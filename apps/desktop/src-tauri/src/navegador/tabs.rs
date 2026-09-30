@@ -102,6 +102,9 @@ impl Tab {
 pub struct BrowserState {
     pub tabs: Vec<Tab>,
     pub active: Option<u32>,
+    /// Grows with every snapshot. A command's answer and an event can reach the
+    /// UI in either order; the one with the higher revision is the newer.
+    pub revision: u64,
 }
 
 /// The limit was reached.
@@ -116,6 +119,7 @@ pub struct TabList {
     tabs: Vec<Tab>,
     active: Option<u32>,
     last_id: u32,
+    revision: u64,
 }
 
 impl TabList {
@@ -198,10 +202,13 @@ impl TabList {
         self.active = None;
     }
 
-    pub fn snapshot(&self) -> BrowserState {
+    /// The state as the UI sees it, stamped newer than every one before.
+    pub fn snapshot(&mut self) -> BrowserState {
+        self.revision += 1;
         BrowserState {
             tabs: self.tabs.clone(),
             active: self.active,
+            revision: self.revision,
         }
     }
 }
@@ -296,10 +303,31 @@ mod tests {
 
     #[test]
     fn a_new_list_has_no_tabs_and_no_active_one() {
-        let list = TabList::new();
+        let mut list = TabList::new();
         assert!(list.is_empty());
         assert_eq!(list.active(), None);
-        assert_eq!(list.snapshot(), BrowserState::default());
+        let state = list.snapshot();
+        assert!(state.tabs.is_empty());
+        assert_eq!(state.active, None);
+    }
+
+    #[test]
+    fn every_snapshot_is_newer_than_the_one_before() {
+        // The UI gets the same state from commands and from events, which can
+        // arrive out of order: the revision says which one is newer.
+        let mut list = list_of(1);
+        let first = list.snapshot().revision;
+        let second = list.snapshot().revision;
+        list.close(1);
+        let third = list.snapshot().revision;
+        assert!(first > 0);
+        assert!(second > first);
+        assert!(third > second);
+        list.clear();
+        assert!(
+            list.snapshot().revision > third,
+            "a cleared list is newer too"
+        );
     }
 
     #[test]
@@ -412,7 +440,8 @@ mod tests {
         let mut list = list_of(2);
         let before = list.snapshot();
         assert!(!list.close(9));
-        assert_eq!(list.snapshot(), before);
+        let after = list.snapshot();
+        assert_eq!((after.tabs, after.active), (before.tabs, before.active));
     }
 
     #[test]
@@ -439,6 +468,7 @@ mod tests {
         assert_eq!(first["blocked"], serde_json::Value::Null);
         assert_eq!(first.len(), 4, "an unexpected field would leak: {first:?}");
         assert_eq!(json["tabs"][1]["blocked"], "nope");
-        assert_eq!(json.as_object().unwrap().len(), 2);
+        assert!(json["revision"].as_u64().is_some_and(|n| n > 0));
+        assert_eq!(json.as_object().unwrap().len(), 3);
     }
 }

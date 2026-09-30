@@ -1,5 +1,19 @@
+import { invoke } from '@tauri-apps/api/core'
 import { describe, expect, it, vi } from 'vitest'
-import { computeBounds, createViewerSession, type ViewerApi, type ViewerBounds } from './navegador'
+import {
+  computeBounds,
+  createViewerSession,
+  navegadorActivateTab,
+  navegadorBack,
+  navegadorCloseTab,
+  navegadorForward,
+  navegadorNavigate,
+  navegadorNewTab,
+  navegadorReload,
+  navegadorState,
+  type ViewerApi,
+  type ViewerBounds,
+} from './navegador'
 
 const rect = (left: number, top: number, width: number, height: number) => ({
   left,
@@ -223,5 +237,44 @@ describe('createViewerSession', () => {
     )
     await session.show('a', 'https://example.com/', bounds(800, 600))
     expect(calls).toEqual(['open https://example.com/ 800x600'])
+  })
+})
+
+describe('the calls that act on a tab', () => {
+  it('always name the tab they mean', async () => {
+    vi.mocked(invoke).mockReset()
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await navegadorNavigate(2, 'example.com')
+    await navegadorBack(2)
+    await navegadorForward(3)
+    await navegadorReload(4)
+    await navegadorActivateTab(5)
+    await navegadorCloseTab(6)
+    await navegadorNewTab()
+    expect(vi.mocked(invoke).mock.calls).toEqual([
+      ['navegador_navigate', { tab: 2, url: 'example.com' }],
+      ['navegador_back', { tab: 2 }],
+      ['navegador_forward', { tab: 3 }],
+      ['navegador_reload', { tab: 4 }],
+      ['navegador_activate_tab', { tab: 5 }],
+      ['navegador_close_tab', { tab: 6 }],
+      ['navegador_new_tab'],
+    ])
+  })
+
+  it('read the state the backend answers with, and never throw on a strange one', async () => {
+    vi.mocked(invoke).mockReset()
+    vi.mocked(invoke).mockResolvedValueOnce({
+      tabs: [{ id: 1, url: 'https://a.test/', title: 'A', blocked: null }],
+      active: 1,
+      revision: 3,
+    })
+    expect(await navegadorNewTab()).toEqual({
+      tabs: [{ id: 1, url: 'https://a.test/', title: 'A', blocked: null }],
+      active: 1,
+      revision: 3,
+    })
+    vi.mocked(invoke).mockResolvedValueOnce('nonsense')
+    expect(await navegadorState()).toEqual({ tabs: [], active: null, revision: 0 })
   })
 })

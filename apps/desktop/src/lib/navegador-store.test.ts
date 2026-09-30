@@ -1,6 +1,7 @@
 import { get } from 'svelte/store'
 import { describe, expect, it, vi } from 'vitest'
 import type { CaptureDraft, DownloadDraft } from './navegador-capture'
+import { EMPTY_BROWSER, type BrowserState } from './navegador-tabs'
 import { createNavegadorStore } from './navegador-store'
 
 const capture: CaptureDraft = {
@@ -31,6 +32,7 @@ const download = (id: string, patch: Partial<DownloadDraft> = {}): DownloadDraft
   accessedAt: '2026-09-30T12:00:00Z',
   status: 'downloading',
   reason: null,
+  tab: null,
   ...patch,
 })
 
@@ -47,7 +49,12 @@ function fakeListen() {
 describe('createNavegadorStore', () => {
   it('starts empty', () => {
     const store = createNavegadorStore({ listen: fakeListen().listen })
-    expect(get(store)).toEqual({ capture: null, captureError: null, downloads: [] })
+    expect(get(store)).toEqual({
+      capture: null,
+      captureError: null,
+      downloads: [],
+      browser: EMPTY_BROWSER,
+    })
   })
 
   it('keeps a capture draft and its error until they are dismissed', () => {
@@ -119,7 +126,12 @@ describe('createNavegadorStore', () => {
     store.setCapture(capture)
     store.applyDownload(download('a'))
     store.clearAll()
-    expect(get(store)).toEqual({ capture: null, captureError: null, downloads: [] })
+    expect(get(store)).toEqual({
+      capture: null,
+      captureError: null,
+      downloads: [],
+      browser: EMPTY_BROWSER,
+    })
     fake.emit(download('b'))
     expect(get(store).downloads.map((d) => d.id)).toEqual(['b'])
     expect(fake.unlisten).not.toHaveBeenCalled()
@@ -193,6 +205,83 @@ describe('createNavegadorStore', () => {
     store.dismissDownload('a')
     store.clearAll()
     store.applyDownload(download('a'))
+    expect(get(store).downloads).toHaveLength(1)
+  })
+})
+
+const browser = (revision: number, ids: number[], active: number | null): BrowserState => ({
+  tabs: ids.map((id) => ({ id, url: `https://a.test/${id}`, title: null, blocked: null })),
+  active,
+  revision,
+})
+
+function fakeStateListen() {
+  let handler: ((state: BrowserState) => void) | undefined
+  const unlisten = vi.fn()
+  const listenState = vi.fn(async (next: (state: BrowserState) => void) => {
+    handler = next
+    return unlisten
+  })
+  return { listenState, unlisten, emit: (state: BrowserState) => handler?.(state) }
+}
+
+describe('createNavegadorStore browser tabs', () => {
+  it('keeps the tab list, so it survives the view', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.applyBrowser(browser(1, [1, 2], 2))
+    expect(get(store).browser).toEqual(browser(1, [1, 2], 2))
+  })
+
+  it('takes a newer state and refuses an older one, whichever arrives first', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.applyBrowser(browser(5, [1, 2, 3], 3))
+    store.applyBrowser(browser(4, [1], 1))
+    expect(get(store).browser.tabs).toHaveLength(3)
+    store.applyBrowser(browser(5, [1], 1))
+    expect(get(store).browser.tabs).toHaveLength(3)
+    store.applyBrowser(browser(6, [1, 2], 2))
+    expect(get(store).browser.tabs).toHaveLength(2)
+  })
+
+  it('hears the backend while no view is mounted', async () => {
+    const fake = fakeStateListen()
+    const store = createNavegadorStore({
+      listen: fakeListen().listen,
+      listenState: fake.listenState,
+    })
+    await store.startListening()
+    fake.emit(browser(1, [1], 1))
+    fake.emit(browser(2, [1, 2], 2))
+    expect(get(store).browser.active).toBe(2)
+  })
+
+  it('listens to the tab state once however many views ask, and stops with everything else', async () => {
+    const fake = fakeStateListen()
+    const downloads = fakeListen()
+    const store = createNavegadorStore({ listen: downloads.listen, listenState: fake.listenState })
+    await Promise.all([store.startListening(), store.startListening()])
+    await store.startListening()
+    expect(fake.listenState).toHaveBeenCalledTimes(1)
+    store.reset()
+    expect(fake.unlisten).toHaveBeenCalledTimes(1)
+    expect(downloads.unlisten).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets the tabs when the browser goes away, and accepts a fresh one after', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.applyBrowser(browser(9, [1, 2], 1))
+    store.clearAll()
+    expect(get(store).browser).toEqual(EMPTY_BROWSER)
+    store.applyBrowser(browser(1, [7], 7))
+    expect(get(store).browser.active).toBe(7)
+  })
+
+  it('leaves the capture draft and the downloads alone when the tabs change', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.setCapture(capture)
+    store.applyDownload(download('a'))
+    store.applyBrowser(browser(1, [1], 1))
+    expect(get(store).capture).toEqual(capture)
     expect(get(store).downloads).toHaveLength(1)
   })
 })

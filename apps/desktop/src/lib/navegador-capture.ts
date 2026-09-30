@@ -9,6 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { hostOf, tabTitle, type BrowserTab } from './navegador-tabs'
 
 /** Mirrors `CaptureDraft` in `navegador/capture.rs` (the HTML stays in Rust). */
 export type CaptureDraft = {
@@ -50,6 +51,8 @@ export type DownloadDraft = {
   status: DownloadStatus
   /** A stable code for a rejection or failure, `null` otherwise. */
   reason: string | null
+  /** The browser tab whose page started it; `null` for a popup window. */
+  tab: number | null
 }
 
 export const NAVEGADOR_DOWNLOAD_EVENT = 'navegador://download'
@@ -70,12 +73,13 @@ export function navegadorSetDownloadDir(path: string): Promise<DownloadFolder> {
   return invoke<DownloadFolder>('navegador_set_download_dir', { path })
 }
 
-export function navegadorCapturePage(): Promise<CaptureDraft> {
-  return invoke<CaptureDraft>('navegador_capture_page')
+/** Capture the page of `tab`: the tab the person was looking at, not whichever is active now. */
+export function navegadorCapturePage(tab: number): Promise<CaptureDraft> {
+  return invoke<CaptureDraft>('navegador_capture_page', { tab })
 }
 
-export function navegadorCaptureSelection(): Promise<CaptureDraft> {
-  return invoke<CaptureDraft>('navegador_capture_selection')
+export function navegadorCaptureSelection(tab: number): Promise<CaptureDraft> {
+  return invoke<CaptureDraft>('navegador_capture_selection', { tab })
 }
 
 /** Follow downloads through quarantine. Only the main webview hears it. */
@@ -170,11 +174,19 @@ export function describeCaptureDraft(draft: CaptureDraft) {
   }
 }
 
-export function describeDownload(draft: DownloadDraft) {
+/**
+ * What a download line shows. Downloads belong to the browser, not to a tab:
+ * the host says where the file comes from, and the tab is named only while it
+ * is still open and has a name.
+ */
+export function describeDownload(draft: DownloadDraft, tabs: readonly BrowserTab[] = []) {
+  const from = draft.tab === null ? undefined : tabs.find((tab) => tab.id === draft.tab)
   return {
     id: draft.id,
     fileName: draft.fileName,
     url: draft.url,
+    host: hostOf(draft.url),
+    tabLabel: from ? tabTitle(from) : null,
     accessedAt: draft.accessedAt,
     size: draft.size === null ? '' : formatBytes(draft.size),
     shortSha: shortHash(draft.sha256),

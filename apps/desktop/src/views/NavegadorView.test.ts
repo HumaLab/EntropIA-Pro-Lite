@@ -6,6 +6,7 @@ import { locale } from '$lib/i18n'
 import { navegadorSession } from '$lib/navegador'
 import { navegadorStore } from '$lib/navegador-store'
 import type { CaptureDraft, DownloadDraft } from '$lib/navegador-capture'
+import type { BrowserState, BrowserTab } from '$lib/navegador-tabs'
 import NavegadorView from './NavegadorView.svelte'
 
 const SHA = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
@@ -38,7 +39,26 @@ const pdf: DownloadDraft = {
   accessedAt: '2026-09-30T12:00:00Z',
   status: 'ready',
   reason: null,
+  tab: null,
 }
+
+const tab = (id: number, patch: Partial<BrowserTab> = {}): BrowserTab => ({
+  id,
+  url: null,
+  title: null,
+  blocked: null,
+  ...patch,
+})
+
+/** A revision of 0 is "not versioned": the store always takes it. */
+const browser = (tabs: BrowserTab[], active: number | null, revision = 0): BrowserState => ({
+  tabs,
+  active,
+  revision,
+})
+
+const articleTab = tab(1, { url: 'https://example.com/article', title: 'An article' })
+const EMPTY = browser([], null)
 
 let handlers: Record<string, (event: { payload: unknown }) => void> = {}
 let respond: (command: string) => unknown
@@ -46,10 +66,7 @@ let respond: (command: string) => unknown
 beforeEach(async () => {
   locale.set('es')
   handlers = {}
-  respond = (command) =>
-    command === 'navegador_state'
-      ? { url: 'https://example.com/article', title: 'An article', blocked: null }
-      : undefined
+  respond = (command) => (command === 'navegador_state' ? browser([articleTab], 1) : undefined)
   vi.mocked(invoke).mockImplementation(async (command: string) => {
     const answer = respond(command)
     if (answer instanceof Error) throw answer
@@ -119,7 +136,7 @@ describe('NavegadorView capture', () => {
     // not be inside the placeholder that marks where the page goes.
     const area = screen.getByRole('region', { name: 'Área de la página web' })
     expect(area.contains(panel)).toBe(false)
-    expect(invoke).toHaveBeenCalledWith('navegador_capture_page')
+    expect(invoke).toHaveBeenCalledWith('navegador_capture_page', { tab: 1 })
   })
 
   it('captures the selection with its own command', async () => {
@@ -138,7 +155,7 @@ describe('NavegadorView capture', () => {
     const panel = await screen.findByLabelText(/Captura \(borrador/)
     expect(within(panel).getByText('quoted words')).toBeInTheDocument()
     expect(within(panel).getByText('SHA-256 de la cita')).toBeInTheDocument()
-    expect(invoke).toHaveBeenCalledWith('navegador_capture_selection')
+    expect(invoke).toHaveBeenCalledWith('navegador_capture_selection', { tab: 1 })
   })
 
   it('explains a failed capture in the current language', async () => {
@@ -373,7 +390,7 @@ describe('NavegadorView download folder', () => {
       command === 'navegador_download_dir'
         ? { path: 'C:/Users/x/Downloads', isDefault: true }
         : command === 'navegador_state'
-          ? { url: null, title: null, blocked: null }
+          ? EMPTY
           : undefined
   })
 
@@ -439,5 +456,234 @@ describe('NavegadorView download folder', () => {
     expect(within(panel).getByText('Guardado en C:/Users/x/Downloads')).toBeInTheDocument()
     expect(within(panel).getByText('2.0 KB')).toBeInTheDocument()
     expect(within(panel).queryByText('No es un PDF.')).not.toBeInTheDocument()
+  })
+})
+
+describe('NavegadorView tabs', () => {
+  const commands = () => vi.mocked(invoke).mock.calls.map(([command]) => command)
+  const strip = () => screen.getByRole('group', { name: /Solapas del navegador|Browser tabs/ })
+
+  /**
+   * An open browser whose state, as the backend says it, is `tabs`/`active`
+   * (the active tab may be blank, so this does not wait for a page).
+   */
+  async function openWith(tabs: BrowserTab[], active: number) {
+    respond = (command) => (command === 'navegador_state' ? browser(tabs, active) : undefined)
+    const view = render(NavegadorView)
+    // The view adopts the backend's state on mount; type only after that.
+    await waitFor(() => expect(strip()).toBeInTheDocument())
+    const address = screen.getByRole('textbox', { name: /Dirección|Address/ })
+    await fireEvent.input(address, { target: { value: 'example.com' } })
+    await fireEvent.submit(address.closest('form')!)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_open', expect.anything()))
+    return view
+  }
+
+  const emitState = (state: BrowserState) => handlers['navegador://state']!({ payload: state })
+
+  it('shows no tab strip before the browser has a page', () => {
+    render(NavegadorView)
+    expect(screen.queryByRole('group', { name: 'Solapas del navegador' })).not.toBeInTheDocument()
+  })
+
+  it('lists the tabs by title, then by host, and a blank one as new', async () => {
+    await openWith([articleTab, tab(2, { url: 'https://docs.example.org/x' }), tab(3)], 1)
+    const tabs = within(strip())
+    expect(tabs.getByRole('button', { name: 'An article' })).toHaveAttribute('aria-current', 'true')
+    expect(tabs.getByRole('button', { name: 'docs.example.org' })).not.toHaveAttribute(
+      'aria-current'
+    )
+    expect(tabs.getByRole('button', { name: 'Nueva solapa' })).toBeInTheDocument()
+  })
+
+  it('opens a blank tab with the plus button and leaves the address bar ready', async () => {
+    await openWith([articleTab], 1)
+    const blank = browser([articleTab, tab(2)], 2)
+    respond = (command) => (command === 'navegador_new_tab' ? blank : undefined)
+    await fireEvent.click(within(strip()).getByRole('button', { name: 'Abrir solapa nueva' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_new_tab'))
+    const address = screen.getByRole('textbox', { name: 'Dirección' })
+    await waitFor(() => expect(address).toHaveValue(''))
+    await waitFor(() => expect(address).toHaveFocus())
+    // A blank tab has no page to go back in or capture.
+    expect(screen.getByLabelText('Atrás')).toBeDisabled()
+    expect(screen.getByLabelText('Recargar')).toBeDisabled()
+    expect(screen.getByLabelText('Capturar página')).toBeDisabled()
+  })
+
+  it('types into the blank tab: the address goes to that tab', async () => {
+    await openWith([articleTab, tab(2)], 2)
+    const address = screen.getByRole('textbox', { name: 'Dirección' })
+    await waitFor(() => expect(address).toHaveValue(''))
+    const loaded = browser([articleTab, tab(2, { url: 'https://b.test/', title: 'B' })], 2)
+    respond = (command) => (command === 'navegador_navigate' ? loaded : undefined)
+    await fireEvent.input(address, { target: { value: 'b.test' } })
+    await fireEvent.submit(address.closest('form')!)
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('navegador_navigate', { tab: 2, url: 'b.test' })
+    )
+    await waitFor(() => expect(address).toHaveValue('https://b.test/'))
+  })
+
+  it('switches tab: the address bar, status and buttons follow, and the backend is told', async () => {
+    const second = tab(2, { url: 'https://b.test/', title: 'B' })
+    await openWith([articleTab, second], 2)
+    const address = screen.getByRole('textbox', { name: 'Dirección' })
+    await waitFor(() => expect(address).toHaveValue('https://b.test/'))
+    respond = (command) =>
+      command === 'navegador_activate_tab' ? browser([articleTab, second], 1) : undefined
+    await fireEvent.click(within(strip()).getByRole('button', { name: 'An article' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_activate_tab', { tab: 1 }))
+    await waitFor(() => expect(address).toHaveValue('https://example.com/article'))
+    expect(within(strip()).getByRole('button', { name: 'An article' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+  })
+
+  it('acts on the active tab: navigate, back, forward, reload and both captures', async () => {
+    const second = tab(2, { url: 'https://b.test/', title: 'B' })
+    await openWith([articleTab, second], 2)
+    vi.mocked(invoke).mockClear()
+    respond = (command) =>
+      command === 'navegador_navigate' ? browser([articleTab, second], 2) : undefined
+    await fireEvent.click(screen.getByLabelText('Atrás'))
+    await fireEvent.click(screen.getByLabelText('Adelante'))
+    await fireEvent.click(screen.getByLabelText('Recargar'))
+    await waitFor(() => expect(commands()).toContain('navegador_reload'))
+    expect(invoke).toHaveBeenCalledWith('navegador_back', { tab: 2 })
+    expect(invoke).toHaveBeenCalledWith('navegador_forward', { tab: 2 })
+    expect(invoke).toHaveBeenCalledWith('navegador_reload', { tab: 2 })
+    respond = () => page
+    await fireEvent.click(screen.getByLabelText('Capturar página'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_capture_page', { tab: 2 }))
+    await fireEvent.click(screen.getByLabelText('Capturar selección'))
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('navegador_capture_selection', { tab: 2 })
+    )
+    const address = screen.getByRole('textbox', { name: 'Dirección' })
+    await fireEvent.input(address, { target: { value: 'c.test' } })
+    await fireEvent.submit(address.closest('form')!)
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('navegador_navigate', { tab: 2, url: 'c.test' })
+    )
+  })
+
+  it('closes a tab with its own button, named after the tab', async () => {
+    const second = tab(2, { url: 'https://b.test/', title: 'B' })
+    await openWith([articleTab, second], 1)
+    respond = (command) =>
+      command === 'navegador_close_tab' ? browser([articleTab], 1) : undefined
+    await fireEvent.click(within(strip()).getByLabelText('Cerrar solapa B'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_close_tab', { tab: 2 }))
+    await waitFor(() =>
+      expect(within(strip()).queryByRole('button', { name: 'B' })).not.toBeInTheDocument()
+    )
+  })
+
+  it('keeps the address bar ready when the last tab is closed and replaced by a blank one', async () => {
+    await openWith([articleTab], 1)
+    respond = (command) => (command === 'navegador_close_tab' ? browser([tab(2)], 2) : undefined)
+    await fireEvent.click(within(strip()).getByLabelText('Cerrar solapa An article'))
+    const address = screen.getByRole('textbox', { name: 'Dirección' })
+    await waitFor(() => expect(address).toHaveValue(''))
+    expect(within(strip()).getByRole('button', { name: 'Nueva solapa' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Capturar página')).toBeDisabled()
+  })
+
+  it('disables the plus button at four tabs and says why', async () => {
+    const full = [1, 2, 3, 4].map((id) => tab(id, { url: `https://t${id}.test/` }))
+    await openWith(full, 1)
+    const plus = within(strip()).getByRole('button', { name: 'Solapa nueva: ya hay 4 abiertas' })
+    expect(plus).toBeDisabled()
+    await fireEvent.click(plus)
+    expect(commands()).not.toContain('navegador_new_tab')
+  })
+
+  it('shows a tab a page opened, from the backend event, while the view is mounted', async () => {
+    await openWith([articleTab], 1)
+    emitState(
+      browser([articleTab, tab(2, { url: 'https://popup.test/', title: 'Opened by a page' })], 1, 5)
+    )
+    expect(
+      await within(strip()).findByRole('button', { name: 'Opened by a page' })
+    ).toBeInTheDocument()
+  })
+
+  it('ignores a state older than the one it has', async () => {
+    await openWith([articleTab], 1)
+    emitState(browser([articleTab, tab(2, { url: 'https://b.test/', title: 'B' })], 2, 9))
+    await within(strip()).findByRole('button', { name: 'B' })
+    emitState(browser([articleTab], 1, 8))
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Dirección' })).toHaveValue('https://b.test/')
+    )
+    expect(within(strip()).getByRole('button', { name: 'B' })).toBeInTheDocument()
+  })
+
+  it('keeps every tab when the view goes away and comes back', async () => {
+    const second = tab(2, { url: 'https://b.test/', title: 'B' })
+    const view = await openWith([articleTab, second], 2)
+    view.unmount()
+    render(NavegadorView)
+    expect(await within(strip()).findByRole('button', { name: 'B' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+    expect(within(strip()).getByRole('button', { name: 'An article' })).toBeInTheDocument()
+  })
+
+  it('hears a tab a page opened while no view was mounted', async () => {
+    const view = await openWith([articleTab], 1)
+    view.unmount()
+    const opened = browser([articleTab, tab(2, { url: 'https://b.test/', title: 'B' })], 1, 6)
+    emitState(opened)
+    // The backend answers a remount with the state it holds now.
+    respond = (command) => (command === 'navegador_state' ? opened : undefined)
+    render(NavegadorView)
+    expect(await within(strip()).findByRole('button', { name: 'B' })).toBeInTheDocument()
+  })
+
+  it('tells the person why a page could not open another tab', async () => {
+    await openWith([articleTab], 1)
+    emitState(browser([{ ...articleTab, blocked: 'The page tried to open too many tabs' }], 1, 7))
+    expect(
+      await screen.findByText('Bloqueado: The page tried to open too many tabs')
+    ).toBeInTheDocument()
+  })
+
+  it('says where a download came from, and in which tab while that tab is open', async () => {
+    await openWith([articleTab, tab(2, { url: 'https://b.test/', title: 'Docs' })], 1)
+    handlers['navegador://download']!({
+      payload: { ...pdf, url: 'https://files.example.org/paper.pdf', tab: 2 },
+    })
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    expect(within(panel).getByText(/Desde files\.example\.org/)).toBeInTheDocument()
+    expect(within(panel).getByText(/en la solapa Docs/)).toBeInTheDocument()
+  })
+
+  it('still lists a download whose tab is gone, with its host only', async () => {
+    await openWith([articleTab], 1)
+    handlers['navegador://download']!({
+      payload: { ...pdf, url: 'https://files.example.org/paper.pdf', tab: 7 },
+    })
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    expect(within(panel).getByText(/Desde files\.example\.org/)).toBeInTheDocument()
+    expect(within(panel).queryByText(/en la solapa/)).not.toBeInTheDocument()
+  })
+
+  it('renders a hostile tab title as text, never as markup', async () => {
+    const hostile = '<img src=x onerror=alert(1)>'
+    await openWith([tab(1, { url: 'https://example.com/', title: hostile })], 1)
+    expect(strip().querySelector('img')).toBeNull()
+    expect(within(strip()).getByRole('button', { name: hostile })).toBeInTheDocument()
+  })
+
+  it('speaks English too', async () => {
+    locale.set('en')
+    await openWith([articleTab, tab(2)], 1)
+    expect(strip()).toHaveAccessibleName('Browser tabs')
+    expect(within(strip()).getByRole('button', { name: 'New tab' })).toBeInTheDocument()
+    expect(within(strip()).getByLabelText('Close tab An article')).toBeInTheDocument()
   })
 })

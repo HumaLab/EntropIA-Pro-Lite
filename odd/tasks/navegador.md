@@ -105,7 +105,8 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   limit); window.open with size/position features (sign-in flows) keeps
   opening an isolated popup window. Each tab is its own child webview
   (`navegador-web-<n>`, no capability), hidden unless active; capture and
-  downloads act on the active tab.
+  downloads act on the active tab. Automated checks observed; Windows run
+  pending (see T8 evidence at the end).
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
@@ -648,3 +649,42 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   observed: the popup closing. User recheck: sign in with Google on x.com; the popup
   must close by itself right after the login; open a popup and close it by hand,
   then open three more in a row (the cap must have freed the slot).
+- T8 (browser tabs; route: delegated writer; T8 stays open until the Windows run).
+  Commits `aaf0f868` (Rust) and the one carrying this note (frontend). What
+  `on_new_window` exposes (tauri 2.11.6 `NewWindowFeatures`): `size()` and
+  `position()` as `Option`, plus the opener. WebView2 fills them only when the page
+  passed them (`HasSize`/`HasPosition`), WKWebView likewise; wry's WebKitGTK always
+  reports none. Split (`tabs::placement`): no size and no position -> tab (the
+  handler answers `Deny` and builds a child webview itself); any size or position
+  -> popup window as before (needs `window.opener`). Where the engine reports
+  nothing (Linux) every request stays a popup. A tab cannot keep `window.opener`
+  (child webview, not a top-level window). Tabs: `navegador/tabs.rs` (labels
+  `navegador-web-<n>`, ids never reused, max 4, `TabList`, revisioned
+  `BrowserState`); the first tab is `navegador-web-1` (old `navegador-web` label
+  retired; ACL tests still reject it). Backend owns the active tab; every
+  page-acting command takes the tab id explicitly (justification: what the person
+  clicked is what is acted on). New commands `navegador_new_tab|activate_tab|
+  close_tab` in handler, `APP_COMMANDS`, capability, ACL tests. Downloads carry
+  `tab`. `shutdown`/`close` destroy all tabs and popups. Only the active tab is
+  visible, others hidden alive; a blank tab has no webview until first navigation.
+  Page-initiated tab in the foreground only if the opener tab is active.
+  RED/GREEN: `tabs.rs` 22/22 failed on `unimplemented!()` then 22/22, plus a
+  revision test (compile RED) -> 23/23; download `tab` tests failed to compile then
+  81/81; frontend `navegador-tabs.test.ts`, store/capture/navegador/view tests
+  written first (view 20 failed against the old view, then 42/42). ACL mutation
+  checks: adding `navegador-web-*` to the capability failed 4 app_acl tests and 2
+  guard tests; changing `MAX_TABS` failed the new guard test.
+  Verification: `cargo test --no-fail-fast` 1481 passed, 1 failed (known
+  `no_other_module_opens_the_archive_by_hand`); `--features navegador --lib
+  navegador` 174/174; `--test app_acl` 12/12, `--test acl_manifest_guard` 6/6;
+  `cargo check --features navegador` ok; clippy `--all-targets` with and without
+  the feature: no warnings in navegador or the ACL tests; `cargo fmt --check` ok;
+  `pnpm typecheck` 0 errors; `VITE_LOCAL_ML=0` desktop typecheck 0 errors;
+  `pnpm test` 299 + 800 + 2781 passed (7 skipped); Lite 2760 passed; `pnpm lint`
+  only the known WritingView error; prettier clean on touched files;
+  `VITE_NAVEGADOR=1` vite build emits NavegadorView. NOT observed: any real
+  WebView2 behaviour (tab creation inside the callback thread, hide/show, popup
+  split). Limitations: no per-tab back/forward state; a tab made by a page
+  needs known bounds (the view must have shown the browser once); opener link
+  lost for tabs; Linux always popups; macOS/Linux untested.
+

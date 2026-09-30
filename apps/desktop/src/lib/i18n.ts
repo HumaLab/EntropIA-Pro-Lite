@@ -1832,6 +1832,13 @@ const es = {
   'navegador.download.reason.too_many': 'Hay demasiadas descargas en curso.',
   'navegador.download.reason.blocked': 'La dirección de la descarga no está permitida.',
   'navegador.download.reason.unknown': 'Motivo desconocido.',
+  'navegador.tabs.aria': 'Solapas del navegador',
+  'navegador.tabs.new': 'Nueva solapa',
+  'navegador.tabs.add': 'Abrir solapa nueva',
+  'navegador.tabs.full': 'Solapa nueva: ya hay {max} abiertas',
+  'navegador.tabs.close': 'Cerrar solapa {title}',
+  'navegador.download.from': 'Desde {host}',
+  'navegador.download.inTab': 'en la solapa {tab}',
 } as const
 
 type ExtraI18nKey =
@@ -3782,6 +3789,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.download.reason.too_many': 'Too many downloads are in progress.',
   'navegador.download.reason.blocked': 'The download address is not allowed.',
   'navegador.download.reason.unknown': 'Unknown reason.',
+  'navegador.tabs.aria': 'Browser tabs',
+  'navegador.tabs.new': 'New tab',
+  'navegador.tabs.add': 'Open new tab',
+  'navegador.tabs.full': 'New tab: {max} are already open',
+  'navegador.tabs.close': 'Close tab {title}',
+  'navegador.download.from': 'From {host}',
+  'navegador.download.inTab': 'in tab {tab}',
 }
 
 const messages = { es, en }

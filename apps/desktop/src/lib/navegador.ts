@@ -9,16 +9,12 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { parseBrowserState, type BrowserState } from './navegador-tabs'
+
+export type { BrowserState, BrowserTab } from './navegador-tabs'
 
 /** A rectangle in logical pixels, relative to the window's content area. */
 export type ViewerBounds = { x: number; y: number; width: number; height: number }
-
-/** What the backend reports about the page; mirrors `ViewerState` in Rust. */
-export type ViewerState = {
-  url: string | null
-  title: string | null
-  blocked: string | null
-}
 
 export const NAVEGADOR_STATE_EVENT = 'navegador://state'
 
@@ -49,14 +45,15 @@ export interface ViewerApi {
 }
 
 /**
- * There is one native webview and possibly several Navegador views (a split
- * pane, a tab switched away and back). The session decides who drives it: the
- * view that showed it last owns it, and a hidden or replaced view cannot move
- * it. A view going away only hides the browser: the page, its history and its
- * sign-ins stay alive, and the next view to show it puts it back at its own
- * rect. It closes only when [close] is called (its tab was closed) or the app
- * exits (the backend closes it then). Calls run one after another, so a fast
- * unmount and mount never interleave their native round trips.
+ * There is one browser (its tabs are native webviews the backend keeps) and
+ * possibly several Navegador views (a split pane, an app tab switched away and
+ * back). The session decides who drives it: the view that showed it last owns
+ * it, and a hidden or replaced view cannot move it. A view going away only
+ * hides the browser: its tabs, their pages, history and sign-ins stay alive,
+ * and the next view to show it puts the active tab back at its own rect. It
+ * closes only when [close] is called (its app tab was closed) or the app exits
+ * (the backend closes it then). Calls run one after another, so a fast unmount
+ * and mount never interleave their native round trips.
  */
 export function createViewerSession(api: ViewerApi) {
   let owner: string | null = null
@@ -139,27 +136,46 @@ export const navegadorApi: ViewerApi = {
 
 export const navegadorSession = createViewerSession(navegadorApi)
 
-export function navegadorNavigate(url: string): Promise<ViewerState> {
-  return invoke<ViewerState>('navegador_navigate', { url })
+// Everything that acts on a page names its tab, so it is the tab the person was
+// looking at when they acted, not whichever became active in between.
+
+export async function navegadorNavigate(tab: number, url: string): Promise<BrowserState> {
+  return parseBrowserState(await invoke('navegador_navigate', { tab, url }))
 }
 
-export function navegadorBack(): Promise<void> {
-  return invoke('navegador_back')
+export function navegadorBack(tab: number): Promise<void> {
+  return invoke('navegador_back', { tab })
 }
 
-export function navegadorForward(): Promise<void> {
-  return invoke('navegador_forward')
+export function navegadorForward(tab: number): Promise<void> {
+  return invoke('navegador_forward', { tab })
 }
 
-export function navegadorReload(): Promise<void> {
-  return invoke('navegador_reload')
+export function navegadorReload(tab: number): Promise<void> {
+  return invoke('navegador_reload', { tab })
 }
 
-export function navegadorState(): Promise<ViewerState> {
-  return invoke<ViewerState>('navegador_state')
+/** A new blank tab in front. The backend refuses it past four tabs. */
+export async function navegadorNewTab(): Promise<BrowserState> {
+  return parseBrowserState(await invoke('navegador_new_tab'))
 }
 
-/** Follow what the backend says about the page. Only the main webview hears it. */
-export function onNavegadorState(handler: (state: ViewerState) => void): Promise<UnlistenFn> {
-  return listen<ViewerState>(NAVEGADOR_STATE_EVENT, (event) => handler(event.payload))
+export async function navegadorActivateTab(tab: number): Promise<BrowserState> {
+  return parseBrowserState(await invoke('navegador_activate_tab', { tab }))
+}
+
+/** Close a tab and its page. The last tab is replaced by a blank one. */
+export async function navegadorCloseTab(tab: number): Promise<BrowserState> {
+  return parseBrowserState(await invoke('navegador_close_tab', { tab }))
+}
+
+export async function navegadorState(): Promise<BrowserState> {
+  return parseBrowserState(await invoke('navegador_state'))
+}
+
+/** Follow the tabs and the active one. Only the main webview hears it. */
+export function onNavegadorState(handler: (state: BrowserState) => void): Promise<UnlistenFn> {
+  return listen<unknown>(NAVEGADOR_STATE_EVENT, (event) =>
+    handler(parseBrowserState(event.payload))
+  )
 }

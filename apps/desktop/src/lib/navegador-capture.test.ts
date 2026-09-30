@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
+import { describe, expect, it, vi } from 'vitest'
 import {
   describeCaptureDraft,
   describeDownload,
   formatBytes,
+  navegadorCapturePage,
+  navegadorCaptureSelection,
   parseCaptureError,
   previewText,
   shortHash,
@@ -45,6 +48,7 @@ function download(overrides: Partial<DownloadDraft> = {}): DownloadDraft {
     accessedAt: '2026-09-30T12:00:00Z',
     status: 'ready',
     reason: null,
+    tab: null,
     ...overrides,
   }
 }
@@ -237,5 +241,40 @@ describe('upsertDownload', () => {
     const start = [download({ id: 'a' })]
     upsertDownload(start, download({ id: 'b' }))
     expect(start).toHaveLength(1)
+  })
+})
+
+describe('describeDownload, which tab started it', () => {
+  const tabs = [
+    { id: 1, url: 'https://a.test/', title: 'Docs', blocked: null },
+    { id: 2, url: null, title: null, blocked: null },
+  ]
+
+  it('shows the host the file comes from', () => {
+    expect(describeDownload(download({ url: 'https://files.example.org/a/b.pdf' })).host).toBe(
+      'files.example.org'
+    )
+    expect(describeDownload(download({ url: 'not a url' })).host).toBeNull()
+  })
+
+  it('names the tab that started it while that tab is open', () => {
+    expect(describeDownload(download({ tab: 1 }), tabs).tabLabel).toBe('Docs')
+  })
+
+  it('has no tab to name for a popup, a closed tab or a tab with no name', () => {
+    expect(describeDownload(download({ tab: null }), tabs).tabLabel).toBeNull()
+    expect(describeDownload(download({ tab: 9 }), tabs).tabLabel).toBeNull()
+    expect(describeDownload(download({ tab: 2 }), tabs).tabLabel).toBeNull()
+    expect(describeDownload(download({ tab: 1 })).tabLabel).toBeNull()
+  })
+})
+
+describe('capture commands', () => {
+  it('name the tab they read, so a tab that became active in between is not read instead', async () => {
+    vi.mocked(invoke).mockClear()
+    await navegadorCapturePage(3)
+    await navegadorCaptureSelection(4)
+    expect(invoke).toHaveBeenNthCalledWith(1, 'navegador_capture_page', { tab: 3 })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'navegador_capture_selection', { tab: 4 })
   })
 })

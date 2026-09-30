@@ -859,7 +859,9 @@ pub fn close(app: &AppHandle) -> Result<(), String> {
         browser.visible = false;
     }
     close_tab_webviews(app);
-    emit_state(app, &BrowserState::default());
+    // The empty state is a snapshot like any other: newer than the ones the UI
+    // already has, so it is not mistaken for a stale one.
+    emit_state(app, &shared.snapshot());
     Ok(())
 }
 
