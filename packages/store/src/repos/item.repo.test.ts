@@ -1422,6 +1422,21 @@ describe('keyset pagination against the real schema', () => {
       await expect(realRepo.findImportedFromSource('col-1', acta)).resolves.toBe('doc-a')
     })
 
+    it('looks the file up through the source index, not by scanning the collection', async () => {
+      const {
+        sqlite,
+        repo: realRepo,
+        executed,
+      } = createRealDb([{ id: 'doc-a', title: 'Acta', metadata: importedFrom({}) }])
+
+      await realRepo.findImportedFromSource('col-1', acta)
+
+      const plan = sqlite
+        .prepare(`EXPLAIN QUERY PLAN ${executed.at(-1)}`)
+        .all('col-1', acta.originalPath, acta.sizeBytes, acta.modifiedAt)
+      expect(JSON.stringify(plan)).toContain('idx_items_import_source')
+    })
+
     it('matches the path without regard to case, as Windows does', async () => {
       const { repo: realRepo } = createRealDb([
         { id: 'doc-a', title: 'Acta', metadata: importedFrom({}) },
