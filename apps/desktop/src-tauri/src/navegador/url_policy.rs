@@ -11,8 +11,11 @@
 //!   typed `http` address (which reaches `on_navigation` as a plain navigation)
 //!   is let through, and only that one.
 //! - `about:blank` is allowed; every other scheme (`file`, `data`,
-//!   `javascript`, `blob`, `ftp`, `ws(s)`, the app's own `tauri`/`asset`/`ipc`,
-//!   other `about:` pages) is blocked.
+//!   `javascript`, `ftp`, `ws(s)`, the app's own `tauri`/`asset`/`ipc`, other
+//!   `about:` pages) is blocked.
+//! - `blob:<origin>/<id>` is allowed when its inner http(s) origin passes these
+//!   same rules (a page's own generated download); opaque or malformed blobs
+//!   and blobs of a blocked origin are not.
 //! - Hosts that are not on the public internet are blocked: `localhost` and
 //!   `*.localhost`, loopback, unspecified, private, link-local (cloud metadata
 //!   lives at 169.254.169.254), CGNAT, multicast and reserved ranges, IPv4 in
@@ -99,6 +102,7 @@ pub fn check_url(url: &Url, kind: NavigationKind) -> Result<(), Blocked> {
         "http" if kind == NavigationKind::Typed => {}
         "http" => return Err(Blocked::InsecureHttp),
         "about" if url.as_str() == "about:blank" => return Ok(()),
+        "blob" => return check_blob(url, kind),
         other => return Err(Blocked::Scheme(other.to_string())),
     }
     // The parser has already turned every IPv4 spelling into dotted decimal
@@ -117,6 +121,23 @@ pub fn check_url(url: &Url, kind: NavigationKind) -> Result<(), Blocked> {
     } else {
         Err(Blocked::Host(host.to_string()))
     }
+}
+
+/// A `blob:<origin>/<id>` address, which is how a page hands the browser a file
+/// it built itself (GitHub's PDF download button, for one). The bytes live in
+/// the page that made them, so the address is only as trustworthy as that
+/// origin: it passes when the inner `https` (or typed `http`) origin passes
+/// every rule above, and is refused as that host when it does not. An opaque
+/// blob (`blob:null/..`), a blob of anything but http(s) (`blob:about:blank`,
+/// `blob:file:..`, a blob of a blob) or one that does not parse is refused as
+/// the `blob` scheme.
+fn check_blob(url: &Url, kind: NavigationKind) -> Result<(), Blocked> {
+    let refused = || Blocked::Scheme("blob".to_string());
+    let inner = Url::parse(url.path()).map_err(|_| refused())?;
+    if !matches!(inner.scheme(), "http" | "https") {
+        return Err(refused());
+    }
+    check_url(&inner, kind)
 }
 
 /// True when typed text starts with `scheme:` (`javascript:`, `about:`,
@@ -274,7 +295,6 @@ mod tests {
             ("data:text/html,<script>1</script>", "data"),
             ("javascript:alert(1)", "javascript"),
             ("JavaScript:alert(1)", "javascript"),
-            ("blob:https://example.com/1234", "blob"),
             ("about:config", "about"),
             ("about:blank#x", "about"),
             ("ftp://example.com/", "ftp"),
@@ -294,6 +314,119 @@ mod tests {
                 );
             }
         }
+    }
+
+    // --- blob: urls -----------------------------------------------------------
+
+    #[test]
+    fn a_blob_url_passes_when_its_https_origin_passes() {
+        for input in [
+            "blob:https://github.com/8f6d3c1e-2b0a-4c53-9a44-0d1f5e2b7c19",
+            "blob:https://example.com/1234",
+            "blob:https://sub.example.co.uk:8443/abc",
+            "blob:https://93.184.216.34/abc",
+        ] {
+            for kind in [Typed, Navigation, NewWindow] {
+                assert_eq!(allowed(input, kind), input, "{input:?} {kind:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_blob_of_a_typed_http_origin_passes_only_when_typed() {
+        let input = "blob:http://example.com/1234";
+        assert_eq!(allowed(input, Typed), input);
+        assert_eq!(
+            blocked(input, Navigation),
+            Blocked::InsecureHttp,
+            "a link may not downgrade through a blob"
+        );
+        assert_eq!(blocked(input, NewWindow), Blocked::InsecureHttp);
+    }
+
+    #[test]
+    fn a_blob_of_a_blocked_origin_is_blocked_as_that_host() {
+        for input in [
+            "blob:https://localhost/1234",
+            "blob:https://127.0.0.1/1234",
+            "blob:https://[::1]/1234",
+            "blob:https://192.168.1.10/1234",
+            "blob:https://10.0.0.1:8080/1234",
+            "blob:https://169.254.169.254/1234",
+            "blob:https://metadata.google.internal/1234",
+            "blob:https://app.localhost/1234",
+            "blob:https://2130706433/1234",
+        ] {
+            for kind in [Typed, Navigation, NewWindow] {
+                assert!(
+                    is_host(&blocked(input, kind)),
+                    "{input:?} {kind:?} should be a blocked host"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_opaque_or_malformed_blob_is_blocked() {
+        for input in [
+            "blob:null/1234",
+            "blob:",
+            "blob:/1234",
+            "blob://example.com/1234",
+            "blob:https://",
+            "blob:https:///1234",
+            "blob:about:blank",
+            "blob:file:///C:/Windows/win.ini",
+            "blob:data:text/html,<script>1</script>",
+            "blob:javascript:alert(1)",
+            "blob:ftp://example.com/1234",
+            "blob:blob:https://example.com/1234",
+            "blob:tauri://localhost/1234",
+            "blob:https://example.com%00.evil/1234",
+        ] {
+            for kind in [Typed, Navigation, NewWindow] {
+                let reason = match check(input, kind) {
+                    Ok(url) => panic!("{input:?} {kind:?} should be blocked, passed as {url}"),
+                    Err(reason) => reason,
+                };
+                assert!(
+                    matches!(
+                        reason,
+                        Blocked::Scheme(_) | Blocked::Malformed | Blocked::Host(_)
+                    ),
+                    "{input:?} {kind:?}: {reason:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_blob_without_an_origin_is_blocked_when_it_is_not_typed() {
+        // Typed, `blob:1234` reads as the host `blob` on port 1234, like any
+        // other `host:port` typed in the address bar.
+        for kind in [Navigation, NewWindow] {
+            assert_eq!(blocked("blob:1234", kind), Blocked::Scheme("blob".into()));
+        }
+    }
+
+    #[test]
+    fn a_blob_cannot_hide_a_blocked_host_behind_userinfo() {
+        assert!(is_host(&blocked(
+            "blob:https://user@127.0.0.1/1234",
+            Navigation
+        )));
+        assert!(is_host(&blocked(
+            "blob:https://example.com@localhost/1234",
+            Navigation
+        )));
+    }
+
+    #[test]
+    fn the_blob_scheme_alone_is_still_refused_with_its_own_name() {
+        assert_eq!(
+            blocked("blob:null/1234", Navigation),
+            Blocked::Scheme("blob".into())
+        );
     }
 
     #[test]

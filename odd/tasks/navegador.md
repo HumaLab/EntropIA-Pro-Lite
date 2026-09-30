@@ -377,3 +377,19 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   can add "Guardar PDF", which downloads the current URL through this same
   quarantine path (not built here); concurrent downloads of the same URL are
   matched to failures oldest first.
+- T5c-3 (`blob:` in the URL policy; T5c stays open until the user's Windows run).
+  `url_policy::check_url` now sends `blob:` to `check_blob`: the inner address
+  (`blob:<origin>/<id>`, parsed from the URL path) must be `http` or `https` and
+  then passes the same rules as any address for the same kind (typed `http`
+  only when typed, blocked hosts blocked as that host, userinfo cannot hide a
+  host). Opaque (`blob:null/..`), non-http(s) (`blob:about:blank`, `blob:file:`,
+  `blob:data:`, a blob of a blob) and unparsable blobs are refused as the `blob`
+  scheme. The old table row that expected every `blob:` to be blocked moved to
+  the new tests. RED: 5 of the 6 new tests failed (every `blob:` was
+  `Scheme("blob")`); GREEN 26/26 (`cargo test --lib navegador::url_policy`), one
+  test adjusted after the first GREEN run because a typed `blob:1234` is read
+  as host `blob` port 1234 (existing `host:port` rule), so the bare-blob case
+  is asserted for non-typed kinds only. `cargo fmt --check` ok, `cargo test
+  --lib navegador` all pass. Limitation: the policy sees the address, not the
+  bytes, so a page can still hand the browser a blob of its own making (that is
+  what a blob is); downloads still go through quarantine/verification.
