@@ -9,6 +9,10 @@
    * overlaps the placeholder (a dialog, a menu) would be hidden behind it: the
    * view hides the page while an overlay is open in the shell's overlay root.
    * Menus that attach to <body> instead (ToolbarMenu) are not detected.
+   *
+   * The capture panel sits below the placeholder, outside the native webview's
+   * rect: showing it shrinks the placeholder, and the ResizeObserver below moves
+   * the webview with it. Captures and downloads are drafts; nothing is stored.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { get } from 'svelte/store'
@@ -27,6 +31,18 @@
     type ViewerBounds,
     type ViewerState,
   } from '$lib/navegador'
+  import {
+    describeCaptureDraft,
+    describeDownload,
+    formatBytes,
+    navegadorCapturePage,
+    navegadorCaptureSelection,
+    onNavegadorDownload,
+    parseCaptureError,
+    upsertDownload,
+    type CaptureDraft,
+    type DownloadDraft,
+  } from '$lib/navegador-capture'
 
   const currentLocale = locale
   const instanceId = crypto.randomUUID()
@@ -41,6 +57,14 @@
   let status = $state<ViewerState>({ url: null, title: null, blocked: null })
   let error = $state<string | null>(null)
   let lastSent: string | null = null
+
+  let capturing = $state(false)
+  let capture = $state<CaptureDraft | null>(null)
+  let captureError = $state<string | null>(null)
+  let downloads = $state<DownloadDraft[]>([])
+  const captureView = $derived(capture ? describeCaptureDraft(capture) : null)
+  const downloadViews = $derived(downloads.map(describeDownload))
+  const panelOpen = $derived(captureView !== null || captureError !== null || downloads.length > 0)
 
   function measure(): ViewerBounds | null {
     if (!placeholder) return null
@@ -97,6 +121,41 @@
     }
   }
 
+  async function takeCapture(command: () => Promise<CaptureDraft>) {
+    if (capturing) return
+    capturing = true
+    captureError = null
+    try {
+      capture = await command()
+    } catch (reason) {
+      capture = null
+      const { code, detail } = parseCaptureError(reason)
+      captureError = t(`navegador.capture.error.${code}`, { message: detail ?? '' })
+    } finally {
+      capturing = false
+    }
+  }
+
+  function dismissCapture() {
+    capture = null
+    captureError = null
+  }
+
+  const DOWNLOAD_REASONS = [
+    'not_pdf',
+    'too_large',
+    'empty',
+    'interrupted',
+    'io_error',
+    'too_many',
+    'blocked',
+  ]
+
+  function downloadReason(reason: string | null): string {
+    const known = reason !== null && DOWNLOAD_REASONS.includes(reason)
+    return t(`navegador.download.reason.${known ? reason : 'unknown'}`)
+  }
+
   // Show the page while nothing covers it, hide it while an overlay is open.
   $effect(() => {
     if (!opened) return
@@ -131,6 +190,14 @@
       else unlisten = stop
     })
 
+    let unlistenDownload: (() => void) | undefined
+    void onNavegadorDownload((draft) => {
+      downloads = upsertDownload(downloads, draft)
+    }).then((stop) => {
+      if (disposed) stop()
+      else unlistenDownload = stop
+    })
+
     // Adopt a browser another view left open: same page, this view's address.
     void navegadorState()
       .then((state) => {
@@ -161,6 +228,7 @@
     return () => {
       disposed = true
       unlisten?.()
+      unlistenDownload?.()
       resize.disconnect()
       overlays.disconnect()
       window.removeEventListener('resize', onWindowChange)
@@ -208,6 +276,26 @@
     >
       <ActionIcon name="refresh" size={16} />
     </IconButton>
+    <IconButton
+      size="md"
+      variant="secondary"
+      label={$currentLocale && t('navegador.capturePage')}
+      title={$currentLocale && t('navegador.capturePage')}
+      disabled={!opened || capturing}
+      onclick={() => void takeCapture(navegadorCapturePage)}
+    >
+      <ActionIcon name="file-text" size={16} />
+    </IconButton>
+    <IconButton
+      size="md"
+      variant="secondary"
+      label={$currentLocale && t('navegador.captureSelection')}
+      title={$currentLocale && t('navegador.captureSelection')}
+      disabled={!opened || capturing}
+      onclick={() => void takeCapture(navegadorCaptureSelection)}
+    >
+      <ActionIcon name="text-quote" size={16} />
+    </IconButton>
     <input
       class="navegador-view__address"
       type="text"
@@ -244,6 +332,78 @@
     aria-label={$currentLocale && t('navegador.pageArea')}
     bind:this={placeholder}
   ></div>
+
+  {#if panelOpen}
+    <section
+      class="navegador-view__panel"
+      aria-label={$currentLocale && t('navegador.capture.title')}
+    >
+      {#if captureError}
+        <p class="navegador-view__problem" role="alert">{captureError}</p>
+      {/if}
+      {#if captureView}
+        <header class="navegador-view__panel-head">
+          <strong class="navegador-view__panel-title">{captureView.title}</strong>
+          <span class="navegador-view__chip"
+            >{$currentLocale && t(`navegador.capture.kind.${captureView.kind}`)}</span
+          >
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label={$currentLocale && t('navegador.capture.dismiss')}
+            title={$currentLocale && t('navegador.capture.dismiss')}
+            onclick={dismissCapture}
+          >
+            <ActionIcon name="close" size={14} />
+          </IconButton>
+        </header>
+        <dl class="navegador-view__facts">
+          <dt>{$currentLocale && t('navegador.capture.finalUrl')}</dt>
+          <dd>{captureView.finalUrl}</dd>
+          <dt>{$currentLocale && t('navegador.capture.accessedAt')}</dt>
+          <dd>{captureView.accessedAt}</dd>
+          <dt>{$currentLocale && t(`navegador.capture.hash.${captureView.hashOf}`)}</dt>
+          <dd><code>{captureView.shortSha}</code></dd>
+        </dl>
+        <p class="navegador-view__meta">
+          {$currentLocale && t('navegador.capture.text', { count: captureView.textLength })}
+          {#if captureView.kind === 'page'}
+            · {$currentLocale &&
+              t('navegador.capture.html', { size: formatBytes(captureView.htmlBytes) })}
+          {/if}
+        </p>
+        {#if captureView.truncated}
+          <p class="navegador-view__problem">
+            {$currentLocale && t('navegador.capture.truncated')}
+          </p>
+        {/if}
+        <blockquote class="navegador-view__preview">{captureView.preview}</blockquote>
+      {/if}
+
+      {#if downloadViews.length > 0}
+        <h3 class="navegador-view__panel-subtitle">
+          {$currentLocale && t('navegador.download.title')}
+        </h3>
+        <ul class="navegador-view__downloads">
+          {#each downloadViews as item (item.id)}
+            <li>
+              <strong>{item.fileName}</strong>
+              <span class="navegador-view__chip"
+                >{$currentLocale && t(`navegador.download.status.${item.status}`)}</span
+              >
+              {#if item.size}<span>{item.size}</span>{/if}
+              {#if item.shortSha}<code>{item.shortSha}</code>{/if}
+              {#if item.status === 'rejected' || item.status === 'failed'}
+                <span class="navegador-view__problem"
+                  >{$currentLocale && downloadReason(item.reason)}</span
+                >
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -289,6 +449,89 @@
     color: var(--color-text-secondary);
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+
+  .navegador-view__panel {
+    flex: none;
+    max-height: 30%;
+    overflow-y: auto;
+    padding: var(--space-3);
+    margin-block-start: var(--space-2);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-surface);
+    background: var(--color-surface);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .navegador-view__panel-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .navegador-view__panel-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .navegador-view__panel-subtitle {
+    margin: var(--space-3) 0 var(--space-1);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-primary);
+  }
+
+  .navegador-view__chip {
+    padding: 0 var(--space-2);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-input);
+    white-space: nowrap;
+  }
+
+  .navegador-view__facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-1) var(--space-3);
+    margin: var(--space-2) 0;
+  }
+
+  .navegador-view__facts dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    color: var(--color-text-primary);
+  }
+
+  .navegador-view__meta {
+    margin: 0;
+  }
+
+  .navegador-view__preview {
+    margin: var(--space-2) 0 0;
+    padding-inline-start: var(--space-3);
+    border-inline-start: 2px solid var(--color-hairline);
+    overflow-wrap: anywhere;
+    color: var(--color-text-primary);
+  }
+
+  .navegador-view__downloads {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .navegador-view__downloads li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .navegador-view__problem {

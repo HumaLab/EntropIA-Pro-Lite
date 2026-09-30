@@ -247,3 +247,57 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   ignored by WebView2 older than 101.0.1210.39. (e) DNS rebinding (see T3).
   (f) While the child exists `get_webview_window("main")` is `None` (see T4a).
   (g) Downloads are refused and there is no capture yet (T5).
+- T5a (capture page and selection as drafts; T5 stays open until T5b). Route:
+  delegated writer (T5 mapping trigger: 4+ files across Rust, JS and Svelte).
+  `navegador_capture_page` / `navegador_capture_selection` (async, in
+  `APP_COMMANDS`, `default.json`, `generate_handler!`; "not available" without
+  the feature). They run `src-tauri/src/navegador/capture.js` (`include_str!`,
+  the kind substituted for the `'__KIND__'` placeholder) in the child webview
+  with `Webview::eval_with_callback`, bridged to a `tokio` oneshot with a 10 s
+  timeout, and `capture::parse_capture` turns the JSON into a typed
+  `CaptureDraft`: object only, every field typed, text <= 2 MiB, html <= 10 MiB,
+  whole message <= 64 MiB (byte limits, not characters), title/site/lang
+  cleaned (control and bidi characters gone, bounded), canonical URL kept only
+  if absolute http(s), context around a selection cut to 400 chars on each side,
+  `final_url` re-checked with the T3 policy (`kind_for`: a typed `http` page can
+  still be captured, a link-followed one cannot), `accessed_at` from the Rust
+  clock (own RFC 3339 formatter, no new crate), `sha256` over the html bytes for
+  a page and over the quote bytes for a selection (`hashOf` says which). The
+  HTML never crosses IPC (`#[serde(skip)]`), only its size. Nothing is written
+  to disk or SQLite. UI: two toolbar buttons (`file-text`, `text-quote`) and a
+  panel BELOW the placeholder (title, kind, final URL, accessed_at UTC, short
+  hash, text length, HTML size, truncated flag, 500-char preview, error); the
+  placeholder shrinks and the existing ResizeObserver moves the native webview.
+  Pure helpers in `lib/navegador-capture.ts`.
+  RED/GREEN: `capture.rs` 25 of 26 failed on `unimplemented!()` then 26/26
+  (27/27 with `script_for`); `navegador-capture-script.test.ts` (happy-dom, the
+  real `.js` via `?raw`) 23 of 25 failed on the stub then 25/25; it also
+  compares the byte/char limits of the script with the Rust constants;
+  `navegador-capture.test.ts` failed to import (module missing) then 30/30;
+  `app_acl` 3 new-command failures ("Command not found") then 9/9 also with
+  `--features navegador`; `acl_manifest_guard` failed on the two new commands
+  (handler changed first) then 4/4.
+  Security notes: the script runs in the page's main world, so a hostile page can
+  alter what it returns (it controls its own content anyway); the draft is data,
+  never instructions; the snapshot is the raw `outerHTML` (scripts included), and
+  stripping active content stays a display-time job.
+  `eval_with_callback` (read in tauri 2.11.6 and wry 0.55.1, `webview2/mod.rs`
+  `execute_script`; NOT observed at runtime, I cannot see the app): the callback
+  gets the script's return value as a JSON string (`ExecuteScript`), so an
+  object arrives as `{"ok":true,...}`; an exception in the page arrives as
+  `"null"` on Windows, which is why the script catches everything and returns
+  `{ok:false,error}` (a `null` is rejected as `invalid_result`). It goes through
+  WebView2 directly, not the page's IPC or CSP, and needs no capability. If the
+  page never answers (hung script, document being replaced) the 10 s timeout
+  returns `timeout`. The built-in PDF viewer: the script answers `pdf_document`
+  when `document.contentType` is `application/pdf` (unverified in WebView2; if
+  the viewer is an embedded plugin document the script would otherwise return
+  empty text). Unsettled: whether WebView2 accepts a 10+ MB `ExecuteScript`
+  result: the script caps at 12 MiB of content, so a page near the cap is the
+  case to try.
+  Limitations: only the top frame is read (selections and text inside iframes
+  are not captured); selection context is whitespace-collapsed `textContent`, so
+  anchoring in phase 2 must normalise whitespace the same way; text is
+  `innerText` (rendered, so hidden content is excluded), while the HTML snapshot
+  is the live DOM, not the bytes the server sent; lone surrogates are replaced
+  with U+FFFD; a page can spoof what it returns.

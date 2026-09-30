@@ -8,6 +8,7 @@
 
 use tauri::AppHandle;
 
+use super::capture::{CaptureDraft, CaptureKind};
 use super::url_policy::{self, NavigationKind};
 use super::{bounds, viewer, ViewerState, UNAVAILABLE};
 
@@ -93,6 +94,26 @@ pub async fn navegador_close(app: AppHandle) -> Result<(), String> {
 pub async fn navegador_state(app: AppHandle) -> Result<ViewerState, String> {
     ensure_available()?;
     viewer::state(&app)
+}
+
+/// Read the page shown in the browser: its text and an HTML snapshot. Returns
+/// a draft; nothing is stored. Errors are a stable code (`no_selection`,
+/// `timeout`, ...), optionally followed by `: detail`.
+#[tauri::command]
+pub async fn navegador_capture_page(app: AppHandle) -> Result<CaptureDraft, String> {
+    ensure_available()?;
+    viewer::capture(&app, CaptureKind::Page)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read the text selected in the page, with the text around it.
+#[tauri::command]
+pub async fn navegador_capture_selection(app: AppHandle) -> Result<CaptureDraft, String> {
+    ensure_available()?;
+    viewer::capture(&app, CaptureKind::Selection)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

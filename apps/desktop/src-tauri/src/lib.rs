@@ -1213,6 +1213,8 @@ pub fn run() {
             navegador::commands::navegador_set_visible,
             navegador::commands::navegador_close,
             navegador::commands::navegador_state,
+            navegador::commands::navegador_capture_page,
+            navegador::commands::navegador_capture_selection,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,

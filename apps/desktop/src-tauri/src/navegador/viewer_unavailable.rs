@@ -3,6 +3,7 @@
 use tauri::{AppHandle, Url};
 
 use super::bounds::Bounds;
+use super::capture::{CaptureDraft, CaptureError, CaptureKind};
 use super::{ViewerState, UNAVAILABLE};
 
 pub const AVAILABLE: bool = false;
@@ -41,6 +42,13 @@ pub fn close(_app: &AppHandle) -> Result<(), String> {
 
 pub fn state(_app: &AppHandle) -> Result<ViewerState, String> {
     Err(UNAVAILABLE.to_string())
+}
+
+pub async fn capture(_app: &AppHandle, _kind: CaptureKind) -> Result<CaptureDraft, CaptureError> {
+    Err(CaptureError::with_detail(
+        super::capture::code::NOT_OPEN,
+        UNAVAILABLE,
+    ))
 }
 
 /// Nothing to close.

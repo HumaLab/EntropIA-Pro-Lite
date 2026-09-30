@@ -26,6 +26,7 @@
 //!   main window.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{
@@ -33,12 +34,16 @@ use tauri::{
 };
 
 use super::bounds::Bounds;
+use super::capture::{self, code, CaptureDraft, CaptureError, CaptureKind};
 use super::url_policy::{self, NavigationKind};
 use super::{ViewerState, STATE_EVENT, WEBVIEW_LABEL};
 
 pub const AVAILABLE: bool = true;
 
 const MAIN_LABEL: &str = "main";
+
+/// How long the page gets to answer the capture script.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What the callbacks and the commands both need to see.
 #[derive(Default)]
@@ -240,6 +245,41 @@ pub fn close(app: &AppHandle) -> Result<(), String> {
 
 pub fn state(app: &AppHandle) -> Result<ViewerState, String> {
     Ok(shared(app).update(|_| {}))
+}
+
+/// Run the capture script in the page and validate what comes back.
+///
+/// The script goes through the platform's script evaluation
+/// (`Webview::eval_with_callback`), not the page's IPC: the page never sees a
+/// command and needs no capability. The callback hands the result, serialised
+/// as JSON, to a one-shot channel so this can stay an async command; if the
+/// page does not answer in [`CAPTURE_TIMEOUT`] (a hung script, a page
+/// mid-navigation whose document is replaced) the capture fails instead of
+/// waiting forever.
+pub async fn capture(app: &AppHandle, kind: CaptureKind) -> Result<CaptureDraft, CaptureError> {
+    let view = app
+        .get_webview(WEBVIEW_LABEL)
+        .ok_or_else(|| CaptureError::new(code::NOT_OPEN))?;
+    let shared = shared(app);
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let tx = Mutex::new(Some(tx));
+    view.eval_with_callback(capture::script_for(kind), move |result| {
+        let sender = tx.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
+    })
+    .map_err(|e| CaptureError::with_detail(code::SCRIPT_FAILED, e.to_string()))?;
+
+    let raw = match tokio::time::timeout(CAPTURE_TIMEOUT, rx).await {
+        Ok(Ok(raw)) => raw,
+        Ok(Err(_)) => return Err(CaptureError::new(code::SCRIPT_FAILED)),
+        Err(_) => return Err(CaptureError::new(code::TIMEOUT)),
+    };
+    capture::parse_capture(&raw, kind, capture::now_rfc3339(), |url| {
+        shared.kind_for(url)
+    })
 }
 
 /// Close the browser if it is open, before the main window is destroyed.

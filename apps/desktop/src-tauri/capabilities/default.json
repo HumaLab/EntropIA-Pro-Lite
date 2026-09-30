@@ -176,6 +176,8 @@
     "allow-navegador-set-visible",
     "allow-navegador-close",
     "allow-navegador-state",
+    "allow-navegador-capture-page",
+    "allow-navegador-capture-selection",
     "core:default",
     "core:path:default",
     "core:event:default",

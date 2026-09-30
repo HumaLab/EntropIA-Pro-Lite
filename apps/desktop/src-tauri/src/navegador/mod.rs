@@ -10,6 +10,10 @@
 use serde::Serialize;
 
 pub mod bounds;
+// Parsing is compiled in every build; only the viewer that feeds it needs the
+// `navegador` feature.
+#[allow(dead_code)]
+pub mod capture;
 pub mod commands;
 // The navigation callbacks that use the rest of the policy exist only when the
 // `navegador` feature is on.
