@@ -15,6 +15,8 @@ pub mod bounds;
 #[allow(dead_code)]
 pub mod capture;
 pub mod commands;
+#[allow(dead_code)]
+pub mod download;
 // The navigation callbacks that use the rest of the policy exist only when the
 // `navegador` feature is on.
 #[allow(dead_code)]
@@ -36,6 +38,19 @@ pub const WEBVIEW_LABEL: &str = "navegador-web";
 /// Event the main webview listens to for changes in the browser state.
 #[cfg(feature = "navegador")]
 pub const STATE_EVENT: &str = "navegador://state";
+
+/// Event the main webview listens to for downloads in quarantine.
+#[cfg(feature = "navegador")]
+pub const DOWNLOAD_EVENT: &str = "navegador://download";
+
+/// Remove quarantined downloads that a crash or an abandoned draft left
+/// behind. Runs off the calling thread; harmless when nothing exists.
+pub fn sweep_quarantine(cache: &std::path::Path) {
+    let dir = download::quarantine_dir(cache);
+    std::thread::spawn(move || {
+        download::sweep_stale(&dir, std::time::SystemTime::now(), download::STALE_AFTER);
+    });
+}
 
 /// What every command answers when the build has no browser.
 pub const UNAVAILABLE: &str = "The embedded browser is not available in this build";

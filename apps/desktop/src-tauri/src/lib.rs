@@ -646,6 +646,7 @@ pub fn run() {
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app.manage(store_updates::StoreUpdateState::new());
+            navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
 
             // Where the app decided its files live, in the log rather than on

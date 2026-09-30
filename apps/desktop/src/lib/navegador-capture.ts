@@ -85,7 +85,7 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unit]}`
 }
 
-const CAPTURE_ERROR_CODES = [
+export const CAPTURE_ERROR_CODES = [
   'no_selection',
   'pdf_document',
   'script_failed',
@@ -112,6 +112,23 @@ export function parseCaptureError(reason: unknown): {
   const code = CAPTURE_ERROR_CODES.find((known) => known === head)
   if (!code) return { code: 'unknown', detail: message }
   return { code, detail: rest.length > 0 ? rest.join(': ') : null }
+}
+
+/** Reasons a download is refused or fails; mirrors `download::reason`. */
+export const DOWNLOAD_REASON_CODES = [
+  'not_pdf',
+  'too_large',
+  'empty',
+  'interrupted',
+  'io_error',
+  'too_many',
+  'blocked',
+] as const
+
+/** The message key for a reason; anything unrecognised is the generic one. */
+export function downloadReasonKey(reason: string | null): string {
+  const known = DOWNLOAD_REASON_CODES.find((code) => code === reason)
+  return `navegador.download.reason.${known ?? 'unknown'}`
 }
 
 /** What the capture panel shows for a draft. */

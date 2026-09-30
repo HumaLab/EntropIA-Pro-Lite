@@ -14,7 +14,9 @@
 //! Choices worth knowing:
 //! - A popup (`window.open`, `target=_blank`) is never opened as a window; if
 //!   its address passes the policy it loads in this same webview.
-//! - Downloads are refused until capture handles them.
+//! - A download is let through only if its address passes the policy; it lands
+//!   in a quarantine directory under the cache directory, is checked when it
+//!   ends and is reported to the main webview as a draft (see [`download`]).
 //! - The typed URL is remembered so that the initial load of a typed `http`
 //!   address, which arrives as a plain navigation, is let through; a redirect
 //!   from it to `http` elsewhere is not.
@@ -35,8 +37,9 @@ use tauri::{
 
 use super::bounds::Bounds;
 use super::capture::{self, code, CaptureDraft, CaptureError, CaptureKind};
+use super::download::{self, DownloadDraft};
 use super::url_policy::{self, NavigationKind};
-use super::{ViewerState, STATE_EVENT, WEBVIEW_LABEL};
+use super::{ViewerState, DOWNLOAD_EVENT, STATE_EVENT, WEBVIEW_LABEL};
 
 pub const AVAILABLE: bool = true;
 
@@ -51,6 +54,8 @@ struct Shared {
     /// The last address the person typed.
     typed: Mutex<Option<Url>>,
     info: Mutex<ViewerState>,
+    /// Downloads let through and not yet ended.
+    downloads: download::Registry,
 }
 
 /// Managed state wrapper, created on first open.
@@ -81,6 +86,83 @@ impl Shared {
 fn emit_state(app: &AppHandle, state: &ViewerState) {
     // Only the main webview: the page's own webview must never be a target.
     let _ = app.emit_to(MAIN_LABEL, STATE_EVENT, state);
+}
+
+fn emit_download(app: &AppHandle, draft: &DownloadDraft) {
+    let _ = app.emit_to(MAIN_LABEL, DOWNLOAD_EVENT, draft);
+}
+
+/// The webview asked to download `url`. Returning `true` lets it start, at the
+/// quarantine path written into `destination`.
+fn download_requested(
+    app: &AppHandle,
+    shared: &Shared,
+    url: Url,
+    destination: &mut std::path::PathBuf,
+) -> bool {
+    let refuse = |why: &'static str| {
+        emit_download(app, &DownloadDraft::refused(&url, destination, why));
+        false
+    };
+    if let Err(blocked) = url_policy::check_url(&url, shared.kind_for(&url)) {
+        let state = shared.update(|s| s.blocked = Some(blocked.to_string()));
+        emit_state(app, &state);
+        return refuse(download::reason::BLOCKED);
+    }
+    let dir = match crate::path_utils::cache_dir(app) {
+        Ok(cache) => download::quarantine_dir(&cache),
+        Err(_) => return refuse(download::reason::IO_ERROR),
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return refuse(download::reason::IO_ERROR);
+    }
+    match shared.downloads.begin(&url, destination) {
+        Ok(pending) => {
+            *destination = download::part_path(&dir, &pending.id);
+            emit_download(app, &DownloadDraft::started(&pending));
+            true
+        }
+        Err(why) => refuse(why),
+    }
+}
+
+/// A download ended. Only downloads this module let through are looked at, and
+/// only through the path this module chose for them.
+fn download_finished(
+    app: &AppHandle,
+    shared: &Shared,
+    url: Url,
+    path: Option<std::path::PathBuf>,
+    success: bool,
+) {
+    // A failed or cancelled download reports no path: match it by address.
+    let pending = path
+        .as_deref()
+        .and_then(|p| shared.downloads.take_by_path(p))
+        .or_else(|| shared.downloads.take_by_url(&url));
+    let Some(pending) = pending else { return };
+    let Ok(cache) = crate::path_utils::cache_dir(app) else {
+        emit_download(
+            app,
+            &DownloadDraft::finished(&pending, Err(download::reason::IO_ERROR)),
+        );
+        return;
+    };
+    let dir = download::quarantine_dir(&cache);
+    if !success {
+        download::discard_part(&dir, &pending.id);
+        emit_download(
+            app,
+            &DownloadDraft::finished(&pending, Err(download::reason::INTERRUPTED)),
+        );
+        return;
+    }
+    // Hashing up to 100 MB does not belong on the thread the webview calls on.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let outcome = download::finalize(&dir, &pending.id);
+        emit_download(&app, &DownloadDraft::finished(&pending, outcome));
+    });
 }
 
 fn shared(app: &AppHandle) -> Arc<Shared> {
@@ -156,13 +238,17 @@ pub fn open(app: &AppHandle, url: Url, bounds: Bounds) -> Result<ViewerState, St
     };
     let on_download = {
         let (app, shared) = (app.clone(), shared.clone());
-        move |_view: Webview, event: DownloadEvent<'_>| {
-            if matches!(event, DownloadEvent::Requested { .. }) {
-                let state = shared
-                    .update(|s| s.blocked = Some("Downloads are not available yet".to_string()));
-                emit_state(&app, &state);
+        move |_view: Webview, event: DownloadEvent<'_>| match event {
+            DownloadEvent::Requested { url, destination } => {
+                download_requested(&app, &shared, url, destination)
             }
-            false
+            DownloadEvent::Finished { url, path, success } => {
+                download_finished(&app, &shared, url, path, success);
+                true
+            }
+            // `DownloadEvent` is non-exhaustive: an event this code does not
+            // know is not a download it agreed to.
+            _ => false,
         }
     };
     let on_title = {

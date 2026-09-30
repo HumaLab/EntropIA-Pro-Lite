@@ -74,9 +74,11 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
-- [ ] T5 — (route: delegated writer) Capture without IPC: page text, selection with context, HTML
-  snapshot (platform script evaluation with result), PDF download via
-  `on_download`.
+- [x] T5 — (route: delegated writer; automated checks observed, runtime behaviour
+  not yet seen by the user: that is T6) Capture without IPC: page text,
+  selection with context, HTML snapshot (platform script evaluation with
+  result), PDF download via `on_download`. T5a `d63f19fe`, T5b in the commit
+  that carries this note.
 - [ ] T6 — Windows verification matrix with the user (plan §10), then decide
   the engine and update the plan.
 
@@ -301,3 +303,59 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `innerText` (rendered, so hidden content is excluded), while the HTML snapshot
   is the live DOM, not the bytes the server sent; lone surrogates are replaced
   with U+FFFD; a page can spoof what it returns.
+- T5b (PDF download into quarantine). `navegador/download.rs` (pure, tested) plus
+  the handler in `viewer.rs`. `DownloadEvent::Requested { url, destination }`
+  (tauri 2.11.6; wry 0.55.1 `webview2/mod.rs` `DownloadStarting`): the URL runs
+  through the T3 policy (`kind_for`, so a typed `http` file works), a `Registry`
+  allows at most 4 at once, and `destination` is rewritten to
+  `<cache>/navegador/downloads/<uuid>.part` (`path_utils::cache_dir`, never the
+  Downloads folder); a denied download makes wry call `SetCancel(true)`. The
+  name WebView2 suggests (`destination`'s file name: Content-Disposition or the
+  URL) is only kept for display, after `sanitize_file_name` (last component
+  whatever the separator, `<>:"|?*` and control/bidi characters replaced or
+  dropped, reserved device names `CON`/`NUL`/`COM1`-9/`LPT1`-9 prefixed with `_`,
+  edge dots and spaces trimmed, 120 chars, always `.pdf`). `Finished { url, path,
+  success }`: the code looks only at the file name of the path it chose (the OS
+  directory is ignored, ids are validated as `[A-Za-z0-9-]`), so nothing outside
+  quarantine can be read, renamed or deleted. On success, a thread checks size
+  (0 < n <= 100 MiB, cap also enforced while hashing), the `%PDF-` magic at
+  offset 0, hashes in 64 KiB blocks and renames to `<uuid>.pdf`; a failed check
+  deletes the file and the draft is `rejected` (`not_pdf`, `too_large`, `empty`)
+  or `failed` (`io_error`, `interrupted`). Drafts `{ id, url, fileName, size,
+  sha256, accessedAt, status, reason }` (no path; the file is `<id>.pdf`) go out
+  as `navegador://download` with `emit_to("main", ..)` at start and at the end.
+  `sweep_quarantine(&cache_dir)` runs from `setup` on a thread and deletes files
+  older than 24 h (also verified PDFs: until phase 2 decides where they live,
+  quarantine is their only home). UI: downloads list in the same panel, newest
+  first, max 5. No new command, so no new ACL surface; the child webview still
+  has no capability.
+  RED/GREEN: `download.rs` 33 of 34 failed on `unimplemented!()` then 34/34;
+  draft constructors 4 failed then 39/39; `navegador-messages.test.ts` (reads
+  the Rust `code::`/`reason::` constants and both language tables) 8 of 10 failed
+  then 10/10; `NavegadorView.test.ts` (10 tests: buttons disabled, draft panel
+  outside the placeholder, failure messages es/en, dismiss, hostile markup as
+  text, download list and rejection) written after the view: 9/10 first run, the
+  failure was a test timing issue (label after a locale change), fixed.
+  Verification: `cargo test --lib navegador` 92/92 with and without `--features
+  navegador`; `--test app_acl` 9/9 and `--test acl_manifest_guard` 4/4 with the
+  feature (in a separate target dir: the user's `tauri dev` had the exe locked);
+  full `cargo test --no-fail-fast` 1399 lib passed, 1 failed (the known `no_other_module_opens_the_archive_by_hand`) plus every integration test ok; `cargo check`, `cargo clippy --all-targets` with and without the feature: no
+  warnings in `src/navegador`; `cargo fmt --check` ok; `pnpm typecheck` 0 errors;
+  `VITE_LOCAL_ML=0` desktop typecheck 0 errors; `pnpm test` 299 store + 800 ui +
+  2680 desktop passed (7 skipped); `pnpm lint` only the known
+  `WritingView.svelte:1403`; prettier clean on every touched file;
+  `VITE_NAVEGADOR=1` vite build emits the NavegadorView chunk.
+  Not observed (needs the user, T6): WebView2's real behaviour for
+  cancellations (source says a cancelled or failed download reports `success:
+  false` and `path: None`, matched by URL), whether the built-in PDF viewer
+  shows instead of downloading when a link opens a PDF (WebView2 shows its
+  viewer for `application/pdf` without `Content-Disposition: attachment`; then
+  `on_download` never fires and the capture script answers `pdf_document`), and
+  whether the viewer's own save button reaches `on_download` (unknown).
+  Limitations: the size cap cannot stop a download in progress (no progress
+  event), only refuse it when it ends; `DownloadEvent::Finished` on macOS has no
+  path (matched by URL, the file is still ours); Content-Disposition is not
+  exposed beyond the suggested name; an inline PDF cannot be captured yet: phase 2
+  can add "Guardar PDF", which downloads the current URL through this same
+  quarantine path (not built here); concurrent downloads of the same URL are
+  matched to failures oldest first.

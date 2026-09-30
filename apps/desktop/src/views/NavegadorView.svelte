@@ -34,6 +34,7 @@
   import {
     describeCaptureDraft,
     describeDownload,
+    downloadReasonKey,
     formatBytes,
     navegadorCapturePage,
     navegadorCaptureSelection,
@@ -139,21 +140,6 @@
   function dismissCapture() {
     capture = null
     captureError = null
-  }
-
-  const DOWNLOAD_REASONS = [
-    'not_pdf',
-    'too_large',
-    'empty',
-    'interrupted',
-    'io_error',
-    'too_many',
-    'blocked',
-  ]
-
-  function downloadReason(reason: string | null): string {
-    const known = reason !== null && DOWNLOAD_REASONS.includes(reason)
-    return t(`navegador.download.reason.${known ? reason : 'unknown'}`)
   }
 
   // Show the page while nothing covers it, hide it while an overlay is open.
@@ -395,7 +381,7 @@
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
               {#if item.status === 'rejected' || item.status === 'failed'}
                 <span class="navegador-view__problem"
-                  >{$currentLocale && downloadReason(item.reason)}</span
+                  >{$currentLocale && t(downloadReasonKey(item.reason))}</span
                 >
               {/if}
             </li>
