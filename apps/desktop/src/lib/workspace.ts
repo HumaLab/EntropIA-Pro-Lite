@@ -38,6 +38,16 @@ export interface WorkspaceSnapshot {
 
 type WorkspaceSubscriber = (snapshot: WorkspaceSnapshot) => void
 
+/** What a tab-closed listener learns: which tab, what it was showing, who is left. */
+export interface TabClosedEvent {
+  readonly tabId: string
+  /** The view the tab was showing when it closed. */
+  readonly view: View
+  readonly remaining: readonly Tab[]
+}
+
+type TabClosedListener = (event: TabClosedEvent) => void
+
 /** Chrome-style: four tabs is the ceiling, matching the design's `+` cap. */
 export const MAX_TABS = 4
 const SPLIT_RATIO_STORAGE_KEY = 'entropia-workspace-split-ratio'
@@ -80,6 +90,7 @@ export class WorkspaceStore {
   private writingOwnerTabId: string | null = null
   private readonly subscribers = new Set<WorkspaceSubscriber>()
   private readonly tabUnsubscribes = new Map<string, () => void>()
+  private readonly tabClosedListeners = new Set<TabClosedListener>()
 
   constructor() {
     const home = this.createTab()
@@ -135,6 +146,18 @@ export class WorkspaceStore {
     this.writingOwnerTabId =
       this.tabList.find((t) => t.id !== changedTabId && t.navigation.current.name === 'writing')
         ?.id ?? null
+  }
+
+  /**
+   * Hear about tabs that are closed on purpose (not the workspace being
+   * disposed). Runs after the tab is gone; a listener that throws never keeps
+   * the tab from closing or the other listeners from running.
+   */
+  onTabClosed(listener: TabClosedListener): () => void {
+    this.tabClosedListeners.add(listener)
+    return () => {
+      this.tabClosedListeners.delete(listener)
+    }
   }
 
   subscribe(run: WorkspaceSubscriber): () => void {
@@ -221,6 +244,7 @@ export class WorkspaceStore {
 
     this.tabUnsubscribes.get(tabId)?.()
     this.tabUnsubscribes.delete(tabId)
+    const closedView = this.tabList[index]!.navigation.current
     this.tabList[index]!.navigation.dispose()
     const remaining = this.tabList.filter((tab) => tab.id !== tabId)
 
@@ -247,6 +271,13 @@ export class WorkspaceStore {
 
     this.tabList = remaining
     this.emit()
+    this.tabClosedListeners.forEach((listener) => {
+      try {
+        listener({ tabId, view: closedView, remaining })
+      } catch (reason) {
+        console.warn('[workspace] a tab-closed listener failed:', reason)
+      }
+    })
   }
 
   /** Releases every tab's subscriptions and drops this store's subscribers. */
@@ -255,6 +286,7 @@ export class WorkspaceStore {
     this.tabUnsubscribes.clear()
     this.tabList.forEach((tab) => tab.navigation.dispose())
     this.subscribers.clear()
+    this.tabClosedListeners.clear()
   }
 
   activateTab(tabId: string): void {

@@ -50,13 +50,15 @@ export interface ViewerApi {
 
 /**
  * There is one native webview and possibly several Navegador views (a split
- * pane, a tab switched away and back). The session decides who drives it:
- * the view that showed it last owns it, a hidden or replaced view cannot move
- * it, and the last view to go away closes it. Calls run one after another, so
- * a fast unmount and mount never interleave their native round trips.
+ * pane, a tab switched away and back). The session decides who drives it: the
+ * view that showed it last owns it, and a hidden or replaced view cannot move
+ * it. A view going away only hides the browser: the page, its history and its
+ * sign-ins stay alive, and the next view to show it puts it back at its own
+ * rect. It closes only when [close] is called (its tab was closed) or the app
+ * exits (the backend closes it then). Calls run one after another, so a fast
+ * unmount and mount never interleave their native round trips.
  */
 export function createViewerSession(api: ViewerApi) {
-  const mounted = new Set<string>()
   let owner: string | null = null
   let opened = false
   let tail: Promise<unknown> = Promise.resolve()
@@ -68,10 +70,6 @@ export function createViewerSession(api: ViewerApi) {
   }
 
   return {
-    attach(id: string): void {
-      mounted.add(id)
-    },
-
     /** Whether the native webview exists, as of the calls already made. */
     isOpen(): boolean {
       return opened
@@ -102,18 +100,22 @@ export function createViewerSession(api: ViewerApi) {
       })
     },
 
+    /** A view is going away: hide the browser if it was driving it, keep it alive. */
     detach(id: string): Promise<void> {
-      mounted.delete(id)
       return enqueue(async () => {
-        const wasOwner = owner === id
-        if (wasOwner) owner = null
+        if (owner !== id) return
+        owner = null
+        if (opened) await api.setVisible(false)
+      })
+    },
+
+    /** Close the browser for good (its tab was closed). A no-op when none is open. */
+    close(): Promise<void> {
+      return enqueue(async () => {
+        owner = null
         if (!opened) return
-        if (mounted.size === 0) {
-          opened = false
-          await api.close()
-        } else if (wasOwner) {
-          await api.setVisible(false)
-        }
+        opened = false
+        await api.close()
       })
     },
   }

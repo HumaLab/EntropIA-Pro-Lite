@@ -1,0 +1,138 @@
+import { get } from 'svelte/store'
+import { describe, expect, it, vi } from 'vitest'
+import type { CaptureDraft, DownloadDraft } from './navegador-capture'
+import { createNavegadorStore } from './navegador-store'
+
+const capture: CaptureDraft = {
+  kind: 'page',
+  finalUrl: 'https://example.com/',
+  title: 'Example',
+  canonicalUrl: null,
+  siteName: null,
+  lang: 'en',
+  text: 'text',
+  quote: null,
+  quotePrefix: null,
+  quoteSuffix: null,
+  htmlBytes: 10,
+  hashOf: 'html',
+  sha256: 'a'.repeat(64),
+  truncated: false,
+  accessedAt: '2026-09-30T12:00:00Z',
+}
+
+const download = (id: string, patch: Partial<DownloadDraft> = {}): DownloadDraft => ({
+  id,
+  url: `https://example.com/${id}.pdf`,
+  fileName: `${id}.pdf`,
+  size: null,
+  sha256: null,
+  accessedAt: '2026-09-30T12:00:00Z',
+  status: 'downloading',
+  reason: null,
+  ...patch,
+})
+
+function fakeListen() {
+  let handler: ((draft: DownloadDraft) => void) | undefined
+  const unlisten = vi.fn()
+  const listen = vi.fn(async (next: (draft: DownloadDraft) => void) => {
+    handler = next
+    return unlisten
+  })
+  return { listen, unlisten, emit: (draft: DownloadDraft) => handler?.(draft) }
+}
+
+describe('createNavegadorStore', () => {
+  it('starts empty', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    expect(get(store)).toEqual({ capture: null, captureError: null, downloads: [] })
+  })
+
+  it('keeps a capture draft and its error until they are dismissed', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.setCapture(capture)
+    expect(get(store).capture).toEqual(capture)
+    store.setCaptureError('boom')
+    expect(get(store).capture).toBeNull()
+    expect(get(store).captureError).toBe('boom')
+    store.setCapture(capture)
+    expect(get(store).captureError).toBeNull()
+    store.clearCapture()
+    expect(get(store)).toMatchObject({ capture: null, captureError: null })
+  })
+
+  it('lists downloads newest first, updates them in place and keeps the last few', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    for (const id of ['a', 'b', 'c', 'd', 'e', 'f']) store.applyDownload(download(id))
+    expect(get(store).downloads.map((d) => d.id)).toEqual(['f', 'e', 'd', 'c', 'b'])
+    store.applyDownload(download('d', { status: 'ready' }))
+    expect(get(store).downloads.map((d) => [d.id, d.status])).toEqual([
+      ['f', 'downloading'],
+      ['e', 'downloading'],
+      ['d', 'ready'],
+      ['c', 'downloading'],
+      ['b', 'downloading'],
+    ])
+  })
+
+  it('survives the view: a second reader sees what the first one left', () => {
+    const store = createNavegadorStore({ listen: fakeListen().listen })
+    store.setCapture(capture)
+    store.applyDownload(download('a'))
+    // A view unmounts and another mounts: it only has to subscribe again.
+    expect(get(store).capture).toEqual(capture)
+    expect(get(store).downloads).toHaveLength(1)
+  })
+
+  it('hears downloads that finish while no view is mounted', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await store.startListening()
+    fake.emit(download('a'))
+    fake.emit(download('a', { status: 'ready', size: 1 }))
+    expect(get(store).downloads).toEqual([download('a', { status: 'ready', size: 1 })])
+  })
+
+  it('listens once however many views ask', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await Promise.all([store.startListening(), store.startListening()])
+    await store.startListening()
+    expect(fake.listen).toHaveBeenCalledTimes(1)
+  })
+
+  it('can try again after a listen that failed', async () => {
+    const fake = fakeListen()
+    fake.listen.mockRejectedValueOnce(new Error('no event bridge'))
+    const store = createNavegadorStore({ listen: fake.listen })
+    await expect(store.startListening()).rejects.toThrow('no event bridge')
+    await store.startListening()
+    expect(fake.listen).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the state without stopping to listen', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await store.startListening()
+    store.setCapture(capture)
+    store.applyDownload(download('a'))
+    store.clearAll()
+    expect(get(store)).toEqual({ capture: null, captureError: null, downloads: [] })
+    fake.emit(download('b'))
+    expect(get(store).downloads.map((d) => d.id)).toEqual(['b'])
+    expect(fake.unlisten).not.toHaveBeenCalled()
+  })
+
+  it('stops listening and forgets everything on reset', async () => {
+    const fake = fakeListen()
+    const store = createNavegadorStore({ listen: fake.listen })
+    await store.startListening()
+    store.applyDownload(download('a'))
+    store.reset()
+    expect(fake.unlisten).toHaveBeenCalledTimes(1)
+    expect(get(store).downloads).toEqual([])
+    await store.startListening()
+    expect(fake.listen).toHaveBeenCalledTimes(2)
+  })
+})

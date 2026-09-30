@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { locale } from '$lib/i18n'
+import { navegadorSession } from '$lib/navegador'
+import { navegadorStore } from '$lib/navegador-store'
 import type { CaptureDraft, DownloadDraft } from '$lib/navegador-capture'
 import NavegadorView from './NavegadorView.svelte'
 
@@ -40,7 +42,7 @@ const pdf: DownloadDraft = {
 let handlers: Record<string, (event: { payload: unknown }) => void> = {}
 let respond: (command: string) => unknown
 
-beforeEach(() => {
+beforeEach(async () => {
   locale.set('es')
   handlers = {}
   respond = (command) =>
@@ -56,6 +58,10 @@ beforeEach(() => {
     handlers[name] = handler as (event: { payload: unknown }) => void
     return () => {}
   })
+  // The browser session and the store outlive a view: start every test clean.
+  await navegadorSession.close()
+  navegadorStore.reset()
+  vi.mocked(invoke).mockClear()
   // happy-dom lays nothing out: give the page area a real size.
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
     x: 0,
@@ -74,13 +80,18 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-async function openPage() {
-  render(NavegadorView)
+async function openPageView() {
+  const view = render(NavegadorView)
   const address = screen.getByRole('textbox', { name: 'Dirección' })
   await fireEvent.input(address, { target: { value: 'example.com' } })
   await fireEvent.submit(address.closest('form')!)
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('navegador_open', expect.anything()))
   await waitFor(() => expect(screen.getByLabelText('Capturar página')).toBeEnabled())
+  return view
+}
+
+async function openPage() {
+  await openPageView()
 }
 
 describe('NavegadorView capture', () => {
@@ -218,5 +229,66 @@ describe('NavegadorView downloads', () => {
     })
     expect(await screen.findByText('No es un PDF.')).toBeInTheDocument()
     expect(screen.getByText('Rechazado')).toBeInTheDocument()
+  })
+})
+
+describe('NavegadorView across mounts', () => {
+  const commands = () => vi.mocked(invoke).mock.calls.map(([command]) => command)
+
+  it('hides the browser when the view goes away and never closes it', async () => {
+    const view = await openPageView()
+    vi.mocked(invoke).mockClear()
+    view.unmount()
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('navegador_set_visible', { visible: false })
+    )
+    expect(commands()).not.toContain('navegador_close')
+    expect(navegadorSession.isOpen()).toBe(true)
+  })
+
+  it('shows the same browser again, at the new rect, when the view comes back', async () => {
+    const view = await openPageView()
+    view.unmount()
+    await waitFor(() => expect(commands()).toContain('navegador_set_visible'))
+    vi.mocked(invoke).mockClear()
+
+    render(NavegadorView)
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('navegador_set_bounds', {
+        x: 0,
+        y: 100,
+        width: 800,
+        height: 500,
+      })
+    )
+    expect(invoke).toHaveBeenCalledWith('navegador_set_visible', { visible: true })
+    expect(commands()).not.toContain('navegador_open')
+    // The address bar shows the page the browser is still on.
+    expect(await screen.findByDisplayValue('https://example.com/article')).toBeInTheDocument()
+    expect(screen.getByLabelText('Capturar página')).toBeEnabled()
+  })
+
+  it('keeps the capture draft and the downloads when the view is remounted', async () => {
+    const view = await openPageView()
+    respond = (command) => (command === 'navegador_capture_page' ? page : undefined)
+    await fireEvent.click(screen.getByLabelText('Capturar página'))
+    await screen.findByLabelText(/Captura \(borrador/)
+    handlers['navegador://download']!({ payload: pdf })
+    await screen.findByText('PDF verificado')
+    view.unmount()
+
+    render(NavegadorView)
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    expect(within(panel).getByText('An article')).toBeInTheDocument()
+    expect(within(panel).getByText('paper.pdf')).toBeInTheDocument()
+  })
+
+  it('lists a download that finished while no view was mounted', async () => {
+    const view = await openPageView()
+    view.unmount()
+    handlers['navegador://download']!({ payload: pdf })
+    render(NavegadorView)
+    expect(await screen.findByText('paper.pdf')).toBeInTheDocument()
+    expect(screen.getByText('PDF verificado')).toBeInTheDocument()
   })
 })

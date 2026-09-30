@@ -393,3 +393,41 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   --lib navegador` all pass. Limitation: the policy sees the address, not the
   bytes, so a page can still hand the browser a blob of its own making (that is
   what a blob is); downloads still go through quarantine/verification.
+- T5c-1 (keep the browser alive across section and tab switches). Route:
+  delegated writer, TS only. The Navegador view unmounts on every section or tab
+  switch; before, the last unmount closed the native webview (page, history,
+  drafts and downloads lost). Now `createViewerSession.detach` only HIDES the
+  browser (and only when that view was driving it); the next view to `show`
+  puts the same webview back at its own rect (adopting `navegador_state`, which
+  the view already did). New `session.close()` closes for good. The `attach`
+  bookkeeping is gone. Drafts and downloads moved to a module-level store
+  (`lib/navegador-store.ts`: `navegadorStore`, capture draft, capture error,
+  downloads), which keeps listening to `navegador://download` for the rest of
+  the session, so a download that ends while the person is in another section
+  is listed on return. Closing: `WorkspaceStore.onTabClosed` (new, generic,
+  listener errors isolated) feeds `lib/navegador-lifecycle.ts`; the shell
+  (`AppShell`, behind `NAVEGADOR`) installs it: closing the last tab whose
+  current view is the Navegador closes the browser (`navegador_close`) and clears
+  the store; the app exit path is the existing `navegador::shutdown`.
+  Decision, two Navegador tabs: ONE browser instance shared by every Navegador
+  tab (the pane shown last drives it; a second tab adopts the same page).
+  Closing one of two Navegador tabs keeps the browser; closing the last one
+  closes it. A tab that navigated away from the Navegador before being closed
+  does not close it (it stays hidden until a Navegador tab closes or the app
+  exits): a deliberate limit. Hiding on unmount is `set_visible(false)`, which the
+  backend already implemented; no Rust change in this unit.
+  RED: `navegador.test.ts` 6 failed (`session.close is not a function`, detach
+  closed the browser), `navegador-store.test.ts` and `navegador-lifecycle.test.ts`
+  failed to import; `NavegadorView.test.ts` against the old view: every test failed
+  once the session lost `attach`. GREEN: `navegador.test.ts` 17/17,
+  `navegador-store.test.ts` 9/9, `navegador-lifecycle.test.ts` 10/10,
+  `workspace.test.ts` 48/48 (the four `onTabClosed` tests were written after the
+  implementation; the lifecycle tests exercise the same path from the failing
+  side), `NavegadorView.test.ts` 14/14 (new: hides but never closes on unmount,
+  shows the same browser again at the new rect without `navegador_open`, keeps
+  draft and downloads across a remount, lists a download that finished while no
+  view was mounted), `AppShell.test.ts` 50/50. `pnpm --filter
+  @entropia-pro/desktop typecheck` 0 errors. Not observed (needs the user):
+  the real hide/show on WebView2 across tab switches. The AppShell wiring has
+  no test of its own (`NAVEGADOR` is a build-time flag, 0 under Vitest); the
+  helper it calls is tested.

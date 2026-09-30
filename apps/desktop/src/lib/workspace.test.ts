@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { WorkspaceStore, MAX_TABS, resetTabIdSequenceForTests } from './workspace'
 import { locale } from './i18n'
 
@@ -606,5 +606,55 @@ describe('WorkspaceStore releases what a tab held', () => {
 
     expect(navEmits).toBe(navBefore)
     expect(workspaceEmits).toBe(workspaceBefore)
+  })
+})
+
+describe('WorkspaceStore onTabClosed', () => {
+  it('tells the listener which tab closed, what it showed and who is left', () => {
+    const ws = new WorkspaceStore()
+    const seen: unknown[] = []
+    ws.onTabClosed((event) =>
+      seen.push([event.tabId, event.view.name, event.remaining.map((t) => t.id)])
+    )
+    const id = ws.openTab({ name: 'settings' })!
+    ws.closeTab(id)
+    expect(seen).toEqual([[id, 'settings', [ws.tabs[0]!.id]]])
+    ws.dispose()
+  })
+
+  it('is silent when nothing closed: the last tab cannot go, an unknown id is ignored', () => {
+    const ws = new WorkspaceStore()
+    const listener = vi.fn()
+    ws.onTabClosed(listener)
+    ws.closeTab(ws.tabs[0]!.id)
+    ws.openTab()
+    ws.closeTab('missing')
+    expect(listener).not.toHaveBeenCalled()
+    ws.dispose()
+  })
+
+  it('does not let a throwing listener stop the others or the close', () => {
+    const ws = new WorkspaceStore()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const after = vi.fn()
+    ws.onTabClosed(() => {
+      throw new Error('boom')
+    })
+    ws.onTabClosed(after)
+    const id = ws.openTab()!
+    ws.closeTab(id)
+    expect(after).toHaveBeenCalledTimes(1)
+    expect(ws.tabs).toHaveLength(1)
+    warn.mockRestore()
+    ws.dispose()
+  })
+
+  it('stops calling a listener that unsubscribed', () => {
+    const ws = new WorkspaceStore()
+    const listener = vi.fn()
+    ws.onTabClosed(listener)()
+    ws.closeTab(ws.openTab()!)
+    expect(listener).not.toHaveBeenCalled()
+    ws.dispose()
   })
 })

@@ -91,7 +91,6 @@ describe('createViewerSession', () => {
   it('opens the browser the first time it is shown and reuses it afterwards', async () => {
     const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
     await session.show('a', 'https://example.com/', bounds(800, 600))
     await session.show('a', 'https://example.com/', bounds(700, 500))
     expect(calls).toEqual(['open https://example.com/ 800x600', 'bounds 700x500', 'visible true'])
@@ -100,7 +99,6 @@ describe('createViewerSession', () => {
   it('hides the browser when its view is hidden, and shows it again', async () => {
     const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
     await session.show('a', 'https://example.com/', bounds(800, 600))
     await session.hide('a')
     await session.show('a', 'https://example.com/', bounds(800, 600))
@@ -112,32 +110,45 @@ describe('createViewerSession', () => {
     ])
   })
 
-  it('closes the browser when the last view goes away', async () => {
+  it('hides, and never closes, the browser when its view goes away', async () => {
     const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
-    await session.show('a', 'https://example.com/', bounds(800, 600))
-    await session.detach('a')
-    expect(calls).toEqual(['open https://example.com/ 800x600', 'close'])
-  })
-
-  it('keeps the browser, hidden, while another view is still mounted', async () => {
-    const { api, calls } = fakeApi()
-    const session = createViewerSession(api)
-    session.attach('a')
-    session.attach('b')
     await session.show('a', 'https://example.com/', bounds(800, 600))
     await session.detach('a')
     expect(calls).toEqual(['open https://example.com/ 800x600', 'visible false'])
+    expect(session.isOpen()).toBe(true)
+  })
+
+  it('shows the same browser again, at the new rect, when a view comes back', async () => {
+    const { api, calls } = fakeApi()
+    const session = createViewerSession(api)
+    await session.show('a', 'https://example.com/', bounds(800, 600))
+    await session.detach('a')
+    await session.show('b', 'https://example.com/', bounds(640, 480))
+    expect(calls).toEqual([
+      'open https://example.com/ 800x600',
+      'visible false',
+      'bounds 640x480',
+      'visible true',
+    ])
+    expect(api.open).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hide a browser that a newer view already took over', async () => {
+    const { api, calls } = fakeApi()
+    const session = createViewerSession(api)
+    await session.show('a', 'https://example.com/', bounds(800, 600))
+    await session.show('b', 'https://example.com/', bounds(400, 300))
+    calls.length = 0
+    await session.detach('a')
+    expect(calls).toEqual([])
     await session.detach('b')
-    expect(calls.at(-1)).toBe('close')
+    expect(calls).toEqual(['visible false'])
   })
 
   it('lets the view shown last own the browser, and ignores the previous owner', async () => {
     const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
-    session.attach('b')
     await session.show('a', 'https://example.com/', bounds(800, 600))
     await session.show('b', 'https://example.com/', bounds(400, 300))
     calls.length = 0
@@ -148,21 +159,30 @@ describe('createViewerSession', () => {
     expect(calls).toEqual(['bounds 500x400'])
   })
 
-  it('says whether a browser is open, so a second view knows to navigate it', async () => {
-    const { api } = fakeApi()
+  it('closes the browser only when asked to, and then forgets it', async () => {
+    const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
     expect(session.isOpen()).toBe(false)
     await session.show('a', 'https://example.com/', bounds(800, 600))
     expect(session.isOpen()).toBe(true)
-    await session.detach('a')
+    await session.close()
+    expect(calls).toEqual(['open https://example.com/ 800x600', 'close'])
     expect(session.isOpen()).toBe(false)
+    // The next view to show it opens a fresh one.
+    await session.show('a', 'https://example.org/', bounds(800, 600))
+    expect(calls.at(-1)).toBe('open https://example.org/ 800x600')
+  })
+
+  it('has nothing to close when no browser was ever opened', async () => {
+    const { api, calls } = fakeApi()
+    const session = createViewerSession(api)
+    await session.close()
+    expect(calls).toEqual([])
   })
 
   it('does not open a browser for a view that never showed one', async () => {
     const { api, calls } = fakeApi()
     const session = createViewerSession(api)
-    session.attach('a')
     await session.setBounds('a', bounds(800, 600))
     await session.hide('a')
     await session.detach('a')
@@ -185,13 +205,12 @@ describe('createViewerSession', () => {
       close: async () => void order.push('close'),
     }
     const session = createViewerSession(api)
-    session.attach('a')
     const shown = session.show('a', 'https://example.com/', bounds(800, 600))
-    const detached = session.detach('a')
+    const closed = session.close()
     await Promise.resolve()
     expect(order).toEqual([])
     releaseOpen()
-    await Promise.all([shown, detached])
+    await Promise.all([shown, closed])
     expect(order).toEqual(['open done', 'close'])
   })
 
@@ -199,7 +218,6 @@ describe('createViewerSession', () => {
     const { api, calls } = fakeApi()
     vi.mocked(api.open).mockRejectedValueOnce(new Error('boom'))
     const session = createViewerSession(api)
-    session.attach('a')
     await expect(session.show('a', 'https://example.com/', bounds(800, 600))).rejects.toThrow(
       'boom'
     )

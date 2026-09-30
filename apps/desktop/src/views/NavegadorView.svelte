@@ -13,6 +13,12 @@
    * The capture panel sits below the placeholder, outside the native webview's
    * rect: showing it shrinks the placeholder, and the ResizeObserver below moves
    * the webview with it. Captures and downloads are drafts; nothing is stored.
+   *
+   * This view comes and goes (another section, another tab), the browser does
+   * not: unmounting only hides it, and the next mount shows the same page at its
+   * own rect. The drafts and the download list live in `navegadorStore`, outside
+   * the component, for the same reason. The browser closes when its tab does
+   * (`watchNavegadorTabs`, installed by the shell) or the app exits.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { get } from 'svelte/store'
@@ -31,6 +37,7 @@
     type ViewerBounds,
     type ViewerState,
   } from '$lib/navegador'
+  import { navegadorStore } from '$lib/navegador-store'
   import {
     describeCaptureDraft,
     describeDownload,
@@ -38,11 +45,8 @@
     formatBytes,
     navegadorCapturePage,
     navegadorCaptureSelection,
-    onNavegadorDownload,
     parseCaptureError,
-    upsertDownload,
     type CaptureDraft,
-    type DownloadDraft,
   } from '$lib/navegador-capture'
 
   const currentLocale = locale
@@ -60,12 +64,14 @@
   let lastSent: string | null = null
 
   let capturing = $state(false)
-  let capture = $state<CaptureDraft | null>(null)
-  let captureError = $state<string | null>(null)
-  let downloads = $state<DownloadDraft[]>([])
-  const captureView = $derived(capture ? describeCaptureDraft(capture) : null)
-  const downloadViews = $derived(downloads.map(describeDownload))
-  const panelOpen = $derived(captureView !== null || captureError !== null || downloads.length > 0)
+  const captureError = $derived($navegadorStore.captureError)
+  const captureView = $derived(
+    $navegadorStore.capture ? describeCaptureDraft($navegadorStore.capture) : null
+  )
+  const downloadViews = $derived($navegadorStore.downloads.map(describeDownload))
+  const panelOpen = $derived(
+    captureView !== null || captureError !== null || downloadViews.length > 0
+  )
 
   function measure(): ViewerBounds | null {
     if (!placeholder) return null
@@ -125,21 +131,21 @@
   async function takeCapture(command: () => Promise<CaptureDraft>) {
     if (capturing) return
     capturing = true
-    captureError = null
+    navegadorStore.clearCapture()
     try {
-      capture = await command()
+      navegadorStore.setCapture(await command())
     } catch (reason) {
-      capture = null
       const { code, detail } = parseCaptureError(reason)
-      captureError = t(`navegador.capture.error.${code}`, { message: detail ?? '' })
+      navegadorStore.setCaptureError(
+        t(`navegador.capture.error.${code}`, { message: detail ?? '' })
+      )
     } finally {
       capturing = false
     }
   }
 
   function dismissCapture() {
-    capture = null
-    captureError = null
+    navegadorStore.clearCapture()
   }
 
   // Show the page while nothing covers it, hide it while an overlay is open.
@@ -164,8 +170,6 @@
   })
 
   onMount(() => {
-    navegadorSession.attach(instanceId)
-
     let unlisten: (() => void) | undefined
     let disposed = false
     void onNavegadorState((next) => {
@@ -176,12 +180,9 @@
       else unlisten = stop
     })
 
-    let unlistenDownload: (() => void) | undefined
-    void onNavegadorDownload((draft) => {
-      downloads = upsertDownload(downloads, draft)
-    }).then((stop) => {
-      if (disposed) stop()
-      else unlistenDownload = stop
+    // The store keeps listening after this view is gone.
+    void navegadorStore.startListening().catch((reason) => {
+      console.warn('[navegador] could not follow downloads:', reason)
     })
 
     // Adopt a browser another view left open: same page, this view's address.
@@ -214,7 +215,6 @@
     return () => {
       disposed = true
       unlisten?.()
-      unlistenDownload?.()
       resize.disconnect()
       overlays.disconnect()
       window.removeEventListener('resize', onWindowChange)
@@ -225,7 +225,7 @@
 
   onDestroy(() => {
     void navegadorSession.detach(instanceId).catch((reason) => {
-      console.warn('[navegador] could not close the browser:', reason)
+      console.warn('[navegador] could not hide the browser:', reason)
     })
   })
 </script>
