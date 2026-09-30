@@ -707,6 +707,10 @@ mod tests {
             [],
         )
         .expect("track 0033");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
+        ))
+        .expect("apply 0038");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

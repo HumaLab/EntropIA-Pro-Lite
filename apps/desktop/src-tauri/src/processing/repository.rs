@@ -63,7 +63,19 @@ pub fn is_schema_ready(conn: &Connection) -> Result<bool, String> {
     if pragmas.synchronous != 2 || pragmas.foreign_keys != 1 {
         return Ok(false);
     }
-    is_migration_applied(conn, MIGRATION_NAME)
+    if !is_migration_applied(conn, MIGRATION_NAME)? {
+        return Ok(false);
+    }
+    // Claims no longer settle blocked dependents themselves; the 0038 trigger
+    // does. Running the queue before it exists would strand them.
+    let settle_trigger: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'processing_tasks_settle_dependents'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to inspect sqlite_master: {e}"))?;
+    Ok(settle_trigger == 1)
 }
 
 /// True when `_migrations` records `name`. A missing tracking table means no
@@ -1845,8 +1857,10 @@ pub struct ClaimedTask {
 
 /// Moves `blocked` tasks whose dependency succeeded back to `pending`, and
 /// fails the ones whose dependency died terminally without another live
-/// path to resolve them. Runs inside the claim transaction and before every
-/// claim scan, so no worker ever starts a task that cannot finish.
+/// path to resolve them. The `processing_tasks_settle_dependents` trigger
+/// (migration 0038) does this the moment a dependency ends; this full scan
+/// is O(blocked), so it only runs as the repair at recovery, for units a
+/// pre-0038 build left blocked.
 pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
     let rows = conn
         .prepare(
@@ -1905,8 +1919,7 @@ fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result
     Ok(())
 }
 
-/// Claims the next runnable task for `session_id`: BEGIN IMMEDIATE, settle
-/// dependents, pick the oldest runnable unit with an actively-wanted batch,
+/// Claims the next runnable task for `session_id`: BEGIN IMMEDIATE, pick the oldest runnable unit with an actively-wanted batch,
 /// revalidate its input (admission data may be stale), CAS it to `running`
 /// with a fresh fencing epoch, open an attempt, COMMIT — all before any
 /// compute starts. Returns `None` when no unit is runnable. `kinds` lists
@@ -1930,29 +1943,43 @@ pub fn claim_next(
         .map(|kind| format!("'{kind}'"))
         .collect::<Vec<_>>()
         .join(", ");
+    let runnable = format!(
+        "t.kind IN ({kind_list})
+         AND EXISTS (
+               SELECT 1 FROM processing_batch_tasks l
+               JOIN processing_batches b ON b.id = l.batch_id
+               WHERE l.task_id = t.id AND l.request_state = 'active'
+                 AND b.state = 'running' AND b.desired_state = 'run')
+         AND NOT EXISTS (
+               SELECT 1 FROM processing_batch_tasks l2
+               WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
+                 AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')"
+    );
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin claim: {e}"))?;
     let claimed = (|| -> Result<Option<ClaimedTask>, String> {
         use rusqlite::OptionalExtension as _;
-        settle_blocked_dependents(conn)?;
         let candidate: Option<(String, String, String, String, i64)> = conn
             .query_row(
                 &format!(
-                    "SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
-                 FROM processing_tasks t
-                 WHERE t.kind IN ({kind_list})
-                   AND (t.state = 'pending'
-                        OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
-                   AND EXISTS (
-                         SELECT 1 FROM processing_batch_tasks l
-                         JOIN processing_batches b ON b.id = l.batch_id
-                         WHERE l.task_id = t.id AND l.request_state = 'active'
-                           AND b.state = 'running' AND b.desired_state = 'run')
-                   AND NOT EXISTS (
-                         SELECT 1 FROM processing_batch_tasks l2
-                         WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
-                           AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')
-                 ORDER BY t.id LIMIT 1"
+                    // One branch per state, each walking its own index in id
+                    // order and stopping at the first runnable unit. A single
+                    // `pending OR retry_wait` filter gathered and sorted every
+                    // pending unit on each claim: 1.2 s per claim at 200k pages.
+                    "SELECT id, kind, asset_id_snapshot, contract_hash, lease_epoch FROM (
+                   SELECT * FROM (
+                     SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                     FROM processing_tasks t
+                     WHERE t.state = 'pending' AND {runnable}
+                     ORDER BY t.id LIMIT 1)
+                   UNION ALL
+                   SELECT * FROM (
+                     SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                     FROM processing_tasks t
+                     WHERE t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1
+                       AND {runnable}
+                     ORDER BY t.id LIMIT 1))
+                 ORDER BY id LIMIT 1"
                 ),
                 [now_ms],
                 |row| {
@@ -2404,7 +2431,6 @@ pub fn commit_success_with(
             .map_err(|e| format!("Failed to stamp completion of {asset_id}: {e}"))?;
         }
         close_open_attempt(conn, task_id, "succeeded")?;
-        settle_blocked_dependents(conn)?;
         conn.execute(
             "UPDATE processing_batches SET revision = revision + 1, updated_at = strftime('%s', 'now') * 1000
              WHERE id IN (SELECT batch_id FROM processing_batch_tasks WHERE task_id = ?1)",
@@ -2508,7 +2534,6 @@ pub fn fail_attempt(
         rusqlite::params![error_code, error_message, now_ms, task_id],
     )
     .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
-    settle_blocked_dependents(conn)?;
     Ok(FailOutcome::Failed)
 }
 
@@ -2771,6 +2796,9 @@ mod tests {
         "../../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
     );
     const MIGRATION_0033_NAME: &str = "0033_processing_source_invalidation";
+    const MIGRATION_0038_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
+    );
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -2804,6 +2832,8 @@ mod tests {
             [MIGRATION_0033_NAME],
         )
         .expect("track 0033");
+        conn.execute_batch(MIGRATION_0038_SQL)
+            .expect("apply 0038 mirror");
         (dir, conn)
     }
 
@@ -2815,6 +2845,17 @@ mod tests {
         assert!(
             !is_schema_ready(&conn).expect("check"),
             "no migration row, no tables: the gate must stay closed"
+        );
+    }
+
+    #[test]
+    fn a_queue_without_the_settle_trigger_is_not_schema_ready() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch("DROP TRIGGER processing_tasks_settle_dependents")
+            .expect("drop trigger");
+        assert!(
+            !is_schema_ready(&conn).expect("check"),
+            "claims no longer settle dependents, so a pre-0038 archive must wait"
         );
     }
 
@@ -2866,6 +2907,7 @@ mod tests {
                 [MIGRATION_0033_NAME],
             )
             .expect("track 0033");
+            conn.execute_batch(MIGRATION_0038_SQL).expect("apply 0038");
             conn.execute(
                 "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at) VALUES ('t1', 'ocr', 'a1', 'succeeded', 1, 1)",
                 [],
@@ -3576,6 +3618,32 @@ mod tests {
     }
 
     #[test]
+    fn a_succeeded_dependency_unblocks_its_dependent_without_a_scan() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
+        let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
+        let state = |id: &str| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        assert_eq!(state(&embedding_id), "blocked");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&ocr_id],
+        )
+        .expect("finish ocr");
+        assert_eq!(state(&embedding_id), "pending");
+    }
+
+    #[test]
     fn retry_opens_a_new_cycle_and_pulls_failed_dependencies() {
         let (_dir, conn) = batch_db();
         insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
@@ -3584,13 +3652,13 @@ mod tests {
         advance_planning(&conn, "b1", 10, 200).expect("plan");
         let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
         let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
-        // Fail the OCR unit terminally: its blocked embedding must follow.
+        // Fail the OCR unit terminally: its blocked embedding must follow,
+        // with no settle call — the 0038 trigger does it on the transition.
         conn.execute(
             "UPDATE processing_tasks SET state = 'failed', last_error_code = 'corrupt_pdf', last_error_message = 'locked' WHERE id = ?1",
             [&ocr_id],
         )
         .expect("fail ocr");
-        settle_blocked_dependents(&conn).expect("settle");
         let dep_state: String = conn
             .query_row(
                 "SELECT state FROM processing_tasks WHERE id = ?1",

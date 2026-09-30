@@ -136,6 +136,9 @@ pub fn recover_session(
             )
             .map_err(|e| format!("Failed to close attempts: {e}"))?;
         out.attempts_closed = closed;
+        // The 0038 trigger settles dependents as their dependency ends; this
+        // one scan repairs units a pre-0038 build left blocked.
+        repository::settle_blocked_dependents(conn)?;
         // Batches: running work waits for resume; confirmed intents converge.
         // `user` only. A `repair`/`manual` batch is a long-lived container
         // that is always running with an empty complete snapshot — parking one
@@ -270,6 +273,10 @@ mod tests {
             [],
         )
         .expect("track 0033");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
+        ))
+        .expect("apply 0038");
         (dir, conn)
     }
 
