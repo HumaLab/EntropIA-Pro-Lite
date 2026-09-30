@@ -107,7 +107,13 @@ pub async fn db_execute_transaction(
     let conn = db.ui_conn.clone();
     run_blocking_db_task(move || {
         let mut conn = conn.lock().map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        // IMMEDIATE takes the write lock up front, so a busy archive makes this
+        // wait out busy_timeout. A DEFERRED transaction that reads first fails
+        // instantly with `database is locked` when a worker is mid-write:
+        // SQLite refuses to upgrade a read lock rather than risk a deadlock.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
 
         for statement in statements {
             let params: Vec<Box<dyn rusqlite::ToSql>> =
