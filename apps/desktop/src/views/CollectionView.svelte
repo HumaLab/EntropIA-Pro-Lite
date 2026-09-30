@@ -212,6 +212,7 @@
     const store = getStore()
     // Feature-detect: tests and older stores may not expose the method.
     if (!store.items.getCollectionStats) return
+    const started = performance.now()
     try {
       const stats = await store.items.getCollectionStats(collectionId)
       if (requestId !== collectionStatsLoadRequestId) return
@@ -220,7 +221,27 @@
       if (requestId !== collectionStatsLoadRequestId) return
       console.warn('[CollectionView] Failed to load collection stats:', e)
       collectionStats = null
+    } finally {
+      lastStatsLoadMs = performance.now() - started
     }
+  }
+
+  // Pipeline events arrive once per processed page during a batch, and each
+  // stats load scans the whole collection while holding the UI database
+  // connection. Coalesce them: one pending refresh at a time, spaced by five
+  // times what the last load took and never under 2 s, so a large collection
+  // refreshes less often instead of stalling every other query.
+  let lastStatsLoadMs = 0
+  let statsRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleCollectionStatsRefresh() {
+    if (statsRefreshTimer !== null) return
+    statsRefreshTimer = setTimeout(
+      () => {
+        statsRefreshTimer = null
+        if (!destroyed) void loadCollectionStats()
+      },
+      Math.max(2000, lastStatsLoadMs * 5)
+    )
   }
 
   // Media chips (pages/images/audios) show only when the collection actually
@@ -1056,7 +1077,7 @@
     for (const eventName of PIPELINE_REFRESH_EVENTS) {
       listen(eventName, () => {
         if (destroyed) return
-        void loadCollectionStats()
+        scheduleCollectionStatsRefresh()
       })
         .then((unlisten) => {
           if (destroyed) unlisten()
@@ -1070,6 +1091,7 @@
 
   onDestroy(() => {
     destroyed = true
+    if (statsRefreshTimer !== null) clearTimeout(statsRefreshTimer)
     window.removeEventListener(
       DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
       handleCollectionOrderChanged

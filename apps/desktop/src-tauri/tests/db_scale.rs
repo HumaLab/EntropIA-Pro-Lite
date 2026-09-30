@@ -148,47 +148,80 @@ fn secs(d: Duration) -> String {
 
 // packages/store/src/repos/item.repo.ts — getCorpusStats (Inicio).
 const CORPUS_STATS_SQL: &str = "
-  WITH viewable_assets AS (
-    SELECT a.id, a.item_id, a.type AS type FROM assets a
-     WHERE NOT EXISTS (SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id)
-  ),
-  ocr_universe_assets AS (
-    SELECT va.id FROM viewable_assets va
-     WHERE va.type = 'image'
-        OR (va.type = 'pdf' AND NOT EXISTS (
-              SELECT 1 FROM extractions e WHERE e.asset_id = va.id AND e.method = 'native'
-                 AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''))
-  ),
-  asset_ocr AS (
-    SELECT DISTINCT oua.id FROM ocr_universe_assets oua JOIN extractions e ON e.asset_id = oua.id
-     WHERE e.method <> 'native' AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-  ),
-  stt_universe_assets AS (SELECT id FROM viewable_assets WHERE type = 'audio'),
-  asset_stt AS (
-    SELECT DISTINCT su.id FROM stt_universe_assets su JOIN transcriptions t ON t.asset_id = su.id
-     WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
-  ),
-  asset_text AS (
-    SELECT va.id FROM viewable_assets va
-     WHERE EXISTS (SELECT 1 FROM extractions e WHERE e.asset_id = va.id
-                     AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> '')
-        OR EXISTS (SELECT 1 FROM transcriptions t WHERE t.asset_id = va.id
-                     AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> '')
-  ),
-  asset_embeddings AS (
-    SELECT DISTINCT va.id FROM viewable_assets va JOIN vec_assets v ON v.asset_id = va.id
-     WHERE va.id IN (SELECT id FROM asset_text)
-  )
-  SELECT
-    (SELECT COUNT(*) FROM collections), (SELECT COUNT(*) FROM items),
-    (SELECT COUNT(*) FROM asset_ocr), (SELECT COUNT(*) FROM ocr_universe_assets),
-    (SELECT COUNT(*) FROM asset_stt), (SELECT COUNT(*) FROM stt_universe_assets),
-    (SELECT COUNT(*) FROM asset_text), (SELECT COUNT(*) FROM viewable_assets),
-    (SELECT COUNT(*) FROM asset_embeddings),
-    (SELECT COUNT(*) FROM processing_tasks pt WHERE pt.kind = 'ocr'
-        AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')),
-    (SELECT COUNT(*) FROM processing_tasks pt WHERE pt.kind = 'embedding'
-        AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled'))";
+          WITH
+          -- One pass over the text and one over the viewable files: each file
+          -- is classified once and the counts are sums of its flags. The
+          -- earlier shape re-ran the viewable_assets CTE for every count and
+          -- read every extraction three times, 3.4 s at 200k pages. No
+          -- semicolons in this statement, comments included: db_select
+          -- rejects any.
+          extraction_text AS (
+            SELECT e.asset_id,
+                   MAX(e.method = 'native' AND TRIM(e.text_content) <> '') AS has_native,
+                   -- OCR-derived text: any extraction method other than 'native'.
+                   MAX(e.method <> 'native' AND TRIM(e.text_content) <> '') AS has_ocr
+              FROM extractions e
+             WHERE e.text_content IS NOT NULL
+             GROUP BY e.asset_id
+          ),
+          transcription_text AS (
+            SELECT t.asset_id, 1 AS has_stt
+              FROM transcriptions t
+             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+             GROUP BY t.asset_id
+          ),
+          viewable_assets AS (
+            SELECT a.id, a.type AS type,
+                   COALESCE(et.has_native, 0) AS has_native,
+                   COALESCE(et.has_ocr, 0) AS has_ocr,
+                   COALESCE(tt.has_stt, 0) AS has_stt,
+                   EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = a.id) AS has_vec
+              FROM assets a
+              LEFT JOIN extraction_text et ON et.asset_id = a.id
+              LEFT JOIN transcription_text tt ON tt.asset_id = a.id
+             WHERE NOT EXISTS (
+               SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
+             )
+          ),
+          classified AS (
+            SELECT va.*,
+                   -- OCR universe: a viewable IMAGE, or a viewable PDF page with
+                   -- no non-empty native text layer (a scanned page). A page not
+                   -- yet checked for a native layer counts as scanned.
+                   (va.type = 'image' OR (va.type = 'pdf' AND NOT va.has_native)) AS in_ocr_universe,
+                   -- STT universe: a viewable AUDIO file.
+                   (va.type = 'audio') AS in_stt_universe,
+                   -- Texto: any non-empty text, native, OCR or transcription alike.
+                   (va.has_native OR va.has_ocr OR va.has_stt) AS has_text
+              FROM viewable_assets va
+          ),
+          totals AS (
+            SELECT COALESCE(SUM(in_ocr_universe AND has_ocr), 0) AS ocr_count,
+                   COALESCE(SUM(in_ocr_universe), 0) AS ocr_universe_count,
+                   COALESCE(SUM(in_stt_universe AND has_stt), 0) AS stt_count,
+                   COALESCE(SUM(in_stt_universe), 0) AS stt_universe_count,
+                   COALESCE(SUM(has_text), 0) AS text_count,
+                   COUNT(*) AS text_universe_count,
+                   -- Embeddings: a vector without text must never count.
+                   COALESCE(SUM(has_text AND has_vec), 0) AS embed_count
+              FROM classified
+          )
+          SELECT
+            (SELECT COUNT(*) FROM collections) AS collections_count,
+            (SELECT COUNT(*) FROM items) AS items_count,
+            totals.*,
+            (SELECT COUNT(*)
+               FROM processing_tasks pt
+              WHERE pt.kind = 'ocr'
+                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+            ) AS pending_ocr_count,
+            (SELECT COUNT(*)
+               FROM processing_tasks pt
+              WHERE pt.kind = 'embedding'
+                AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
+            ) AS pending_embed_count
+            FROM totals
+        ";
 
 // packages/store/src/repos/item.repo.ts — findImportedFromSource, run once
 // per imported file.

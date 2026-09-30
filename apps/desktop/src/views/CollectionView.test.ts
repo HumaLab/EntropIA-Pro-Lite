@@ -1428,6 +1428,32 @@ describe('CollectionView import flow', () => {
         vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
       }
     })
+
+    // A batch fires one pipeline event per processed page, and each stats
+    // load scans the whole collection: reloading per event stalled every
+    // other query on a large archive.
+    it('coalesces a burst of pipeline events into one delayed stats refresh', async () => {
+      const handlers = new Map<string, () => void>()
+      vi.mocked(listen).mockImplementation((name, handler) => {
+        handlers.set(name as string, handler as () => void)
+        return Promise.resolve(vi.fn())
+      })
+
+      try {
+        render(CollectionView, { collectionId: 'col-1' })
+        await vi.advanceTimersByTimeAsync(0)
+        const stats = storeRef.current.items.getCollectionStats as Mock
+        const before = stats.mock.calls.length
+
+        for (let page = 0; page < 20; page++) handlers.get('ocr:complete')?.()
+        await vi.advanceTimersByTimeAsync(1999)
+        expect(stats.mock.calls.length).toBe(before)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(stats.mock.calls.length).toBe(before + 1)
+      } finally {
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
+    })
   })
 
   // Task 3.5: Tauri's drag-drop event is webview-wide, so every mounted

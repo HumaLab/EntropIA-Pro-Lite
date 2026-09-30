@@ -1166,85 +1166,68 @@ export class ItemRepo {
   async getCorpusStats(): Promise<CorpusStats> {
     if (this.rawClient) {
       const rows = await this.rawClient.select<CorpusStatsRow>(`
-          WITH viewable_assets AS (
-            SELECT a.id, a.item_id, a.type AS type
+          WITH
+          -- One pass over the text and one over the viewable files: each file
+          -- is classified once and the counts are sums of its flags. The
+          -- earlier shape re-ran the viewable_assets CTE for every count and
+          -- read every extraction three times, 3.4 s at 200k pages. No
+          -- semicolons in this statement, comments included: db_select
+          -- rejects any.
+          extraction_text AS (
+            SELECT e.asset_id,
+                   MAX(e.method = 'native' AND TRIM(e.text_content) <> '') AS has_native,
+                   -- OCR-derived text: any extraction method other than 'native'.
+                   MAX(e.method <> 'native' AND TRIM(e.text_content) <> '') AS has_ocr
+              FROM extractions e
+             WHERE e.text_content IS NOT NULL
+             GROUP BY e.asset_id
+          ),
+          transcription_text AS (
+            SELECT t.asset_id, 1 AS has_stt
+              FROM transcriptions t
+             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
+             GROUP BY t.asset_id
+          ),
+          viewable_assets AS (
+            SELECT a.id, a.type AS type,
+                   COALESCE(et.has_native, 0) AS has_native,
+                   COALESCE(et.has_ocr, 0) AS has_ocr,
+                   COALESCE(tt.has_stt, 0) AS has_stt,
+                   EXISTS (SELECT 1 FROM vec_assets v WHERE v.asset_id = a.id) AS has_vec
               FROM assets a
+              LEFT JOIN extraction_text et ON et.asset_id = a.id
+              LEFT JOIN transcription_text tt ON tt.asset_id = a.id
              WHERE NOT EXISTS (
                SELECT 1 FROM assets child WHERE child.parent_asset_id = a.id
              )
           ),
-          -- OCR universe: a viewable IMAGE, or a viewable PDF page with no
-          -- non-empty native text layer (a "scanned" page). A page not yet
-          -- checked for a native layer counts as scanned. No semicolons in
-          -- this statement, comments included: db_select rejects any.
-          ocr_universe_assets AS (
-            SELECT va.id
+          classified AS (
+            SELECT va.*,
+                   -- OCR universe: a viewable IMAGE, or a viewable PDF page with
+                   -- no non-empty native text layer (a scanned page). A page not
+                   -- yet checked for a native layer counts as scanned.
+                   (va.type = 'image' OR (va.type = 'pdf' AND NOT va.has_native)) AS in_ocr_universe,
+                   -- STT universe: a viewable AUDIO file.
+                   (va.type = 'audio') AS in_stt_universe,
+                   -- Texto: any non-empty text, native, OCR or transcription alike.
+                   (va.has_native OR va.has_ocr OR va.has_stt) AS has_text
               FROM viewable_assets va
-             WHERE va.type = 'image'
-                OR (
-                  va.type = 'pdf'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM extractions e
-                     WHERE e.asset_id = va.id
-                       AND e.method = 'native'
-                       AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-                  )
-                )
           ),
-          -- OCR numerator: the subset of ocr_universe_assets with a non-empty
-          -- OCR-derived extraction (method other than 'native').
-          asset_ocr AS (
-            SELECT DISTINCT oua.id
-              FROM ocr_universe_assets oua
-              JOIN extractions e ON e.asset_id = oua.id
-             WHERE e.method <> 'native'
-               AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-          ),
-          -- STT universe: a viewable AUDIO asset.
-          stt_universe_assets AS (
-            SELECT id FROM viewable_assets WHERE type = 'audio'
-          ),
-          asset_stt AS (
-            SELECT DISTINCT su.id
-              FROM stt_universe_assets su
-              JOIN transcriptions t ON t.asset_id = su.id
-             WHERE t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
-          ),
-          -- Texto numerator: any viewable file (page, image or audio) with
-          -- ANY non-empty text, native extraction or OCR extraction or
-          -- transcription alike.
-          asset_text AS (
-            SELECT va.id
-              FROM viewable_assets va
-             WHERE EXISTS (
-                     SELECT 1 FROM extractions e
-                      WHERE e.asset_id = va.id
-                        AND e.text_content IS NOT NULL AND TRIM(e.text_content) <> ''
-                   )
-                OR EXISTS (
-                     SELECT 1 FROM transcriptions t
-                      WHERE t.asset_id = va.id
-                        AND t.text_content IS NOT NULL AND TRIM(t.text_content) <> ''
-                   )
-          ),
-          -- Embeddings numerator: a viewable file with text AND a vec_assets
-          -- row (a vector without text must never count).
-          asset_embeddings AS (
-            SELECT DISTINCT va.id
-              FROM viewable_assets va
-              JOIN vec_assets v ON v.asset_id = va.id
-             WHERE va.id IN (SELECT id FROM asset_text)
+          totals AS (
+            SELECT COALESCE(SUM(in_ocr_universe AND has_ocr), 0) AS ocr_count,
+                   COALESCE(SUM(in_ocr_universe), 0) AS ocr_universe_count,
+                   COALESCE(SUM(in_stt_universe AND has_stt), 0) AS stt_count,
+                   COALESCE(SUM(in_stt_universe), 0) AS stt_universe_count,
+                   COALESCE(SUM(has_text), 0) AS text_count,
+                   COUNT(*) AS text_universe_count,
+                   -- Embeddings: a vector without text must never count.
+                   COALESCE(SUM(has_text AND has_vec), 0) AS embed_count
+              FROM classified
           )
           SELECT
             (SELECT COUNT(*) FROM collections) AS collections_count,
             (SELECT COUNT(*) FROM items) AS items_count,
-            (SELECT COUNT(*) FROM asset_ocr) AS ocr_count,
-            (SELECT COUNT(*) FROM ocr_universe_assets) AS ocr_universe_count,
-            (SELECT COUNT(*) FROM asset_stt) AS stt_count,
-            (SELECT COUNT(*) FROM stt_universe_assets) AS stt_universe_count,
-            (SELECT COUNT(*) FROM asset_text) AS text_count,
-            (SELECT COUNT(*) FROM viewable_assets) AS text_universe_count,
-            (SELECT COUNT(*) FROM asset_embeddings) AS embed_count,
+            totals.*,
             (SELECT COUNT(*)
                FROM processing_tasks pt
               WHERE pt.kind = 'ocr'
@@ -1255,6 +1238,7 @@ export class ItemRepo {
               WHERE pt.kind = 'embedding'
                 AND pt.state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
             ) AS pending_embed_count
+            FROM totals
         `)
 
       const row = rows[0] ?? ({} as CorpusStatsRow)
