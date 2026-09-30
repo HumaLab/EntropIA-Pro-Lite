@@ -29,6 +29,7 @@
   import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
   import IconBold from '@tabler/icons-svelte-runes/icons/bold'
+  import IconBrowser from '@tabler/icons-svelte-runes/icons/browser'
   import IconBrush from '@tabler/icons-svelte-runes/icons/brush'
   import IconCheck from '@tabler/icons-svelte-runes/icons/check'
   import IconChecks from '@tabler/icons-svelte-runes/icons/checks'
@@ -155,6 +156,8 @@
     add: IconPlus,
     bell: IconBell,
     bold: IconBold,
+    // The embedded web browser section, not a window or a tab.
+    browser: IconBrowser,
     strikethrough: IconStrikethrough,
     table: IconTable,
     // Tabler has no footnote glyph. The asterisk is the typographic footnote

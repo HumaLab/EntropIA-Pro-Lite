@@ -163,6 +163,12 @@ describe('NavigationStore', () => {
     expect(nav.breadcrumb).toEqual(['Colecciones', 'Base de datos'])
   })
 
+  it('navigates to the navegador and shows it in the breadcrumb', () => {
+    nav.navigate({ name: 'navegador' })
+    expect(nav.current).toEqual({ name: 'navegador' })
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Navegador'])
+  })
+
   it('navigates to rag chat view', () => {
     nav.navigate({ name: 'rag-chat' })
     expect(nav.current).toEqual({ name: 'rag-chat' })

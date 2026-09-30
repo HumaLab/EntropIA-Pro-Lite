@@ -39,6 +39,7 @@ const loadCachedRoute = createRouteLoader<LazyViewName, RouteModule>({
   investigation: () => import('../views/InvestigationView.svelte'),
   writing: () => import('../views/WritingView.svelte'),
   settings: () => import('../views/SettingsView.svelte'),
+  navegador: () => import('../views/NavegadorView.svelte'),
 })
 
 export function loadRouteView(name: LazyViewName): Promise<RouteModule> {

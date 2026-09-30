@@ -70,7 +70,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   the user; block file:, data:, javascript:, loopback, private ranges, cloud
   metadata; applied to navigation, redirects and new windows. Module
   `src-tauri/src/navegador/url_policy.rs`; evidence below.
-- [ ] T4 — (route: delegated writer) Prototype child webview (label
+- [x] T4 — (route: delegated writer; checks observed, UI not yet seen by the user: that is T6) Prototype child webview (label
   `navegador-web`, incognito, no capability) behind Cargo feature `navegador`
   (enables `tauri/unstable`) and `VITE_NAVEGADOR=1`: open,
   navigate, back/forward/reload, bounds follow the pane, close.
@@ -202,3 +202,32 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `incognito` silently does nothing. (3) `emit_to("main")` only reaches JS
   listeners registered by a webview with that label; the child could not
   register one anyway (ACL).
+- T4b (view, frontend). `VITE_NAVEGADOR=1` (`$lib/capabilities` `NAVEGADOR`,
+  defined in vite/vitest configs, default 0) shows a TopBar entry, `View`
+  `{name:'navegador'}`, lazy `views/NavegadorView.svelte`. Pure logic in
+  `lib/navegador.ts`: `computeBounds(rect, zoom)` (CSS px times the webview zoom
+  = logical px, whole pixels, null for an empty rect) and `createViewerSession`
+  (one native webview, the view shown last owns it, calls serialised, closes
+  when the last view unmounts, hides while another view still holds it).
+  Bounds are re-sent on mount, `ResizeObserver`, window resize, capture-phase
+  scroll, zoom change and a 400 ms re-measure (drawer moves that no resize
+  reveals). Overlay handling: the page is hidden while `[data-overlay-root]`
+  has children (dialogs). New icon name `browser` in `ACTION_ICON_NAMES`.
+  RED: `navegador.test.ts` 14/14 failed on a throwing stub, tab-meta and
+  navigation navegador tests failed; the TopBar "hidden by default" test is a
+  guard that passed from the start. GREEN: `navegador.test.ts` 15/15; `pnpm
+  test` 299 store + 800 ui + 2605 desktop passed (7 skipped);
+  `VITE_LOCAL_ML=0` desktop 2584 passed; `pnpm typecheck` 0 errors (8 old
+  warnings), Lite typecheck 0 errors; `pnpm lint` only the known
+  `WritingView.svelte:1403`; prettier clean on every touched file;
+  `VITE_NAVEGADOR=1 vite build` emits the NavegadorView chunk.
+  Known limitations of the prototype: (a) the native webview paints above all
+  HTML, so `ToolbarMenu` popovers (portalled to `<body>`) and tooltips over the
+  page area are hidden behind it; only dialogs in the overlay root are
+  detected. (b) Switching tab closes the browser (AppShell remounts the pane;
+  the last unmount closes it), so the page and its history do not survive a tab
+  switch; keeping it alive is a phase-2 decision. (c) Back/forward buttons are
+  never greyed (Tauri has no `can_go_back`). (d) `incognito` is silently
+  ignored by WebView2 older than 101.0.1210.39. (e) DNS rebinding (see T3).
+  (f) While the child exists `get_webview_window("main")` is `None` (see T4a).
+  (g) Downloads are refused and there is no capture yet (T5).

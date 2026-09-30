@@ -1774,6 +1774,19 @@ const es = {
   'item.entityType.custom': 'Custom',
   'collections.searchAria': 'Buscar colecciones',
   'collections.searchClear': 'Limpiar búsqueda',
+  'nav.navegador': 'Navegador',
+  'topbar.navegadorTitle': 'Navegador (experimental)',
+  'topbar.navegadorAria': 'Abrir el Navegador experimental',
+  'navegador.title': 'Navegador',
+  'navegador.address': 'Dirección',
+  'navegador.addressPlaceholder': 'Escribe una dirección web',
+  'navegador.back': 'Atrás',
+  'navegador.forward': 'Adelante',
+  'navegador.reload': 'Recargar',
+  'navegador.pageArea': 'Área de la página web',
+  'navegador.idle': 'Escribe una dirección y presiona Enter para empezar.',
+  'navegador.blocked': 'Bloqueado: {reason}',
+  'navegador.error': 'No se pudo abrir la página: {message}',
 } as const
 
 type ExtraI18nKey =
@@ -3666,6 +3679,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.entityType.custom': 'Custom',
   'collections.searchAria': 'Search collections',
   'collections.searchClear': 'Clear search',
+  'nav.navegador': 'Browser',
+  'topbar.navegadorTitle': 'Browser (experimental)',
+  'topbar.navegadorAria': 'Open the experimental Browser',
+  'navegador.title': 'Browser',
+  'navegador.address': 'Address',
+  'navegador.addressPlaceholder': 'Type a web address',
+  'navegador.back': 'Back',
+  'navegador.forward': 'Forward',
+  'navegador.reload': 'Reload',
+  'navegador.pageArea': 'Web page area',
+  'navegador.idle': 'Type an address and press Enter to start.',
+  'navegador.blocked': 'Blocked: {reason}',
+  'navegador.error': 'The page could not be opened: {message}',
 }
 
 const messages = { es, en }

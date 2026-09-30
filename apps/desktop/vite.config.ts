@@ -16,6 +16,8 @@ const isTauriDebug = process.env.TAURI_ENV_DEBUG === 'true'
 // `local-ml` feature so the Rust backend and the frontend never disagree about
 // which variant is being built. Defaults to '1' (Pro) for local dev.
 const localMl = process.env.VITE_LOCAL_ML ?? '1'
+// Experimental Navegador section: opt-in, off by default.
+const navegador = process.env.VITE_NAVEGADOR ?? '0'
 const developmentProductName = developmentTauriConfig.app.windows[0]?.title
 if (!developmentProductName) {
   throw new Error('tauri.dev.conf.json is missing the main window title')
@@ -38,6 +40,7 @@ export default defineConfig({
   ],
   define: {
     'import.meta.env.VITE_LOCAL_ML': JSON.stringify(localMl),
+    'import.meta.env.VITE_NAVEGADOR': JSON.stringify(navegador),
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(desktopPackage.version),
     'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(productName),
   },

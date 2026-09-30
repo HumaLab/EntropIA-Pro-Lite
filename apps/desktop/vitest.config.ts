@@ -10,6 +10,7 @@ import productionTauriConfig from './src-tauri/tauri.conf.json' with { type: 'js
 // default test run exercises the full UI surface. Set VITE_LOCAL_ML=0 to run the
 // lean variant.
 const localMl = process.env.VITE_LOCAL_ML ?? '1'
+const navegador = process.env.VITE_NAVEGADOR ?? '0'
 const productName =
   localMl === '1' ? productionTauriConfig.productName : liteTauriConfig.productName
 
@@ -17,6 +18,7 @@ export default defineConfig({
   plugins: [svelte({ hot: !process.env.VITEST })],
   define: {
     'import.meta.env.VITE_LOCAL_ML': JSON.stringify(localMl),
+    'import.meta.env.VITE_NAVEGADOR': JSON.stringify(navegador),
     'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(productName),
   },
   resolve: {
