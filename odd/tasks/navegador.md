@@ -106,6 +106,8 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
+- 2026-09-30, user's Windows run of T5c: Google Sign-In popup on x.com logs in (PASS) but stays open after login (window.close() not honoured) -> fixed in the commit that carries this note, rerun pending; GitHub blob: PDF download 'PDF verificado' 4.2 MB PASS; dismiss/clear PASS; .ipynb/.zip/.jpg saved to C:\Users\agusn\Downloads and, after 'Cambiar', to S:\Descargas, no .pdf suffix PASS; persistence across section/tab switches PASS; closing the Navegador tab and closing the app with a popup open PASS; Mark-of-the-Web kept on a rerouted download (Zone.Identifier: ZoneId=3, HostUrl=about:internet) PASS.
+
 - 2026-09-30, user's Windows run of T5: page capture (lanacion.com.ar: title,
   final URL, UTC, sha256, 9171 chars, 468.9 KB HTML) PASS; selection capture
   (lanacion, x.com) exact quote PASS; PDF download from a link "PDF verificado"
@@ -589,3 +591,32 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `pnpm lint` only the known `WritingView.svelte:1403` error (the warnings are in
   files this work did not touch); prettier clean on every touched file;
   `VITE_NAVEGADOR=1 vite build` emits the NavegadorView chunk.
+- T5c-2b (close the sign-in popup when its page closes it). The user's run showed
+  the popup stays open after login: `window.close()` is not honoured. Cause, read
+  in the source: wry 0.55.1 `attach_handlers` subscribes `WindowCloseRequested` and
+  calls `DestroyWindow(hwnd)` on the webview's own container window only, so the
+  top-level popup window stays, empty. Checked first, nothing better exists:
+  tauri 2.11.6 has no close-requested hook for a webview (the window event
+  `CloseRequested` fires only for the OS window, which is never asked), and
+  `NewWindowResponse::Create`/`window_features` carry none. Fix, Windows:
+  `viewer::close_when_page_closes` runs `WebviewWindow::with_webview` (main thread)
+  and calls `controller().CoreWebView2()?.add_WindowCloseRequested(
+  &webview2_com::WindowCloseRequestedEventHandler::create(..), &mut token)`; the
+  handler destroys the popup's Tauri window (`get_webview_window(label).destroy()`),
+  only for labels that pass `popup::is_popup_label`. `webview2-com` was not
+  reachable from the app crate, so it is now a direct Windows dependency pinned
+  `=0.38.2`, the version already in Cargo.lock (the lock only gains the
+  `webview2-com` line in the app's dependency list; no new crate; the
+  `entropia-agent` source line is intact). The 3-popup cap counts live windows, so a
+  closed popup (by the page or by the person) frees its slot on its own.
+  macOS and Linux: not wired, documented in `viewer.rs`. wry has no
+  `webViewDidClose:` delegate on macOS; on Linux its `close` signal only destroys
+  the GTK widget, not the tao window. There a popup is closed by the person, or
+  when the browser or the app closes. No platform code written that cannot be
+  compiled here.
+  Not unit-testable (a COM subscription on a live WebView2); the `is_popup_label`
+  guard it relies on is covered by the `popup.rs` tests. Observed: `cargo check
+  --features navegador` compiles, see the verification list in the commit. NOT
+  observed: the popup closing. User recheck: sign in with Google on x.com; the popup
+  must close by itself right after the login; open a popup and close it by hand,
+  then open three more in a row (the cap must have freed the slot).

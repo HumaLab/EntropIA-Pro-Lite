@@ -332,7 +332,10 @@ fn new_window(
         return NewWindowResponse::Deny;
     }
     match open_popup(app, shared, features) {
-        Ok(window) => NewWindowResponse::Create { window },
+        Ok(window) => {
+            close_when_page_closes(app, &window);
+            NewWindowResponse::Create { window }
+        }
         Err(_) => {
             if let Some(view) = app.get_webview(WEBVIEW_LABEL) {
                 let _ = view.navigate(target);
@@ -341,6 +344,48 @@ fn new_window(
         }
     }
 }
+
+/// Close the popup window when its page calls `window.close()` (Google
+/// Sign-In does, after the login). Tauri 2.11.6 and wry 0.55.1 have no hook for
+/// it on a webview created through `NewWindowResponse::Create`: wry's own
+/// `WindowCloseRequested` handler destroys only the webview's container window
+/// and leaves the top-level popup window open and empty. So on Windows this
+/// subscribes to `ICoreWebView2::add_WindowCloseRequested` and destroys the
+/// popup's Tauri window, on the main thread (`with_webview` runs there).
+///
+/// Elsewhere nothing is wired: wry has no `webViewDidClose:` delegate on macOS,
+/// and on Linux its `close` signal destroys the GTK widget, not the window. A
+/// popup there is closed by the person, or when the browser or the app closes.
+#[cfg(windows)]
+fn close_when_page_closes(app: &AppHandle, window: &WebviewWindow<Wry>) {
+    use webview2_com::WindowCloseRequestedEventHandler;
+
+    let (app, label) = (app.clone(), window.label().to_string());
+    let _ = window.with_webview(move |platform| {
+        // SAFETY: COM calls on the UI thread, on the controller Tauri owns for
+        // this window; the handler only holds an `AppHandle` and a label.
+        unsafe {
+            let Ok(core) = platform.controller().CoreWebView2() else {
+                return;
+            };
+            let mut token = 0i64;
+            let _ = core.add_WindowCloseRequested(
+                &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                    if popup::is_popup_label(&label) {
+                        if let Some(window) = app.get_webview_window(&label) {
+                            let _ = window.destroy();
+                        }
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            );
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn close_when_page_closes(_app: &AppHandle, _window: &WebviewWindow<Wry>) {}
 
 /// Build the popup window. It starts on `about:blank`: the engine navigates it
 /// to the address the page asked for once it is linked to its opener.

@@ -93,6 +93,11 @@ windows = { version = "0.61", features = [
 # Awaiting the Store operation needs its `IntoFuture`, which only this crate's
 # `std` feature provides (`windows` depends on it without default features).
 windows-future = "0.2"
+# The Navegador closes a sign-in popup when its page calls `window.close()`:
+# wry only destroys the popup's inner container window, so the app subscribes
+# to WebView2's `WindowCloseRequested` itself (viewer.rs). Pinned to the version
+# Tauri/wry already resolve; adds no new crate to the tree.
+webview2-com = "=0.38.2"
 
 [dev-dependencies]
 # Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
