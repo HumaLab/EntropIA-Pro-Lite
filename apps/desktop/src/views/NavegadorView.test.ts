@@ -34,6 +34,7 @@ const pdf: DownloadDraft = {
   fileName: 'paper.pdf',
   size: 1536,
   sha256: SHA,
+  savedTo: null,
   accessedAt: '2026-09-30T12:00:00Z',
   status: 'ready',
   reason: null,
@@ -353,5 +354,90 @@ describe('NavegadorView clearing the panel', () => {
     await withDownloads()
     expect(screen.getByLabelText('Remove one.pdf from the list')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument()
+  })
+})
+
+describe('NavegadorView download folder', () => {
+  const emit = (draft: Partial<DownloadDraft> & { id: string }) =>
+    handlers['navegador://download']!({ payload: { ...pdf, ...draft } })
+
+  async function withDownload(draft: Partial<DownloadDraft> = {}) {
+    render(NavegadorView)
+    await waitFor(() => expect(handlers['navegador://download']).toBeDefined())
+    emit({ id: 'd1', ...draft })
+    return screen.findByLabelText(/Captura \(borrador/)
+  }
+
+  beforeEach(() => {
+    respond = (command) =>
+      command === 'navegador_download_dir'
+        ? { path: 'C:/Users/x/Downloads', isDefault: true }
+        : command === 'navegador_state'
+          ? { url: null, title: null, blocked: null }
+          : undefined
+  })
+
+  it('shows the folder that non-PDF files go to, in the downloads header', async () => {
+    const panel = await withDownload()
+    expect(await within(panel).findByText('C:/Users/x/Downloads')).toBeInTheDocument()
+    expect(within(panel).getByText(/Carpeta de descargas/)).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('navegador_download_dir')
+  })
+
+  it('lets the person pick another folder and saves it', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValue('D:/Docs')
+    const setDir = vi.fn(() => ({ path: 'D:/Docs', isDefault: false }))
+    const base = respond
+    respond = (command) => (command === 'navegador_set_download_dir' ? setDir() : base(command))
+    const panel = await withDownload()
+    await within(panel).findByText('C:/Users/x/Downloads')
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Cambiar' }))
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ directory: true, multiple: false }))
+    await within(panel).findByText('D:/Docs')
+    expect(invoke).toHaveBeenCalledWith('navegador_set_download_dir', { path: 'D:/Docs' })
+  })
+
+  it('changes nothing when the dialog is cancelled', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValue(null)
+    const panel = await withDownload()
+    await within(panel).findByText('C:/Users/x/Downloads')
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Cambiar' }))
+    await waitFor(() => expect(open).toHaveBeenCalled())
+    expect(invoke).not.toHaveBeenCalledWith('navegador_set_download_dir', expect.anything())
+    expect(within(panel).getByText('C:/Users/x/Downloads')).toBeInTheDocument()
+  })
+
+  it('says why a folder was refused and keeps the old one', async () => {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValue('D:/gone')
+    const base = respond
+    respond = (command) =>
+      command === 'navegador_set_download_dir'
+        ? new Error('That folder does not exist')
+        : base(command)
+    const panel = await withDownload()
+    await within(panel).findByText('C:/Users/x/Downloads')
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Cambiar' }))
+    expect(await within(panel).findByRole('alert')).toHaveTextContent(
+      'No se pudo usar esa carpeta: That folder does not exist'
+    )
+    expect(within(panel).getByText('C:/Users/x/Downloads')).toBeInTheDocument()
+  })
+
+  it('shows a file that was saved to the folder, and where', async () => {
+    const panel = await withDownload({
+      fileName: 'data.zip',
+      status: 'saved',
+      savedTo: 'C:/Users/x/Downloads',
+      size: 2048,
+      sha256: null,
+    })
+    expect(within(panel).getByText('data.zip')).toBeInTheDocument()
+    expect(within(panel).getByText('Guardado')).toBeInTheDocument()
+    expect(within(panel).getByText('Guardado en C:/Users/x/Downloads')).toBeInTheDocument()
+    expect(within(panel).getByText('2.0 KB')).toBeInTheDocument()
+    expect(within(panel).queryByText('No es un PDF.')).not.toBeInTheDocument()
   })
 })

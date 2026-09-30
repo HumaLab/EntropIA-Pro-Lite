@@ -30,7 +30,12 @@ export type CaptureDraft = {
   accessedAt: string
 }
 
-export type DownloadStatus = 'downloading' | 'ready' | 'rejected' | 'failed'
+/**
+ * `ready`: a verified PDF EntropIA holds in quarantine. `saved`: a file EntropIA
+ * does not keep (anything that is not a verified PDF), written to the person's
+ * download folder. Nothing in that folder is ever opened.
+ */
+export type DownloadStatus = 'downloading' | 'ready' | 'saved' | 'rejected' | 'failed'
 
 /** Mirrors `DownloadDraft` in `navegador/download.rs`. */
 export type DownloadDraft = {
@@ -39,6 +44,8 @@ export type DownloadDraft = {
   fileName: string
   size: number | null
   sha256: string | null
+  /** The folder a `saved` file was written to; `null` for anything else. */
+  savedTo: string | null
   accessedAt: string
   status: DownloadStatus
   /** A stable code for a rejection or failure, `null` otherwise. */
@@ -46,6 +53,22 @@ export type DownloadDraft = {
 }
 
 export const NAVEGADOR_DOWNLOAD_EVENT = 'navegador://download'
+
+/** The folder non-PDF downloads go to; mirrors `DownloadDir` in `navegador/commands.rs`. */
+export type DownloadFolder = {
+  path: string | null
+  /** True when nobody chose a folder and the system's Downloads folder is used. */
+  isDefault: boolean
+}
+
+export function navegadorDownloadDir(): Promise<DownloadFolder> {
+  return invoke<DownloadFolder>('navegador_download_dir')
+}
+
+/** The backend checks that `path` exists and is a directory before it keeps it. */
+export function navegadorSetDownloadDir(path: string): Promise<DownloadFolder> {
+  return invoke<DownloadFolder>('navegador_set_download_dir', { path })
+}
 
 export function navegadorCapturePage(): Promise<CaptureDraft> {
   return invoke<CaptureDraft>('navegador_capture_page')
@@ -155,6 +178,7 @@ export function describeDownload(draft: DownloadDraft) {
     accessedAt: draft.accessedAt,
     size: draft.size === null ? '' : formatBytes(draft.size),
     shortSha: shortHash(draft.sha256),
+    savedTo: draft.savedTo,
     status: draft.status,
     reason: draft.reason,
   }

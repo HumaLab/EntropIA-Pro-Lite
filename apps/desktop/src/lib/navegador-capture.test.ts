@@ -41,6 +41,7 @@ function download(overrides: Partial<DownloadDraft> = {}): DownloadDraft {
     fileName: 'paper.pdf',
     size: 1_500_000,
     sha256: SHA,
+    savedTo: null,
     accessedAt: '2026-09-30T12:00:00Z',
     status: 'ready',
     reason: null,
@@ -180,6 +181,26 @@ describe('describeDownload', () => {
     const view = describeDownload(download({ status: 'downloading', size: null, sha256: null }))
     expect(view.size).toBe('')
     expect(view.shortSha).toBe('')
+  })
+
+  it('shows where a file that is not kept was saved', () => {
+    const view = describeDownload(
+      download({
+        fileName: 'data.zip',
+        status: 'saved',
+        savedTo: 'C:/Users/x/Downloads',
+        size: 2048,
+        sha256: null,
+      })
+    )
+    expect(view.status).toBe('saved')
+    expect(view.savedTo).toBe('C:/Users/x/Downloads')
+    expect(view.shortSha).toBe('')
+    expect(view.size).toBe('2.0 KB')
+  })
+
+  it('has no folder to show for a file EntropIA keeps', () => {
+    expect(describeDownload(download()).savedTo).toBeNull()
   })
 
   it('names the reason for a rejection', () => {

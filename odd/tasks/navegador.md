@@ -79,7 +79,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   selection with context, HTML snapshot (platform script evaluation with
   result), PDF download via `on_download`. T5a `d63f19fe`, T5b in the commit
   that carries this note.
-- [ ] T5c — (route: delegated writer) Fixes from the user's T5 run: real
+- [ ] T5c — (route: delegated writer; automated checks observed; Windows run pending) Fixes from the user's T5 run: real
   isolated popup windows for sign-in flows (keep window.opener), allow `blob:`
   URLs whose origin passes the policy, dismiss/clear downloads, non-PDF
   downloads to the user's Downloads folder or a chosen folder (fix the
@@ -567,3 +567,25 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   file created by another program in between can be overwritten); a failed or
   cancelled download in the folder leaves whatever WebView2 left (we never delete
   in that folder).
+- T5c-5b (download folder in the panel; frontend). `DownloadDraft` gains `savedTo`
+  and status `saved` (mirrors Rust); the downloads header reads "Carpeta de
+  descargas: <path>" with a "Cambiar" button that opens the dialog plugin in
+  directory mode (`dialog:allow-open`, already granted to `main`) and sends the
+  pick to `navegador_set_download_dir`, which validates it; a refusal is shown
+  ("No se pudo usar esa carpeta: <reason>") and the old folder stays; cancelling
+  the dialog changes nothing. A `saved` item shows the chip "Guardado", its size
+  and "Guardado en <carpeta>", no hash and no rejection reason. The section title
+  is now just "Descargas" (it is no longer all quarantine). The header only shows
+  once the list has an item, so the folder cannot be changed before the first
+  download (the first one goes to the OS Downloads folder): a deliberate
+  minimum. No "show in explorer" action (see T5c-5a).
+  RED: 2 new `describeDownload` tests and 5 new `NavegadorView` tests failed
+  (no `savedTo`, no folder row, no `saved` rendering). GREEN: `navegador-capture.test.ts`
+  and `NavegadorView.test.ts` pass (view: folder shown, pick and save, dialog
+  cancelled, refusal shown with the old folder kept, saved file with its
+  folder). Final frontend run for the five fixes: `pnpm test` 299 store + 800 ui +
+  2727 desktop passed (7 skipped); `VITE_LOCAL_ML=0` desktop 2706 passed (28
+  skipped); `pnpm typecheck` and `VITE_LOCAL_ML=0` desktop typecheck 0 errors;
+  `pnpm lint` only the known `WritingView.svelte:1403` error (the warnings are in
+  files this work did not touch); prettier clean on every touched file;
+  `VITE_NAVEGADOR=1 vite build` emits the NavegadorView chunk.

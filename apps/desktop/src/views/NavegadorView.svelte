@@ -22,6 +22,7 @@
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { get } from 'svelte/store'
+  import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
   import { ActionIcon, Button, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { zoomFactor } from '$lib/zoom'
@@ -45,8 +46,11 @@
     formatBytes,
     navegadorCapturePage,
     navegadorCaptureSelection,
+    navegadorDownloadDir,
+    navegadorSetDownloadDir,
     parseCaptureError,
     type CaptureDraft,
+    type DownloadFolder,
   } from '$lib/navegador-capture'
 
   const currentLocale = locale
@@ -64,6 +68,8 @@
   let lastSent: string | null = null
 
   let capturing = $state(false)
+  let folder = $state<DownloadFolder | null>(null)
+  let folderError = $state<string | null>(null)
   const captureError = $derived($navegadorStore.captureError)
   const captureView = $derived(
     $navegadorStore.capture ? describeCaptureDraft($navegadorStore.capture) : null
@@ -144,6 +150,22 @@
     }
   }
 
+  async function changeFolder() {
+    folderError = null
+    try {
+      const picked = await openFolderDialog({
+        directory: true,
+        multiple: false,
+        defaultPath: folder?.path ?? undefined,
+        title: t('navegador.download.folderDialog'),
+      })
+      if (typeof picked !== 'string') return
+      folder = await navegadorSetDownloadDir(picked)
+    } catch (reason) {
+      folderError = t('navegador.download.folderError', { message: describe(reason) })
+    }
+  }
+
   function dismissCapture() {
     navegadorStore.clearCapture()
   }
@@ -179,6 +201,12 @@
       if (disposed) stop()
       else unlisten = stop
     })
+
+    void navegadorDownloadDir()
+      .then((next) => {
+        if (next && !disposed) folder = next
+      })
+      .catch(() => undefined)
 
     // The store keeps listening after this view is gone.
     void navegadorStore.startListening().catch((reason) => {
@@ -375,6 +403,16 @@
             {$currentLocale && t('navegador.download.clear')}
           </Button>
         </header>
+        <p class="navegador-view__folder">
+          <span>{$currentLocale && t('navegador.download.folder')}</span>
+          {#if folder?.path}<code>{folder.path}</code>{/if}
+          <Button size="sm" variant="ghost" onclick={() => void changeFolder()}>
+            {$currentLocale && t('navegador.download.folderChange')}
+          </Button>
+        </p>
+        {#if folderError}
+          <p class="navegador-view__problem" role="alert">{folderError}</p>
+        {/if}
         <ul class="navegador-view__downloads">
           {#each downloadViews as item (item.id)}
             <li>
@@ -384,6 +422,12 @@
               >
               {#if item.size}<span>{item.size}</span>{/if}
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
+              {#if item.status === 'saved' && item.savedTo}
+                <span
+                  >{$currentLocale &&
+                    t('navegador.download.savedIn', { folder: item.savedTo })}</span
+                >
+              {/if}
               {#if item.status === 'rejected' || item.status === 'failed'}
                 <span class="navegador-view__problem"
                   >{$currentLocale && t(downloadReasonKey(item.reason))}</span
@@ -494,6 +538,19 @@
   .navegador-view__downloads-head .navegador-view__panel-subtitle {
     flex: 1;
     margin: 0;
+  }
+
+  .navegador-view__folder {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 var(--space-2);
+  }
+
+  .navegador-view__folder code {
+    overflow-wrap: anywhere;
+    color: var(--color-text-primary);
   }
 
   .navegador-view__row-end {

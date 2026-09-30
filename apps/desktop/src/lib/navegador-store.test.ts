@@ -27,6 +27,7 @@ const download = (id: string, patch: Partial<DownloadDraft> = {}): DownloadDraft
   fileName: `${id}.pdf`,
   size: null,
   sha256: null,
+  savedTo: null,
   accessedAt: '2026-09-30T12:00:00Z',
   status: 'downloading',
   reason: null,
