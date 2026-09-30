@@ -1497,7 +1497,7 @@ export class ItemRepo {
    * 3. Entities (FK → items)
    * 4. Triples (FK → items)
    * 5. Asset embeddings (item_id in vec_assets)
-   * 6. FTS rebuild from canonical rowid sources
+   * 6. The item's own FTS row, by rowid (contentless_delete=1, 0034)
    * 7. Notes (FK → items)
    * 8. Item itself
    *
@@ -1531,6 +1531,7 @@ export class ItemRepo {
         DELETE FROM entities WHERE item_id = '${esc}';
         DELETE FROM triples WHERE item_id = '${esc}';
         DELETE FROM notes WHERE item_id = '${esc}';
+        DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE id = '${esc}');
         DELETE FROM items WHERE id = '${esc}';
         DELETE FROM collections WHERE id = '${escCollectionId}' AND id NOT IN (SELECT DISTINCT collection_id FROM items);
         COMMIT;
@@ -1547,13 +1548,9 @@ export class ItemRepo {
       )
     }
 
-    // Phase 2: Best-effort cleanup for optional tables / derived indexes
-    try {
-      await this.ftsRepo?.rebuildIndex()
-    } catch {
-      /* table may not exist — non-fatal */
-    }
+    this.ftsRepo?.forgetVocabulary()
 
+    // Phase 2: Best-effort cleanup for optional tables
     try {
       await this.rawClient.execute(`DELETE FROM vec_assets WHERE item_id = '${esc}'`)
     } catch {

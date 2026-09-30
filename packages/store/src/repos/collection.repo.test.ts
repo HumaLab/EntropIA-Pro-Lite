@@ -239,7 +239,10 @@ describe('CollectionRepo', () => {
       expect(batchSql).not.toContain('DELETE FROM vec_items')
       expect(batchSql).not.toContain('DELETE FROM embeddings_fallback')
       expect(batchSql).not.toContain('DELETE FROM fts_index')
-      expect(batchSql).not.toContain('DELETE FROM fts_items')
+      // The item's own index row leaves by rowid inside the same transaction.
+      expect(batchSql).toContain(
+        'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
+      )
     })
 
     it('cleans up optional tables after core transaction succeeds', async () => {
@@ -255,19 +258,8 @@ describe('CollectionRepo', () => {
 
       // Optional tables are cleaned up with individual execute calls
       const executeCalls = rawExecuteMock.mock.calls.map((c) => c[0] as string)
-      expect(
-        executeCalls.some((sql) =>
-          sql.includes("INSERT INTO fts_items(fts_items) VALUES ('delete-all')")
-        )
-      ).toBe(true)
-      expect(
-        executeCalls.some((sql) =>
-          sql.includes('INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)')
-        )
-      ).toBe(true)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM fts_items WHERE item_id'))).toBe(
-        false
-      )
+      // No full index rebuild: it cost seconds per delete on a large archive.
+      expect(executeCalls.some((sql) => sql.includes('fts_items'))).toBe(false)
       expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_items'))).toBe(false)
       expect(executeCalls.some((sql) => sql.includes('DELETE FROM embeddings_fallback'))).toBe(
         false

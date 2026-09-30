@@ -128,6 +128,7 @@ export class CollectionRepo {
         DELETE FROM entities WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
         DELETE FROM triples WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
         DELETE FROM notes WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
+        DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE collection_id = '${esc}');
         DELETE FROM items WHERE collection_id = '${esc}';
         DELETE FROM collections WHERE id = '${esc}';
         COMMIT;
@@ -146,12 +147,7 @@ export class CollectionRepo {
 
     // Phase 2: Best-effort cleanup for optional tables (items already deleted, use cached IDs)
     if (itemIdsList.length > 0) {
-      // FTS search index (contentless FTS5 must rebuild from canonical rowids)
-      try {
-        await this.ftsRepo?.rebuildIndex()
-      } catch {
-        /* table may not exist — non-fatal */
-      }
+      this.ftsRepo?.forgetVocabulary()
 
       // Asset embedding vectors
       try {

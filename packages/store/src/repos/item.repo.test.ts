@@ -387,7 +387,10 @@ describe('ItemRepo', () => {
       expect(batchSql).not.toContain('DELETE FROM vec_items')
       expect(batchSql).not.toContain('DELETE FROM embeddings_fallback')
       expect(batchSql).not.toContain('DELETE FROM fts_index')
-      expect(batchSql).not.toContain('DELETE FROM fts_items')
+      // The item's own index row leaves by rowid inside the same transaction.
+      expect(batchSql).toContain(
+        'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
+      )
     })
 
     it('cleans up optional tables after core transaction succeeds', async () => {
@@ -403,19 +406,8 @@ describe('ItemRepo', () => {
 
       // Optional tables are cleaned up with individual execute calls
       const executeCalls = rawExecuteMock.mock.calls.map((c) => c[0] as string)
-      expect(
-        executeCalls.some((sql) =>
-          sql.includes("INSERT INTO fts_items(fts_items) VALUES ('delete-all')")
-        )
-      ).toBe(true)
-      expect(
-        executeCalls.some((sql) =>
-          sql.includes('INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)')
-        )
-      ).toBe(true)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM fts_items WHERE item_id'))).toBe(
-        false
-      )
+      // No full index rebuild: it cost seconds per delete on a large archive.
+      expect(executeCalls.some((sql) => sql.includes('fts_items'))).toBe(false)
       expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_items'))).toBe(false)
       expect(executeCalls.some((sql) => sql.includes('DELETE FROM embeddings_fallback'))).toBe(
         false
@@ -1401,6 +1393,21 @@ describe('keyset pagination against the real schema', () => {
     { id: 'doc-10', title: 'Mosaic' },
     { id: 'doc-11', title: 'Nimbus' },
   ]
+
+  describe('deleting a document from the search index', () => {
+    it('drops only its own index row, keeping every other document searchable', async () => {
+      const { sqlite, rawClient, repo: realRepo } = createRealDb(fiveDocs)
+      await indexFts(rawClient)
+      const matches = (term: string) =>
+        sqlite.prepare('SELECT rowid FROM fts_items WHERE fts_items MATCH ?').all(term).length
+
+      await realRepo.deleteWithCascade('doc-a')
+
+      expect(matches('alpha')).toBe(0)
+      expect(matches('bravo')).toBe(1)
+      expect(sqlite.prepare('SELECT COUNT(*) AS n FROM fts_items').get()).toEqual({ n: 4 })
+    })
+  })
 
   describe('finding a document already imported from the same file', () => {
     const acta = { originalPath: 'D:\\Fondo\\acta.pdf', sizeBytes: 1000, modifiedAt: 1302811932000 }

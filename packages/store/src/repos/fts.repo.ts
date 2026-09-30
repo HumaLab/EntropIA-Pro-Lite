@@ -511,4 +511,13 @@ FROM items i`
   async removeItem(_itemId: string): Promise<void> {
     await this.rebuildIndex()
   }
+
+  /**
+   * Drop the cached vocabulary after rows left the index some other way —
+   * the item and collection deletes remove their own rows by rowid inside
+   * their transaction instead of rebuilding the whole index.
+   */
+  forgetVocabulary(): void {
+    this.vocab = null
+  }
 }
