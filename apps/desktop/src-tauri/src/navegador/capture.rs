@@ -263,7 +263,7 @@ pub fn parse_capture(
 /// One clean line of untrusted text: control characters and bidirectional
 /// overrides gone, runs of whitespace collapsed, at most `max` characters.
 /// `None` when nothing is left.
-fn clean_line(input: &str, max: usize) -> Option<String> {
+pub(super) fn clean_line(input: &str, max: usize) -> Option<String> {
     let spaced: String = input
         .chars()
         .filter(|c| !is_bidi_control(*c))

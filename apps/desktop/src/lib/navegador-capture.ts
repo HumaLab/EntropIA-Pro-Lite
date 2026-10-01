@@ -9,7 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { hostOf, tabTitle, type BrowserTab } from './navegador-tabs'
+import { hostOf } from './navegador-tabs'
 
 /** Mirrors `CaptureDraft` in `navegador/capture.rs` (the HTML stays in Rust). */
 export type CaptureDraft = {
@@ -53,6 +53,9 @@ export type DownloadDraft = {
   reason: string | null
   /** The browser tab whose page started it; `null` for a popup window. */
   tab: number | null
+  /** The page it started from, as it was then: a snapshot, never the tab's live page. */
+  pageUrl: string | null
+  pageTitle: string | null
 }
 
 export const NAVEGADOR_DOWNLOAD_EVENT = 'navegador://download'
@@ -175,18 +178,17 @@ export function describeCaptureDraft(draft: CaptureDraft) {
 }
 
 /**
- * What a download line shows. Downloads belong to the browser, not to a tab:
- * the host says where the file comes from, and the tab is named only while it
- * is still open and has a name.
+ * What a download line shows. Downloads belong to the browser, not to a tab,
+ * and a tab keeps navigating: the label is the page the download started from,
+ * as the backend saw it at that moment, never the tab's page now.
  */
-export function describeDownload(draft: DownloadDraft, tabs: readonly BrowserTab[] = []) {
-  const from = draft.tab === null ? undefined : tabs.find((tab) => tab.id === draft.tab)
+export function describeDownload(draft: DownloadDraft) {
   return {
     id: draft.id,
     fileName: draft.fileName,
     url: draft.url,
-    host: hostOf(draft.url),
-    tabLabel: from ? tabTitle(from) : null,
+    host: hostOf(draft.pageUrl) ?? hostOf(draft.url),
+    pageTitle: draft.pageTitle?.trim() || null,
     accessedAt: draft.accessedAt,
     size: draft.size === null ? '' : formatBytes(draft.size),
     shortSha: shortHash(draft.sha256),

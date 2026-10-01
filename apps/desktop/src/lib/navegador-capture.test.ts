@@ -49,6 +49,8 @@ function download(overrides: Partial<DownloadDraft> = {}): DownloadDraft {
     status: 'ready',
     reason: null,
     tab: null,
+    pageUrl: null,
+    pageTitle: null,
     ...overrides,
   }
 }
@@ -244,28 +246,35 @@ describe('upsertDownload', () => {
   })
 })
 
-describe('describeDownload, which tab started it', () => {
-  const tabs = [
-    { id: 1, url: 'https://a.test/', title: 'Docs', blocked: null },
-    { id: 2, url: null, title: null, blocked: null },
-  ]
+describe('describeDownload, the page it came from', () => {
+  const from = {
+    pageUrl: 'https://news.example.org/article-1',
+    pageTitle: 'Article one',
+  }
 
-  it('shows the host the file comes from', () => {
-    expect(describeDownload(download({ url: 'https://files.example.org/a/b.pdf' })).host).toBe(
-      'files.example.org'
-    )
+  it('shows the host and title of the page the download started from', () => {
+    const view = describeDownload(download({ url: 'https://cdn.other.net/a.pdf', ...from }))
+    expect(view.host).toBe('news.example.org')
+    expect(view.pageTitle).toBe('Article one')
+  })
+
+  it('does not follow the tab: the same draft reads the same whatever the tab shows now', () => {
+    // The line is a function of the draft alone: nothing about the tab goes in.
+    const draft = download({ tab: 1, ...from })
+    expect(describeDownload(draft).pageTitle).toBe('Article one')
+    expect(describeDownload({ ...draft, tab: 2 })).toEqual(describeDownload(draft))
+    expect(describeDownload.length).toBe(1)
+  })
+
+  it('falls back to the host of the file when the page is not known, and shows no title', () => {
+    const view = describeDownload(download({ url: 'https://files.example.org/a/b.pdf' }))
+    expect(view.host).toBe('files.example.org')
+    expect(view.pageTitle).toBeNull()
     expect(describeDownload(download({ url: 'not a url' })).host).toBeNull()
   })
 
-  it('names the tab that started it while that tab is open', () => {
-    expect(describeDownload(download({ tab: 1 }), tabs).tabLabel).toBe('Docs')
-  })
-
-  it('has no tab to name for a popup, a closed tab or a tab with no name', () => {
-    expect(describeDownload(download({ tab: null }), tabs).tabLabel).toBeNull()
-    expect(describeDownload(download({ tab: 9 }), tabs).tabLabel).toBeNull()
-    expect(describeDownload(download({ tab: 2 }), tabs).tabLabel).toBeNull()
-    expect(describeDownload(download({ tab: 1 })).tabLabel).toBeNull()
+  it('has no title for a blank one', () => {
+    expect(describeDownload(download({ ...from, pageTitle: '  ' })).pageTitle).toBeNull()
   })
 })
 

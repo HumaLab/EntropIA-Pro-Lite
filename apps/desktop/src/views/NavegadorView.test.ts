@@ -40,6 +40,8 @@ const pdf: DownloadDraft = {
   status: 'ready',
   reason: null,
   tab: null,
+  pageUrl: null,
+  pageTitle: null,
 }
 
 const tab = (id: number, patch: Partial<BrowserTab> = {}): BrowserTab => ({
@@ -652,24 +654,55 @@ describe('NavegadorView tabs', () => {
     ).toBeInTheDocument()
   })
 
-  it('says where a download came from, and in which tab while that tab is open', async () => {
-    await openWith([articleTab, tab(2, { url: 'https://b.test/', title: 'Docs' })], 1)
+  it('says where a download came from by the page it started on', async () => {
+    await openWith([articleTab], 1)
     handlers['navegador://download']!({
-      payload: { ...pdf, url: 'https://files.example.org/paper.pdf', tab: 2 },
+      payload: {
+        ...pdf,
+        url: 'https://files.example.org/paper.pdf',
+        tab: 1,
+        pageUrl: 'https://news.example.org/a',
+        pageTitle: 'Article one',
+      },
     })
     const panel = await screen.findByLabelText(/Captura \(borrador/)
-    expect(within(panel).getByText(/Desde files\.example\.org/)).toBeInTheDocument()
-    expect(within(panel).getByText(/en la solapa Docs/)).toBeInTheDocument()
+    expect(within(panel).getByText('Desde news.example.org · Article one')).toBeInTheDocument()
   })
 
-  it('still lists a download whose tab is gone, with its host only', async () => {
+  it('keeps each download labelled with its own page when the tab moved on', async () => {
+    await openWith([articleTab], 1)
+    for (const [id, title] of [
+      ['d1', 'Article one'],
+      ['d2', 'Article two'],
+      ['d3', 'Article three'],
+    ] as const) {
+      handlers['navegador://download']!({
+        payload: {
+          ...pdf,
+          id,
+          fileName: `${id}.pdf`,
+          tab: 1,
+          pageUrl: `https://news.example.org/${id}`,
+          pageTitle: title,
+        },
+      })
+    }
+    // The tab itself now shows something else.
+    emitState(browser([{ ...articleTab, title: 'Something else entirely' }], 1, 9))
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+    for (const title of ['Article one', 'Article two', 'Article three']) {
+      expect(within(panel).getByText(`Desde news.example.org · ${title}`)).toBeInTheDocument()
+    }
+    expect(within(panel).queryByText(/Something else entirely/)).not.toBeInTheDocument()
+  })
+
+  it('still lists a download with only its host when the page is unknown', async () => {
     await openWith([articleTab], 1)
     handlers['navegador://download']!({
       payload: { ...pdf, url: 'https://files.example.org/paper.pdf', tab: 7 },
     })
     const panel = await screen.findByLabelText(/Captura \(borrador/)
-    expect(within(panel).getByText(/Desde files\.example\.org/)).toBeInTheDocument()
-    expect(within(panel).queryByText(/en la solapa/)).not.toBeInTheDocument()
+    expect(within(panel).getByText('Desde files.example.org')).toBeInTheDocument()
   })
 
   it('renders a hostile tab title as text, never as markup', async () => {

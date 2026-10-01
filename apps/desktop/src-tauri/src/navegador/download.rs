@@ -170,6 +170,10 @@ pub struct DownloadDraft {
     /// window started). The download outlives a tab switch, and the tab itself
     /// may be closed before it ends: this is only for display.
     pub tab: Option<u32>,
+    /// The page the download started from, as it was at that moment. A tab
+    /// keeps navigating, so this is a snapshot: it never follows the tab.
+    pub page_url: Option<String>,
+    pub page_title: Option<String>,
 }
 
 impl DownloadDraft {
@@ -228,7 +232,16 @@ impl DownloadDraft {
             status: DownloadStatus::Rejected,
             reason: Some(why),
             tab: None,
+            page_url: None,
+            page_title: None,
         }
+    }
+
+    /// The same draft, saying which page asked for the download.
+    pub fn with_page(mut self, url: Option<&str>, title: Option<&str>) -> Self {
+        self.page_url = url.map(str::to_string);
+        self.page_title = title.and_then(|t| super::capture::clean_line(t, PAGE_TITLE_MAX));
+        self
     }
 
     /// The same draft, saying which tab's page asked for the download.
@@ -255,6 +268,8 @@ impl DownloadDraft {
             status,
             reason,
             tab: pending.tab,
+            page_url: pending.page_url.clone(),
+            page_title: pending.page_title.clone(),
         }
     }
 }
@@ -664,7 +679,13 @@ pub struct Pending {
     pub accessed_at: String,
     /// The browser tab whose page started it, once [`Registry::set_tab`] says.
     pub tab: Option<u32>,
+    /// The page that started it, as it was then (address and cleaned title).
+    pub page_url: Option<String>,
+    pub page_title: Option<String>,
 }
+
+/// Longest page title kept with a download, in characters.
+pub const PAGE_TITLE_MAX: usize = 200;
 
 /// The downloads in flight, in the order they started.
 #[derive(Default)]
@@ -725,6 +746,8 @@ impl Registry {
             saved,
             accessed_at: super::capture::now_rfc3339(),
             tab: None,
+            page_url: None,
+            page_title: None,
         };
         pending.push(entry.clone());
         Ok(entry)
@@ -741,6 +764,28 @@ impl Registry {
             }
             None => false,
         }
+    }
+
+    /// Record the page that started download `id`, as it is right now. The
+    /// title comes from a web page, so it is cleaned and bounded. False when the
+    /// download is not in flight.
+    pub fn set_page(&self, id: &str, url: Option<&str>, title: Option<&str>) -> bool {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        match pending.iter_mut().find(|p| p.id == id) {
+            Some(entry) => {
+                entry.page_url = url.map(str::to_string);
+                entry.page_title =
+                    title.and_then(|t| super::capture::clean_line(t, PAGE_TITLE_MAX));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A download in flight, as it is now, without taking it out.
+    pub fn peek(&self, id: &str) -> Option<Pending> {
+        let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        pending.iter().find(|p| p.id == id).cloned()
     }
 
     /// The download whose file is `path`: its quarantine file, or the file it
@@ -1234,6 +1279,110 @@ mod tests {
         assert_eq!(refused.with_tab(Some(4)).tab, Some(4));
     }
 
+    // --- the page it came from, as it was when the download started ------------
+
+    #[test]
+    fn the_page_a_download_came_from_is_kept_as_it_was_and_comes_back_when_it_ends() {
+        let registry = Registry::default();
+        let a = registry
+            .begin(&url("https://a.test/1.pdf"), Path::new("1.pdf"))
+            .unwrap();
+        let b = registry
+            .begin(&url("https://a.test/2.pdf"), Path::new("2.pdf"))
+            .unwrap();
+        assert!(registry.set_page(&a.id, Some("https://a.test/one"), Some("Article one")));
+        assert!(registry.set_page(&b.id, Some("https://a.test/two"), Some("Article two")));
+        let b = registry.take_by_url(&url("https://a.test/2.pdf")).unwrap();
+        assert_eq!(b.page_title.as_deref(), Some("Article two"));
+        assert_eq!(b.page_url.as_deref(), Some("https://a.test/two"));
+        let a = registry
+            .take_by_path(&PathBuf::from(format!("{}.part", a.id)))
+            .unwrap();
+        assert_eq!(a.page_title.as_deref(), Some("Article one"));
+    }
+
+    #[test]
+    fn the_page_title_is_cleaned_and_bounded_like_any_text_from_a_page() {
+        let registry = Registry::default();
+        let p = registry
+            .begin(&url("https://a.test/x"), Path::new("x"))
+            .unwrap();
+        let hostile = format!("  Bad\u{202e}\n\ttitle {}", "w".repeat(500));
+        registry.set_page(&p.id, None, Some(&hostile));
+        let title = registry
+            .take_by_url(&p.url)
+            .unwrap()
+            .page_title
+            .expect("a title");
+        assert!(title.starts_with("Bad title w"), "{title}");
+        assert!(!title.contains('\u{202e}') && !title.contains('\n'));
+        assert!(title.chars().count() <= PAGE_TITLE_MAX);
+    }
+
+    #[test]
+    fn a_blank_title_or_an_unknown_download_leaves_nothing_behind() {
+        let registry = Registry::default();
+        let p = registry
+            .begin(&url("https://a.test/x"), Path::new("x"))
+            .unwrap();
+        assert!(!registry.set_page("nope", Some("https://a.test/"), Some("T")));
+        registry.set_page(&p.id, Some("https://a.test/"), Some("   \u{202e} "));
+        let p = registry.take_by_url(&p.url).unwrap();
+        assert_eq!(p.page_title, None);
+    }
+
+    #[test]
+    fn every_draft_keeps_the_page_it_came_from() {
+        let registry = Registry::default();
+        let p = registry
+            .begin(&url("https://a.test/p.pdf"), Path::new("p.pdf"))
+            .unwrap();
+        registry.set_page(&p.id, Some("https://a.test/one"), Some("Article one"));
+        let p = registry.take_by_url(&p.url).unwrap();
+        let verified = Verified {
+            size: 3,
+            sha256: "a".repeat(64),
+        };
+        let drafts = [
+            DownloadDraft::started(&p),
+            DownloadDraft::finished(&p, Ok(verified)),
+            DownloadDraft::finished(&p, Err(reason::INTERRUPTED)),
+            DownloadDraft::saved(&p, Path::new("/d/x.zip"), Some(1)),
+        ];
+        for draft in drafts {
+            assert_eq!(draft.page_title.as_deref(), Some("Article one"));
+            assert_eq!(draft.page_url.as_deref(), Some("https://a.test/one"));
+        }
+    }
+
+    #[test]
+    fn a_refused_download_can_carry_the_page_too() {
+        let refused =
+            DownloadDraft::refused(&url("https://a.test/x"), Path::new("x"), reason::BLOCKED);
+        assert_eq!(
+            (refused.page_url.clone(), refused.page_title.clone()),
+            (None, None)
+        );
+        let refused = refused.with_page(Some("https://a.test/one"), Some("Article one"));
+        assert_eq!(refused.page_title.as_deref(), Some("Article one"));
+        assert_eq!(refused.page_url.as_deref(), Some("https://a.test/one"));
+    }
+
+    #[test]
+    fn peeking_at_a_download_shows_its_current_state_and_leaves_it_in_flight() {
+        let registry = Registry::default();
+        let p = registry
+            .begin(&url("https://a.test/x"), Path::new("x"))
+            .unwrap();
+        registry.set_tab(&p.id, Some(3));
+        registry.set_page(&p.id, Some("https://a.test/one"), Some("One"));
+        let seen = registry.peek(&p.id).unwrap();
+        assert_eq!(seen.tab, Some(3));
+        assert_eq!(seen.page_title.as_deref(), Some("One"));
+        assert!(registry.take_by_url(&p.url).is_some(), "still in flight");
+        assert!(registry.peek("nope").is_none());
+    }
+
     // --- draft --------------------------------------------------------------
 
     fn pending() -> Pending {
@@ -1321,6 +1470,8 @@ mod tests {
             status: DownloadStatus::Ready,
             reason: None,
             tab: Some(2),
+            page_url: Some("https://a.test/one".into()),
+            page_title: Some("Article one".into()),
         };
         let value = serde_json::to_value(draft).unwrap();
         let object = value.as_object().unwrap();
@@ -1335,13 +1486,15 @@ mod tests {
             "status",
             "reason",
             "tab",
+            "pageUrl",
+            "pageTitle",
         ] {
             assert!(object.contains_key(key), "missing {key}");
         }
         assert_eq!(object["tab"], 2);
         assert_eq!(
             object.len(),
-            10,
+            12,
             "an unexpected field would leak: {object:?}"
         );
         assert_eq!(object["status"], "ready");

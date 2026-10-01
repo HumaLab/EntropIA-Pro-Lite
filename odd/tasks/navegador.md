@@ -124,6 +124,30 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
+- 2026-09-30, user's Windows run of T8 (tabs, commits `aaf0f868`, `1fcb1c6b`):
+  PASS: target=_blank and Ctrl+click open a tab; `window.open(url)` opens a tab;
+  `window.open` with a size opens a popup; Google Sign-In still works and closes
+  itself; 4-tab cap, the 5th rejected; switching tabs keeps each page; closing
+  tabs, closing the last tab; leaving the section and returning; closing the
+  Navegador workspace tab; capture acts on the active tab (two tabs, different
+  pages, selection captured in the second: quote and URL from the second). Not
+  yet exercised: a download started in a background tab. Two findings, fixed in
+  the commit that carries them (SHA: see `git log --grep "single navegador tab"`
+  and `--grep "snapshot the page of a download"`), rerun pending: (1) a second
+  app tab could also choose the Navegador and both showed the one browser; now
+  the Navegador lives in one workspace tab (`WorkspaceStore.navegadorOwnerId`,
+  same owner rules as Writing: `navigateActive`, `openTab` and the split view
+  focus the owner; a tab that reaches it through its own history shows a notice
+  in `WorkPane` instead of a second view). (2) A download line showed the tab's
+  CURRENT title, so three PDFs from one tab all read like the last page; the
+  backend now snapshots the page url and title at `DownloadEvent::Requested`
+  (`Registry::set_page`, title cleaned and bounded) into the draft
+  (`pageUrl`, `pageTitle`) and the line reads "Desde <host> · <title>" from that.
+  RED: workspace 9/9 new tests failed, download 5 new Rust tests failed to
+  compile (`set_page`, `PAGE_TITLE_MAX`); the capture and view tests were
+  rewritten with the implementation. The WorkPane notice tests passed on first
+  run (written after the implementation).
+
 - 2026-09-30, user's Windows rerun after `b538e0db`: Google Sign-In popup
   closes itself after login PASS; a popup closed by hand frees its slot, three
   popups open, the fourth is rejected PASS. T5, T5c checked.

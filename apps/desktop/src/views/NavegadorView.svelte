@@ -101,9 +101,7 @@
   const captureView = $derived(
     $navegadorStore.capture ? describeCaptureDraft($navegadorStore.capture) : null
   )
-  const downloadViews = $derived(
-    $navegadorStore.downloads.map((draft) => describeDownload(draft, browser.tabs))
-  )
+  const downloadViews = $derived($navegadorStore.downloads.map((draft) => describeDownload(draft)))
   const panelOpen = $derived(
     captureView !== null || captureError !== null || downloadViews.length > 0
   )
@@ -533,11 +531,14 @@
               {#if item.size}<span>{item.size}</span>{/if}
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
               {#if item.host}
-                <span>{$currentLocale && t('navegador.download.from', { host: item.host })}</span>
-              {/if}
-              {#if item.tabLabel}
                 <span
-                  >{$currentLocale && t('navegador.download.inTab', { tab: item.tabLabel })}</span
+                  >{$currentLocale &&
+                    (item.pageTitle
+                      ? t('navegador.download.fromPage', {
+                          host: item.host,
+                          title: item.pageTitle,
+                        })
+                      : t('navegador.download.from', { host: item.host }))}</span
                 >
               {/if}
               {#if item.status === 'saved' && item.savedTo}

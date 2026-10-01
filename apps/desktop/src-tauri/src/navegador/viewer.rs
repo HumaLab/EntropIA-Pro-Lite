@@ -169,6 +169,16 @@ impl Shared {
         browser.tabs.snapshot()
     }
 
+    /// The address and title of the page in `tab` right now (nothing for a
+    /// popup, which is no tab).
+    fn page_of(&self, tab: Option<u32>) -> (Option<String>, Option<String>) {
+        let browser = self.browser();
+        match tab.and_then(|id| browser.tabs.get(id)) {
+            Some(entry) => (entry.url.clone(), entry.title.clone()),
+            None => (None, None),
+        }
+    }
+
     fn download_dir(&self) -> Option<std::path::PathBuf> {
         self.download_dir
             .lock()
@@ -205,10 +215,14 @@ fn download_requested(
     url: Url,
     destination: &mut std::path::PathBuf,
 ) -> bool {
+    // The page as it is NOW: the tab keeps moving, the download's label must not.
+    let (page_url, page_title) = shared.page_of(tab);
     let refuse = |why: &'static str| {
         emit_download(
             app,
-            &DownloadDraft::refused(&url, destination, why).with_tab(tab),
+            &DownloadDraft::refused(&url, destination, why)
+                .with_tab(tab)
+                .with_page(page_url.as_deref(), page_title.as_deref()),
         );
         false
     };
@@ -232,7 +246,10 @@ fn download_requested(
         {
             Ok(mut pending) => {
                 shared.downloads.set_tab(&pending.id, tab);
-                pending.tab = tab;
+                shared
+                    .downloads
+                    .set_page(&pending.id, page_url.as_deref(), page_title.as_deref());
+                pending = shared.downloads.peek(&pending.id).unwrap_or(pending);
                 if let Some(saved) = &pending.saved {
                     *destination = saved.clone();
                 }
@@ -252,7 +269,10 @@ fn download_requested(
     match shared.downloads.begin(&url, destination) {
         Ok(mut pending) => {
             shared.downloads.set_tab(&pending.id, tab);
-            pending.tab = tab;
+            shared
+                .downloads
+                .set_page(&pending.id, page_url.as_deref(), page_title.as_deref());
+            pending = shared.downloads.peek(&pending.id).unwrap_or(pending);
             *destination = download::part_path(&dir, &pending.id);
             emit_download(app, &DownloadDraft::started(&pending));
             true
