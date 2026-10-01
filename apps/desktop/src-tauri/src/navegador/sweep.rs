@@ -575,6 +575,16 @@ mod tests {
     }
 
     #[test]
+    fn the_folder_of_rendered_copies_is_not_taken_for_an_orphan_source() {
+        let env = Env::new();
+        let rendered = env.file("web-captures/_copy/c1-1-0.pdf", OLD);
+
+        env.sweep_later();
+
+        assert!(rendered.exists());
+    }
+
+    #[test]
     fn nothing_outside_web_captures_is_touched() {
         let env = Env::new();
         let asset = env.file("assets/old.bin", OLD);

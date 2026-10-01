@@ -29,6 +29,7 @@ use serde::Serialize;
 
 use super::capture_files::{self, Located};
 use super::save::DIR;
+use super::text_copy;
 
 /// Sources a list returns when the caller does not say.
 pub const DEFAULT_LIMIT: usize = 200;
@@ -46,6 +47,7 @@ pub mod code {
     pub const NOT_A_PDF: &str = "not_a_pdf";
     pub const FILE_MISSING: &str = "file_missing";
     pub const FILE_CHANGED: &str = "file_changed";
+    pub const NO_TEXT: &str = "no_text";
     pub const DB_ERROR: &str = "db_error";
 }
 
@@ -123,8 +125,16 @@ pub struct WebCaptureProvenance {
     pub page_title: Option<String>,
     /// UTC, RFC 3339, exactly as recorded.
     pub accessed_at: String,
-    /// What was verified when the PDF was saved.
+    /// What was verified when the PDF was saved; for a rendered copy, the
+    /// capture's own hash (of the page's HTML, or of the quote).
     pub sha256: String,
+    /// `page` or `selection`: only set on a copy rendered from a capture's text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_kind: Option<String>,
+    /// `text-pdf`: the copy is a PDF rendered from the capture's text, not the
+    /// page itself. Absent on a copy of a saved PDF.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rendering: Option<String>,
 }
 
 /// What copying a saved PDF into a collection needs: the file, found on this
@@ -274,7 +284,7 @@ pub fn list_sources(
 /// file on disk. The key must be exactly `web-captures/<source_id>/<name>` with
 /// a plain name, so a stored path can never point anywhere else, and the folder
 /// must be a real one inside the captures root (never a link).
-fn capture_file(data_dir: &Path, source_id: &str, key: &str) -> Option<PathBuf> {
+pub(super) fn capture_file(data_dir: &Path, source_id: &str, key: &str) -> Option<PathBuf> {
     let name = key.strip_prefix(&format!("{DIR}/{source_id}/"))?;
     let plain = !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':']);
     if !plain {
@@ -349,7 +359,11 @@ pub fn pdf_capture_file(
         .ok_or_else(|| format!("{}: the saved PDF is not on disk", code::FILE_MISSING))
 }
 
-/// Everything a copy of the PDF capture `capture_id` needs. The file goes through
+/// Everything a copy of the capture `capture_id` needs. A page or a selection is
+/// rendered into a PDF from its text ([`text_copy`]); the rest of this comment is
+/// about a saved PDF.
+///
+/// Everything a copy of the PDF capture needs. The file goes through
 /// the same checks as [`pdf_capture_file`] and, before a copy is allowed to
 /// carry the capture's name, it is hashed again: bytes that no longer match the
 /// sha256 recorded when they were verified are refused (`file_changed`), so a
@@ -359,7 +373,14 @@ pub fn copy_ticket(
     data_dir: &Path,
     capture_id: &str,
 ) -> Result<CopyTicket, String> {
-    let file = pdf_capture_file(conn, data_dir, capture_id)?;
+    let file = match pdf_capture_file(conn, data_dir, capture_id) {
+        Ok(file) => file,
+        // A page or a selection has no file: its text is rendered into one.
+        Err(error) if error.starts_with(code::NOT_A_PDF) => {
+            return text_copy::copy_ticket(conn, data_dir, capture_id)
+        }
+        Err(error) => return Err(error),
+    };
     let (source_id, original_url, final_url, source_title, capture_title, accessed_at, sha256): (
         String,
         String,
@@ -416,6 +437,8 @@ pub fn copy_ticket(
             page_title,
             accessed_at,
             sha256,
+            capture_kind: None,
+            rendering: None,
         },
     })
 }
@@ -567,6 +590,7 @@ pub fn delete_source(
 
 #[cfg(test)]
 mod tests {
+    use super::text_copy::COPY_DIR;
     use super::*;
     use crate::sync::test_support::new_app_schema_db;
 
@@ -1452,6 +1476,8 @@ mod tests {
                 page_title: Some("The PDF title".into()),
                 accessed_at: "2026-09-30T12:00:00Z".into(),
                 sha256: digest(bytes),
+                capture_kind: None,
+                rendering: None,
             }
         );
     }
@@ -1497,7 +1523,7 @@ mod tests {
         let cases = [
             ("../c1", code::INVALID_ID),
             ("nope", code::NOT_FOUND),
-            ("h", code::NOT_A_PDF),
+            ("h", code::NO_TEXT),
             ("gone", code::FILE_MISSING),
         ];
         for (id, expected) in cases {
@@ -1523,6 +1549,268 @@ mod tests {
         assert!(!env.data.path().join("web-captures/s1").exists());
         assert_eq!(fs::read(&copy).unwrap(), bytes);
         assert_eq!(env.count("web_captures"), 0);
+    }
+
+    // --- copy of a page or a selection, rendered as a PDF ----------------------
+
+    impl Env {
+        /// A page or selection capture with the sha256 the caller says it has.
+        fn add_text_capture(&self, c: NewCapture<'_>, sha: &str) {
+            let id = c.id;
+            self.add_capture(c);
+            self.conn
+                .execute(
+                    "UPDATE web_captures SET sha256 = ?2 WHERE id = ?1",
+                    rusqlite::params![id, sha],
+                )
+                .unwrap();
+        }
+
+        fn set_context(&self, id: &str, prefix: &str, suffix: &str) {
+            self.conn
+                .execute(
+                    "UPDATE web_captures SET quote_prefix = ?2, quote_suffix = ?3 WHERE id = ?1",
+                    rusqlite::params![id, prefix, suffix],
+                )
+                .unwrap();
+        }
+    }
+
+    fn pdf_text(path: &str) -> String {
+        let bytes = fs::read(path).expect("the rendered pdf exists");
+        let text = pdf_extract::extract_text_from_mem(&bytes).expect("a readable text layer");
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn page_env(text: Option<&str>) -> Env {
+        let env = Env::new();
+        env.add_source(NewSource {
+            title: Some("Source title"),
+            original: "https://e.com/nota",
+            final_url: "https://e.com/nota?ref=1",
+            ..source("s1", "https://e.com/nota", 1)
+        });
+        env.add_text_capture(
+            NewCapture {
+                text,
+                title: Some("La educación en Córdoba"),
+                ..capture("p1", "s1", "page", "2026-09-30T03:00:00Z")
+            },
+            SHA_A,
+        );
+        env
+    }
+
+    #[test]
+    fn a_page_copy_renders_its_text_into_a_pdf_with_the_provenance_header() {
+        let env = page_env(Some(
+            "¿Qué pasó con la educación?\n\nLa ñandú corrió — “rápido”.",
+        ));
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "p1").unwrap();
+
+        let folder = env.data.path().join("web-captures").join(COPY_DIR);
+        assert_eq!(PathBuf::from(&ticket.path).parent().unwrap(), folder);
+        assert!(ticket.path.ends_with(".pdf"), "{}", ticket.path);
+        let text = pdf_text(&ticket.path);
+        assert!(text.contains("La educación en Córdoba"), "{text}");
+        assert!(text.contains("https://e.com/nota?ref=1"), "{text}");
+        assert!(
+            text.contains("Consultada (UTC): 2026-09-30T03:00:00Z"),
+            "{text}"
+        );
+        assert!(text.contains("Página"), "{text}");
+        assert!(text.contains(SHA_A), "{text}");
+        assert!(text.contains("¿Qué pasó con la educación?"), "{text}");
+        assert!(text.contains("La ñandú corrió — “rápido”."), "{text}");
+        assert_eq!(ticket.provenance.rendering.as_deref(), Some("text-pdf"));
+        assert_eq!(ticket.provenance.capture_kind.as_deref(), Some("page"));
+        assert_eq!(ticket.provenance.capture_id, "p1");
+        assert_eq!(ticket.provenance.sha256, SHA_A);
+        assert_eq!(
+            ticket.provenance.page_title.as_deref(),
+            Some("La educación en Córdoba")
+        );
+    }
+
+    #[test]
+    fn a_page_whose_text_is_in_a_file_is_read_from_the_file() {
+        let env = page_env(None);
+        let rel = "web-captures/s1/p1.txt";
+        let path = env.data.path().join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let big = format!("inicio {} final", "palabra ".repeat(20_000));
+        fs::write(&path, &big).unwrap();
+        env.conn
+            .execute(
+                "UPDATE web_captures SET text_rel_path = ?1 WHERE id = 'p1'",
+                [rel],
+            )
+            .unwrap();
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "p1").unwrap();
+
+        let text = pdf_text(&ticket.path);
+        assert!(text.contains("inicio palabra"), "{}", &text[..200]);
+        assert!(
+            text.ends_with("palabra final"),
+            "{}",
+            &text[text.len() - 100..]
+        );
+        let pages = lopdf::Document::load_mem(&fs::read(&ticket.path).unwrap())
+            .unwrap()
+            .get_pages()
+            .len();
+        assert!(pages > 5, "{pages} pages");
+    }
+
+    #[test]
+    fn a_selection_copy_sets_the_quote_between_its_context_and_checks_the_quote_hash() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/nota", 1));
+        let quote = "la cita exacta, con acentos: canción";
+        env.add_text_capture(
+            NewCapture {
+                text: Some(quote),
+                ..capture("q1", "s1", "selection", "2026-09-30T04:00:00Z")
+            },
+            &digest(quote.as_bytes()),
+        );
+        env.set_context("q1", "texto previo ", " texto posterior");
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "q1").unwrap();
+
+        let text = pdf_text(&ticket.path);
+        let before = text.find("texto previo").expect("prefix");
+        let at = text.find(quote).expect("the exact quote");
+        let after = text.find("texto posterior").expect("suffix");
+        assert!(before < at && at < after, "{text}");
+        assert!(text.contains("Selección"), "{text}");
+        assert_eq!(ticket.provenance.capture_kind.as_deref(), Some("selection"));
+        assert_eq!(ticket.provenance.rendering.as_deref(), Some("text-pdf"));
+        assert_eq!(ticket.provenance.sha256, digest(quote.as_bytes()));
+    }
+
+    #[test]
+    fn a_selection_whose_text_no_longer_matches_its_hash_is_refused() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/nota", 1));
+        env.add_text_capture(
+            NewCapture {
+                text: Some("an edited quote"),
+                ..capture("q1", "s1", "selection", "2026-09-30T04:00:00Z")
+            },
+            &digest(b"the quote that was saved"),
+        );
+
+        let error = copy_ticket(&env.conn, env.data.path(), "q1").unwrap_err();
+
+        assert!(error.starts_with(code::FILE_CHANGED), "{error}");
+        assert!(!env.data.path().join("web-captures").join(COPY_DIR).exists());
+    }
+
+    #[test]
+    fn a_capture_without_text_cannot_be_copied() {
+        let env = page_env(None);
+        env.add_text_capture(
+            NewCapture {
+                text: Some("  \n\t "),
+                ..capture("blank", "s1", "page", "2026-09-30T05:00:00Z")
+            },
+            SHA_B,
+        );
+
+        for id in ["p1", "blank"] {
+            let error = copy_ticket(&env.conn, env.data.path(), id).unwrap_err();
+            assert!(error.starts_with(code::NO_TEXT), "{id}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_page_whose_text_file_is_gone_is_missing_not_empty() {
+        let env = page_env(None);
+        env.conn
+            .execute(
+                "UPDATE web_captures SET text_rel_path = 'web-captures/s1/p1.txt' WHERE id = 'p1'",
+                [],
+            )
+            .unwrap();
+
+        let error = copy_ticket(&env.conn, env.data.path(), "p1").unwrap_err();
+
+        assert!(error.starts_with(code::FILE_MISSING), "{error}");
+    }
+
+    #[test]
+    fn rendered_copies_are_temporary_and_stale_ones_are_purged_on_the_next_copy() {
+        let env = page_env(Some("texto de la página que se copia"));
+        let folder = env.data.path().join("web-captures").join(COPY_DIR);
+        fs::create_dir_all(&folder).unwrap();
+        let old = folder.join("old.pdf");
+        let fresh = folder.join("fresh.pdf");
+        let other = folder.join("notes.txt");
+        for file in [&old, &fresh, &other] {
+            fs::write(file, b"x").unwrap();
+        }
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+
+        let first = copy_ticket(&env.conn, env.data.path(), "p1").unwrap();
+        let second = copy_ticket(&env.conn, env.data.path(), "p1").unwrap();
+
+        assert!(!old.exists(), "a stale copy stays");
+        assert!(fresh.exists(), "a fresh copy goes");
+        assert!(other.exists(), "only pdfs are purged");
+        assert_ne!(first.path, second.path);
+        assert!(PathBuf::from(&first.path).exists());
+    }
+
+    #[test]
+    fn a_short_selection_copy_still_has_enough_text_to_skip_the_ocr() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/nota", 1));
+        env.add_text_capture(
+            NewCapture {
+                text: Some("Sí."),
+                ..capture("q1", "s1", "selection", "2026-09-30T04:00:00Z")
+            },
+            &digest("Sí.".as_bytes()),
+        );
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "q1").unwrap();
+
+        let bytes = fs::read(&ticket.path).unwrap();
+        let text = pdf_extract::extract_text_from_mem(&bytes).unwrap();
+        assert!(crate::ocr::pdf::is_quality_text(&text), "{text}");
+    }
+
+    #[test]
+    fn only_a_text_copy_says_it_is_a_rendering() {
+        let pdf = serde_json::to_value(WebCaptureProvenance {
+            source_id: "s".into(),
+            capture_id: "c".into(),
+            original_url: "o".into(),
+            final_url: "f".into(),
+            page_title: None,
+            accessed_at: "a".into(),
+            sha256: "h".into(),
+            capture_kind: None,
+            rendering: None,
+        })
+        .unwrap();
+        assert!(pdf.get("rendering").is_none());
+        assert!(pdf.get("captureKind").is_none());
+
+        let env = page_env(Some("texto suficiente para renderizar"));
+        let ticket = copy_ticket(&env.conn, env.data.path(), "p1").unwrap();
+        let text = serde_json::to_value(&ticket.provenance).unwrap();
+        assert_eq!(text["rendering"], "text-pdf");
+        assert_eq!(text["captureKind"], "page");
     }
 
     // --- shape ---------------------------------------------------------------
@@ -1565,6 +1853,8 @@ mod tests {
                 page_title: None,
                 accessed_at: "a".into(),
                 sha256: "h".into(),
+                capture_kind: None,
+                rendering: None,
             },
         })
         .unwrap();
