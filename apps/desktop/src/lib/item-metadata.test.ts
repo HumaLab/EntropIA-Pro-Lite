@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DebouncedMetadataPersistor,
   IMPORTED_FILE_METADATA_KEY,
+  WEB_CAPTURE_METADATA_KEY,
   buildTechnicalMetadata,
   getAssetDisplayPath,
   getAssetPathLabel,
@@ -10,6 +11,7 @@ import {
   normalizeMetadataKey,
   parseImportedFileMetadata,
   parseMetadataRecord,
+  parseWebCaptureProvenance,
 } from './item-metadata'
 import type { Asset, Collection, Item } from '@entropia/store'
 
@@ -96,6 +98,108 @@ describe('item metadata helpers', () => {
       ])
     )
     expect(metadata.some((entry) => entry.label === 'Ruta interna')).toBe(false)
+  })
+
+  describe('web capture provenance', () => {
+    const provenance = {
+      sourceId: 's1',
+      captureId: 'c1',
+      originalUrl: 'https://e.com/a',
+      finalUrl: 'https://e.com/a?x=1',
+      pageTitle: 'A paper',
+      accessedAt: '2026-10-01T12:00:00Z',
+      sha256: 'a'.repeat(64),
+    }
+    const source = JSON.stringify({
+      [IMPORTED_FILE_METADATA_KEY]: { originalName: 'a.pdf' },
+      [WEB_CAPTURE_METADATA_KEY]: provenance,
+    })
+
+    it('uses its own reserved key', () => {
+      expect(WEB_CAPTURE_METADATA_KEY).toBe('__entropia_web_capture')
+    })
+
+    it('is never shown as a custom metadata field', () => {
+      expect(parseMetadataRecord(source)).toEqual({})
+      expect(
+        parseMetadataRecord(
+          JSON.stringify({ autor: 'Moreno', [WEB_CAPTURE_METADATA_KEY]: provenance })
+        )
+      ).toEqual({ autor: 'Moreno' })
+    })
+
+    it('survives the person editing the custom metadata', () => {
+      const saved = mergeReservedMetadata({ autor: 'Belgrano' }, source)
+
+      expect(saved).toEqual({
+        autor: 'Belgrano',
+        [IMPORTED_FILE_METADATA_KEY]: { originalName: 'a.pdf' },
+        [WEB_CAPTURE_METADATA_KEY]: provenance,
+      })
+      // A second round trip changes nothing: the provenance stays an object.
+      expect(
+        mergeReservedMetadata(parseMetadataRecord(JSON.stringify(saved)), JSON.stringify(saved))
+      ).toEqual(saved)
+    })
+
+    it('is dropped when the item never had it, not invented', () => {
+      expect(mergeReservedMetadata({ a: 'b' }, JSON.stringify({ x: 1 }))).toEqual({ a: 'b' })
+    })
+
+    it('is read back from the reserved key', () => {
+      expect(parseWebCaptureProvenance(source)).toEqual(provenance)
+    })
+
+    it('reads a title that was never recorded as no title', () => {
+      const bare = JSON.stringify({
+        [WEB_CAPTURE_METADATA_KEY]: { ...provenance, pageTitle: null },
+      })
+      expect(parseWebCaptureProvenance(bare)?.pageTitle).toBeNull()
+    })
+
+    it.each([
+      ['no metadata', null],
+      ['not JSON', '{oops'],
+      ['no provenance', JSON.stringify({ a: 1 })],
+      ['a provenance that is not an object', JSON.stringify({ [WEB_CAPTURE_METADATA_KEY]: 'x' })],
+      [
+        'a provenance missing its capture id',
+        JSON.stringify({ [WEB_CAPTURE_METADATA_KEY]: { ...provenance, captureId: undefined } }),
+      ],
+    ])('is absent for %s', (_name, json) => {
+      expect(parseWebCaptureProvenance(json)).toBeNull()
+    })
+
+    it('adds where the item came from to its technical metadata', () => {
+      const entries = buildTechnicalMetadata({
+        item,
+        selectedAsset: asset,
+        collection,
+        originalFileMetadata: null,
+        webCapture: provenance,
+        customMetadataKeys: new Set(),
+      })
+
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          { label: 'Fuente web', value: 'https://e.com/a?x=1' },
+          { label: 'Consultada (UTC)', value: '2026-10-01T12:00:00Z' },
+          { label: 'SHA-256 del PDF guardado', value: provenance.sha256 },
+        ])
+      )
+    })
+
+    it('adds nothing for an item that is not a web copy', () => {
+      const entries = buildTechnicalMetadata({
+        item,
+        selectedAsset: asset,
+        collection,
+        originalFileMetadata: null,
+        customMetadataKeys: new Set(),
+      })
+
+      expect(entries.some((entry) => entry.label === 'Fuente web')).toBe(false)
+    })
   })
 
   it('formats asset labels consistently', () => {

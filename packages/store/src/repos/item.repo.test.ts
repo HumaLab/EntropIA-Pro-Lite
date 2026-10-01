@@ -1436,6 +1436,45 @@ describe('keyset pagination against the real schema', () => {
     })
   })
 
+  describe('finding the copies of one web capture', () => {
+    const copyOf = (captureId: string) =>
+      JSON.stringify({
+        __entropia_web_capture: { sourceId: 's1', captureId, sha256: 'abc' },
+        __entropia_file_metadata: { originalName: 'a.pdf' },
+      })
+
+    it('finds the item a collection already holds for that capture', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Paper', metadata: copyOf('cap-1') },
+        { id: 'doc-b', title: 'Other', metadata: copyOf('cap-2') },
+      ])
+
+      await expect(realRepo.findByWebCapture('col-1', 'cap-1')).resolves.toEqual({
+        id: 'doc-a',
+        title: 'Paper',
+      })
+    })
+
+    it('ignores copies in another collection, other captures and items without provenance', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Paper', collectionId: 'col-2', metadata: copyOf('cap-1') },
+        { id: 'doc-b', title: 'Other', metadata: copyOf('cap-2') },
+        { id: 'doc-c', title: 'Plain' },
+      ])
+
+      await expect(realRepo.findByWebCapture('col-1', 'cap-1')).resolves.toBeNull()
+    })
+
+    it('does not treat the id as a pattern', async () => {
+      const { repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Paper', metadata: copyOf('cap-1') },
+      ])
+
+      await expect(realRepo.findByWebCapture('col-1', "%' OR 1=1 --")).resolves.toBeNull()
+      await expect(realRepo.findByWebCapture('col-1', '')).resolves.toBeNull()
+    })
+  })
+
   it('returns a stable first page and next cursor', async () => {
     const { repo: realRepo } = createRealDb(fiveDocs)
 

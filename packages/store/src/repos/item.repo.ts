@@ -1466,6 +1466,28 @@ export class ItemRepo {
     return rows[0]?.id ?? null
   }
 
+  /**
+   * The item this collection already holds as a copy of one web capture, read
+   * from the `__entropia_web_capture` provenance a copy is written with, or null.
+   * The capture id is a bound parameter, never part of the SQL.
+   */
+  async findByWebCapture(
+    collectionId: string,
+    captureId: string
+  ): Promise<{ id: string; title: string } | null> {
+    if (!this.rawClient || !captureId) return null
+
+    const rows = await this.rawClient.select<{ id: string; title: string }>(
+      `SELECT id, title FROM items
+        WHERE collection_id = ?
+          AND json_extract(metadata, '$.__entropia_web_capture.captureId') = ?
+        ORDER BY created_at, id
+        LIMIT 1`,
+      [collectionId, captureId]
+    )
+    return rows[0] ?? null
+  }
+
   async findById(id: string): Promise<Item | null> {
     const rows = await this.db.select().from(items).where(eq(items.id, id))
 

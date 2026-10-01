@@ -2,6 +2,34 @@ import type { Asset, Collection, Item } from '@entropia/store'
 
 export const IMPORTED_FILE_METADATA_KEY = '__entropia_file_metadata'
 
+/**
+ * Where an item that was copied from a saved web capture came from. Written once,
+ * when the copy is made (`navegador-copy.ts`); the provenance of the PDF, not an
+ * editable field.
+ */
+export const WEB_CAPTURE_METADATA_KEY = '__entropia_web_capture'
+
+/**
+ * Keys that are not the person's own metadata: the editor never shows them and a
+ * save writes them back untouched. The custom-metadata editor only handles flat
+ * string fields, so a reserved object that went through it would come back as
+ * "[object Object]".
+ */
+const RESERVED_METADATA_KEYS = [IMPORTED_FILE_METADATA_KEY, WEB_CAPTURE_METADATA_KEY] as const
+
+/** Mirrors `WebCaptureProvenance` in `navegador/sources.rs`. */
+export type WebCaptureProvenance = {
+  sourceId: string
+  captureId: string
+  originalUrl: string
+  finalUrl: string
+  pageTitle: string | null
+  /** UTC, RFC 3339, as recorded when the capture was taken. */
+  accessedAt: string
+  /** What was verified when the PDF was saved. */
+  sha256: string
+}
+
 export type ImportedFileMetadata = {
   originalName?: string
   originalPath?: string
@@ -88,7 +116,7 @@ export function parseMetadataRecord(json: string): Record<string, string> {
     const obj = JSON.parse(json)
     const record: Record<string, string> = {}
     for (const [key, value] of Object.entries(obj)) {
-      if (key === IMPORTED_FILE_METADATA_KEY) continue
+      if ((RESERVED_METADATA_KEYS as readonly string[]).includes(key)) continue
       record[key] = String(value)
     }
     return record
@@ -107,12 +135,53 @@ export function parseImportedFileMetadata(json: string): ImportedFileMetadata | 
   }
 }
 
+export function parseWebCaptureProvenance(
+  json: string | null | undefined
+): WebCaptureProvenance | null {
+  if (!json) return null
+  try {
+    const value = (JSON.parse(json) as Record<string, unknown> | null)?.[WEB_CAPTURE_METADATA_KEY]
+    if (!value || typeof value !== 'object') return null
+    const found = value as Record<string, unknown>
+    const text = (key: string) => (typeof found[key] === 'string' ? (found[key] as string) : null)
+    const sourceId = text('sourceId')
+    const captureId = text('captureId')
+    const originalUrl = text('originalUrl')
+    const finalUrl = text('finalUrl')
+    const accessedAt = text('accessedAt')
+    const sha256 = text('sha256')
+    if (!sourceId || !captureId || !originalUrl || !finalUrl || !accessedAt || !sha256) return null
+    return {
+      sourceId,
+      captureId,
+      originalUrl,
+      finalUrl,
+      pageTitle: text('pageTitle'),
+      accessedAt,
+      sha256,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function mergeReservedMetadata(
   metadata: Record<string, string>,
   sourceMetadata?: string | null
 ): Record<string, unknown> {
-  const reserved = sourceMetadata ? parseImportedFileMetadata(sourceMetadata) : null
-  return reserved ? { ...metadata, [IMPORTED_FILE_METADATA_KEY]: reserved } : metadata
+  let source: Record<string, unknown> | null = null
+  try {
+    const parsed = sourceMetadata ? JSON.parse(sourceMetadata) : null
+    source = parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    source = null
+  }
+  const merged: Record<string, unknown> = { ...metadata }
+  for (const key of RESERVED_METADATA_KEYS) {
+    const value = source?.[key]
+    if (value && typeof value === 'object') merged[key] = value
+  }
+  return merged
 }
 
 export function getAssetPathLabel(path: string) {
@@ -206,12 +275,14 @@ export function buildTechnicalMetadata({
   selectedAsset,
   collection,
   originalFileMetadata,
+  webCapture = null,
   customMetadataKeys,
 }: {
   item: Item | null
   selectedAsset: Asset | null
   collection: Collection | null
   originalFileMetadata: ImportedFileMetadata | null
+  webCapture?: WebCaptureProvenance | null
   customMetadataKeys: Set<string>
 }): TechnicalMetadataEntry[] {
   const entries: TechnicalMetadataEntry[] = []
@@ -313,6 +384,26 @@ export function buildTechnicalMetadata({
     'Solo lectura',
     formatBoolean(originalFileMetadata?.readonly),
     ['readonly', 'read only']
+  )
+
+  // Labels in Spanish like every entry above: this function has no translator.
+  pushTechnicalMetadataEntry(entries, customMetadataKeys, 'Fuente web', webCapture?.finalUrl, [
+    'web source',
+    'fuente',
+  ])
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'Consultada (UTC)',
+    webCapture?.accessedAt,
+    ['accessed at', 'fecha consulta']
+  )
+  pushTechnicalMetadataEntry(
+    entries,
+    customMetadataKeys,
+    'SHA-256 del PDF guardado',
+    webCapture?.sha256,
+    ['sha256', 'sha-256', 'hash']
   )
 
   return entries
