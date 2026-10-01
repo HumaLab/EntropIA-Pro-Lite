@@ -190,6 +190,7 @@
     "allow-navegador-source-detail",
     "allow-navegador-delete-source",
     "allow-navegador-pdf-file",
+    "allow-navegador-copy-ticket",
     "core:default",
     "core:path:default",
     "core:event:default",

@@ -45,6 +45,7 @@ pub mod code {
     pub const NOT_FOUND: &str = "not_found";
     pub const NOT_A_PDF: &str = "not_a_pdf";
     pub const FILE_MISSING: &str = "file_missing";
+    pub const FILE_CHANGED: &str = "file_changed";
     pub const DB_ERROR: &str = "db_error";
 }
 
@@ -106,6 +107,35 @@ pub struct SourceDetail {
     pub created_at: i64,
     pub updated_at: i64,
     pub captures: Vec<CaptureDetail>,
+}
+
+/// Where a web capture came from, as it is written into the item a copy creates
+/// (`items.metadata.__entropia_web_capture`). Built here from the rows, never
+/// from anything the renderer sends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebCaptureProvenance {
+    pub source_id: String,
+    pub capture_id: String,
+    pub original_url: String,
+    pub final_url: String,
+    /// The capture's own title, else the source's.
+    pub page_title: Option<String>,
+    /// UTC, RFC 3339, exactly as recorded.
+    pub accessed_at: String,
+    /// What was verified when the PDF was saved.
+    pub sha256: String,
+}
+
+/// What copying a saved PDF into a collection needs: the file, found on this
+/// side, and its provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyTicket {
+    /// Absolute path of the saved PDF, for the import to copy from. The copy is
+    /// a new file: nothing keeps pointing into the web-captures folder.
+    pub path: String,
+    pub provenance: WebCaptureProvenance,
 }
 
 /// What a delete did besides removing the rows.
@@ -317,6 +347,95 @@ pub fn pdf_capture_file(
     rel_path
         .and_then(|key| capture_file(data_dir, &source_id, &key))
         .ok_or_else(|| format!("{}: the saved PDF is not on disk", code::FILE_MISSING))
+}
+
+/// Everything a copy of the PDF capture `capture_id` needs. The file goes through
+/// the same checks as [`pdf_capture_file`] and, before a copy is allowed to
+/// carry the capture's name, it is hashed again: bytes that no longer match the
+/// sha256 recorded when they were verified are refused (`file_changed`), so a
+/// copy's provenance never vouches for a file that is not the one that was saved.
+pub fn copy_ticket(
+    conn: &Connection,
+    data_dir: &Path,
+    capture_id: &str,
+) -> Result<CopyTicket, String> {
+    let file = pdf_capture_file(conn, data_dir, capture_id)?;
+    let (source_id, original_url, final_url, source_title, capture_title, accessed_at, sha256): (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+    ) = conn
+        .query_row(
+            "SELECT s.id, s.original_url, s.final_url, s.title, c.title, c.accessed_at, c.sha256
+             FROM web_captures c JOIN web_sources s ON s.id = c.web_source_id
+             WHERE c.id = ?1",
+            [capture_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .map_err(db_error)?;
+
+    let actual = hash_file(&file).map_err(|error| {
+        // A file that vanished between the check and the read is missing, not changed.
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("{}: the saved PDF is not on disk", code::FILE_MISSING)
+        } else {
+            db_error(error)
+        }
+    })?;
+    if actual != sha256 {
+        return Err(format!(
+            "{}: the saved PDF is not the one that was verified",
+            code::FILE_CHANGED
+        ));
+    }
+
+    let page_title = capture_title
+        .filter(|title| !title.trim().is_empty())
+        .or(source_title.filter(|title| !title.trim().is_empty()));
+    Ok(CopyTicket {
+        path: file.to_string_lossy().into_owned(),
+        provenance: WebCaptureProvenance {
+            source_id,
+            capture_id: capture_id.to_string(),
+            original_url,
+            final_url,
+            page_title,
+            accessed_at,
+            sha256,
+        },
+    })
+}
+
+/// The lower-case hex SHA-256 of a file, read in blocks.
+fn hash_file(path: &Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut block = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut block)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&block[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// A source with its captures; `None` when there is no such source.
@@ -1283,6 +1402,129 @@ mod tests {
         assert!(error.starts_with(code::FILE_MISSING), "{error}");
     }
 
+    // --- copy ----------------------------------------------------------------
+
+    fn digest(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(bytes))
+    }
+
+    impl Env {
+        /// A saved PDF whose recorded hash is the real one of `bytes`.
+        fn add_real_pdf(&self, id: &str, source: &str, bytes: &[u8], title: Option<&str>) {
+            let rel = format!("web-captures/{source}/{id}.pdf");
+            let path = self.data.path().join(&rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, bytes).unwrap();
+            self.add_pdf(id, source, &digest(bytes), Some(&rel));
+            self.conn
+                .execute(
+                    "UPDATE web_captures SET title = ?2 WHERE id = ?1",
+                    rusqlite::params![id, title],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_copy_ticket_names_the_file_and_carries_the_provenance_of_the_capture() {
+        let env = Env::new();
+        env.add_source(NewSource {
+            title: Some("Source title"),
+            original: "https://e.com/article",
+            final_url: "https://e.com/article?ref=1",
+            ..source("s1", "https://e.com/article", 1)
+        });
+        let bytes = b"%PDF-1.7 a saved pdf";
+        env.add_real_pdf("c1", "s1", bytes, Some("The PDF title"));
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "c1").unwrap();
+
+        let file = env.data.path().join("web-captures/s1/c1.pdf");
+        assert_eq!(PathBuf::from(&ticket.path), file);
+        assert_eq!(
+            ticket.provenance,
+            WebCaptureProvenance {
+                source_id: "s1".into(),
+                capture_id: "c1".into(),
+                original_url: "https://e.com/article".into(),
+                final_url: "https://e.com/article?ref=1".into(),
+                page_title: Some("The PDF title".into()),
+                accessed_at: "2026-09-30T12:00:00Z".into(),
+                sha256: digest(bytes),
+            }
+        );
+    }
+
+    #[test]
+    fn a_capture_with_no_title_of_its_own_takes_the_title_of_its_source() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/a", 1));
+        env.add_real_pdf("c1", "s1", b"%PDF-1.7 one", None);
+
+        let ticket = copy_ticket(&env.conn, env.data.path(), "c1").unwrap();
+
+        assert_eq!(ticket.provenance.page_title.as_deref(), Some("A title"));
+    }
+
+    #[test]
+    fn a_pdf_that_is_no_longer_the_one_that_was_verified_is_refused() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/a", 1));
+        env.add_real_pdf("c1", "s1", b"%PDF-1.7 original", None);
+        fs::write(
+            env.data.path().join("web-captures/s1/c1.pdf"),
+            b"%PDF-1.7 tampered",
+        )
+        .unwrap();
+
+        let error = copy_ticket(&env.conn, env.data.path(), "c1").unwrap_err();
+
+        assert!(error.starts_with(code::FILE_CHANGED), "{error}");
+    }
+
+    #[test]
+    fn a_copy_is_refused_for_the_same_reasons_as_viewing_the_pdf() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/a", 1));
+        env.file("web-captures/s1/h.html");
+        env.add_capture(NewCapture {
+            rel_path: Some("web-captures/s1/h.html"),
+            ..capture("h", "s1", "page", "2026-09-30T03:00:00Z")
+        });
+        env.add_pdf("gone", "s1", SHA_A, Some("web-captures/s1/gone.pdf"));
+
+        let cases = [
+            ("../c1", code::INVALID_ID),
+            ("nope", code::NOT_FOUND),
+            ("h", code::NOT_A_PDF),
+            ("gone", code::FILE_MISSING),
+        ];
+        for (id, expected) in cases {
+            let error = copy_ticket(&env.conn, env.data.path(), id).unwrap_err();
+            assert!(error.starts_with(expected), "{id}: {error}");
+        }
+    }
+
+    #[test]
+    fn deleting_a_source_leaves_a_copy_made_in_a_collection_alone() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/a", 1));
+        let bytes = b"%PDF-1.7 shared bytes";
+        env.add_real_pdf("c1", "s1", bytes, None);
+        let ticket = copy_ticket(&env.conn, env.data.path(), "c1").unwrap();
+        // What the import does: a new file under assets/, never a link or a move.
+        let copy = env.data.path().join("assets/col1/item1/uuid_a.pdf");
+        fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        fs::copy(&ticket.path, &copy).unwrap();
+
+        delete_source(&env.conn, env.data.path(), "s1").unwrap();
+
+        assert!(!env.data.path().join("web-captures/s1").exists());
+        assert_eq!(fs::read(&copy).unwrap(), bytes);
+        assert_eq!(env.count("web_captures"), 0);
+    }
+
     // --- shape ---------------------------------------------------------------
 
     #[test]
@@ -1313,6 +1555,31 @@ mod tests {
         })
         .unwrap();
         assert_eq!(outcome["leftoverFiles"], true);
+        let ticket = serde_json::to_value(CopyTicket {
+            path: "p".into(),
+            provenance: WebCaptureProvenance {
+                source_id: "s".into(),
+                capture_id: "c".into(),
+                original_url: "o".into(),
+                final_url: "f".into(),
+                page_title: None,
+                accessed_at: "a".into(),
+                sha256: "h".into(),
+            },
+        })
+        .unwrap();
+        assert!(ticket.get("path").is_some());
+        for key in [
+            "sourceId",
+            "captureId",
+            "originalUrl",
+            "finalUrl",
+            "pageTitle",
+            "accessedAt",
+            "sha256",
+        ] {
+            assert!(ticket["provenance"].get(key).is_some(), "missing {key}");
+        }
         let capture = serde_json::to_value(CaptureDetail {
             id: "c".into(),
             kind: "page".into(),

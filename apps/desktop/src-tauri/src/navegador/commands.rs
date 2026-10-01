@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, State};
 use super::capture::{CaptureDraft, CaptureKind};
 use super::download;
 use super::save::{self, Saved, Target};
-use super::sources::{self, DeleteOutcome, SourceDetail, SourceSummary};
+use super::sources::{self, CopyTicket, DeleteOutcome, SourceDetail, SourceSummary};
 use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
 use super::{bounds, viewer, UNAVAILABLE};
@@ -389,6 +389,27 @@ pub async fn navegador_pdf_file(
         let conn = open_archive_connection(&db_path)?;
         sources::pdf_capture_file(&conn, &data_dir, &capture_id)
             .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// What copying the saved PDF of capture `capture_id` into a collection needs:
+/// where the file is and where it came from. The file is found and re-hashed on
+/// this side and the provenance is read from the rows, so the renderer names a
+/// capture and never supplies a path or the words that vouch for it. Errors are
+/// the codes of [`navegador_pdf_file`] plus `file_changed`.
+#[tauri::command]
+pub async fn navegador_copy_ticket(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    capture_id: String,
+) -> Result<CopyTicket, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        sources::copy_ticket(&conn, &data_dir, &capture_id)
     })
     .await
     .map_err(|e| format!("task_failed: {e}"))?

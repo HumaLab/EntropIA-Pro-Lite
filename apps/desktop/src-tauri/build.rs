@@ -170,6 +170,7 @@ const APP_COMMANDS: &[&str] = &[
     "navegador_source_detail",
     "navegador_delete_source",
     "navegador_pdf_file",
+    "navegador_copy_ticket",
     "check_microsoft_store_update",
     "splash_finish",
     "sync_ensure_capture",
