@@ -268,6 +268,26 @@ fn read_schema_tag_tracks_migrations_head_freshly() {
     );
 }
 
+#[test]
+fn read_schema_tag_is_the_highest_name_not_the_last_applied() {
+    // Branches merged in different orders can apply a lower-numbered migration
+    // after a higher one. The server keeps the lexicographic max and answers 426
+    // to anything lower, so the client must report the max too, or a device
+    // that applied the same set in another order locks itself out.
+    let conn = engine_session_db();
+    conn.execute(
+        "INSERT INTO _migrations(name, applied_at) VALUES('0041_later_number', 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO _migrations(name, applied_at) VALUES('0039_applied_after', 2)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(read_schema_tag(&conn).unwrap(), "0041_later_number");
+}
+
 // --------------------------------------------------------------------------
 // State-machine error mapping (DESIGN §11)
 // --------------------------------------------------------------------------

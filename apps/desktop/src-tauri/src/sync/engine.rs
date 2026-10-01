@@ -768,14 +768,17 @@ async fn push_cycle<A: SyncApi>(
 // schema_tag + status helpers
 // ---------------------------------------------------------------------------
 
-/// Reads the local `schema_tag` = the latest applied migration name (the
-/// `_migrations` head, PROTOCOL "schema_tag"). Returns `""` when the table is
-/// empty / absent (a fresh DB before any JS migration); the server tolerates `''`.
+/// Reads the local `schema_tag` = the highest applied migration name
+/// (PROTOCOL "schema_tag"). Returns `""` when the table is empty / absent (a
+/// fresh DB before any JS migration); the server tolerates `''`.
 pub fn read_schema_tag(conn: &Connection) -> Result<String, String> {
-    // The runner applies migrations in id order, so the highest id is the head.
+    // The highest NAME, not the last applied row: branches merged in different
+    // orders can apply a lower-numbered migration after a higher one, and the
+    // server keeps the lexicographic max of the tags it sees and answers 426 to
+    // anything lower. Reporting the same max keeps the order irrelevant.
     let head: Option<String> = conn
         .query_row(
-            "SELECT name FROM _migrations ORDER BY id DESC LIMIT 1",
+            "SELECT name FROM _migrations ORDER BY name DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
