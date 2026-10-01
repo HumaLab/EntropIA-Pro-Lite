@@ -1196,3 +1196,20 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   Download the same PDF again: "Ya está en tus fuentes", no Guardar, "Ver fuente" opens
   its source. 5. Capture the article page and download its PDF: both land in one
   source. 6. Download the same new PDF three times before saving: one entry.
+- 2026-10-01, user's Windows run of P2e (dev profile): provenance PASS; "Abrir
+  página de origen" PASS; "Ver PDF guardado" PASS but only the first page was
+  shown; "Ya está en tus fuentes" PASS; page capture + PDF in one source PASS;
+  repeated downloads collapse PASS. Finding: `DocumentViewer` (pdf.js) renders one
+  page at a time and has no page controls of its own (corpus assets are
+  single-page). Fix `89639328`: `NavegadorPdfViewer` drives it with its existing
+  `currentPage` prop and `onPageChange(page, total)`: previous/next buttons, "Página
+  N de M" and ArrowLeft/ArrowRight/PageUp/PageDown, shown only when the PDF has more
+  than one page. Chosen over continuous scroll because that would need changes inside
+  the shared viewer (risk to the corpus viewer and `SimilarAssetPreviewDialog`);
+  this touches neither (ui package untouched; their tests pass). RED: 3 new tests
+  failed, GREEN 14/14 in `NavegadorPdf.test.ts`. Full run: typecheck both variants 0
+  errors; `pnpm test` 309 + 800 + 2890; Lite 2869; lint only the known one; format
+  only the three known files; `VITE_NAVEGADOR=1` build ok; Rust unchanged since
+  P2e. P2e stays unchecked until the user's rerun. Recheck: open a multi-page saved
+  PDF with "Ver PDF guardado", step through all pages with the buttons and the arrow
+  keys, check the last page disables Next, close it and the browser returns.
