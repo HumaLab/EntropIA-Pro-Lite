@@ -20,6 +20,9 @@ const MIGRATION_SQL: &str =
 const MIGRATION_0033_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
 );
+const MIGRATION_0038_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
+);
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -103,6 +106,12 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
             [],
         )
         .expect("track 0033");
+        conn.execute_batch(MIGRATION_0038_SQL).expect("apply 0038");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0038_processing_settle_on_terminal', 1)",
+            [],
+        )
+        .expect("track 0038");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

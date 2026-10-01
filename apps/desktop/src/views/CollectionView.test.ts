@@ -1442,7 +1442,8 @@ describe('CollectionView import flow', () => {
       try {
         render(CollectionView, { collectionId: 'col-1' })
         await vi.advanceTimersByTimeAsync(0)
-        const stats = storeRef.current.items.getCollectionStats as Mock
+        const stats = (storeRef.current.items as unknown as { getCollectionStats: Mock })
+          .getCollectionStats
         const before = stats.mock.calls.length
 
         for (let page = 0; page < 20; page++) handlers.get('ocr:complete')?.()

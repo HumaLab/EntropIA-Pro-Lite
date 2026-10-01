@@ -389,7 +389,7 @@ fn stress_2_ui_and_workers_share_the_archive() {
         );
         handles.push(std::thread::spawn(move || {
             let mut conn = open(&path);
-            let mut n = w as usize;
+            let mut n = w;
             let mut done = 0u64;
             while !stop.load(Ordering::Relaxed) {
                 std::thread::sleep(worker_pause());
