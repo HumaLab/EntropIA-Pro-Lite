@@ -162,6 +162,21 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
+- 2026-10-01, incident remediation, local step DONE: with every EntropIA app
+  closed, the real archive was backed up (sqlite backup API + raw files, in
+  `%APPDATA%\com.entropia.shared\backups-0055-rollback-20261001-011914\`,
+  integrity ok, 2205 items) and, in one transaction, the two empty tables
+  `web_captures`/`web_sources` were dropped and the `_migrations` row
+  `0055_web_captures` deleted. Verified after: last migration
+  `0037_fts_vocab`, no `web_*` objects, integrity ok, 2205 items. Cause: the
+  user's `tauri dev` from this worktree stayed open and Vite reloaded the
+  renderer with the new runner, applying 0055 with no explicit run.
+  PENDING: reset the account's server `schema_tag` from `0055_web_captures`
+  to `0037_fts_vocab` (`UPDATE accounts SET schema_tag='0037_fts_vocab'
+  WHERE email=? AND schema_tag='0055_web_captures'`). Until then this machine
+  also gets 426.
+
+
 - 2026-09-30, user's Windows rerun of T8 fixes: single Navegador workspace
   tab (top bar and split view focus the existing one) PASS; download labels
   keep the originating page title PASS; download started in a background tab
