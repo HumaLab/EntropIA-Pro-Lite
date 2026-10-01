@@ -138,6 +138,18 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   viewer, never re-downloading). A download whose sha256 is already saved is
   flagged "ya está en tus fuentes" instead of offering Guardar again.
 
+## Phase 4 — copy a web source into a collection (route: delegated writer)
+
+- [ ] P4a — Investigate and report how a copy lands in the corpus without
+  new migrations: verified PDFs through the existing import flow (item +
+  container asset + page assets), page/selection captures (the corpus import
+  accepts only image/pdf/audio): options with tradeoffs, before building them.
+- [ ] P4b — "Copiar a colección" for PDF captures: pick a collection, create
+  an independent item through the existing import path, provenance in
+  `items.metadata.__entropia_web_capture` (source_id, capture_id, url,
+  accessed_at, sha256). Deleting the web source never touches the copy.
+- [ ] P4c — Page/selection copies, per the option chosen in P4a.
+
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
