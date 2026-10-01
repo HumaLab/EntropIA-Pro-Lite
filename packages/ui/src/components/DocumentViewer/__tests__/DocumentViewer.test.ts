@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import DocumentViewer from '../DocumentViewer.svelte'
 import documentViewerSource from '../DocumentViewer.svelte?raw'
+import DocumentViewerPagingTestHost from './DocumentViewerPagingTestHost.svelte'
 
 type ResizeObserverCallback = globalThis.ResizeObserverCallback
 
@@ -1540,6 +1541,24 @@ describe('DocumentViewer', () => {
 
       expect(scrollContainer.scrollLeft).toBe(0)
       expect(scrollContainer.scrollTop).toBe(0)
+    })
+
+    it('renders the requested page when currentPage changes after the pdf loads', async () => {
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+        {} as CanvasRenderingContext2D
+      )
+      const onPageChange = vi.fn()
+      render(DocumentViewerPagingTestHost, { props: { onPageChange } })
+
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(1, 3))
+      const loads = pdfMock.getDocument.mock.calls.length
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(pdfMock.mockDocument.getPage).toHaveBeenLastCalledWith(2))
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(2, 3))
+      // Paging reuses the loaded document instead of reloading it.
+      expect(pdfMock.getDocument.mock.calls.length).toBe(loads)
     })
 
     it('ignores stale pdf renders after a newer render starts', async () => {
