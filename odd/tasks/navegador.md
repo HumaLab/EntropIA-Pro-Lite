@@ -119,14 +119,23 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `<data>/web-captures/<source_id>/<capture_id>.<ext>`, file first then the
   DB transaction, text over 512 KB to a file, captures immutable. Commits
   `55fe7157` (Rust, ACL) and `89c9603b` (UI).
-- [ ] P2c — (route: delegated writer; automated checks observed; Windows run
+- [x] P2c — (route: delegated writer; automated checks observed; Windows run
   pending) Saved sources list inside the Navegador: search by title, URL and
   text; source detail with its captures; open the original URL; delete a
   source and its local files. Commits `423880e5` (Rust), `14805b54` (UI).
-- [ ] P2d — (route: delegated writer; automated checks observed; Windows run
+- [x] P2d — (route: delegated writer; automated checks observed; Windows run
   pending) Startup sweep of partial/orphan capture files; errors that never
   damage the archive; no empty folder for a source with only selections.
   Commits `2f047dcd` (folder fix), `240ddaab` (sweep).
+
+- [ ] P2e — (route: delegated writer) PDF sources, from the user's P2c run:
+  a saved PDF's source URL must be the page it was downloaded from (the
+  download's page snapshot), not the file link; the file link stays on the
+  capture. Source detail for PDFs gets two actions (user decision
+  2026-10-01): "Abrir página de origen" (loads the origin page in the active
+  tab) and "Ver PDF guardado" (opens the local copy in the app's own PDF
+  viewer, never re-downloading). A download whose sha256 is already saved is
+  flagged "ya está en tus fuentes" instead of offering Guardar again.
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
@@ -164,6 +173,16 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-01, user's Windows run of P2c/P2d (dev profile): selection-only
+  save creates no folder PASS; saved-sources drawer beside the page PASS;
+  search by title/URL/text PASS; detail (local + UTC, hash, size) PASS;
+  copy URL PASS; delete with confirmation removes row and folder PASS;
+  startup sweep log line PASS. Finding: "Abrir en el navegador" on a PDF
+  source loads the stored download link (`.../articulos/227/descargar`), so it
+  downloads again; the same PDF downloaded four times (sha e33acec22ed8) is
+  listed four times with Guardar -> P2e. P2c, P2d checked.
+
 
 - 2026-10-01, user's Windows run of P2a/P2b on the isolated dev profile
   (`profile=dev:navegador ... sync=disabled` confirmed in the startup log):
