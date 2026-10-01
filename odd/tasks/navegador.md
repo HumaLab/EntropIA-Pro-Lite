@@ -98,7 +98,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 - Engram mirror `odd/navegador/tasks`: PENDING (MCP save refused: several
   active sessions; CLI save failed: database locked). Resync when available.
 
-- [ ] T8 — (route: delegated writer) Browser tabs inside the Navegador. User
+- [x] T8 — (route: delegated writer) Browser tabs inside the Navegador. User
   decision 2026-09-30: links that ask for a new tab/window (target=_blank,
   Ctrl+click, window.open without size features) open as a new tab inside
   the Navegador, max 4 tabs per browser (independent of the app's own tab
@@ -107,6 +107,20 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   (`navegador-web-<n>`, no capability), hidden unless active; capture and
   downloads act on the active tab. Automated checks observed; Windows run
   pending (see T8 evidence at the end).
+## Phase 2 — local capture persistence (route: delegated writer)
+
+- [ ] P2a — Migration `0055_web_captures` (never 0038–0054, owned by the
+  Zotero branch) with `web_sources` and `web_captures` per plan §5, plus a
+  store repository with tests. Shared archive: both Lite and Pro get it.
+- [ ] P2b — Save a capture draft or a verified PDF: files under
+  `<data>/web-captures/<source_id>/<capture_id>.<ext>`, file first then the
+  DB transaction, text over 512 KB to a file, captures immutable.
+- [ ] P2c — Saved sources list inside the Navegador: search by title, URL and
+  text; source detail with its captures; open the original URL; delete a
+  source and its local files.
+- [ ] P2d — Startup sweep of partial/orphan capture files; errors that never
+  damage the archive.
+
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
@@ -123,6 +137,13 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-09-30, user's Windows rerun of T8 fixes: single Navegador workspace
+  tab (top bar and split view focus the existing one) PASS; download labels
+  keep the originating page title PASS; download started in a background tab
+  listed with the right origin PASS; one line per download (`c1909790`) PASS.
+  T8 checked.
+
 
 - 2026-09-30, user's Windows run of T8 (tabs, commits `aaf0f868`, `1fcb1c6b`):
   PASS: target=_blank and Ctrl+click open a tab; `window.open(url)` opens a tab;
