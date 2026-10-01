@@ -26,6 +26,9 @@ pub mod popup;
 // over a data directory and a connection, so every build compiles it.
 #[allow(dead_code)]
 pub mod save;
+// Reading and deleting the saved web sources (Rust owns both tables).
+#[allow(dead_code)]
+pub mod sources;
 // The startup sweep of the capture folder.
 #[allow(dead_code)]
 pub mod sweep;

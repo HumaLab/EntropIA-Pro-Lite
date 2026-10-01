@@ -130,6 +130,21 @@ fn navegador_discard_draft() -> &'static str {
     "ran"
 }
 
+#[tauri::command]
+fn navegador_list_sources() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_source_detail() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_delete_source() -> &'static str {
+    "ran"
+}
+
 /// The label of the navegador's first tab, the webview remote content lives in.
 const EXTERNAL_LABEL: &str = "navegador-web-1";
 
@@ -175,7 +190,7 @@ const SENSITIVE_APP_COMMANDS: [&str; 4] = [
 
 /// The commands the Navegador view drives its child webview with. The page
 /// inside that webview must never reach them.
-const NAVEGADOR_COMMANDS: [&str; 19] = [
+const NAVEGADOR_COMMANDS: [&str; 22] = [
     "navegador_open",
     "navegador_navigate",
     "navegador_back",
@@ -195,6 +210,9 @@ const NAVEGADOR_COMMANDS: [&str; 19] = [
     "navegador_save_capture",
     "navegador_save_download",
     "navegador_discard_draft",
+    "navegador_list_sources",
+    "navegador_source_detail",
+    "navegador_delete_source",
 ];
 
 /// A file-system read through a plugin: plugin commands are ACL-checked with
@@ -227,7 +245,10 @@ fn build_app() -> App<tauri::test::MockRuntime> {
             navegador_set_download_dir,
             navegador_save_capture,
             navegador_save_download,
-            navegador_discard_draft
+            navegador_discard_draft,
+            navegador_list_sources,
+            navegador_source_detail,
+            navegador_delete_source
         ])
         .build(tauri::generate_context!())
         .expect("build the app with its real context")

@@ -14,6 +14,7 @@ use tauri::{AppHandle, Manager, State};
 use super::capture::{CaptureDraft, CaptureKind};
 use super::download;
 use super::save::{self, Saved, Target};
+use super::sources::{self, DeleteOutcome, SourceDetail, SourceSummary};
 use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
 use super::{bounds, viewer, UNAVAILABLE};
@@ -308,6 +309,66 @@ pub async fn navegador_save_download(
 pub async fn navegador_discard_draft(app: AppHandle, draft_id: String) -> Result<(), String> {
     save::holds(&app).discard_draft(&draft_id);
     Ok(())
+}
+
+/// The saved web sources, newest first, optionally only those whose title, URL
+/// or captured text contain `query`. Errors are a stable code (`db_error`),
+/// optionally followed by `: detail`.
+#[tauri::command]
+pub async fn navegador_list_sources(
+    db: State<'_, AppDbState>,
+    query: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<SourceSummary>, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        sources::list_sources(
+            &conn,
+            query.as_deref(),
+            limit.map_or(sources::DEFAULT_LIMIT, |n| n as usize),
+        )
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// One saved source with its captures, newest first; `null` when it no longer
+/// exists. The renderer names the source by id and never sends a path.
+#[tauri::command]
+pub async fn navegador_source_detail(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    source_id: String,
+) -> Result<Option<SourceDetail>, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        sources::source_detail(&conn, &data_dir, &source_id)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Delete a saved source: its rows in one transaction, then its folder. Copies
+/// made into a collection are not touched. A folder that will not go does not
+/// fail the delete; the startup sweep removes it later and `leftoverFiles` says
+/// so.
+#[tauri::command]
+pub async fn navegador_delete_source(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    source_id: String,
+) -> Result<DeleteOutcome, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        sources::delete_source(&conn, &data_dir, &source_id)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
 }
 
 #[cfg(test)]
