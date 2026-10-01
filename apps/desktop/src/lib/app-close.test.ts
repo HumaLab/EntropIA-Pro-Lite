@@ -100,7 +100,7 @@ describe('app-close handshake', () => {
       () =>
         new Promise<UnlistenFn>((resolve) => {
           resolveListen = resolve
-        }),
+        })
     )
 
     const started = start()

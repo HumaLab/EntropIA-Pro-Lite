@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 
 import { locale, t } from './i18n'
-import {
-  loadWritingSyncNotices,
-  selectWritingSyncNotices,
-  type WritingSyncNotice,
-} from './writing'
+import { loadWritingSyncNotices, selectWritingSyncNotices, type WritingSyncNotice } from './writing'
 
 /**
  * The writing-sync notice over the manuscript list.

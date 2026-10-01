@@ -1400,7 +1400,7 @@
             {#each syncNoticeSummaries as summary (summary.id)}
               <li class="writing__sync-item">
                 <span class="writing__sync-doc" use:tooltip={summary.title}>{summary.title}</span>
-                {#each summary.lines as line}
+                {#each summary.lines as line (line.key)}
                   <p class="writing__sync-line">{t(line.key, line.params)}</p>
                 {/each}
               </li>

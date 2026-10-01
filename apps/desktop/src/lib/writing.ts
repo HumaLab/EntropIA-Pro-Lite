@@ -128,8 +128,8 @@ export async function loadWritingSyncNotices(): Promise<WritingSyncNotice[]> {
     // The shape is checked, not assumed: a command answering anything else is
     // not a notice list, and callers read `.document_id` off every row.
     return Array.isArray(rows)
-      ? rows.filter((row): row is WritingSyncNotice =>
-          Boolean(row) && typeof row.document_id === 'string'
+      ? rows.filter(
+          (row): row is WritingSyncNotice => Boolean(row) && typeof row.document_id === 'string'
         )
       : []
   } catch {
