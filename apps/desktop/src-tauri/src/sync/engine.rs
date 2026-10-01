@@ -43,6 +43,7 @@ use crate::sync::push::{
     journal_and_purge_oversized, snapshot_oplog, split_into_batches, update_clock_offset,
     DEFAULT_MAX_PUSH_BYTES,
 };
+use crate::sync::research_capture::{OUTBOX_PREFIX, RECEIVE_PREFIX};
 use crate::sync::session::{meta_get, meta_get_i64, meta_set_i64, read_token};
 
 const LOG_SOURCE: &str = "sync/engine";
@@ -90,7 +91,10 @@ pub struct SyncStatus {
     /// Last successful sync, ms since epoch (`sync_meta['last_sync_at']`); `None`
     /// until the first successful cycle.
     pub last_sync_at: Option<i64>,
-    /// Coalesced count of dirty rows awaiting push (distinct `(table, row_id)`).
+    /// Coalesced count of dirty rows awaiting push (distinct `(table, row_id)`),
+    /// plus pending Investigations research work (outbox entries awaiting push
+    /// and durable receive-queue rows). Research conflicts surface separately
+    /// through `conflicts` (the unacknowledged `sync_conflicts` count).
     pub pending: i64,
     /// Rows awaiting blob download (`COUNT(sync_pending_blobs)`).
     pub blobs_pending: i64,
@@ -674,6 +678,29 @@ pub async fn run_cycle<A: SyncApi>(
     crate::sync::writing_cycle::run_writing_cycle(api, token, conn, app_data_dir, &health, warn)
         .await;
 
+    // 8c. Bounded Investigations research sync (IS5a/IS5b activation, PROTOCOL
+    // "Negociación de capacidades"): the same activation shape as writing —
+    // ordinary capability discovery, since-zero research catch-up, durable
+    // `research_receive:` staging, report-blob-before-apply settlement into
+    // `research/estado.sqlite`, outbox seeding gated on the recorded catch-up,
+    // and bounded prepare/send/settle pushes (report blob before the row,
+    // exact-generation settlement, `lww_lost` winner install with the loser
+    // preserved). The phase is a no-op without a research state database,
+    // failures stay pending, and the corpus cycle result is never changed by it.
+    let research_state_path = app_data_dir.join("research").join("estado.sqlite");
+    let research_artifacts = app_data_dir.join("research").join("artifacts");
+    crate::sync::research_cycle::run_research_cycle(
+        api,
+        token,
+        conn,
+        app_data_dir,
+        &research_state_path,
+        &research_artifacts,
+        &health,
+        warn,
+    )
+    .await;
+
     // Record the successful sync time (PROTOCOL step 9 status payload).
     meta_set_i64(conn, "last_sync_at", now_ms()).map_err(|e| CycleError::Fatal { message: e })?;
     Ok(())
@@ -786,11 +813,30 @@ pub fn read_schema_tag(conn: &Connection) -> Result<String, String> {
     Ok(head.unwrap_or_default())
 }
 
-/// Coalesced count of dirty rows awaiting push (distinct `(table, row_id)`).
+/// Coalesced count of dirty rows awaiting push (distinct `(table, row_id)`),
+/// plus pending Investigations research work stored in `sync_meta`: outbox
+/// entries awaiting their push and durable `research_receive:` queue rows.
+/// Count-only: research sync state surfaces through the existing generic
+/// "pending changes" indicator without any behavior change.
 fn pending_count(conn: &Connection) -> i64 {
+    let corpus: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM sync_oplog GROUP BY table_name, row_id)",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    corpus + research_pending_count(conn)
+}
+
+/// Pending research sync work in `sync_meta`, counted by literal prefix (SQL
+/// `LIKE` would treat prefix underscores as wildcards).
+fn research_pending_count(conn: &Connection) -> i64 {
     conn.query_row(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM sync_oplog GROUP BY table_name, row_id)",
-        [],
+        "SELECT COUNT(*) FROM sync_meta
+          WHERE substr(key, 1, length(?1)) = ?1
+             OR substr(key, 1, length(?2)) = ?2",
+        rusqlite::params![OUTBOX_PREFIX, RECEIVE_PREFIX],
         |row| row.get(0),
     )
     .unwrap_or(0)
@@ -1059,6 +1105,45 @@ mod close_tests {
     fn disabled_status_ends_the_wait_immediately() {
         let mut completion = CycleCompletion::new(&status(SyncState::Disabled, None));
         assert!(completion.observe(&status(SyncState::Disabled, None)));
+    }
+}
+
+// Research outbox/receive visibility (count-only): the generic `pending` count
+// surfaces Investigations sync work through the existing "pending changes"
+// indicator without any new UI. Research conflicts already surface through the
+// unacknowledged `sync_conflicts` count.
+#[cfg(test)]
+mod research_pending_tests {
+    use super::*;
+    use crate::sync::test_support::new_synced_test_db;
+
+    #[test]
+    fn pending_count_includes_research_outbox_and_receive_rows() {
+        let conn = new_synced_test_db();
+        assert_eq!(pending_count(&conn), 0);
+        conn.execute_batch(
+            "INSERT INTO sync_meta(key, value) VALUES
+               ('research_outbox:job-1', '{}'),
+               ('research_receive:job-2', '{}'),
+               ('research_delete_intent:job-3', '{}');",
+        )
+        .expect("research meta");
+        assert_eq!(
+            pending_count(&conn),
+            2,
+            "outbox + receive queue rows count; other research keys stay out of scope"
+        );
+    }
+
+    #[test]
+    fn build_status_pending_carries_research_work() {
+        let conn = new_synced_test_db();
+        conn.execute_batch(
+            "INSERT INTO sync_meta(key, value) VALUES ('research_outbox:job-1', '{}');",
+        )
+        .expect("research meta");
+        let status = build_status(&conn, SyncState::Idle, None);
+        assert_eq!(status.pending, 1, "research work surfaces in the payload");
     }
 }
 
