@@ -119,11 +119,14 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `<data>/web-captures/<source_id>/<capture_id>.<ext>`, file first then the
   DB transaction, text over 512 KB to a file, captures immutable. Commits
   `55fe7157` (Rust, ACL) and `89c9603b` (UI).
-- [ ] P2c — Saved sources list inside the Navegador: search by title, URL and
+- [ ] P2c — (route: delegated writer; automated checks observed; Windows run
+  pending) Saved sources list inside the Navegador: search by title, URL and
   text; source detail with its captures; open the original URL; delete a
-  source and its local files.
-- [ ] P2d — Startup sweep of partial/orphan capture files; errors that never
-  damage the archive.
+  source and its local files. Commits `423880e5` (Rust), `14805b54` (UI).
+- [ ] P2d — (route: delegated writer; automated checks observed; Windows run
+  pending) Startup sweep of partial/orphan capture files; errors that never
+  damage the archive; no empty folder for a source with only selections.
+  Commits `2f047dcd` (folder fix), `240ddaab` (sweep).
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
@@ -964,3 +967,138 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   get 426. Nothing was changed by the writer; remediation (server-side tag reset
   by the Cloud admin, or shipping 0055 in a release) is a decision for the
   owner. The isolated profile prevents any further case, not this one.
+
+- P2d fix (`2f047dcd`). `save::commit` created `web-captures/<source_id>/` before
+  knowing whether any file would be written, so a selection that fits the row
+  left an empty folder. The folder is now created only when the plan has a
+  payload. RED: 2 new tests failed (selection leaves no folder; a failed
+  selection save creates none either); the third new test (a selection over
+  512 KB still gets its folder for the `.txt`) passed on both sides. GREEN: `save`
+  25/25.
+- P2d sweep (`240ddaab`). `navegador/capture_files.rs` (the one safe way into the
+  tree, shared with the delete: id = `[A-Za-z0-9-]{1,64}`, `locate_source_dir`
+  refuses a link or junction at the root or the source folder and anything whose
+  canonical path leaves the canonical root, `remove_dir_contents` deletes regular
+  files only and never follows or removes links or sub-folders) and
+  `navegador/sweep.rs`. Four rules, each only for things older than 1 h
+  (`MIN_AGE`; nothing younger is touched, so a save in flight is safe): (1) temp
+  files `.<name>.tmp`; (2) files no `web_captures.rel_path`/`text_rel_path`
+  points at (key compared as `web-captures/<folder>/<name>`, backslashes
+  normalised); (3) empty source folders; (4) folders of sources that no longer
+  exist, removed whole only when every file and the folder itself is old. Rules 2
+  and 4 need the database: if the tables are missing (the renderer has not
+  migrated yet, e.g. the first start after an upgrade) or ANY query fails, they
+  are skipped and the report says so; a failed read never means "nothing is
+  referenced". Rules 1 and 3 do not depend on it. Only folders named like ids are
+  looked at (anything else in `web-captures/`, loose files, `assets/`, the
+  database stay), at most 50 000 entries per run. `navegador::sweep_captures`
+  runs it from `setup` on a thread (after the sync blob cleanup), opens the
+  archive through `open_archive_connection`, catches panics, and logs one line to
+  stderr and the in-app log: `[navegador] web-captures sweep: N temporary
+  file(s), N orphan file(s), N empty folder(s), N folder(s) of deleted sources
+  removed; N refused, N error(s)` (plus `; orphan and deleted-source rules
+  skipped (database not ready)` when it applies). It respects the dev profile
+  because the data dir already flows through `path_utils`. The folder of a source
+  whose delete left files behind (see P2c) is exactly rule 4.
+  RED: `capture_files` 5 of 6 and `sweep` 14 of 16 failed on `todo!()` (the two
+  passing were the id-shape and summary tests). GREEN: `capture_files` 6/6, `sweep`
+  17/17 (one test reads `lib.rs` and fails if setup stops calling the sweep).
+  Link tests really ran (a junction or symlink is made with `symlink_dir` or
+  `mklink /J`; they skip with a message only where neither works). Mutation
+  check: removing the three layers that refuse a link (root/source `is_symlink`,
+  the `is_dir` check and the canonical containment) made the link test fail (the
+  file behind the link was deleted); removing only the first two layers did not,
+  because the third still refused, which is the point of having three.
+- P2c Rust (`423880e5`). Reads live in Rust (`navegador/sources.rs`, commands
+  `navegador_list_sources(query?, limit?)`, `navegador_source_detail(sourceId)`,
+  `navegador_delete_source(sourceId)`), not in a TypeScript repository over
+  `db_select`. Why: Rust already owns the writes (P2b), the list shows file
+  presence which needs the file system, a delete changes rows and files together,
+  and three typed commands are a smaller surface than SQL assembled in the
+  renderer. They open the archive with `open_archive_connection` in
+  `spawn_blocking` (like the saves), are not gated by `ensure_available`, are in
+  `generate_handler!`, `APP_COMMANDS`, the `main` capability and `app_acl` (22
+  commands now rejected from `navegador-web-*`, `navegador-popup-*` and lookalike
+  origins). The Drizzle entries from P2a stay unused by reads (no TS repository
+  was needed). List: newest first by `updated_at`, capture count, distinct kinds,
+  `limit` (default 200, max 500). Search: substring over title, site name, the
+  three URLs and, through the captures, text, title and final URL, `LIKE ... ESCAPE`
+  with `%`, `_` and the backslash made literal, trimmed and cut to 200 characters,
+  a source listed once however many captures match. Case: SQLite folds ASCII
+  only, so the query is also tried lower, upper and capitalised (`educación`
+  finds `EDUCACIÓN` and `Educación`, not `eDUCACIÓN`). Text over 512 KB lives in a
+  file and is not searched. Detail: captures newest first by `accessed_at`, UTC
+  string as recorded, hash, kind of hash, size, preview (first 2000 characters
+  from SQL), `textInFile`, quote prefix/suffix, `filePresent` (true/false/null
+  when the capture has no file): the check accepts only a key that is exactly
+  `web-captures/<source_id>/<plain name>` and a regular file inside a located
+  folder, so a stored path like `../x`, another source's folder or an absolute
+  path is never read. Delete: validates the id, then one `BEGIN IMMEDIATE`
+  transaction (existence check, captures, source: captures are deleted explicitly
+  so it does not depend on `foreign_keys`), then the folder through
+  `capture_files`; a folder that is a link, has a sub-folder or will not go
+  returns `leftoverFiles: true` and never fails the delete; the folder of a
+  deleted source is what the sweep removes (a test runs the sweep on that state).
+  Copies in collections are not touched (the module reads and writes only the two
+  web tables). Selection saves after the P2d fix leave no folder, which the delete
+  also tolerates. RED: 25 of 27 `sources` tests failed on `todo!()` (the 2 passing
+  were serialisation shape); `app_acl` 5 of 12 failed ("not allowed. Command not
+  found") before registration. GREEN: `sources` 27/27, `app_acl` 12/12,
+  `acl_manifest_guard` 6/6 (with `--features navegador`).
+- P2c UI (`14805b54`). `lib/navegador-sources.ts` (types, three `invoke`
+  wrappers, `parseSourceError`, `formatLocalTime` (local zone, 24 h in Spanish),
+  `describeSource`, `describeCapture`), `views/NavegadorSources.svelte` (the
+  drawer) and a toolbar button (`list` icon, existing `ActionIcon`) in
+  `NavegadorView`. The drawer sits beside the placeholder in a flex row
+  (`navegador-view__body`), never over it: opening it narrows the placeholder and
+  the existing ResizeObserver moves the native webview; a test checks neither
+  contains the other (the real layout is for the user to see). Search is
+  debounced 250 ms and the newest request wins (a slow answer to an older search
+  is dropped, tested). A capture saved while the drawer is open refreshes the list
+  and the open detail (watches `navegadorStore.saved`). Detail shows the three
+  addresses, first visit (UTC), every capture with kind, local time + UTC, final
+  URL, short hash, size, file presence (a saved HTML snapshot or PDF is only
+  reported, never opened: showing HTML needs active content stripped first, not
+  built), a missing-file warning, quote with context for selections, text
+  preview and "text is in a file". Actions: open in the browser (the view's own
+  `go()`, the same path as typing the address: first call opens the browser,
+  later ones `navegador_navigate` the active tab, so the T3 policy applies and a
+  refusal shows in the status line), copy address (clipboard, with a notice), and
+  delete through the existing `ConfirmDialog` (the overlay root hides the webview
+  as for any dialog); a failed delete stays in the dialog with its message, a
+  `not_found` closes it and refreshes, a leftover shows "some files are cleaned
+  up when the app starts". Search field follows the project's search-field
+  pattern (a design-tokens guard failed first because the magnifier was missing).
+  Everything from pages renders as text (hostile markup tests for the list and the
+  detail). es + en keys under `navegador.sources.*`.
+  RED: `navegador-sources.test.ts` failed to import, then 2 of 15 failed on the
+  12-hour clock of `es-AR` (fixed with `hourCycle: 'h23'`); `NavegadorSources.test.ts`
+  27/27 failed against the old view, 26 passed with the component and the last
+  was a test set-up error (the session only counts as open when this view opened
+  it), fixed. GREEN: 15/15 and 27/27.
+- P2c/P2d verification (Rust with `CARGO_TARGET_DIR=src-tauri/target/writer`): `cargo
+  test --no-fail-fast` 1577 lib passed, 1 failed (the known
+  `no_other_module_opens_the_archive_by_hand`, still only the three sync
+  `*_tests.rs` files) and every integration test ok; `cargo test --features
+  navegador --lib navegador` 256 passed; `--test app_acl` 12/12 and `--test
+  acl_manifest_guard` 6/6 with the feature; `cargo check --features navegador` ok;
+  `cargo clippy --all-targets` with and without the feature: no warnings in the
+  navegador modules or `tests/app_acl.rs`; `cargo fmt --check` ok; Cargo.lock
+  untouched. Frontend: `pnpm typecheck` 0 errors; `VITE_LOCAL_ML=0` desktop
+  typecheck 0 errors; `pnpm test` 309 store + 800 ui + 2861 desktop passed (7
+  skipped); `VITE_LOCAL_ML=0` desktop 2840 passed (28 skipped); `pnpm lint` only
+  the known `WritingView.svelte:1403`; prettier clean on touched files
+  (`format:check` still lists only the three known files); `VITE_NAVEGADOR=1` vite
+  build emits NavegadorView. No migration was added or changed and no real
+  archive was opened (tests use temp dirs and in-memory databases).
+  NOT observed (needs the user): the drawer's real layout beside the native
+  webview, the sweep log line, a real delete.
+  Limitations: the 1 h age uses file and folder modification times (a clock set
+  far back could make fresh files look old); the sweep's first run after an
+  upgrade skips the database rules because the tables do not exist until the
+  renderer migrates (the next start does them); text over 512 KB and saved HTML
+  are not searchable or viewable; case folding beyond ASCII covers lower, upper
+  and capitalised spellings of the query only; the list shows at most 500 sources
+  and has no pagination; the drawer closes when the view is left (it is local
+  state); deleting does not touch sync (these tables are not synced yet, P3 must
+  add the delete path).
