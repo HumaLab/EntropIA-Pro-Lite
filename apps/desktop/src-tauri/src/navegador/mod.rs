@@ -29,6 +29,9 @@ pub mod save;
 // Reading and deleting the saved web sources (Rust owns both tables).
 #[allow(dead_code)]
 pub mod sources;
+// Rendering captured text into a PDF for a copy into a collection.
+#[allow(dead_code)]
+pub mod text_pdf;
 // The startup sweep of the capture folder.
 #[allow(dead_code)]
 pub mod sweep;
