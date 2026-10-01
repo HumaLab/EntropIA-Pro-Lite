@@ -117,13 +117,14 @@ export async function pickAndImportFiles(
 async function copyFileToItem(
   sourcePath: string,
   collectionId: string,
-  itemId: string
+  itemId: string,
+  fileName?: string
 ): Promise<string> {
   const dataDir = await invoke<string>('resolve_data_dir')
   const destDir = await join(dataDir, 'assets', collectionId, itemId)
   await mkdir(destDir, { recursive: true })
 
-  const name = sourcePath.split(/[/\\]/).pop() ?? 'unknown'
+  const name = fileName ?? sourcePath.split(/[/\\]/).pop() ?? 'unknown'
   const destPath = await join(destDir, `${crypto.randomUUID()}_${name}`)
   await copyFile(sourcePath, destPath)
   // The copy needs the absolute destination; the caller stores the return value
@@ -241,19 +242,25 @@ export async function importFilesFromPaths(
 /**
  * Import a single file: copy it to the app data directory under its own item.
  * Returns the ImportedFile metadata.
+ *
+ * `fileName` renames the stored copy (and the original name it records) for a
+ * source whose own file name says nothing, such as a saved web capture's id. The
+ * file is still classified by the source's real extension.
  */
 export async function importSingleFile(
   sourcePath: string,
   collectionId: string,
-  itemId: string
+  itemId: string,
+  fileName?: string
 ): Promise<ImportedFile> {
-  const name = sourcePath.split(/[/\\]/).pop() ?? 'unknown'
-  const type = classifyFileType(name)
+  const sourceName = sourcePath.split(/[/\\]/).pop() ?? 'unknown'
+  const type = classifyFileType(sourceName)
   if (!type) {
-    throw new Error(`Unsupported file format: ${name}`)
+    throw new Error(`Unsupported file format: ${sourceName}`)
   }
+  const name = fileName ?? sourceName
 
-  const destPath = await copyFileToItem(sourcePath, collectionId, itemId)
+  const destPath = await copyFileToItem(sourcePath, collectionId, itemId, fileName)
   const originalMetadata = await readOriginalFileMetadata(sourcePath, name)
   return {
     originalName: name,

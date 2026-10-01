@@ -7,6 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import type { WebCaptureProvenance } from './item-metadata'
 import { formatBytes, previewText, shortHash } from './navegador-capture'
 import { hostOf } from './navegador-tabs'
 
@@ -96,12 +97,30 @@ export function navegadorPdfFile(captureId: string): Promise<string> {
   return invoke<string>('navegador_pdf_file', { captureId })
 }
 
+/** Mirrors `CopyTicket`: what copying a saved PDF into a collection needs. */
+export type CopyTicket = {
+  /** Absolute path of the saved PDF, found by Rust from the capture id. */
+  path: string
+  provenance: WebCaptureProvenance
+}
+
+/**
+ * The saved PDF of a capture and where it came from, for a copy into a
+ * collection. Rust finds the file, re-hashes it against the sha256 recorded when
+ * it was verified and reads the provenance from its own rows: this side names a
+ * capture and never supplies a path or the words that vouch for it.
+ */
+export function navegadorCopyTicket(captureId: string): Promise<CopyTicket> {
+  return invoke<CopyTicket>('navegador_copy_ticket', { captureId })
+}
+
 /** Why a source command failed; mirrors `sources::code`. */
 export const SOURCE_ERROR_CODES = [
   'invalid_id',
   'not_found',
   'not_a_pdf',
   'file_missing',
+  'file_changed',
   'db_error',
 ] as const
 

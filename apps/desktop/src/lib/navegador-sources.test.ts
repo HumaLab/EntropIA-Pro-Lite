@@ -6,6 +6,7 @@ import {
   formatLocalTime,
   navegadorDeleteSource,
   navegadorListSources,
+  navegadorCopyTicket,
   navegadorPdfFile,
   navegadorSourceDetail,
   parseSourceError,
@@ -224,6 +225,33 @@ describe('a saved PDF', () => {
     vi.mocked(invoke).mockResolvedValue('C:/data/web-captures/s/c.pdf')
     await expect(navegadorPdfFile('c1')).resolves.toBe('C:/data/web-captures/s/c.pdf')
     expect(invoke).toHaveBeenCalledWith('navegador_pdf_file', { captureId: 'c1' })
+  })
+
+  it('asks for a copy ticket by capture id, never by a path', async () => {
+    const ticket = {
+      path: 'C:/data/web-captures/s/c.pdf',
+      provenance: {
+        sourceId: 's',
+        captureId: 'c1',
+        originalUrl: 'https://e.com/',
+        finalUrl: 'https://e.com/f.pdf',
+        pageTitle: null,
+        accessedAt: '2026-10-01T12:00:00Z',
+        sha256: SHA,
+      },
+    }
+    vi.mocked(invoke).mockClear()
+    vi.mocked(invoke).mockResolvedValue(ticket)
+
+    await expect(navegadorCopyTicket('c1')).resolves.toEqual(ticket)
+    expect(invoke).toHaveBeenCalledWith('navegador_copy_ticket', { captureId: 'c1' })
+  })
+
+  it('reads the code of a PDF that changed since it was verified', () => {
+    expect(parseSourceError('file_changed: not the one that was verified')).toEqual({
+      code: 'file_changed',
+      detail: 'not the one that was verified',
+    })
   })
 
   it('reads the codes of a PDF that cannot be opened', () => {

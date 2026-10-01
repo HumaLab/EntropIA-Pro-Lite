@@ -1932,7 +1932,40 @@ const es = {
   'navegador.pdf.error.file_missing':
     'El archivo del PDF ya no está en este equipo. Vuelve a descargarlo desde la página de origen.',
   'navegador.pdf.error.db_error': 'No se pudo leer el archivo de datos: {message}',
+  'navegador.pdf.error.file_changed':
+    'El PDF guardado ya no coincide con el que se verificó al guardarlo, así que no se abre.',
   'navegador.pdf.error.unknown': 'No se pudo abrir el PDF: {message}',
+  'navegador.sources.copyToCollection': 'Copiar a colección',
+  'navegador.copy.title': 'Copiar a una colección',
+  'navegador.copy.intro':
+    'Se crea un documento nuevo en la colección con una copia de «{title}». La fuente web no cambia y la copia es independiente: borrar la fuente no la toca.',
+  'navegador.copy.destination': 'Colección de destino',
+  'navegador.copy.loading': 'Leyendo las colecciones…',
+  'navegador.copy.loadError': 'No se pudieron leer las colecciones: {message}',
+  'navegador.copy.newCollection': '+ Nueva colección',
+  'navegador.copy.newCollectionPlaceholder': 'Nombre de la colección',
+  'navegador.copy.newCollectionAriaLabel': 'Nombre de la nueva colección',
+  'navegador.copy.confirm': 'Copiar',
+  'navegador.copy.cancel': 'Cancelar',
+  'navegador.copy.close': 'Cerrar',
+  'navegador.copy.copying': 'Copiando el PDF…',
+  'navegador.copy.already':
+    'Esta captura ya está copiada en «{collection}» como «{title}». Si copias otra vez, se crea un segundo documento independiente.',
+  'navegador.copy.again': 'Copiar otra vez',
+  'navegador.copy.done': 'Copia creada en «{collection}»: «{title}».',
+  'navegador.copy.open': 'Abrir documento',
+  'navegador.copy.error.invalid_id': 'No se pudo copiar: identificador no válido.',
+  'navegador.copy.error.not_found': 'No se pudo copiar: esta captura ya no existe.',
+  'navegador.copy.error.not_a_pdf': 'No se pudo copiar: esta captura no es un PDF.',
+  'navegador.copy.error.file_missing':
+    'No se pudo copiar: el archivo del PDF ya no está en este equipo.',
+  'navegador.copy.error.file_changed':
+    'No se pudo copiar: el PDF guardado ya no coincide con el que se verificó al guardarlo.',
+  'navegador.copy.error.db_error': 'No se pudo copiar: error del archivo de datos ({message}).',
+  'navegador.copy.error.import_failed': 'No se pudo copiar: {message}',
+  'navegador.copy.error.not_created':
+    'No se pudo copiar: no se creó ningún documento. Prueba de nuevo.',
+  'navegador.copy.error.unknown': 'No se pudo copiar: {message}',
 } as const
 
 type ExtraI18nKey =
@@ -3983,7 +4016,39 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.pdf.error.file_missing':
     'The PDF file is no longer on this computer. Download it again from the page of origin.',
   'navegador.pdf.error.db_error': 'The data file could not be read: {message}',
+  'navegador.pdf.error.file_changed':
+    'The saved PDF no longer matches the one verified when it was saved, so it is not opened.',
   'navegador.pdf.error.unknown': 'The PDF could not be opened: {message}',
+  'navegador.sources.copyToCollection': 'Copy to collection',
+  'navegador.copy.title': 'Copy to a collection',
+  'navegador.copy.intro':
+    'A new document is created in the collection with a copy of "{title}". The web source does not change and the copy is independent: deleting the source does not touch it.',
+  'navegador.copy.destination': 'Destination collection',
+  'navegador.copy.loading': 'Reading the collections…',
+  'navegador.copy.loadError': 'The collections could not be read: {message}',
+  'navegador.copy.newCollection': '+ New collection',
+  'navegador.copy.newCollectionPlaceholder': 'Collection name',
+  'navegador.copy.newCollectionAriaLabel': 'Name of the new collection',
+  'navegador.copy.confirm': 'Copy',
+  'navegador.copy.cancel': 'Cancel',
+  'navegador.copy.close': 'Close',
+  'navegador.copy.copying': 'Copying the PDF…',
+  'navegador.copy.already':
+    'This capture is already copied in "{collection}" as "{title}". Copying again creates a second, independent document.',
+  'navegador.copy.again': 'Copy again',
+  'navegador.copy.done': 'Copy created in "{collection}": "{title}".',
+  'navegador.copy.open': 'Open document',
+  'navegador.copy.error.invalid_id': 'Could not copy: invalid identifier.',
+  'navegador.copy.error.not_found': 'Could not copy: this capture no longer exists.',
+  'navegador.copy.error.not_a_pdf': 'Could not copy: this capture is not a PDF.',
+  'navegador.copy.error.file_missing':
+    'Could not copy: the PDF file is no longer on this computer.',
+  'navegador.copy.error.file_changed':
+    'Could not copy: the saved PDF no longer matches the one verified when it was saved.',
+  'navegador.copy.error.db_error': 'Could not copy: data file error ({message}).',
+  'navegador.copy.error.import_failed': 'Could not copy: {message}',
+  'navegador.copy.error.not_created': 'Could not copy: no document was created. Try again.',
+  'navegador.copy.error.unknown': 'Could not copy: {message}',
 }
 
 const messages = { es, en }

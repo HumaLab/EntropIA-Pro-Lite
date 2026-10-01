@@ -51,9 +51,29 @@ export interface ImportClassifiedPathsResult {
   alreadyImported: string[]
 }
 
+/**
+ * What a single imported file may bring of its own. Only meaningful when one
+ * path is imported (a file that already has an identity, such as a saved web
+ * capture); a batch of picked files takes everything from the files.
+ */
+export interface ImportItemOverrides {
+  /** The item's title; by default the file name without its extension. */
+  title?: string
+  /** The name the stored copy and its original-name metadata carry. */
+  fileName?: string
+  /**
+   * Reserved metadata written beside `__entropia_file_metadata`. It can add keys
+   * but never replace that one.
+   */
+  extraMetadata?: Record<string, unknown>
+  /** Import even when this same source file was already imported here. */
+  allowDuplicate?: boolean
+}
+
 export interface ImportClassifiedPathsOptions {
   baseErrorMessage: string
   onProgress?: (progress: ImportProgress) => void
+  overrides?: ImportItemOverrides
 }
 
 export interface ImportSummary {
@@ -176,8 +196,12 @@ export function formatImportStageError(baseMessage: string, stage: string, e: un
 
 const IMPORTED_FILE_METADATA_KEY = '__entropia_file_metadata'
 
-function buildImportedItemMetadata(imported: ImportedFile): string {
+function buildImportedItemMetadata(
+  imported: ImportedFile,
+  extraMetadata?: Record<string, unknown>
+): string {
   return JSON.stringify({
+    ...extraMetadata,
     [IMPORTED_FILE_METADATA_KEY]: imported.originalMetadata,
   })
 }
@@ -280,7 +304,7 @@ export async function importClassifiedPathsIntoCollection(
   collectionId: string,
   options: ImportClassifiedPathsOptions
 ): Promise<ImportClassifiedPathsResult> {
-  const { baseErrorMessage, onProgress } = options
+  const { baseErrorMessage, onProgress, overrides } = options
   const store = getStore()
 
   // Classify files before creating items or copying assets.
@@ -319,7 +343,7 @@ export async function importClassifiedPathsIntoCollection(
   }
 
   for (const file of classified) {
-    const title = file.name.replace(/\.[^.]+$/, '')
+    const title = overrides?.title ?? file.name.replace(/\.[^.]+$/, '')
     let itemId: string | null = null
     const claim = inFlightKey(collectionId, file.sourcePath)
     let release: ((inCollection: boolean) => void) | null = null
@@ -339,7 +363,10 @@ export async function importClassifiedPathsIntoCollection(
         // call cannot slip in between.
         release = claimImport(claim)
       }
-      if (importedConcurrently || (await isAlreadyImported(collectionId, file.sourcePath))) {
+      if (
+        importedConcurrently ||
+        (!overrides?.allowDuplicate && (await isAlreadyImported(collectionId, file.sourcePath)))
+      ) {
         inCollection = true
         alreadyImported.push(file.name)
         updateProgress({ skipped: progress.skipped + 1 })
@@ -353,9 +380,13 @@ export async function importClassifiedPathsIntoCollection(
       itemId = item.id
 
       updateProgress({ stage: 'copyingFile' })
-      const imported = await importSingleFile(file.sourcePath, collectionId, itemId)
+      const imported = overrides?.fileName
+        ? await importSingleFile(file.sourcePath, collectionId, itemId, overrides.fileName)
+        : await importSingleFile(file.sourcePath, collectionId, itemId)
       updateProgress({ stage: 'savingDocument' })
-      await store.items.update(itemId, { metadata: buildImportedItemMetadata(imported) })
+      await store.items.update(itemId, {
+        metadata: buildImportedItemMetadata(imported, overrides?.extraMetadata),
+      })
       await finalizeImportedItem(collectionId, itemId, imported, (stage) =>
         updateProgress({ stage })
       )

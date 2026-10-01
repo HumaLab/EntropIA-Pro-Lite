@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest'
 import captureRs from '../../src-tauri/src/navegador/capture.rs?raw'
 import downloadRs from '../../src-tauri/src/navegador/download.rs?raw'
 import saveRs from '../../src-tauri/src/navegador/save.rs?raw'
+import sourcesRs from '../../src-tauri/src/navegador/sources.rs?raw'
 import { locale, t } from './i18n'
+import { SOURCE_ERROR_CODES } from './navegador-sources'
 import {
   CAPTURE_ERROR_CODES,
   DOWNLOAD_REASON_CODES,
@@ -99,6 +101,26 @@ describe('status and kind labels', () => {
       'navegador.save.saved',
     ]) {
       expect(t(key), key).not.toBe(key)
+    }
+  })
+})
+
+describe('saved source error codes', () => {
+  it('are the ones sources.rs can produce', () => {
+    const rust = codesIn(sourcesRs, 'code').sort()
+    expect([...SOURCE_ERROR_CODES].sort()).toEqual(rust)
+  })
+
+  it.each(['es', 'en'] as const)('have a viewer and a copy message in %s', (language) => {
+    locale.set(language)
+    for (const code of [...SOURCE_ERROR_CODES, 'unknown']) {
+      for (const key of [`navegador.pdf.error.${code}`, `navegador.copy.error.${code}`]) {
+        expect(t(key, { message: 'x' }), key).not.toBe(key)
+      }
+    }
+    for (const code of ['import_failed', 'not_created']) {
+      const key = `navegador.copy.error.${code}`
+      expect(t(key, { message: 'x' }), key).not.toBe(key)
     }
   })
 })
