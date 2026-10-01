@@ -1038,6 +1038,10 @@ pub fn run() {
                 Err(error) => eprintln!("[sync] orphan .part cleanup failed: {error}"),
             }
 
+            // Saved web captures: remove what a crash or a failed delete left in
+            // `web-captures/`. Background, bounded, logged, never fatal.
+            navegador::sweep_captures(app.handle().clone(), app_dir.clone(), db_path.clone());
+
             // Sync engine (DESIGN §3.1): single long-lived task owning its own
             // connection. Spawned PAUSED — it runs no cycle until the gate opens
             // (capture ensured + a session exists). Held in managed state so the
