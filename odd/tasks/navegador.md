@@ -128,7 +128,8 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   damage the archive; no empty folder for a source with only selections.
   Commits `2f047dcd` (folder fix), `240ddaab` (sweep).
 
-- [ ] P2e — (route: delegated writer) PDF sources, from the user's P2c run:
+- [ ] P2e — (route: delegated writer; automated checks observed; Windows run
+  pending; commits `c5884034` Rust, `73a7263e` UI) PDF sources, from the user's P2c run:
   a saved PDF's source URL must be the page it was downloaded from (the
   download's page snapshot), not the file link; the file link stays on the
   capture. Source detail for PDFs gets two actions (user decision
@@ -1121,3 +1122,77 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   and has no pagination; the drawer closes when the view is left (it is local
   state); deleting does not touch sync (these tables are not synced yet, P3 must
   add the delete path).
+- P2e (user decisions 2026-10-01; `c5884034` Rust and ACL, `73a7263e` UI).
+  Provenance: `save::save_pdf` stores the download's page snapshot as the source
+  (`original_url` = `final_url` = page URL, `title` = page title) and the file link on
+  the `web_captures` row (`CaptureInfo.url`, new; `insert_rows` no longer reuses the
+  source address for the capture). The page must be http(s) and pass
+  `url_policy::check_url(.., Typed)` (Typed because the person could have typed an
+  `http` page; private hosts, `file:`, `about:blank`, `javascript:` are refused); a
+  refused or unknown page falls back to the file link as before. Find-or-create by
+  page URL means a PDF joins the source of a page capture of that article. With a
+  page URL but no title the source title is left alone (COALESCE keeps the page
+  capture's title) and only the capture title falls back to the file name.
+  Viewer reuse decision: the corpus viewer is `@entropia/ui` `DocumentViewer`
+  (pdf.js over `assetUrl`), not tied to `assets` rows (it takes `path`, `type`,
+  `assetUrl`, `readOnly`), and `SimilarAssetPreviewDialog` already uses it read only.
+  So no pdfium command and no second viewer: the thinnest adapter is ONE command,
+  `navegador_pdf_file(captureId) -> path` (`sources::pdf_capture_file`): validates the
+  id like a source id, requires `kind = 'pdf'`, then resolves `rel_path` with the same
+  rule as the file-presence report (now `capture_file`: exactly
+  `web-captures/<source_id>/<plain name>`, real folder inside the root, never a link,
+  regular file only). Codes `invalid_id`, `not_found`, `not_a_pdf`, `file_missing`,
+  `db_error`. The renderer never sends a path; the asset protocol scope already covers
+  the data dir (also the dev profile). New `NavegadorPdfViewer.svelte` is laid over the
+  page area (`navegador-view__stage`, absolute) and `NavegadorView` hides the native
+  webview while it is open (`covered = overlayOpen || pdf`, same effect that serves
+  `[data-overlay-root]` dialogs) and shows it again on close; a missing file shows a
+  message and the close button still works. Offline: it only reads the local file.
+  Actions: PDF-only sources show "Abrir página de origen", others keep "Abrir en el
+  navegador" (same `go()` path, `sourceOpenAction`); each PDF capture whose file is on
+  disk gets "Ver PDF guardado". Duplicates: at download finish Rust looks up the sha256
+  in `web_captures` (`sources::source_of_pdf_sha`, kind pdf, digest-validated); if
+  found the draft carries `alreadySavedIn` (source id), the quarantined file is
+  DELETED (identical bytes) and nothing is held, so the entry shows "Ya está en tus
+  fuentes" + "Ver fuente" (opens the drawer on that source) and no Guardar. Backstop:
+  `save_pdf` refuses a hash already saved with `already_saved`. The same PDF
+  downloaded again before saving: `Holds::arrive` keeps one held copy (newest) and
+  deletes the older quarantine file; the list collapses same-sha verified entries to
+  the newest (`upsertDownload`), chosen over marking duplicates because the older
+  entry's file is gone and a list of identical rows is the complaint. Running,
+  rejected and user-folder downloads never collapse. No migration touched.
+  RED: Rust 17 of the new tests failed (`todo!()` stubs, provenance and hold
+  assertions); TS 12 failed in `navegador-capture/sources` tests and 9 of 11 in
+  `NavegadorPdf.test.ts`. Mutation: `covered = overlayOpen` alone made the
+  hide-while-viewing test fail. GREEN: `cargo test --features navegador --lib
+  navegador::` 276 passed, `--test app_acl` 12/12 and `--test acl_manifest_guard` 6/6
+  (23 navegador commands rejected from `navegador-web-*`, `navegador-popup-*` and
+  remote origins). Verification (`CARGO_TARGET_DIR=src-tauri/target/writer`): `cargo test
+  --no-fail-fast` 1597 lib passed, 1 failed (the known
+  `no_other_module_opens_the_archive_by_hand`, still only the three sync `*_tests.rs`),
+  every integration test ok; `cargo check --features navegador` ok; `cargo clippy
+  --all-targets` with and without the feature: nothing in navegador or `app_acl`;
+  `cargo fmt --check` ok. Frontend: `pnpm typecheck` 0 errors; `VITE_LOCAL_ML=0` desktop
+  typecheck 0 errors; `pnpm test` 309 + 800 + 2887 passed (7 skipped);
+  `VITE_LOCAL_ML=0` desktop 2866 passed (28 skipped); `pnpm lint` only the known
+  `WritingView.svelte:1403`; prettier clean on touched files (`format:check` lists only
+  the three known files); `VITE_NAVEGADOR=1` vite build ok. Three existing tests listed
+  different files under one hash; they now use distinct hashes (same hash is the same
+  PDF by design).
+  NOT observed (needs the user): the real viewer (pdf.js) over the native webview, the
+  webview hiding and returning, offline, a real download from an article page.
+  Limitations: sources saved before this change keep the file-link URL (and their
+  "Abrir página de origen" loads that link, which downloads again); the page URL is the
+  tab URL at download time, normalised by the URL parser, so an article captured under
+  a different spelling of its address (fragment, tracking query) is a separate source;
+  a source deleted after its duplicate was flagged leaves a stale "Ver fuente" (the
+  drawer then says it is gone); the duplicate check needs the archive open at finish,
+  and any trouble counts as "not saved" (the save itself still refuses a true
+  duplicate); Cargo.lock untouched.
+  Windows checklist (dev profile): 1. Download a PDF from an article page and save it:
+  the source shows the article page URL and title. 2. "Abrir página de origen" loads the
+  article and downloads nothing. 3. "Ver PDF guardado" shows the local copy with the
+  browser hidden; close it and the page returns; repeat with the network off. 4.
+  Download the same PDF again: "Ya está en tus fuentes", no Guardar, "Ver fuente" opens
+  its source. 5. Capture the article page and download its PDF: both land in one
+  source. 6. Download the same new PDF three times before saving: one entry.
