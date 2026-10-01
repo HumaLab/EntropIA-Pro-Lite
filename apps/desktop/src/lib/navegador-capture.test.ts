@@ -6,7 +6,11 @@ import {
   formatBytes,
   navegadorCapturePage,
   navegadorCaptureSelection,
+  navegadorDiscardDraft,
+  navegadorSaveCapture,
+  navegadorSaveDownload,
   parseCaptureError,
+  parseSaveError,
   previewText,
   shortHash,
   upsertDownload,
@@ -18,6 +22,7 @@ const SHA = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
 
 function draft(overrides: Partial<CaptureDraft> = {}): CaptureDraft {
   return {
+    id: 'draft-1',
     kind: 'page',
     finalUrl: 'https://example.com/a',
     title: 'A title',
@@ -285,5 +290,40 @@ describe('capture commands', () => {
     await navegadorCaptureSelection(4)
     expect(invoke).toHaveBeenNthCalledWith(1, 'navegador_capture_page', { tab: 3 })
     expect(invoke).toHaveBeenNthCalledWith(2, 'navegador_capture_selection', { tab: 4 })
+  })
+})
+
+describe('saving', () => {
+  it('names the draft or the download and nothing else', async () => {
+    vi.mocked(invoke).mockClear()
+    vi.mocked(invoke).mockResolvedValue({ sourceId: 's', captureId: 'c' })
+    await expect(navegadorSaveCapture('draft-1')).resolves.toEqual({
+      sourceId: 's',
+      captureId: 'c',
+    })
+    await navegadorSaveDownload('dl-1')
+    await navegadorDiscardDraft('draft-1')
+    expect(invoke).toHaveBeenNthCalledWith(1, 'navegador_save_capture', { draftId: 'draft-1' })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'navegador_save_download', { downloadId: 'dl-1' })
+    expect(invoke).toHaveBeenNthCalledWith(3, 'navegador_discard_draft', { draftId: 'draft-1' })
+  })
+
+  it('reads the code the backend printed and keeps the detail', () => {
+    expect(parseSaveError('db_error: no such table: web_sources')).toEqual({
+      code: 'db_error',
+      detail: 'no such table: web_sources',
+    })
+    expect(parseSaveError(new Error('unknown_draft'))).toEqual({
+      code: 'unknown_draft',
+      detail: null,
+    })
+  })
+
+  it('treats anything else as unknown and keeps its message', () => {
+    expect(parseSaveError('Command not found')).toEqual({
+      code: 'unknown',
+      detail: 'Command not found',
+    })
+    expect(parseSaveError('../../x: y').code).toBe('unknown')
   })
 })

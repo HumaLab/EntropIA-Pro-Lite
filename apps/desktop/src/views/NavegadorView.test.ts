@@ -12,6 +12,7 @@ import NavegadorView from './NavegadorView.svelte'
 const SHA = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
 
 const page: CaptureDraft = {
+  id: 'draft-1',
   kind: 'page',
   finalUrl: 'https://example.com/article',
   title: 'An article',
@@ -212,6 +213,108 @@ describe('NavegadorView capture', () => {
     expect(panel.querySelector('img')).toBeNull()
     expect(panel.querySelector('b')).toBeNull()
     expect(within(panel).getAllByText(hostile).length).toBeGreaterThan(0)
+  })
+})
+
+describe('NavegadorView saving', () => {
+  const saved = { sourceId: 's1', captureId: 'c1' }
+  const calls = (command: string) =>
+    vi.mocked(invoke).mock.calls.filter(([name]) => name === command)
+
+  async function captured() {
+    await openPage()
+    respond = (command) => {
+      if (command === 'navegador_capture_page') return page
+      if (command === 'navegador_save_capture') return saved
+      return undefined
+    }
+    await fireEvent.click(screen.getByLabelText('Capturar página'))
+    return await screen.findByLabelText(/Captura \(borrador/)
+  }
+
+  it('offers to save a draft and sends only its id', async () => {
+    const panel = await captured()
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Guardar' }))
+
+    await waitFor(() => expect(calls('navegador_save_capture')).toHaveLength(1))
+    expect(calls('navegador_save_capture')[0]![1]).toEqual({ draftId: 'draft-1' })
+  })
+
+  it('shows the draft as saved afterwards and cannot save it again', async () => {
+    const panel = await captured()
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Guardar' }))
+
+    const done = await within(panel).findByRole('button', { name: 'Guardado' })
+    expect(done).toBeDisabled()
+    await fireEvent.click(done)
+    expect(calls('navegador_save_capture')).toHaveLength(1)
+  })
+
+  it('says why a save failed and lets the person try again', async () => {
+    const panel = await captured()
+    respond = (command) =>
+      command === 'navegador_save_capture' ? new Error('db_error: disk full') : undefined
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Guardar' }))
+
+    expect(
+      await within(panel).findByText(
+        'No se pudo registrar en el archivo de datos, y no quedó nada guardado: disk full'
+      )
+    ).toBeInTheDocument()
+    expect(within(panel).getByRole('button', { name: 'Guardar' })).toBeEnabled()
+
+    respond = (command) => (command === 'navegador_save_capture' ? saved : undefined)
+    await fireEvent.click(within(panel).getByRole('button', { name: 'Guardar' }))
+    await within(panel).findByRole('button', { name: 'Guardado' })
+    expect(within(panel).queryByText(/No se pudo registrar/)).not.toBeInTheDocument()
+  })
+
+  it('tells the backend to forget a draft that is dismissed', async () => {
+    const panel = await captured()
+    await fireEvent.click(within(panel).getByLabelText('Descartar'))
+
+    await waitFor(() => expect(calls('navegador_discard_draft')).toHaveLength(1))
+    expect(calls('navegador_discard_draft')[0]![1]).toEqual({ draftId: 'draft-1' })
+  })
+
+  it('saves a verified PDF by its download id', async () => {
+    render(NavegadorView)
+    await waitFor(() => expect(handlers['navegador://download']).toBeDefined())
+    respond = (command) => (command === 'navegador_save_download' ? saved : undefined)
+    handlers['navegador://download']!({ payload: pdf })
+    const panel = await screen.findByLabelText(/Captura \(borrador/)
+
+    await fireEvent.click(await within(panel).findByRole('button', { name: 'Guardar paper.pdf' }))
+
+    await waitFor(() => expect(calls('navegador_save_download')).toHaveLength(1))
+    expect(calls('navegador_save_download')[0]![1]).toEqual({ downloadId: 'd1' })
+    expect(await within(panel).findByRole('button', { name: 'Guardado paper.pdf' })).toBeDisabled()
+  })
+
+  it('offers no save for what is not a verified PDF', async () => {
+    render(NavegadorView)
+    await waitFor(() => expect(handlers['navegador://download']).toBeDefined())
+    for (const [id, status] of [
+      ['a', 'downloading'],
+      ['b', 'rejected'],
+      ['c', 'failed'],
+      ['d', 'saved'],
+    ] as const) {
+      handlers['navegador://download']!({
+        payload: { ...pdf, id, fileName: `${id}.zip`, status, size: null, sha256: null },
+      })
+    }
+    await screen.findByText('d.zip')
+    expect(screen.queryByRole('button', { name: /^Guardar / })).not.toBeInTheDocument()
+  })
+
+  it('speaks English too', async () => {
+    await openPage()
+    locale.set('en')
+    respond = (command) => (command === 'navegador_capture_page' ? page : undefined)
+    await fireEvent.click(await screen.findByLabelText('Capture page'))
+    const panel = await screen.findByLabelText(/Capture \(draft/)
+    expect(within(panel).getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 })
 

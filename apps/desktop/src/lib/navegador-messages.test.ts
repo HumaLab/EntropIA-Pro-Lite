@@ -6,10 +6,12 @@
 import { describe, expect, it } from 'vitest'
 import captureRs from '../../src-tauri/src/navegador/capture.rs?raw'
 import downloadRs from '../../src-tauri/src/navegador/download.rs?raw'
+import saveRs from '../../src-tauri/src/navegador/save.rs?raw'
 import { locale, t } from './i18n'
 import {
   CAPTURE_ERROR_CODES,
   DOWNLOAD_REASON_CODES,
+  SAVE_ERROR_CODES,
   downloadReasonKey,
   parseCaptureError,
 } from './navegador-capture'
@@ -65,6 +67,21 @@ describe('download reason codes', () => {
   })
 })
 
+describe('save error codes', () => {
+  it('are the ones save.rs can produce', () => {
+    const rust = codesIn(saveRs, 'code').sort()
+    expect([...SAVE_ERROR_CODES].sort()).toEqual(rust)
+  })
+
+  it.each(['es', 'en'] as const)('have a message in %s', (language) => {
+    locale.set(language)
+    for (const code of [...SAVE_ERROR_CODES, 'unknown']) {
+      const key = `navegador.save.error.${code}`
+      expect(t(key, { message: 'x' }), key).not.toBe(key)
+    }
+  })
+})
+
 describe('status and kind labels', () => {
   it.each(['es', 'en'] as const)('exist in %s', (language) => {
     locale.set(language)
@@ -77,6 +94,9 @@ describe('status and kind labels', () => {
       'navegador.download.status.ready',
       'navegador.download.status.rejected',
       'navegador.download.status.failed',
+      'navegador.save.action',
+      'navegador.save.saving',
+      'navegador.save.saved',
     ]) {
       expect(t(key), key).not.toBe(key)
     }

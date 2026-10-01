@@ -9,15 +9,24 @@
  * tab a page opens) while the person is elsewhere is there when they come back.
  */
 
-import { writable, type Readable } from 'svelte/store'
+import { get, writable, type Readable } from 'svelte/store'
 import { onNavegadorState } from './navegador'
 import {
+  navegadorDiscardDraft,
+  navegadorSaveCapture,
+  navegadorSaveDownload,
   onNavegadorDownload,
   upsertDownload,
+  parseSaveError,
   type CaptureDraft,
   type DownloadDraft,
+  type SaveErrorCode,
+  type SavedCapture,
 } from './navegador-capture'
 import { EMPTY_BROWSER, isNewer, type BrowserState } from './navegador-tabs'
+
+/** Why saving an item failed; the view turns the code into a message. */
+export type SaveFailure = { code: SaveErrorCode; detail: string | null }
 
 export type NavegadorPanelState = {
   capture: CaptureDraft | null
@@ -25,6 +34,12 @@ export type NavegadorPanelState = {
   downloads: DownloadDraft[]
   /** The browser's tabs and the active one, as the backend last said. */
   browser: BrowserState
+  /** Drafts and downloads being saved right now, by id. */
+  saving: string[]
+  /** What was saved, by the id of the draft or download it came from. */
+  saved: Record<string, SavedCapture>
+  /** The last failure of each item that could not be saved. */
+  saveErrors: Record<string, SaveFailure>
 }
 
 type Stop = () => void
@@ -38,12 +53,20 @@ const empty = (): NavegadorPanelState => ({
   captureError: null,
   downloads: [],
   browser: EMPTY_BROWSER,
+  saving: [],
+  saved: {},
+  saveErrors: {},
 })
 
 export function createNavegadorStore(deps: {
   listen: (handler: (draft: DownloadDraft) => void) => Promise<Stop>
   /** Follows the tabs; without it the store only holds what it is given. */
   listenState?: (handler: (state: BrowserState) => void) => Promise<Stop>
+  /** Saving; without them the store never saves. */
+  saveCapture?: (draftId: string) => Promise<SavedCapture>
+  saveDownload?: (downloadId: string) => Promise<SavedCapture>
+  /** Frees the HTML the backend holds for a draft nobody will save. */
+  discardDraft?: (draftId: string) => Promise<void>
 }) {
   const state = writable<NavegadorPanelState>(empty())
   let stop: Stop | null = null
@@ -62,19 +85,66 @@ export function createNavegadorStore(deps: {
     }
   }
 
+  /** A draft that leaves the panel is no longer worth holding in the backend. */
+  const discard = (draft: CaptureDraft | null) => {
+    if (!draft || !deps.discardDraft) return
+    void deps.discardDraft(draft.id).catch(() => undefined)
+  }
+
+  const save = async (
+    id: string,
+    run: ((id: string) => Promise<SavedCapture>) | undefined
+  ): Promise<void> => {
+    if (!run) return
+    const current = get(state)
+    if (current.saving.includes(id) || id in current.saved) return
+    state.update((s) => {
+      const { [id]: _cleared, ...saveErrors } = s.saveErrors
+      return { ...s, saving: [...s.saving, id], saveErrors }
+    })
+    try {
+      const saved = await run(id)
+      state.update((s) => ({
+        ...s,
+        saving: s.saving.filter((entry) => entry !== id),
+        saved: { ...s.saved, [id]: saved },
+      }))
+    } catch (reason) {
+      state.update((s) => ({
+        ...s,
+        saving: s.saving.filter((entry) => entry !== id),
+        saveErrors: { ...s.saveErrors, [id]: parseSaveError(reason) },
+      }))
+    }
+  }
+
   return {
     subscribe: state.subscribe as Readable<NavegadorPanelState>['subscribe'],
 
     /** A capture draft replaces the previous one and clears its error. */
     setCapture(capture: CaptureDraft): void {
+      const previous = get(state).capture
+      if (previous && previous.id !== capture.id) discard(previous)
       state.update((s) => ({ ...s, capture, captureError: null }))
     },
 
+    /** Save the capture draft `draftId` (a page or a selection). */
+    saveCapture(draftId: string): Promise<void> {
+      return save(draftId, deps.saveCapture)
+    },
+
+    /** Save the verified PDF `downloadId`. */
+    saveDownload(downloadId: string): Promise<void> {
+      return save(downloadId, deps.saveDownload)
+    },
+
     setCaptureError(message: string): void {
+      discard(get(state).capture)
       state.update((s) => ({ ...s, capture: null, captureError: message }))
     },
 
     clearCapture(): void {
+      discard(get(state).capture)
       state.update((s) => ({ ...s, capture: null, captureError: null }))
     },
 
@@ -136,6 +206,7 @@ export function createNavegadorStore(deps: {
 
     /** Forget the tabs, the drafts and the downloads; keep listening. */
     clearAll(): void {
+      discard(get(state).capture)
       dismissed.clear()
       state.set(empty())
     },
@@ -153,4 +224,7 @@ export function createNavegadorStore(deps: {
 export const navegadorStore = createNavegadorStore({
   listen: onNavegadorDownload,
   listenState: onNavegadorState,
+  saveCapture: navegadorSaveCapture,
+  saveDownload: navegadorSaveDownload,
+  discardDraft: navegadorDiscardDraft,
 })

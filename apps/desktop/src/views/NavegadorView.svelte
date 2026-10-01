@@ -12,7 +12,9 @@
    *
    * The capture panel sits below the placeholder, outside the native webview's
    * rect: showing it shrinks the placeholder, and the ResizeObserver below moves
-   * the webview with it. Captures and downloads are drafts; nothing is stored.
+   * the webview with it. Captures and downloads are drafts until the person
+   * saves them: "Guardar" asks the backend to keep one (it holds the HTML and the
+   * verified PDF itself, so only the id travels).
    *
    * This view comes and goes (another section, another app tab), the browser
    * does not: unmounting only hides it, and the next mount shows the same active
@@ -102,9 +104,26 @@
     $navegadorStore.capture ? describeCaptureDraft($navegadorStore.capture) : null
   )
   const downloadViews = $derived($navegadorStore.downloads.map((draft) => describeDownload(draft)))
+  const savingIds = $derived($navegadorStore.saving)
+  const savedIds = $derived($navegadorStore.saved)
+  const saveErrors = $derived($navegadorStore.saveErrors)
   const panelOpen = $derived(
     captureView !== null || captureError !== null || downloadViews.length > 0
   )
+
+  type SaveState = 'idle' | 'saving' | 'saved'
+
+  function saveState(id: string): SaveState {
+    if (id in savedIds) return 'saved'
+    return savingIds.includes(id) ? 'saving' : 'idle'
+  }
+
+  /** The message for the last failed save of an item, in the current language. */
+  function saveProblem(id: string): string | null {
+    const failure = saveErrors[id]
+    if (!failure) return null
+    return t(`navegador.save.error.${failure.code}`, { message: failure.detail ?? '' })
+  }
 
   function measure(): ViewerBounds | null {
     if (!placeholder) return null
@@ -500,6 +519,29 @@
           </p>
         {/if}
         <blockquote class="navegador-view__preview">{captureView.preview}</blockquote>
+        {@const state = saveState(captureView.id)}
+        {@const problem = $currentLocale && saveProblem(captureView.id)}
+        <div class="navegador-view__save">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={state === 'saved'}
+            loading={state === 'saving'}
+            onclick={() => void navegadorStore.saveCapture(captureView.id)}
+          >
+            {$currentLocale &&
+              t(
+                state === 'saved'
+                  ? 'navegador.save.saved'
+                  : state === 'saving'
+                    ? 'navegador.save.saving'
+                    : 'navegador.save.action'
+              )}
+          </Button>
+          {#if problem}
+            <span class="navegador-view__problem" role="alert">{problem}</span>
+          {/if}
+        </div>
       {/if}
 
       {#if downloadViews.length > 0}
@@ -552,6 +594,42 @@
                   use:tooltip={problem}>{problem}</span
                 >
               {/if}
+              {#if item.status === 'ready'}
+                {@const state = saveState(item.id)}
+                {@const problem = $currentLocale && saveProblem(item.id)}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={state === 'saved'}
+                  loading={state === 'saving'}
+                  aria-label={$currentLocale &&
+                    t(
+                      state === 'saved'
+                        ? 'navegador.save.savedNamed'
+                        : state === 'saving'
+                          ? 'navegador.save.savingNamed'
+                          : 'navegador.save.actionNamed',
+                      { name: item.fileName }
+                    )}
+                  onclick={() => void navegadorStore.saveDownload(item.id)}
+                >
+                  {$currentLocale &&
+                    t(
+                      state === 'saved'
+                        ? 'navegador.save.saved'
+                        : state === 'saving'
+                          ? 'navegador.save.saving'
+                          : 'navegador.save.action'
+                    )}
+                </Button>
+                {#if problem}
+                  <span
+                    class="navegador-view__problem navegador-view__download-text"
+                    role="alert"
+                    use:tooltip={problem}>{problem}</span
+                  >
+                {/if}
+              {/if}
               <span class="navegador-view__row-end">
                 <IconButton
                   size="sm"
@@ -582,6 +660,14 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  .navegador-view__save {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-start: var(--space-2);
+    min-width: 0;
   }
 
   .navegador-view__tabs {

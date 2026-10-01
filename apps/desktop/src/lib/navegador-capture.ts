@@ -2,9 +2,10 @@
  * What the Navegador captures, seen from the frontend.
  *
  * Captures and downloads are drafts: data the backend read from a page or a
- * quarantined file, shown to the person before anything is kept (nothing is
- * stored yet). Everything in them came from a web page, so the view renders
- * it as text and never as markup.
+ * quarantined file, shown to the person before anything is kept. Saving one
+ * names it by id: the backend holds the HTML and the quarantined file, and
+ * checks the hash itself. Everything in them came from a web page, so the view
+ * renders it as text and never as markup.
  */
 
 import { invoke } from '@tauri-apps/api/core'
@@ -13,6 +14,8 @@ import { hostOf } from './navegador-tabs'
 
 /** Mirrors `CaptureDraft` in `navegador/capture.rs` (the HTML stays in Rust). */
 export type CaptureDraft = {
+  /** Names the draft for the save command; the HTML itself stays in Rust. */
+  id: string
   kind: 'page' | 'selection'
   finalUrl: string
   title: string | null
@@ -85,6 +88,24 @@ export function navegadorCaptureSelection(tab: number): Promise<CaptureDraft> {
   return invoke<CaptureDraft>('navegador_capture_selection', { tab })
 }
 
+/** What a save returns: the ids of the source and the capture it created or joined. */
+export type SavedCapture = { sourceId: string; captureId: string }
+
+/** Save a capture draft: its files and its rows, together. */
+export function navegadorSaveCapture(draftId: string): Promise<SavedCapture> {
+  return invoke<SavedCapture>('navegador_save_capture', { draftId })
+}
+
+/** Save a verified PDF out of quarantine, the same way. */
+export function navegadorSaveDownload(downloadId: string): Promise<SavedCapture> {
+  return invoke<SavedCapture>('navegador_save_download', { downloadId })
+}
+
+/** Tell the backend to forget a draft nobody will save (frees its held HTML). */
+export function navegadorDiscardDraft(draftId: string): Promise<void> {
+  return invoke<void>('navegador_discard_draft', { draftId })
+}
+
 /** Follow downloads through quarantine. Only the main webview hears it. */
 export function onNavegadorDownload(handler: (draft: DownloadDraft) => void): Promise<UnlistenFn> {
   return listen<DownloadDraft>(NAVEGADOR_DOWNLOAD_EVENT, (event) => handler(event.payload))
@@ -144,6 +165,28 @@ export function parseCaptureError(reason: unknown): {
   return { code, detail: rest.length > 0 ? rest.join(': ') : null }
 }
 
+/** Why a save failed; mirrors `save::code` in `navegador/save.rs`. */
+export const SAVE_ERROR_CODES = [
+  'unknown_draft',
+  'unknown_download',
+  'invalid_capture',
+  'hash_mismatch',
+  'file_missing',
+  'io_error',
+  'db_error',
+] as const
+
+export type SaveErrorCode = (typeof SAVE_ERROR_CODES)[number] | 'unknown'
+
+/** The same shape as capture errors: a stable code, then optionally `: detail`. */
+export function parseSaveError(reason: unknown): { code: SaveErrorCode; detail: string | null } {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  const [head, ...rest] = message.split(': ')
+  const code = SAVE_ERROR_CODES.find((known) => known === head)
+  if (!code) return { code: 'unknown', detail: message }
+  return { code, detail: rest.length > 0 ? rest.join(': ') : null }
+}
+
 /** Reasons a download is refused or fails; mirrors `download::reason`. */
 export const DOWNLOAD_REASON_CODES = [
   'not_pdf',
@@ -164,6 +207,7 @@ export function downloadReasonKey(reason: string | null): string {
 /** What the capture panel shows for a draft. */
 export function describeCaptureDraft(draft: CaptureDraft) {
   return {
+    id: draft.id,
     kind: draft.kind,
     title: draft.title || draft.finalUrl,
     finalUrl: draft.finalUrl,
