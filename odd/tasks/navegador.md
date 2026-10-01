@@ -140,14 +140,18 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Phase 4 — copy a web source into a collection (route: delegated writer)
 
-- [ ] P4a — Investigate and report how a copy lands in the corpus without
-  new migrations: verified PDFs through the existing import flow (item +
-  container asset + page assets), page/selection captures (the corpus import
-  accepts only image/pdf/audio): options with tradeoffs, before building them.
-- [ ] P4b — "Copiar a colección" for PDF captures: pick a collection, create
-  an independent item through the existing import path, provenance in
-  `items.metadata.__entropia_web_capture` (source_id, capture_id, url,
-  accessed_at, sha256). Deleting the web source never touches the copy.
+- [x] P4a — (route: delegated writer, read-only investigation; reported
+  2026-10-01) How a copy lands in the corpus without new migrations. Findings
+  and the recommendation are in the evidence block "P4a" at the end.
+- [ ] P4b — (route: delegated writer; automated checks observed; Windows run
+  pending) "Copiar a colección" for PDF captures: pick a collection (or create
+  one), create an independent item through the existing import path, provenance
+  in `items.metadata.__entropia_web_capture` (sourceId, captureId, originalUrl,
+  finalUrl, pageTitle, accessedAt, sha256). Asks before a second copy into the
+  same collection. Deleting the web source never touches the copy. Commits
+  `85c6c2c0` (Rust: `navegador_copy_ticket`), `fd8789fc` (provenance survives
+  metadata edits, `findByWebCapture`), `67523f84` (import overrides, copy
+  module), `7da5a801` (dialog and drawer button).
 - [ ] P4c — Page/selection copies, per the option chosen in P4a.
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
@@ -186,6 +190,102 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-01, P4a (read-only investigation; paths are at base `a915b36e`,
+  `apps/desktop/` omitted for the desktop ones):
+  - PDF captures fit the existing import with no schema change. The saved file
+    is resolved in Rust by capture id (`src-tauri/src/navegador/sources.rs`
+    `pdf_capture_file`, command `navegador_pdf_file`); the corpus import copies
+    any path to `assets/<collection>/<item>/<uuid>_<name>`
+    (`src/lib/file-import.ts:117-132`), creates the item and a container PDF asset
+    and splits it into one single-page PDF asset per page
+    (`src/lib/collection-import.ts:185-217`, `106-138`). The renderer may read
+    the data directory: `fs:scope` allows `$DATA/com.entropia.shared/**/*`
+    (`capabilities/default.json:205-209`), the same scope the import already
+    copies within.
+  - What the person sees after a PDF copy: a normal document (pages, thumbnails,
+    notes, annotations). Text is NOT searchable the instant it lands: import
+    creates no `extractions` rows and starts no processing
+    (`collection-import.ts` has no such call). Text arrives when the person (or
+    a batch) runs "Extraer texto"; for a PDF with a text layer that uses the
+    embedded text (`method='native'`) and needs no OCR engine
+    (`src-tauri/src/ocr/mod.rs:1347-1371`, per page in
+    `processing/ocr.rs:209-221`, rule in `processing/eligibility.rs:12-14`). Only
+    scanned pages fall back to OCR. Meanwhile title and metadata are searchable
+    (generated `items.search_text` = title + metadata,
+    `packages/store/src/migrations/0002_metadata_search.sql:5`). Full-text/RAG:
+    `fts_items` indexes title, metadata and extracted text
+    (`src-tauri/src/nlp/fts.rs:64-110`); text is every `extractions` row of any
+    asset of the item (`nlp/text_provider.rs:21-28`), whatever the asset type.
+  - Page and selection captures (text, optional HTML). Facts that decide it:
+    `assets.type` and `extractions.method` are plain TEXT with no CHECK
+    (`0001_initial.sql:31-37`, `0003_extractions.sql`), so no migration is
+    needed for any option; the item viewer treats every non-pdf, non-audio asset
+    as an image (`src/views/ItemView.svelte:1078-1080`); an asset row without a file is
+    never pushed by sync (`src-tauri/src/sync/blobs.rs:262-300`); `notes` are not
+    in the FTS/RAG text (`text_provider.rs`, `fts.rs`); corpus tables sync with
+    no capability gate (`sync/capture.rs:16-33`, `push.rs:116-190`), so an older
+    device receiving a new asset type would draw it as a broken image.
+      (a) Render the text into a PDF and import it as a normal PDF item. Search:
+      same as any PDF (after extract; native text). Viewer: the existing PDF
+      viewer. Sync: normal (a real PDF blob). Effort: medium, one new Rust
+      command that writes a text PDF with `lopdf` (already a dependency,
+      `Cargo.toml:32`; wry exposes no print-to-PDF, only the interactive
+      `print()`, `wry-0.55.1/src/lib.rs:2024`) plus the P4b flow. Risks: it is a
+      text rendition (no layout or images), built-in PDF fonts cover Latin
+      (Spanish/English fine) but not every script unless a font is embedded
+      (more work); the PDF must pass `is_quality_text` to use native text.
+      (b) Item with an `extractions` row (`method='web'`) on some asset. Needs an
+      asset, and an asset needs a file (else it never syncs) and a type the
+      viewer can draw: with `pdf`/`image` it would be a fake; so (b) collapses
+      into (a) or (c). Not viable alone.
+      (c) New asset type (`text`/`html`). No migration, but: a new viewer branch
+      in ItemView/ItemTextPanel, thumbnails and counts in CollectionView, delete
+      cleanup, export, writing-corpus, processing eligibility (must skip OCR) and
+      a compatibility break on older synced devices. Effort: high; risk: highest.
+      (d) A note on an item. Not searchable (notes are outside FTS/RAG), needs a
+      target item, no document of its own. Fine as a later extra, not as "the
+      copy".
+    Recommendation: (a), for both page and selection (a selection is one page
+    with the quote, its context and the provenance header). Everything the
+    corpus does with a PDF then works unchanged, sync is safe, and (c) stays open
+    if a faithful HTML copy is ever wanted. For a faithful copy of a page, the
+    user can already save the page as a PDF and copy that (P4b).
+  - Provenance: `items.metadata` is a TEXT JSON column of a synced table, so an
+    `__entropia_web_capture` object syncs with the row (all non-generated
+    columns are pushed, `sync/push.rs:116-190`) and is indexed in
+    `search_text`/`fts_items` (the URL becomes searchable). It did NOT survive
+    edits: the only code that rewrites `items.metadata` is the item metadata
+    persistor (`src/lib/item-metadata.ts:76`), and it hid and preserved only
+    `__entropia_file_metadata` (`item-metadata.ts:91`, `110-116`); any other
+    key was shown as an editable field with `String(value)` ("[object Object]")
+    and written back flattened on the next edit. Fixed in P4b (`fd8789fc`).
+    Also: `collection-import.ts:358` overwrote `metadata` with only the
+    file metadata, and the title came from the file name
+    (`collection-import.ts:322`): P4b adds per-import overrides.
+- 2026-10-01, P4b verification (automated only; Windows run pending). RED
+  observed first: Rust `copy_ticket` 5 tests failed on `todo!()` (35 passed);
+  `app_acl` 5 of 12 failed "navegador_copy_ticket not allowed. Command not
+  found"; `findByWebCapture` 3 failed; `item-metadata` 11 failed; collection
+  import overrides 4 failed; `importSingleFile(fileName)` 1 failed; drawer wiring
+  `NavegadorCopy.test.ts` 5/5 failed with the drawer reverted. Written alongside
+  the code (no separate RED): `navegador-copy.test.ts` (module missing, so it
+  failed to import), `NavegadorCopyDialog.test.ts`, the messages guard. GREEN:
+  `cargo test --lib navegador` 281 (with and without `--features navegador`),
+  `--test app_acl` 12 and `--test acl_manifest_guard` 6 with the feature; full
+  `cargo test --no-fail-fast` 1602 passed, 1 failed (the known
+  `no_other_module_opens_the_archive_by_hand`); `cargo check --features
+  navegador` ok; `cargo clippy --all-targets` with and without the feature: no
+  warnings in `src/navegador` or the ACL tests; `cargo fmt --check` ok;
+  `pnpm typecheck` 0 errors; `VITE_LOCAL_ML=0` desktop typecheck 0 errors;
+  `pnpm test` 312 store + 801 ui + 2964 desktop passed (7 skipped); `pnpm lint`
+  only the known `WritingView.svelte:1403`; prettier clean on every committed
+  touched file (checked on the committed blobs: the working copies are CRLF);
+  `VITE_NAVEGADOR=1` vite build emits the NavegadorView chunk. No migration
+  added. Limits: item panel labels for the provenance are Spanish only (the
+  function has no translator, like its neighbours); the copy keeps
+  `__entropia_file_metadata.originalPath` pointing at the (later deleted)
+  web-captures file; page/selection copies not built (P4c).
 
 - 2026-10-01, user's Windows rerun of P2e: multi-page saved PDF now pages
   through every page (buttons and arrow keys) PASS after `ebd0c573`
