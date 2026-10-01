@@ -186,6 +186,12 @@ mod tests {
             if name == "open.rs" || DIRECT_OPEN_ALLOWED.contains(&name.as_str()) {
                 continue;
             }
+            // `<module>_tests.rs` files are declared `#[cfg(test)] mod ...;` and
+            // never ship, so they are test code in the sense of `runtime_portion`
+            // even though they carry no inline `mod tests`.
+            if name.ends_with("_tests.rs") {
+                continue;
+            }
 
             let body = std::fs::read_to_string(&path).unwrap_or_default();
             let runtime = runtime_portion(&body);
