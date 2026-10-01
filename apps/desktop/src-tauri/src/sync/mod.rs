@@ -14,6 +14,7 @@ pub mod push;
 pub(crate) mod research_blobs;
 pub(crate) mod research_capture;
 pub(crate) mod research_envelope;
+pub(crate) mod research_transport;
 pub mod schema;
 pub mod session;
 pub(crate) mod writing_blobs;
@@ -28,6 +29,8 @@ mod research_blobs_tests;
 mod research_capture_tests;
 #[cfg(test)]
 mod research_envelope_tests;
+#[cfg(test)]
+mod research_transport_tests;
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]
