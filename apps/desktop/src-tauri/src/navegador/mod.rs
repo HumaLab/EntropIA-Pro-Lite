@@ -19,6 +19,10 @@ pub mod download;
 // `navegador` feature.
 #[allow(dead_code)]
 pub mod popup;
+// Saving what was captured: files first, then one database transaction. Pure
+// over a data directory and a connection, so every build compiles it.
+#[allow(dead_code)]
+pub mod save;
 // Labels, the limit and the tab list are pure; the viewer that builds the
 // webviews needs the `navegador` feature.
 #[allow(dead_code)]

@@ -467,7 +467,7 @@ pub fn quarantine_dir(cache: &Path) -> PathBuf {
 
 /// Ids are ours (UUIDs); refusing anything else keeps a name from ever
 /// climbing out of the quarantine directory.
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 

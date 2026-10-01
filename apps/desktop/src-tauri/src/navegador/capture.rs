@@ -110,6 +110,9 @@ impl fmt::Display for CaptureError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureDraft {
+    /// Names this draft for the save command: the HTML stays on this side, so
+    /// the UI asks to save a draft by id instead of sending it back.
+    pub id: String,
     pub kind: CaptureKind,
     /// Where the page says it is, after policy validation.
     pub final_url: String,
@@ -233,6 +236,7 @@ pub fn parse_capture(
     };
 
     Ok(CaptureDraft {
+        id: uuid::Uuid::new_v4().to_string(),
         kind: expected,
         final_url: url.to_string(),
         title: raw.title.and_then(|t| clean_line(&t, TITLE_MAX_CHARS)),
@@ -437,6 +441,18 @@ mod tests {
         assert_eq!(draft.html, None);
         assert_eq!(draft.hash_of, "quote");
         assert_eq!(draft.sha256, sha256_hex("the quote".as_bytes()));
+    }
+
+    #[test]
+    fn every_draft_gets_its_own_id_so_it_can_be_saved_later() {
+        let first = page(page_json()).unwrap();
+        let second = page(page_json()).unwrap();
+        assert!(!first.id.is_empty());
+        assert_ne!(first.id, second.id);
+        assert!(first
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'));
     }
 
     #[test]

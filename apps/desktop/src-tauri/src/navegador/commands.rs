@@ -13,9 +13,11 @@ use tauri::{AppHandle, Manager, State};
 
 use super::capture::{CaptureDraft, CaptureKind};
 use super::download;
+use super::save::{self, Saved, Target};
 use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
 use super::{bounds, viewer, UNAVAILABLE};
+use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
 
 /// The setting that keeps the folder the person chose for downloads.
@@ -222,18 +224,90 @@ pub async fn navegador_state(app: AppHandle) -> Result<BrowserState, String> {
 #[tauri::command]
 pub async fn navegador_capture_page(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
     ensure_available()?;
-    viewer::capture(&app, tab, CaptureKind::Page)
+    let draft = viewer::capture(&app, tab, CaptureKind::Page)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    save::holds(&app).hold_draft(draft.clone());
+    Ok(draft)
 }
 
 /// Read the text selected in the page of `tab`, with the text around it.
 #[tauri::command]
 pub async fn navegador_capture_selection(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
     ensure_available()?;
-    viewer::capture(&app, tab, CaptureKind::Selection)
+    let draft = viewer::capture(&app, tab, CaptureKind::Selection)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    save::holds(&app).hold_draft(draft.clone());
+    Ok(draft)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Save the capture draft `draft_id` (a page or a selection): its files under
+/// the data directory and its rows in the archive, together. The renderer only
+/// names the draft; the HTML and the hash are the ones held on this side.
+/// Errors are a stable code (`unknown_draft`, `db_error`, ...), optionally
+/// followed by `: detail`; a failed save leaves no file and no row, and the
+/// draft stays available to try again.
+#[tauri::command]
+pub async fn navegador_save_capture(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    draft_id: String,
+) -> Result<Saved, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let target = Target {
+            data_dir: &data_dir,
+            conn: &conn,
+            now_ms: now_ms(),
+        };
+        save::holds(&app)
+            .save_draft(&draft_id, &target)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Save the verified PDF `download_id` out of quarantine, the same way.
+#[tauri::command]
+pub async fn navegador_save_download(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    download_id: String,
+) -> Result<Saved, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let quarantine = download::quarantine_dir(&crate::path_utils::cache_dir(&app)?);
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let target = Target {
+            data_dir: &data_dir,
+            conn: &conn,
+            now_ms: now_ms(),
+        };
+        save::holds(&app)
+            .save_pdf(&download_id, &target, &quarantine)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Forget a capture draft the person dismissed, freeing its held HTML.
+#[tauri::command]
+pub async fn navegador_discard_draft(app: AppHandle, draft_id: String) -> Result<(), String> {
+    save::holds(&app).discard_draft(&draft_id);
+    Ok(())
 }
 
 #[cfg(test)]

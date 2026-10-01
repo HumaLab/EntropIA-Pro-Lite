@@ -344,7 +344,19 @@ fn download_finished(
             download::finalize_or_release(&dir, &pending.id, folder.as_deref(), &pending.file_name);
         let draft = match outcome {
             Ok(download::Outcome::Verified(verified)) => {
-                DownloadDraft::finished(&pending, Ok(verified))
+                let draft = DownloadDraft::finished(&pending, Ok(verified.clone()));
+                // The save command finds the PDF by id, never by a path or hash
+                // the renderer sends.
+                super::save::holds(&app).hold_pdf(super::save::ReadyPdf {
+                    id: pending.id.clone(),
+                    url: pending.url.to_string(),
+                    file_name: draft.file_name.clone(),
+                    size: verified.size,
+                    sha256: verified.sha256,
+                    accessed_at: pending.accessed_at.clone(),
+                    page_title: pending.page_title.clone(),
+                });
+                draft
             }
             Ok(download::Outcome::Saved { path, size }) => {
                 DownloadDraft::saved(&pending, &path, Some(size))
