@@ -6,8 +6,10 @@ import {
   formatLocalTime,
   navegadorDeleteSource,
   navegadorListSources,
+  navegadorPdfFile,
   navegadorSourceDetail,
   parseSourceError,
+  sourceOpenAction,
   type CaptureDetail,
   type SourceSummary,
 } from './navegador-sources'
@@ -182,5 +184,53 @@ describe('describeCapture', () => {
 
   it('keeps a hash it cannot recognise out of the short form', () => {
     expect(describeCapture(capture({ sha256: 'zz' })).shortSha).toBe('')
+  })
+})
+
+describe('sourceOpenAction', () => {
+  it('loads the page of origin for a source that only holds PDFs', () => {
+    expect(sourceOpenAction([capture({ kind: 'pdf' })])).toBe('origin')
+    expect(sourceOpenAction([capture({ kind: 'pdf' }), capture({ kind: 'pdf', id: 'c2' })])).toBe(
+      'origin'
+    )
+  })
+
+  it('opens the address in the browser for pages and selections', () => {
+    expect(sourceOpenAction([capture({ kind: 'page' })])).toBe('browser')
+    expect(sourceOpenAction([capture({ kind: 'selection' })])).toBe('browser')
+  })
+
+  it('a page capture next to a PDF is still just the page', () => {
+    expect(sourceOpenAction([capture({ kind: 'pdf' }), capture({ kind: 'page', id: 'c2' })])).toBe(
+      'browser'
+    )
+  })
+
+  it('has no PDF to speak of for a source with no captures', () => {
+    expect(sourceOpenAction([])).toBe('browser')
+  })
+})
+
+describe('a saved PDF', () => {
+  it('can be viewed only when the capture is a PDF whose file is on disk', () => {
+    expect(describeCapture(capture({ kind: 'pdf', filePresent: true })).canViewPdf).toBe(true)
+    expect(describeCapture(capture({ kind: 'pdf', filePresent: false })).canViewPdf).toBe(false)
+    expect(describeCapture(capture({ kind: 'pdf', filePresent: null })).canViewPdf).toBe(false)
+    expect(describeCapture(capture({ kind: 'page', filePresent: true })).canViewPdf).toBe(false)
+  })
+
+  it('is asked for by capture id, never by a path', async () => {
+    vi.mocked(invoke).mockClear()
+    vi.mocked(invoke).mockResolvedValue('C:/data/web-captures/s/c.pdf')
+    await expect(navegadorPdfFile('c1')).resolves.toBe('C:/data/web-captures/s/c.pdf')
+    expect(invoke).toHaveBeenCalledWith('navegador_pdf_file', { captureId: 'c1' })
+  })
+
+  it('reads the codes of a PDF that cannot be opened', () => {
+    expect(parseSourceError('file_missing: the saved PDF is not on disk')).toEqual({
+      code: 'file_missing',
+      detail: 'the saved PDF is not on disk',
+    })
+    expect(parseSourceError('not_a_pdf').code).toBe('not_a_pdf')
   })
 })

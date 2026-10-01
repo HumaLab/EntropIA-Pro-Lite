@@ -87,8 +87,23 @@ export function navegadorDeleteSource(sourceId: string): Promise<DeleteOutcome> 
   return invoke<DeleteOutcome>('navegador_delete_source', { sourceId })
 }
 
+/**
+ * Where the saved PDF of a capture is, resolved by the backend from the capture
+ * id (never a path from here). The viewer loads it from disk: nothing is
+ * downloaded again, so it works offline.
+ */
+export function navegadorPdfFile(captureId: string): Promise<string> {
+  return invoke<string>('navegador_pdf_file', { captureId })
+}
+
 /** Why a source command failed; mirrors `sources::code`. */
-export const SOURCE_ERROR_CODES = ['invalid_id', 'not_found', 'db_error'] as const
+export const SOURCE_ERROR_CODES = [
+  'invalid_id',
+  'not_found',
+  'not_a_pdf',
+  'file_missing',
+  'db_error',
+] as const
 
 export type SourceErrorCode = (typeof SOURCE_ERROR_CODES)[number] | 'unknown'
 
@@ -122,6 +137,18 @@ export function formatLocalTime(iso: string, locale: 'es' | 'en', timeZone?: str
   } catch {
     return iso
   }
+}
+
+/**
+ * What the source-level "open" button does. A source made of PDFs only is the
+ * page those files came from, so it opens "the page of origin"; any other source
+ * just opens its address in the browser. Both load the address in the active
+ * tab through the same navigate path.
+ */
+export function sourceOpenAction(captures: readonly CaptureDetail[]): 'origin' | 'browser' {
+  return captures.length > 0 && captures.every((capture) => capture.kind === 'pdf')
+    ? 'origin'
+    : 'browser'
 }
 
 /** What a row of the list shows. */
@@ -168,6 +195,8 @@ export function describeCapture(
           }
         : null,
     textInFile: capture.textInFile,
+    /** A PDF whose file is on disk can be opened in the app's own viewer. */
+    canViewPdf: capture.kind === 'pdf' && capture.filePresent === true,
     file: (capture.filePresent === null ? 'none' : capture.filePresent ? 'present' : 'missing') as
       | 'present'
       | 'missing'

@@ -27,6 +27,10 @@
    * opening it narrows the placeholder, and the same ResizeObserver moves the
    * native webview, so the drawer never sits under the page.
    *
+   * A saved PDF opens in the app's own viewer (`NavegadorPdfViewer`), laid over
+   * the page area: the native webview is hidden while it is open, exactly as for
+   * a dialog in the overlay root, and shown again when it closes.
+   *
    * The browser has its own tabs (up to four), each a native webview the backend
    * keeps; the strip above the address bar shows them. The backend owns which
    * one is active and tells this view through `navegadorStore`; every button
@@ -56,6 +60,7 @@
   import { MAX_TABS, activeTab, canOpenTab, describeTabs } from '$lib/navegador-tabs'
   import { navegadorStore } from '$lib/navegador-store'
   import NavegadorSources from './NavegadorSources.svelte'
+  import NavegadorPdfViewer from './NavegadorPdfViewer.svelte'
   import {
     describeCaptureDraft,
     describeDownload,
@@ -84,11 +89,18 @@
   let overlayOpen = $state(false)
   /** The saved-sources drawer is open (beside the page area, never over it). */
   let sourcesOpen = $state(false)
+  /** A saved PDF is open in the viewer over the page area. */
+  let pdf = $state<{ id: string; title: string } | null>(null)
+  /** Asks the drawer to show one source; a new nonce asks again. */
+  let sourceFocus = $state<{ id: string; nonce: number } | null>(null)
+  let focusCount = 0
   let error = $state<string | null>(null)
   let lastSent: string | null = null
   /** The tab the address bar is showing, to tell a tab switch from a page moving. */
   let shownTab: number | null = null
 
+  /** Something draws over the page area, so the native webview must not. */
+  const covered = $derived(overlayOpen || pdf !== null)
   const browser = $derived($navegadorStore.browser)
   const current = $derived(activeTab(browser))
   /** What the active tab's page says; all empty for a blank tab. */
@@ -143,7 +155,7 @@
 
   /** Send the placeholder's rect if it moved since the last time. */
   async function syncBounds(force = false) {
-    if (!opened || overlayOpen) return
+    if (!opened || covered) return
     const bounds = measure()
     if (!bounds) return
     const key = JSON.stringify(bounds)
@@ -196,6 +208,12 @@
   async function openSource(url: string) {
     address = url
     await go(url)
+  }
+
+  /** Show the drawer with one source open (what a duplicate download points at). */
+  function showSource(id: string) {
+    sourcesOpen = true
+    sourceFocus = { id, nonce: ++focusCount }
   }
 
   /** Run a command on the tab on screen right now; the tab is fixed at the click. */
@@ -267,7 +285,7 @@
   // Show the page while nothing covers it, hide it while an overlay is open.
   $effect(() => {
     if (!opened) return
-    const visible = !overlayOpen
+    const visible = !covered
     untrack(() => {
       const bounds = measure()
       if (visible && bounds) {
@@ -495,14 +513,24 @@
   </p>
 
   <div class="navegador-view__body">
-    <div
-      class="navegador-view__page"
-      role="region"
-      aria-label={$currentLocale && t('navegador.pageArea')}
-      bind:this={placeholder}
-    ></div>
+    <div class="navegador-view__stage">
+      <div
+        class="navegador-view__page"
+        role="region"
+        aria-label={$currentLocale && t('navegador.pageArea')}
+        bind:this={placeholder}
+      ></div>
+      {#if pdf}
+        <NavegadorPdfViewer captureId={pdf.id} title={pdf.title} onclose={() => (pdf = null)} />
+      {/if}
+    </div>
     {#if sourcesOpen}
-      <NavegadorSources onopen={openSource} onclose={() => (sourcesOpen = false)} />
+      <NavegadorSources
+        onopen={openSource}
+        onclose={() => (sourcesOpen = false)}
+        onviewpdf={(capture) => (pdf = capture)}
+        focusSource={sourceFocus}
+      />
     {/if}
   </div>
 
@@ -626,7 +654,21 @@
                   use:tooltip={problem}>{problem}</span
                 >
               {/if}
-              {#if item.status === 'ready'}
+              {#if item.status === 'ready' && item.alreadySavedIn}
+                {@const sourceId = item.alreadySavedIn}
+                <span class="navegador-view__chip"
+                  >{$currentLocale && t('navegador.download.alreadySaved')}</span
+                >
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-label={$currentLocale &&
+                    t('navegador.download.showSourceNamed', { name: item.fileName })}
+                  onclick={() => showSource(sourceId)}
+                >
+                  {$currentLocale && t('navegador.download.showSource')}
+                </Button>
+              {:else if item.status === 'ready'}
                 {@const state = saveState(item.id)}
                 {@const problem = $currentLocale && saveProblem(item.id)}
                 <Button
@@ -913,6 +955,16 @@
   }
 
   /* Only marks where the native webview goes; the page is not DOM. */
+  /* The page area and, over it, the PDF viewer (the native webview is hidden
+     then). The placeholder inside keeps its own rect either way. */
+  .navegador-view__stage {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 200px;
+  }
+
   .navegador-view__page {
     flex: 1;
     min-width: 0;

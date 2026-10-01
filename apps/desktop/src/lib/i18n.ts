@@ -1915,6 +1915,23 @@ const es = {
   'navegador.sources.file.pdf': 'PDF guardado en este equipo.',
   'navegador.sources.file.missing': 'El archivo guardado ya no está en el disco.',
   'navegador.sources.textInFile': 'El texto es largo y está guardado en un archivo.',
+  'navegador.sources.openOrigin': 'Abrir página de origen',
+  'navegador.sources.viewPdf': 'Ver PDF guardado',
+  'navegador.save.error.already_saved':
+    'Este PDF ya está en tus fuentes, así que no se guardó otra copia.',
+  'navegador.download.alreadySaved': 'Ya está en tus fuentes',
+  'navegador.download.showSource': 'Ver fuente',
+  'navegador.download.showSourceNamed': 'Ver la fuente que ya guarda {name}',
+  'navegador.pdf.region': 'PDF guardado',
+  'navegador.pdf.close': 'Cerrar el PDF',
+  'navegador.pdf.loading': 'Abriendo el PDF…',
+  'navegador.pdf.error.invalid_id': 'No se pudo abrir el PDF: identificador no válido.',
+  'navegador.pdf.error.not_found': 'Esta captura ya no existe.',
+  'navegador.pdf.error.not_a_pdf': 'Esta captura no es un PDF.',
+  'navegador.pdf.error.file_missing':
+    'El archivo del PDF ya no está en este equipo. Vuelve a descargarlo desde la página de origen.',
+  'navegador.pdf.error.db_error': 'No se pudo leer el archivo de datos: {message}',
+  'navegador.pdf.error.unknown': 'No se pudo abrir el PDF: {message}',
 } as const
 
 type ExtraI18nKey =
@@ -3948,6 +3965,23 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.sources.file.pdf': 'PDF saved on this computer.',
   'navegador.sources.file.missing': 'The saved file is no longer on disk.',
   'navegador.sources.textInFile': 'The text is long and is saved in a file.',
+  'navegador.sources.openOrigin': 'Open the page of origin',
+  'navegador.sources.viewPdf': 'View saved PDF',
+  'navegador.save.error.already_saved':
+    'This PDF is already in your sources, so no second copy was saved.',
+  'navegador.download.alreadySaved': 'Already in your sources',
+  'navegador.download.showSource': 'Show source',
+  'navegador.download.showSourceNamed': 'Show the source that already holds {name}',
+  'navegador.pdf.region': 'Saved PDF',
+  'navegador.pdf.close': 'Close the PDF',
+  'navegador.pdf.loading': 'Opening the PDF…',
+  'navegador.pdf.error.invalid_id': 'The PDF could not be opened: invalid identifier.',
+  'navegador.pdf.error.not_found': 'This capture no longer exists.',
+  'navegador.pdf.error.not_a_pdf': 'This capture is not a PDF.',
+  'navegador.pdf.error.file_missing':
+    'The PDF file is no longer on this computer. Download it again from the page of origin.',
+  'navegador.pdf.error.db_error': 'The data file could not be read: {message}',
+  'navegador.pdf.error.unknown': 'The PDF could not be opened: {message}',
 }
 
 const messages = { es, en }

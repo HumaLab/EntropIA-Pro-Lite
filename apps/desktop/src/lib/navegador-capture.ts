@@ -59,6 +59,11 @@ export type DownloadDraft = {
   /** The page it started from, as it was then: a snapshot, never the tab's live page. */
   pageUrl: string | null
   pageTitle: string | null
+  /**
+   * The saved source that already holds this exact PDF (same SHA-256), when the
+   * archive says so. Such a download is not kept in quarantine and has no Save.
+   */
+  alreadySavedIn: string | null
 }
 
 export const NAVEGADOR_DOWNLOAD_EVENT = 'navegador://download'
@@ -174,6 +179,7 @@ export const SAVE_ERROR_CODES = [
   'file_missing',
   'io_error',
   'db_error',
+  'already_saved',
 ] as const
 
 export type SaveErrorCode = (typeof SAVE_ERROR_CODES)[number] | 'unknown'
@@ -239,10 +245,24 @@ export function describeDownload(draft: DownloadDraft) {
     savedTo: draft.savedTo,
     status: draft.status,
     reason: draft.reason,
+    alreadySavedIn: draft.alreadySavedIn,
   }
 }
 
-/** Newest first; an update replaces the entry in place; only the last few stay. */
+/** A PDF that ended verified: the only kind two downloads can be "the same file" for. */
+function isVerifiedPdf(draft: DownloadDraft): boolean {
+  return draft.status === 'ready' && draft.sha256 !== null
+}
+
+/**
+ * Newest first; an update replaces the entry in place; only the last few stay.
+ *
+ * The same PDF downloaded again (same SHA-256) is one entry, not several: when a
+ * verified PDF arrives, the earlier verified entries with the same hash go. The
+ * backend keeps only one quarantined copy of them too (the newest), so the
+ * entry that stays is always one that can still be acted on. Files that are not
+ * verified PDFs (running, rejected, saved to the person's folder) never collapse.
+ */
 export function upsertDownload(
   list: readonly DownloadDraft[],
   next: DownloadDraft,
@@ -252,5 +272,10 @@ export function upsertDownload(
   const merged = exists
     ? list.map((entry) => (entry.id === next.id ? next : entry))
     : [next, ...list]
-  return merged.slice(0, max)
+  const unique = isVerifiedPdf(next)
+    ? merged.filter(
+        (entry) => entry.id === next.id || !(isVerifiedPdf(entry) && entry.sha256 === next.sha256)
+      )
+    : merged
+  return unique.slice(0, max)
 }

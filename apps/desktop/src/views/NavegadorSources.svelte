@@ -11,7 +11,9 @@
    * the drawer names a source by id and never handles a path. Everything shown
    * came from a web page and is rendered as text. A saved HTML snapshot is only
    * reported (it exists, how big it is): showing it needs its active content
-   * stripped first, which is not built.
+   * stripped first, which is not built. A saved PDF can be opened in the app's
+   * own viewer (`onviewpdf`, by capture id), and a source made of PDFs opens its
+   * page of origin rather than "the browser".
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { ActionIcon, Button, ConfirmDialog, IconButton } from '@entropia/ui'
@@ -25,17 +27,27 @@
     navegadorListSources,
     navegadorSourceDetail,
     parseSourceError,
+    sourceOpenAction,
     type SourceDetail,
     type SourceSummary,
   } from '$lib/navegador-sources'
 
-  /** Load this address in the browser's active tab (through the URL policy). */
+  /**
+   * `onopen` loads an address in the browser's active tab (through the URL
+   * policy); `onviewpdf` opens a saved PDF capture in the app's viewer;
+   * `focusSource` asks the drawer to show one source's detail (a new `nonce`
+   * asks again, even for the same source).
+   */
   let {
     onopen,
     onclose,
+    onviewpdf,
+    focusSource = null,
   }: {
     onopen: (url: string) => Promise<void> | void
     onclose: () => void
+    onviewpdf: (capture: { id: string; title: string }) => void
+    focusSource?: { id: string; nonce: number } | null
   } = $props()
 
   const currentLocale = locale
@@ -65,8 +77,10 @@
   const captures = $derived(
     (detail?.captures ?? []).map((capture) => describeCapture(capture, lang))
   )
+  const openAction = $derived(sourceOpenAction(detail?.captures ?? []))
   const savedCount = $derived(Object.keys($navegadorStore.saved).length)
   let seenSaved = 0
+  let seenFocus = 0
 
   function describe(reason: unknown): string {
     return reason instanceof Error ? reason.message : String(reason)
@@ -180,6 +194,16 @@
       deleting = false
     }
   }
+
+  // Another part of the view asked for one source (a download already saved).
+  $effect(() => {
+    const wanted = focusSource
+    untrack(() => {
+      if (!wanted || wanted.nonce === seenFocus) return
+      seenFocus = wanted.nonce
+      openDetail(wanted.id)
+    })
+  })
 
   // A capture saved while the drawer is open shows up without reopening it.
   $effect(() => {
@@ -301,7 +325,12 @@
       <h3 class="sources__detail-title">{detail.title?.trim() || detail.finalUrl}</h3>
       <div class="sources__actions">
         <Button size="sm" variant="secondary" onclick={() => void onopen(detail!.finalUrl)}>
-          {$currentLocale && t('navegador.sources.openInBrowser')}
+          {$currentLocale &&
+            t(
+              openAction === 'origin'
+                ? 'navegador.sources.openOrigin'
+                : 'navegador.sources.openInBrowser'
+            )}
         </Button>
         <Button size="sm" variant="secondary" onclick={() => void copyUrl(detail!.finalUrl)}>
           {$currentLocale && t('navegador.sources.copyUrl')}
@@ -357,6 +386,21 @@
                 <span class="sources__problem">
                   {$currentLocale && t('navegador.sources.file.missing')}
                 </span>
+              {/if}
+              {#if capture.canViewPdf}
+                <div class="sources__actions">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onclick={() =>
+                      onviewpdf({
+                        id: capture.id,
+                        title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
+                      })}
+                  >
+                    {$currentLocale && t('navegador.sources.viewPdf')}
+                  </Button>
+                </div>
               {/if}
               {#if capture.quote}
                 <blockquote class="sources__quote">

@@ -35,6 +35,7 @@ const download = (id: string, patch: Partial<DownloadDraft> = {}): DownloadDraft
   reason: null,
   tab: null,
   pageUrl: null,
+  alreadySavedIn: null,
   pageTitle: null,
   ...patch,
 })

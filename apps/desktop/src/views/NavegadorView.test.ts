@@ -43,6 +43,7 @@ const pdf: DownloadDraft = {
   tab: null,
   pageUrl: null,
   pageTitle: null,
+  alreadySavedIn: null,
 }
 
 const tab = (id: number, patch: Partial<BrowserTab> = {}): BrowserTab => ({
@@ -417,8 +418,11 @@ describe('NavegadorView across mounts', () => {
 })
 
 describe('NavegadorView clearing the panel', () => {
+  // Different files have different hashes: the same hash would be the same PDF.
   const emit = (draft: Partial<DownloadDraft> & { id: string }) =>
-    handlers['navegador://download']!({ payload: { ...pdf, ...draft } })
+    handlers['navegador://download']!({
+      payload: { ...pdf, sha256: draft.id.padEnd(64, 'a'), ...draft },
+    })
 
   async function withDownloads() {
     render(NavegadorView)
@@ -784,6 +788,7 @@ describe('NavegadorView tabs', () => {
           ...pdf,
           id,
           fileName: `${id}.pdf`,
+          sha256: id.padEnd(64, 'a'),
           tab: 1,
           pageUrl: `https://news.example.org/${id}`,
           pageTitle: title,

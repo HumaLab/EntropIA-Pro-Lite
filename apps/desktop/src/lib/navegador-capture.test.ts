@@ -56,6 +56,7 @@ function download(overrides: Partial<DownloadDraft> = {}): DownloadDraft {
     tab: null,
     pageUrl: null,
     pageTitle: null,
+    alreadySavedIn: null,
     ...overrides,
   }
 }
@@ -223,15 +224,24 @@ describe('describeDownload', () => {
   })
 })
 
+/** A distinct, valid-looking hash per number: different files. */
+const sha = (n: number) => String(n).repeat(64).slice(0, 64)
+
 describe('upsertDownload', () => {
   it('adds a new download at the top', () => {
-    const list = upsertDownload([download({ id: 'a' })], download({ id: 'b' }))
+    const list = upsertDownload(
+      [download({ id: 'a', sha256: sha(1) })],
+      download({ id: 'b', sha256: sha(2) })
+    )
     expect(list.map((d) => d.id)).toEqual(['b', 'a'])
   })
 
   it('replaces a download in place when its status changes', () => {
-    const start = [download({ id: 'b' }), download({ id: 'a', status: 'downloading' })]
-    const list = upsertDownload(start, download({ id: 'a', status: 'ready' }))
+    const start = [
+      download({ id: 'b', sha256: sha(2) }),
+      download({ id: 'a', status: 'downloading', sha256: sha(1) }),
+    ]
+    const list = upsertDownload(start, download({ id: 'a', status: 'ready', sha256: sha(1) }))
     expect(list.map((d) => [d.id, d.status])).toEqual([
       ['b', 'ready'],
       ['a', 'ready'],
@@ -240,7 +250,9 @@ describe('upsertDownload', () => {
 
   it('keeps only the most recent few', () => {
     let list: DownloadDraft[] = []
-    for (let i = 0; i < 8; i++) list = upsertDownload(list, download({ id: `d${i}` }), 5)
+    for (let i = 0; i < 8; i++) {
+      list = upsertDownload(list, download({ id: `d${i}`, sha256: sha(i) }), 5)
+    }
     expect(list.map((d) => d.id)).toEqual(['d7', 'd6', 'd5', 'd4', 'd3'])
   })
 
@@ -248,6 +260,50 @@ describe('upsertDownload', () => {
     const start = [download({ id: 'a' })]
     upsertDownload(start, download({ id: 'b' }))
     expect(start).toHaveLength(1)
+    expect(start[0]!.id).toBe('a')
+  })
+})
+
+describe('upsertDownload, the same file twice', () => {
+  it('collapses repeated downloads of one PDF (same hash) into the newest entry', () => {
+    let list: DownloadDraft[] = []
+    for (const id of ['a', 'b', 'c', 'd']) list = upsertDownload(list, download({ id }))
+    expect(list.map((d) => d.id)).toEqual(['d'])
+  })
+
+  it('collapses entries already flagged as being in the sources too', () => {
+    const flagged = download({ id: 'a', alreadySavedIn: 's1' })
+    const list = upsertDownload([flagged], download({ id: 'b', alreadySavedIn: 's1' }))
+    expect(list.map((d) => d.id)).toEqual(['b'])
+  })
+
+  it('keeps downloads whose hash differs', () => {
+    const other = 'e'.repeat(64)
+    const list = upsertDownload([download({ id: 'a' })], download({ id: 'b', sha256: other }))
+    expect(list.map((d) => d.id)).toEqual(['b', 'a'])
+  })
+
+  it('never collapses a download still running or one that did not end as a PDF', () => {
+    const running = download({ id: 'run', status: 'downloading', sha256: null })
+    const rejected = download({ id: 'rej', status: 'rejected', sha256: null })
+    const list = upsertDownload([running, rejected], download({ id: 'new' }))
+    expect(list.map((d) => d.id)).toEqual(['new', 'run', 'rej'])
+  })
+
+  it('does not drop a file saved to the person folder that happens to share a hash', () => {
+    const kept = download({ id: 'f', status: 'saved', savedTo: 'C:/Downloads' })
+    const list = upsertDownload([kept], download({ id: 'new' }))
+    expect(list.map((d) => d.id)).toEqual(['new', 'f'])
+  })
+})
+
+describe('describeDownload, a file that is already in the sources', () => {
+  it('says which source holds it', () => {
+    expect(describeDownload(download({ alreadySavedIn: 's1' })).alreadySavedIn).toBe('s1')
+  })
+
+  it('says nothing for a file that is new', () => {
+    expect(describeDownload(download()).alreadySavedIn).toBeNull()
   })
 })
 
@@ -306,6 +362,10 @@ describe('saving', () => {
     expect(invoke).toHaveBeenNthCalledWith(1, 'navegador_save_capture', { draftId: 'draft-1' })
     expect(invoke).toHaveBeenNthCalledWith(2, 'navegador_save_download', { downloadId: 'dl-1' })
     expect(invoke).toHaveBeenNthCalledWith(3, 'navegador_discard_draft', { draftId: 'draft-1' })
+  })
+
+  it('knows the refusal of a PDF whose bytes are already saved', () => {
+    expect(parseSaveError('already_saved')).toEqual({ code: 'already_saved', detail: null })
   })
 
   it('reads the code the backend printed and keeps the detail', () => {
