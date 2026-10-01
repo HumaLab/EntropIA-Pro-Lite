@@ -152,7 +152,12 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `85c6c2c0` (Rust: `navegador_copy_ticket`), `fd8789fc` (provenance survives
   metadata edits, `findByWebCapture`), `67523f84` (import overrides, copy
   module), `7da5a801` (dialog and drawer button).
-- [ ] P4c — Page/selection copies, per the option chosen in P4a.
+- [ ] P4c — (route: delegated writer; automated checks observed; Windows run
+  pending) Option (a): "Copiar a colección" for page and selection captures
+  renders the captured text into a PDF in Rust and imports it through the P4b
+  path. No new command: `navegador_copy_ticket` renders when the capture is a
+  page or selection. Commits `4b37f172` (PDF renderer), `7fe1a350` (ticket,
+  temp file, provenance), `912d575e` (button, dialog wording, item panel).
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
@@ -1334,3 +1339,39 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   P2e. P2e stays unchecked until the user's rerun. Recheck: open a multi-page saved
   PDF with "Ver PDF guardado", step through all pages with the buttons and the arrow
   keys, check the last page disables Next, close it and the browser returns.
+
+- 2026-10-01, P4c verification (automated only; Windows run pending). Approach:
+  `navegador/text_pdf.rs` writes the PDF with `lopdf` (no new crate): A4, three
+  built-in Helvetica faces with `WinAnsiEncoding`, no embedded font, so the text
+  layer is native (`pdf_extract`, the corpus extractor, reads it back; a short
+  selection still passes `is_quality_text` because the header adds text). Layout:
+  own word wrap from the Helvetica AFM widths, long words broken, multi-page, no
+  page numbers (they would pollute the extracted text). Header: title, capture
+  type, URL (and original URL), "Consultada (UTC)", SHA-256 (HTML for a page,
+  quote for a selection), note that it is a text copy. Selection: quote in
+  oblique with a bar, `quote_prefix`/`quote_suffix` as grey context around it.
+  `navegador/text_copy.rs` reads text from the row or `text_rel_path`, checks a
+  selection's quote hash (`file_changed`), refuses missing file (`file_missing`)
+  or blank text (new code `no_text`), writes to `<data>/web-captures/_copy/`
+  (not an id-named folder, so the sweep leaves it) and purges `.pdf` there older
+  than 1 h on each render. Provenance gains `captureKind` and
+  `rendering: "text-pdf"` (only on rendered copies). Encoding limits: Windows-1252
+  only; NFD accents are composed, typographic spaces/hyphens/quotes/ligatures and
+  a few arrows are mapped, zero-width characters dropped, everything else (other
+  scripts, emoji, Latin letters outside CP1252 such as `ł`) becomes `?` and the
+  header says how many were replaced. An embedded TrueType font would be needed
+  for full Unicode; not added (needs a binary asset). RED observed first: 13
+  `text_pdf` tests failed on `todo!()`; 9 ticket tests failed (page copy still
+  `not_a_pdf`); TS: 12 failed (canCopy, no_text code, provenance fields, item
+  panel labels, drawer and dialog wiring). GREEN: `cargo test --lib navegador`
+  303 (304 with `--features navegador`), `--test app_acl` 12 and
+  `--test acl_manifest_guard` 6 with the feature; full `cargo test --no-fail-fast`
+  1625 passed, 1 failed (the known `no_other_module_opens_the_archive_by_hand`);
+  `cargo check --features navegador` ok; `cargo clippy --all-targets` with and
+  without the feature: only pre-existing warnings, none in navegador; `cargo fmt
+  --check` ok; `pnpm typecheck` and `VITE_LOCAL_ML=0` desktop typecheck 0
+  errors; `pnpm test` 312 + 801 + 2976 passed (7 skipped); `pnpm lint` only the
+  known `WritingView.svelte:1403`; prettier clean on committed blobs;
+  `VITE_NAVEGADOR=1` vite build emits NavegadorView. No migration, no new
+  command (ACL unchanged). Limits: a rendered copy keeps the temp file up to 1 h
+  (purged on the next render, not at startup); item panel labels Spanish only.
