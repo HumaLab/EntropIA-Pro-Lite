@@ -59,6 +59,7 @@
   } from '$lib/navegador'
   import { MAX_TABS, activeTab, canOpenTab, describeTabs } from '$lib/navegador-tabs'
   import { navegadorStore } from '$lib/navegador-store'
+  import { getNavigation } from '$lib/pane-context'
   import NavegadorSources from './NavegadorSources.svelte'
   import NavegadorPdfViewer from './NavegadorPdfViewer.svelte'
   import {
@@ -76,6 +77,8 @@
   } from '$lib/navegador-capture'
 
   const currentLocale = locale
+  // Init-only (see `getNavigation`): the pane this view lives in.
+  const navigation = getNavigation()
   const instanceId = crypto.randomUUID()
   /** How often the placeholder is re-measured, for moves no resize reveals. */
   const REMEASURE_MS = 400
@@ -208,6 +211,22 @@
   async function openSource(url: string) {
     address = url
     await go(url)
+  }
+
+  /** Open the document a copy of a saved PDF created, in this pane. */
+  function openCopiedItem(target: {
+    collectionId: string
+    collectionName: string
+    itemId: string
+    itemTitle: string
+  }) {
+    navigation.navigate({
+      name: 'item',
+      collectionId: target.collectionId,
+      collectionName: target.collectionName,
+      itemId: target.itemId,
+      itemTitle: target.itemTitle,
+    })
   }
 
   /** Show the drawer with one source open (what a duplicate download points at). */
@@ -529,6 +548,7 @@
         onopen={openSource}
         onclose={() => (sourcesOpen = false)}
         onviewpdf={(capture) => (pdf = capture)}
+        onopenitem={openCopiedItem}
         focusSource={sourceFocus}
       />
     {/if}

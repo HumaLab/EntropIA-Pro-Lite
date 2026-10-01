@@ -13,12 +13,15 @@
    * reported (it exists, how big it is): showing it needs its active content
    * stripped first, which is not built. A saved PDF can be opened in the app's
    * own viewer (`onviewpdf`, by capture id), and a source made of PDFs opens its
-   * page of origin rather than "the browser".
+   * page of origin rather than "the browser". A saved PDF can also be copied into
+   * a collection (`NavegadorCopyDialog`): an explicit, independent copy that
+   * leaves the source as it is.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { ActionIcon, Button, ConfirmDialog, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { navegadorStore } from '$lib/navegador-store'
+  import NavegadorCopyDialog, { type CopiedTarget } from './NavegadorCopyDialog.svelte'
   import {
     describeCapture,
     describeSource,
@@ -35,18 +38,21 @@
   /**
    * `onopen` loads an address in the browser's active tab (through the URL
    * policy); `onviewpdf` opens a saved PDF capture in the app's viewer;
-   * `focusSource` asks the drawer to show one source's detail (a new `nonce`
-   * asks again, even for the same source).
+   * `onopenitem` opens the document a copy created; `focusSource` asks the drawer
+   * to show one source's detail (a new `nonce` asks again, even for the same
+   * source).
    */
   let {
     onopen,
     onclose,
     onviewpdf,
+    onopenitem,
     focusSource = null,
   }: {
     onopen: (url: string) => Promise<void> | void
     onclose: () => void
     onviewpdf: (capture: { id: string; title: string }) => void
+    onopenitem: (target: CopiedTarget) => void
     focusSource?: { id: string; nonce: number } | null
   } = $props()
 
@@ -66,6 +72,7 @@
   let confirming = $state<{ id: string; title: string; count: number } | null>(null)
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
+  let copying = $state<{ id: string; title: string } | null>(null)
 
   let listRequest = 0
   let detailRequest = 0
@@ -400,6 +407,17 @@
                   >
                     {$currentLocale && t('navegador.sources.viewPdf')}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onclick={() =>
+                      (copying = {
+                        id: capture.id,
+                        title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
+                      })}
+                  >
+                    {$currentLocale && t('navegador.sources.copyToCollection')}
+                  </Button>
                 </div>
               {/if}
               {#if capture.quote}
@@ -421,6 +439,10 @@
     {/if}
   {/if}
 </aside>
+
+{#if copying}
+  <NavegadorCopyDialog capture={copying} onclose={() => (copying = null)} {onopenitem} />
+{/if}
 
 {#if confirming}
   <ConfirmDialog
