@@ -11,7 +11,8 @@
 //! - The Bearer token and the `X-Schema-Tag` header are attached to every
 //!   authenticated request; the token is NEVER logged (DESIGN §8).
 //! - `X-Sync-Capabilities` is attached only by the explicit writing-envelope-v1
-//!   push/pull methods. Ordinary push/pull requests remain capability-free.
+//!   and research-envelope-v1 push/pull methods. Ordinary push/pull requests
+//!   remain capability-free.
 //!
 //! Several DTO fields and trait methods (devices, revoke, usage, delete_account,
 //! pull, blob_get, and the pull-response cursor fields) are consumed by the
@@ -39,6 +40,8 @@ const SCHEMA_TAG_HEADER: &str = "X-Schema-Tag";
 const SYNC_CAPABILITIES_HEADER: &str = "X-Sync-Capabilities";
 /// Exact, case-sensitive capability token for writing aggregate envelopes.
 pub const WRITING_ENVELOPE_V1_CAPABILITY: &str = "writing-envelope-v1";
+/// Exact, case-sensitive capability token for research aggregate envelopes.
+pub const RESEARCH_ENVELOPE_V1_CAPABILITY: &str = "research-envelope-v1";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -426,6 +429,11 @@ impl PushResponse {
     pub fn supports_writing_envelope_v1(&self) -> bool {
         supports_writing_envelope_v1(&self.capabilities)
     }
+
+    /// Whether the server advertised the exact research-envelope-v1 token.
+    pub fn supports_research_envelope_v1(&self) -> bool {
+        supports_research_envelope_v1(&self.capabilities)
+    }
 }
 
 /// One row returned by a pull page (PROTOCOL `GET /v1/sync/pull`). Also reused
@@ -470,6 +478,11 @@ impl PullResponse {
     pub fn supports_writing_envelope_v1(&self) -> bool {
         supports_writing_envelope_v1(&self.capabilities)
     }
+
+    /// Whether the server advertised the exact research-envelope-v1 token.
+    pub fn supports_research_envelope_v1(&self) -> bool {
+        supports_research_envelope_v1(&self.capabilities)
+    }
 }
 
 /// Checks capability tokens exactly. Schema tags and successful status codes do
@@ -478,6 +491,14 @@ pub fn supports_writing_envelope_v1(capabilities: &[String]) -> bool {
     capabilities
         .iter()
         .any(|capability| capability == WRITING_ENVELOPE_V1_CAPABILITY)
+}
+
+/// Checks capability tokens exactly, case-sensitively. Schema tags and
+/// successful status codes do not imply research-envelope-v1 support.
+pub fn supports_research_envelope_v1(capabilities: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == RESEARCH_ENVELOPE_V1_CAPABILITY)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -520,7 +541,7 @@ pub type BlobExists = bool;
 /// [`SyncApi::health`] attaches the device Bearer token. The `/sync/*` methods
 /// also attach `X-Schema-Tag`. Ordinary [`SyncApi::push`] and [`SyncApi::pull`]
 /// omit capability headers; opt-in requires the dedicated writing-envelope-v1
-/// methods.
+/// or research-envelope-v1 methods.
 #[allow(dead_code)]
 pub trait SyncApi {
     fn register(
@@ -628,6 +649,20 @@ pub trait SyncApi {
         )))
     }
 
+    /// Pushes with the exact research-envelope-v1 capability opt-in. The
+    /// default fails closed locally so alternate implementations cannot
+    /// silently issue a legacy request without the required header.
+    fn push_with_research_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _req: PushRequest,
+    ) -> impl std::future::Future<Output = Result<PushResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support research-envelope-v1 opt-in".to_string(),
+        )))
+    }
+
     fn pull(
         &self,
         token: &str,
@@ -647,6 +682,21 @@ pub trait SyncApi {
     ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send {
         std::future::ready(Err(SyncError::Decode(
             "SyncApi implementation does not support writing-envelope-v1 opt-in".to_string(),
+        )))
+    }
+
+    /// Pulls with the exact research-envelope-v1 capability opt-in. The
+    /// default fails closed rather than delegating to [`SyncApi::pull`]
+    /// without a header.
+    fn pull_with_research_envelope_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _since: i64,
+        _limit: i64,
+    ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support research-envelope-v1 opt-in".to_string(),
         )))
     }
 
@@ -711,17 +761,16 @@ impl HttpSyncApi {
         token: &str,
         schema_tag: &str,
         req: PushRequest,
-        writing_envelope_v1: bool,
+        capability: Option<&str>,
     ) -> Result<PushResponse, SyncError> {
         let request = self
             .client
             .post(self.url("/v1/sync/push"))
             .bearer_auth(token)
             .header(SCHEMA_TAG_HEADER, schema_tag);
-        let request = if writing_envelope_v1 {
-            request.header(SYNC_CAPABILITIES_HEADER, WRITING_ENVELOPE_V1_CAPABILITY)
-        } else {
-            request
+        let request = match capability {
+            Some(capability) => request.header(SYNC_CAPABILITIES_HEADER, capability),
+            None => request,
         };
         let response = request
             .json(&req)
@@ -737,17 +786,16 @@ impl HttpSyncApi {
         schema_tag: &str,
         since: i64,
         limit: i64,
-        writing_envelope_v1: bool,
+        capability: Option<&str>,
     ) -> Result<PullResponse, SyncError> {
         let request = self
             .client
             .get(self.url("/v1/sync/pull"))
             .bearer_auth(token)
             .header(SCHEMA_TAG_HEADER, schema_tag);
-        let request = if writing_envelope_v1 {
-            request.header(SYNC_CAPABILITIES_HEADER, WRITING_ENVELOPE_V1_CAPABILITY)
-        } else {
-            request
+        let request = match capability {
+            Some(capability) => request.header(SYNC_CAPABILITIES_HEADER, capability),
+            None => request,
         };
         let response = request
             .query(&[("since", since), ("limit", limit)])
@@ -982,7 +1030,7 @@ impl SyncApi for HttpSyncApi {
         schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        self.push_request(token, schema_tag, req, false).await
+        self.push_request(token, schema_tag, req, None).await
     }
 
     async fn push_with_writing_envelope_v1(
@@ -991,7 +1039,23 @@ impl SyncApi for HttpSyncApi {
         schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        self.push_request(token, schema_tag, req, true).await
+        self.push_request(token, schema_tag, req, Some(WRITING_ENVELOPE_V1_CAPABILITY))
+            .await
+    }
+
+    async fn push_with_research_envelope_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        req: PushRequest,
+    ) -> Result<PushResponse, SyncError> {
+        self.push_request(
+            token,
+            schema_tag,
+            req,
+            Some(RESEARCH_ENVELOPE_V1_CAPABILITY),
+        )
+        .await
     }
 
     async fn pull(
@@ -1001,7 +1065,7 @@ impl SyncApi for HttpSyncApi {
         since: i64,
         limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        self.pull_request(token, schema_tag, since, limit, false)
+        self.pull_request(token, schema_tag, since, limit, None)
             .await
     }
 
@@ -1012,8 +1076,31 @@ impl SyncApi for HttpSyncApi {
         since: i64,
         limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        self.pull_request(token, schema_tag, since, limit, true)
-            .await
+        self.pull_request(
+            token,
+            schema_tag,
+            since,
+            limit,
+            Some(WRITING_ENVELOPE_V1_CAPABILITY),
+        )
+        .await
+    }
+
+    async fn pull_with_research_envelope_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        since: i64,
+        limit: i64,
+    ) -> Result<PullResponse, SyncError> {
+        self.pull_request(
+            token,
+            schema_tag,
+            since,
+            limit,
+            Some(RESEARCH_ENVELOPE_V1_CAPABILITY),
+        )
+        .await
     }
 
     async fn blob_head(&self, token: &str, sha256: &str) -> Result<BlobExists, SyncError> {
@@ -1620,5 +1707,186 @@ mod tests {
 
         assert_eq!(error.status(), Some(400));
         assert_eq!(error.api_code(), Some("bad_request"));
+    }
+
+    #[test]
+    fn research_capability_support_requires_exact_case_sensitive_token() {
+        assert!(supports_research_envelope_v1(&[
+            RESEARCH_ENVELOPE_V1_CAPABILITY.to_string()
+        ]));
+        assert!(supports_research_envelope_v1(&[
+            WRITING_ENVELOPE_V1_CAPABILITY.to_string(),
+            RESEARCH_ENVELOPE_V1_CAPABILITY.to_string()
+        ]));
+        for unsupported in [
+            Vec::new(),
+            vec!["Research-envelope-v1".to_string()],
+            vec!["RESEARCH-ENVELOPE-V1".to_string()],
+            vec!["research-envelope-v1-extra".to_string()],
+            vec!["research-envelope-v1 ".to_string()],
+        ] {
+            assert!(
+                !supports_research_envelope_v1(&unsupported),
+                "unexpected support for {unsupported:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn research_capability_token_matches_the_negotiation_constant() {
+        assert_eq!(
+            RESEARCH_ENVELOPE_V1_CAPABILITY,
+            crate::sync::research_capture::RESEARCH_CAPABILITY
+        );
+    }
+
+    #[test]
+    fn push_and_pull_responses_expose_the_research_capability() {
+        let push: PushResponse = serde_json::from_str(
+            r#"{"results":[],"max_server_seq":1,"server_epoch":"e","server_now_ms":2,
+                "capabilities":["research-envelope-v1"]}"#,
+        )
+        .expect("parse push");
+        assert!(push.supports_research_envelope_v1());
+        assert!(!push.supports_writing_envelope_v1());
+
+        let pull: PullResponse = serde_json::from_str(
+            r#"{"rows":[],"next_since":1,"has_more":false,"schema_tag":"s","server_epoch":"e",
+                "server_now_ms":2,"capabilities":["research-envelope-v1"]}"#,
+        )
+        .expect("parse pull");
+        assert!(pull.supports_research_envelope_v1());
+        assert!(!pull.supports_writing_envelope_v1());
+    }
+
+    #[tokio::test]
+    async fn research_opted_in_push_sends_exactly_the_research_capability() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"results":[],"max_server_seq":8,"server_epoch":"epoch","server_now_ms":43,"capabilities":["research-envelope-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .push_with_research_envelope_v1(
+                "test-token",
+                "0023_sync_ids",
+                sample_push_request("research_envelopes"),
+            )
+            .await
+            .expect("research capability push");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_research_envelope_v1());
+        assert!(!response.supports_writing_envelope_v1());
+        assert_eq!(request.request_line, "POST /v1/sync/push HTTP/1.1");
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![RESEARCH_ENVELOPE_V1_CAPABILITY]
+        );
+        assert_push_body(&request, "research_envelopes");
+    }
+
+    #[tokio::test]
+    async fn research_opted_in_pull_sends_exactly_the_research_capability() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"rows":[],"next_since":0,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":["research-envelope-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .pull_with_research_envelope_v1("test-token", "0023_sync_ids", 0, 500)
+            .await
+            .expect("research capability pull");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_research_envelope_v1());
+        assert_eq!(
+            request.request_line,
+            "GET /v1/sync/pull?since=0&limit=500 HTTP/1.1"
+        );
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![RESEARCH_ENVELOPE_V1_CAPABILITY]
+        );
+        assert!(request.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn writing_opt_in_never_sends_the_research_capability() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"results":[],"max_server_seq":8,"server_epoch":"epoch","server_now_ms":43,"capabilities":["writing-envelope-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        api.push_with_writing_envelope_v1(
+            "test-token",
+            "0023_sync_ids",
+            sample_push_request("writing_envelopes"),
+        )
+        .await
+        .expect("writing capability push");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![WRITING_ENVELOPE_V1_CAPABILITY],
+            "the writing opt-in sends only its own token"
+        );
+    }
+
+    #[tokio::test]
+    async fn research_opted_in_push_propagates_structured_api_error() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            400,
+            r#"{"error":{"code":"bad_request","message":"push rejected"}}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let error = api
+            .push_with_research_envelope_v1(
+                "test-token",
+                "0023_sync_ids",
+                sample_push_request("research_envelopes"),
+            )
+            .await
+            .expect_err("push must propagate error");
+        let _request = finish_loopback_request(request_rx, handle);
+
+        assert_eq!(error.status(), Some(400));
+        assert_eq!(error.api_code(), Some("bad_request"));
+    }
+
+    #[tokio::test]
+    async fn research_capability_defaults_fail_closed_and_leave_other_paths_untouched() {
+        use crate::sync::test_support::MockSyncApi;
+
+        let api = MockSyncApi::default();
+        let push_error = api
+            .push_with_research_envelope_v1("tok", "0023_sync_ids", sample_push_request("items"))
+            .await
+            .expect_err("research push default must fail closed");
+        assert!(matches!(push_error, SyncError::Decode(_)));
+        let pull_error = api
+            .pull_with_research_envelope_v1("tok", "0023_sync_ids", 0, 10)
+            .await
+            .expect_err("research pull default must fail closed");
+        assert!(matches!(pull_error, SyncError::Decode(_)));
+
+        // Ordinary and writing requests on the same double are untouched.
+        api.push("tok", "0023_sync_ids", sample_push_request("items"))
+            .await
+            .expect("ordinary push");
+        api.pull("tok", "0023_sync_ids", 0, 10)
+            .await
+            .expect("ordinary pull");
+        api.push_with_writing_envelope_v1("tok", "0023_sync_ids", sample_push_request("items"))
+            .await
+            .expect("writing push");
+        assert_eq!(api.pushed_count(), 2);
     }
 }
