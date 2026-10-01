@@ -23,6 +23,10 @@
    * browser closes when its app tab does (`watchNavegadorTabs`, installed by the
    * shell) or the app exits.
    *
+   * The saved sources are a drawer BESIDE the placeholder (`NavegadorSources`):
+   * opening it narrows the placeholder, and the same ResizeObserver moves the
+   * native webview, so the drawer never sits under the page.
+   *
    * The browser has its own tabs (up to four), each a native webview the backend
    * keeps; the strip above the address bar shows them. The backend owns which
    * one is active and tells this view through `navegadorStore`; every button
@@ -51,6 +55,7 @@
   } from '$lib/navegador'
   import { MAX_TABS, activeTab, canOpenTab, describeTabs } from '$lib/navegador-tabs'
   import { navegadorStore } from '$lib/navegador-store'
+  import NavegadorSources from './NavegadorSources.svelte'
   import {
     describeCaptureDraft,
     describeDownload,
@@ -77,6 +82,8 @@
   /** Whether the browser exists (its first tab was made); not whether a tab has a page. */
   let opened = $state(false)
   let overlayOpen = $state(false)
+  /** The saved-sources drawer is open (beside the page area, never over it). */
+  let sourcesOpen = $state(false)
   let error = $state<string | null>(null)
   let lastSent: string | null = null
   /** The tab the address bar is showing, to tell a tab switch from a page moving. */
@@ -151,7 +158,11 @@
 
   async function submit(event: SubmitEvent) {
     event.preventDefault()
-    const text = address.trim()
+    await go(address.trim())
+  }
+
+  /** Load `text` in the active tab, opening the browser first when it is not. */
+  async function go(text: string) {
     if (!text) return
     error = null
     const bounds = measure()
@@ -179,6 +190,12 @@
     } catch (reason) {
       error = t('navegador.error', { message: describe(reason) })
     }
+  }
+
+  /** Open a saved source's address: the same path as typing it, URL policy included. */
+  async function openSource(url: string) {
+    address = url
+    await go(url)
   }
 
   /** Run a command on the tab on screen right now; the tab is fixed at the click. */
@@ -436,6 +453,16 @@
     >
       <ActionIcon name="text-quote" size={16} />
     </IconButton>
+    <IconButton
+      size="md"
+      variant="secondary"
+      active={sourcesOpen}
+      label={$currentLocale && t('navegador.sources.open')}
+      title={$currentLocale && t('navegador.sources.open')}
+      onclick={() => (sourcesOpen = !sourcesOpen)}
+    >
+      <ActionIcon name="list" size={16} />
+    </IconButton>
     <input
       class="navegador-view__address"
       type="text"
@@ -467,12 +494,17 @@
     {/if}
   </p>
 
-  <div
-    class="navegador-view__page"
-    role="region"
-    aria-label={$currentLocale && t('navegador.pageArea')}
-    bind:this={placeholder}
-  ></div>
+  <div class="navegador-view__body">
+    <div
+      class="navegador-view__page"
+      role="region"
+      aria-label={$currentLocale && t('navegador.pageArea')}
+      bind:this={placeholder}
+    ></div>
+    {#if sourcesOpen}
+      <NavegadorSources onopen={openSource} onclose={() => (sourcesOpen = false)} />
+    {/if}
+  </div>
 
   {#if panelOpen}
     <section
@@ -871,9 +903,19 @@
     color: var(--color-danger, var(--color-text-primary));
   }
 
+  /* The page area and the sources drawer share a row: the drawer is never over
+     the native webview, it takes its width from the placeholder. */
+  .navegador-view__body {
+    display: flex;
+    flex: 1;
+    gap: var(--space-2);
+    min-height: 0;
+  }
+
   /* Only marks where the native webview goes; the page is not DOM. */
   .navegador-view__page {
     flex: 1;
+    min-width: 0;
     min-height: 200px;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
