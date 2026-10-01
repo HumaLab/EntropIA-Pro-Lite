@@ -26,8 +26,15 @@ export type WebCaptureProvenance = {
   pageTitle: string | null
   /** UTC, RFC 3339, as recorded when the capture was taken. */
   accessedAt: string
-  /** What was verified when the PDF was saved. */
+  /**
+   * What was verified when the PDF was saved; for a copy rendered from text, the
+   * capture's own hash (of the page's HTML, or of the quote).
+   */
   sha256: string
+  /** Only on a copy rendered from a capture's text. */
+  captureKind?: 'page' | 'selection'
+  /** `text-pdf`: the copy is a PDF rendered from the text, not the page itself. */
+  rendering?: 'text-pdf'
 }
 
 export type ImportedFileMetadata = {
@@ -159,6 +166,10 @@ export function parseWebCaptureProvenance(
       pageTitle: text('pageTitle'),
       accessedAt,
       sha256,
+      ...(text('captureKind') === 'page' || text('captureKind') === 'selection'
+        ? { captureKind: text('captureKind') as 'page' | 'selection' }
+        : {}),
+      ...(text('rendering') === 'text-pdf' ? { rendering: 'text-pdf' as const } : {}),
     }
   } catch {
     return null
@@ -398,10 +409,22 @@ export function buildTechnicalMetadata({
     webCapture?.accessedAt,
     ['accessed at', 'fecha consulta']
   )
+  const rendered = webCapture?.rendering === 'text-pdf'
+  if (rendered) {
+    pushTechnicalMetadataEntry(
+      entries,
+      customMetadataKeys,
+      'Tipo de copia',
+      webCapture?.captureKind === 'selection'
+        ? 'Texto de una selección, en PDF'
+        : 'Texto de una página, en PDF',
+      ['copy type', 'tipo copia', 'rendering']
+    )
+  }
   pushTechnicalMetadataEntry(
     entries,
     customMetadataKeys,
-    'SHA-256 del PDF guardado',
+    rendered ? 'SHA-256 de la captura original' : 'SHA-256 del PDF guardado',
     webCapture?.sha256,
     ['sha256', 'sha-256', 'hash']
   )

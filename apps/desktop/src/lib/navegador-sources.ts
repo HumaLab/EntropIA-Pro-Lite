@@ -121,6 +121,7 @@ export const SOURCE_ERROR_CODES = [
   'not_a_pdf',
   'file_missing',
   'file_changed',
+  'no_text',
   'db_error',
 ] as const
 
@@ -216,6 +217,14 @@ export function describeCapture(
     textInFile: capture.textInFile,
     /** A PDF whose file is on disk can be opened in the app's own viewer. */
     canViewPdf: capture.kind === 'pdf' && capture.filePresent === true,
+    /**
+     * A PDF whose file is on disk is copied as it is; a page or a selection is
+     * copied as a PDF rendered from the text kept in its row or in its file.
+     */
+    canCopy:
+      capture.kind === 'pdf'
+        ? capture.filePresent === true
+        : capture.textPreview !== null || capture.textInFile,
     file: (capture.filePresent === null ? 'none' : capture.filePresent ? 'present' : 'missing') as
       | 'present'
       | 'missing'

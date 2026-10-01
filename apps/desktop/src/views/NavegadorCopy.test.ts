@@ -69,6 +69,21 @@ const detailOf = (id: string, captures: CaptureDetail[]): SourceDetail => ({
   captures,
 })
 
+const renderedTicket: CopyTicket = {
+  path: 'C:/data/web-captures/_copy/c1-1-0.pdf',
+  provenance: {
+    sourceId: 'alpha',
+    captureId: 'c1',
+    originalUrl: 'https://www.alpha.example.org/articulos/227',
+    finalUrl: 'https://www.alpha.example.org/articulos/227',
+    pageTitle: 'La cuestión social',
+    accessedAt: '2026-09-30T12:00:00Z',
+    sha256: SHA,
+    captureKind: 'page',
+    rendering: 'text-pdf',
+  },
+}
+
 const ticket: CopyTicket = {
   path: FILE,
   provenance: {
@@ -92,14 +107,27 @@ beforeEach(async () => {
   locale.set('es')
   vi.clearAllMocks()
   details = {
-    alpha: detailOf('alpha', [{ ...pdfCapture('c1'), kind: 'page', hashOf: 'html' }]),
+    alpha: detailOf('alpha', [
+      { ...pdfCapture('c1'), kind: 'page', hashOf: 'html', textPreview: 'Texto de la página' },
+    ]),
+    delta: detailOf('delta', [
+      { ...pdfCapture('c5'), kind: 'page', hashOf: 'html', textPreview: null },
+      {
+        ...pdfCapture('c6'),
+        kind: 'selection',
+        hashOf: 'quote',
+        textPreview: 'una cita',
+        quotePrefix: 'antes ',
+        quoteSuffix: ' después',
+      },
+    ]),
     beta: detailOf('beta', [pdfCapture('c3')]),
     gamma: detailOf('gamma', [pdfCapture('c4', { filePresent: false })]),
   }
   vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
     if (command === 'navegador_state') return browser()
     if (command === 'navegador_list_sources') {
-      return ['alpha', 'beta', 'gamma'].map((id) => ({
+      return ['alpha', 'beta', 'gamma', 'delta'].map((id) => ({
         id,
         title: `Title of ${id}`,
         finalUrl: `https://www.${id}.example.org/page`,
@@ -112,7 +140,9 @@ beforeEach(async () => {
     if (command === 'navegador_source_detail') {
       return details[(args as { sourceId: string }).sourceId] ?? null
     }
-    if (command === 'navegador_copy_ticket') return ticket
+    if (command === 'navegador_copy_ticket') {
+      return (args as { captureId: string }).captureId === 'c3' ? ticket : renderedTicket
+    }
     return undefined
   })
   vi.mocked(listen).mockImplementation(async () => () => {})
@@ -163,7 +193,7 @@ async function openDetail(title: string) {
 }
 
 describe('copy to collection from the saved sources', () => {
-  it('is offered for a PDF whose file is on disk, and not for a page or a missing file', async () => {
+  it('is offered for a PDF whose file is on disk, and not for a missing file', async () => {
     await openDetail('Title of beta')
     expect(within(drawer()).getByRole('button', { name: 'Copiar a colección' })).toBeEnabled()
 
@@ -174,8 +204,50 @@ describe('copy to collection from the saved sources', () => {
 
     await fireEvent.click(within(drawer()).getByRole('button', { name: 'Volver a la lista' }))
     await fireEvent.click(await within(drawer()).findByRole('button', { name: /Title of alpha/ }))
+  })
+
+  it('is offered for a page or a selection that has text, and not for a page without it', async () => {
+    await openDetail('Title of alpha')
+    expect(within(drawer()).getByRole('button', { name: 'Copiar a colección' })).toBeEnabled()
+
+    await fireEvent.click(within(drawer()).getByRole('button', { name: 'Volver a la lista' }))
+    await fireEvent.click(await within(drawer()).findByRole('button', { name: /Title of delta/ }))
     await within(drawer()).findByRole('button', { name: 'Abrir en el navegador' })
-    expect(within(drawer()).queryByRole('button', { name: 'Copiar a colección' })).toBeNull()
+    // One page with no text kept and one selection: only the selection can be copied.
+    expect(within(drawer()).getAllByRole('button', { name: 'Copiar a colección' })).toHaveLength(1)
+  })
+
+  it('copies a page capture as the rendered PDF Rust names and records the rendering', async () => {
+    await openDetail('Title of alpha')
+    await fireEvent.click(within(drawer()).getByRole('button', { name: 'Copiar a colección' }))
+    await screen.findByText(/PDF con el texto de/)
+    await fireEvent.click(await screen.findByLabelText(/Voces/))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
+
+    await screen.findByText(/Copia creada en «Voces»/)
+    expect(calls('navegador_copy_ticket')).toEqual([['navegador_copy_ticket', { captureId: 'c1' }]])
+    const [paths, , options] = importRef.importClassifiedPathsIntoCollection.mock.calls[0]!
+    expect(paths).toEqual([renderedTicket.path])
+    expect(options.overrides.extraMetadata).toEqual({
+      __entropia_web_capture: renderedTicket.provenance,
+    })
+  })
+
+  it('copies a selection by its capture id, asking before a second copy', async () => {
+    storeRef.current.items.findByWebCapture.mockResolvedValue({ id: 'item-1', title: 'Cita' })
+    await openDetail('Title of delta')
+    await fireEvent.click(within(drawer()).getByRole('button', { name: 'Copiar a colección' }))
+    await fireEvent.click(await screen.findByLabelText(/Voces/))
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
+
+    await screen.findByText(/ya está copiada en «Voces»/)
+    expect(storeRef.current.items.findByWebCapture).toHaveBeenCalledWith('col-1', 'c6')
+    expect(calls('navegador_copy_ticket')).toHaveLength(0)
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar otra vez' }))
+    await screen.findByText(/Copia creada/)
+    expect(calls('navegador_copy_ticket')).toEqual([['navegador_copy_ticket', { captureId: 'c6' }]])
   })
 
   it('copies the saved file Rust names for the capture and records where it came from', async () => {

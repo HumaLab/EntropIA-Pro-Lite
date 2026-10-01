@@ -189,6 +189,55 @@ describe('item metadata helpers', () => {
       )
     })
 
+    it('says a copy is a text rendering, and what its hash is of', () => {
+      const entries = buildTechnicalMetadata({
+        item,
+        selectedAsset: asset,
+        collection,
+        originalFileMetadata: null,
+        webCapture: { ...provenance, captureKind: 'selection', rendering: 'text-pdf' },
+        customMetadataKeys: new Set(),
+      })
+
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          { label: 'Tipo de copia', value: 'Texto de una selección, en PDF' },
+          { label: 'SHA-256 de la captura original', value: provenance.sha256 },
+        ])
+      )
+      expect(entries.some((entry) => entry.label === 'SHA-256 del PDF guardado')).toBe(false)
+    })
+
+    it('calls the copy of a page by its kind', () => {
+      const entries = buildTechnicalMetadata({
+        item,
+        selectedAsset: asset,
+        collection,
+        originalFileMetadata: null,
+        webCapture: { ...provenance, captureKind: 'page', rendering: 'text-pdf' },
+        customMetadataKeys: new Set(),
+      })
+
+      expect(entries).toEqual(
+        expect.arrayContaining([{ label: 'Tipo de copia', value: 'Texto de una página, en PDF' }])
+      )
+    })
+
+    it('reads the rendering fields back, and ignores values it does not know', () => {
+      const read = (extra: Record<string, unknown>) =>
+        parseWebCaptureProvenance(
+          JSON.stringify({ [WEB_CAPTURE_METADATA_KEY]: { ...provenance, ...extra } })
+        )
+
+      expect(read({ captureKind: 'page', rendering: 'text-pdf' })).toMatchObject({
+        captureKind: 'page',
+        rendering: 'text-pdf',
+      })
+      const odd = read({ captureKind: 'video', rendering: 7 })
+      expect(odd?.captureKind).toBeUndefined()
+      expect(odd?.rendering).toBeUndefined()
+    })
+
     it('adds nothing for an item that is not a web copy', () => {
       const entries = buildTechnicalMetadata({
         item,

@@ -92,6 +92,21 @@ describe('NavegadorCopyDialog', () => {
     expect(screen.getByText(/La cuestión social/)).toBeInTheDocument()
   })
 
+  it('says a page or a selection is copied as a PDF of its text, not as the page', async () => {
+    render(NavegadorCopyDialog, { props: { capture, rendered: true, onclose, onopenitem } })
+
+    expect(await screen.findByText(/PDF con el texto de «La cuestión social»/)).toBeInTheDocument()
+    expect(screen.getByText(/No reproduce el diseño ni las imágenes/)).toBeInTheDocument()
+    expect(screen.getByText(/borrar la fuente no la toca/)).toBeInTheDocument()
+  })
+
+  it('shows the English wording when the language is English', async () => {
+    locale.set('en')
+    render(NavegadorCopyDialog, { props: { capture, rendered: true, onclose, onopenitem } })
+
+    expect(await screen.findByText(/PDF with the text of "La cuestión social"/)).toBeInTheDocument()
+  })
+
   it('copies nothing until a destination is chosen', async () => {
     open()
     await screen.findByText('Voces')
@@ -242,7 +257,7 @@ describe('NavegadorCopyDialog', () => {
     await fireEvent.click(confirm())
 
     expect(
-      await screen.findByText(/el PDF guardado ya no coincide con el que se verificó/)
+      await screen.findByText(/lo guardado ya no coincide con lo que se verificó/)
     ).toBeInTheDocument()
     expect(screen.queryByText(/Copia creada/)).toBeNull()
     expect(onclose).not.toHaveBeenCalled()

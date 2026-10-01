@@ -30,10 +30,13 @@
 
   let {
     capture,
+    rendered = false,
     onclose,
     onopenitem,
   }: {
     capture: { id: string; title: string }
+    /** A page or a selection: the copy is a PDF rendered from its text. */
+    rendered?: boolean
     onclose: () => void
     onopenitem: (target: CopiedTarget) => void
   } = $props()
@@ -183,7 +186,8 @@
     </p>
   {:else}
     <p class="copy-dialog__intro">
-      {$currentLocale && t('navegador.copy.intro', { title: capture.title })}
+      {$currentLocale &&
+        t(rendered ? 'navegador.copy.introText' : 'navegador.copy.intro', { title: capture.title })}
     </p>
     <fieldset class="copy-dialog__destination">
       <legend class="copy-dialog__legend">

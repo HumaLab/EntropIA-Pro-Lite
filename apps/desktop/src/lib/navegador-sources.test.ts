@@ -220,6 +220,25 @@ describe('a saved PDF', () => {
     expect(describeCapture(capture({ kind: 'page', filePresent: true })).canViewPdf).toBe(false)
   })
 
+  it('can be copied to a collection when its file, or its text, is on this computer', () => {
+    const copy = (overrides: Partial<CaptureDetail>) => describeCapture(capture(overrides)).canCopy
+    expect(copy({ kind: 'pdf', filePresent: true })).toBe(true)
+    expect(copy({ kind: 'pdf', filePresent: false })).toBe(false)
+    expect(copy({ kind: 'pdf', filePresent: null })).toBe(false)
+    expect(copy({ kind: 'page', textPreview: 'text' })).toBe(true)
+    expect(copy({ kind: 'page', textPreview: null, textInFile: true })).toBe(true)
+    expect(copy({ kind: 'page', textPreview: null, textInFile: false })).toBe(false)
+    expect(copy({ kind: 'selection', textPreview: 'a quote' })).toBe(true)
+    expect(copy({ kind: 'selection', textPreview: null, textInFile: false })).toBe(false)
+  })
+
+  it('reads the code of a capture with no text to copy', () => {
+    expect(parseSourceError('no_text: the capture holds no text')).toEqual({
+      code: 'no_text',
+      detail: 'the capture holds no text',
+    })
+  })
+
   it('is asked for by capture id, never by a path', async () => {
     vi.mocked(invoke).mockClear()
     vi.mocked(invoke).mockResolvedValue('C:/data/web-captures/s/c.pdf')

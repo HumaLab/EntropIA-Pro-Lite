@@ -151,6 +151,24 @@ describe('copyCaptureToCollection', () => {
     })
   })
 
+  it('records a rendering of a page exactly as Rust described it', async () => {
+    const rendered = provenance({
+      captureKind: 'page',
+      rendering: 'text-pdf',
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'navegador_copy_ticket'
+        ? { path: 'C:/data/web-captures/_copy/c1-1-0.pdf', provenance: rendered }
+        : undefined
+    )
+
+    await copyCaptureToCollection({ captureId: 'c1', collectionId: 'col-1' })
+
+    const [, , options] = importRef.importClassifiedPathsIntoCollection.mock.calls[0]!
+    expect(options.overrides.extraMetadata).toEqual({ __entropia_web_capture: rendered })
+    expect(options.overrides.extraMetadata.__entropia_web_capture.rendering).toBe('text-pdf')
+  })
+
   it('imports only the path Rust answered', async () => {
     await copyCaptureToCollection({ captureId: 'c1', collectionId: 'col-1' })
 
@@ -180,21 +198,26 @@ describe('copyCaptureToCollection', () => {
     expect(stages).toEqual(['copyingFile'])
   })
 
-  it.each(['not_found', 'not_a_pdf', 'file_missing', 'file_changed', 'invalid_id', 'db_error'])(
-    'stops with the code %s when Rust refuses the capture, importing nothing',
-    async (code) => {
-      vi.mocked(invoke).mockRejectedValue(`${code}: why`)
+  it.each([
+    'not_found',
+    'not_a_pdf',
+    'file_missing',
+    'file_changed',
+    'invalid_id',
+    'db_error',
+    'no_text',
+  ])('stops with the code %s when Rust refuses the capture, importing nothing', async (code) => {
+    vi.mocked(invoke).mockRejectedValue(`${code}: why`)
 
-      const failure = await copyCaptureToCollection({
-        captureId: 'c1',
-        collectionId: 'col-1',
-      }).catch((reason) => reason)
+    const failure = await copyCaptureToCollection({
+      captureId: 'c1',
+      collectionId: 'col-1',
+    }).catch((reason) => reason)
 
-      expect(failure).toBeInstanceOf(CopyError)
-      expect(failure.code).toBe(code)
-      expect(importRef.importClassifiedPathsIntoCollection).not.toHaveBeenCalled()
-    }
-  )
+    expect(failure).toBeInstanceOf(CopyError)
+    expect(failure.code).toBe(code)
+    expect(importRef.importClassifiedPathsIntoCollection).not.toHaveBeenCalled()
+  })
 
   it('fails with the import error when the import could not create the item', async () => {
     importRef.importClassifiedPathsIntoCollection.mockResolvedValue({

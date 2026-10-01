@@ -1932,6 +1932,7 @@ const es = {
   'navegador.pdf.error.file_missing':
     'El archivo del PDF ya no está en este equipo. Vuelve a descargarlo desde la página de origen.',
   'navegador.pdf.error.db_error': 'No se pudo leer el archivo de datos: {message}',
+  'navegador.pdf.error.no_text': 'Esta captura no conserva texto.',
   'navegador.pdf.error.file_changed':
     'El PDF guardado ya no coincide con el que se verificó al guardarlo, así que no se abre.',
   'navegador.pdf.error.unknown': 'No se pudo abrir el PDF: {message}',
@@ -1939,6 +1940,8 @@ const es = {
   'navegador.copy.title': 'Copiar a una colección',
   'navegador.copy.intro':
     'Se crea un documento nuevo en la colección con una copia de «{title}». La fuente web no cambia y la copia es independiente: borrar la fuente no la toca.',
+  'navegador.copy.introText':
+    'Se crea un documento nuevo en la colección: un PDF con el texto de «{title}», precedido de una cabecera con la dirección, la fecha de consulta y el hash de la captura. No reproduce el diseño ni las imágenes de la página. La fuente web no cambia y la copia es independiente: borrar la fuente no la toca.',
   'navegador.copy.destination': 'Colección de destino',
   'navegador.copy.loading': 'Leyendo las colecciones…',
   'navegador.copy.loadError': 'No se pudieron leer las colecciones: {message}',
@@ -1960,7 +1963,8 @@ const es = {
   'navegador.copy.error.file_missing':
     'No se pudo copiar: el archivo del PDF ya no está en este equipo.',
   'navegador.copy.error.file_changed':
-    'No se pudo copiar: el PDF guardado ya no coincide con el que se verificó al guardarlo.',
+    'No se pudo copiar: lo guardado ya no coincide con lo que se verificó al guardarlo.',
+  'navegador.copy.error.no_text': 'No se pudo copiar: esta captura no conserva texto.',
   'navegador.copy.error.db_error': 'No se pudo copiar: error del archivo de datos ({message}).',
   'navegador.copy.error.import_failed': 'No se pudo copiar: {message}',
   'navegador.copy.error.not_created':
@@ -4016,6 +4020,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.pdf.error.file_missing':
     'The PDF file is no longer on this computer. Download it again from the page of origin.',
   'navegador.pdf.error.db_error': 'The data file could not be read: {message}',
+  'navegador.pdf.error.no_text': 'This capture kept no text.',
   'navegador.pdf.error.file_changed':
     'The saved PDF no longer matches the one verified when it was saved, so it is not opened.',
   'navegador.pdf.error.unknown': 'The PDF could not be opened: {message}',
@@ -4023,6 +4028,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.copy.title': 'Copy to a collection',
   'navegador.copy.intro':
     'A new document is created in the collection with a copy of "{title}". The web source does not change and the copy is independent: deleting the source does not touch it.',
+  'navegador.copy.introText':
+    'A new document is created in the collection: a PDF with the text of "{title}", preceded by a header with the address, the date it was accessed and the capture hash. It does not reproduce the page layout or images. The web source does not change and the copy is independent: deleting the source does not touch it.',
   'navegador.copy.destination': 'Destination collection',
   'navegador.copy.loading': 'Reading the collections…',
   'navegador.copy.loadError': 'The collections could not be read: {message}',
@@ -4044,7 +4051,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.copy.error.file_missing':
     'Could not copy: the PDF file is no longer on this computer.',
   'navegador.copy.error.file_changed':
-    'Could not copy: the saved PDF no longer matches the one verified when it was saved.',
+    'Could not copy: what was saved no longer matches what was verified when it was saved.',
+  'navegador.copy.error.no_text': 'Could not copy: this capture kept no text.',
   'navegador.copy.error.db_error': 'Could not copy: data file error ({message}).',
   'navegador.copy.error.import_failed': 'Could not copy: {message}',
   'navegador.copy.error.not_created': 'Could not copy: no document was created. Try again.',

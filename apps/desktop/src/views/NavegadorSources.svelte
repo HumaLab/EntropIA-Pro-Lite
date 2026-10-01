@@ -72,7 +72,7 @@
   let confirming = $state<{ id: string; title: string; count: number } | null>(null)
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
-  let copying = $state<{ id: string; title: string } | null>(null)
+  let copying = $state<{ id: string; title: string; rendered: boolean } | null>(null)
 
   let listRequest = 0
   let detailRequest = 0
@@ -394,30 +394,36 @@
                   {$currentLocale && t('navegador.sources.file.missing')}
                 </span>
               {/if}
-              {#if capture.canViewPdf}
+              {#if capture.canViewPdf || capture.canCopy}
                 <div class="sources__actions">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onclick={() =>
-                      onviewpdf({
-                        id: capture.id,
-                        title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
-                      })}
-                  >
-                    {$currentLocale && t('navegador.sources.viewPdf')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onclick={() =>
-                      (copying = {
-                        id: capture.id,
-                        title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
-                      })}
-                  >
-                    {$currentLocale && t('navegador.sources.copyToCollection')}
-                  </Button>
+                  {#if capture.canViewPdf}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onclick={() =>
+                        onviewpdf({
+                          id: capture.id,
+                          title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
+                        })}
+                    >
+                      {$currentLocale && t('navegador.sources.viewPdf')}
+                    </Button>
+                  {/if}
+                  {#if capture.canCopy}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onclick={() =>
+                        (copying = {
+                          id: capture.id,
+                          title: capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
+                          // A page or a selection is copied as a PDF of its text.
+                          rendered: capture.kind !== 'pdf',
+                        })}
+                    >
+                      {$currentLocale && t('navegador.sources.copyToCollection')}
+                    </Button>
+                  {/if}
                 </div>
               {/if}
               {#if capture.quote}
@@ -441,7 +447,12 @@
 </aside>
 
 {#if copying}
-  <NavegadorCopyDialog capture={copying} onclose={() => (copying = null)} {onopenitem} />
+  <NavegadorCopyDialog
+    capture={copying}
+    rendered={copying.rendered}
+    onclose={() => (copying = null)}
+    {onopenitem}
+  />
 {/if}
 
 {#if confirming}
