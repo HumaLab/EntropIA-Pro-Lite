@@ -15,6 +15,12 @@
 - Frontend Lite typecheck needs the variant env: `VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck`.
 - Rust quality helper exists at root: `pnpm rust:quality:report`.
 
+## Dev profile (never run `tauri dev` on the real archive with a new migration)
+
+- `tauri dev` opens the same archive as the installed app (`%APPDATA%\com.entropia.shared`) and finds its sync session in the OS keyring. A new migration applied there is irreversible, and one sync raises the account's `schema_tag` for every device.
+- Debug builds only: set `ENTROPIA_DEV_PROFILE=<name>` (`A-Z a-z 0-9 - _`, max 32) before `pnpm exec tauri dev`. Data goes to `<data>/com.entropia.shared/dev-profiles/<name>`, cache likewise under `%LOCALAPPDATA%`; sync is off (no engine, no keyring, sync commands answer `sync_disabled_in_dev_profile`). Release builds never read the variable. See `src-tauri/src/dev_profile.rs`.
+- Check the startup line first: `[setup] profile=dev:<name> data_dir=... sync=disabled`. If it says `profile=shared`, close the app.
+
 ## Pro vs Lite variant rules
 
 - Pro = Rust feature `local-ml` plus `VITE_LOCAL_ML=1`; Lite = no Cargo features plus `VITE_LOCAL_ML=0` and `src-tauri/tauri.lite.conf.json`.

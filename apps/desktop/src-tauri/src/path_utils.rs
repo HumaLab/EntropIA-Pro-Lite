@@ -328,6 +328,18 @@ pub fn resolve_and_remember_dirs(
         .map(|dir| dir.join(SHARED_DIR_NAME))
         .map_err(|e| format!("Failed to resolve the cache directory: {e}"))?;
 
+    // A debug build asked to run an isolated profile moves both directories
+    // under the shared ones (dev_profile.rs). An invalid request is an error,
+    // never a fall back to the real archive.
+    let (nominal_data, nominal_cache) = match crate::dev_profile::from_env()? {
+        Some(name) => {
+            let dirs = crate::dev_profile::profile_dirs(&name, &nominal_data, &nominal_cache);
+            crate::dev_profile::activate(name);
+            dirs
+        }
+        None => (nominal_data, nominal_cache),
+    };
+
     let data = resolve_real_dir(nominal_data.clone())?;
     let cache = resolve_real_dir(nominal_cache.clone())?;
 

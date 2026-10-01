@@ -2,6 +2,7 @@ mod app_logs;
 mod asset_integrity;
 mod audio_preview;
 mod db;
+mod dev_profile;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name
 // + its command/struct surface are identical in both arms (DependencyId diverges
@@ -446,8 +447,10 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
     // Phase 2 — one best-effort sync cycle (the existing SyncNow path). The
     // durable copy is already local; a slow server only delays the push. Cycle
     // completion is read directly from the engine's shared status cell.
+    // The dev profile has no sync engine to wait for.
     let cell = app_handle
         .try_state::<SyncEngine>()
+        .filter(|_| !dev_profile::sync_disabled())
         .map(|engine| engine.status_cell());
     let sync = match cell {
         Some(cell) => {
@@ -572,6 +575,12 @@ pub fn run() {
                 path_utils::resolve_and_remember_dirs(app.handle()).map_err(|e| {
                     fail("No se pudieron resolver las carpetas de datos y caché.", e)
                 })?;
+            // Which archive this run opened, on stderr as early as possible so
+            // `tauri dev` shows it before anything else happens.
+            eprintln!(
+                "[setup] {}",
+                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir)
+            );
             // One EntropIA at a time, before anything touches the archive: a
             // second process on the same database — above all a Store build
             // next to a non-Store one — can corrupt it (instance_guard.rs).
@@ -602,8 +611,12 @@ pub fn run() {
                 }
             }
 
-            migrate_legacy_app_dir(&app_dir)
-                .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
+            // An isolated dev profile starts empty: it never pulls a legacy
+            // archive into itself.
+            if dev_profile::active().is_none() {
+                migrate_legacy_app_dir(&app_dir)
+                    .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
+            }
             std::fs::create_dir_all(&app_dir).map_err(|e| {
                 fail(
                     &format!("No se pudo crear la carpeta de datos {}.", app_dir.display()),
@@ -666,6 +679,11 @@ pub fn run() {
                         _ => String::new(),
                     }
                 ),
+            );
+            app_logs::info(
+                &app.handle().clone(),
+                "setup",
+                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir),
             );
             let db_path = app_dir.join("entropia.sqlite");
 
@@ -1026,7 +1044,11 @@ pub fn run() {
             // sync_now / sync_status commands can reach it.
             let sync_engine = sync::engine::start_engine(app.handle().clone(), db_path.clone());
             app.manage(sync_engine);
-            eprintln!("[sync] engine spawned (gated until capture + session)");
+            if dev_profile::sync_disabled() {
+                eprintln!("[sync] disabled in the dev profile: no engine, no keyring access");
+            } else {
+                eprintln!("[sync] engine spawned (gated until capture + session)");
+            }
 
             // Close orchestration (app-close.ts handshake): durably flush the
             // open editor first, then one best-effort sync cycle, then close —

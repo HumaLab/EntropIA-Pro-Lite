@@ -130,6 +130,26 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
   path. Engine A is approved for Windows only until then.
 
+## Open items to decide before merging with the Zotero branch
+
+- [ ] Schema-tag ordering (found in P2a). The client's `X-Schema-Tag` is the
+  LAST APPLIED migration, not the highest name: `read_schema_tag`
+  (`apps/desktop/src-tauri/src/sync/engine.rs:793-800`, `SELECT name FROM
+  _migrations ORDER BY id DESC LIMIT 1`), read fresh each cycle
+  (`engine.rs:630`; the writing sync reads it the same way:
+  `writing_cycle.rs:300`, `writing_push.rs:235`, `writing_pull.rs:158`) and sent
+  as the `X-Schema-Tag` header (`sync/http.rs:37`). The runner applies pending
+  names sorted and records them in that order (`packages/store/src/runner.ts:
+  1368-1370`). The server keeps `max(stored, X-Schema-Tag)` lexicographically
+  on push (`EntropIA-Cloud/src/handlers/sync.rs:179`, `UPDATE accounts SET
+  schema_tag = ?1 ... AND ?1 > schema_tag`) and answers 426 to any push or pull
+  whose tag is lower (`sync.rs:68-86`, `if client_tag < stored`). Consequence: a
+  device that applied `0055_web_captures` and later applies the Zotero
+  `0038`..`0054` ends with head `0054_...`, lower than the account's
+  `0055_web_captures`, and is locked out with 426 until its head sorts above
+  0055. Decide at merge time: renumber `0055` above the Zotero range, or make
+  the client send the highest applied name. NOT changed.
+
 ## Follow-ups (outside this feature)
 
 - Pre-existing bug on main, not caused by the ACL change: `readAssetSize`
@@ -847,3 +867,56 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   24 h is swept and its save says `file_missing`; the `original_url` is the
   final URL; saving needs the migration to have run (the renderer runs it at
   startup).
+
+- HAZARD found after P2a/P2b (2026-10-01): `tauri dev` opens the user's REAL
+  shared archive (`%APPDATA%\com.entropia.shared`) and the sync session lives in
+  the OS keyring (`com.entropia.lite sync`), shared across data directories.
+  Applying `0055` there is irreversible and one sync would raise the account's
+  `schema_tag` to `0055_web_captures`, locking every other device on 1.0.18 out
+  with 426 (rule above). Signing out does not help: the migration stays in the
+  archive. Do not run any dev build with a new migration on the real profile.
+- Isolated dev profile (commit `feat(dev): run the desktop app on an isolated dev
+  profile`). `src-tauri/src/dev_profile.rs`. Debug builds only (`debug_assertions`):
+  `ENTROPIA_DEV_PROFILE=<name>` puts the data dir at
+  `<data>/com.entropia.shared/dev-profiles/<name>` and the cache at
+  `<local>/com.entropia.shared/dev-profiles/<name>`. A name, not a path, on purpose:
+  the fs capability scope and `assetProtocol.scope` only cover
+  `$DATA/com.entropia.shared/**` and `$LOCALDATA/com.entropia.shared/**`
+  (`capabilities/default.json:203-204`, the three tauri configs); a directory
+  nested under them is already inside both, so no config widens, while an
+  arbitrary path could not be scoped without widening them. The name is
+  `[A-Za-z0-9_-]{1,32}`, so it cannot climb out. A set-but-invalid value is a
+  startup error, never a fall back to the real archive. Release builds ignore the
+  variable: the only read (`std::env::var`) is inside a `#[cfg(debug_assertions)]`
+  function and a test pins that (and that no other file reads it). Every
+  resolution goes through `path_utils::resolve_and_remember_dirs`, which now
+  applies the profile; the renderer's `resolve_data_dir`, `cache_dir`, the
+  instance guard, the asset-protocol grant and logs all derive from it (no other
+  code asks the OS for the shared dirs; checked with a search for
+  `data_dir(`, `app_data_dir`, `local_data_dir`, `dirs::`). The legacy-dir
+  migration is skipped in the profile (it would otherwise be eligible to pull
+  legacy archives into it). The instance guard is per directory, so a profile
+  can run next to the installed app.
+  Sync in the profile: `start_engine` returns a dormant engine (no thread, no
+  ticker; status `disabled` with message `sync_disabled_in_dev_profile: ...`);
+  `session::token_entry` (the single door to the keyring service
+  `com.entropia.lite sync`) refuses, so no read, write or delete of the real
+  session; `sync_register_account`, `sync_login`, `sync_logout`, `sync_now`,
+  `sync_full_resync`, `sync_set_auto` and `session_creds` (which every other
+  server command, including `sync_delete_account`, uses) answer the same error;
+  a source-reading test fails if any of those loses its `require_sync()`. The
+  local-only commands (`sync_ensure_capture`, conflicts) keep working. LLM keys
+  (`settings.rs`, a different keyring service) are untouched; a fresh profile
+  database simply has no key references. The close sequence does not wait for a
+  sync cycle there. UI: the Sync card shows "desactivada en el perfil de
+  desarrollo aislado" and disables Iniciar sesion / Registrar cuenta; the error
+  maps to a readable message.
+  Startup line (stderr and the in-app log): `profile=dev:<name> data_dir=...
+  cache_dir=... sync=disabled` (`profile=shared ... sync=enabled` otherwise), plus
+  `[sync] disabled in the dev profile: no engine, no keyring access`.
+  RED: 8 of 11 `dev_profile` tests failed on `todo!()`, then compile errors for the
+  sync guard and the dormant engine; mutation: removing the guard from
+  `token_entry` failed the guard test. GREEN: `dev_profile` 13/13, dormant engine
+  1/1, UI tests (+3), `pnpm test` 309 store + 800 ui + 2819 desktop. Not done:
+  a `cargo test --release` run (a release build compiles the whole crate; the
+  property is covered by `requested(false, ..)` and the source test).

@@ -514,6 +514,9 @@ const es = {
   'sync.error.unauthorized': 'Credenciales inválidas o sesión revocada.',
   'sync.error.emailTaken': 'Ya existe una cuenta con ese email.',
   'sync.error.generic': 'No se pudo completar la operación de sincronización.',
+  'sync.error.devProfile': 'La sincronización está desactivada en el perfil de desarrollo aislado.',
+  'sync.card.devProfile':
+    'La sincronización está desactivada en el perfil de desarrollo aislado: esta copia no toca tu cuenta ni tu sesión.',
   'sync.error.credentialStoreUnavailable':
     'La sincronización necesita el llavero del sistema y no hay ninguno disponible. En Linux, instalá gnome-keyring o KWallet y creá un llavero predeterminado (por ejemplo, con la app «Contraseñas y claves»); después volvé a iniciar sesión.',
   'sync.error.planRequestPending': 'Ya tenés una solicitud de cambio de plan en revisión.',
@@ -2881,6 +2884,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.error.unauthorized': 'Invalid credentials or revoked session.',
   'sync.error.emailTaken': 'An account with that email already exists.',
   'sync.error.generic': 'The sync operation could not be completed.',
+  'sync.error.devProfile': 'Sync is turned off in the isolated development profile.',
+  'sync.card.devProfile':
+    'Sync is turned off in the isolated development profile: this copy never touches your account or session.',
   'sync.error.credentialStoreUnavailable':
     'Sync needs the system keyring and none is available. On Linux, install gnome-keyring or KWallet and create a default keyring (for example, with the "Passwords and Keys" app), then sign in again.',
   'sync.error.planRequestPending': 'You already have a plan change request under review.',
