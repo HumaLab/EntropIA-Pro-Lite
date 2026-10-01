@@ -69,6 +69,7 @@ fn set_meta(conn: &Connection, key: &str, value: &str) {
     .expect("set meta");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_job_row(
     conn: &Connection,
     id: &str,

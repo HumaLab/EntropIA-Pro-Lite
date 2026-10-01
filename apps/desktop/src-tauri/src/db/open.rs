@@ -170,7 +170,11 @@ mod tests {
     /// `rag/baseline.rs` opens a throwaway working copy it creates with
     /// `Backup::new` — a different file from the archive, with no other writer
     /// to contend with.
-    const DIRECT_OPEN_ALLOWED: &[&str] = &["baseline.rs"];
+    ///
+    /// `sync/research_cycle.rs` opens `research/estado.sqlite`, the research
+    /// engine's own state database (owned by `entropia-agent`), never the
+    /// archive.
+    const DIRECT_OPEN_ALLOWED: &[&str] = &["baseline.rs", "research_cycle.rs"];
 
     fn collect_offenders(dir: &std::path::Path, found: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).expect("read src dir").flatten() {

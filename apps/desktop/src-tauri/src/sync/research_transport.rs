@@ -764,6 +764,8 @@ fn apply_tombstone(
 }
 
 /// What the local research state holds for one row id.
+// Short-lived, one per received row: boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum LocalProjection {
     /// No local job with this id.
     Missing,

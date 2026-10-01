@@ -20,6 +20,7 @@
 //!      `research-verify` build dirs, newest binary wins), spawned on an
 //!      ephemeral loopback port with a throwaway `SYNC_DATA_DIR` and
 //!      `SYNC_REGISTRATION_OPEN=true`.
+//!
 //! With none available the tests print a loud skip notice and return — the
 //! same loud-skip contract as `tests/sync_e2e.rs` and
 //! `tests/writing_sync_two_device.rs`. A reachable server that does not

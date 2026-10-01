@@ -370,8 +370,7 @@ pub(crate) fn snapshot_job(
 ) -> ResearchResult<ResearchEnvelopeV1> {
     if !is_safe_path_component(job_id) {
         return Err(invalid_envelope(format!(
-            "job id {:?} is not a safe path component",
-            job_id
+            "job id {job_id:?} is not a safe path component"
         )));
     }
     let state = open_research_state_read_only(state_db_path)?;
@@ -403,13 +402,12 @@ pub(crate) fn snapshot_job_conn(
         None => job.question.clone(),
     };
 
-    let report = match load_current_artifact(state, job_id, "report")? {
-        Some((version, content_json)) => Some(ResearchReportV1 {
+    let report = load_current_artifact(state, job_id, "report")?.map(|(version, content_json)| {
+        ResearchReportV1 {
             version,
             content_json,
-        }),
-        None => None,
-    };
+        }
+    });
 
     let sources = match load_current_artifact(state, job_id, "archive")? {
         Some((_, content)) => {
@@ -629,8 +627,7 @@ pub(crate) fn report_file_manifest(
 ) -> ResearchResult<Option<ResearchFileManifestV1>> {
     if !is_safe_path_component(job_id) {
         return Err(invalid_envelope(format!(
-            "job id {:?} is not a safe path component",
-            job_id
+            "job id {job_id:?} is not a safe path component"
         )));
     }
     let path = artifacts_root.join(job_id).join(REPORT_FILE_REL_PATH);
@@ -678,8 +675,7 @@ pub(crate) fn verify_report_file(
 ) -> ResearchResult<()> {
     if !is_safe_path_component(job_id) {
         return Err(invalid_envelope(format!(
-            "job id {:?} is not a safe path component",
-            job_id
+            "job id {job_id:?} is not a safe path component"
         )));
     }
     if !is_safe_relative_path(&file.rel_path) {

@@ -160,6 +160,7 @@ struct PhaseScope {
 /// Runs one bounded research phase. Never returns a transport failure to the
 /// corpus cycle: everything it cannot finish stays pending for the next run.
 /// No-op when the research state database does not exist.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_research_cycle<A: SyncApi>(
     api: &A,
     token: &str,
@@ -857,6 +858,8 @@ impl ResearchPushPending {
 
 /// Preparation either yields one bounded single-job request, finds no work, or
 /// explains why existing outbox work must remain pending.
+// Short-lived, one per cycle: boxing the large variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum ResearchPushPreparation {
     Ready(PreparedResearchPush),
     Idle,
