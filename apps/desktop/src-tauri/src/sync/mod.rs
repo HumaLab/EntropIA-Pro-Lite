@@ -13,6 +13,7 @@ pub mod pull;
 pub mod push;
 pub(crate) mod research_blobs;
 pub(crate) mod research_capture;
+pub(crate) mod research_cycle;
 pub(crate) mod research_envelope;
 pub(crate) mod research_pull;
 pub(crate) mod research_receive;
@@ -29,6 +30,8 @@ pub(crate) mod writing_receive;
 mod research_blobs_tests;
 #[cfg(test)]
 mod research_capture_tests;
+#[cfg(test)]
+mod research_cycle_tests;
 #[cfg(test)]
 mod research_envelope_tests;
 #[cfg(test)]
