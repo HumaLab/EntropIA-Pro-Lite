@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { COLLECTION_ACTIVITY_DDL, runMigrations } from './runner'
+import { COLLECTION_ACTIVITY_DDL, buildSchemaFixture, runMigrations } from './runner'
 import { createMockDbClient } from './__mocks__/db.mock'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { DbClient } from './types'
@@ -879,6 +879,191 @@ describe('writing recovery journal migration (0036)', () => {
            VALUES ('ghost', 1, 0, 1, '[]', 'h', 1)`
         )
       ).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('web captures migration (0055)', () => {
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  const migrated = async (db: DatabaseSync) => {
+    db.exec('PRAGMA foreign_keys=ON')
+    await runMigrations(shim(db))
+  }
+
+  const addSource = (db: DatabaseSync, id = 's1', url = 'https://example.com/a') =>
+    db
+      .prepare(
+        `INSERT INTO web_sources
+           (id, original_url, final_url, first_accessed_at, created_at, updated_at)
+         VALUES (?, ?, ?, '2026-09-30T12:00:00Z', 1, 1)`
+      )
+      .run(id, url, url)
+
+  const addCapture = (db: DatabaseSync, id = 'c1', sourceId = 's1', kind = 'page') =>
+    db
+      .prepare(
+        `INSERT INTO web_captures
+           (id, web_source_id, accessed_at, final_url, kind, mime_type, sha256, hash_of, size_bytes, created_at)
+         VALUES (?, ?, '2026-09-30T12:00:00Z', 'https://example.com/a', ?, 'text/html', 'abc', 'html', 10, 1)`
+      )
+      .run(id, sourceId, kind)
+
+  it('is registered under 0055 and never inside the range the Zotero branch owns', () => {
+    const names = [...buildSchemaFixture().matchAll(/^-- (\d{4})_(\w+)$/gm)].map((m) => ({
+      number: Number(m[1]),
+      name: `${m[1]}_${m[2]}`,
+    }))
+
+    expect(names.map((n) => n.name)).toContain('0055_web_captures')
+    expect(names.filter((n) => n.number >= 38 && n.number <= 54)).toEqual([])
+  })
+
+  it('creates both tables and their indexes, and is idempotent', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      await runMigrations(shim(db))
+
+      const expected: [string, string][] = [
+        ['table', 'web_sources'],
+        ['table', 'web_captures'],
+        ['index', 'idx_web_sources_updated'],
+        ['index', 'idx_web_sources_final_url'],
+        ['index', 'idx_web_captures_source'],
+      ]
+      for (const [type, name] of expected) {
+        expect(
+          db.prepare('SELECT name FROM sqlite_master WHERE type=? AND name=?').get(type, name),
+          `missing ${type}: ${name}`
+        ).toBeDefined()
+      }
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0055_web_captures'").get()?.n
+      ).toBe(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('applies by name even when a higher number was recorded first', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec(`CREATE TABLE _migrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);
+        INSERT INTO _migrations (name, applied_at) VALUES ('0060_from_the_future', 1)`)
+      await migrated(db)
+
+      expect(
+        db.prepare("SELECT name FROM sqlite_master WHERE name='web_captures'").get()
+      ).toBeDefined()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('only accepts the three capture kinds', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      addSource(db)
+
+      for (const kind of ['page', 'selection', 'pdf']) {
+        expect(() => addCapture(db, `c-${kind}`, 's1', kind)).not.toThrow()
+      }
+      expect(() => addCapture(db, 'c-bad', 's1', 'screenshot')).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('refuses a capture whose source does not exist', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      expect(() => addCapture(db, 'c1', 'ghost')).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('drops the captures of a source with the source', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      addSource(db, 's1')
+      addSource(db, 's2', 'https://example.com/b')
+      addCapture(db, 'c1', 's1')
+      addCapture(db, 'c2', 's1')
+      addCapture(db, 'c3', 's2')
+
+      db.exec("DELETE FROM web_sources WHERE id='s1'")
+
+      expect(db.prepare('SELECT id FROM web_captures').all()).toEqual([{ id: 'c3' }])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps text in the row to 512 KB and sends anything larger to a file', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      addSource(db)
+      const withText = (id: string, text: string) =>
+        db
+          .prepare(
+            `INSERT INTO web_captures
+               (id, web_source_id, accessed_at, final_url, kind, mime_type, text, sha256, hash_of, size_bytes, created_at)
+             VALUES (?, 's1', 't', 'u', 'selection', 'text/plain', ?, 'h', 'quote', 1, 1)`
+          )
+          .run(id, text)
+
+      expect(() => withText('ok', 'a'.repeat(512 * 1024))).not.toThrow()
+      expect(() => withText('big', 'a'.repeat(512 * 1024 + 1))).toThrow()
+      // The limit is bytes, not characters.
+      expect(() => withText('wide', 'é'.repeat(256 * 1024 + 1))).toThrow()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('has a standalone .sql mirror that matches the registry', () => {
+    const flat = (text: string) => text.replaceAll('\r', '').trim()
+    const mirror = flat(readFileSync(resolve(here, 'migrations/0055_web_captures.sql'), 'utf8'))
+    expect(flat(buildSchemaFixture())).toContain(mirror)
+  })
+
+  it('does not touch the corpus tables or leave a web table out of the sync set', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      await migrated(db)
+      // Phase 2 is local only: nothing may be captured for sync yet.
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_sync_web%'"
+          )
+          .all()
+      ).toEqual([])
     } finally {
       db.close()
     }

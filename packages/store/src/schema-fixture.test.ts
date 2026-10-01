@@ -110,3 +110,25 @@ describe('schema fixture export', () => {
     expect(sql).toContain('idx_rag_chunks_item_id')
   })
 })
+
+describe('web capture tables', () => {
+  it('declares the drizzle tables with exactly the columns the migration creates', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec(buildSchemaFixture())
+      for (const [table, name] of [
+        [schema.webSources, 'web_sources'],
+        [schema.webCaptures, 'web_captures'],
+      ] as const) {
+        const declared = getTableConfig(table).columns.map((column) => column.name)
+        const created = (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[]).map(
+          (row) => row.name
+        )
+        expect(declared.sort(), name).toEqual(created.sort())
+      }
+    } finally {
+      db.close()
+    }
+  })
+})
