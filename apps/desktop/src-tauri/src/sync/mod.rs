@@ -11,6 +11,8 @@ pub mod engine;
 pub mod http;
 pub mod pull;
 pub mod push;
+pub(crate) mod research_capture;
+pub(crate) mod research_envelope;
 pub mod schema;
 pub mod session;
 pub(crate) mod writing_blobs;
@@ -19,6 +21,10 @@ pub(crate) mod writing_pull;
 pub(crate) mod writing_push;
 pub(crate) mod writing_receive;
 
+#[cfg(test)]
+mod research_capture_tests;
+#[cfg(test)]
+mod research_envelope_tests;
 #[cfg(test)]
 pub mod test_support;
 #[cfg(test)]

@@ -244,8 +244,8 @@ const SESSION_STATE_TABLES: &[&str] = &[
 ];
 
 /// Wipes ALL local sync state per DESIGN §6.3, in one transaction:
-/// delete the per-session state tables, clear session and writing-account
-/// `sync_meta`, and reset `uploaded=0` across the WHOLE `sync_blob_index`
+/// delete the per-session state tables, clear session plus writing- and
+/// research-account `sync_meta`, and reset `uploaded=0` across the WHOLE `sync_blob_index`
 /// (hashes survive — they are content-derived). Does NOT touch the keyring;
 /// callers handle the token separately (revoke remote first, then
 /// [`delete_token`]).
@@ -268,6 +268,13 @@ pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
     crate::writing::sync_capture::clear_account_metadata(&tx_guard).map_err(|error| {
         format!(
             "[sync] failed to clear writing sync metadata: {}",
+            error.message
+        )
+    })?;
+
+    crate::sync::research_capture::clear_account_metadata(&tx_guard).map_err(|error| {
+        format!(
+            "[sync] failed to clear research sync metadata: {}",
             error.message
         )
     })?;
