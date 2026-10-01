@@ -109,12 +109,16 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   pending (see T8 evidence at the end).
 ## Phase 2 — local capture persistence (route: delegated writer)
 
-- [ ] P2a — Migration `0055_web_captures` (never 0038–0054, owned by the
-  Zotero branch) with `web_sources` and `web_captures` per plan §5, plus a
-  store repository with tests. Shared archive: both Lite and Pro get it.
-- [ ] P2b — Save a capture draft or a verified PDF: files under
+- [ ] P2a — (route: delegated writer; automated checks observed; Windows run
+  pending) Migration `0055_web_captures` (never 0038–0054, owned by the
+  Zotero branch) with `web_sources` and `web_captures` per plan §5. Shared
+  archive: both Lite and Pro get it. Commit `c07c5e4f`. Schema, Drizzle entries
+  and tests only; the read repository is left to P2c (see evidence).
+- [ ] P2b — (route: delegated writer; automated checks observed; Windows run
+  pending) Save a capture draft or a verified PDF: files under
   `<data>/web-captures/<source_id>/<capture_id>.<ext>`, file first then the
-  DB transaction, text over 512 KB to a file, captures immutable.
+  DB transaction, text over 512 KB to a file, captures immutable. Commits
+  `55fe7157` (Rust, ACL) and `89c9603b` (UI).
 - [ ] P2c — Saved sources list inside the Navegador: search by title, URL and
   text; source detail with its captures; open the original URL; delete a
   source and its local files.
@@ -732,3 +736,114 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   needs known bounds (the view must have shown the browser once); opener link
   lost for tabs; Linux always popups; macOS/Linux untested.
 
+- P2a (`c07c5e4f`). `packages/store/src/runner.ts` entry `0055_web_captures`
+  (mirrored in `src/migrations/0055_web_captures.sql`, like 0032-0037), applied
+  through the atomic `BEGIN IMMEDIATE` path, and `schema_full.sql` regenerated
+  (`pnpm --filter @entropia/store export-schema`). Tables as created:
+  `web_sources(id PK, original_url, final_url, canonical_url?, title?,
+  site_name?, first_accessed_at TEXT, created_at INT, updated_at INT)` with
+  indexes `idx_web_sources_final_url` (not unique on purpose: two devices may
+  save the same page before they meet) and `idx_web_sources_updated`;
+  `web_captures(id PK, web_source_id FK ON DELETE CASCADE, accessed_at TEXT,
+  final_url, kind CHECK page|selection|pdf, mime_type, text? CHECK <= 524288
+  bytes, text_rel_path?, quote_prefix?, quote_suffix?, rel_path?, sha256,
+  hash_of CHECK html|quote|pdf, size_bytes, extractor_version?, title?,
+  created_at INT)` with `idx_web_captures_source(web_source_id, accessed_at
+  DESC)`. No FTS (P2c searches with LIKE). Deviation from the brief: the rest of
+  the archive stores `created_at`/`updated_at` as INTEGER epoch milliseconds
+  (not ISO text), so those two follow that; `accessed_at` and
+  `first_accessed_at` are RFC 3339 UTC TEXT on purpose (provenance, shown
+  exactly as recorded, the form CSL/Zotero take). `original_url` equals the
+  first capture's `final_url`: the draft carries no redirect chain.
+  Not in `SYNCED_TABLES`, no sync triggers; the Rust sync tests have no "every
+  table is classified" guard (they iterate `SYNCED_TABLES` only), so nothing
+  needed classifying; `cargo test --lib sync::` 281 passed.
+  Migration order and schema tag (findings): the runner computes `pending` as
+  every registry name missing from `_migrations`, sorted, so 0055 applies on an
+  install that has only 0037, and on one that already recorded a higher name
+  (test: `applies by name even when a higher number was recorded first`).
+  `read_schema_tag` is `_migrations ORDER BY id DESC LIMIT 1` (the latest APPLIED,
+  not the highest name) and the Cloud server keeps `max(stored, X-Schema-Tag)`
+  lexicographically (PROTOCOL "Ciclo de vida de schema_tag"). Monotonic today:
+  a fresh install ends on 0055 (sorted), an upgrade appends 0055 last. RISK once
+  the Zotero branch lands: a device that already applied 0055 and then applies
+  0038-0054 gets head `0054_...` < the account's stored `0055_web_captures`, so
+  the server answers 426 for it. Plan §5 already says the number is fixed at
+  merge time after that range; that is the moment to renumber 0055 (or make the
+  tag the max name instead of the last applied). Not changed here.
+  RED: 5 of 7 new runner tests failed (no such table / name missing; the other
+  two passed vacuously), the drizzle column test failed without the schema
+  entries. GREEN: store 309 passed, `tsc --noEmit` 0 errors. Decision: Rust is
+  the one writer, so no TS write repository exists; the Drizzle tables are there
+  for the P2c reads (the read repository is written with its queries then).
+- P2b Rust (`55fe7157`). `navegador/save.rs` (pure over a data dir and a
+  connection, compiled in every build) plus commands `navegador_save_capture
+  (draft_id)`, `navegador_save_download(download_id)` and
+  `navegador_discard_draft(draft_id)` (in `generate_handler!`, `APP_COMMANDS`,
+  the `main` capability and the `app_acl` rejections; they do not need the
+  browser, so they are not gated by `ensure_available`). Writes use the
+  existing `open_archive_connection` (no new module opens the archive by hand).
+  `CaptureDraft` got an `id` (uuid); `Holds` (managed lazily like the viewer's
+  state) keeps up to 4 drafts with their HTML (oldest evicted, dropped on save
+  or `navegador_discard_draft`) and up to 50 verified PDFs (`ReadyPdf`: id, url,
+  sanitized name, size, sha256, accessed_at, page title, filled by
+  `download_finished`). A failed save keeps the draft held (retry); saves are
+  serialised so a double click cannot save twice. Order: validate (kind, sizes,
+  http/https/blob URL, sha256 recomputed over html or quote), find the source by
+  `final_url` (reuse its directory) or mint ids, write each file as
+  `.<name>.tmp` in `web-captures/<source_id>/`, `sync_all`, rename, then one
+  `BEGIN IMMEDIATE` transaction (source insert or `title`/`updated_at` update,
+  capture insert); on any later failure the files written, the temp file and the
+  source directory if new are removed. Stored keys are `web-captures/<source>/
+  <capture>.<ext>` (forward slashes). Page: `.html` in `rel_path`; text in the
+  row up to 512 KB (bytes), else `.txt` in `text_rel_path`. Selection: quote in
+  the row (or `.txt` over 512 KB). PDF deviation from "rename": the file is
+  COPIED out of quarantine while hashing (size and sha256 must equal what was
+  verified, else `hash_mismatch` and nothing stays) and the quarantined file is
+  deleted only after the commit, so a failed save or a crash never loses the
+  PDF (a rename into a temp name would need a second move back on failure, and
+  cross-volume needs the copy anyway). Directory fsync is not done (not portable
+  on Windows). `extractor_version` is `navegador-capture-1` for page and
+  selection, NULL for a PDF.
+  RED: `capture.rs` id test failed to compile; `save.rs` 19 of 22 tests failed on
+  `todo!()` (the 3 passing were the pure holds/serde ones); `app_acl` 1 of 12
+  failed ("Command navegador_save_capture not found") before the stubs. GREEN:
+  `save` 22/22, `app_acl` 12/12, `acl_manifest_guard` 6/6 (with and without
+  `--features navegador`). Mutation check: dropping the file cleanup after a DB
+  failure failed 3 tests. Cases covered: page, selection and pdf save, find-or-
+  create by final URL (title refreshed, kept when the new capture has none),
+  512 KB boundary by bytes, quote over 512 KB, DB failure removes files and
+  source dir and keeps an earlier capture's files, PDF stays in quarantine on DB
+  failure, tampered PDF refused, missing PDF, id that climbs out of quarantine,
+  hash not matching content, invalid drafts, unknown draft/download, retry after
+  failure, no double save, bounded holds.
+- P2b UI (`89c9603b`). `CaptureDraft.id`; `navegadorStore` gained `saving`,
+  `saved` and `saveErrors` and `saveCapture`/`saveDownload` (deduplicated,
+  retryable, errors kept as code + detail and mapped to messages in es/en);
+  replacing or dismissing a draft calls `navegador_discard_draft`. The panel
+  shows a "Guardar" button (draft and each verified PDF), then "Guardando…" and
+  "Guardado" (disabled); the title no longer says "todavía no se guarda".
+  RED: 16 new lib tests failed, 5 of 7 new view tests failed. GREEN: `pnpm test`
+  309 store + 800 ui + 2816 desktop passed (7 skipped); Lite
+  (`VITE_LOCAL_ML=0`) navegador view + lib 1722 passed; `pnpm typecheck` and the
+  Lite desktop typecheck 0 errors; `pnpm lint` only the known
+  `WritingView.svelte:1403`; prettier clean on touched files;
+  `VITE_NAVEGADOR=1 vite build` emits NavegadorView.
+- P2 verification (Rust, `CARGO_TARGET_DIR=src-tauri/target/writer`): `cargo
+  test --no-fail-fast` 1510 lib passed, 1 failed (the known
+  `no_other_module_opens_the_archive_by_hand`, still only the three sync
+  `*_tests.rs` files) and every integration test ok; `cargo test --features
+  navegador --lib navegador` 203 passed; `cargo check --features navegador` ok;
+  `cargo clippy --all-targets` with and without the feature: no warnings in
+  `save.rs`, `navegador/` or `tests/app_acl.rs` (the remaining warnings are the
+  old `sync/writing_*` ones); `cargo fmt --check` ok; Cargo.lock untouched.
+  NOT observed: any real run (needs the user): saving from the live browser,
+  files under `%APPDATA%\com.entropia.shared\web-captures\`, rows surviving a
+  restart (the DB browser view lists `web_sources` and `web_captures`: it shows
+  every table `sqlite_master` holds).
+  Limitations: no listing yet (P2c); orphan files from a crash between rename
+  and commit stay until P2d's sweep (a `.tmp` too); a draft not saved before 4
+  newer ones is evicted ("unknown_draft"); a PDF held in quarantine older than
+  24 h is swept and its save says `file_missing`; the `original_url` is the
+  final URL; saving needs the migration to have run (the renderer runs it at
+  startup).
