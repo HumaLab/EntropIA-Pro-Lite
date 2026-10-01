@@ -332,3 +332,44 @@ describe('a download that is already in the sources', () => {
     expect(screen.getAllByText('paper.pdf')).toHaveLength(1)
   })
 })
+
+describe('a multi-page saved PDF', () => {
+  async function openViewer() {
+    await openDetail('Title of beta')
+    await fireEvent.click(within(drawer()).getByRole('button', { name: 'Ver PDF guardado' }))
+    await within(viewerRegion()).findByTestId('mock-document-viewer')
+  }
+  const shownPage = () => within(viewerRegion()).getByTestId('viewer-current-page').textContent
+
+  it('offers no page controls until the viewer reports more than one page', async () => {
+    await openViewer()
+    expect(within(viewerRegion()).queryByRole('button', { name: 'Página siguiente' })).toBeNull()
+    await fireEvent.click(within(viewerRegion()).getByRole('button', { name: 'Go to page 1' }))
+    expect(within(viewerRegion()).getByRole('button', { name: 'Página siguiente' })).toBeEnabled()
+    expect(within(viewerRegion()).getByText('Página 1 de 2')).toBeInTheDocument()
+  })
+
+  it('moves between pages with the buttons and stops at both ends', async () => {
+    await openViewer()
+    await fireEvent.click(within(viewerRegion()).getByRole('button', { name: 'Go to page 1' }))
+    const prev = () => within(viewerRegion()).getByRole('button', { name: 'Página anterior' })
+    const next = () => within(viewerRegion()).getByRole('button', { name: 'Página siguiente' })
+    expect(prev()).toBeDisabled()
+    await fireEvent.click(next())
+    expect(shownPage()).toBe('2')
+    expect(next()).toBeDisabled()
+    await fireEvent.click(prev())
+    expect(shownPage()).toBe('1')
+  })
+
+  it('follows the arrow keys', async () => {
+    await openViewer()
+    await fireEvent.click(within(viewerRegion()).getByRole('button', { name: 'Go to page 1' }))
+    await fireEvent.keyDown(viewerRegion(), { key: 'ArrowRight' })
+    expect(shownPage()).toBe('2')
+    await fireEvent.keyDown(viewerRegion(), { key: 'ArrowRight' })
+    expect(shownPage()).toBe('2')
+    await fireEvent.keyDown(viewerRegion(), { key: 'ArrowLeft' })
+    expect(shownPage()).toBe('1')
+  })
+})

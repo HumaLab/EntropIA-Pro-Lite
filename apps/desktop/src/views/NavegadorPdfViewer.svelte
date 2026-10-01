@@ -30,6 +30,21 @@
   let phase = $state<'loading' | 'ready' | 'error'>('loading')
   let path = $state('')
   let problem = $state('')
+  /** The page shown and how many there are, as the viewer reports them. */
+  let page = $state(1)
+  let total = $state(0)
+
+  function goTo(next: number) {
+    page = Math.min(Math.max(next, 1), Math.max(total, 1))
+  }
+
+  function onKeydown(event: KeyboardEvent) {
+    if (total < 2) return
+    if (event.key === 'ArrowRight' || event.key === 'PageDown') goTo(page + 1)
+    else if (event.key === 'ArrowLeft' || event.key === 'PageUp') goTo(page - 1)
+    else return
+    event.preventDefault()
+  }
 
   /** The corpus viewer's own texts, in the current language. */
   const labels = $derived.by(() => {
@@ -65,9 +80,38 @@
   })
 </script>
 
-<div class="pdf" role="region" aria-label={$currentLocale && t('navegador.pdf.region')}>
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div
+  class="pdf"
+  role="region"
+  aria-label={$currentLocale && t('navegador.pdf.region')}
+  onkeydown={onKeydown}
+>
   <header class="pdf__head">
     <strong class="pdf__title">{title}</strong>
+    {#if phase === 'ready' && total > 1}
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={$currentLocale && t('item.previousPage')}
+        title={$currentLocale && t('item.previousPage')}
+        disabled={page <= 1}
+        onclick={() => goTo(page - 1)}
+      >
+        <ActionIcon name="chevron-left" size={14} />
+      </IconButton>
+      <span>{$currentLocale && t('navegador.pdf.page', { page, total })}</span>
+      <IconButton
+        size="sm"
+        variant="ghost"
+        label={$currentLocale && t('item.nextPage')}
+        title={$currentLocale && t('item.nextPage')}
+        disabled={page >= total}
+        onclick={() => goTo(page + 1)}
+      >
+        <ActionIcon name="chevron-right" size={14} />
+      </IconButton>
+    {/if}
     <IconButton
       size="sm"
       variant="ghost"
@@ -84,7 +128,18 @@
     <p class="pdf__note pdf__problem" role="alert">{problem}</p>
   {:else}
     <div class="pdf__viewer">
-      <DocumentViewer {path} assetUrl={convertFileSrc(path)} type="pdf" readOnly {labels} />
+      <DocumentViewer
+        {path}
+        assetUrl={convertFileSrc(path)}
+        type="pdf"
+        readOnly
+        {labels}
+        currentPage={page}
+        onPageChange={(next, count) => {
+          total = count
+          page = next
+        }}
+      />
     </div>
   {/if}
 </div>
