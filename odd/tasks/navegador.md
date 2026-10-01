@@ -128,7 +128,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   damage the archive; no empty folder for a source with only selections.
   Commits `2f047dcd` (folder fix), `240ddaab` (sweep).
 
-- [ ] P2e — (route: delegated writer; automated checks observed; Windows run
+- [x] P2e — (route: delegated writer; automated checks observed; Windows run
   pending; commits `c5884034` Rust, `73a7263e` UI) PDF sources, from the user's P2c run:
   a saved PDF's source URL must be the page it was downloaded from (the
   download's page snapshot), not the file link; the file link stays on the
@@ -174,6 +174,15 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-01, user's Windows rerun of P2e: multi-page saved PDF now pages
+  through every page (buttons and arrow keys) PASS after `ebd0c573`
+  (shared `DocumentViewer` effect returned before reading `currentPage` and
+  never re-ran; the earlier tests passed only because testing-library's
+  `rerender` replaces the whole props object and reloads the document; new
+  `DocumentViewerPagingTestHost` changes only the page: RED without the fix,
+  GREEN with it). P2e checked. Phase 2 closed.
+
 
 - 2026-10-01, user's Windows run of P2c/P2d (dev profile): selection-only
   save creates no folder PASS; saved-sources drawer beside the page PASS;
