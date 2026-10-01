@@ -524,32 +524,32 @@
         <ul class="navegador-view__downloads">
           {#each downloadViews as item (item.id)}
             <li>
-              <strong>{item.fileName}</strong>
+              <strong class="navegador-view__download-text" use:tooltip={item.fileName}
+                >{item.fileName}</strong
+              >
               <span class="navegador-view__chip"
                 >{$currentLocale && t(`navegador.download.status.${item.status}`)}</span
               >
               {#if item.size}<span>{item.size}</span>{/if}
               {#if item.shortSha}<code>{item.shortSha}</code>{/if}
               {#if item.host}
-                <span
-                  >{$currentLocale &&
-                    (item.pageTitle
-                      ? t('navegador.download.fromPage', {
-                          host: item.host,
-                          title: item.pageTitle,
-                        })
-                      : t('navegador.download.from', { host: item.host }))}</span
-                >
+                {@const origin =
+                  $currentLocale &&
+                  (item.pageTitle
+                    ? t('navegador.download.fromPage', { host: item.host, title: item.pageTitle })
+                    : t('navegador.download.from', { host: item.host }))}
+                <span class="navegador-view__download-text" use:tooltip={origin}>{origin}</span>
               {/if}
               {#if item.status === 'saved' && item.savedTo}
-                <span
-                  >{$currentLocale &&
-                    t('navegador.download.savedIn', { folder: item.savedTo })}</span
-                >
+                {@const saved =
+                  $currentLocale && t('navegador.download.savedIn', { folder: item.savedTo })}
+                <span class="navegador-view__download-text" use:tooltip={saved}>{saved}</span>
               {/if}
               {#if item.status === 'rejected' || item.status === 'failed'}
-                <span class="navegador-view__problem"
-                  >{$currentLocale && t(downloadReasonKey(item.reason))}</span
+                {@const problem = $currentLocale && t(downloadReasonKey(item.reason))}
+                <span
+                  class="navegador-view__problem navegador-view__download-text"
+                  use:tooltip={problem}>{problem}</span
                 >
               {/if}
               <span class="navegador-view__row-end">
@@ -759,11 +759,26 @@
     list-style: none;
   }
 
+  /* One line per download: the long texts shrink with an ellipsis (full text
+     in the tooltip) and the dismiss button stays pinned at the end. */
   .navegador-view__downloads li {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .navegador-view__downloads li > * {
+    flex-shrink: 0;
+  }
+
+  .navegador-view__downloads li > .navegador-view__download-text {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .navegador-view__problem {
