@@ -162,6 +162,15 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 
 ## Verification evidence
 
+- 2026-10-01, incident remediation, server step: CHECKED read-only on the
+  sync server (container `idhit0wuzbld1u4ee83akvr6-…`, Traefik host
+  `entropia-cloud.app.hlab.com.ar`, DB `/data/sync.sqlite`): the account's
+  `schema_tag` is `0037_fts_vocab` and no account holds `0055_web_captures`
+  (tags present: '', `0023_sync_ids`, `0037_fts_vocab`). The tag was never
+  raised, so no UPDATE was run. Incident closed: local archive back on 0037,
+  server on 0037.
+
+
 - 2026-10-01, incident remediation, local step DONE: with every EntropIA app
   closed, the real archive was backed up (sqlite backup API + raw files, in
   `%APPDATA%\com.entropia.shared\backups-0055-rollback-20261001-011914\`,
