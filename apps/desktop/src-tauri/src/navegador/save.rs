@@ -506,7 +506,11 @@ fn commit(target: &Target<'_>, plan: Plan) -> Result<Saved, SaveError> {
         dir_is_new: !dir.exists(),
         dir: dir.clone(),
     };
-    fs::create_dir_all(&dir).map_err(io_error)?;
+    // The folder exists only when a file is written into it: a selection that
+    // fits the row has nothing to put there.
+    if !plan.payloads.is_empty() {
+        fs::create_dir_all(&dir).map_err(io_error)?;
+    }
 
     let mut rel_path = None;
     let mut text_rel_path = None;
@@ -932,6 +936,51 @@ mod tests {
             .unwrap();
         assert_eq!(prefix.as_deref(), Some("before "));
         assert_eq!(suffix.as_deref(), Some(" after"));
+    }
+
+    #[test]
+    fn a_selection_leaves_no_folder_behind_when_it_writes_no_file() {
+        let env = Env::new();
+
+        let saved = save_draft(
+            &env.target(),
+            &selection_draft("https://example.com/a", "the quote"),
+        )
+        .unwrap();
+
+        let source_dir = env.data.path().join(DIR).join(&saved.source_id);
+        assert!(!source_dir.exists(), "an empty source folder was created");
+        // Nothing was written, so not even the shared parent is needed.
+        assert!(!env.data.path().join(DIR).exists());
+    }
+
+    #[test]
+    fn a_failed_selection_save_creates_no_folder_either() {
+        let env = Env::new();
+        env.conn.execute_batch("DROP TABLE web_captures").unwrap();
+
+        let result = save_draft(
+            &env.target(),
+            &selection_draft("https://example.com/a", "the quote"),
+        );
+
+        assert_eq!(result.unwrap_err().code, code::DB_ERROR);
+        assert!(!env.data.path().join(DIR).exists());
+    }
+
+    #[test]
+    fn a_selection_whose_text_goes_to_a_file_still_gets_its_folder() {
+        let env = Env::new();
+        let quote = "q".repeat(TEXT_IN_ROW_MAX_BYTES + 1);
+
+        let saved = save_draft(
+            &env.target(),
+            &selection_draft("https://example.com/a", &quote),
+        )
+        .unwrap();
+
+        let rel = format!("web-captures/{}/{}.txt", saved.source_id, saved.capture_id);
+        assert_eq!(env.files(), vec![rel]);
     }
 
     #[test]
