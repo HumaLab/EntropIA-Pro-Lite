@@ -109,12 +109,12 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   pending (see T8 evidence at the end).
 ## Phase 2 — local capture persistence (route: delegated writer)
 
-- [ ] P2a — (route: delegated writer; automated checks observed; Windows run
+- [x] P2a — (route: delegated writer; automated checks observed; Windows run
   pending) Migration `0055_web_captures` (never 0038–0054, owned by the
   Zotero branch) with `web_sources` and `web_captures` per plan §5. Shared
   archive: both Lite and Pro get it. Commit `c07c5e4f`. Schema, Drizzle entries
   and tests only; the read repository is left to P2c (see evidence).
-- [ ] P2b — (route: delegated writer; automated checks observed; Windows run
+- [x] P2b — (route: delegated writer; automated checks observed; Windows run
   pending) Save a capture draft or a verified PDF: files under
   `<data>/web-captures/<source_id>/<capture_id>.<ext>`, file first then the
   DB transaction, text over 512 KB to a file, captures immutable. Commits
@@ -161,6 +161,15 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-01, user's Windows run of P2a/P2b on the isolated dev profile
+  (`profile=dev:navegador ... sync=disabled` confirmed in the startup log):
+  save page, selection and verified PDF PASS; second capture of the same URL
+  reuses the source PASS; files under `dev-profiles\navegador\web-captures\`
+  PASS; rows visible in the DB browser PASS; survive a restart PASS. Finding:
+  a source with only selections gets an empty folder (selections store text
+  in the row, no file) -> fix in P2d. P2a, P2b checked.
+
 
 - 2026-10-01, incident remediation, server step: CHECKED read-only on the
   sync server (container `idhit0wuzbld1u4ee83akvr6-…`, Traefik host
