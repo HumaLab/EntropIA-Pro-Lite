@@ -920,3 +920,14 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   1/1, UI tests (+3), `pnpm test` 309 store + 800 ui + 2819 desktop. Not done:
   a `cargo test --release` run (a release build compiles the whole crate; the
   property is covered by `requested(false, ..)` and the source test).
+
+- INCIDENT (observed 2026-10-01 01:15, read-only query of the real archive): the
+  user's `tauri dev` from this worktree had ALREADY applied `0055_web_captures`
+  to `%APPDATA%\com.entropia.shared\entropia.sqlite` (`_migrations` id 38,
+  applied_at 2026-09-30 22:58) while its sync session (server
+  `https://entropia-cloud.app.hlab.com.ar`, auto-sync every 5 min, last sync
+  01:14) was active. The account's `schema_tag` has very likely been raised to
+  `0055_web_captures` already, so devices on 1.0.18 (head `0037_fts_vocab`) would
+  get 426. Nothing was changed by the writer; remediation (server-side tag reset
+  by the Cloud admin, or shipping 0055 in a release) is a decision for the
+  owner. The isolated profile prevents any further case, not this one.
