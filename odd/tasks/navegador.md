@@ -132,8 +132,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   Navegador workspace tab; capture acts on the active tab (two tabs, different
   pages, selection captured in the second: quote and URL from the second). Not
   yet exercised: a download started in a background tab. Two findings, fixed in
-  the commit that carries them (SHA: see `git log --grep "single navegador tab"`
-  and `--grep "snapshot the page of a download"`), rerun pending: (1) a second
+  the commit that carries them (`b7837ffc` and `c4a0da3e`), rerun pending: (1) a second
   app tab could also choose the Navegador and both showed the one browser; now
   the Navegador lives in one workspace tab (`WorkspaceStore.navegadorOwnerId`,
   same owner rules as Writing: `navigateActive`, `openTab` and the split view
