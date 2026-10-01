@@ -143,7 +143,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
 - [x] P4a — (route: delegated writer, read-only investigation; reported
   2026-10-01) How a copy lands in the corpus without new migrations. Findings
   and the recommendation are in the evidence block "P4a" at the end.
-- [ ] P4b — (route: delegated writer; automated checks observed; Windows run
+- [x] P4b — (route: delegated writer; automated checks observed; Windows run
   pending) "Copiar a colección" for PDF captures: pick a collection (or create
   one), create an independent item through the existing import path, provenance
   in `items.metadata.__entropia_web_capture` (sourceId, captureId, originalUrl,
@@ -152,7 +152,7 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   `85c6c2c0` (Rust: `navegador_copy_ticket`), `fd8789fc` (provenance survives
   metadata edits, `findByWebCapture`), `67523f84` (import overrides, copy
   module), `7da5a801` (dialog and drawer button).
-- [ ] P4c — (route: delegated writer; automated checks observed; Windows run
+- [x] P4c — (route: delegated writer; automated checks observed; Windows run
   pending) Option (a): "Copiar a colección" for page and selection captures
   renders the captured text into a PDF in Rust and imports it through the P4b
   path. No new command: `navegador_copy_ticket` renders when the capture is a
@@ -195,6 +195,17 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-01, user's Windows run of P4b/P4c (dev profile): PDF capture copied
+  into a new collection, item opens with pages and the article title PASS;
+  page and selection captures copied as text PDFs PASS; "OCRH" on a copy
+  reads the native text layer ("native", 1110 characters) with no OCR PASS;
+  selection quote set apart with grey context PASS; provenance in the
+  metadata panel survives an edit (no "[object Object]") PASS; duplicate-copy
+  prompt PASS; deleting the web source leaves the copies intact PASS.
+  Note: in Lite the PDF text action is the "OCRH" button (`ItemTextPanel.svelte`),
+  not a button labelled "Extraer texto". P4a, P4b, P4c checked. Phase 4 closed.
+
 
 - 2026-10-01, P4a (read-only investigation; paths are at base `a915b36e`,
   `apps/desktop/` omitted for the desktop ones):
