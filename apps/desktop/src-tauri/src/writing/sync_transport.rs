@@ -231,6 +231,7 @@ fn build_push_changes_in_savepoint(
 /// Conditionally acknowledges the exact outbox generation captured by a push
 /// draft. Future engine wiring should call this only after that draft receives
 /// a successful server acknowledgment; pulled own-device rows are not proof.
+#[cfg(test)]
 pub(crate) fn acknowledge_push_draft(
     conn: &Connection,
     draft: &WritingChangeDraft,

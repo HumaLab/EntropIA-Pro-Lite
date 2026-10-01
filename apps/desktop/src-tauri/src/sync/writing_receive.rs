@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::http::{HealthLimits, PullRow, SyncApi};
+#[cfg(test)]
+use super::http::PullRow;
+use super::http::{HealthLimits, SyncApi};
 use super::session::{read_session_incarnation, SYNC_SESSION_INCARNATION_KEY};
 use super::writing_blobs::ensure_writing_blobs_installed;
 use crate::writing::repository::{WritingError, WritingResult};
+#[cfg(test)]
 use crate::writing::sync_capture::ENVELOPE_TABLE;
 use crate::writing::sync_envelope::WritingEnvelopeV1;
 use crate::writing::sync_transport::{apply_pulled_row, PullApplyOutcome, PulledWritingRow};
@@ -293,6 +296,7 @@ fn pending(code: &'static str, message: impl Into<String>) -> WritingReceivePend
 }
 
 /// Durably stores one validated writing row for the current session.
+#[cfg(test)]
 pub(crate) fn enqueue_writing_receive(
     conn: &Connection,
     row: &PullRow,
@@ -441,6 +445,7 @@ fn required_meta(conn: &Connection, key: &str) -> Result<String, WritingReceiveE
     })
 }
 
+#[cfg(test)]
 struct ValidatedRow {
     document_id: String,
     server_seq: i64,
@@ -450,6 +455,7 @@ struct ValidatedRow {
     payload: Option<Value>,
 }
 
+#[cfg(test)]
 impl StoredReceive {
     fn wire_identity(&self) -> ValidatedRow {
         ValidatedRow {
@@ -463,6 +469,7 @@ impl StoredReceive {
     }
 }
 
+#[cfg(test)]
 impl PartialEq<ValidatedRow> for ValidatedRow {
     fn eq(&self, other: &Self) -> bool {
         self.server_seq == other.server_seq
@@ -473,6 +480,7 @@ impl PartialEq<ValidatedRow> for ValidatedRow {
     }
 }
 
+#[cfg(test)]
 fn validate_row(row: &PullRow) -> Result<ValidatedRow, WritingReceiveEnqueueError> {
     if row.table != ENVELOPE_TABLE {
         return Err(enqueue_error(
@@ -524,6 +532,7 @@ fn read_exact(conn: &Connection, key: &str) -> WritingResult<Option<(StoredRecei
     .transpose()
 }
 
+#[cfg(test)]
 fn write_exact(
     conn: &Connection,
     key: &str,
