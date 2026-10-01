@@ -839,4 +839,26 @@ describe('WorkPane', () => {
       expect(workspace.activeTabId).toBe(tabB)
     })
   })
+
+  describe('Navegador open in another tab (pane-level guard)', () => {
+    it('shows a notice, not a second browser, when a tab reaches it through its own history', async () => {
+      const tabA = workspace.activeTabId
+      const tabB = workspace.openTab()!
+      workspace.navigationFor(tabB).navigate({ name: 'navegador' })
+      workspace.navigationFor(tabA).navigate({ name: 'navegador' })
+
+      render(WorkPane, { paneId: tabA })
+
+      expect(screen.getByText('El Navegador está abierto en otra pestaña.')).toBeInTheDocument()
+      await fireEvent.click(screen.getByRole('button', { name: 'Ir a esa pestaña' }))
+      expect(workspace.activeTabId).toBe(tabB)
+    })
+
+    it('shows nothing of the kind on the pane that owns it', () => {
+      const tabA = workspace.activeTabId
+      workspace.navigationFor(tabA).navigate({ name: 'navegador' })
+      render(WorkPane, { paneId: tabA })
+      expect(screen.queryByText('El Navegador está abierto en otra pestaña.')).toBeNull()
+    })
+  })
 })

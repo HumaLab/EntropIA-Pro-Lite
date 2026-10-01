@@ -658,3 +658,95 @@ describe('WorkspaceStore onTabClosed', () => {
     ws.dispose()
   })
 })
+
+describe('WorkspaceStore: the Navegador lives in one tab only', () => {
+  let ws: WorkspaceStore
+
+  beforeEach(() => {
+    resetTabIdSequenceForTests()
+    ws = new WorkspaceStore()
+  })
+
+  afterEach(() => ws.dispose())
+
+  it('opens it on the active tab when no tab shows it yet, and that tab owns it', () => {
+    ws.navigateActive({ name: 'navegador' })
+    expect(ws.activeNavigation.current).toEqual({ name: 'navegador' })
+    expect(ws.navegadorOwnerId).toBe(ws.activeTabId)
+  })
+
+  it('navigating to it from another tab focuses the tab that has it and places nothing', () => {
+    const owner = ws.activeTabId
+    ws.navigateActive({ name: 'navegador' })
+    const other = ws.openTab()!
+    expect(ws.activeTabId).toBe(other)
+    ws.navigateActive({ name: 'navegador' })
+    expect(ws.activeTabId).toBe(owner)
+    expect(ws.navigationFor(other).current).toEqual({ name: 'home' })
+    expect(ws.tabs).toHaveLength(2)
+  })
+
+  it('a new tab asked to open on it focuses the existing one instead of creating a tab', () => {
+    const owner = ws.activeTabId
+    ws.navigateActive({ name: 'navegador' })
+    ws.openTab()
+    expect(ws.openTab({ name: 'navegador' })).toBe(owner)
+    expect(ws.activeTabId).toBe(owner)
+    expect(ws.tabs).toHaveLength(2)
+  })
+
+  it('does that even at the tab cap, where a new tab would be refused', () => {
+    const owner = ws.activeTabId
+    ws.navigateActive({ name: 'navegador' })
+    while (ws.tabs.length < MAX_TABS) ws.openTab()
+    expect(ws.openTab({ name: 'navegador' })).toBe(owner)
+    expect(ws.tabs).toHaveLength(MAX_TABS)
+  })
+
+  it('a new tab can open on it when nobody has it', () => {
+    const id = ws.openTab({ name: 'navegador' })!
+    expect(ws.navigationFor(id).current).toEqual({ name: 'navegador' })
+    expect(ws.navegadorOwnerId).toBe(id)
+  })
+
+  it('focuses the owner in the other pane of a split view', () => {
+    const left = ws.activeTabId
+    ws.navigateActive({ name: 'navegador' })
+    ws.toggleSplit()
+    const right = ws.split!.rightId
+    ws.activateTab(right)
+    ws.navigateActive({ name: 'navegador' })
+    expect(ws.activeTabId).toBe(left)
+    expect(ws.navigationFor(right).current).toEqual({ name: 'home' })
+  })
+
+  it('the first arrival stays the owner when a later tab reaches it through its own history', () => {
+    const first = ws.activeTabId
+    ws.navigationFor(first).navigate({ name: 'navegador' })
+    ws.navigationFor(first).navigate({ name: 'settings' })
+    const second = ws.openTab({ name: 'navegador' })!
+    expect(ws.navegadorOwnerId).toBe(second)
+    ws.navigationFor(first).back()
+    expect(ws.navegadorOwnerId).toBe(second)
+  })
+
+  it('hands it over, or lets it go, when the owner leaves or closes', () => {
+    const first = ws.activeTabId
+    ws.navigateActive({ name: 'navegador' })
+    ws.navigateActive({ name: 'settings' })
+    expect(ws.navegadorOwnerId).toBeNull()
+    ws.navigateActive({ name: 'navegador' })
+    const second = ws.openTab()!
+    ws.closeTab(first)
+    expect(ws.navegadorOwnerId).toBeNull()
+    ws.navigateActive({ name: 'navegador' })
+    expect(ws.navegadorOwnerId).toBe(second)
+  })
+
+  it('shows the owner in the snapshot', () => {
+    let seen: string | null = null
+    ws.subscribe((snapshot) => (seen = snapshot.navegadorOwnerId))
+    ws.navigateActive({ name: 'navegador' })
+    expect(seen).toBe(ws.activeTabId)
+  })
+})

@@ -629,6 +629,7 @@ const es = {
   'topbar.splitDisabledTitle': 'La ventana es muy angosta para la vista dividida',
   'workpane.writingElsewhereNotice': 'Escritura está abierta en otra pestaña.',
   'workpane.writingElsewhereAction': 'Ir a esa pestaña',
+  'workpane.navegadorElsewhereNotice': 'El Navegador está abierto en otra pestaña.',
   'writing.repaired':
     'Se quitaron {count} marcador(es) de nota al pie sin nota asociada, que impedían abrir el documento. El cambio se guarda con tu próxima edición.',
   'writing.repairedDismiss': 'Descartar aviso',
@@ -1838,7 +1839,7 @@ const es = {
   'navegador.tabs.full': 'Solapa nueva: ya hay {max} abiertas',
   'navegador.tabs.close': 'Cerrar solapa {title}',
   'navegador.download.from': 'Desde {host}',
-  'navegador.download.inTab': 'en la solapa {tab}',
+  'navegador.download.fromPage': 'Desde {host} · {title}',
 } as const
 
 type ExtraI18nKey =
@@ -2040,6 +2041,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'topbar.splitDisabledTitle': 'The window is too narrow for split view',
   'workpane.writingElsewhereNotice': 'Writing is open in another tab.',
   'workpane.writingElsewhereAction': 'Go to that tab',
+  'workpane.navegadorElsewhereNotice': 'The Browser is open in another tab.',
   'writing.repaired':
     'Removed {count} footnote marker(s) with no footnote behind them, which prevented the document from opening. The change is saved with your next edit.',
   'writing.repairedDismiss': 'Dismiss notice',
@@ -3795,7 +3797,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.tabs.full': 'New tab: {max} are already open',
   'navegador.tabs.close': 'Close tab {title}',
   'navegador.download.from': 'From {host}',
-  'navegador.download.inTab': 'in tab {tab}',
+  'navegador.download.fromPage': 'From {host} · {title}',
 }
 
 const messages = { es, en }

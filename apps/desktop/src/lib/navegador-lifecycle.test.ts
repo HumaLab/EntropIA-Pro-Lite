@@ -39,7 +39,24 @@ describe('watchNavegadorTabs', () => {
     const settings = workspace.openTab({ name: 'settings' })!
     workspace.closeTab(settings)
     const first = workspace.openTab({ name: 'navegador' })!
-    const second = workspace.openTab({ name: 'navegador' })!
+    // A second request focuses the one tab that has it; it makes no second tab.
+    expect(workspace.openTab({ name: 'navegador' })).toBe(first)
+    const other = workspace.openTab()!
+    workspace.closeTab(other)
+    expect(release).not.toHaveBeenCalled()
+    workspace.closeTab(first)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('still waits for the other tab when one reached the Navegador through its history', () => {
+    const workspace = new WorkspaceStore()
+    const release = vi.fn()
+    watchNavegadorTabs(workspace, release)
+    const first = workspace.activeTabId
+    workspace.navigationFor(first).navigate({ name: 'navegador' })
+    const second = workspace.openTab()!
+    workspace.navigationFor(second).navigate({ name: 'navegador' })
+    workspace.openTab()
     workspace.closeTab(first)
     expect(release).not.toHaveBeenCalled()
     workspace.closeTab(second)
