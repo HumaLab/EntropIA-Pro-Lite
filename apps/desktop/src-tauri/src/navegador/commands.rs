@@ -371,6 +371,29 @@ pub async fn navegador_delete_source(
     .map_err(|e| format!("task_failed: {e}"))?
 }
 
+/// Where the saved PDF of capture `capture_id` is on disk, for the app's own PDF
+/// viewer. The renderer names a capture and never sends a path: this side finds
+/// the stored key, checks it stays inside that source's folder (never a link, a
+/// regular file only) and answers the path. Nothing is downloaded, so it works
+/// offline. Errors are a stable code (`not_found`, `not_a_pdf`, `file_missing`,
+/// `invalid_id`, `db_error`), optionally followed by `: detail`.
+#[tauri::command]
+pub async fn navegador_pdf_file(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+    capture_id: String,
+) -> Result<String, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        sources::pdf_capture_file(&conn, &data_dir, &capture_id)
+            .map(|path| path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

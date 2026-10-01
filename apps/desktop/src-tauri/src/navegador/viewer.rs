@@ -281,6 +281,17 @@ fn download_requested(
     }
 }
 
+/// The source that already holds a PDF with this sha256. Any trouble reading the
+/// archive (not open yet, not migrated) counts as "not saved": the person can
+/// still save the file, and the save refuses a true duplicate on its own.
+fn saved_source_of(app: &AppHandle, sha256: &str) -> Option<String> {
+    let db = app.try_state::<crate::db::state::AppDbState>()?;
+    let conn = crate::db::open::open_archive_connection(&db.db_path).ok()?;
+    super::sources::source_of_pdf_sha(&conn, sha256)
+        .ok()
+        .flatten()
+}
+
 /// Where a file EntropIA does not keep goes: the folder the person chose while
 /// it is still a directory, else the system's Downloads folder.
 fn user_folder(app: &AppHandle, shared: &Shared) -> Option<std::path::PathBuf> {
@@ -345,18 +356,31 @@ fn download_finished(
         let draft = match outcome {
             Ok(download::Outcome::Verified(verified)) => {
                 let draft = DownloadDraft::finished(&pending, Ok(verified.clone()));
-                // The save command finds the PDF by id, never by a path or hash
-                // the renderer sends.
-                super::save::holds(&app).hold_pdf(super::save::ReadyPdf {
-                    id: pending.id.clone(),
-                    url: pending.url.to_string(),
-                    file_name: draft.file_name.clone(),
-                    size: verified.size,
-                    sha256: verified.sha256,
-                    accessed_at: pending.accessed_at.clone(),
-                    page_title: pending.page_title.clone(),
-                });
-                draft
+                // Identical bytes already in the archive are not kept: the
+                // person is told where they are. Otherwise the save command
+                // finds the PDF by id, never by a path or hash the renderer
+                // sends.
+                let saved_in = saved_source_of(&app, &verified.sha256);
+                let arrival = super::save::holds(&app).arrive(
+                    super::save::ReadyPdf {
+                        id: pending.id.clone(),
+                        url: pending.url.to_string(),
+                        file_name: draft.file_name.clone(),
+                        size: verified.size,
+                        sha256: verified.sha256,
+                        accessed_at: pending.accessed_at.clone(),
+                        page_url: pending.page_url.clone(),
+                        page_title: pending.page_title.clone(),
+                    },
+                    saved_in,
+                    &dir,
+                );
+                match arrival {
+                    super::save::Arrival::Held => draft,
+                    super::save::Arrival::AlreadySaved { source_id } => {
+                        draft.with_already_saved_in(source_id)
+                    }
+                }
             }
             Ok(download::Outcome::Saved { path, size }) => {
                 DownloadDraft::saved(&pending, &path, Some(size))

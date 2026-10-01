@@ -189,6 +189,7 @@
     "allow-navegador-list-sources",
     "allow-navegador-source-detail",
     "allow-navegador-delete-source",
+    "allow-navegador-pdf-file",
     "core:default",
     "core:path:default",
     "core:event:default",

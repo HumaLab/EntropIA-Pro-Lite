@@ -1253,6 +1253,7 @@ pub fn run() {
             navegador::commands::navegador_list_sources,
             navegador::commands::navegador_source_detail,
             navegador::commands::navegador_delete_source,
+            navegador::commands::navegador_pdf_file,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,

@@ -174,6 +174,10 @@ pub struct DownloadDraft {
     /// keeps navigating, so this is a snapshot: it never follows the tab.
     pub page_url: Option<String>,
     pub page_title: Option<String>,
+    /// The source that already holds this exact PDF (same sha256), when the
+    /// archive says so: the file is not kept in quarantine and cannot be saved
+    /// again.
+    pub already_saved_in: Option<String>,
 }
 
 impl DownloadDraft {
@@ -234,7 +238,14 @@ impl DownloadDraft {
             tab: None,
             page_url: None,
             page_title: None,
+            already_saved_in: None,
         }
+    }
+
+    /// The same draft, saying the archive already holds these bytes in `source_id`.
+    pub fn with_already_saved_in(mut self, source_id: impl Into<String>) -> Self {
+        self.already_saved_in = Some(source_id.into());
+        self
     }
 
     /// The same draft, saying which page asked for the download.
@@ -270,6 +281,7 @@ impl DownloadDraft {
             tab: pending.tab,
             page_url: pending.page_url.clone(),
             page_title: pending.page_title.clone(),
+            already_saved_in: None,
         }
     }
 }
@@ -1472,6 +1484,7 @@ mod tests {
             tab: Some(2),
             page_url: Some("https://a.test/one".into()),
             page_title: Some("Article one".into()),
+            already_saved_in: Some("src-1".into()),
         };
         let value = serde_json::to_value(draft).unwrap();
         let object = value.as_object().unwrap();
@@ -1488,18 +1501,45 @@ mod tests {
             "tab",
             "pageUrl",
             "pageTitle",
+            "alreadySavedIn",
         ] {
             assert!(object.contains_key(key), "missing {key}");
         }
         assert_eq!(object["tab"], 2);
+        assert_eq!(object["alreadySavedIn"], "src-1");
         assert_eq!(
             object.len(),
-            12,
+            13,
             "an unexpected field would leak: {object:?}"
         );
         assert_eq!(object["status"], "ready");
         let rejected = serde_json::to_value(DownloadStatus::Rejected).unwrap();
         assert_eq!(rejected, "rejected");
+    }
+
+    #[test]
+    fn a_draft_says_which_source_already_holds_its_file_only_when_told() {
+        let pending = Pending {
+            id: "id1".into(),
+            url: Url::parse("https://a.test/x.pdf").unwrap(),
+            file_name: "x.pdf".into(),
+            saved: None,
+            accessed_at: "2026-09-30T12:00:00Z".into(),
+            tab: None,
+            page_url: None,
+            page_title: None,
+        };
+        let verified = Verified {
+            size: 10,
+            sha256: "ab".repeat(32),
+        };
+
+        let plain = DownloadDraft::finished(&pending, Ok(verified.clone()));
+        let known = DownloadDraft::finished(&pending, Ok(verified)).with_already_saved_in("src-1");
+
+        assert_eq!(plain.already_saved_in, None);
+        assert_eq!(known.already_saved_in.as_deref(), Some("src-1"));
+        assert_eq!(known.status, DownloadStatus::Ready);
     }
 
     // --- routing ------------------------------------------------------------

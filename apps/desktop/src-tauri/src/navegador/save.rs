@@ -37,6 +37,8 @@ use sha2::{Digest, Sha256};
 
 use super::capture::{self, CaptureDraft, CaptureKind};
 use super::download;
+use super::sources;
+use super::url_policy::{self, NavigationKind};
 
 /// Text up to this many bytes stays in the row; more goes to a file.
 pub const TEXT_IN_ROW_MAX_BYTES: usize = 512 * 1024;
@@ -55,6 +57,16 @@ pub const MAX_HELD_DRAFTS: usize = 4;
 /// Verified PDFs in quarantine that can still be saved.
 pub const MAX_HELD_PDFS: usize = 50;
 
+/// What became of a PDF that finished downloading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Arrival {
+    /// Held in quarantine, waiting for the person to save it.
+    Held,
+    /// Identical bytes are already saved in this source: nothing is held and the
+    /// quarantined copy is gone.
+    AlreadySaved { source_id: String },
+}
+
 const COPY_BLOCK: usize = 64 * 1024;
 
 /// Stable codes the UI maps to messages.
@@ -66,6 +78,7 @@ pub mod code {
     pub const FILE_MISSING: &str = "file_missing";
     pub const IO_ERROR: &str = "io_error";
     pub const DB_ERROR: &str = "db_error";
+    pub const ALREADY_SAVED: &str = "already_saved";
 }
 
 /// Why a save did not happen. `code` is stable; `detail` is for people.
@@ -125,6 +138,9 @@ pub struct ReadyPdf {
     pub sha256: String,
     /// UTC, RFC 3339, from this process's clock when the download started.
     pub accessed_at: String,
+    /// The page the download started from, as it was then. It becomes the
+    /// source of the saved PDF when the T3 policy lets it through.
+    pub page_url: Option<String>,
     /// Title of the page the download started from.
     pub page_title: Option<String>,
 }
@@ -168,6 +184,41 @@ impl Holds {
         while pdfs.len() > MAX_HELD_PDFS {
             pdfs.pop_front();
         }
+    }
+
+    /// A verified PDF arrived. `saved_in` is the source that already holds a PDF
+    /// with the same sha256, if the archive says so.
+    ///
+    /// Identical bytes already saved are not kept: the quarantined copy is
+    /// deleted (it is the same file, and the person is told where it already is).
+    /// The same bytes held under an earlier id (downloaded twice before saving)
+    /// are replaced by this arrival, so one list entry and one file remain.
+    pub fn arrive(&self, pdf: ReadyPdf, saved_in: Option<String>, quarantine: &Path) -> Arrival {
+        let _serial = self.saving.lock().unwrap_or_else(|e| e.into_inner());
+        let drop_file = |id: &str| {
+            if download::valid_id(id) {
+                let _ = fs::remove_file(download::pdf_path(quarantine, id));
+            }
+        };
+        if let Some(source_id) = saved_in {
+            drop_file(&pdf.id);
+            return Arrival::AlreadySaved { source_id };
+        }
+        let superseded: Vec<String> = {
+            let mut pdfs = self.pdfs.lock().unwrap_or_else(|e| e.into_inner());
+            let ids = pdfs
+                .iter()
+                .filter(|held| held.sha256 == pdf.sha256 && held.id != pdf.id)
+                .map(|held| held.id.clone())
+                .collect();
+            pdfs.retain(|held| held.sha256 != pdf.sha256 || held.id == pdf.id);
+            ids
+        };
+        for id in &superseded {
+            drop_file(id);
+        }
+        self.hold_pdf(pdf);
+        Arrival::Held
     }
 
     /// Forget a PDF (its quarantine file went away or was saved).
@@ -237,21 +288,36 @@ pub fn save_pdf(
         ));
     }
     check_url(&pdf.url)?;
-    let title = pdf
+    // The same bytes are never saved twice, whatever source they would join.
+    if sources::source_of_pdf_sha(target.conn, &pdf.sha256)
+        .map_err(db_error)?
+        .is_some()
+    {
+        return Err(SaveError::new(code::ALREADY_SAVED));
+    }
+    let page_title = pdf
         .page_title
         .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| pdf.file_name.clone());
+        .filter(|title| !title.trim().is_empty());
+    let title = page_title.clone().unwrap_or_else(|| pdf.file_name.clone());
+    // The source of a downloaded PDF is the page it came from, so it joins the
+    // source of a capture of that page; the file link stays on the capture. A
+    // PDF whose page is unknown (or refused by the policy) is its own source.
+    let (source_url, source_title) = match origin_page(pdf) {
+        Some(page) => (page, page_title),
+        None => (pdf.url.clone(), Some(title.clone())),
+    };
     let file = download::pdf_path(quarantine, &pdf.id);
     let plan = Plan {
         source: SourceInfo {
-            final_url: pdf.url.clone(),
+            final_url: source_url,
             canonical_url: None,
-            title: Some(title.clone()),
+            title: source_title,
             site_name: None,
             first_accessed_at: pdf.accessed_at.clone(),
         },
         capture: CaptureInfo {
+            url: pdf.url.clone(),
             kind: "pdf",
             mime_type: "application/pdf",
             accessed_at: pdf.accessed_at.clone(),
@@ -312,6 +378,9 @@ struct SourceInfo {
 }
 
 struct CaptureInfo {
+    /// The address of what was captured: the page, or the PDF's file link. The
+    /// source's own address may be another one (a PDF's source is its page).
+    url: String,
     kind: &'static str,
     mime_type: &'static str,
     accessed_at: String,
@@ -343,6 +412,18 @@ fn check_url(url: &str) -> Result<(), SaveError> {
             "the address is not a web address",
         )),
     }
+}
+
+/// The page a download started from, when it may be stored as a source: a web
+/// page the browser could have loaded (the person could have typed it, so plain
+/// `http` is fine) that the T3 policy lets through.
+fn origin_page(pdf: &ReadyPdf) -> Option<String> {
+    let url = tauri::Url::parse(pdf.page_url.as_deref()?).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    url_policy::check_url(&url, NavigationKind::Typed).ok()?;
+    Some(url.to_string())
 }
 
 fn invalid(why: &str) -> SaveError {
@@ -427,6 +508,7 @@ fn plan_draft(draft: &CaptureDraft) -> Result<Plan, SaveError> {
             first_accessed_at: draft.accessed_at.clone(),
         },
         capture: CaptureInfo {
+            url: draft.final_url.clone(),
             kind,
             mime_type,
             accessed_at: draft.accessed_at.clone(),
@@ -671,7 +753,7 @@ fn insert_rows(
             capture_id,
             source_id,
             capture.accessed_at,
-            plan.source.final_url,
+            capture.url,
             capture.kind,
             capture.mime_type,
             capture.text,
@@ -756,6 +838,7 @@ mod tests {
                 size: bytes.len() as u64,
                 sha256: capture::sha256_hex(bytes),
                 accessed_at: AT.into(),
+                page_url: None,
                 page_title: Some("The paper".into()),
             }
         }
@@ -1405,6 +1488,251 @@ mod tests {
 
         assert!(env.files().iter().all(|f| !f.ends_with(".tmp")));
         assert_eq!(env.files().len(), 2);
+    }
+
+    // --- PDF provenance (P2e) ---------------------------------------------------
+
+    const ARTICLE: &str = "https://journal.example.org/articulos/227";
+
+    fn from_article(mut pdf: ReadyPdf) -> ReadyPdf {
+        pdf.url = "https://journal.example.org/articulos/227/descargar".into();
+        pdf.page_url = Some(ARTICLE.into());
+        pdf.page_title = Some("Un artículo".into());
+        pdf
+    }
+
+    fn source_row(env: &Env, id: &str) -> (String, String, Option<String>) {
+        env.conn
+            .query_row(
+                "SELECT original_url, final_url, title FROM web_sources WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    fn capture_url(env: &Env, id: &str) -> (String, Option<String>) {
+        env.conn
+            .query_row(
+                "SELECT final_url, title FROM web_captures WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_pdf_is_a_source_of_the_page_it_was_downloaded_from_and_keeps_its_file_link() {
+        let env = Env::new();
+        let pdf = from_article(env.quarantined_pdf("dl-1", b"%PDF-1.7 article"));
+
+        let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+        let (original, final_url, title) = source_row(&env, &saved.source_id);
+        assert_eq!(original, ARTICLE);
+        assert_eq!(final_url, ARTICLE);
+        assert_eq!(title.as_deref(), Some("Un artículo"));
+        let (file_link, capture_title) = capture_url(&env, &saved.capture_id);
+        assert_eq!(
+            file_link,
+            "https://journal.example.org/articulos/227/descargar"
+        );
+        assert_eq!(capture_title.as_deref(), Some("Un artículo"));
+    }
+
+    #[test]
+    fn a_pdf_and_a_page_capture_of_the_same_article_land_in_one_source() {
+        let env = Env::new();
+        let page = save_draft(&env.target(), &page_draft(ARTICLE, "<p>x</p>", "x")).unwrap();
+        let pdf = from_article(env.quarantined_pdf("dl-1", b"%PDF-1.7 article"));
+
+        let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+        assert_eq!(saved.source_id, page.source_id);
+        assert_eq!(env.count("web_sources"), 1);
+        assert_eq!(env.count("web_captures"), 2);
+    }
+
+    #[test]
+    fn two_pdfs_from_one_article_share_the_article_as_their_source() {
+        let env = Env::new();
+        let first = from_article(env.quarantined_pdf("dl-1", b"%PDF-1.7 one"));
+        let mut second = from_article(env.quarantined_pdf("dl-2", b"%PDF-1.7 two"));
+        second.url = "https://journal.example.org/articulos/227/anexo".into();
+
+        let a = save_pdf(&env.target(), &first, env.quarantine.path()).unwrap();
+        let b = save_pdf(&env.target(), &second, env.quarantine.path()).unwrap();
+
+        assert_eq!(a.source_id, b.source_id);
+        assert_eq!(env.count("web_sources"), 1);
+    }
+
+    #[test]
+    fn a_pdf_with_no_known_page_falls_back_to_its_own_address() {
+        let env = Env::new();
+        let pdf = env.quarantined_pdf("dl-1", b"%PDF-1.7 typed");
+
+        let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+        let (original, final_url, title) = source_row(&env, &saved.source_id);
+        assert_eq!(original, "https://example.com/paper.pdf");
+        assert_eq!(final_url, "https://example.com/paper.pdf");
+        assert_eq!(title.as_deref(), Some("The paper"));
+    }
+
+    #[test]
+    fn a_page_address_the_policy_refuses_is_never_stored_as_a_source() {
+        for refused in [
+            "http://127.0.0.1/articulo",
+            "https://localhost/articulo",
+            "https://192.168.1.4/articulo",
+            "file:///C:/Users/me/a.html",
+            "javascript:alert(1)",
+            "about:blank",
+            "ftp://example.com/a",
+            "not a url",
+            "",
+        ] {
+            let env = Env::new();
+            let mut pdf = env.quarantined_pdf("dl-1", b"%PDF-1.7 x");
+            pdf.page_url = Some(refused.into());
+            pdf.page_title = Some("Hostile".into());
+
+            let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+            let (original, final_url, title) = source_row(&env, &saved.source_id);
+            assert_eq!(original, "https://example.com/paper.pdf", "{refused}");
+            assert_eq!(final_url, "https://example.com/paper.pdf", "{refused}");
+            assert_eq!(title.as_deref(), Some("Hostile"), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_typed_http_page_is_a_valid_origin_because_the_person_could_have_typed_it() {
+        let env = Env::new();
+        let mut pdf = env.quarantined_pdf("dl-1", b"%PDF-1.7 x");
+        pdf.page_url = Some("http://old.example.org/articulo".into());
+
+        let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+        let (original, _, _) = source_row(&env, &saved.source_id);
+        assert_eq!(original, "http://old.example.org/articulo");
+    }
+
+    #[test]
+    fn a_pdf_with_no_page_title_does_not_overwrite_the_title_of_the_source_it_joins() {
+        let env = Env::new();
+        let page = save_draft(&env.target(), &page_draft(ARTICLE, "<p>x</p>", "x")).unwrap();
+        let mut pdf = from_article(env.quarantined_pdf("dl-1", b"%PDF-1.7 article"));
+        pdf.page_title = None;
+
+        let saved = save_pdf(&env.target(), &pdf, env.quarantine.path()).unwrap();
+
+        assert_eq!(saved.source_id, page.source_id);
+        let (_, _, title) = source_row(&env, &saved.source_id);
+        assert_eq!(title.as_deref(), Some("A page"));
+        let (_, capture_title) = capture_url(&env, &saved.capture_id);
+        assert_eq!(capture_title.as_deref(), Some("paper.pdf"));
+    }
+
+    // --- duplicates (P2e) --------------------------------------------------------
+
+    #[test]
+    fn a_pdf_whose_hash_is_already_saved_is_refused_without_a_second_copy() {
+        let env = Env::new();
+        let first = env.quarantined_pdf("dl-1", b"%PDF-1.7 same");
+        save_pdf(&env.target(), &first, env.quarantine.path()).unwrap();
+        let again = env.quarantined_pdf("dl-2", b"%PDF-1.7 same");
+
+        let error = save_pdf(&env.target(), &again, env.quarantine.path()).unwrap_err();
+
+        assert_eq!(error.code, code::ALREADY_SAVED);
+        assert_eq!(env.count("web_captures"), 1);
+        assert_eq!(env.files().len(), 1, "no second copy on disk");
+    }
+
+    #[test]
+    fn a_pdf_that_arrives_already_saved_is_dropped_and_never_held() {
+        let env = Env::new();
+        let holds = Holds::default();
+        let pdf = env.quarantined_pdf("dl-1", b"%PDF-1.7 same");
+
+        let arrival = holds.arrive(pdf, Some("src-9".into()), env.quarantine.path());
+
+        assert_eq!(
+            arrival,
+            Arrival::AlreadySaved {
+                source_id: "src-9".into()
+            }
+        );
+        assert!(
+            !download::pdf_path(env.quarantine.path(), "dl-1").exists(),
+            "the identical quarantined copy is deleted"
+        );
+        assert_eq!(
+            holds
+                .save_pdf("dl-1", &env.target(), env.quarantine.path())
+                .unwrap_err()
+                .code,
+            code::UNKNOWN_DOWNLOAD
+        );
+    }
+
+    #[test]
+    fn a_new_pdf_arrives_held_and_can_be_saved_by_id() {
+        let env = Env::new();
+        let holds = Holds::default();
+
+        let arrival = holds.arrive(
+            env.quarantined_pdf("dl-1", b"%PDF-1.7 fresh"),
+            None,
+            env.quarantine.path(),
+        );
+
+        assert_eq!(arrival, Arrival::Held);
+        assert!(download::pdf_path(env.quarantine.path(), "dl-1").exists());
+        holds
+            .save_pdf("dl-1", &env.target(), env.quarantine.path())
+            .unwrap();
+        assert_eq!(env.count("web_captures"), 1);
+    }
+
+    #[test]
+    fn the_same_pdf_downloaded_again_before_saving_replaces_the_earlier_copy() {
+        let env = Env::new();
+        let holds = Holds::default();
+        holds.arrive(
+            env.quarantined_pdf("dl-1", b"%PDF-1.7 twice"),
+            None,
+            env.quarantine.path(),
+        );
+        holds.arrive(
+            env.quarantined_pdf("dl-2", b"%PDF-1.7 twice"),
+            None,
+            env.quarantine.path(),
+        );
+        holds.arrive(
+            env.quarantined_pdf("dl-3", b"%PDF-1.7 other"),
+            None,
+            env.quarantine.path(),
+        );
+
+        assert!(
+            !download::pdf_path(env.quarantine.path(), "dl-1").exists(),
+            "the older identical file is deleted"
+        );
+        assert!(download::pdf_path(env.quarantine.path(), "dl-2").exists());
+        assert!(download::pdf_path(env.quarantine.path(), "dl-3").exists());
+        assert_eq!(
+            holds
+                .save_pdf("dl-1", &env.target(), env.quarantine.path())
+                .unwrap_err()
+                .code,
+            code::UNKNOWN_DOWNLOAD
+        );
+        holds
+            .save_pdf("dl-2", &env.target(), env.quarantine.path())
+            .unwrap();
     }
 
     #[test]

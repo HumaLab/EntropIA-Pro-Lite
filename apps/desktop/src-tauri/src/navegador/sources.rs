@@ -22,7 +22,7 @@
 //! source and removes it.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{params_from_iter, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
@@ -43,6 +43,8 @@ pub const PREVIEW_MAX_CHARS: usize = 2000;
 pub mod code {
     pub const INVALID_ID: &str = "invalid_id";
     pub const NOT_FOUND: &str = "not_found";
+    pub const NOT_A_PDF: &str = "not_a_pdf";
+    pub const FILE_MISSING: &str = "file_missing";
     pub const DB_ERROR: &str = "db_error";
 }
 
@@ -238,23 +240,83 @@ pub fn list_sources(
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
-/// Whether the file `key` (a stored relative path) of `source_id` is a regular
+/// The file `key` (a stored relative path) of `source_id`, when it is a regular
 /// file on disk. The key must be exactly `web-captures/<source_id>/<name>` with
-/// a plain name, so a stored path can never point the check elsewhere.
-fn file_is_present(data_dir: &Path, source_id: &str, key: &str) -> bool {
-    let Some(name) = key.strip_prefix(&format!("{DIR}/{source_id}/")) else {
-        return false;
-    };
+/// a plain name, so a stored path can never point anywhere else, and the folder
+/// must be a real one inside the captures root (never a link).
+fn capture_file(data_dir: &Path, source_id: &str, key: &str) -> Option<PathBuf> {
+    let name = key.strip_prefix(&format!("{DIR}/{source_id}/"))?;
     let plain = !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':']);
     if !plain {
-        return false;
+        return None;
     }
     match capture_files::locate_source_dir(data_dir, source_id) {
-        Located::Dir(dir) => fs::symlink_metadata(dir.join(name))
-            .map(|meta| meta.file_type().is_file())
-            .unwrap_or(false),
-        _ => false,
+        Located::Dir(dir) => {
+            let file = dir.join(name);
+            fs::symlink_metadata(&file)
+                .is_ok_and(|meta| meta.file_type().is_file())
+                .then_some(file)
+        }
+        _ => None,
     }
+}
+
+fn file_is_present(data_dir: &Path, source_id: &str, key: &str) -> bool {
+    capture_file(data_dir, source_id, key).is_some()
+}
+
+/// Whether `text` looks like a lower-case hex SHA-256.
+fn is_digest(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The source that already holds a PDF capture with this sha256, if any. Anything
+/// that is not a digest matches nothing.
+pub fn source_of_pdf_sha(conn: &Connection, sha256: &str) -> Result<Option<String>, String> {
+    if !is_digest(sha256) {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT web_source_id FROM web_captures
+         WHERE kind = 'pdf' AND sha256 = ?1
+         ORDER BY created_at, id LIMIT 1",
+        [sha256],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// The saved PDF file of capture `capture_id`, resolved on this side: the
+/// renderer names a capture and never a path. The stored key goes through the
+/// same checks as the file-presence report, so a key that leaves its source's
+/// folder, a folder that is a link or a file that is not a regular file is never
+/// returned. Reading it does not touch the network.
+pub fn pdf_capture_file(
+    conn: &Connection,
+    data_dir: &Path,
+    capture_id: &str,
+) -> Result<PathBuf, String> {
+    if !capture_files::valid_source_id(capture_id) {
+        return Err(invalid_id());
+    }
+    let row: Option<(String, String, Option<String>)> = conn
+        .query_row(
+            "SELECT web_source_id, kind, rel_path FROM web_captures WHERE id = ?1",
+            [capture_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some((source_id, kind, rel_path)) = row else {
+        return Err(format!("{}: there is no such capture", code::NOT_FOUND));
+    };
+    if kind != "pdf" {
+        return Err(format!("{}: the capture is not a PDF", code::NOT_A_PDF));
+    }
+    rel_path
+        .and_then(|key| capture_file(data_dir, &source_id, &key))
+        .ok_or_else(|| format!("{}: the saved PDF is not on disk", code::FILE_MISSING))
 }
 
 /// A source with its captures; `None` when there is no such source.
@@ -388,7 +450,6 @@ pub fn delete_source(
 mod tests {
     use super::*;
     use crate::sync::test_support::new_app_schema_db;
-    use std::path::PathBuf;
 
     struct Env {
         data: tempfile::TempDir,
@@ -1048,6 +1109,178 @@ mod tests {
         assert!(outcome.leftover_files);
         assert!(precious.exists(), "a file behind a link was deleted");
         assert_eq!(env.count("web_sources"), 0);
+    }
+
+    // --- PDFs: lookup by hash and the file behind a capture -------------------
+
+    const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    impl Env {
+        fn add_pdf(&self, id: &str, source: &str, sha: &str, rel_path: Option<&str>) {
+            self.conn
+                .execute(
+                    "INSERT INTO web_captures
+                       (id, web_source_id, accessed_at, final_url, kind, mime_type, rel_path,
+                        sha256, hash_of, size_bytes, created_at)
+                     VALUES (?1, ?2, '2026-09-30T12:00:00Z', 'https://e.com/f.pdf', 'pdf',
+                             'application/pdf', ?3, ?4, 'pdf', 10, 5)",
+                    rusqlite::params![id, source, rel_path, sha],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_pdf_hash_finds_the_source_that_already_holds_it() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.add_source(source("s2", "https://e.com/two", 2));
+        env.add_pdf("c1", "s1", SHA_A, None);
+        env.add_pdf("c2", "s2", SHA_B, None);
+
+        assert_eq!(
+            source_of_pdf_sha(&env.conn, SHA_A).unwrap().as_deref(),
+            Some("s1")
+        );
+        assert_eq!(
+            source_of_pdf_sha(&env.conn, SHA_B).unwrap().as_deref(),
+            Some("s2")
+        );
+        assert_eq!(source_of_pdf_sha(&env.conn, &"c".repeat(64)).unwrap(), None);
+    }
+
+    #[test]
+    fn only_a_pdf_capture_counts_for_a_hash_not_a_page_or_a_quote_with_the_same_digest() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.conn
+            .execute(
+                "INSERT INTO web_captures
+                   (id, web_source_id, accessed_at, final_url, kind, mime_type, sha256,
+                    hash_of, size_bytes, created_at)
+                 VALUES ('p', 's1', '2026-09-30T12:00:00Z', 'https://e.com/', 'page',
+                         'text/html', ?1, 'html', 10, 5)",
+                [SHA_A],
+            )
+            .unwrap();
+
+        assert_eq!(source_of_pdf_sha(&env.conn, SHA_A).unwrap(), None);
+    }
+
+    #[test]
+    fn a_hash_that_is_not_a_digest_matches_nothing() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.add_pdf("c1", "s1", SHA_A, None);
+
+        for bad in ["", "abc", "%", "' OR 1=1 --", &SHA_A.to_uppercase()] {
+            assert_eq!(source_of_pdf_sha(&env.conn, bad).unwrap(), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_saved_pdf_is_found_by_its_capture_id_and_never_by_a_path() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        let file = env.file("web-captures/s1/c1.pdf");
+        env.add_pdf("c1", "s1", SHA_A, Some("web-captures/s1/c1.pdf"));
+
+        let found = pdf_capture_file(&env.conn, env.data.path(), "c1").unwrap();
+
+        assert_eq!(found, file);
+        for bad in ["", "../c1", "a/b", "c1.pdf", "C:\\x"] {
+            let error = pdf_capture_file(&env.conn, env.data.path(), bad).unwrap_err();
+            assert!(
+                error.starts_with(code::INVALID_ID) || error.starts_with(code::NOT_FOUND),
+                "{bad}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_capture_or_one_that_is_not_a_pdf_is_refused_with_its_own_code() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.file("web-captures/s1/h.html");
+        env.add_capture(NewCapture {
+            rel_path: Some("web-captures/s1/h.html"),
+            ..capture("h", "s1", "page", "2026-09-30T03:00:00Z")
+        });
+
+        let unknown = pdf_capture_file(&env.conn, env.data.path(), "nope").unwrap_err();
+        let page = pdf_capture_file(&env.conn, env.data.path(), "h").unwrap_err();
+
+        assert!(unknown.starts_with(code::NOT_FOUND), "{unknown}");
+        assert!(page.starts_with(code::NOT_A_PDF), "{page}");
+    }
+
+    #[test]
+    fn a_pdf_whose_file_is_gone_says_so() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.add_pdf("c1", "s1", SHA_A, Some("web-captures/s1/c1.pdf"));
+        env.add_pdf("c2", "s1", SHA_B, None);
+
+        for id in ["c1", "c2"] {
+            let error = pdf_capture_file(&env.conn, env.data.path(), id).unwrap_err();
+            assert!(error.starts_with(code::FILE_MISSING), "{id}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_stored_path_that_leaves_the_sources_folder_is_never_returned() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        env.add_source(source("s2", "https://e.com/two", 2));
+        env.file("web-captures/s2/theirs.pdf");
+        env.file("outside.pdf");
+        let outside = env.data.path().join("outside.pdf");
+        let absolute = outside.to_string_lossy().into_owned();
+        let cases = [
+            "web-captures/s1/../s2/theirs.pdf",
+            "web-captures/s2/theirs.pdf",
+            "../outside.pdf",
+            "web-captures/s1/..\\..\\outside.pdf",
+            "outside.pdf",
+            absolute.as_str(),
+        ];
+        for (n, rel) in cases.into_iter().enumerate() {
+            env.add_pdf(&format!("c{n}"), "s1", &format!("{n:0>64}"), Some(rel));
+        }
+
+        for n in 0..cases.len() {
+            let result = pdf_capture_file(&env.conn, env.data.path(), &format!("c{n}"));
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|e| e.starts_with(code::FILE_MISSING)),
+                "case {n} returned {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_source_folder_that_is_a_link_is_not_followed_to_find_a_pdf() {
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/one", 1));
+        let elsewhere = tempfile::tempdir().unwrap();
+        fs::write(elsewhere.path().join("c1.pdf"), b"x").unwrap();
+        fs::create_dir_all(env.data.path().join("web-captures")).unwrap();
+        let link = env.data.path().join("web-captures/s1");
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(elsewhere.path(), &link).is_ok();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(elsewhere.path(), &link).is_ok();
+        if !linked {
+            eprintln!("skipped: this machine cannot create a directory link");
+            return;
+        }
+        env.add_pdf("c1", "s1", SHA_A, Some("web-captures/s1/c1.pdf"));
+
+        let error = pdf_capture_file(&env.conn, env.data.path(), "c1").unwrap_err();
+
+        assert!(error.starts_with(code::FILE_MISSING), "{error}");
     }
 
     // --- shape ---------------------------------------------------------------
