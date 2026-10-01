@@ -90,10 +90,7 @@ pub(crate) fn read_session_incarnation(conn: &Connection) -> Result<Option<Uuid>
 fn session_identity_complete(conn: &Connection) -> Result<bool, String> {
     for key in ["account_id", "server_url", "device_id"] {
         let value = meta_get(conn, key)?;
-        if !value
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
-        {
+        if value.as_deref().is_none_or(|value| value.trim().is_empty()) {
             return Ok(false);
         }
     }

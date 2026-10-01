@@ -84,6 +84,7 @@ pub(crate) struct PreparedWritingReceive {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // short-lived plan value, one per receive; boxing would only add churn
 enum ReceiveDownloadPlan {
     Tombstone,
     Install(WritingEnvelopeV1),

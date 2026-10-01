@@ -17,6 +17,7 @@
 //!   3. The sibling checkout `EntropIA-Cloud/target/{debug,release}` (newest
 //!      binary wins), spawned on an ephemeral loopback port with a throwaway
 //!      `SYNC_DATA_DIR` and `SYNC_REGISTRATION_OPEN=true`.
+//!
 //! With none available the tests print a skip notice and return — the same
 //! loud-skip contract as `tests/sync_e2e.rs`. A reachable server that does not
 //! advertise `writing-envelope-v1` fails loudly (a stale binary cannot be a

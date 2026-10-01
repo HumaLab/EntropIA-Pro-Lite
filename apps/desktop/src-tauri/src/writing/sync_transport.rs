@@ -307,6 +307,7 @@ pub(crate) fn settle_applied_push_draft(
     })
 }
 
+#[allow(clippy::large_enum_variant)] // short-lived per-document value; boxing would only add churn
 enum OutgoingEnvelope {
     Ready {
         envelope: WritingEnvelopeV1,
@@ -748,6 +749,7 @@ fn rollback_transport_savepoint(conn: &Connection) -> Result<(), rusqlite::Error
     ))
 }
 
+#[allow(clippy::large_enum_variant)] // short-lived per-document value; boxing would only add churn
 enum ProvenEnvelope {
     Ready(WritingEnvelopeV1),
     Unproven,

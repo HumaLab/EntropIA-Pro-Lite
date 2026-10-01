@@ -93,6 +93,7 @@ impl WritingPushPending {
 
 /// Preparation either yields one bounded single-document request, finds no
 /// work, or explains why existing outbox work must remain pending.
+#[allow(clippy::large_enum_variant)] // short-lived return value, built once per push; boxing would only add churn
 pub(crate) enum WritingPushPreparation {
     Ready(PreparedWritingPush),
     Idle,

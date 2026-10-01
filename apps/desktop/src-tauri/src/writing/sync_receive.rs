@@ -263,6 +263,7 @@ fn rollback_receive_savepoint(conn: &Connection) -> Result<(), rusqlite::Error> 
     ))
 }
 
+#[allow(clippy::large_enum_variant)] // short-lived plan value, one per receive; boxing would only add churn
 pub(super) enum ReceivePlan {
     Outcome(ReceiveOutcome),
     Apply {
