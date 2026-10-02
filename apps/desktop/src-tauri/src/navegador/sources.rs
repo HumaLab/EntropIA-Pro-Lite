@@ -577,6 +577,11 @@ pub fn delete_source(
             .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
     }
+    // Its copies to Zotero are records of this source; the Zotero items stay. A
+    // failure here never fails the delete.
+    if let Err(error) = super::zotero_copy::store::forget_source(conn, source_id) {
+        eprintln!("[navegador] source {source_id} deleted, its Zotero copy rows stayed: {error}");
+    }
 
     // The rows are gone. The files follow, and nothing here fails the delete:
     // what stays is a folder with no source, which the startup sweep removes.
@@ -1599,6 +1604,27 @@ mod tests {
         assert!(!env.data.path().join("web-captures/s1").exists());
         assert_eq!(fs::read(&copy).unwrap(), bytes);
         assert_eq!(env.count("web_captures"), 0);
+    }
+
+    #[test]
+    fn deleting_a_source_drops_its_zotero_copy_rows_and_only_its_own() {
+        use super::super::zotero_copy::store::{self, LibraryRef};
+        let env = Env::new();
+        env.add_source(source("s1", "https://e.com/a", 1));
+        env.add_source(source("s2", "https://e.com/b", 2));
+        let library = LibraryRef {
+            library_type: "user".into(),
+            library_id: "0".into(),
+            library_name: None,
+        };
+        store::request(&env.conn, "s1", None, &library).unwrap();
+        store::request(&env.conn, "s2", None, &library).unwrap();
+
+        delete_source(&env.conn, env.data.path(), "s1").unwrap();
+
+        let left = store::list(&env.conn, None).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].source_id, "s2");
     }
 
     // --- copy of a page or a selection, rendered as a PDF ----------------------

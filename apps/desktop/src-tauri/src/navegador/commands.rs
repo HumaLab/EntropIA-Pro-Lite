@@ -17,6 +17,10 @@ use super::save::{self, Saved, Target};
 use super::sources::{self, CopyTicket, DeleteOutcome, SourceDetail, SourceSummary};
 use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
+use super::zotero_copy::launch::{self, LaunchOutcome};
+use super::zotero_copy::port::{ConnectorPort, ZoteroPort};
+use super::zotero_copy::run::{self as zotero_run, DrainReport, RunOptions};
+use super::zotero_copy::store::{self as zotero_store, LibraryRef, ZoteroCopy};
 use super::{bounds, viewer, UNAVAILABLE};
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -413,6 +417,95 @@ pub async fn navegador_copy_ticket(
     })
     .await
     .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Queue one copy of a saved source (or of one of its PDF captures) to a Zotero
+/// library. The renderer names ids and a library; the item and the file are
+/// built here from the rows. Idempotent: the same source, capture and library
+/// answer with the row that exists. Errors are a stable code (`not_found`,
+/// `not_a_pdf`, `invalid_library`, `db_error`), optionally followed by `: detail`.
+#[tauri::command]
+pub async fn navegador_zotero_copy_request(
+    db: State<'_, AppDbState>,
+    source_id: String,
+    capture_id: Option<String>,
+    library: LibraryRef,
+) -> Result<ZoteroCopy, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        zotero_store::request(&conn, &source_id, capture_id.as_deref(), &library)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// The copies to Zotero, newest first, of one source or of all of them.
+#[tauri::command]
+pub async fn navegador_zotero_copy_list(
+    db: State<'_, AppDbState>,
+    source_id: Option<String>,
+) -> Result<Vec<ZoteroCopy>, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        zotero_store::list(&conn, source_id.as_deref())
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Send what waits, if Zotero answers. One drain at a time (a second call while
+/// one runs answers with nothing to report). It never starts Zotero.
+#[tauri::command]
+pub async fn navegador_zotero_copy_run(
+    app: AppHandle,
+    db: State<'_, AppDbState>,
+) -> Result<DrainReport, String> {
+    let data_dir = crate::path_utils::data_dir(&app)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let report = zotero_run::drain_exclusive(
+            &conn,
+            &data_dir,
+            &ConnectorPort::local(),
+            &RunOptions::default(),
+        )?;
+        Ok(report.unwrap_or(DrainReport {
+            reachable: true,
+            copies: Vec::new(),
+        }))
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Cancel a copy that has not started and not finished.
+#[tauri::command]
+pub async fn navegador_zotero_copy_cancel(
+    db: State<'_, AppDbState>,
+    copy_id: String,
+) -> Result<ZoteroCopy, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        zotero_store::cancel(&conn, &copy_id)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Start the installed Zotero in the background so the queue can drain. Only
+/// from a button the person pressed; a second start within a minute is refused.
+#[tauri::command]
+pub async fn navegador_zotero_launch() -> Result<LaunchOutcome, String> {
+    tokio::task::spawn_blocking(|| {
+        let reachable = ConnectorPort::local().ping().is_ok();
+        launch::launch(reachable)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))
 }
 
 #[cfg(test)]

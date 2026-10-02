@@ -438,6 +438,41 @@ pub fn drain(
     Ok(report)
 }
 
+static DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The one slot for a drain: the view polls and a button may press at the same
+/// time, and two drains would race for the same rows.
+pub struct DrainGuard;
+
+impl DrainGuard {
+    pub fn try_acquire() -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        DRAINING
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for DrainGuard {
+    fn drop(&mut self) {
+        DRAINING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// [`drain`], unless another drain is already running (`None`).
+pub fn drain_exclusive(
+    conn: &Connection,
+    data_dir: &Path,
+    port: &dyn ZoteroPort,
+    options: &RunOptions,
+) -> Result<Option<DrainReport>, String> {
+    let Some(_slot) = DrainGuard::try_acquire() else {
+        return Ok(None);
+    };
+    drain(conn, data_dir, port, options).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::port::{PortError, TargetLibrary, Targets, ZoteroPort};
@@ -983,6 +1018,34 @@ mod tests {
         let port = FakePort::open();
         let report = drain(&env.conn, env.data.path(), &port, &opts()).unwrap();
         assert!(report.copies.is_empty());
+    }
+
+    #[test]
+    fn only_one_drain_runs_at_a_time_and_the_guard_lets_go() {
+        let first = DrainGuard::try_acquire().expect("nothing else is draining");
+        assert!(
+            DrainGuard::try_acquire().is_none(),
+            "a second drain must not start"
+        );
+        drop(first);
+        assert!(
+            DrainGuard::try_acquire().is_some(),
+            "dropping the guard frees the slot"
+        );
+    }
+
+    #[test]
+    fn an_exclusive_drain_that_finds_the_slot_taken_does_nothing() {
+        let env = env();
+        store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let port = FakePort::open();
+        let held = DrainGuard::try_acquire().unwrap();
+        let report = drain_exclusive(&env.conn, env.data.path(), &port, &opts()).unwrap();
+        assert!(report.is_none());
+        assert!(port.calls().is_empty());
+        drop(held);
+        let report = drain_exclusive(&env.conn, env.data.path(), &port, &opts()).unwrap();
+        assert!(report.is_some());
     }
 
     #[test]
