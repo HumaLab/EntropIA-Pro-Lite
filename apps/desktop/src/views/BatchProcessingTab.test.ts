@@ -378,9 +378,9 @@ describe('BatchProcessingTab batch controls', () => {
         name: '1 de 100 páginas o fragmentos procesados',
       })
     ).not.toBeInTheDocument()
-    expect(await screen.findByLabelText('25 de 50 ítems sincronizados')).toBeInTheDocument()
+    expect(await screen.findByLabelText('25 de 50 registros sincronizados')).toBeInTheDocument()
     expect(
-      screen.getByLabelText('3 ítems sincronizados; total remoto desconocido')
+      screen.getByLabelText('3 registros sincronizados; total remoto desconocido')
     ).toBeInTheDocument()
     expect(
       screen.getByText('Tareas con total de páginas o fragmentos aún desconocido: 2.')

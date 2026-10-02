@@ -97,7 +97,7 @@ describe('E1c-3 work details (ficha), lost-link state', () => {
       },
     })
 
-    expect(screen.getByText('Ítem no disponible en Zotero')).toBeInTheDocument()
+    expect(screen.getByText('Obra no disponible en Zotero')).toBeInTheDocument()
     expect(screen.getByText(/página de borrado remoto/)).toBeInTheDocument()
     // The last snapshot is still shown, not invented metadata.
     expect(screen.getByText('Los orígenes')).toBeInTheDocument()
@@ -116,7 +116,7 @@ describe('E1c-3 work details (ficha), lost-link state', () => {
       },
     })
 
-    expect(screen.getByText('Ítem no disponible en Zotero')).toBeInTheDocument()
+    expect(screen.getByText('Obra no disponible en Zotero')).toBeInTheDocument()
     expect(screen.queryByText('Los orígenes')).not.toBeInTheDocument()
     expect(screen.queryByText('capitulo.pdf')).not.toBeInTheDocument()
   })
@@ -174,7 +174,7 @@ describe('E1c-3 work details (ficha), fetch entry point', () => {
     expect(await screen.findByRole('button', { name: /Reintentar/ })).toBeInTheDocument()
     // No state chip is claimed while nothing answered.
     expect(screen.queryByText(/Sincronizado/)).not.toBeInTheDocument()
-    expect(screen.queryByText('Ítem no disponible en Zotero')).not.toBeInTheDocument()
+    expect(screen.queryByText('Obra no disponible en Zotero')).not.toBeInTheDocument()
     expect(screen.queryByText('Copia local sin verificar ahora')).not.toBeInTheDocument()
 
     await fireEvent.click(screen.getByRole('button', { name: /Reintentar/ }))
