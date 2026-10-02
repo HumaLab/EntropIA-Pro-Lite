@@ -10,9 +10,10 @@
 //!   ([`validate_server_url`]) AND at use-time (inside [`HttpSyncApi::new`]).
 //! - The Bearer token and the `X-Schema-Tag` header are attached to every
 //!   authenticated request; the token is NEVER logged (DESIGN §8).
-//! - `X-Sync-Capabilities` is attached only by the explicit writing-envelope-v1
-//!   and research-envelope-v1 push/pull methods. Ordinary push/pull requests
-//!   remain capability-free.
+//! - `X-Sync-Capabilities` carries `web-capture-v1` on ordinary push/pull
+//!   requests (web captures are ordinary rows) and the aggregate token on the
+//!   explicit writing-envelope-v1 / research-envelope-v1 methods, which send
+//!   only their own token.
 //!
 //! Several DTO fields and trait methods (devices, revoke, usage, delete_account,
 //! pull, blob_get, and the pull-response cursor fields) are consumed by the
@@ -42,6 +43,9 @@ const SYNC_CAPABILITIES_HEADER: &str = "X-Sync-Capabilities";
 pub const WRITING_ENVELOPE_V1_CAPABILITY: &str = "writing-envelope-v1";
 /// Exact, case-sensitive capability token for research aggregate envelopes.
 pub const RESEARCH_ENVELOPE_V1_CAPABILITY: &str = "research-envelope-v1";
+/// Exact, case-sensitive capability token for saved web captures. Unlike the
+/// aggregates above, these are ordinary rows: every ordinary push/pull sends it.
+pub const WEB_CAPTURE_V1_CAPABILITY: &str = "web-capture-v1";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -474,6 +478,11 @@ pub struct PullResponse {
 }
 
 impl PullResponse {
+    /// Whether the server advertised the exact web-capture-v1 token.
+    pub fn supports_web_capture_v1(&self) -> bool {
+        supports_web_capture_v1(&self.capabilities)
+    }
+
     /// Whether the server advertised the exact writing-envelope-v1 token.
     pub fn supports_writing_envelope_v1(&self) -> bool {
         supports_writing_envelope_v1(&self.capabilities)
@@ -483,6 +492,13 @@ impl PullResponse {
     pub fn supports_research_envelope_v1(&self) -> bool {
         supports_research_envelope_v1(&self.capabilities)
     }
+}
+
+/// Checks the web capture token exactly, case-sensitively.
+pub fn supports_web_capture_v1(capabilities: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == WEB_CAPTURE_V1_CAPABILITY)
 }
 
 /// Checks capability tokens exactly. Schema tags and successful status codes do
@@ -540,8 +556,8 @@ pub type BlobExists = bool;
 /// Auth: every method except [`SyncApi::register`], [`SyncApi::login`] and
 /// [`SyncApi::health`] attaches the device Bearer token. The `/sync/*` methods
 /// also attach `X-Schema-Tag`. Ordinary [`SyncApi::push`] and [`SyncApi::pull`]
-/// omit capability headers; opt-in requires the dedicated writing-envelope-v1
-/// or research-envelope-v1 methods.
+/// send only the `web-capture-v1` header; the aggregates opt in through the
+/// dedicated writing-envelope-v1 or research-envelope-v1 methods.
 #[allow(dead_code)]
 pub trait SyncApi {
     fn register(
@@ -1030,7 +1046,8 @@ impl SyncApi for HttpSyncApi {
         schema_tag: &str,
         req: PushRequest,
     ) -> Result<PushResponse, SyncError> {
-        self.push_request(token, schema_tag, req, None).await
+        self.push_request(token, schema_tag, req, Some(WEB_CAPTURE_V1_CAPABILITY))
+            .await
     }
 
     async fn push_with_writing_envelope_v1(
@@ -1065,8 +1082,14 @@ impl SyncApi for HttpSyncApi {
         since: i64,
         limit: i64,
     ) -> Result<PullResponse, SyncError> {
-        self.pull_request(token, schema_tag, since, limit, None)
-            .await
+        self.pull_request(
+            token,
+            schema_tag,
+            since,
+            limit,
+            Some(WEB_CAPTURE_V1_CAPABILITY),
+        )
+        .await
     }
 
     async fn pull_with_writing_envelope_v1(
@@ -1569,7 +1592,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordinary_push_omits_capability_header_and_preserves_request() {
+    async fn ordinary_push_sends_only_the_web_capture_capability_and_preserves_request() {
         let (server_url, request_rx, handle) = spawn_loopback_server(
             200,
             r#"{"results":[],"max_server_seq":7,"server_epoch":"epoch","server_now_ms":43}"#,
@@ -1585,12 +1608,15 @@ mod tests {
         assert!(!response.supports_writing_envelope_v1());
         assert_eq!(request.request_line, "POST /v1/sync/push HTTP/1.1");
         assert_auth_and_schema_headers(&request);
-        assert!(header_values(&request, SYNC_CAPABILITIES_HEADER).is_empty());
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![WEB_CAPTURE_V1_CAPABILITY]
+        );
         assert_push_body(&request, "items");
     }
 
     #[tokio::test]
-    async fn ordinary_pull_omits_capability_header_and_preserves_query() {
+    async fn ordinary_pull_sends_only_the_web_capture_capability_and_preserves_query() {
         let (server_url, request_rx, handle) = spawn_loopback_server(
             200,
             r#"{"rows":[],"next_since":41,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":[]}"#,
@@ -1610,7 +1636,10 @@ mod tests {
             "GET /v1/sync/pull?since=41&limit=17 HTTP/1.1"
         );
         assert_auth_and_schema_headers(&request);
-        assert!(header_values(&request, SYNC_CAPABILITIES_HEADER).is_empty());
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![WEB_CAPTURE_V1_CAPABILITY]
+        );
         assert!(request.body.is_empty());
     }
 

@@ -96,7 +96,7 @@ pub fn check_epoch(conn: &Connection, server_epoch: &str) -> Result<bool, String
 // ---------------------------------------------------------------------------
 
 /// Seeds the oplog with `'I'` entries for every pre-existing local row the server
-/// has NOT already versioned (DESIGN §4.5), for all 15 synced tables, in one
+/// has NOT already versioned (DESIGN §4.5), for all 18 synced tables, in one
 /// transaction, guarded by `sync_meta['seeded_account']`. Idempotent: re-running
 /// after a crash adds no duplicates (the `WHERE NOT EXISTS` against
 /// `sync_row_versions` plus the natural coalescing of identical `(table, row_id)`
@@ -183,6 +183,17 @@ pub async fn pull_loop<A: SyncApi>(
             continue;
         }
 
+        // Ordinary responses advertise the server capabilities; remember the
+        // web capture token for this epoch (it gates the web rows' push).
+        if !page.server_epoch.is_empty() {
+            crate::sync::web_capture::record_capability(
+                conn,
+                &page.server_epoch,
+                page.supports_web_capture_v1(),
+            )
+            .map_err(SyncError::Decode)?;
+        }
+
         // Apply the page in one transaction (cursor persisted inside).
         let page_outcome =
             apply_page(conn, &mut ctx, &page.rows, page.next_since).map_err(SyncError::Decode)?;
@@ -210,6 +221,11 @@ pub async fn pull_loop<A: SyncApi>(
     // Final pending-row retry, with parent_deleted journaling for confirmed
     // tombstones (DESIGN §4.3).
     retry_pending_rows(conn, &mut ctx, true).map_err(SyncError::Decode)?;
+
+    // Folders of sources a remote tombstone deleted (queued in the same
+    // transaction as the delete, removed only now that it committed).
+    crate::sync::web_capture::drain_folder_removals(conn, app_data_dir)
+        .map_err(SyncError::Decode)?;
 
     // Step 7: drain the blob download queue (temp + verify + rename; per-blob
     // backoff). Network errors here do not fail the cycle — blobs stay queued.

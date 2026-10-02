@@ -20,6 +20,7 @@ pub(crate) mod research_receive;
 pub(crate) mod research_transport;
 pub mod schema;
 pub mod session;
+pub(crate) mod web_capture;
 pub(crate) mod writing_blobs;
 pub(crate) mod writing_cycle;
 pub(crate) mod writing_pull;
@@ -42,6 +43,8 @@ mod research_receive_tests;
 mod research_transport_tests;
 #[cfg(test)]
 pub mod test_support;
+#[cfg(test)]
+mod web_capture_tests;
 #[cfg(test)]
 mod writing_blobs_tests;
 #[cfg(test)]
@@ -67,7 +70,7 @@ pub(crate) fn open_sync_connection(db_path: &std::path::Path) -> Result<Connecti
         .map_err(|e| format!("[sync] failed to open sync connection: {e}"))
 }
 
-/// Ensures the sync schema and the 45 capture triggers on a fresh connection.
+/// Ensures the sync schema and the 54 capture triggers on a fresh connection.
 /// Shared by the Tauri command and the Rust `setup()` bootstrap so both paths
 /// run identical logic.
 pub fn ensure_capture_on_path(db_path: &std::path::Path) -> Result<(), String> {

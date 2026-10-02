@@ -1,4 +1,4 @@
-//! Static `ON DELETE CASCADE` graph for the 15 synced tables (DESIGN §4.4), plus
+//! Static `ON DELETE CASCADE` graph for the 18 synced tables (DESIGN §4.4), plus
 //! the RESTRICT (plain `REFERENCES`, no cascade) edges among them.
 //!
 //! When a remote tombstone (delete) is applied, the apply path must FIRST check
@@ -26,6 +26,7 @@
 /// - `assets`  → `extractions`, `transcriptions`, `layouts`, `annotations`
 /// - `topics`  → `item_topics`
 /// - `rag_conversations` → `rag_messages`
+/// - `web_sources` → `web_captures`
 ///
 /// `notes` references `items` and `assets` references `items` but WITHOUT
 /// cascade (RESTRICT), so they are not children here.
@@ -35,6 +36,7 @@ fn cascade_children(table: &str) -> &'static [&'static str] {
         "assets" => &["extractions", "transcriptions", "layouts", "annotations"],
         "topics" => &["item_topics"],
         "rag_conversations" => &["rag_messages"],
+        "web_sources" => &["web_captures"],
         _ => &[],
     }
 }
@@ -53,6 +55,7 @@ fn cascade_fk_column(parent: &str, child: &str) -> Option<&'static str> {
         ("assets", "annotations") => Some("asset_id"),
         ("topics", "item_topics") => Some("topic_id"),
         ("rag_conversations", "rag_messages") => Some("conversation_id"),
+        ("web_sources", "web_captures") => Some("web_source_id"),
         _ => None,
     }
 }
@@ -146,6 +149,67 @@ mod tests {
         assert_eq!(
             direct_cascade_edges("rag_conversations"),
             vec![("rag_messages", "conversation_id")]
+        );
+    }
+
+    #[test]
+    fn web_sources_cascade_to_their_captures() {
+        assert_eq!(
+            direct_cascade_edges("web_sources"),
+            vec![("web_captures", "web_source_id")]
+        );
+        assert!(direct_cascade_edges("web_captures").is_empty());
+        assert!(direct_restrict_edges("web_sources").is_empty());
+    }
+
+    /// Mirror of the restrict guard for the CASCADE edges: every
+    /// `ON DELETE CASCADE` FK between synced tables in the real schema must be
+    /// in [`direct_cascade_edges`], and nothing else. A new cascade FK that is
+    /// not mapped would let a remote tombstone destroy a dirty child unnoticed.
+    #[test]
+    fn cascade_edge_map_matches_schema_fixture() {
+        use crate::sync::capture::SYNCED_TABLES;
+        use crate::sync::test_support::new_app_schema_db;
+        use std::collections::BTreeSet;
+
+        let conn = new_app_schema_db();
+
+        let mut from_schema: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for &child in SYNCED_TABLES {
+            let sql = format!("PRAGMA foreign_key_list({child})");
+            let mut stmt = conn.prepare(&sql).expect("prepare foreign_key_list");
+            let rows = stmt
+                .query_map([], |row| {
+                    let parent: String = row.get(2)?;
+                    let from: String = row.get(3)?;
+                    let on_delete: String = row.get(6)?;
+                    Ok((parent, from, on_delete))
+                })
+                .expect("query foreign_key_list");
+            for row in rows {
+                let (parent, from_col, on_delete) = row.expect("read fk row");
+                // `assets.parent_asset_id -> assets` is a pre-existing self-reference
+                // that this map has never modelled; it is out of scope here and
+                // reported separately, so self-edges are exempt from the guard.
+                if parent != child
+                    && SYNCED_TABLES.contains(&parent.as_str())
+                    && on_delete.to_uppercase() == "CASCADE"
+                {
+                    from_schema.insert((parent, child.to_string(), from_col));
+                }
+            }
+        }
+
+        let mut from_map: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for &parent in SYNCED_TABLES {
+            for (child, col) in direct_cascade_edges(parent) {
+                from_map.insert((parent.to_string(), child.to_string(), col.to_string()));
+            }
+        }
+
+        assert_eq!(
+            from_map, from_schema,
+            "direct_cascade_edges must equal every CASCADE FK edge between synced tables"
         );
     }
 

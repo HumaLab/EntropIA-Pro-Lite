@@ -1,4 +1,4 @@
-//! Capture triggers (DESIGN §4.1, §6.1). 48 triggers (16 synced tables × 3 ops)
+//! Capture triggers (DESIGN §4.1, §6.1). 54 triggers (18 synced tables × 3 ops)
 //! mark dirty rows in `sync_oplog`. Capture is gated by session: each trigger
 //! only fires when `capture_enabled='1'` and `applying<>'1'` (echo suppression
 //! during pull apply). `ensure_capture` is self-healing across schema rebuilds.
@@ -12,7 +12,7 @@ use crate::sync::schema::ensure_sync_schema;
 /// DROP-all-then-create upgrade (DESIGN §6.1.2).
 pub const TRIGGERS_VERSION: &str = "2";
 
-/// The 16 synced tables (DESIGN §5). Allowlist enforced on both ends.
+/// The 18 synced tables (DESIGN §5). Allowlist enforced on both ends.
 pub const SYNCED_TABLES: &[&str] = &[
     "collections",
     "items",
@@ -30,9 +30,13 @@ pub const SYNCED_TABLES: &[&str] = &[
     "rag_conversations",
     "rag_messages",
     "vec_assets",
+    // Saved web captures (capability `web-capture-v1`): physical tables, keyed
+    // on `id`, no generated columns. See `sync::web_capture` for the gating.
+    "web_sources",
+    "web_captures",
 ];
 
-/// The 16 synced tables ordered parents-before-children along the FK graph
+/// The 18 synced tables ordered parents-before-children along the FK graph
 /// (DESIGN §4.10), for use by the pull-apply path (upserts in this order,
 /// deletes in reverse). Same set as [`SYNCED_TABLES`], different order.
 /// Consumed by the apply slice (push/pull); only tests reference it in C1.
@@ -58,6 +62,9 @@ pub const SYNCED_TABLES_FK_ORDER: &[&str] = &[
     "transcriptions",
     "layouts",
     "vec_assets",
+    // Web captures: the source first, its captures after.
+    "web_sources",
+    "web_captures",
 ];
 
 /// Returns true when `table` is in the synced allowlist (DESIGN §5). Used by
@@ -208,10 +215,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Ensures the sync schema and all 48 capture triggers, with self-healing
+/// Ensures the sync schema and all 54 capture triggers, with self-healing
 /// semantics (DESIGN §6.1):
 ///
-/// 1. ALWAYS run 48 `CREATE TRIGGER IF NOT EXISTS` (auto-cure after `DROP+RENAME`
+/// 1. ALWAYS run 54 `CREATE TRIGGER IF NOT EXISTS` (auto-cure after `DROP+RENAME`
 ///    rebuilds that destroy triggers, e.g. migrations 0010/0019).
 /// 2. If `sync_meta['triggers_version']` differs from [`TRIGGERS_VERSION`]:
 ///    DROP every `trg_sync_*` then CREATE (template upgrade).
@@ -296,8 +303,8 @@ mod tests {
 
     #[test]
     fn synced_table_sets_match() {
-        assert_eq!(SYNCED_TABLES.len(), 16);
-        assert_eq!(SYNCED_TABLES_FK_ORDER.len(), 16);
+        assert_eq!(SYNCED_TABLES.len(), 18);
+        assert_eq!(SYNCED_TABLES_FK_ORDER.len(), 18);
         let mut a: Vec<&str> = SYNCED_TABLES.to_vec();
         let mut b: Vec<&str> = SYNCED_TABLES_FK_ORDER.to_vec();
         a.sort_unstable();
@@ -316,6 +323,68 @@ mod tests {
         assert!(pos("assets") < pos("extractions"));
         assert!(pos("assets") < pos("annotations"));
         assert!(pos("items") < pos("entities"));
+        assert!(pos("web_sources") < pos("web_captures"));
+    }
+
+    #[test]
+    fn web_tables_are_synced_and_keyed_on_id() {
+        for table in ["web_sources", "web_captures"] {
+            assert!(is_synced_table(table), "{table} must be synced");
+            assert_eq!(pk_column(table), "id");
+        }
+    }
+
+    #[test]
+    fn web_tables_have_no_generated_columns() {
+        // The push path reads non-generated columns only; a generated column on
+        // a web table would silently drop out of the wire payload.
+        let conn = new_synced_test_db();
+        for table in ["web_sources", "web_captures"] {
+            let hidden: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_xinfo(?1) WHERE hidden <> 0",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("table_xinfo");
+            assert_eq!(hidden, 0, "{table} must have no generated columns");
+        }
+    }
+
+    #[test]
+    fn capture_records_web_source_and_capture_writes_with_session() {
+        let conn = new_synced_test_db();
+        ensure_capture(&conn).expect("ensure capture");
+        set_session_with_capture(&conn);
+
+        conn.execute(
+            "INSERT INTO web_sources(id, original_url, final_url, first_accessed_at, created_at, updated_at)
+             VALUES ('s1', 'https://a.test/', 'https://a.test/', '2026-10-02T00:00:00Z', 1, 1)",
+            [],
+        )
+        .expect("insert source");
+        conn.execute(
+            "INSERT INTO web_captures(id, web_source_id, accessed_at, final_url, kind, mime_type,
+                                      sha256, hash_of, size_bytes, created_at)
+             VALUES ('c1', 's1', '2026-10-02T00:00:00Z', 'https://a.test/', 'page', 'text/html',
+                     'ab', 'html', 3, 1)",
+            [],
+        )
+        .expect("insert capture");
+        conn.execute("UPDATE web_sources SET title = 'T' WHERE id = 's1'", [])
+            .expect("update source");
+        assert_eq!(oplog_count_for(&conn, "web_sources"), 2);
+        assert_eq!(oplog_count_for(&conn, "web_captures"), 1);
+
+        // A source delete cascades to its captures and both are captured.
+        conn.execute("DELETE FROM web_sources WHERE id = 's1'", [])
+            .expect("delete source");
+        assert_eq!(oplog_count_for(&conn, "web_sources"), 3);
+        assert_eq!(
+            oplog_count_for(&conn, "web_captures"),
+            2,
+            "the cascaded capture delete is captured too"
+        );
     }
 
     #[test]
@@ -333,10 +402,10 @@ mod tests {
     }
 
     #[test]
-    fn ensure_capture_installs_exactly_48_triggers() {
+    fn ensure_capture_installs_exactly_54_triggers() {
         let conn = new_synced_test_db();
         ensure_capture(&conn).expect("ensure capture");
-        assert_eq!(trg_sync_count(&conn), 48);
+        assert_eq!(trg_sync_count(&conn), 54);
     }
 
     #[test]
@@ -402,12 +471,12 @@ mod tests {
              DROP TRIGGER trg_sync_collections_d;",
         )
         .expect("drop triggers");
-        assert_eq!(trg_sync_count(&conn), 45);
+        assert_eq!(trg_sync_count(&conn), 51);
 
         // Re-run with UNCHANGED version: IF NOT EXISTS restores the 3 triggers
         // and re-seeds the table's oplog ('U' for each row).
         ensure_capture(&conn).expect("self-heal ensure");
-        assert_eq!(trg_sync_count(&conn), 48, "triggers restored");
+        assert_eq!(trg_sync_count(&conn), 54, "triggers restored");
         assert_eq!(
             oplog_count_for(&conn, "collections"),
             1,
@@ -438,7 +507,7 @@ mod tests {
         ensure_capture(&conn).expect("upgrade ensure");
 
         // Triggers are recreated from the new template...
-        assert_eq!(trg_sync_count(&conn), 48);
+        assert_eq!(trg_sync_count(&conn), 54);
         // ...but tables that were ALREADY capturing are NOT re-seeded: a template
         // upgrade must not mass-re-push already-synced rows (which would lose them
         // all to LWW). The oplog stays empty.

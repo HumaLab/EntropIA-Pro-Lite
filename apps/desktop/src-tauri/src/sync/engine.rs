@@ -681,12 +681,27 @@ pub async fn run_cycle<A: SyncApi>(
     }
 
     // 2-5. Push (snapshot → coalesce → blobs-before-rows → batched POST → reconcile).
+    let web_known_before = crate::sync::web_capture::supports_web_capture(conn)
+        .map_err(|e| CycleError::Fatal { message: e })?;
     push_cycle(api, token, &schema_tag, conn, app_data_dir, warn).await?;
 
     // 6-8. Pull loop (paginated apply + parked-row retries + blob/FTS drains).
     pull_loop(api, token, &schema_tag, conn, app_data_dir)
         .await
         .map_err(classify_error)?;
+
+    // 8a. Saved web captures: the one-time since-zero catch-up for rows a legacy
+    // pull never showed, and, the first time the capability is seen, the push of
+    // the web rows that were held back above.
+    crate::sync::web_capture::run_catchup(api, token, &schema_tag, conn, app_data_dir)
+        .await
+        .map_err(classify_error)?;
+    if !web_known_before
+        && crate::sync::web_capture::supports_web_capture(conn)
+            .map_err(|e| CycleError::Fatal { message: e })?
+    {
+        push_cycle(api, token, &schema_tag, conn, app_data_dir, warn).await?;
+    }
 
     // 8b. Bounded writing sync (W-ENGINE activation, PROTOCOL "Negociación de
     // capacidades"): exact-capability discovery from an ordinary response,
@@ -741,7 +756,15 @@ async fn push_cycle<A: SyncApi>(
     if snapshot == 0 {
         return Ok(()); // Nothing dirty; skip the empty push.
     }
-    let ops = coalesce_ops(conn, snapshot).map_err(|e| CycleError::Fatal { message: e })?;
+    let mut ops = coalesce_ops(conn, snapshot).map_err(|e| CycleError::Fatal { message: e })?;
+    // Web capture rows travel only once the server advertised `web-capture-v1`
+    // for this epoch: a legacy server rejects the whole batch (and with it the
+    // corpus rows). Held rows keep their oplog entries and go out later.
+    if !crate::sync::web_capture::supports_web_capture(conn)
+        .map_err(|e| CycleError::Fatal { message: e })?
+    {
+        ops.retain(|op| !crate::sync::web_capture::is_web_table(&op.table));
+    }
     let offset = clock_offset(conn).map_err(|e| CycleError::Fatal { message: e })?;
     let mut changes =
         build_changes(conn, &ops, offset).map_err(|e| CycleError::Fatal { message: e })?;

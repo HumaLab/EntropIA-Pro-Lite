@@ -176,6 +176,8 @@ pub struct MockSyncApi {
     pub server_epoch: String,
     /// Capabilities advertised by generated push responses and empty pull pages.
     pub server_capabilities: Mutex<Vec<String>>,
+    /// Number of ordinary `pull` calls served (any page).
+    pub plain_pull_calls: Mutex<usize>,
     /// Number of explicit writing-envelope-v1 push opt-ins.
     pub writing_capability_push_calls: Mutex<usize>,
     /// Number of explicit writing-envelope-v1 pull opt-ins.
@@ -226,6 +228,7 @@ impl Default for MockSyncApi {
             server_now_ms: 1_700_000_000_000,
             server_epoch: "mock-epoch".to_string(),
             server_capabilities: Mutex::new(Vec::new()),
+            plain_pull_calls: Mutex::new(0),
             writing_capability_push_calls: Mutex::new(0),
             writing_capability_pull_calls: Mutex::new(0),
             pull_pages: Mutex::new(std::collections::VecDeque::new()),
@@ -519,6 +522,7 @@ impl SyncApi for MockSyncApi {
         since: i64,
         _limit: i64,
     ) -> Result<PullResponse, SyncError> {
+        *self.plain_pull_calls.lock().unwrap() += 1;
         self.pull_response(since)
     }
 

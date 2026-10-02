@@ -282,6 +282,8 @@ pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
         )
     })?;
 
+    crate::sync::web_capture::clear_account_metadata(&tx_guard)?;
+
     // Reset every blob's uploaded flag (DESIGN §6.3): uploaded=1 only ever held
     // for the account that set it; a new account must re-confirm via HEAD/PUT.
     tx_guard

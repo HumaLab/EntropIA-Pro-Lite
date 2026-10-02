@@ -772,6 +772,10 @@ pub fn apply_row(
             )?;
         }
         apply_delete(conn, table, row_id)?;
+        if table == "web_sources" {
+            // The local folder follows the rows, after this page commits.
+            crate::sync::web_capture::queue_folder_removal(conn, row_id)?;
+        }
         record_version(conn, table, row_id, row.server_seq)?;
         return Ok(RowOutcome::Applied);
     }
@@ -1303,6 +1307,7 @@ fn parent_present_or_parked(conn: &Connection, child: &PullRow) -> Result<bool, 
         "assets" | "notes" | "entities" | "triples" | "item_topics" => &[("items", "item_id")],
         "extractions" | "transcriptions" | "layouts" | "annotations" => &[("assets", "asset_id")],
         "rag_messages" => &[("rag_conversations", "conversation_id")],
+        "web_captures" => &[("web_sources", "web_source_id")],
         _ => &[],
     };
     for (parent_table, fk_col) in parent_refs {
