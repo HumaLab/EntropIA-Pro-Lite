@@ -245,9 +245,7 @@ describe('E1c-2 library selector', () => {
 
     await screen.findByText('Los orígenes')
     expect(zoteroStore.select).not.toHaveBeenCalled()
-    expect(((await screen.findByLabelText('Biblioteca')) as HTMLSelectElement).value).toBe(
-      'user/0'
-    )
+    expect(((await screen.findByLabelText('Biblioteca')) as HTMLSelectElement).value).toBe('user/0')
   })
 })
 
@@ -283,8 +281,7 @@ describe('E1c-2 adding a library by hand', () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
-      if (cmd === 'writing_zotero_check_library')
-        return Promise.resolve({ status: 'unverifiable' })
+      if (cmd === 'writing_zotero_check_library') return Promise.resolve({ status: 'unverifiable' })
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
@@ -303,8 +300,7 @@ describe('E1c-2 adding a library by hand', () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
-      if (cmd === 'writing_zotero_check_library')
-        return Promise.resolve({ status: 'not_found' })
+      if (cmd === 'writing_zotero_check_library') return Promise.resolve({ status: 'not_found' })
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
@@ -343,8 +339,7 @@ describe('E1c-3 opening the work details (ficha)', () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
-      if (cmd === 'writing_zotero_item_detail')
-        return Promise.resolve({ status: 'not_in_catalog' })
+      if (cmd === 'writing_zotero_item_detail') return Promise.resolve({ status: 'not_in_catalog' })
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
@@ -364,8 +359,7 @@ describe('E1c-3 opening the work details (ficha)', () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {
       if (cmd === 'writing_zotero_known_libraries') return Promise.resolve([PERSONAL])
-      if (cmd === 'writing_zotero_item_detail')
-        return Promise.resolve({ status: 'not_in_catalog' })
+      if (cmd === 'writing_zotero_item_detail') return Promise.resolve({ status: 'not_in_catalog' })
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     const oncite = vi.fn(() => 'citation-1')

@@ -188,7 +188,8 @@ const es = {
     'Se detendrá el procesamiento y se conservará el trabajo confirmado. La unidad en curso puede terminarse; no se iniciarán unidades nuevas. ¿Cancelar el lote?',
   'batch.confirmCancel': 'Cancelar lote',
   'bibliography.searchTitle': 'Buscar obras',
-  'bibliography.searchHint': 'Búsqueda híbrida sobre perfiles verificados: léxico más vectores cuando hay una generación activa.',
+  'bibliography.searchHint':
+    'Búsqueda híbrida sobre perfiles verificados: léxico más vectores cuando hay una generación activa.',
   'bibliography.searchLabel': 'Consulta',
   'bibliography.searchPlaceholder': 'Tema, autor u obra…',
   'bibliography.searchAction': 'Buscar',
@@ -722,7 +723,8 @@ const es = {
   'writing.tabPending.zotero': 'Acá vas a citar tu biblioteca de Zotero y armar la bibliografía.',
   'writing.tabPending.notes':
     'Acá vas a tener a mano las notas de los documentos mientras escribís.',
-  'writing.tabPending.bibliography': 'Acá vas a buscar obras por tema, autor o título sobre los perfiles verificados.',
+  'writing.tabPending.bibliography':
+    'Acá vas a buscar obras por tema, autor o título sobre los perfiles verificados.',
   'writing.tabPending.agent': 'Acá el agente va a proponer texto con su procedencia a la vista.',
   'writing.tabPending.export':
     'Acá elegís cómo se exportan las citas y si se incluye la bibliografía. El formato se elige al descargar.',
@@ -2123,7 +2125,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.tabPending.zotero':
     'This is where you will cite your Zotero library and build the bibliography.',
   'writing.tabPending.notes': 'This is where your document notes will be at hand while you write.',
-  'writing.tabPending.bibliography': 'This is where you will search works by topic, author, or title over the verified profiles.',
+  'writing.tabPending.bibliography':
+    'This is where you will search works by topic, author, or title over the verified profiles.',
   'writing.tabPending.agent':
     'This is where the agent will propose text with its provenance in view.',
   'writing.tabPending.export':
@@ -2278,8 +2281,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroLibraryAdd': 'Add',
   'writing.zoteroLibraryCancel': 'Cancel',
   'writing.zoteroLibraryInvalid': 'Enter a library ID.',
-  'writing.zoteroLibraryNotFound':
-    'That library was not found in Zotero. Check the type and ID.',
+  'writing.zoteroLibraryNotFound': 'That library was not found in Zotero. Check the type and ID.',
   'writing.zoteroLibraryCheckFailed': 'The library could not be checked. Try again.',
   'writing.citeDialogTitle': 'Adjust the citation',
   'writing.zoteroBack': 'Back to references',
@@ -2310,8 +2312,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroDetailOpenPending':
     'Opening in Zotero is still under verification in this build. Try again later.',
   'writing.zoteroDetailOpenInvalidKey': 'This card has no valid key to open in Zotero.',
-  'writing.zoteroDetailOpenInvalidLibrary':
-    'This card has no valid library to open in Zotero.',
+  'writing.zoteroDetailOpenInvalidLibrary': 'This card has no valid library to open in Zotero.',
   'writing.zoteroDetailOpenFailed': 'Could not open in Zotero. Try again.',
   'writing.citeLocator': 'Locator',
   'writing.citeLocatorPlaceholder': '45, 45-50, 3…',
@@ -2606,7 +2607,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Processing will stop and confirmed work will be kept. The in-flight unit may finish; no new units will start. Cancel the batch?',
   'batch.confirmCancel': 'Cancel batch',
   'bibliography.searchTitle': 'Search works',
-  'bibliography.searchHint': 'Hybrid search over verified profiles: lexical plus vectors when an active generation exists.',
+  'bibliography.searchHint':
+    'Hybrid search over verified profiles: lexical plus vectors when an active generation exists.',
   'bibliography.searchLabel': 'Query',
   'bibliography.searchPlaceholder': 'Topic, author, or work…',
   'bibliography.searchAction': 'Search',

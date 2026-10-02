@@ -297,12 +297,7 @@
        Zotero, and a local copy attempts with the entry's native identity.
        Success closes nothing; failures surface below by error code. -->
     <div class="details__actions">
-      <Button
-        variant="secondary"
-        size="sm"
-        onclick={() => void openInZotero()}
-        disabled={opening}
-      >
+      <Button variant="secondary" size="sm" onclick={() => void openInZotero()} disabled={opening}>
         <ActionIcon name="external-link" size={14} />
         {t('writing.zoteroDetailOpenInZotero')}
       </Button>
@@ -311,33 +306,35 @@
       <p class="details__error" role="alert">{openError}</p>
     {/if}
     {#if confirmedItem && verifiedAt !== null}
-    <p class="details__chip details__chip--ok" role="status">
-      {t('writing.zoteroDetailSynced', { date: formatDetailDate(verifiedAt) })}
-    </p>
-    {@render ficha(confirmedItem)}
-  {:else if tombstone}
-    <p class="details__chip details__chip--lost" role="status">
-      {t('writing.zoteroDetailLost')}
-    </p>
-    {#if tombstone.reason.trim()}
-      <p class="details__notice">{t('writing.zoteroDetailReason', { reason: tombstone.reason })}</p>
-    {/if}
-    {#if lostItem}
-      {@render ficha(lostItem)}
-    {:else}
-      <p class="details__notice">{t('writing.zoteroDetailNoSnapshot')}</p>
-    {/if}
-  {:else if offline}
-    <!-- The held CSL, already parsed by the entry: what the list showed, with
+      <p class="details__chip details__chip--ok" role="status">
+        {t('writing.zoteroDetailSynced', { date: formatDetailDate(verifiedAt) })}
+      </p>
+      {@render ficha(confirmedItem)}
+    {:else if tombstone}
+      <p class="details__chip details__chip--lost" role="status">
+        {t('writing.zoteroDetailLost')}
+      </p>
+      {#if tombstone.reason.trim()}
+        <p class="details__notice">
+          {t('writing.zoteroDetailReason', { reason: tombstone.reason })}
+        </p>
+      {/if}
+      {#if lostItem}
+        {@render ficha(lostItem)}
+      {:else}
+        <p class="details__notice">{t('writing.zoteroDetailNoSnapshot')}</p>
+      {/if}
+    {:else if offline}
+      <!-- The held CSL, already parsed by the entry: what the list showed, with
        a chip that says only that it is unverified right now. Nothing here
        claims Zotero is closed or absent — nothing observed says that. -->
-    <p class="details__chip details__chip--local" role="status">
-      {t('writing.zoteroDetailLocalCopy')}
-    </p>
-    <h3 class="details__title">{entry.title}</h3>
-    {#if entry.authors || entry.year}
-      <p class="details__meta">{[entry.authors, entry.year].filter(Boolean).join(' · ')}</p>
-    {/if}
+      <p class="details__chip details__chip--local" role="status">
+        {t('writing.zoteroDetailLocalCopy')}
+      </p>
+      <h3 class="details__title">{entry.title}</h3>
+      {#if entry.authors || entry.year}
+        <p class="details__meta">{[entry.authors, entry.year].filter(Boolean).join(' · ')}</p>
+      {/if}
     {/if}
   {/if}
 </div>

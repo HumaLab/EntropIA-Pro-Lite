@@ -52,8 +52,9 @@ function qualifiedIdentityOf(item: Record<string, unknown>): QualifiedIdentity |
 
 /** Keep each identity component safe from the namespace separator. */
 function escapeIdentityComponent(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
-    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
   )
 }
 

@@ -217,7 +217,11 @@ export async function addLibraryChecked(
   } catch {
     return { ok: false, error: 'check_failed' }
   }
-  if (!check || typeof check !== 'object' || typeof (check as { status?: unknown }).status !== 'string') {
+  if (
+    !check ||
+    typeof check !== 'object' ||
+    typeof (check as { status?: unknown }).status !== 'string'
+  ) {
     return { ok: false, error: 'check_failed' }
   }
   if (check.status === 'not_found') return { ok: false, error: 'not_found' }

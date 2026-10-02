@@ -222,10 +222,7 @@ export class WritingZoteroStore {
    * discarded on arrival. Selecting the current library changes nothing.
    */
   select(libraryType: ZoteroLibrarySelection['libraryType'], libraryId: string): void {
-    if (
-      this.#selection.libraryType === libraryType &&
-      this.#selection.libraryId === libraryId
-    ) {
+    if (this.#selection.libraryType === libraryType && this.#selection.libraryId === libraryId) {
       return
     }
     this.#selection = { libraryType, libraryId }
@@ -323,10 +320,7 @@ export class WritingZoteroStore {
     return task
   }
 
-  async #requestBibliographySync(
-    selection: ZoteroLibrarySelection,
-    epoch: number
-  ): Promise<void> {
+  async #requestBibliographySync(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     this.#set({
       bibliographySync: { loading: true, error: null, requested: null },
     })

@@ -322,76 +322,71 @@
          was. Opening it selects nothing and cites nothing. -->
       <WritingZoteroDetails entry={detailsEntry} onclose={() => (detailsEntry = null)} />
     {:else}
-    <div class="zotero__actions">
-      <Button
-        variant="secondary"
-        size="sm"
-        disabled={snapshot.loading || snapshot.status?.state !== 'available'}
-        onclick={() => store.sync()}
-      >
-        <ActionIcon name="refresh" size={14} />
-        {t('writing.zoteroReload')}
-      </Button>
-      {#if snapshot.loading}
-        <p class="zotero__notice" role="status">
-          {t(snapshot.loaded > 0 ? 'writing.zoteroSyncing' : 'writing.zoteroLoading')}
-        </p>
-      {:else if snapshot.loaded > 0}
-        <p class="zotero__notice">
-          {t('writing.zoteroLoaded', { count: String(snapshot.loaded) })}
-        </p>
+      <div class="zotero__actions">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={snapshot.loading || snapshot.status?.state !== 'available'}
+          onclick={() => store.sync()}
+        >
+          <ActionIcon name="refresh" size={14} />
+          {t('writing.zoteroReload')}
+        </Button>
+        {#if snapshot.loading}
+          <p class="zotero__notice" role="status">
+            {t(snapshot.loaded > 0 ? 'writing.zoteroSyncing' : 'writing.zoteroLoading')}
+          </p>
+        {:else if snapshot.loaded > 0}
+          <p class="zotero__notice">
+            {t('writing.zoteroLoaded', { count: String(snapshot.loaded) })}
+          </p>
+        {/if}
+      </div>
+
+      {#if snapshot.loaded > 0}
+        <SearchBar
+          value={snapshot.query}
+          debounceMs={350}
+          ariaLabel={t('writing.zoteroSearch')}
+          placeholder={t('writing.zoteroSearch')}
+          onvaluechange={(query) => store.search(query)}
+          onsearch={(query) => void store.searchLibrary(query)}
+          emitSearch={true}
+        />
       {/if}
-    </div>
 
-    {#if snapshot.loaded > 0}
-      <SearchBar
-        value={snapshot.query}
-        debounceMs={350}
-        ariaLabel={t('writing.zoteroSearch')}
-        placeholder={t('writing.zoteroSearch')}
-        onvaluechange={(query) => store.search(query)}
-        onsearch={(query) => void store.searchLibrary(query)}
-        emitSearch={true}
-      />
-    {/if}
-
-    {#if snapshot.entries.length > 0}
-      <ul class="zotero__list">
-        <!-- Keyed by the whole item, not its citation key: two works can share
+      {#if snapshot.entries.length > 0}
+        <ul class="zotero__list">
+          <!-- Keyed by the whole item, not its citation key: two works can share
            a key, and a keyed list with a repeated key does not render. -->
-        {#each snapshot.entries as entry (entry.csl_json)}
-          <li class="zotero__row">
-            <span class="zotero__work">
-              <span class="zotero__title">{entry.title}</span>
-              <span class="zotero__meta">
-                {[entry.authors, entry.year].filter(Boolean).join(' · ')}
+          {#each snapshot.entries as entry (entry.csl_json)}
+            <li class="zotero__row">
+              <span class="zotero__work">
+                <span class="zotero__title">{entry.title}</span>
+                <span class="zotero__meta">
+                  {[entry.authors, entry.year].filter(Boolean).join(' · ')}
+                </span>
               </span>
-            </span>
-            <span class="zotero__row-actions">
-              <IconButton
-                size="sm"
-                label={t('writing.zoteroDetails')}
-                onclick={() => (detailsEntry = entry)}
-              >
-                <ActionIcon name="eye" size={14} />
-              </IconButton>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!oncite}
-                onclick={() => cite(entry)}
-              >
-                {t('writing.zoteroCite')}
-              </Button>
-            </span>>
-          </li>
-        {/each}
-      </ul>
-    {:else if snapshot.query.trim() && snapshot.loaded > 0}
-      <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
-    {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
-      <p class="zotero__notice">{t('writing.zoteroStart')}</p>
-    {/if}
+              <span class="zotero__row-actions">
+                <IconButton
+                  size="sm"
+                  label={t('writing.zoteroDetails')}
+                  onclick={() => (detailsEntry = entry)}
+                >
+                  <ActionIcon name="eye" size={14} />
+                </IconButton>
+                <Button variant="ghost" size="sm" disabled={!oncite} onclick={() => cite(entry)}>
+                  {t('writing.zoteroCite')}
+                </Button>
+              </span>>
+            </li>
+          {/each}
+        </ul>
+      {:else if snapshot.query.trim() && snapshot.loaded > 0}
+        <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
+      {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
+        <p class="zotero__notice">{t('writing.zoteroStart')}</p>
+      {/if}
     {/if}
 
     <p class="zotero__notice" role="status">

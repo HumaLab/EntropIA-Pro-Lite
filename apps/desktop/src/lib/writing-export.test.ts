@@ -31,9 +31,7 @@ const cite = (id: string, ...items: (string | Record<string, unknown>)[]): Node 
   type: 'zoteroCitation',
   attrs: {
     citationNodeId: id,
-    items: items.map((item) =>
-      typeof item === 'string' ? { metadataSnapshot: item } : item
-    ),
+    items: items.map((item) => (typeof item === 'string' ? { metadataSnapshot: item } : item)),
   },
 })
 const qualified = (
@@ -179,7 +177,11 @@ describe('qualified citation identity at the CSL/export seam', () => {
   })
 
   it('keeps an unqualified legacy citation CSL id through cluster and export', async () => {
-    const legacySnapshot = JSON.stringify({ id: 'legacy-csl-id', type: 'book', title: 'Legacy work' })
+    const legacySnapshot = JSON.stringify({
+      id: 'legacy-csl-id',
+      type: 'book',
+      title: 'Legacy work',
+    })
     const legacy: Node = {
       type: 'zoteroCitation',
       attrs: {
@@ -197,7 +199,8 @@ describe('qualified citation identity at the CSL/export seam', () => {
       ([command]) => command === 'writing_csl_render_document'
     )!
     expect(
-      JSON.parse((renderArgs as { clusters: { csl_json: string }[][] }).clusters[0]![0]!.csl_json).id
+      JSON.parse((renderArgs as { clusters: { csl_json: string }[][] }).clusters[0]![0]!.csl_json)
+        .id
     ).toBe('legacy-csl-id')
     const [, bibliographyArgs] = mockInvoke.mock.calls.find(
       ([command]) => command === 'writing_csl_bibliography'

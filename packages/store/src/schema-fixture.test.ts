@@ -367,7 +367,9 @@ describe('schema fixture export', () => {
 
   it('exports native extraction tasks and per-attachment rows', () => {
     const sql = buildSchemaFixture()
-    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'))")
+    expect(sql).toContain(
+      "CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'))"
+    )
     const normalized = sql.replace(/\s+/g, ' ')
     for (const fragment of [
       'bibliographic_extractions',
@@ -414,7 +416,9 @@ describe('schema fixture export', () => {
 
   it('exports E3b work profile tasks and per-contract embeddings', () => {
     const sql = buildSchemaFixture()
-    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'))")
+    expect(sql).toContain(
+      "CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'))"
+    )
     const normalized = sql.replace(/\s+/g, ' ')
     for (const fragment of [
       'bibliographic_item_embeddings',

@@ -76,9 +76,9 @@ describe('reading what was added by hand', () => {
 
   it('parses a raw value without touching storage', () => {
     expect(parseAddedLibraries(null)).toEqual([])
-    expect(
-      parseAddedLibraries(JSON.stringify([{ libraryType: 'user', libraryId: '0' }]))
-    ).toEqual([{ libraryType: 'user', libraryId: '0', unverified: false }])
+    expect(parseAddedLibraries(JSON.stringify([{ libraryType: 'user', libraryId: '0' }]))).toEqual([
+      { libraryType: 'user', libraryId: '0', unverified: false },
+    ])
   })
 })
 
@@ -108,10 +108,13 @@ describe('merging what Zotero knows with what was added', () => {
   })
 
   it('treats user/1 and group/1 as different libraries', () => {
-    const merged = mergeLibraries([], [
-      { libraryType: 'user', libraryId: '1', unverified: false },
-      { libraryType: 'group', libraryId: '1', unverified: false },
-    ])
+    const merged = mergeLibraries(
+      [],
+      [
+        { libraryType: 'user', libraryId: '1', unverified: false },
+        { libraryType: 'group', libraryId: '1', unverified: false },
+      ]
+    )
 
     expect(merged).toHaveLength(3)
   })
@@ -129,7 +132,13 @@ describe('naming an entry', () => {
   it('prefers the catalog name, falls back to Personal and derived labels', () => {
     expect(
       libraryLabel(
-        { libraryType: 'group', libraryId: '1', name: 'Seminario', source: 'catalog', unverified: false },
+        {
+          libraryType: 'group',
+          libraryId: '1',
+          name: 'Seminario',
+          source: 'catalog',
+          unverified: false,
+        },
         'Personal'
       )
     ).toBe('Seminario')
@@ -147,7 +156,13 @@ describe('naming an entry', () => {
     ).toBe('user/9')
     expect(
       libraryLabel(
-        { libraryType: 'group', libraryId: '6680944', name: null, source: 'mirror', unverified: false },
+        {
+          libraryType: 'group',
+          libraryId: '6680944',
+          name: null,
+          source: 'mirror',
+          unverified: false,
+        },
         'Personal'
       )
     ).toBe('group/6680944')
@@ -204,10 +219,7 @@ describe('checking a library before adding it', () => {
     const outcome = await addLibraryChecked('group', '   ')
 
     expect(outcome).toEqual({ ok: false, error: 'invalid' })
-    expect(mockInvoke).not.toHaveBeenCalledWith(
-      'writing_zotero_check_library',
-      expect.anything()
-    )
+    expect(mockInvoke).not.toHaveBeenCalledWith('writing_zotero_check_library', expect.anything())
     expect(localStorage.getItem(ADDED_LIBRARIES_STORAGE_KEY)).toBeNull()
   })
 
@@ -223,9 +235,9 @@ describe('checking a library before adding it', () => {
     expect(outcome.ok).toBe(true)
     if (outcome.ok) {
       expect(outcome.selected).toEqual({ libraryType: 'group', libraryId: '6680944' })
-      expect(
-        outcome.libraries.find((e) => e.libraryId === '6680944')
-      ).toMatchObject({ unverified: false })
+      expect(outcome.libraries.find((e) => e.libraryId === '6680944')).toMatchObject({
+        unverified: false,
+      })
     }
     expect(JSON.parse(localStorage.getItem(ADDED_LIBRARIES_STORAGE_KEY)!)).toEqual([
       { libraryType: 'group', libraryId: '6680944', unverified: false },
@@ -239,9 +251,7 @@ describe('checking a library before adding it', () => {
 
     expect(outcome.ok).toBe(true)
     if (outcome.ok) {
-      expect(
-        outcome.libraries.find((e) => e.libraryId === '9')
-      ).toMatchObject({ unverified: true })
+      expect(outcome.libraries.find((e) => e.libraryId === '9')).toMatchObject({ unverified: true })
     }
     expect(JSON.parse(localStorage.getItem(ADDED_LIBRARIES_STORAGE_KEY)!)).toEqual([
       { libraryType: 'user', libraryId: '9', unverified: true },

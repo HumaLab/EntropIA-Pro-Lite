@@ -1810,7 +1810,8 @@ END;
   // Per-work semantic profiles (E3b-WU1): one canonical-text row per verified
   // work. Runs through the trigger-safe single-batch path in runMigrations()
   // below like 0032/0043/0044/0045/0046.
-  '0047_bibliographic_semantic_profiles': `-- 0047_bibliographic_semantic_profiles: per-work semantic profiles (E3b-WU1).
+  '0047_bibliographic_semantic_profiles':
+    `-- 0047_bibliographic_semantic_profiles: per-work semantic profiles (E3b-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0047_bibliographic_semantic_profiles']); this file mirrors it
@@ -1848,7 +1849,8 @@ CREATE INDEX idx_bibliographic_semantic_profiles_hash
   // Per-work profile tasks (E3b-WU2): widens the kind CHECK to
   // bibliography_profile via the 0045-style table rebuild and adds the
   // per-(work, contract) embedding table. Trigger-safe single-batch path.
-  '0048_bibliography_profile_tasks': `-- 0048_bibliography_profile_tasks: per-work profile tasks and embeddings (E3b-WU2).
+  '0048_bibliography_profile_tasks':
+    `-- 0048_bibliography_profile_tasks: per-work profile tasks and embeddings (E3b-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0048_bibliography_profile_tasks']); this file mirrors it
@@ -2030,7 +2032,8 @@ END;
   // 0049 mirrors packages/store/src/migrations/0049_bibliographic_index_generations.sql.
   // Index generations (E3c-WU1): immutable contract rows plus generation
   // lifecycle with a per-contract active pointer. Trigger-safe single-batch.
-  '0049_bibliographic_index_generations': `-- 0049_bibliographic_index_generations: immutable embedding contracts and
+  '0049_bibliographic_index_generations':
+    `-- 0049_bibliographic_index_generations: immutable embedding contracts and
 -- index generations with a single-global-active pointer (E3c-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
@@ -2085,7 +2088,8 @@ CREATE INDEX idx_bibliographic_generations_contract
   // Generation identity on work embeddings (E3c-WU2): primary key moves to
   // (item, generation) with honest retired legacy ancestry for pre-existing
   // rows. Trigger-safe single-batch.
-  '0050_bibliographic_embedding_generations': `-- 0050_bibliographic_embedding_generations: generation identity on work
+  '0050_bibliographic_embedding_generations':
+    `-- 0050_bibliographic_embedding_generations: generation identity on work
 -- embeddings (E3c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
@@ -2164,7 +2168,8 @@ DROP TABLE _backup_0050_item_embeddings;
   // Native extraction tasks and rows (E4a-WU2): kind CHECK widening plus
   // one whole-document native-text row per attachment. Trigger-safe
   // single-batch.
-  '0052_bibliographic_extraction_tasks': `-- 0052_bibliographic_extraction_tasks: native extraction tasks and rows (E4a-WU2).
+  '0052_bibliographic_extraction_tasks':
+    `-- 0052_bibliographic_extraction_tasks: native extraction tasks and rows (E4a-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0052_bibliographic_extraction_tasks']); this file mirrors it
@@ -2349,7 +2354,8 @@ END;
   // 0053 mirrors packages/store/src/migrations/0053_bibliographic_page_texts.sql.
   // Per-page native texts (E4b-WU2): one row per attachment page with its
   // own hash and quality. Trigger-safe single-batch.
-  '0053_bibliographic_page_texts': `-- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).
+  '0053_bibliographic_page_texts':
+    `-- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0053_bibliographic_page_texts']); this file mirrors it
@@ -2391,7 +2397,8 @@ CREATE INDEX idx_bibliographic_page_texts_attachment
 `.trim(),
   // 0054 mirrors packages/store/src/migrations/0054_bibliographic_chunks.sql.
   // Structural work chunks and spans (E4c-WU1). Trigger-safe single-batch.
-  '0054_bibliographic_chunks': `-- 0054_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
+  '0054_bibliographic_chunks':
+    `-- 0054_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0054_bibliographic_chunks']); this file mirrors it
@@ -2438,7 +2445,8 @@ CREATE INDEX idx_bibliographic_chunks_item
 `.trim(),
   // 0055 mirrors packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql.
   // Chunk vectors per generation (E4c-WU2). Trigger-safe single-batch.
-  '0055_bibliographic_chunk_embeddings': `-- 0055_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
+  '0055_bibliographic_chunk_embeddings':
+    `-- 0055_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0055_bibliographic_chunk_embeddings']); this file mirrors it
@@ -2479,7 +2487,8 @@ CREATE INDEX idx_bibliographic_chunk_embeddings_hash
 `.trim(),
   // 0056 mirrors packages/store/src/migrations/0056_bibliographic_ingest_operations.sql.
   // Durable pending tray (E5a-WU1). Trigger-safe single-batch.
-  '0056_bibliographic_ingest_operations': `  -- 0056_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
+  '0056_bibliographic_ingest_operations':
+    `  -- 0056_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
   --
   -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
   -- (MIGRATIONS['0056_bibliographic_ingest_operations']); this file mirrors it
@@ -2521,7 +2530,8 @@ CREATE INDEX idx_bibliographic_chunk_embeddings_hash
   // 0051 mirrors packages/store/src/migrations/0051_bibliographic_profile_fts.sql.
   // Lexical search over work profiles (E3c-WU3): FTS5 with transactional
   // triggers. Trigger-safe single-batch.
-  '0051_bibliographic_profile_fts': `-- 0051_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
+  '0051_bibliographic_profile_fts':
+    `-- 0051_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0051_bibliographic_profile_fts']); this file mirrors it
@@ -2569,7 +2579,8 @@ END;
   // Per-batch interactive priority (E2c-WU3): one additive column plus an
   // index. Runs through the trigger-safe single-batch path in runMigrations()
   // below like 0032/0043/0044/0045.
-  '0046_processing_priority': `-- 0046_processing_priority: per-batch interactive priority (E2c-WU3).
+  '0046_processing_priority':
+    `-- 0046_processing_priority: per-batch interactive priority (E2c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
 -- (MIGRATIONS['0046_processing_priority']); this file mirrors it

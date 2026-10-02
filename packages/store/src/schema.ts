@@ -397,7 +397,15 @@ export const processingTasks = sqliteTable(
   'processing_tasks',
   {
     id: text('id').primaryKey(),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
+    kind: text('kind', {
+      enum: [
+        'ocr',
+        'embedding',
+        'bibliography_sync',
+        'bibliography_profile',
+        'bibliography_extract',
+      ],
+    }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity (migration 0043). Dual-written alongside
     // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
@@ -446,7 +454,15 @@ export const processingBatchTasks = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => processingTasks.id),
-    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
+    kind: text('kind', {
+      enum: [
+        'ocr',
+        'embedding',
+        'bibliography_sync',
+        'bibliography_profile',
+        'bibliography_extract',
+      ],
+    }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
     // E2a-1 task-subject identity mirror (migration 0043); see processingTasks.
     domain: text('domain').notNull().default('corpus'),
@@ -1381,9 +1397,6 @@ export const bibliographicIngestOperations = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
   },
   (table) => ({
-    stateIdx: index('idx_bibliographic_ingest_operations_state').on(
-      table.state,
-      table.libraryId
-    ),
+    stateIdx: index('idx_bibliographic_ingest_operations_state').on(table.state, table.libraryId),
   })
 )

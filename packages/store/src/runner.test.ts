@@ -1074,12 +1074,20 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
         ).toBeDefined()
       }
       expect(
-        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'").get()?.n
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'"
+          )
+          .get()?.n
       ).toBe(1)
 
       await runMigrations(shim(db))
       expect(
-        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'").get()?.n
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'"
+          )
+          .get()?.n
       ).toBe(1)
     } finally {
       db.close()
@@ -1212,9 +1220,42 @@ describe('processing task-subject identity migration (0043)', () => {
         )
         .all() as Array<Record<string, unknown>>
       expect(tasks).toEqual([
-        { id: 't-done', kind: 'ocr', asset_id_snapshot: 'a3', domain: 'corpus', subject_kind: 'asset', subject_id: 'a3', state: 'succeeded', input_revision: 7, input_fingerprint: 'fp-a3', contract_hash: 'ch-a3' },
-        { id: 't-interrupted', kind: 'embedding', asset_id_snapshot: 'a2', domain: 'corpus', subject_kind: 'asset', subject_id: 'a2', state: 'interrupted', input_revision: 5, input_fingerprint: 'fp-a2', contract_hash: 'ch-a2' },
-        { id: 't-pending', kind: 'ocr', asset_id_snapshot: 'a1', domain: 'corpus', subject_kind: 'asset', subject_id: 'a1', state: 'pending', input_revision: 3, input_fingerprint: 'fp-a1', contract_hash: 'ch-a1' },
+        {
+          id: 't-done',
+          kind: 'ocr',
+          asset_id_snapshot: 'a3',
+          domain: 'corpus',
+          subject_kind: 'asset',
+          subject_id: 'a3',
+          state: 'succeeded',
+          input_revision: 7,
+          input_fingerprint: 'fp-a3',
+          contract_hash: 'ch-a3',
+        },
+        {
+          id: 't-interrupted',
+          kind: 'embedding',
+          asset_id_snapshot: 'a2',
+          domain: 'corpus',
+          subject_kind: 'asset',
+          subject_id: 'a2',
+          state: 'interrupted',
+          input_revision: 5,
+          input_fingerprint: 'fp-a2',
+          contract_hash: 'ch-a2',
+        },
+        {
+          id: 't-pending',
+          kind: 'ocr',
+          asset_id_snapshot: 'a1',
+          domain: 'corpus',
+          subject_kind: 'asset',
+          subject_id: 'a1',
+          state: 'pending',
+          input_revision: 3,
+          input_fingerprint: 'fp-a1',
+          contract_hash: 'ch-a1',
+        },
       ])
 
       const links = db
@@ -1223,15 +1264,37 @@ describe('processing task-subject identity migration (0043)', () => {
         )
         .all() as Array<Record<string, unknown>>
       expect(links).toEqual([
-        { batch_id: 'b1', task_id: 't-interrupted', domain: 'corpus', subject_kind: 'asset', subject_id: 'a2', request_state: 'paused' },
-        { batch_id: 'b1', task_id: 't-pending', domain: 'corpus', subject_kind: 'asset', subject_id: 'a1', request_state: 'active' },
+        {
+          batch_id: 'b1',
+          task_id: 't-interrupted',
+          domain: 'corpus',
+          subject_kind: 'asset',
+          subject_id: 'a2',
+          request_state: 'paused',
+        },
+        {
+          batch_id: 'b1',
+          task_id: 't-pending',
+          domain: 'corpus',
+          subject_kind: 'asset',
+          subject_id: 'a1',
+          request_state: 'active',
+        },
       ])
 
       const checkpoints = db
-        .prepare('SELECT task_id, unit_key, input_fingerprint, contract_hash, payload FROM processing_checkpoints')
+        .prepare(
+          'SELECT task_id, unit_key, input_fingerprint, contract_hash, payload FROM processing_checkpoints'
+        )
         .all() as Array<Record<string, unknown>>
       expect(checkpoints).toEqual([
-        { task_id: 't-pending', unit_key: 'page:1', input_fingerprint: 'fp-a1', contract_hash: 'ch-a1', payload: '{}' },
+        {
+          task_id: 't-pending',
+          unit_key: 'page:1',
+          input_fingerprint: 'fp-a1',
+          contract_hash: 'ch-a1',
+          payload: '{}',
+        },
       ])
     } finally {
       db.close()
@@ -1419,9 +1482,9 @@ describe('bibliography task admission migration (0045)', () => {
            (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
          VALUES ('t-biblio', 'bibliography_sync', 'library-row-1', 'bibliography', 'library', 'library-row-1', 'pending', 1, 1)`
       ).run()
-      expect(
-        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-biblio'").get()?.kind
-      ).toBe('bibliography_sync')
+      expect(db.prepare("SELECT kind FROM processing_tasks WHERE id='t-biblio'").get()?.kind).toBe(
+        'bibliography_sync'
+      )
     } finally {
       db.close()
     }
@@ -1528,10 +1591,14 @@ describe('bibliography task admission migration (0045)', () => {
       expect(subjectSql.sql).toContain(
         'ON processing_tasks(domain, subject_kind, subject_id, kind)'
       )
-      expect(subjectSql.sql).toContain("state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')")
+      expect(subjectSql.sql).toContain(
+        "state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')"
+      )
 
       const foreignKeys = db
-        .prepare("SELECT \"table\" AS \"table\", \"from\" AS \"from\", \"to\" AS \"to\" FROM pragma_foreign_key_list('processing_batch_tasks')")
+        .prepare(
+          'SELECT "table" AS "table", "from" AS "from", "to" AS "to" FROM pragma_foreign_key_list(\'processing_batch_tasks\')'
+        )
         .all() as Array<{ table: string; from: string; to: string }>
       expect(foreignKeys).toEqual(
         expect.arrayContaining([
@@ -1557,19 +1624,20 @@ describe('bibliography task admission migration (0045)', () => {
          VALUES ('b-biblio', 't-biblio', 'bibliography_sync', 'library-row-1', 'bibliography', 'library', 'library-row-1', 'active')`
       ).run()
       expect(() =>
-        db.prepare(
-          `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+        db
+          .prepare(
+            `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
            VALUES ('t-invalid', 'not-a-kind', 'asset-invalid', 'pending', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       expect(
-        db.prepare("SELECT kind FROM processing_tasks WHERE id IN ('t-pending','t-paused','t-interrupted','t-running') ORDER BY id").all()
-      ).toEqual([
-        { kind: 'ocr' },
-        { kind: 'embedding' },
-        { kind: 'ocr' },
-        { kind: 'embedding' },
-      ])
+        db
+          .prepare(
+            "SELECT kind FROM processing_tasks WHERE id IN ('t-pending','t-paused','t-interrupted','t-running') ORDER BY id"
+          )
+          .all()
+      ).toEqual([{ kind: 'ocr' }, { kind: 'embedding' }, { kind: 'ocr' }, { kind: 'embedding' }])
     } finally {
       db.close()
     }
@@ -1666,11 +1734,13 @@ describe('batch priority migration (0046)', () => {
         ).run(`b-p${priority}`, `req-p${priority}`, priority)
       }
       expect(() =>
-        db.prepare(
-          `INSERT INTO processing_batches
+        db
+          .prepare(
+            `INSERT INTO processing_batches
              (id, request_id, origin, state, desired_state, operations, planning_done, priority, created_at, updated_at)
            VALUES ('b-bad', 'req-bad', 'user', 'running', 'run', '[]', 1, 3, 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
     } finally {
       db.close()
@@ -1774,16 +1844,16 @@ describe('bibliographic semantic profiles migration (0047)', () => {
          VALUES ('item-1', 1, 'bibliography-profile-v1', 'Título: Obra', 'hash-1', '[]', 1, 1)`
       ).run()
       expect(
-        db.prepare(
-          'SELECT input_hash FROM bibliographic_semantic_profiles WHERE item_id = ?'
-        ).get('item-1')?.input_hash
+        db
+          .prepare('SELECT input_hash FROM bibliographic_semantic_profiles WHERE item_id = ?')
+          .get('item-1')?.input_hash
       ).toBe('hash-1')
       // A catalog row delete cascades: profiles are reconstructible, never
       // entangled with citations.
       db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
-      expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_semantic_profiles').get()?.n
-      ).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_semantic_profiles').get()?.n).toBe(
+        0
+      )
     } finally {
       db.close()
     }
@@ -1900,15 +1970,17 @@ describe('bibliography profile tasks migration (0048)', () => {
            (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
          VALUES ('t-profile', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1', 'pending', 1, 1)`
       ).run()
-      expect(
-        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-profile'").get()?.kind
-      ).toBe('bibliography_profile')
+      expect(db.prepare("SELECT kind FROM processing_tasks WHERE id='t-profile'").get()?.kind).toBe(
+        'bibliography_profile'
+      )
       expect(() =>
-        db.prepare(
-          `INSERT INTO processing_tasks
+        db
+          .prepare(
+            `INSERT INTO processing_tasks
              (id, kind, asset_id_snapshot, state, created_at, updated_at)
            VALUES ('t-bad', 'not-a-kind', 'x', 'pending', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       db.prepare(
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
@@ -1938,9 +2010,11 @@ describe('bibliography profile tasks migration (0048)', () => {
          VALUES ('item-1', 'gen-46', 'c1', 'm1', 4, zeroblob(4), 'h1', 1, 1, 1)`
       ).run()
       expect(
-        db.prepare(
-          'SELECT input_hash FROM bibliographic_item_embeddings WHERE item_id=? AND embedding_contract=?'
-        ).get('item-1', 'c1')?.input_hash
+        db
+          .prepare(
+            'SELECT input_hash FROM bibliographic_item_embeddings WHERE item_id=? AND embedding_contract=?'
+          )
+          .get('item-1', 'c1')?.input_hash
       ).toBe('h1')
     } finally {
       db.close()
@@ -2011,11 +2085,13 @@ describe('bibliographic index generations migration (0049)', () => {
         ).run(id, status)
       }
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_index_generations
+        db
+          .prepare(
+            `INSERT INTO bibliographic_index_generations
              (id, contract_hash, status, created_at)
            VALUES ('g-second-active', 'c1', 'active', 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
     } finally {
       db.close()
@@ -2107,15 +2183,17 @@ describe('bibliographic embedding generations migration (0050)', () => {
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0050}'`).get()?.n
       ).toBe(1)
-      const legacy = db.prepare(
-        'SELECT generation_id, embedding, input_hash, profile_revision FROM bibliographic_item_embeddings WHERE item_id = ?'
-      ).get('item-1') as { generation_id: string; input_hash: string; profile_revision: number }
+      const legacy = db
+        .prepare(
+          'SELECT generation_id, embedding, input_hash, profile_revision FROM bibliographic_item_embeddings WHERE item_id = ?'
+        )
+        .get('item-1') as { generation_id: string; input_hash: string; profile_revision: number }
       expect(legacy.generation_id).toMatch(/^gen-legacy-/)
       expect(legacy.input_hash).toBe('h1')
       expect(legacy.profile_revision).toBe(1)
-      const gen = db.prepare(
-        'SELECT status, contract_hash FROM bibliographic_index_generations WHERE id = ?'
-      ).get(legacy.generation_id) as { status: string; contract_hash: string }
+      const gen = db
+        .prepare('SELECT status, contract_hash FROM bibliographic_index_generations WHERE id = ?')
+        .get(legacy.generation_id) as { status: string; contract_hash: string }
       expect(gen.status).toBe('retired')
       expect(gen.contract_hash).toBe('c-old')
       // The same work may carry a fresh-generation vector beside the legacy
@@ -2131,11 +2209,13 @@ describe('bibliographic embedding generations migration (0050)', () => {
          VALUES ('item-1', 'gen-new', 'c-old', 'm-old', 4, zeroblob(4), 'h2', 2, 1, 1)`
       ).run()
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_item_embeddings
+        db
+          .prepare(
+            `INSERT INTO bibliographic_item_embeddings
              (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at)
            VALUES ('item-1', 'gen-new', 'c-old', 'm-old', 4, zeroblob(4), 'h3', 3, 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
     } finally {
       db.close()
@@ -2236,9 +2316,9 @@ describe('bibliographic extraction tasks migration (0052)', () => {
            (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
          VALUES ('t-ext', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1', 'pending', 1, 1)`
       ).run()
-      expect(
-        db.prepare("SELECT kind FROM processing_tasks WHERE id='t-ext'").get()?.kind
-      ).toBe('bibliography_extract')
+      expect(db.prepare("SELECT kind FROM processing_tasks WHERE id='t-ext'").get()?.kind).toBe(
+        'bibliography_extract'
+      )
       // Extraction rows cascade with the catalog: deleting the work removes
       // the attachment row and its extraction in one statement.
       db.prepare(
@@ -2263,14 +2343,12 @@ describe('bibliographic extraction tasks migration (0052)', () => {
          VALUES ('att-1', 'item-1', 3, 'native', 'texto nativo', 'h1', 12, 'sparse', 99, 1, 1)`
       ).run()
       expect(
-        db.prepare(
-          'SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?'
-        ).get('att-1')?.quality
+        db
+          .prepare('SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?')
+          .get('att-1')?.quality
       ).toBe('sparse')
       db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
-      expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_extractions').get()?.n
-      ).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_extractions').get()?.n).toBe(0)
     } finally {
       db.close()
     }
@@ -2346,21 +2424,21 @@ describe('bibliographic page texts migration (0053)', () => {
                 ('att-1', 2, 'native', 'texto pagina dos', 'h2', 16, 'sparse', 1, 1)`
       ).run()
       expect(
-        db.prepare(
-          'SELECT COUNT(*) AS n FROM bibliographic_page_texts WHERE attachment_id = ?'
-        ).get('att-1')?.n
+        db
+          .prepare('SELECT COUNT(*) AS n FROM bibliographic_page_texts WHERE attachment_id = ?')
+          .get('att-1')?.n
       ).toBe(2)
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_page_texts
+        db
+          .prepare(
+            `INSERT INTO bibliographic_page_texts
              (attachment_id, page_number, method, text_content, text_hash, text_chars, quality, created_at, updated_at)
            VALUES ('att-1', 0, 'native', 'x', 'h0', 1, 'sparse', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
-      expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_page_texts').get()?.n
-      ).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_page_texts').get()?.n).toBe(0)
     } finally {
       db.close()
     }
@@ -2439,16 +2517,18 @@ describe('bibliographic chunks migration (0054)', () => {
          VALUES ('chunk-1', 1, 0, 5), ('chunk-1', 2, 0, 5)`
       ).run()
       expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?').get(
-          'chunk-1'
-        )?.n
+        db
+          .prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?')
+          .get('chunk-1')?.n
       ).toBe(2)
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_chunks
+        db
+          .prepare(
+            `INSERT INTO bibliographic_chunks
              (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
            VALUES ('chunk-2', 'item-1', 'att-1', 0, 'otro', 'h2', 'test-contract', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
       expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunks').get()?.n).toBe(0)
@@ -2531,16 +2611,18 @@ describe('bibliographic chunks migration (0054)', () => {
          VALUES ('chunk-1', 1, 0, 5), ('chunk-1', 2, 0, 5)`
       ).run()
       expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?').get(
-          'chunk-1'
-        )?.n
+        db
+          .prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_spans WHERE chunk_id = ?')
+          .get('chunk-1')?.n
       ).toBe(2)
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_chunks
+        db
+          .prepare(
+            `INSERT INTO bibliographic_chunks
              (id, item_id, attachment_id, ordinal, text_content, text_hash, chunking_contract, created_at, updated_at)
            VALUES ('chunk-2', 'item-1', 'att-1', 0, 'otro', 'h2', 'test-contract', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       db.prepare('DELETE FROM bibliographic_items WHERE id = ?').run('item-1')
       expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunks').get()?.n).toBe(0)
@@ -2622,9 +2704,11 @@ describe('bibliographic chunk embeddings migration (0055)', () => {
         db.prepare(stmt).run()
       }
       expect(
-        db.prepare(
-          'SELECT input_hash FROM bibliographic_chunk_embeddings WHERE chunk_id = ? AND generation_id = ?'
-        ).get('chunk-1', 'gen-1')?.input_hash
+        db
+          .prepare(
+            'SELECT input_hash FROM bibliographic_chunk_embeddings WHERE chunk_id = ? AND generation_id = ?'
+          )
+          .get('chunk-1', 'gen-1')?.input_hash
       ).toBe('h1')
       // Same chunk under another generation coexists; same pair does not.
       db.prepare(
@@ -2638,17 +2722,19 @@ describe('bibliographic chunk embeddings migration (0055)', () => {
          VALUES ('chunk-1', 'gen-2', 'ch-1', 'm', 4, zeroblob(4), 'h1', 1, 1)`
       ).run()
       expect(() =>
-        db.prepare(
-          `INSERT INTO bibliographic_chunk_embeddings
+        db
+          .prepare(
+            `INSERT INTO bibliographic_chunk_embeddings
              (chunk_id, generation_id, embedding_contract, embedding_model, dimensions, embedding, input_hash, created_at, updated_at)
            VALUES ('chunk-1', 'gen-2', 'ch-1', 'm', 4, zeroblob(4), 'h9', 1, 1)`
-        ).run()
+          )
+          .run()
       ).toThrow()
       // Deleting the chunk cascades its vectors.
       db.prepare('DELETE FROM bibliographic_chunks WHERE id = ?').run('chunk-1')
-      expect(
-        db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_embeddings').get()?.n
-      ).toBe(0)
+      expect(db.prepare('SELECT COUNT(*) AS n FROM bibliographic_chunk_embeddings').get()?.n).toBe(
+        0
+      )
     } finally {
       db.close()
     }
