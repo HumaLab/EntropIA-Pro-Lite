@@ -433,6 +433,122 @@ fn tombstone_applied_when_no_dirty_child() {
 }
 
 // --------------------------------------------------------------------------
+// Tombstone of a PDF container asset: its page assets hang off it through the
+// `assets.parent_asset_id -> assets ON DELETE CASCADE` self-edge.
+// --------------------------------------------------------------------------
+
+/// Item + PDF container `pdf` + pages `p1`/`p2` (+ an extraction on `p1`), with
+/// the oplog cleared so every row starts clean.
+fn seed_pdf_container(conn: &Connection) {
+    seed_collection(conn);
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,created_at) VALUES('pdf','i1','/pdf','pdf',1)",
+        [],
+    )
+    .unwrap();
+    for (id, page) in [("p1", 1), ("p2", 2)] {
+        conn.execute(
+            "INSERT INTO assets(id,item_id,path,type,parent_asset_id,page_number,created_at)
+             VALUES(?1,'i1','/pg','image','pdf',?2,1)",
+            rusqlite::params![id, page],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO extractions(id,asset_id,text_content,method,created_at) VALUES('ext-p1','p1','t','ocr',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+}
+
+#[test]
+fn container_tombstone_deletes_clean_pages_without_oplog_echo() {
+    let conn = capturing_db();
+    seed_pdf_container(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    let row = delete_row("assets", "pdf", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply");
+    assert_eq!(outcome.applied, 1);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets"), 0, "pages go");
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM extractions"), 0);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM sync_oplog"),
+        0,
+        "a pulled delete never echoes back to the server"
+    );
+}
+
+#[test]
+fn container_tombstone_deferred_when_page_asset_is_dirty() {
+    let conn = capturing_db();
+    seed_pdf_container(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    conn.execute("UPDATE assets SET path='/pg2' WHERE id='p2'", [])
+        .unwrap();
+    assert!(row_has_pending_oplog(&conn, "assets", "p2").unwrap());
+    assert!(!row_has_pending_oplog(&conn, "assets", "pdf").unwrap());
+
+    let row = delete_row("assets", "pdf", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply");
+    assert_eq!(outcome.skipped, 1, "tombstone deferred");
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM assets"),
+        3,
+        "the dirty page edit is not destroyed by SQLite's own cascade"
+    );
+}
+
+#[test]
+fn container_tombstone_deferred_when_page_extraction_is_dirty() {
+    let conn = capturing_db();
+    seed_pdf_container(&conn);
+    let dir = tmp_app_dir();
+    let mut ctx = ApplyContext::new(dir.path());
+
+    conn.execute(
+        "UPDATE extractions SET text_content='edited' WHERE id='ext-p1'",
+        [],
+    )
+    .unwrap();
+
+    let row = delete_row("assets", "pdf", 50);
+    let outcome = apply_page(&conn, &mut ctx, std::slice::from_ref(&row), 50).expect("apply");
+    assert_eq!(outcome.skipped, 1, "tombstone deferred");
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets"), 3);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM extractions"), 1);
+}
+
+#[test]
+fn self_referencing_asset_does_not_loop_the_dirty_walk() {
+    let conn = capturing_db();
+    seed_collection(&conn);
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,parent_asset_id,created_at)
+         VALUES('loop','i1','/p','image','loop',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+
+    assert!(!tombstone_has_dirty_cascade_child(&conn, "assets", "loop").unwrap());
+}
+
+// --------------------------------------------------------------------------
 // Tombstone of a parent with a local RESTRICT (non-cascade) dependent.
 // --------------------------------------------------------------------------
 

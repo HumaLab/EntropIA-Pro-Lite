@@ -137,7 +137,7 @@ pub fn row_has_pending_oplog(conn: &Connection, table: &str, row_id: &str) -> Re
 
 /// True when applying a tombstone for `(table, row_id)` would destroy a locally
 /// dirty cascade-reachable child (DESIGN §4.4). Walks the static cascade graph
-/// (depth ≤ 2 for the synced schema): a dirty direct child, or a dirty
+/// (depth ≤ 3 for the synced schema: container → page → extraction): a dirty direct child, or a dirty
 /// grandchild reachable through an existing intermediate child row, defers the
 /// whole tombstone.
 pub fn tombstone_has_dirty_cascade_child(
@@ -145,16 +145,33 @@ pub fn tombstone_has_dirty_cascade_child(
     table: &str,
     row_id: &str,
 ) -> Result<bool, String> {
+    let mut seen = std::collections::HashSet::new();
+    seen.insert((table.to_string(), row_id.to_string()));
+    dirty_cascade_child_walk(conn, table, row_id, &mut seen)
+}
+
+/// Recursive body of [`tombstone_has_dirty_cascade_child`]. `seen` holds the
+/// rows already on the walk so a self-referencing edge (`assets.parent_asset_id`)
+/// can never loop, even on a malformed cycle.
+fn dirty_cascade_child_walk(
+    conn: &Connection,
+    table: &str,
+    row_id: &str,
+    seen: &mut std::collections::HashSet<(String, String)>,
+) -> Result<bool, String> {
     for (child_table, fk_col) in direct_cascade_edges(table) {
         // Enumerate the local child rows pointing at this parent.
         let child_ids = child_rows_for_parent(conn, child_table, fk_col, row_id)?;
         for child_id in &child_ids {
+            if !seen.insert((child_table.to_string(), child_id.clone())) {
+                continue;
+            }
             if row_has_pending_oplog(conn, child_table, child_id)? {
                 return Ok(true);
             }
-            // Recurse one more level (e.g. items → assets is RESTRICT so never
-            // reached, but assets → extractions etc. terminate at leaves).
-            if tombstone_has_dirty_cascade_child(conn, child_table, child_id)? {
+            // Recurse: a child can itself be a cascade parent (an asset's
+            // extractions, or a PDF container's page assets and their rows).
+            if dirty_cascade_child_walk(conn, child_table, child_id, seen)? {
                 return Ok(true);
             }
         }

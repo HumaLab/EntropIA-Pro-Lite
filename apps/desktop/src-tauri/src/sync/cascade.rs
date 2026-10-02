@@ -23,7 +23,8 @@
 /// listed here have no synced cascade children. Derived from the schema:
 ///
 /// - `items`   → `entities`, `triples`, `item_topics`
-/// - `assets`  → `extractions`, `transcriptions`, `layouts`, `annotations`
+/// - `assets`  → `extractions`, `transcriptions`, `layouts`, `annotations`, and
+///   `assets` itself (`parent_asset_id`: a PDF container's page assets)
 /// - `topics`  → `item_topics`
 /// - `rag_conversations` → `rag_messages`
 /// - `web_sources` → `web_captures`
@@ -33,7 +34,13 @@
 fn cascade_children(table: &str) -> &'static [&'static str] {
     match table {
         "items" => &["entities", "triples", "item_topics"],
-        "assets" => &["extractions", "transcriptions", "layouts", "annotations"],
+        "assets" => &[
+            "extractions",
+            "transcriptions",
+            "layouts",
+            "annotations",
+            "assets",
+        ],
         "topics" => &["item_topics"],
         "rag_conversations" => &["rag_messages"],
         "web_sources" => &["web_captures"],
@@ -53,6 +60,7 @@ fn cascade_fk_column(parent: &str, child: &str) -> Option<&'static str> {
         ("assets", "transcriptions") => Some("asset_id"),
         ("assets", "layouts") => Some("asset_id"),
         ("assets", "annotations") => Some("asset_id"),
+        ("assets", "assets") => Some("parent_asset_id"),
         ("topics", "item_topics") => Some("topic_id"),
         ("rag_conversations", "rag_messages") => Some("conversation_id"),
         ("web_sources", "web_captures") => Some("web_source_id"),
@@ -136,8 +144,18 @@ mod tests {
         for child in ["extractions", "transcriptions", "layouts", "annotations"] {
             assert!(tables.contains(&child), "missing cascade child {child}");
         }
-        // Every edge on assets uses asset_id.
-        assert!(edges.iter().all(|(_, col)| *col == "asset_id"));
+        // Every edge on assets uses asset_id, except the page self-edge.
+        assert!(edges.iter().all(|(t, col)| *col
+            == if *t == "assets" {
+                "parent_asset_id"
+            } else {
+                "asset_id"
+            }));
+    }
+
+    #[test]
+    fn assets_cascade_to_their_page_assets() {
+        assert!(direct_cascade_edges("assets").contains(&("assets", "parent_asset_id")));
     }
 
     #[test]
@@ -188,12 +206,7 @@ mod tests {
                 .expect("query foreign_key_list");
             for row in rows {
                 let (parent, from_col, on_delete) = row.expect("read fk row");
-                // `assets.parent_asset_id -> assets` is a pre-existing self-reference
-                // that this map has never modelled; it is out of scope here and
-                // reported separately, so self-edges are exempt from the guard.
-                if parent != child
-                    && SYNCED_TABLES.contains(&parent.as_str())
-                    && on_delete.to_uppercase() == "CASCADE"
+                if SYNCED_TABLES.contains(&parent.as_str()) && on_delete.to_uppercase() == "CASCADE"
                 {
                     from_schema.insert((parent, child.to_string(), from_col));
                 }
