@@ -49,8 +49,27 @@ that has write access to the library.
   and passed on rerun: `test_server::dead_base` frees a port that a parallel
   test server can take. Z2/Z3 call `zotero_web::stored_credentials(conn)`
   (key + user id; `None` until the key is saved and verified).
-- [ ] Z2 — Copy to Zotero completes an existing item's missing fields via the
-  Web API. Route: delegated writer.
+- [x] Z2 — Copy to Zotero completes an existing item's missing fields via the
+  Web API. Route: delegated writer. Commit `9e28b7e1` (follow-ups: group names
+  `f6de31f3`, deterministic dead address `603bbf2d`).
+  Behaviour: an existing item is read (`GET /users|groups/{id}/items/{key}`),
+  only fields empty in Zotero and present in our source are patched (never a
+  non-empty one, never creators, `websiteTitle` only on a webpage) with
+  `If-Unmodified-Since-Version`; `412` re-reads once and retries once, then
+  reports `conflict`. Needs a stored key re-verified at copy time with write
+  access to that library; otherwise today's behaviour (`no_key`, `no_write`,
+  `invalid_key` recorded in `detail.web.state`). A Web API failure never fails
+  the copy. Result notes say what was completed and that it reaches the local
+  Zotero after Zotero syncs.
+  Evidence (RED observed first for Rust and Vitest): `pnpm lint` 0 errors;
+  `pnpm typecheck` 0 errors; `pnpm format:check` clean; `pnpm test` all
+  green (desktop 230 files); `cargo fmt --check` clean; `cargo clippy
+  --all-targets -- -D warnings` clean; `cargo test` 2125 lib tests + ACL
+  guards green. Live check (group "prueba" 6680944 only, throwaway item
+  created and deleted): key can write to the group; first run completed
+  `accessDate` and `websiteTitle`, read-back showed them filled and the title
+  untouched; second run `NothingMissing`; a stale precondition returned 412;
+  delete 204, then 404.
 - [ ] Z3 — Copy to Zotero attaches the PDF to an existing item via the Web API
   upload flow. Route: delegated writer.
 - [ ] Z4 — Owner's manual check in the app (Lite).
@@ -59,3 +78,4 @@ that has write access to the library.
 
 - 2026-10-02: opened.
 - 2026-10-02: Z1 done (`7151ebc6`).
+- 2026-10-02: Z2 done (`9e28b7e1`), live-checked on group prueba.
