@@ -239,6 +239,23 @@ and capability gating keeps old clients unaffected.
   `4c80a832` (see "Trying two dev profiles by hand" below).
 - [x] P3e — User verification on two dev profiles against a local server.
 
+## Phase 5 — copy a web source to Zotero (route: delegated writer)
+
+Started 2026-10-02 on `feat/navegador-zotero-copy` (from main `5084e05e`).
+Unblocked: the Zotero bibliographic layer (with its write transports) is on
+main. Plan §7: a Zotero `webpage` item with `url`, `accessDate`, `title`, plus
+the PDF as an attachment when there is one; needs Zotero desktop running (local
+connector) or the web API with a key. Copy, never move, never by default (D3).
+
+- [ ] P5a — Investigate and report (no code): which write path to reuse from
+  `bibliography/` (`ingest.rs` connector `saveItems`, `web_upload.rs`), how a
+  library is chosen, how an existing item with the same URL is detected, what
+  happens without Zotero running or without a key, and how the copy is
+  recorded (provenance) so a second copy is detected. Product decisions go to
+  the owner.
+- [ ] P5b — Build the chosen path for page/selection/PDF sources.
+- [ ] P5c — User verification with a real Zotero (a test library/group).
+
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
