@@ -2056,6 +2056,77 @@ const es = {
   'navegador.copy.error.not_created':
     'No se pudo copiar: no se creó ningún documento. Prueba de nuevo.',
   'navegador.copy.error.unknown': 'No se pudo copiar: {message}',
+  'navegador.zotero.copy': 'Copiar a Zotero',
+  'navegador.zotero.title': 'Copiar a Zotero',
+  'navegador.zotero.intro':
+    'Se crea «{title}» en Zotero como una página web. La fuente guardada no cambia y no se mueve.',
+  'navegador.zotero.introPdf':
+    'Se crea la página de origen en Zotero con el PDF «{title}» adjunto. La fuente guardada no cambia y no se mueve.',
+  'navegador.zotero.destination': 'Biblioteca de destino',
+  'navegador.zotero.personal': 'Mi biblioteca',
+  'navegador.zotero.loading': 'Leyendo las bibliotecas…',
+  'navegador.zotero.hint':
+    'Si Zotero no está abierto, la copia espera en cola y se envía sola cuando Zotero responda. Si el elemento ya está en la biblioteca, no se duplica.',
+  'navegador.zotero.confirm': 'Copiar',
+  'navegador.zotero.cancel': 'Cancelar',
+  'navegador.zotero.close': 'Cerrar',
+  'navegador.zotero.ok': 'Aceptar',
+  'navegador.zotero.sending': 'Enviando a Zotero…',
+  'navegador.zotero.done.copied': 'Copiado a «{library}».',
+  'navegador.zotero.done.linked':
+    'Ya estaba en «{library}»: no se duplicó ni se modificó el elemento existente.',
+  'navegador.zotero.done.waiting':
+    'Zotero no responde. La copia a «{library}» queda en cola y se enviará cuando Zotero esté abierto.',
+  'navegador.zotero.done.failed': 'No se pudo copiar: {message}',
+  'navegador.zotero.done.cancelled': 'La copia a «{library}» se canceló.',
+  'navegador.zotero.state.queued': 'En cola',
+  'navegador.zotero.state.waiting': 'Esperando a Zotero',
+  'navegador.zotero.state.running': 'Copiando…',
+  'navegador.zotero.state.copied': 'Copiado',
+  'navegador.zotero.state.linked': 'Ya estaba en Zotero',
+  'navegador.zotero.state.failed': 'Con error',
+  'navegador.zotero.state.cancelled': 'Cancelado',
+  'navegador.zotero.note.existing':
+    'El elemento ya existía en la biblioteca: se enlazó, no se duplicó.',
+  'navegador.zotero.note.pdf.attached': 'PDF adjunto.',
+  'navegador.zotero.note.pdf.not_attached':
+    'No se pudo adjuntar el PDF: esa biblioteca no admite archivos.',
+  'navegador.zotero.note.pdf.parent_exists':
+    'El PDF no se adjuntó: el elemento ya existía y Zotero solo permite adjuntar al crearlo.',
+  'navegador.zotero.note.pdf.already_there': 'El PDF ya estaba adjunto.',
+  'navegador.zotero.note.differs':
+    'Algunos campos difieren de los de Zotero; se dejaron como están (nunca se pisan).',
+  'navegador.zotero.section': 'Copias a Zotero',
+  'navegador.zotero.library': 'Biblioteca: {library}',
+  'navegador.zotero.openZotero': 'Abrir Zotero',
+  'navegador.zotero.cancelCopy': 'Cancelar copia',
+  'navegador.zotero.retry': 'Reintentar',
+  'navegador.zotero.launch.started': 'Abriendo Zotero… la cola sigue cuando responda.',
+  'navegador.zotero.launch.already_running': 'Zotero ya está abierto.',
+  'navegador.zotero.launch.not_found':
+    'No se encontró Zotero en las carpetas habituales. Ábrelo a mano.',
+  'navegador.zotero.launch.too_soon': 'Zotero se abrió hace un momento; espera a que cargue.',
+  'navegador.zotero.launch.unsupported':
+    'Abrir Zotero desde aquí no está disponible en este sistema.',
+  'navegador.zotero.launch.spawn_failed': 'No se pudo abrir Zotero. Ábrelo a mano.',
+  'navegador.zotero.error.invalid_library': 'La biblioteca elegida no es válida.',
+  'navegador.zotero.error.not_found': 'Esta fuente o captura ya no existe.',
+  'navegador.zotero.error.not_a_pdf': 'Esta captura no es un PDF.',
+  'navegador.zotero.error.library_unavailable':
+    'La biblioteca elegida no está disponible para escribir en Zotero (no existe, o es de solo lectura).',
+  'navegador.zotero.error.ambiguous_library':
+    'Hay dos bibliotecas con ese nombre en Zotero; renombra una para poder elegir.',
+  'navegador.zotero.error.zotero_api_disabled':
+    'Zotero tiene desactivada la API local. Actívala en Ajustes de Zotero > Avanzado.',
+  'navegador.zotero.error.zotero_rejected': 'Zotero rechazó la escritura: {message}',
+  'navegador.zotero.error.readback_miss':
+    'Zotero aceptó el elemento pero aún no lo devuelve. Reintenta: no se duplicará.',
+  'navegador.zotero.error.file_missing': 'El PDF guardado ya no está en el disco.',
+  'navegador.zotero.error.file_changed':
+    'El PDF guardado ya no coincide con lo que se verificó al guardarlo.',
+  'navegador.zotero.error.file_too_large': 'El PDF es demasiado grande para copiarlo a Zotero.',
+  'navegador.zotero.error.db_error': 'Error del archivo de datos ({message}).',
+  'navegador.zotero.error.unknown': '{message}',
 } as const
 
 type ExtraI18nKey =
@@ -4226,6 +4297,77 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.copy.error.import_failed': 'Could not copy: {message}',
   'navegador.copy.error.not_created': 'Could not copy: no document was created. Try again.',
   'navegador.copy.error.unknown': 'Could not copy: {message}',
+  'navegador.zotero.copy': 'Copy to Zotero',
+  'navegador.zotero.title': 'Copy to Zotero',
+  'navegador.zotero.intro':
+    '"{title}" is created in Zotero as a web page. The saved source does not change and is not moved.',
+  'navegador.zotero.introPdf':
+    'The page of origin is created in Zotero with the PDF "{title}" attached. The saved source does not change and is not moved.',
+  'navegador.zotero.destination': 'Destination library',
+  'navegador.zotero.personal': 'My library',
+  'navegador.zotero.loading': 'Reading the libraries…',
+  'navegador.zotero.hint':
+    'If Zotero is not open the copy waits in a queue and is sent by itself once Zotero answers. If the item is already in the library it is not duplicated.',
+  'navegador.zotero.confirm': 'Copy',
+  'navegador.zotero.cancel': 'Cancel',
+  'navegador.zotero.close': 'Close',
+  'navegador.zotero.ok': 'OK',
+  'navegador.zotero.sending': 'Sending to Zotero…',
+  'navegador.zotero.done.copied': 'Copied to "{library}".',
+  'navegador.zotero.done.linked':
+    'It was already in "{library}": it was not duplicated and the existing item was not modified.',
+  'navegador.zotero.done.waiting':
+    'Zotero is not answering. The copy to "{library}" stays in the queue and is sent when Zotero is open.',
+  'navegador.zotero.done.failed': 'Could not copy: {message}',
+  'navegador.zotero.done.cancelled': 'The copy to "{library}" was cancelled.',
+  'navegador.zotero.state.queued': 'Queued',
+  'navegador.zotero.state.waiting': 'Waiting for Zotero',
+  'navegador.zotero.state.running': 'Copying…',
+  'navegador.zotero.state.copied': 'Copied',
+  'navegador.zotero.state.linked': 'Already in Zotero',
+  'navegador.zotero.state.failed': 'Failed',
+  'navegador.zotero.state.cancelled': 'Cancelled',
+  'navegador.zotero.note.existing':
+    'The item already existed in the library: it was linked, not duplicated.',
+  'navegador.zotero.note.pdf.attached': 'PDF attached.',
+  'navegador.zotero.note.pdf.not_attached':
+    'The PDF could not be attached: that library does not take files.',
+  'navegador.zotero.note.pdf.parent_exists':
+    'The PDF was not attached: the item already existed and Zotero only allows attaching when creating it.',
+  'navegador.zotero.note.pdf.already_there': 'The PDF was already attached.',
+  'navegador.zotero.note.differs':
+    'Some fields differ from the ones in Zotero; they were left as they are (never overwritten).',
+  'navegador.zotero.section': 'Copies to Zotero',
+  'navegador.zotero.library': 'Library: {library}',
+  'navegador.zotero.openZotero': 'Open Zotero',
+  'navegador.zotero.cancelCopy': 'Cancel copy',
+  'navegador.zotero.retry': 'Retry',
+  'navegador.zotero.launch.started': 'Opening Zotero… the queue continues once it answers.',
+  'navegador.zotero.launch.already_running': 'Zotero is already open.',
+  'navegador.zotero.launch.not_found':
+    'Zotero was not found in the usual folders. Open it by hand.',
+  'navegador.zotero.launch.too_soon': 'Zotero was opened a moment ago; wait for it to load.',
+  'navegador.zotero.launch.unsupported':
+    'Opening Zotero from here is not available on this system.',
+  'navegador.zotero.launch.spawn_failed': 'Zotero could not be opened. Open it by hand.',
+  'navegador.zotero.error.invalid_library': 'The chosen library is not valid.',
+  'navegador.zotero.error.not_found': 'This source or capture no longer exists.',
+  'navegador.zotero.error.not_a_pdf': 'This capture is not a PDF.',
+  'navegador.zotero.error.library_unavailable':
+    'The chosen library is not available for writing in Zotero (it does not exist, or it is read-only).',
+  'navegador.zotero.error.ambiguous_library':
+    'Two libraries in Zotero have that name; rename one to be able to choose.',
+  'navegador.zotero.error.zotero_api_disabled':
+    'Zotero has its local API turned off. Turn it on in Zotero Settings > Advanced.',
+  'navegador.zotero.error.zotero_rejected': 'Zotero rejected the write: {message}',
+  'navegador.zotero.error.readback_miss':
+    'Zotero accepted the item but does not return it yet. Retry: it will not be duplicated.',
+  'navegador.zotero.error.file_missing': 'The saved PDF is no longer on disk.',
+  'navegador.zotero.error.file_changed':
+    'The saved PDF no longer matches what was verified when it was saved.',
+  'navegador.zotero.error.file_too_large': 'The PDF is too large to copy to Zotero.',
+  'navegador.zotero.error.db_error': 'Data file error ({message}).',
+  'navegador.zotero.error.unknown': '{message}',
 }
 
 const messages = { es, en }
