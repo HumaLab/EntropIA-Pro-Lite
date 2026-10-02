@@ -30,7 +30,16 @@ const APP_CREDENTIAL_SERVICE: &str = "com.entropia.desktop credentials";
 pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
 pub const ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
 pub const GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
-const SECRET_SETTING_KEYS: [&str; 3] = [OPENROUTER_API_KEY, ASSEMBLYAI_API_KEY, GLM_OCR_API_KEY];
+pub const ZOTERO_API_KEY: &str = "zotero_api_key";
+/// The Zotero account id the stored key was last verified for. Not a secret, but
+/// only meaningful next to that key, so a new or cleared key forgets it.
+pub const ZOTERO_USER_ID_KEY: &str = "zotero_user_id";
+const SECRET_SETTING_KEYS: [&str; 4] = [
+    OPENROUTER_API_KEY,
+    ASSEMBLYAI_API_KEY,
+    GLM_OCR_API_KEY,
+    ZOTERO_API_KEY,
+];
 static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_MANIFEST_URL_ENV: &str = "ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL";
@@ -170,6 +179,7 @@ pub async fn settings_delete(
             params![key.as_str()],
         )
         .map_err(|e| format!("Failed to delete setting: {e}"))?;
+        forget_zotero_user_id_for(&conn, &key);
         if is_secret_setting_key(&key) {
             if let Err(error) = delete_secret(&key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
@@ -329,11 +339,23 @@ fn delete_secret(key: &str) -> Result<(), String> {
     }
 }
 
+/// A Zotero user id belongs to one key: when that key is replaced or removed the
+/// id is stale, and the next verification writes it again.
+fn forget_zotero_user_id_for(conn: &rusqlite::Connection, key: &str) {
+    if key == ZOTERO_API_KEY {
+        let _ = conn.execute(
+            "DELETE FROM app_settings WHERE key = ?1",
+            params![ZOTERO_USER_ID_KEY],
+        );
+    }
+}
+
 pub(crate) fn persist_setting(
     conn: &rusqlite::Connection,
     key: &str,
     value: &str,
 ) -> Result<(), String> {
+    forget_zotero_user_id_for(conn, key);
     if is_secret_setting_key(key) {
         if value.trim().is_empty() {
             conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
@@ -912,6 +934,32 @@ mod tests {
                 .expect("public key should load");
 
         assert_eq!(public_key, "base64-public-key");
+    }
+
+    #[test]
+    fn the_zotero_key_is_a_protected_setting_and_redacted_in_bulk_reads() {
+        assert!(is_secret_setting_key(ZOTERO_API_KEY));
+        assert_eq!(
+            ipc_setting_value(ZOTERO_API_KEY, "secret_ref:zotero_api_key"),
+            "secret_ref:zotero_api_key"
+        );
+        let entry = redact_setting_entry(SettingEntry {
+            key: ZOTERO_API_KEY.to_string(),
+            value: "secret_ref:zotero_api_key".to_string(),
+        });
+        assert_eq!(entry.value, REDACTED_SETTING_VALUE);
+    }
+
+    #[test]
+    fn replacing_or_clearing_the_zotero_key_forgets_the_account_it_was_verified_for() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, ZOTERO_USER_ID_KEY, "4242").expect("save user id");
+
+        // Clearing takes the keyring-free path; saving a new key forgets the id
+        // through the same helper before it touches the credential store.
+        persist_setting(&conn, ZOTERO_API_KEY, "").expect("clear key");
+
+        assert_eq!(get_raw_setting(&conn, ZOTERO_USER_ID_KEY), None);
     }
 
     #[cfg(feature = "local-ml")]

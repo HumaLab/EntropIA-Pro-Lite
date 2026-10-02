@@ -15,6 +15,7 @@ import {
   describeSettingsError,
   testOpenrouterConnection,
   testAssemblyaiConnection,
+  verifyZoteroKey,
   testGlmOcrConnection,
   SETTINGS_KEYS,
   DEFAULT_OPENROUTER_MODEL,
@@ -117,6 +118,15 @@ describe('settings', () => {
     })
   })
 
+  describe('verifyZoteroKey', () => {
+    it('asks the backend to check the key, blank meaning the stored one', async () => {
+      mockInvoke.mockResolvedValueOnce({ state: 'invalid_key' })
+      const check = await verifyZoteroKey('')
+      expect(mockInvoke).toHaveBeenCalledWith('zotero_verify_key', { apiKey: '' })
+      expect(check).toEqual({ state: 'invalid_key' })
+    })
+  })
+
   describe('constants', () => {
     it('exports well-known setting keys', () => {
       expect(SETTINGS_KEYS.OPENROUTER_API_KEY).toBe('openrouter_api_key')
@@ -126,6 +136,7 @@ describe('settings', () => {
       expect(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS).toBe('assemblyai_role_speaker_identification')
       expect(SETTINGS_KEYS.STT_MODE).toBe('stt_mode')
       expect(SETTINGS_KEYS.GLM_OCR_API_KEY).toBe('glm_ocr_api_key')
+      expect(SETTINGS_KEYS.ZOTERO_API_KEY).toBe('zotero_api_key')
       expect(SETTINGS_KEYS.OCRH_MODE).toBe('ocrh_mode')
       expect(SETTINGS_KEYS.LANGUAGE).toBe('language')
     })

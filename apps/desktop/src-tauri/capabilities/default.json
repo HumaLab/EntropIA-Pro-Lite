@@ -94,6 +94,7 @@
     "allow-transcribe-audio",
     "allow-transcribe-dictation",
     "allow-test-assemblyai-connection",
+    "allow-zotero-verify-key",
     "allow-update-transcription-text-cmd",
     "allow-prepare-audio-preview",
     "allow-llm-correct-ocr",

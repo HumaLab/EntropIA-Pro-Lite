@@ -31,6 +31,7 @@ const {
   testOpenrouterConnectionMock,
   testAssemblyaiConnectionMock,
   testGlmOcrConnectionMock,
+  verifyZoteroKeyMock,
   llmIsAvailableMock,
   llmLocalModelInfoMock,
   llmDownloadModelMock,
@@ -48,6 +49,7 @@ const {
   testOpenrouterConnectionMock: vi.fn(),
   testAssemblyaiConnectionMock: vi.fn(),
   testGlmOcrConnectionMock: vi.fn(),
+  verifyZoteroKeyMock: vi.fn(),
   llmIsAvailableMock: vi.fn(),
   llmLocalModelInfoMock: vi.fn(),
   llmDownloadModelMock: vi.fn(),
@@ -73,6 +75,7 @@ vi.mock('$lib/settings', async () => {
     testOpenrouterConnection: testOpenrouterConnectionMock,
     testAssemblyaiConnection: testAssemblyaiConnectionMock,
     testGlmOcrConnection: testGlmOcrConnectionMock,
+    verifyZoteroKey: verifyZoteroKeyMock,
   }
 })
 
@@ -121,6 +124,7 @@ describe('SettingsView', () => {
     testOpenrouterConnectionMock.mockReset()
     testAssemblyaiConnectionMock.mockReset().mockResolvedValue(undefined)
     testGlmOcrConnectionMock.mockReset().mockResolvedValue(undefined)
+    verifyZoteroKeyMock.mockReset().mockResolvedValue({ state: 'invalid_key' })
     llmIsAvailableMock.mockReset().mockResolvedValue(true)
     llmDownloadModelMock.mockReset().mockResolvedValue(undefined)
     embeddingOpenModelsDirMock.mockReset().mockResolvedValue(undefined)
@@ -1384,6 +1388,136 @@ describe('SettingsView', () => {
       expect(llmDownloadModelMock).not.toHaveBeenCalled()
     }
   )
+
+  describe('Zotero Web API key card', () => {
+    const FULL_ACCESS = {
+      state: 'valid',
+      user_id: 4242,
+      username: 'agus',
+      personal_library: true,
+      personal_write: true,
+      groups: [
+        { id: 'all', library: true, write: false },
+        { id: '777', library: true, write: true },
+      ],
+    }
+
+    function storedZoteroKey() {
+      settingsGetMock.mockImplementation(async (key: string) => {
+        if (key === 'zotero_api_key') return 'secret_ref:zotero_api_key'
+        if (key === 'openrouter_model') return 'anthropic/claude-3.7-sonnet'
+        if (key === 'openrouter_embedding_model') return 'baai/bge-m3'
+        return null
+      })
+    }
+
+    async function clickVerify() {
+      const verify = await screen.findByRole('button', { name: 'Verificar clave' })
+      await waitFor(() => expect(verify).toBeEnabled())
+      await fireEvent.click(verify)
+    }
+
+    it('says Web API changes reach the local Zotero after Zotero syncs', async () => {
+      render(SettingsView)
+      expect(await screen.findByText(/cuando Zotero sincroniza/)).toBeInTheDocument()
+    })
+
+    it('keeps the verify action off until there is a key', async () => {
+      render(SettingsView)
+      const verify = await screen.findByRole('button', { name: 'Verificar clave' })
+      expect(verify).toBeDisabled()
+    })
+
+    it('verifies the stored key without retyping it and shows the account and access', async () => {
+      storedZoteroKey()
+      verifyZoteroKeyMock.mockResolvedValue(FULL_ACCESS)
+      render(SettingsView)
+
+      await clickVerify()
+
+      expect(verifyZoteroKeyMock).toHaveBeenCalledWith('')
+      expect(await screen.findByText('Cuenta de Zotero: agus · id 4242')).toBeInTheDocument()
+      expect(screen.getByText('Biblioteca personal: lectura y escritura')).toBeInTheDocument()
+      expect(screen.getByText('Todos tus grupos: solo lectura')).toBeInTheDocument()
+      expect(screen.getByText('Grupo 777: lectura y escritura')).toBeInTheDocument()
+    })
+
+    it('reports a read-only key with no group access', async () => {
+      storedZoteroKey()
+      verifyZoteroKeyMock.mockResolvedValue({
+        state: 'valid',
+        user_id: 1,
+        username: '',
+        personal_library: true,
+        personal_write: false,
+        groups: [],
+      })
+      render(SettingsView)
+
+      await clickVerify()
+
+      expect(await screen.findByText('Cuenta de Zotero · id 1')).toBeInTheDocument()
+      expect(screen.getByText('Biblioteca personal: solo lectura')).toBeInTheDocument()
+      expect(screen.getByText('Grupos: sin acceso')).toBeInTheDocument()
+    })
+
+    it('says so when Zotero does not know the key', async () => {
+      storedZoteroKey()
+      verifyZoteroKeyMock.mockResolvedValue({ state: 'invalid_key' })
+      render(SettingsView)
+
+      await clickVerify()
+
+      expect(await screen.findByText(/Zotero no reconoce esta clave/)).toBeInTheDocument()
+    })
+
+    it('says so when Zotero cannot be reached', async () => {
+      storedZoteroKey()
+      verifyZoteroKeyMock.mockResolvedValue({ state: 'unreachable' })
+      render(SettingsView)
+
+      await clickVerify()
+
+      expect(await screen.findByText(/No se pudo contactar a Zotero/)).toBeInTheDocument()
+    })
+
+    it('shows a command failure instead of swallowing it', async () => {
+      storedZoteroKey()
+      verifyZoteroKeyMock.mockRejectedValue(new Error('Zotero answered HTTP 500'))
+      render(SettingsView)
+
+      await clickVerify()
+
+      expect(await screen.findByText('Zotero answered HTTP 500')).toBeInTheDocument()
+    })
+
+    it('verifies a typed key as typed, before it is saved', async () => {
+      render(SettingsView)
+
+      const input = await screen.findByLabelText('API key de Zotero')
+      await fireEvent.input(input, { target: { value: ' TypedKey123 ' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Verificar clave' }))
+
+      expect(verifyZoteroKeyMock).toHaveBeenCalledWith('TypedKey123')
+      expect(settingsSetMock).not.toHaveBeenCalledWith('zotero_api_key', expect.anything())
+    })
+
+    it('saves the key as a protected setting, masks it, and records the account', async () => {
+      verifyZoteroKeyMock.mockResolvedValue(FULL_ACCESS)
+      render(SettingsView)
+
+      const input = await screen.findByLabelText('API key de Zotero')
+      await fireEvent.input(input, { target: { value: 'TypedKey123' } })
+      await fireEvent.click(screen.getByRole('button', { name: 'Guardar cambios' }))
+
+      await waitFor(() =>
+        expect(settingsSetMock).toHaveBeenCalledWith('zotero_api_key', 'TypedKey123')
+      )
+      await waitFor(() => expect(input).toHaveValue(''))
+      // Saving forgets the cached account; checking the stored key learns it again.
+      await waitFor(() => expect(verifyZoteroKeyMock).toHaveBeenCalledWith(''))
+    })
+  })
 })
 
 describe('settings dirty detection helpers', () => {
@@ -1401,6 +1535,7 @@ describe('settings dirty detection helpers', () => {
     assemblyAiApiKey: '',
     assemblyAiCollectionSpeakerLabels: true,
     glmOcrApiKey: '',
+    zoteroApiKey: '',
     ocrCorrectionPrompt: 'Correct {text}',
     summaryPrompt: 'Summarize {text}',
     nerPrompt: 'NER {text}',

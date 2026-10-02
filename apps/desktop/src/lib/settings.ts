@@ -72,6 +72,31 @@ export function testGlmOcrConnection(apiKey: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Zotero Web API key
+// ---------------------------------------------------------------------------
+
+/** What a key may do in one library group (`all` is the default for every group). */
+export type ZoteroGroupAccess = { id: string; library: boolean; write: boolean }
+
+export type ZoteroKeyInfo = {
+  user_id: number
+  username: string
+  personal_library: boolean
+  personal_write: boolean
+  groups: ZoteroGroupAccess[]
+}
+
+export type ZoteroKeyCheck =
+  | ({ state: 'valid' } & ZoteroKeyInfo)
+  | { state: 'invalid_key' }
+  | { state: 'unreachable' }
+
+/** Check a Zotero key against api.zotero.org. A blank key checks the stored one. */
+export function verifyZoteroKey(apiKey: string): Promise<ZoteroKeyCheck> {
+  return invoke<ZoteroKeyCheck>('zotero_verify_key', { apiKey })
+}
+
+// ---------------------------------------------------------------------------
 // Well-known setting keys
 // ---------------------------------------------------------------------------
 
@@ -86,6 +111,7 @@ export const SETTINGS_KEYS = {
   ASSEMBLYAI_SPEAKER_LABELS: 'assemblyai_role_speaker_identification',
   STT_MODE: 'stt_mode',
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
+  ZOTERO_API_KEY: 'zotero_api_key',
   OCRH_MODE: 'ocrh_mode',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',

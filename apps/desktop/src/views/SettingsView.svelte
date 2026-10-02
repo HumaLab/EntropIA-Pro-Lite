@@ -17,6 +17,7 @@
     assemblyAiApiKey: string
     assemblyAiCollectionSpeakerLabels: boolean
     glmOcrApiKey: string
+    zoteroApiKey: string
     ocrCorrectionPrompt: string
     summaryPrompt: string
     nerPrompt: string
@@ -54,6 +55,8 @@
     testOpenrouterConnection,
     testAssemblyaiConnection,
     testGlmOcrConnection,
+    verifyZoteroKey,
+    type ZoteroKeyCheck,
     SETTINGS_KEYS,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENROUTER_EMBEDDING_MODEL,
@@ -167,6 +170,9 @@
   let glmOcrApiKey = $state('')
   let maskedGlmOcrApiKey = $state('')
   let showGlmOcrApiKey = $state(false)
+  let zoteroApiKey = $state('')
+  let maskedZoteroApiKey = $state('')
+  let showZoteroApiKey = $state(false)
   let ocrCorrectionPrompt = $state<string>(DEFAULT_PROMPTS.ocrCorrectionPrompt)
   let summaryPrompt = $state<string>(DEFAULT_PROMPTS.summaryPrompt)
   let nerPrompt = $state<string>(DEFAULT_PROMPTS.nerPrompt)
@@ -292,6 +298,9 @@
   let assemblyAiTestResult = $state<{ success: boolean; message: string } | null>(null)
   let testingGlmOcr = $state(false)
   let glmOcrTestResult = $state<{ success: boolean; message: string } | null>(null)
+  let verifyingZotero = $state(false)
+  let zoteroCheck = $state<ZoteroKeyCheck | null>(null)
+  let zoteroError = $state<string | null>(null)
   let availableModels = $state<ModelInfo[]>([])
   let loadSettingsError = $state<string | null>(null)
 
@@ -323,6 +332,7 @@
   const openRouterKeyStatus = $derived(keyStatus(maskedApiKey))
   const assemblyAiKeyStatus = $derived(keyStatus(maskedAssemblyAiApiKey))
   const glmOcrKeyStatus = $derived(keyStatus(maskedGlmOcrApiKey))
+  const zoteroKeyStatus = $derived(keyStatus(maskedZoteroApiKey))
 
   /* The speaker-label choice was a native <select>, whose popup the operating
      system draws — white surface, foreign type — and no CSS here reaches it.
@@ -351,6 +361,40 @@
     Boolean(assemblyAiApiKey.trim() || maskedAssemblyAiApiKey)
   )
   const hasGlmOcrCredential = $derived(Boolean(glmOcrApiKey.trim() || maskedGlmOcrApiKey))
+  const hasZoteroCredential = $derived(Boolean(zoteroApiKey.trim() || maskedZoteroApiKey))
+
+  /* What a valid key can do, one plain line each: the account, the personal
+     library, then every group the key reaches. */
+  const zoteroAccessLines = $derived.by(() => {
+    if (zoteroCheck?.state !== 'valid') return []
+    const check = zoteroCheck
+    const lines = [
+      check.username
+        ? t('settings.zotero.account', { username: check.username, userId: check.user_id })
+        : t('settings.zotero.accountNoName', { userId: check.user_id }),
+      !check.personal_library
+        ? t('settings.zotero.personalNone')
+        : check.personal_write
+          ? t('settings.zotero.personalWrite')
+          : t('settings.zotero.personalRead'),
+    ]
+    const groups = check.groups.filter((group) => group.library)
+    if (groups.length === 0) lines.push(t('settings.zotero.groupsNone'))
+    for (const group of groups) {
+      if (group.id === 'all') {
+        lines.push(
+          group.write ? t('settings.zotero.groupAllWrite') : t('settings.zotero.groupAllRead')
+        )
+      } else {
+        lines.push(
+          t(group.write ? 'settings.zotero.groupWrite' : 'settings.zotero.groupRead', {
+            id: group.id,
+          })
+        )
+      }
+    }
+    return lines
+  })
 
   const SECRET_REF_PREFIX = 'secret_ref:'
   const LEGACY_REF_PREFIX = 'legacy_ref:'
@@ -359,6 +403,7 @@
     openrouter: 'https://openrouter.ai/settings/keys',
     assemblyai: 'https://www.assemblyai.com/app/account',
     glmOcr: 'https://z.ai/manage-apikey/apikey-list',
+    zotero: 'https://www.zotero.org/settings/keys/new',
   } as const
 
   // Local model download state
@@ -432,6 +477,7 @@
       assemblyAiApiKey,
       assemblyAiCollectionSpeakerLabels,
       glmOcrApiKey,
+      zoteroApiKey,
       ocrCorrectionPrompt,
       summaryPrompt,
       nerPrompt,
@@ -505,6 +551,7 @@
         storedAssemblyAiKey,
         storedAssemblyAiSpeakerLabels,
         storedGlmOcrKey,
+        storedZoteroKey,
         storedOcrCorrectionPrompt,
         storedSummaryPrompt,
         storedNerPrompt,
@@ -524,6 +571,7 @@
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY),
         settingsGet(SETTINGS_KEYS.ASSEMBLYAI_SPEAKER_LABELS),
         settingsGet(SETTINGS_KEYS.GLM_OCR_API_KEY),
+        settingsGet(SETTINGS_KEYS.ZOTERO_API_KEY),
         settingsGet(SETTINGS_KEYS.OCR_CORRECTION_PROMPT),
         settingsGet(SETTINGS_KEYS.SUMMARY_PROMPT),
         settingsGet(SETTINGS_KEYS.NER_PROMPT),
@@ -578,6 +626,16 @@
       } else if (storedGlmOcrKey) {
         glmOcrApiKey = storedGlmOcrKey
         maskedGlmOcrApiKey = maskKey(storedGlmOcrKey, 0)
+      }
+      if (storedZoteroKey?.startsWith(SECRET_REF_PREFIX)) {
+        zoteroApiKey = ''
+        maskedZoteroApiKey = t('settings.keyStoredInCredentialManager')
+      } else if (storedZoteroKey?.startsWith(LEGACY_REF_PREFIX)) {
+        zoteroApiKey = ''
+        maskedZoteroApiKey = t('settings.keyStoredLegacyPlaintext')
+      } else if (storedZoteroKey) {
+        zoteroApiKey = storedZoteroKey
+        maskedZoteroApiKey = maskKey(storedZoteroKey, 0)
       }
       localModel = modelInfo
       localAvailable = modelInfo?.available ?? false
@@ -1045,6 +1103,31 @@
     }
   }
 
+  /* Checks the typed key, or the stored one when the field is blank. The command
+     records the account id only for the stored key, which is the one the
+     Web API writers use. */
+  async function runZoteroCheck(key: string) {
+    verifyingZotero = true
+    zoteroCheck = null
+    zoteroError = null
+    try {
+      zoteroCheck = await verifyZoteroKey(key)
+    } catch (e) {
+      zoteroError = e instanceof Error ? e.message : String(e)
+    } finally {
+      verifyingZotero = false
+    }
+  }
+
+  async function handleVerifyZoteroKey() {
+    if (!hasZoteroCredential) {
+      zoteroCheck = null
+      zoteroError = t('settings.zotero.enterKey')
+      return
+    }
+    await runZoteroCheck(zoteroApiKey.trim())
+  }
+
   async function handleSave() {
     saving = true
     saveFeedback = null
@@ -1148,6 +1231,9 @@
         writes.push(settingsSet(SETTINGS_KEYS.ASSEMBLYAI_API_KEY, assemblyAiApiKey.trim()))
       if (glmOcrApiKey.trim())
         writes.push(settingsSet(SETTINGS_KEYS.GLM_OCR_API_KEY, glmOcrApiKey.trim()))
+      if (zoteroApiKey.trim())
+        writes.push(settingsSet(SETTINGS_KEYS.ZOTERO_API_KEY, zoteroApiKey.trim()))
+      const savedZoteroKey = Boolean(zoteroApiKey.trim())
       const savedOpenRouterKey = Boolean(apiKey.trim())
       const savedAssemblyAiKey = Boolean(assemblyAiApiKey.trim())
       const savedGlmOcrKey = Boolean(glmOcrApiKey.trim())
@@ -1163,6 +1249,13 @@
       if (savedGlmOcrKey) {
         glmOcrApiKey = ''
         maskedGlmOcrApiKey = t('settings.keyStoredInCredentialManager')
+      }
+      if (savedZoteroKey) {
+        zoteroApiKey = ''
+        maskedZoteroApiKey = t('settings.keyStoredInCredentialManager')
+        // Saving forgets the account the previous key was verified for; checking
+        // the stored key learns it again for the Web API writers.
+        void runZoteroCheck('')
       }
       savedSnapshot = currentSnapshot
       saveFeedback = {
@@ -2238,6 +2331,98 @@
             </div>
           </section>
         </Card>
+
+        <Card>
+          <section class="settings-card-section">
+            <div class="settings-card-section__copy">
+              <div class="settings-card-section__head">
+                <h2>{t('settings.zotero.title')}</h2>
+                <a
+                  class="settings__provider-link"
+                  href={PROVIDER_LINKS.zotero}
+                  onclick={(event) => openProviderLink(event, PROVIDER_LINKS.zotero, 'Zotero')}
+                  aria-label={t('settings.getApiKeyLink', { provider: 'Zotero' })}
+                >
+                  <span>{t('settings.getApiKeyShort')}</span>
+                  <ActionIcon name="external-link" size={14} />
+                </a>
+              </div>
+              <p>{t('settings.zotero.description')}</p>
+            </div>
+
+            <div class="settings__field settings__field--stacked">
+              <label class="settings__label" for="zotero-api-key-{paneId}"
+                >{t('settings.zotero.keyLabel')}</label
+              >
+              <div class="settings__input-row">
+                <input
+                  id="zotero-api-key-{paneId}"
+                  type={showZoteroApiKey ? 'text' : 'password'}
+                  class="settings__input"
+                  bind:value={zoteroApiKey}
+                  placeholder={t('settings.zotero.keyPlaceholder')}
+                  autocomplete="off"
+                />
+                <button
+                  class="settings__icon-btn"
+                  type="button"
+                  onclick={() => (showZoteroApiKey = !showZoteroApiKey)}
+                  use:tooltip={showZoteroApiKey
+                    ? t('settings.hideApiKey')
+                    : t('settings.showApiKey')}
+                  aria-label={showZoteroApiKey
+                    ? t('settings.hideApiKey')
+                    : t('settings.showApiKey')}
+                >
+                  <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
+                </button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onclick={handleVerifyZoteroKey}
+                  disabled={verifyingZotero || !hasZoteroCredential}
+                >
+                  {verifyingZotero ? t('settings.zotero.verifying') : t('settings.zotero.verify')}
+                </Button>
+              </div>
+
+              {#if zoteroKeyStatus}
+                <p
+                  class="settings__hint settings__key-status"
+                  class:settings__key-status--warn={zoteroKeyStatus.warn}
+                >
+                  <ActionIcon
+                    name={zoteroKeyStatus.warn ? 'triangle-alert' : 'circle-check'}
+                    size={12}
+                  />
+                  <span>{zoteroKeyStatus.text}</span>
+                </p>
+              {/if}
+
+              <p class="settings__hint">{t('settings.zotero.syncNote')}</p>
+
+              {#if zoteroCheck?.state === 'valid'}
+                <ul class="surface-message surface-message--success settings__access-list">
+                  {#each zoteroAccessLines as line (line)}
+                    <li>{line}</li>
+                  {/each}
+                </ul>
+              {:else if zoteroCheck?.state === 'invalid_key'}
+                <p class="surface-message surface-message--error settings__feedback">
+                  {t('settings.zotero.invalidKey')}
+                </p>
+              {:else if zoteroCheck?.state === 'unreachable'}
+                <p class="surface-message surface-message--error settings__feedback">
+                  {t('settings.zotero.unreachable')}
+                </p>
+              {:else if zoteroError}
+                <p class="surface-message surface-message--error settings__feedback">
+                  {zoteroError}
+                </p>
+              {/if}
+            </div>
+          </section>
+        </Card>
       </div>
     {:else if activeTab === 'prompts'}
       {#if saveFeedback}
@@ -2801,6 +2986,16 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    font-size: var(--font-size-xs);
+  }
+
+  /* What a verified Zotero key can reach: one short line per library. */
+  .settings__access-list {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
     font-size: var(--font-size-xs);
   }
 

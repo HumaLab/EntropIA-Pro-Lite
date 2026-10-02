@@ -42,6 +42,7 @@ mod store_updates;
 // the engine's internal API (run_cycle / ensure_capture / start_engine).
 pub mod sync;
 mod transcription;
+mod zotero_web;
 // Writing workspace (plan-editor.md). Variant-independent: it needs no local
 // ML, so the command surface is identical in Pro and Lite.
 // `pub` so the forced-termination test (tests/writing_recovery.rs) can drive the
@@ -1263,6 +1264,7 @@ pub fn run() {
             transcription::commands::transcribe_audio,
             transcription::commands::transcribe_dictation,
             transcription::commands::test_assemblyai_connection,
+            zotero_web::zotero_verify_key,
             transcription::commands::update_transcription_text_cmd,
             audio_preview::prepare_audio_preview,
             llm::commands::llm_correct_ocr,

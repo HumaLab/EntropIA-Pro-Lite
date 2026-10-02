@@ -97,6 +97,7 @@ const APP_COMMANDS: &[&str] = &[
     "transcribe_audio",
     "transcribe_dictation",
     "test_assemblyai_connection",
+    "zotero_verify_key",
     "update_transcription_text_cmd",
     "prepare_audio_preview",
     "llm_correct_ocr",
