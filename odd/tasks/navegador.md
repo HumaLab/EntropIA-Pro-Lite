@@ -163,6 +163,30 @@ safe after app commands are gated by an ACL manifest, or with engine B.
   page or selection. Commits `4b37f172` (PDF renderer), `7fe1a350` (ticket,
   temp file, provenance), `912d575e` (button, dialog wording, item panel).
 
+## Phase 3 — sync web captures between devices (route: delegated writer)
+
+Started 2026-10-02 on `feat/navegador-sync` (from main `7ada03a8`); server
+work on EntropIA-Cloud `feat/web-capture-sync` (from `0678457`). Unblocked:
+investigation sync landed on main and its server is deployed. Design: plan §8
+(row sync gated by capability `web-capture-v1`, own blob path for
+`web-captures/`). No JS migration needed (sync tables and triggers are created
+by Rust at runtime). Server first: Coolify auto-deploys Cloud `main` on push,
+and capability gating keeps old clients unaffected.
+
+- [ ] P3a — Server: `web_sources`, `web_captures` in `SYNCED_TABLES` and
+  `CAPABILITY_GATED_TABLES` with `web-capture-v1`; advertise it; pull SQL
+  handles the third gated table generically; PROTOCOL.md/DESIGN.md; tests.
+- [ ] P3b — Client rows: allowlist, FK order, cascade map, capability header,
+  one-time catch-up from cursor 0 for the newly visible tables; tests.
+- [ ] P3c — Client blobs: `web-captures/` files (HTML, PDF, long text) pushed
+  before their rows and downloaded/verified on pull; path validation; remote
+  deletes remove local files; streaming upload for large PDFs.
+- [ ] P3d — Two-device verification without the real account: automated
+  two-device test against a local `entropia-sync-server` (like
+  `research_sync_two_device.rs`), and a way for the user to try it by hand
+  (dev profile may sync only to a loopback server).
+- [ ] P3e — User verification on two dev profiles against a local server.
+
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
   not wire `webViewDidClose:` / GTK `close`), and macOS reports no download
