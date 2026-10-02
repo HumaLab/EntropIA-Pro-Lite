@@ -46,6 +46,7 @@ function capture(overrides: Partial<CaptureDetail> = {}): CaptureDetail {
     quotePrefix: null,
     quoteSuffix: null,
     filePresent: true,
+    filePending: false,
     createdAt: 1,
     ...overrides,
   }
@@ -152,6 +153,14 @@ describe('describeCapture', () => {
   it('tells a missing file from a capture that never had one', () => {
     expect(describeCapture(capture({ filePresent: false })).file).toBe('missing')
     expect(describeCapture(capture({ filePresent: null })).file).toBe('none')
+  })
+
+  it('tells a file that sync is still downloading from one that is missing', () => {
+    const arriving = describeCapture(capture({ filePresent: false, filePending: true }))
+    expect(arriving.file).toBe('downloading')
+    expect(arriving.canViewPdf).toBe(false)
+    // A file that is on disk is present whatever the queue says.
+    expect(describeCapture(capture({ filePresent: true, filePending: true })).file).toBe('present')
   })
 
   it('shows a selection as its quote with the text around it', () => {

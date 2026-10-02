@@ -20,6 +20,7 @@ pub(crate) mod research_receive;
 pub(crate) mod research_transport;
 pub mod schema;
 pub mod session;
+pub(crate) mod web_blobs;
 pub(crate) mod web_capture;
 pub(crate) mod writing_blobs;
 pub(crate) mod writing_cycle;
@@ -43,6 +44,8 @@ mod research_receive_tests;
 mod research_transport_tests;
 #[cfg(test)]
 pub mod test_support;
+#[cfg(test)]
+mod web_blobs_tests;
 #[cfg(test)]
 mod web_capture_tests;
 #[cfg(test)]

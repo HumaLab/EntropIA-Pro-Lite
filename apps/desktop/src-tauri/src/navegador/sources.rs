@@ -91,6 +91,8 @@ pub struct CaptureDetail {
     /// Whether the saved file (HTML snapshot or PDF) is on disk; `None` when
     /// this capture has no file.
     pub file_present: Option<bool>,
+    /// The file came from another device and sync is still downloading it.
+    pub file_pending: bool,
     /// Epoch milliseconds.
     pub created_at: i64,
 }
@@ -511,8 +513,10 @@ pub fn source_detail(
             rusqlite::params![source_id, PREVIEW_MAX_CHARS as i64],
             |row| {
                 let rel_path: Option<String> = row.get(13)?;
+                let id: String = row.get(0)?;
+                let file_pending = crate::sync::web_blobs::has_pending_download(conn, &id);
                 Ok(CaptureDetail {
-                    id: row.get(0)?,
+                    id,
                     kind: row.get(1)?,
                     mime_type: row.get(2)?,
                     accessed_at: row.get(3)?,
@@ -528,6 +532,7 @@ pub fn source_detail(
                     file_present: rel_path
                         .as_deref()
                         .map(|key| file_is_present(data_dir, source_id, key)),
+                    file_pending,
                     created_at: row.get(14)?,
                 })
             },
@@ -1030,6 +1035,51 @@ mod tests {
 
         let presence: Vec<_> = detail.captures.iter().map(|c| c.file_present).collect();
         assert_eq!(presence, [Some(true), Some(false), None]);
+    }
+
+    #[test]
+    fn a_file_still_being_downloaded_by_sync_is_reported_as_pending() {
+        let env = Env::new();
+        crate::sync::schema::ensure_sync_schema(&env.conn).unwrap();
+        env.add_source(source("s", "https://e.com/s", 1));
+        env.add_capture(NewCapture {
+            rel_path: Some("web-captures/s/late.pdf"),
+            ..capture("late", "s", "pdf", "2026-09-30T03:00:00Z")
+        });
+        env.add_capture(NewCapture {
+            rel_path: Some("web-captures/s/lost.pdf"),
+            ..capture("lost", "s", "pdf", "2026-09-30T02:00:00Z")
+        });
+        env.conn
+            .execute(
+                "INSERT INTO sync_web_pending_blobs(capture_id, role, sha256, rel_path, size)
+                 VALUES ('late', 'file', 'abc', 'web-captures/s/late.pdf', 10)",
+                [],
+            )
+            .unwrap();
+
+        let detail = source_detail(&env.conn, env.data.path(), "s")
+            .unwrap()
+            .unwrap();
+
+        let by_id = |id: &str| detail.captures.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(by_id("late").file_present, Some(false));
+        assert!(by_id("late").file_pending, "queued for download");
+        assert!(!by_id("lost").file_pending, "nothing queued: just missing");
+    }
+
+    #[test]
+    fn pending_is_false_when_the_sync_tables_do_not_exist() {
+        let env = Env::new();
+        env.add_source(source("s", "https://e.com/s", 1));
+        env.add_capture(NewCapture {
+            rel_path: Some("web-captures/s/x.pdf"),
+            ..capture("x", "s", "pdf", "2026-09-30T03:00:00Z")
+        });
+        let detail = source_detail(&env.conn, env.data.path(), "s")
+            .unwrap()
+            .unwrap();
+        assert!(!detail.captures[0].file_pending);
     }
 
     #[test]
@@ -1885,6 +1935,7 @@ mod tests {
             quote_prefix: None,
             quote_suffix: None,
             file_present: Some(true),
+            file_pending: false,
             created_at: 1,
         })
         .unwrap();
@@ -1899,6 +1950,7 @@ mod tests {
             "quotePrefix",
             "quoteSuffix",
             "filePresent",
+            "filePending",
             "createdAt",
         ] {
             assert!(capture.get(key).is_some(), "missing {key}");

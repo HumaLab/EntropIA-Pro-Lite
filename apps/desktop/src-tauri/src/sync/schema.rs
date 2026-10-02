@@ -60,6 +60,20 @@ CREATE TABLE IF NOT EXISTS sync_pending_blobs (
   last_attempt_at INTEGER
 );
 
+-- Files of saved web captures awaiting download (web-capture-v1). Keyed by
+-- (capture, role): a capture has an HTML/PDF file and, rarely, a text file.
+CREATE TABLE IF NOT EXISTS sync_web_pending_blobs (
+  capture_id TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('file','text')),
+  sha256 TEXT NOT NULL,
+  rel_path TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  last_attempt_at INTEGER,
+  PRIMARY KEY (capture_id, role)
+);
+
 CREATE TABLE IF NOT EXISTS sync_pending_fts (item_id TEXT PRIMARY KEY);
 
 CREATE TABLE IF NOT EXISTS sync_topic_aliases (
@@ -86,6 +100,7 @@ pub const SYNC_TABLES: &[&str] = &[
     "sync_conflicts",
     "sync_pending_rows",
     "sync_pending_blobs",
+    "sync_web_pending_blobs",
     "sync_pending_fts",
     "sync_topic_aliases",
     "sync_blob_index",

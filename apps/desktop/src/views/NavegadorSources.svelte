@@ -389,6 +389,10 @@
                         : 'navegador.sources.file.page'
                     )}
                 </span>
+              {:else if capture.file === 'downloading'}
+                <span class="sources__muted">
+                  {$currentLocale && t('navegador.sources.file.downloading')}
+                </span>
               {:else if capture.file === 'missing'}
                 <span class="sources__problem">
                   {$currentLocale && t('navegador.sources.file.missing')}

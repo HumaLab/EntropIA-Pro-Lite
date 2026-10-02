@@ -841,6 +841,26 @@ pub fn apply_row(
         payload_obj.remove("id");
     }
 
+    // web_captures: validate the file keys and strip the wire-only digests; the
+    // downloads are queued after the row is written.
+    let mut web_files: Vec<crate::sync::web_blobs::WebFile> = Vec::new();
+    if table == "web_captures" {
+        match crate::sync::web_blobs::rewrite_inbound(&mut payload_obj, row_id) {
+            Ok(files) => web_files = files,
+            Err(reason) => {
+                journal_conflict(
+                    conn,
+                    table,
+                    row_id,
+                    "apply_error",
+                    Some(&payload_value.to_string()),
+                    Some(&format!("file key rejected: {reason}")),
+                )?;
+                return Ok(RowOutcome::Journaled);
+            }
+        }
+    }
+
     // assets: validate rel_path, rewrite to local path, enqueue blob + fts.
     let mut blob_enqueue: Option<(String, String, i64)> = None;
     if table == "assets" {
@@ -876,6 +896,9 @@ pub fn apply_row(
                 enqueue_pending_blob(conn, row_id, &sha256, &rel_path, size)?;
             }
         }
+    }
+    if table == "web_captures" {
+        crate::sync::web_blobs::enqueue_downloads(conn, row_id, &web_files, ctx.app_data_dir)?;
     }
     enqueue_pending_fts(conn, table, &payload_obj)?;
 

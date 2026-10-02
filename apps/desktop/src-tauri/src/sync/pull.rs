@@ -234,6 +234,13 @@ pub async fn pull_loop<A: SyncApi>(
             .await
             .map_err(SyncError::Decode)?;
 
+    // Files of saved web captures (verified downloads; a row may exist before
+    // its file arrives). Same rule as assets: failures stay queued.
+    outcome.blobs_downloaded +=
+        crate::sync::web_blobs::drain_pending_web_blobs(api, token, conn, app_data_dir)
+            .await
+            .map_err(SyncError::Decode)?;
+
     // Step 8: drain the FTS reindex queue (idempotent; derived state).
     outcome.fts_reindexed =
         crate::sync::apply::drain_pending_fts(conn).map_err(SyncError::Decode)?;

@@ -790,6 +790,29 @@ async fn push_cycle<A: SyncApi>(
                     return Err(CycleError::Offline(error));
                 }
             }
+        } else if change.table == "web_captures" && change.op == "upsert" {
+            // Capture files: blob BEFORE row, like assets.
+            match crate::sync::web_blobs::prepare_web_capture_push(
+                api,
+                token,
+                app_data_dir,
+                &mut change,
+            )
+            .await
+            {
+                Ok(crate::sync::web_blobs::WebPushOutcome::Ready) => ready.push(change),
+                Ok(crate::sync::web_blobs::WebPushOutcome::Skip(reason)) => {
+                    warn(format!(
+                        "Capture {} omitida del push: {reason}",
+                        change.row_id
+                    ));
+                    crate::sync::push::journal_and_purge_unpushable(
+                        conn, &change, snapshot, &reason,
+                    )
+                    .map_err(|e| CycleError::Fatal { message: e })?;
+                }
+                Err(error) => return Err(CycleError::Offline(error)),
+            }
         } else {
             ready.push(change);
         }
@@ -885,9 +908,12 @@ fn research_pending_count(conn: &Connection) -> i64 {
 }
 
 fn blobs_pending_count(conn: &Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM sync_pending_blobs", [], |row| {
-        row.get(0)
-    })
+    conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM sync_pending_blobs)
+              + (SELECT COUNT(*) FROM sync_web_pending_blobs)",
+        [],
+        |row| row.get(0),
+    )
     .unwrap_or(0)
 }
 

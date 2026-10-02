@@ -729,6 +729,27 @@ pub trait SyncApi {
         bytes: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<(), SyncError>> + Send;
 
+    /// Uploads the file at `path` (exactly `size` bytes). The default reads it
+    /// whole and delegates to [`SyncApi::blob_put`]; the HTTP implementation
+    /// streams it so a large PDF is never held in memory.
+    fn blob_put_file(
+        &self,
+        token: &str,
+        sha256: &str,
+        path: &std::path::Path,
+        _size: i64,
+    ) -> impl std::future::Future<Output = Result<(), SyncError>> + Send {
+        let put = std::fs::read(path)
+            .map_err(|e| SyncError::Network(format!("failed to read {}: {e}", path.display())))
+            .map(|bytes| self.blob_put(token, sha256, bytes));
+        async move {
+            match put {
+                Ok(upload) => upload.await,
+                Err(error) => Err(error),
+            }
+        }
+    }
+
     fn blob_get(
         &self,
         token: &str,
@@ -1153,6 +1174,31 @@ impl SyncApi for HttpSyncApi {
             .header("Content-Type", "application/octet-stream")
             .timeout(BLOB_TIMEOUT)
             .body(bytes)
+            .send()
+            .await
+            .map_err(|e| Self::network_err("blob put request", e))?;
+        ensure_success(response).await.map(|_| ())
+    }
+
+    async fn blob_put_file(
+        &self,
+        token: &str,
+        sha256: &str,
+        path: &std::path::Path,
+        size: i64,
+    ) -> Result<(), SyncError> {
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|e| SyncError::Network(format!("failed to open {}: {e}", path.display())))?;
+        let response = self
+            .client
+            .put(self.url(&format!("/v1/blobs/{sha256}")))
+            .bearer_auth(token)
+            .header("Content-Type", "application/octet-stream")
+            // The server requires a declared length and enforces its cap on it.
+            .header(reqwest::header::CONTENT_LENGTH, size)
+            .timeout(BLOB_TIMEOUT)
+            .body(reqwest::Body::from(file))
             .send()
             .await
             .map_err(|e| Self::network_err("blob put request", e))?;

@@ -242,6 +242,7 @@ const SESSION_STATE_TABLES: &[&str] = &[
     "sync_conflicts",
     "sync_pending_rows",
     "sync_pending_blobs",
+    "sync_web_pending_blobs",
     "sync_pending_fts",
     "sync_topic_aliases",
 ];

@@ -47,6 +47,8 @@ export type CaptureDetail = {
   quoteSuffix: string | null
   /** Whether the saved file is on disk; `null` when the capture has none. */
   filePresent: boolean | null
+  /** The file came from another device and sync is still downloading it. */
+  filePending: boolean
   createdAt: number
 }
 
@@ -225,9 +227,12 @@ export function describeCapture(
       capture.kind === 'pdf'
         ? capture.filePresent === true
         : capture.textPreview !== null || capture.textInFile,
-    file: (capture.filePresent === null ? 'none' : capture.filePresent ? 'present' : 'missing') as
-      | 'present'
-      | 'missing'
-      | 'none',
+    file: (capture.filePresent === null
+      ? 'none'
+      : capture.filePresent
+        ? 'present'
+        : capture.filePending
+          ? 'downloading'
+          : 'missing') as 'present' | 'downloading' | 'missing' | 'none',
   }
 }

@@ -52,6 +52,7 @@ const pdfCapture = (id: string, patch: Partial<CaptureDetail> = {}): CaptureDeta
   quotePrefix: null,
   quoteSuffix: null,
   filePresent: true,
+  filePending: false,
   createdAt: 1,
   ...patch,
 })
@@ -199,7 +200,7 @@ describe('copy to collection from the saved sources', () => {
 
     await fireEvent.click(within(drawer()).getByRole('button', { name: 'Volver a la lista' }))
     await fireEvent.click(await within(drawer()).findByRole('button', { name: /Title of gamma/ }))
-    await within(drawer()).findByText('El archivo guardado ya no está en el disco.')
+    await within(drawer()).findByText('El archivo guardado no está disponible en este equipo.')
     expect(within(drawer()).queryByRole('button', { name: 'Copiar a colección' })).toBeNull()
 
     await fireEvent.click(within(drawer()).getByRole('button', { name: 'Volver a la lista' }))

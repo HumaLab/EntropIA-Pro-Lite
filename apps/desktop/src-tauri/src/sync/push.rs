@@ -407,6 +407,17 @@ pub fn journal_and_purge_oversized(
     change: &PushChange,
     snapshot: i64,
 ) -> Result<(), String> {
+    journal_and_purge_unpushable(conn, change, snapshot, "row exceeds max_push_bytes")
+}
+
+/// Same journal-and-purge as [`journal_and_purge_oversized`] for any row that
+/// cannot be pushed, with the reason recorded in the conflict summary.
+pub fn journal_and_purge_unpushable(
+    conn: &Connection,
+    change: &PushChange,
+    snapshot: i64,
+    reason: &str,
+) -> Result<(), String> {
     let conflict_id = format!("ae-{}-{}", change.table, change.row_id);
     let loser = change
         .payload
@@ -423,7 +434,7 @@ pub fn journal_and_purge_oversized(
             change.table,
             change.row_id,
             loser,
-            "row exceeds max_push_bytes",
+            reason,
             now
         ],
     )

@@ -37,6 +37,7 @@ const capture = (id: string, patch: Partial<CaptureDetail> = {}): CaptureDetail 
   quotePrefix: null,
   quoteSuffix: null,
   filePresent: true,
+  filePending: false,
   createdAt: 1,
   ...patch,
 })
@@ -318,8 +319,28 @@ describe('saved source detail', () => {
     await fireEvent.click(within(drawer()).getByRole('button', { name: 'Volver a la lista' }))
     await fireEvent.click(await within(drawer()).findByRole('button', { name: /Title of beta/ }))
     expect(
-      await within(drawer()).findByText('El archivo guardado ya no está en el disco.')
+      await within(drawer()).findByText('El archivo guardado no está disponible en este equipo.')
     ).toBeInTheDocument()
+  })
+
+  it('says a file that sync is still downloading is on its way, not lost', async () => {
+    details.beta = detailOf('beta', [
+      capture('c3', {
+        kind: 'pdf',
+        hashOf: 'pdf',
+        mimeType: 'application/pdf',
+        textPreview: null,
+        filePresent: false,
+        filePending: true,
+      }),
+    ])
+    await openDetail('Title of beta')
+    expect(
+      await within(drawer()).findByText('Descargando el archivo desde tu cuenta de sincronización…')
+    ).toBeInTheDocument()
+    expect(
+      within(drawer()).queryByText('El archivo guardado no está disponible en este equipo.')
+    ).toBeNull()
   })
 
   it('renders captured text as text, never as markup', async () => {
