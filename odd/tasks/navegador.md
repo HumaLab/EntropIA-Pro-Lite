@@ -173,18 +173,70 @@ investigation sync landed on main and its server is deployed. Design: plan §8
 by Rust at runtime). Server first: Coolify auto-deploys Cloud `main` on push,
 and capability gating keeps old clients unaffected.
 
-- [ ] P3a — Server: `web_sources`, `web_captures` in `SYNCED_TABLES` and
-  `CAPABILITY_GATED_TABLES` with `web-capture-v1`; advertise it; pull SQL
-  handles the third gated table generically; PROTOCOL.md/DESIGN.md; tests.
-- [ ] P3b — Client rows: allowlist, FK order, cascade map, capability header,
-  one-time catch-up from cursor 0 for the newly visible tables; tests.
-- [ ] P3c — Client blobs: `web-captures/` files (HTML, PDF, long text) pushed
-  before their rows and downloaded/verified on pull; path validation; remote
-  deletes remove local files; streaming upload for large PDFs.
-- [ ] P3d — Two-device verification without the real account: automated
-  two-device test against a local `entropia-sync-server` (like
-  `research_sync_two_device.rs`), and a way for the user to try it by hand
-  (dev profile may sync only to a loopback server).
+- [x] P3a - Server (automated checks observed; user run pending). Cloud
+  `feat/web-capture-sync`: `b3d69e3` (tables, capability `web-capture-v1`,
+  generic pull gating, PROTOCOL/DESIGN, tests) and `58b4917` (the orphan edge
+  map gains `web_captures.web_source_id -> web_sources`, Cascade; the client
+  `cascade.rs` and the server `orphans.rs` maps must agree). Pull now hides every
+  gated table whose token the request did not send with ONE clause
+  (`table_name NOT IN (SELECT value FROM json_each(?3))`), built from
+  `CAPABILITY_GATED_TABLES`: a fourth gated table needs no SQL. Blobs need no
+  change (content addressed, `payload.sha256` is already checked by
+  `check-coherence`). RED: `cargo test --test web_capture_sync` failed to compile
+  on the missing constants. GREEN: `cargo test` all suites, `cargo clippy
+  --all-targets -D warnings`, `cargo fmt --check`. Allowlist is 20 tables,
+  capabilities advertised in order writing, research, web.
+- [x] P3b - Client rows (automated checks observed; user run pending).
+  `c99ca354`. `web_sources`, `web_captures` in `SYNCED_TABLES` (18) and FK order;
+  54 triggers; cascade map `web_sources -> web_captures (web_source_id)` plus a new
+  guard that derives the CASCADE edges from the real schema (it showed that the
+  existing self edge `assets.parent_asset_id -> assets` was never in the map; left
+  out of the guard on purpose, see open items). Ordinary push/pull now send
+  `X-Sync-Capabilities: web-capture-v1` (the aggregates still send only their own
+  token). New `sync/web_capture.rs`: capability recorded per epoch from any
+  ordinary pull response; web rows are HELD in the oplog until the server
+  advertised the token (a legacy server rejects the whole batch with 400, which
+  would block corpus rows too) and pushed in the same cycle that first sees it;
+  one since-zero catch-up per epoch that applies web rows only and never moves
+  `last_pull_seq`. Account metadata is cleared on logout. RED: capture/cascade
+  tests failed first (9 failures, 386 passed); the module tests were written
+  before the module but not run RED (compile only). GREEN: `cargo test --lib`
+  1950, clippy, fmt.
+- [x] P3c - Client blobs (automated checks observed; user run pending).
+  `fe1533e9`. New `sync/web_blobs.rs`: key shape is exactly
+  `web-captures/<web_source_id>/<capture_id>.<html|pdf|txt>` (source must match
+  the row, extension must match role and kind; no absolute, drive, UNC, `..`,
+  backslash, `:`); push hashes each file (must equal the row digest), HEAD, PUT
+  streamed from disk with Content-Length, all BEFORE the row; the long-text file
+  has no digest column, so push sends wire-only `text_sha256`/`text_size`
+  (stripped on apply, no migration, no schema drift); pull queues downloads in
+  `sync_web_pending_blobs (capture_id, role)` (created by Rust, cleared on logout,
+  counted in the status), verified install through the existing `download_blob`
+  (size and sha256, temp file, fsync, rename); 404 retried 5 times then journaled
+  `blob_missing`; mismatch journaled and kept; a regular file squatting on the
+  source folder is never written over. Why a parallel queue and no upload index:
+  the asset index is keyed by `asset_id` in five asset-only paths and rebuilding
+  populated tables is a risk this does not need; captures are immutable, so an
+  mtime hash cache saves nothing. Remote deletes: a `web_sources` tombstone queues
+  `web_capture_remove_dir:<id>` in `sync_meta` in the same transaction; the folder
+  is removed after commit, only when no source row with that id exists, through
+  `capture_files::locate_source_dir` (never a link, never outside the root); the
+  startup sweep stays the backstop. UI: `CaptureDetail.filePending` and a
+  `downloading` state ("Descargando el archivo desde tu cuenta de
+  sincronizacion"); the missing text now reads "no esta disponible en este
+  equipo". RED: sources tests failed to compile on `file_pending`; the catch-up
+  install test failed (found by the two-device run) before the fix in
+  `web_capture.rs`. Streaming: `SyncApi::blob_put_file` (default reads whole,
+  HTTP streams). Download is unchanged (already streamed).
+- [x] P3d - Two-device verification (automated checks observed; user run
+  pending). `2fa2001e`: `tests/web_capture_sync_two_device.rs`, 4 tests against
+  the real server binary (page with 840 KB long text, selection, 3 MB PDF
+  streamed; byte-identical files; delete on B removes rows and folder on A, the
+  corpus copy untouched on both; legacy-cursor catch-up; incremental capture).
+  Loud skip without a server; fails loudly if the server lacks the token. Also run
+  green against the new server: `research_sync_two_device` 3,
+  `writing_sync_two_device` 3, `sync_e2e --ignored` 12. Dev-profile loopback sync:
+  `4c80a832` (see "Trying two dev profiles by hand" below).
 - [ ] P3e — User verification on two dev profiles against a local server.
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
@@ -1414,3 +1466,38 @@ and capability gating keeps old clients unaffected.
   `VITE_NAVEGADOR=1` vite build emits NavegadorView. No migration, no new
   command (ACL unchanged). Limits: a rendered copy keeps the temp file up to 1 h
   (purged on the next render, not at startup); item panel labels Spanish only.
+
+### Trying two dev profiles by hand (P3d, `4c80a832`)
+
+`ENTROPIA_DEV_SYNC_SERVER=http://127.0.0.1:<port>` (debug build, requires
+`ENTROPIA_DEV_PROFILE`) turns sync on for that profile against that origin only.
+The value must be plain `http` to `127.0.0.1`, `localhost` or `[::1]` with a
+port; anything else, or the variable without a profile, stops the app at startup.
+`HttpSyncApi::new` (the one door of every sync request) refuses any other address
+in a dev profile, so the production host cannot be reached even if a stored
+`server_url` names it. The device token uses the keyring entry
+`com.entropia.lite sync (dev profile)` / `device_token@dev-profile:<name>`, never
+the real one. Release builds compile the read out.
+
+1. Server (Cloud worktree `integracion`, branch `feat/web-capture-sync`):
+   `cargo build`, then in PowerShell
+   `$env:SYNC_BIND_ADDR='127.0.0.1:8787'; $env:SYNC_DATA_DIR="$env:TEMP\ws-local";
+   $env:SYNC_REGISTRATION_OPEN='true'; .\target\debug\entropia-sync-server.exe`.
+2. App A (starts Vite on 1420): from `apps/desktop`,
+   `$env:VITE_LOCAL_ML='0'; $env:ENTROPIA_DEV_PROFILE='a';
+   $env:ENTROPIA_DEV_SYNC_SERVER='http://127.0.0.1:8787';
+   pnpm exec tauri dev --config src-tauri/tauri.lite.conf.json`.
+3. App B (reuses A's Vite): new PowerShell, same variables with profile `b`, run
+   `src-tauri\target\debug\entropia-pro-desktop.exe` directly (not verified:
+   no `tauri dev` was run here; if it does not load, stop A and run B with
+   `tauri dev` after A closes, keeping the same server).
+4. In each app: Settings, Sync, server `http://127.0.0.1:8787`; register in A,
+   log in with the same account in B. Save a page, a selection and a PDF in A,
+   wait a cycle, open Navegador on B; delete the source on B and watch A.
+   P3e stays unchecked until this is done by the user.
+
+Open items: `assets.parent_asset_id -> assets` ON DELETE CASCADE is not in
+`cascade.rs` (pre-existing); `ItemView.svelte` already fails `format:check` on
+the base; a legacy server keeps web rows pending in the oplog forever (the pending
+counter shows them) until it is upgraded; the catch-up re-reads the account from
+seq 0 once (same cost as the writing/research catch-up).
