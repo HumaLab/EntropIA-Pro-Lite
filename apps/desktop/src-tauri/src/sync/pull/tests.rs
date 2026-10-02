@@ -233,6 +233,53 @@ async fn pull_loop_applies_paginated_pages() {
 }
 
 #[tokio::test]
+async fn pull_loop_removes_the_file_of_a_pulled_asset_delete() {
+    let conn = capturing_db();
+    let dir = tmp_app_dir();
+    let api = MockSyncApi::default();
+    conn.execute(
+        "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','assets/c1/i1/a.png','image',1)",
+        [],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+    let file = dir.path().join("assets/c1/i1/a.png");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, b"bytes").unwrap();
+
+    api.queue_pull_page(page(
+        vec![PullRow {
+            table: "assets".to_string(),
+            row_id: "a1".to_string(),
+            server_seq: 5,
+            deleted: true,
+            changed_at: 1,
+            device_id: "remote".to_string(),
+            payload: None,
+        }],
+        5,
+        false,
+        "mock-epoch",
+    ));
+
+    pull_loop(&api, "tok", "0023_sync_ids", &conn, dir.path())
+        .await
+        .expect("pull loop");
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets"), 0);
+    assert!(!file.exists(), "the cycle removes the orphan file");
+}
+
+#[tokio::test]
 async fn pull_loop_parks_child_then_drains_when_parent_lands_next_page() {
     let conn = capturing_db();
     let dir = tmp_app_dir();

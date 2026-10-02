@@ -615,6 +615,9 @@ fn apply_upsert(
 /// which triggers `ON DELETE CASCADE` as intended for the remote intent — the
 /// dirty-child guard runs BEFORE this is called.
 fn apply_delete(conn: &Connection, table: &str, row_id: &str) -> Result<(), String> {
+    if table == "assets" {
+        crate::sync::asset_files::queue_removal(conn, row_id)?;
+    }
     let pk = pk_column(table);
     let sql = format!(
         "DELETE FROM {} WHERE {} = ?1",

@@ -549,6 +549,201 @@ fn self_referencing_asset_does_not_loop_the_dirty_walk() {
 }
 
 // --------------------------------------------------------------------------
+// A pulled asset delete also removes the local file (and its bookkeeping).
+// --------------------------------------------------------------------------
+
+fn put_file(dir: &std::path::Path, rel: &str) -> std::path::PathBuf {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"bytes").unwrap();
+    path
+}
+
+fn seed_item(conn: &Connection) {
+    seed_collection(conn);
+    conn.execute(
+        "INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1)",
+        [],
+    )
+    .unwrap();
+}
+
+fn seed_asset(conn: &Connection, id: &str, path: &str, parent: Option<&str>) {
+    conn.execute(
+        "INSERT INTO assets(id,item_id,path,type,parent_asset_id,created_at)
+         VALUES(?1,'i1',?2,'image',?3,1)",
+        rusqlite::params![id, path, parent],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sync_pending_blobs(asset_id,sha256,rel_path,size) VALUES(?1,'h',?2,1)",
+        rusqlite::params![id, path],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sync_blob_index(asset_id,sha256,size,file_mtime_ms,uploaded) VALUES(?1,'h',1,1,1)",
+        [id],
+    )
+    .unwrap();
+    conn.execute_batch("DELETE FROM sync_oplog;").unwrap();
+}
+
+fn apply_and_drain(conn: &Connection, dir: &std::path::Path, rows: &[PullRow]) -> usize {
+    let mut ctx = ApplyContext::new(dir);
+    apply_page(conn, &mut ctx, rows, 99).expect("apply");
+    crate::sync::asset_files::drain_asset_file_removals(conn, dir).expect("drain")
+}
+
+#[test]
+fn pulled_asset_delete_removes_its_file_and_bookkeeping() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let file = put_file(dir.path(), "assets/c1/i1/a.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert_eq!(removed, 1);
+    assert!(!file.exists(), "the orphan file is gone");
+    assert!(
+        !dir.path().join("assets/c1/i1").exists(),
+        "its emptied folder goes too"
+    );
+    assert!(dir.path().join("assets").exists(), "the root stays");
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_pending_blobs"), 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_blob_index"), 0);
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_meta WHERE key LIKE 'asset_file_remove:%'"
+        ),
+        0,
+        "the queue is drained"
+    );
+}
+
+#[test]
+fn pulled_container_delete_removes_every_page_file() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let pdf = put_file(dir.path(), "assets/c1/i1/doc.pdf");
+    let p1 = put_file(dir.path(), "assets/c1/i1/doc.pages/1.png");
+    let p2 = put_file(dir.path(), "assets/c1/i1/doc.pages/2.png");
+    seed_asset(&conn, "pdf", "assets/c1/i1/doc.pdf", None);
+    seed_asset(&conn, "p1", "assets/c1/i1/doc.pages/1.png", Some("pdf"));
+    seed_asset(&conn, "p2", "assets/c1/i1/doc.pages/2.png", Some("pdf"));
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "pdf", 50)]);
+
+    assert_eq!(removed, 3);
+    assert!(!pdf.exists() && !p1.exists() && !p2.exists());
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_pending_blobs"), 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_blob_index"), 0);
+}
+
+#[test]
+fn pulled_item_delete_removes_the_files_of_its_assets() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let file = put_file(dir.path(), "assets/c1/i1/a.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("items", "i1", 50)]);
+
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets"), 0);
+    assert_eq!(removed, 1);
+    assert!(!file.exists());
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_pending_blobs"), 0);
+}
+
+#[test]
+fn a_file_still_referenced_by_another_asset_is_kept() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let file = put_file(dir.path(), "assets/c1/i1/shared.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/shared.png", None);
+    seed_asset(&conn, "a2", "assets/c1/i1/shared.png", None);
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert_eq!(removed, 0);
+    assert!(file.exists(), "a2 still needs it");
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_meta WHERE key LIKE 'asset_file_remove:%'"
+        ),
+        0,
+        "the entry is dropped, not retried forever"
+    );
+}
+
+#[test]
+fn a_deferred_tombstone_keeps_the_file() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let file = put_file(dir.path(), "assets/c1/i1/a.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+    conn.execute(
+        "UPDATE assets SET path='assets/c1/i1/a.png' , size=2 WHERE id='a1'",
+        [],
+    )
+    .unwrap();
+    assert!(row_has_pending_oplog(&conn, "assets", "a1").unwrap());
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert_eq!(removed, 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM assets"), 1);
+    assert!(file.exists(), "a skipped delete never touches the file");
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM sync_pending_blobs"), 1);
+}
+
+#[test]
+fn a_path_outside_assets_is_never_deleted() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let outside = put_file(dir.path(), "elsewhere/secret.txt");
+    let traversal = put_file(dir.path(), "keep.txt");
+    let foreign = tempfile::tempdir().unwrap();
+    let absolute = put_file(foreign.path(), "assets/c1/i1/x.png");
+    seed_asset(&conn, "a1", "elsewhere/secret.txt", None);
+    seed_asset(&conn, "a2", "assets/../keep.txt", None);
+    seed_asset(&conn, "a3", &absolute.to_string_lossy(), None);
+
+    let rows = [
+        delete_row("assets", "a1", 50),
+        delete_row("assets", "a2", 51),
+        delete_row("assets", "a3", 52),
+    ];
+    let removed = apply_and_drain(&conn, dir.path(), &rows);
+
+    assert_eq!(removed, 0);
+    assert!(outside.exists() && traversal.exists() && absolute.exists());
+}
+
+#[test]
+fn a_file_that_cannot_be_removed_never_fails_the_drain() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    // The stored path names a folder: remove_file fails, the drain carries on.
+    std::fs::create_dir_all(dir.path().join("assets/c1/i1/odd.png")).unwrap();
+    seed_asset(&conn, "a1", "assets/c1/i1/odd.png", None);
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert_eq!(removed, 0);
+    assert!(dir.path().join("assets/c1/i1/odd.png").is_dir());
+}
+
+// --------------------------------------------------------------------------
 // Tombstone of a parent with a local RESTRICT (non-cascade) dependent.
 // --------------------------------------------------------------------------
 

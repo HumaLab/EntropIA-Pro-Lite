@@ -3,6 +3,7 @@
 //! contends on `ui_conn`.
 
 pub mod apply;
+pub(crate) mod asset_files;
 pub mod blobs;
 pub mod capture;
 pub mod cascade;
