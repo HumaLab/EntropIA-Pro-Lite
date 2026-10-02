@@ -286,21 +286,21 @@ mod tests {
         for (migration, name) in [
             (
                 include_str!(
-                    "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+                    "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
                 ),
-                "0038_bibliography_catalog",
+                "0040_bibliography_catalog",
             ),
             (
                 include_str!(
-                    "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+                    "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
                 ),
-                "0039_bibliography_relations",
+                "0041_bibliography_relations",
             ),
             (
                 include_str!(
-                    "../../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql"
+                    "../../../../../packages/store/src/migrations/0042_bibliography_reconciliation.sql"
                 ),
-                "0040_bibliography_reconciliation",
+                "0042_bibliography_reconciliation",
             ),
         ] {
             conn.execute_batch(migration).expect("apply bibliography migration");
@@ -311,32 +311,32 @@ mod tests {
             .expect("track bibliography migration");
         }
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
-        ))
-        .expect("apply 0041");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
-            [],
-        )
-        .expect("track 0041");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
-        ))
-        .expect("apply 0042");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0042_processing_task_subject_cutover', 1)",
-            [],
-        )
-        .expect("track 0042");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
+            "../../../../../packages/store/src/migrations/0043_processing_task_subject_identity.sql"
         ))
         .expect("apply 0043");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_processing_task_subject_identity', 1)",
             [],
         )
         .expect("track 0043");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0044_processing_task_subject_cutover.sql"
+        ))
+        .expect("apply 0044");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_task_subject_cutover', 1)",
+            [],
+        )
+        .expect("track 0044");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliography_sync_tasks.sql"
+        ))
+        .expect("apply 0045");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0045_bibliography_sync_tasks', 1)",
+            [],
+        )
+        .expect("track 0045");
         (dir, conn)
     }
 

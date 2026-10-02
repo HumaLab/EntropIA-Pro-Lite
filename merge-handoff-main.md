@@ -19,7 +19,7 @@ invalida.
    (`git checkout -- apps/desktop/src-tauri/Cargo.lock`); si es intencional,
    commitealo aparte antes del merge. No lo mezcles con el merge.
 2. Backup de los data dirs (`com.entropia.shared`, `com.entropia.lite`) — el
-   merge trae migraciones 0038–0054.
+   merge trae migraciones 0040–0056.
 3. Lee `AGENTS.md` del checkout padre y
    `odd/tasks/zotero-semantic-bibliography.md` en el worktree (ahí están el
    estado completo, las decisiones y la evidencia).
@@ -35,7 +35,7 @@ Main avanzó ~328 commits desde el punto de bifurcación (`9c85295`): espera
 conflictos en archivos compartidos.
 
 - Zonas seguras (aditivas, no deberían conflictuar):
-  `apps/desktop/src-tauri/src/bibliography/`, migraciones `0038–0054`,
+  `apps/desktop/src-tauri/src/bibliography/`, migraciones `0040–0056`,
   `tests/fixtures/zsb-eval-v1.json`.
 - Zonas calientes (revisar con cuidado): `src/lib.rs` (la rama agrega
   2 re-exports para tests live), `src/lib/i18n.ts` (keys `bibliography.*`),

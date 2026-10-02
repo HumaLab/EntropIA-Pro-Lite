@@ -9,7 +9,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-pub const MIGRATION_NAME: &str = "0039_bibliography_relations";
+pub const MIGRATION_NAME: &str = "0041_bibliography_relations";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BibliographyError {
@@ -590,7 +590,7 @@ pub fn upsert_library(
 ///
 /// E2b-1 admission seam: the processing queue validates bibliography subjects
 /// through this helper so it never queries bibliography tables inline. A
-/// missing `zotero_libraries` table (pre-0038 database) reads as absent — the
+/// missing `zotero_libraries` table (pre-0040 database) reads as absent — the
 /// caller then rejects with an honest `unknown_library` instead of a schema
 /// error. Any other storage failure is returned as `sql_error`.
 pub fn library_row_exists(conn: &Connection, library_row_id: &str) -> Result<bool, String> {
@@ -1368,7 +1368,7 @@ pub fn upsert_attachment(
     Ok(attachment)
 }
 
-/// Adds one item/collection edge. The composite foreign keys in migration 0039
+/// Adds one item/collection edge. The composite foreign keys in migration 0041
 /// make the library scope part of the invariant, not merely a caller promise.
 pub fn upsert_item_collection(
     conn: &mut Connection,
@@ -1734,11 +1734,11 @@ mod tests {
     fn malformed_optional_creators_json_is_rejected() {
         let mut conn = Connection::open_in_memory().expect("open in-memory database");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply bibliography foundation migration");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply bibliography relations migration");
 
@@ -1931,15 +1931,15 @@ mod profile_tests {
     fn catalog_db() -> (Connection, String, String) {
         let mut conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply bibliography foundation migration");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply bibliography relations migration");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply semantic profiles migration");
         let source = upsert_connection(

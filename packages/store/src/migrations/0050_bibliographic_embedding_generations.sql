@@ -1,15 +1,15 @@
--- 0048_bibliographic_embedding_generations: generation identity on work
+-- 0050_bibliographic_embedding_generations: generation identity on work
 -- embeddings (E3c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0048_bibliographic_embedding_generations']); this file mirrors
+-- (MIGRATIONS['0050_bibliographic_embedding_generations']); this file mirrors
 -- it for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier processing/bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0048 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0050 behind.
 --
 -- Plan sections 6 and E3c demand uniqueness per object/generation: the
 -- primary key moves from (item_id, embedding_contract) to
@@ -27,7 +27,7 @@
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0048_item_embeddings AS SELECT * FROM bibliographic_item_embeddings;
+CREATE TABLE _backup_0050_item_embeddings AS SELECT * FROM bibliographic_item_embeddings;
 
 DROP TABLE bibliographic_item_embeddings;
 
@@ -54,14 +54,14 @@ CREATE INDEX idx_bibliographic_item_embeddings_generation
 INSERT INTO bibliographic_embedding_contracts
   (contract_hash, provider, model, dimensions, chunking_contract, created_at)
   SELECT DISTINCT embedding_contract, 'unknown', embedding_model, dimensions, '', strftime('%s', 'now')
-    FROM _backup_0048_item_embeddings
+    FROM _backup_0050_item_embeddings
     WHERE embedding_contract NOT IN (SELECT contract_hash FROM bibliographic_embedding_contracts);
 
 INSERT INTO bibliographic_index_generations
   (id, contract_hash, status, expected_inputs, completed_inputs, created_at, retired_at)
   SELECT 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract, 'retired',
          COUNT(*), COUNT(*), strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000
-    FROM _backup_0048_item_embeddings
+    FROM _backup_0050_item_embeddings
    GROUP BY embedding_contract;
 
 INSERT INTO bibliographic_item_embeddings
@@ -69,6 +69,6 @@ INSERT INTO bibliographic_item_embeddings
    input_hash, profile_revision, created_at, updated_at)
   SELECT item_id, 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract,
          embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at
-    FROM _backup_0048_item_embeddings;
+    FROM _backup_0050_item_embeddings;
 
-DROP TABLE _backup_0048_item_embeddings;
+DROP TABLE _backup_0050_item_embeddings;

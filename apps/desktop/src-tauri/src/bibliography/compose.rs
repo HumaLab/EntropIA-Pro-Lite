@@ -171,23 +171,23 @@ mod tests {
             .expect("corpus FTS");
         // Bibliography side (real migrations).
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply profiles table");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply generations");
-        // Test-only stub of the pre-0048 embeddings shape (see 0046): the
-        // composition fixture never builds processing tables, so the 0046
+        // Test-only stub of the pre-0050 embeddings shape (see 0048): the
+        // composition fixture never builds processing tables, so the 0048
         // rebuild cannot run here. The real file stays pinned by the store
         // mirror tests.
         conn.execute_batch(
@@ -204,13 +204,13 @@ mod tests {
                PRIMARY KEY (item_id, embedding_contract)
              );",
         )
-        .expect("stub pre-0048 embeddings");
+        .expect("stub pre-0050 embeddings");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
+            "../../../../../packages/store/src/migrations/0050_bibliographic_embedding_generations.sql"
         ))
         .expect("apply embedding generations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+            "../../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql"
         ))
         .expect("apply profile FTS");
         conn

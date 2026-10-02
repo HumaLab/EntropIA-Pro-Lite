@@ -4470,79 +4470,79 @@ mod tests {
     // E2a-1 task-subject identity: additive corpus/asset columns + backfill +
     // parallel partial unique, exercised here so registry/file drift breaks a
     // test instead of reaching a user database.
-    const MIGRATION_0041_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+    const MIGRATION_0043_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0043_processing_task_subject_identity.sql"
     );
-    const MIGRATION_0041_NAME: &str = "0041_processing_task_subject_identity";
+    const MIGRATION_0043_NAME: &str = "0043_processing_task_subject_identity";
     // E2a-2 single-flight cutover: drops the snapshot-scoped partial unique so
-    // the composite built in 0041 becomes the sole authority, exercised here so
+    // the composite built in 0043 becomes the sole authority, exercised here so
     // registry/file drift breaks a test instead of reaching a user database.
-    const MIGRATION_0042_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+    const MIGRATION_0044_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0044_processing_task_subject_cutover.sql"
     );
-    const MIGRATION_0042_NAME: &str = "0042_processing_task_subject_cutover";
+    const MIGRATION_0044_NAME: &str = "0044_processing_task_subject_cutover";
     // E2b-1 bibliography admission: widens the kind CHECK to bibliography_sync
     // and the batch origin CHECK to bibliography, exercised here so
     // registry/file drift breaks a test instead of reaching a user database.
-    const MIGRATION_0043_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
+    const MIGRATION_0045_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0045_bibliography_sync_tasks.sql"
     );
-    const MIGRATION_0043_NAME: &str = "0043_bibliography_sync_tasks";
+    const MIGRATION_0045_NAME: &str = "0045_bibliography_sync_tasks";
     // E2c-WU3 per-batch priority: additive column + index, exercised here so
     // registry/file drift breaks a test instead of reaching a user database.
-    const MIGRATION_0044_SQL: &str =
-        include_str!("../../../../../packages/store/src/migrations/0044_processing_priority.sql");
-    const MIGRATION_0044_NAME: &str = "0044_processing_priority";
+    const MIGRATION_0046_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0046_processing_priority.sql");
+    const MIGRATION_0046_NAME: &str = "0046_processing_priority";
     // E3b-WU1 semantic profiles: additive catalog-adjacent table, exercised
     // here so registry/file drift breaks a test instead of reaching a user db.
-    const MIGRATION_0045_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+    const MIGRATION_0047_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
     );
-    const MIGRATION_0045_NAME: &str = "0045_bibliographic_semantic_profiles";
+    const MIGRATION_0047_NAME: &str = "0047_bibliographic_semantic_profiles";
     // E3b-WU2 profile tasks: kind CHECK widening + per-contract embeddings,
     // exercised here so registry/file drift breaks a test instead of a user db.
-    const MIGRATION_0046_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
+    const MIGRATION_0048_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0048_bibliography_profile_tasks.sql"
     );
-    const MIGRATION_0046_NAME: &str = "0046_bibliography_profile_tasks";
+    const MIGRATION_0048_NAME: &str = "0048_bibliography_profile_tasks";
     // E3c-WU1 index generations: immutable contracts + lifecycle rows,
     // exercised here so registry/file drift breaks a test instead of a user db.
-    const MIGRATION_0047_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+    const MIGRATION_0049_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
     );
-    const MIGRATION_0047_NAME: &str = "0047_bibliographic_index_generations";
+    const MIGRATION_0049_NAME: &str = "0049_bibliographic_index_generations";
     // E3c-WU3 profile FTS: virtual table plus transactional triggers. No
     // catalog-row dependency at apply time, so the corpus harness takes it.
-    const MIGRATION_0049_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+    const MIGRATION_0051_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql"
     );
-    const MIGRATION_0049_NAME: &str = "0049_bibliographic_profile_fts";
+    const MIGRATION_0051_NAME: &str = "0051_bibliographic_profile_fts";
     // E4a-WU2 native extraction: kind CHECK widening plus the per-attachment
     // rows. The data half is DDL plus a rebuild with no inserts, so the
-    // corpus harness takes it like 0049.
-    const MIGRATION_0050_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+    // corpus harness takes it like 0051.
+    const MIGRATION_0052_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0052_bibliographic_extraction_tasks.sql"
     );
-    const MIGRATION_0050_NAME: &str = "0050_bibliographic_extraction_tasks";
+    const MIGRATION_0052_NAME: &str = "0052_bibliographic_extraction_tasks";
     // E4b-WU2 per-page native texts: DDL-only, no catalog-row dependency
     // at apply time, so the corpus harness takes it.
-    const MIGRATION_0051_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+    const MIGRATION_0053_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0053_bibliographic_page_texts.sql"
     );
-    const MIGRATION_0051_NAME: &str = "0051_bibliographic_page_texts";
+    const MIGRATION_0053_NAME: &str = "0053_bibliographic_page_texts";
     // E4c-WU1 structural chunks and spans: DDL-only, no catalog-row
     // dependency at apply time, so the corpus harness takes it.
-    const MIGRATION_0052_SQL: &str =
-        include_str!("../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
-    const MIGRATION_0052_NAME: &str = "0052_bibliographic_chunks";
+    const MIGRATION_0054_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql");
+    const MIGRATION_0054_NAME: &str = "0054_bibliographic_chunks";
     // E4c-WU2 chunk vectors per generation: DDL-only, no catalog-row
     // dependency at apply time, so the corpus harness takes it.
-    const MIGRATION_0053_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+    const MIGRATION_0055_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
     );
-    const MIGRATION_0053_NAME: &str = "0053_bibliographic_chunk_embeddings";
+    const MIGRATION_0055_NAME: &str = "0055_bibliographic_chunk_embeddings";
 
-    /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
+    /// Pre-0043 database shape: 0032 + 0033 exactly as upgraded field
     /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
     /// here; [`migrated_db`] builds on top of it. One builder, so the legacy
     /// shape cannot drift between the two.
@@ -4553,22 +4553,6 @@ mod tests {
         // parallel composite unique. E2a-2 cuts the single-flight authority
         // over to that composite and drops the snapshot-scoped unique, so
         // lookups resolve on the full subject identity from here on.
-        conn.execute_batch(MIGRATION_0041_SQL)
-            .expect("apply 0041 mirror");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0041_NAME],
-        )
-        .expect("track 0041");
-        conn.execute_batch(MIGRATION_0042_SQL)
-            .expect("apply 0042 mirror");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0042_NAME],
-        )
-        .expect("track 0042");
-        // E2b-1 bibliography admission widening (kind + origin CHECKs) with
-        // byte-identical row preservation; bibliography tests seed on top.
         conn.execute_batch(MIGRATION_0043_SQL)
             .expect("apply 0043 mirror");
         conn.execute(
@@ -4576,7 +4560,6 @@ mod tests {
             [MIGRATION_0043_NAME],
         )
         .expect("track 0043");
-        // E2c-WU3 batch priority column; existing rows default to background.
         conn.execute_batch(MIGRATION_0044_SQL)
             .expect("apply 0044 mirror");
         conn.execute(
@@ -4584,7 +4567,8 @@ mod tests {
             [MIGRATION_0044_NAME],
         )
         .expect("track 0044");
-        // E3b-WU1 semantic profiles table.
+        // E2b-1 bibliography admission widening (kind + origin CHECKs) with
+        // byte-identical row preservation; bibliography tests seed on top.
         conn.execute_batch(MIGRATION_0045_SQL)
             .expect("apply 0045 mirror");
         conn.execute(
@@ -4592,7 +4576,7 @@ mod tests {
             [MIGRATION_0045_NAME],
         )
         .expect("track 0045");
-        // E3b-WU2 profile-task kind widening.
+        // E2c-WU3 batch priority column; existing rows default to background.
         conn.execute_batch(MIGRATION_0046_SQL)
             .expect("apply 0046 mirror");
         conn.execute(
@@ -4600,7 +4584,7 @@ mod tests {
             [MIGRATION_0046_NAME],
         )
         .expect("track 0046");
-        // E3c-WU1 index generations.
+        // E3b-WU1 semantic profiles table.
         conn.execute_batch(MIGRATION_0047_SQL)
             .expect("apply 0047 mirror");
         conn.execute(
@@ -4608,11 +4592,15 @@ mod tests {
             [MIGRATION_0047_NAME],
         )
         .expect("track 0047");
-        // 0048 is deliberately skipped here: its data half inserts rows
-        // whose FK requires bibliographic_items, a catalog table this
-        // corpus-only harness never builds. Coverage lives in
-        // bibliography_processing and processing_recovery.
-        // 0049 needs only the profiles table (already applied above).
+        // E3b-WU2 profile-task kind widening.
+        conn.execute_batch(MIGRATION_0048_SQL)
+            .expect("apply 0048 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0048_NAME],
+        )
+        .expect("track 0048");
+        // E3c-WU1 index generations.
         conn.execute_batch(MIGRATION_0049_SQL)
             .expect("apply 0049 mirror");
         conn.execute(
@@ -4620,13 +4608,11 @@ mod tests {
             [MIGRATION_0049_NAME],
         )
         .expect("track 0049");
-        conn.execute_batch(MIGRATION_0050_SQL)
-            .expect("apply 0050 mirror");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0050_NAME],
-        )
-        .expect("track 0050");
+        // 0050 is deliberately skipped here: its data half inserts rows
+        // whose FK requires bibliographic_items, a catalog table this
+        // corpus-only harness never builds. Coverage lives in
+        // bibliography_processing and processing_recovery.
+        // 0051 needs only the profiles table (already applied above).
         conn.execute_batch(MIGRATION_0051_SQL)
             .expect("apply 0051 mirror");
         conn.execute(
@@ -4648,10 +4634,24 @@ mod tests {
             [MIGRATION_0053_NAME],
         )
         .expect("track 0053");
+        conn.execute_batch(MIGRATION_0054_SQL)
+            .expect("apply 0054 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0054_NAME],
+        )
+        .expect("track 0054");
+        conn.execute_batch(MIGRATION_0055_SQL)
+            .expect("apply 0055 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0055_NAME],
+        )
+        .expect("track 0055");
         (dir, conn)
     }
 
-    /// Pre-0041 shape for the E2a-1 upgrade tests: 0032 + 0033 only, legacy
+    /// Pre-0043 shape for the E2a-1 upgrade tests: 0032 + 0033 only, legacy
     /// snapshot-scoped rows, no subject columns. [`migrated_db`] delegates
     /// here, so the upgrade path stays exercisable without a second copy of
     /// the legacy setup.
@@ -4814,13 +4814,13 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("collect");
 
-        conn.execute_batch(MIGRATION_0041_SQL)
-            .expect("apply 0041 mirror");
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0041_NAME],
+            [MIGRATION_0043_NAME],
         )
-        .expect("track 0041");
+        .expect("track 0043");
 
         // Every row — live and terminal — reads back as corpus/asset identity
         // keyed by its own snapshot, never by a rewritten fingerprint.
@@ -4927,7 +4927,7 @@ mod tests {
     }
 
     /// E2a-1 (b), still true after the E2a-2 cutover: admitting after the
-    /// upgrade resolves on the composite subject identity — the 0041 backfill
+    /// upgrade resolves on the composite subject identity — the 0043 backfill
     /// keeps it aligned with the snapshot for corpus rows — so the live task
     /// is attached, never duplicated — while new rows dual-write the subject
     /// identity.
@@ -4955,8 +4955,8 @@ mod tests {
         )
         .expect("legacy link");
 
-        conn.execute_batch(MIGRATION_0041_SQL)
-            .expect("apply 0041 mirror");
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
 
         let attached =
             admit_or_attach(&conn, "b2", "ocr", "a1", 3, "fp-a1", "ch-a1", None).expect("admit");
@@ -5051,13 +5051,13 @@ mod tests {
         )
         .expect("legacy link");
 
-        conn.execute_batch(MIGRATION_0041_SQL)
-            .expect("apply 0041 mirror");
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
         // E2c-WU3 priority is an additive batches-table column: the claim
         // scan orders by it, so even this legacy-shape database needs it.
         // The snapshot-column premise below is unaffected.
-        conn.execute_batch(MIGRATION_0044_SQL)
-            .expect("apply 0044 mirror");
+        conn.execute_batch(MIGRATION_0046_SQL)
+            .expect("apply 0046 mirror");
 
         // Old readers name only the snapshot columns.
         let (id, kind, snapshot): (String, String, String) = conn
@@ -5113,8 +5113,8 @@ mod tests {
         );
     }
 
-    /// E2a-2 (upgraded): a 0041-era database keeps its documentary rows while
-    /// the cutover drops the old snapshot-scoped unique. The checked-in 0042
+    /// E2a-2 (upgraded): a 0043-era database keeps its documentary rows while
+    /// the cutover drops the old snapshot-scoped unique. The checked-in 0044
     /// file is applied exactly as the runner applies it.
     #[test]
     fn cutover_drops_old_unique_on_upgraded_db_without_touching_rows() {
@@ -5131,20 +5131,20 @@ mod tests {
             [],
         )
         .expect("legacy live task");
-        conn.execute_batch(MIGRATION_0041_SQL)
-            .expect("apply 0041 mirror");
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0041_NAME],
+            [MIGRATION_0043_NAME],
         )
-        .expect("track 0041");
-        conn.execute_batch(MIGRATION_0042_SQL)
-            .expect("apply 0042 mirror");
+        .expect("track 0043");
+        conn.execute_batch(MIGRATION_0044_SQL)
+            .expect("apply 0044 mirror");
         conn.execute(
             "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
-            [MIGRATION_0042_NAME],
+            [MIGRATION_0044_NAME],
         )
-        .expect("track 0042");
+        .expect("track 0044");
 
         let documentary: String = conn
             .query_row(

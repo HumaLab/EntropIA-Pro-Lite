@@ -1,14 +1,14 @@
--- 0044_processing_priority: per-batch interactive priority (E2c-WU3).
+-- 0046_processing_priority: per-batch interactive priority (E2c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0044_processing_priority']); this file mirrors it
+-- (MIGRATIONS['0046_processing_priority']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042/0043): the whole body goes inside one BEGIN
+-- 0032/0040/0041/0042/0043/0044/0045): the whole body goes inside one BEGIN
 -- IMMEDIATE ... COMMIT together with the _migrations row, so a crash between
--- DDL and bookkeeping can never leave a half-applied 0044 behind.
+-- DDL and bookkeeping can never leave a half-applied 0046 behind.
 --
 -- E2c-WU3 is additive only: one priority column on processing_batches plus
 -- an index. Existing rows default to 0 (background); no backfill, no CHECK
@@ -21,7 +21,7 @@
 -- replay-tolerant where SQLite allows it:
 -- - CREATE INDEX IF NOT EXISTS is a native no-op on replay;
 -- - ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS form in SQLite (same
---   limitation as 0011/0013/0014/0024/0026/0028/0033/0041, which rely on the
+--   limitation as 0011/0013/0014/0024/0026/0028/0033/0043, which rely on the
 --   runner's duplicate-column tolerance). Inside the single-batch path there
 --   is no per-statement rescue, so the registry skip above is what makes
 --   runner-level replay error-free; do not apply this file twice by hand.

@@ -1,14 +1,14 @@
--- 0053_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
+-- 0055_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0053_bibliographic_chunk_embeddings']); this file mirrors it
+-- (MIGRATIONS['0055_bibliographic_chunk_embeddings']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0053 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0055 behind.
 --
 -- One vector per (chunk, generation) under the effective embedding
 -- contract, stamping the chunk text hash it was computed from — the same

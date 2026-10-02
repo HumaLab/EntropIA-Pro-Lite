@@ -200,11 +200,11 @@ mod tests {
         conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY, title TEXT NOT NULL);")
             .expect("corpus items");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn

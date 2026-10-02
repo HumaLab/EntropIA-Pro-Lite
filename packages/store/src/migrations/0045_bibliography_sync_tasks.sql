@@ -1,14 +1,14 @@
--- 0043_bibliography_sync_tasks: bibliographic task admission and system-batch origin (E2b-1).
+-- 0045_bibliography_sync_tasks: bibliographic task admission and system-batch origin (E2b-1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0043_bibliography_sync_tasks']); this file mirrors it
+-- (MIGRATIONS['0045_bibliography_sync_tasks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042/0043/0044): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0043 behind.
+-- bookkeeping can never leave a half-applied 0045 behind.
 --
 -- SQLite cannot ALTER a CHECK, so widening kind/origin requires rebuilding the
 -- three tables: processing_tasks and processing_batch_tasks gain
@@ -16,7 +16,7 @@
 -- All columns, both task indexes (partial composite subject unique +
 -- claimable), every FK, and every row are preserved byte-identically; old
 -- kinds ('ocr', 'embedding') and origins ('user', 'manual', 'repair') are
--- unchanged, and the snapshot-scoped unique dropped in the 0042 cutover stays
+-- unchanged, and the snapshot-scoped unique dropped in the 0044 cutover stays
 -- dropped (only claimable + composite subject unique are rebuilt).
 --
 -- DROP order is child-first per the actual FK direction (same order as
@@ -44,14 +44,14 @@
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0043_processing_batches AS SELECT * FROM processing_batches;
-CREATE TABLE _backup_0043_processing_batch_collections AS SELECT * FROM processing_batch_collections;
-CREATE TABLE _backup_0043_processing_batch_members AS SELECT * FROM processing_batch_members;
-CREATE TABLE _backup_0043_processing_tasks AS SELECT * FROM processing_tasks;
-CREATE TABLE _backup_0043_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
-CREATE TABLE _backup_0043_processing_requests AS SELECT * FROM processing_requests;
-CREATE TABLE _backup_0043_processing_attempts AS SELECT * FROM processing_attempts;
-CREATE TABLE _backup_0043_processing_checkpoints AS SELECT * FROM processing_checkpoints;
+CREATE TABLE _backup_0045_processing_batches AS SELECT * FROM processing_batches;
+CREATE TABLE _backup_0045_processing_batch_collections AS SELECT * FROM processing_batch_collections;
+CREATE TABLE _backup_0045_processing_batch_members AS SELECT * FROM processing_batch_members;
+CREATE TABLE _backup_0045_processing_tasks AS SELECT * FROM processing_tasks;
+CREATE TABLE _backup_0045_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
+CREATE TABLE _backup_0045_processing_requests AS SELECT * FROM processing_requests;
+CREATE TABLE _backup_0045_processing_attempts AS SELECT * FROM processing_attempts;
+CREATE TABLE _backup_0045_processing_checkpoints AS SELECT * FROM processing_checkpoints;
 
 DROP TABLE processing_checkpoints;
 DROP TABLE processing_attempts;
@@ -187,27 +187,27 @@ CREATE TABLE processing_checkpoints (
 );
 
 INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error)
-  SELECT id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error FROM _backup_0043_processing_batches;
+  SELECT id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error FROM _backup_0045_processing_batches;
 INSERT INTO processing_batch_collections (batch_id, collection_id_snapshot, name_snapshot)
-  SELECT batch_id, collection_id_snapshot, name_snapshot FROM _backup_0043_processing_batch_collections;
+  SELECT batch_id, collection_id_snapshot, name_snapshot FROM _backup_0045_processing_batch_collections;
 INSERT INTO processing_batch_members (batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason)
-  SELECT batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason FROM _backup_0043_processing_batch_members;
+  SELECT batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason FROM _backup_0045_processing_batch_members;
 INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)
-  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0043_processing_tasks;
+  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0045_processing_tasks;
 INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)
-  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0043_processing_batch_tasks;
+  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0045_processing_batch_tasks;
 INSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at)
-  SELECT request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at FROM _backup_0043_processing_requests;
+  SELECT request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at FROM _backup_0045_processing_requests;
 INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)
-  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0043_processing_attempts;
+  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0045_processing_attempts;
 INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
-  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0043_processing_checkpoints;
+  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0045_processing_checkpoints;
 
-DROP TABLE _backup_0043_processing_checkpoints;
-DROP TABLE _backup_0043_processing_attempts;
-DROP TABLE _backup_0043_processing_requests;
-DROP TABLE _backup_0043_processing_batch_tasks;
-DROP TABLE _backup_0043_processing_tasks;
-DROP TABLE _backup_0043_processing_batch_members;
-DROP TABLE _backup_0043_processing_batch_collections;
-DROP TABLE _backup_0043_processing_batches;
+DROP TABLE _backup_0045_processing_checkpoints;
+DROP TABLE _backup_0045_processing_attempts;
+DROP TABLE _backup_0045_processing_requests;
+DROP TABLE _backup_0045_processing_batch_tasks;
+DROP TABLE _backup_0045_processing_tasks;
+DROP TABLE _backup_0045_processing_batch_members;
+DROP TABLE _backup_0045_processing_batch_collections;
+DROP TABLE _backup_0045_processing_batches;

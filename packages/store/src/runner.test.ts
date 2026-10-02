@@ -885,7 +885,7 @@ describe('writing recovery journal migration (0036)', () => {
   })
 })
 
-describe('bibliography catalog migrations (0038, 0039)', () => {
+describe('bibliography catalog migrations (0040, 0041)', () => {
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
       return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
@@ -927,7 +927,7 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
       await runMigrations(shim(db))
       expect(
         db
-          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0038_bibliography_catalog'")
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_catalog'")
           .get()?.n
       ).toBe(1)
     } finally {
@@ -935,12 +935,12 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
     }
   })
 
-  it('keeps the checked-in 0038 SQL mirror aligned with the generated fixture', () => {
+  it('keeps the checked-in 0040 SQL mirror aligned with the generated fixture', () => {
     const mirror = readFileSync(
-      resolve(here, 'migrations/0038_bibliography_catalog.sql'),
+      resolve(here, 'migrations/0040_bibliography_catalog.sql'),
       'utf8'
     ).trim()
-    expect(buildSchemaFixture()).toContain(`-- 0038_bibliography_catalog\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- 0040_bibliography_catalog\n${mirror}`)
   })
 
   it('creates the E1b-1b relational catalog and replay-safe tombstone tables', async () => {
@@ -968,13 +968,13 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
 
       expect(
         db
-          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0039_bibliography_relations'")
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0041_bibliography_relations'")
           .get()?.n
       ).toBe(1)
       await runMigrations(shim(db))
       expect(
         db
-          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0039_bibliography_relations'")
+          .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0041_bibliography_relations'")
           .get()?.n
       ).toBe(1)
     } finally {
@@ -1010,15 +1010,15 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
     }
   })
 
-  it('keeps the checked-in 0039 SQL mirror aligned with the generated fixture', () => {
+  it('keeps the checked-in 0041 SQL mirror aligned with the generated fixture', () => {
     const mirror = readFileSync(
-      resolve(here, 'migrations/0039_bibliography_relations.sql'),
+      resolve(here, 'migrations/0041_bibliography_relations.sql'),
       'utf8'
     ).trim()
-    expect(buildSchemaFixture()).toContain(`-- 0039_bibliography_relations\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- 0041_bibliography_relations\n${mirror}`)
   })
 
-  it('creates and replays the durable 0040 reconciliation state', async () => {
+  it('creates and replays the durable 0042 reconciliation state', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1031,30 +1031,30 @@ describe('bibliography catalog migrations (0038, 0039)', () => {
         ).toBeDefined()
       }
       expect(
-        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_reconciliation'").get()?.n
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'").get()?.n
       ).toBe(1)
 
       await runMigrations(shim(db))
       expect(
-        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_reconciliation'").get()?.n
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0042_bibliography_reconciliation'").get()?.n
       ).toBe(1)
     } finally {
       db.close()
     }
   })
 
-  it('keeps the checked-in 0040 SQL mirror aligned with the generated fixture', () => {
+  it('keeps the checked-in 0042 SQL mirror aligned with the generated fixture', () => {
     const mirror = readFileSync(
-      resolve(here, 'migrations/0040_bibliography_reconciliation.sql'),
+      resolve(here, 'migrations/0042_bibliography_reconciliation.sql'),
       'utf8'
     ).trim()
-    expect(buildSchemaFixture()).toContain(`-- 0040_bibliography_reconciliation\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- 0042_bibliography_reconciliation\n${mirror}`)
   })
 })
 
-describe('processing task-subject identity migration (0041)', () => {
-  const MIGRATION_0041 = '0041_processing_task_subject_identity'
-  const mirrorPath = resolve(here, 'migrations/0041_processing_task_subject_identity.sql')
+describe('processing task-subject identity migration (0043)', () => {
+  const MIGRATION_0043 = '0043_processing_task_subject_identity'
+  const mirrorPath = resolve(here, 'migrations/0043_processing_task_subject_identity.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1074,7 +1074,7 @@ describe('processing task-subject identity migration (0041)', () => {
     },
   })
 
-  it('registers 0041 and emits the subject-identity DDL through the runner', async () => {
+  it('registers 0043 and emits the subject-identity DDL through the runner', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
@@ -1083,14 +1083,14 @@ describe('processing task-subject identity migration (0041)', () => {
     expect(migrationSql).toContain('idx_processing_tasks_subject_active_unique')
   })
 
-  it('keeps the checked-in 0041 SQL mirror exactly equal to the registry copy', () => {
+  it('keeps the checked-in 0043 SQL mirror exactly equal to the registry copy', () => {
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
     const fixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0041}\n`
+    const marker = `-- ${MIGRATION_0043}\n`
     const start = fixture.indexOf(marker)
     expect(
       start,
-      '0041 missing from the generated fixture — register it in MIGRATIONS'
+      '0043 missing from the generated fixture — register it in MIGRATIONS'
     ).toBeGreaterThanOrEqual(0)
     const rest = fixture.slice(start + marker.length)
     const next = rest.search(/\n-- \d{4}_/)
@@ -1106,7 +1106,7 @@ describe('processing task-subject identity migration (0041)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0041}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0043}'`).get()?.n
       ).toBe(1)
       for (const table of ['processing_tasks', 'processing_batch_tasks']) {
         const columns = db
@@ -1137,11 +1137,11 @@ describe('processing task-subject identity migration (0041)', () => {
       db.exec('PRAGMA foreign_keys=ON')
       await runMigrations(shim(db))
 
-      // Burn the database back into its pre-0041 shape: complete 0032/0033
-      // tables, no 0041 registry row, no subject columns, no subject index.
+      // Burn the database back into its pre-0043 shape: complete 0032/0033
+      // tables, no 0043 registry row, no subject columns, no subject index.
       // DROP COLUMN is confirmed to work on the CHECK-constrained columns
       // once the dependent partial unique is dropped first.
-      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0041}'`)
+      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0043}'`)
       db.exec('DROP INDEX IF EXISTS idx_processing_tasks_subject_active_unique')
       for (const table of ['processing_tasks', 'processing_batch_tasks']) {
         for (const column of ['domain', 'subject_kind', 'subject_id']) {
@@ -1196,9 +1196,9 @@ describe('processing task-subject identity migration (0041)', () => {
   })
 })
 
-describe('processing task-subject cutover migration (0042)', () => {
-  const MIGRATION_0042 = '0042_processing_task_subject_cutover'
-  const mirrorPath = resolve(here, 'migrations/0042_processing_task_subject_cutover.sql')
+describe('processing task-subject cutover migration (0044)', () => {
+  const MIGRATION_0044 = '0044_processing_task_subject_cutover'
+  const mirrorPath = resolve(here, 'migrations/0044_processing_task_subject_cutover.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1225,7 +1225,7 @@ describe('processing task-subject cutover migration (0042)', () => {
       }>
     ).map((row) => row.name)
 
-  it('registers 0042 and emits the cutover DDL through the runner', async () => {
+  it('registers 0044 and emits the cutover DDL through the runner', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
@@ -1234,14 +1234,14 @@ describe('processing task-subject cutover migration (0042)', () => {
     expect(migrationSql).toContain('idx_processing_tasks_subject_active_unique')
   })
 
-  it('keeps the checked-in 0042 SQL mirror exactly equal to the registry copy', () => {
+  it('keeps the checked-in 0044 SQL mirror exactly equal to the registry copy', () => {
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
     const fixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0042}\n`
+    const marker = `-- ${MIGRATION_0044}\n`
     const start = fixture.indexOf(marker)
     expect(
       start,
-      '0042 missing from the generated fixture — register it in MIGRATIONS'
+      '0044 missing from the generated fixture — register it in MIGRATIONS'
     ).toBeGreaterThanOrEqual(0)
     const rest = fixture.slice(start + marker.length)
     const next = rest.search(/\n-- \d{4}_/)
@@ -1257,7 +1257,7 @@ describe('processing task-subject cutover migration (0042)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
       ).toBe(1)
       // The composite is now the sole single-flight authority.
       expect(liveIndexNames(db)).toContain('idx_processing_tasks_subject_active_unique')
@@ -1273,10 +1273,10 @@ describe('processing task-subject cutover migration (0042)', () => {
       db.exec('PRAGMA foreign_keys=ON')
       await runMigrations(shim(db))
 
-      // Burn the database back into its pre-0042 shape: the full 0041-era
-      // index pair, no 0042 registry row. The old partial unique is
+      // Burn the database back into its pre-0044 shape: the full 0043-era
+      // index pair, no 0044 registry row. The old partial unique is
       // recreated exactly as 0032 built it.
-      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0042}'`)
+      db.exec(`DELETE FROM _migrations WHERE name='${MIGRATION_0044}'`)
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_active_unique
         ON processing_tasks(kind, asset_id_snapshot)
         WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`)
@@ -1285,14 +1285,14 @@ describe('processing task-subject cutover migration (0042)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
       ).toBe(1)
       expect(liveIndexNames(db)).toContain('idx_processing_tasks_subject_active_unique')
       expect(liveIndexNames(db)).not.toContain('idx_processing_tasks_active_unique')
       // Replay stays an error-free no-op.
       await runMigrations(shim(db))
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0042}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
       ).toBe(1)
     } finally {
       db.close()
@@ -1300,9 +1300,9 @@ describe('processing task-subject cutover migration (0042)', () => {
   })
 })
 
-describe('bibliography task admission migration (0043)', () => {
-  const MIGRATION_0043 = '0043_bibliography_sync_tasks'
-  const mirrorPath = resolve(here, 'migrations/0043_bibliography_sync_tasks.sql')
+describe('bibliography task admission migration (0045)', () => {
+  const MIGRATION_0045 = '0045_bibliography_sync_tasks'
+  const mirrorPath = resolve(here, 'migrations/0045_bibliography_sync_tasks.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1322,10 +1322,10 @@ describe('bibliography task admission migration (0043)', () => {
     },
   })
 
-  /** Build a database that has every migration before 0043 recorded. */
+  /** Build a database that has every migration before 0045 recorded. */
   const before0043 = (db: DatabaseSync) => {
     const fullFixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0043}`
+    const marker = `-- ${MIGRATION_0045}`
     const cut = fullFixture.indexOf(marker)
     const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
     db.exec(prefix)
@@ -1342,21 +1342,21 @@ describe('bibliography task admission migration (0043)', () => {
       Object.values
     )
 
-  it('registers 0043 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0045 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\\n')
-    expect(migrationSql).toContain(MIGRATION_0043)
+    expect(migrationSql).toContain(MIGRATION_0045)
     expect(migrationSql).toContain("'bibliography_sync'")
     expect(migrationSql).toContain("'bibliography'")
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0043}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0045}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0043 without duplicating its registry row', async () => {
+  it('freshly applies and replays 0045 without duplicating its registry row', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1364,7 +1364,7 @@ describe('bibliography task admission migration (0043)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0043}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0045}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO processing_batches
@@ -1384,7 +1384,7 @@ describe('bibliography task admission migration (0043)', () => {
     }
   })
 
-  it('upgrades pre-0043 queue rows byte-identically and preserves constraints/indexes', async () => {
+  it('upgrades pre-0045 queue rows byte-identically and preserves constraints/indexes', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1454,7 +1454,7 @@ describe('bibliography task admission migration (0043)', () => {
 
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
-      // 0044 rides the same runMigrations pass: the only batches difference is
+      // 0046 rides the same runMigrations pass: the only batches difference is
       // the additive priority default appended last by ALTER TABLE.
       expect(tableRows(db, 'processing_batches')).toEqual(beforeBatches.map((row) => [...row, 0]))
       expect(tableRows(db, 'processing_attempts')).toEqual(beforeAttempts)
@@ -1533,9 +1533,9 @@ describe('bibliography task admission migration (0043)', () => {
   })
 })
 
-describe('batch priority migration (0044)', () => {
-  const MIGRATION_0044 = '0044_processing_priority'
-  const mirrorPath = resolve(here, 'migrations/0044_processing_priority.sql')
+describe('batch priority migration (0046)', () => {
+  const MIGRATION_0046 = '0046_processing_priority'
+  const mirrorPath = resolve(here, 'migrations/0046_processing_priority.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1555,10 +1555,10 @@ describe('batch priority migration (0044)', () => {
     },
   })
 
-  /** Build a database that has every migration before 0044 recorded. */
+  /** Build a database that has every migration before 0046 recorded. */
   const before0044 = (db: DatabaseSync) => {
     const fullFixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0044}`
+    const marker = `-- ${MIGRATION_0046}`
     const cut = fullFixture.indexOf(marker)
     const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
     db.exec(prefix)
@@ -1570,21 +1570,21 @@ describe('batch priority migration (0044)', () => {
     }
   }
 
-  it('registers 0044 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0046 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0044)
+    expect(migrationSql).toContain(MIGRATION_0046)
     expect(migrationSql).toContain('ADD COLUMN priority')
     expect(migrationSql).toContain('idx_processing_batches_priority')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0044}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0046}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0044 without duplicating its registry row', async () => {
+  it('freshly applies and replays 0046 without duplicating its registry row', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1592,7 +1592,7 @@ describe('batch priority migration (0044)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0046}'`).get()?.n
       ).toBe(1)
       const columns = (
         db.prepare("SELECT name FROM pragma_table_info('processing_batches')").all() as Array<{
@@ -1634,7 +1634,7 @@ describe('batch priority migration (0044)', () => {
     }
   })
 
-  it('upgrades pre-0044 batch rows with a background default and touches nothing else', async () => {
+  it('upgrades pre-0046 batch rows with a background default and touches nothing else', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1659,7 +1659,7 @@ describe('batch priority migration (0044)', () => {
         .all() as Array<Record<string, unknown>>
       expect(after).toEqual(before.map((row) => ({ ...row, priority: 0 })))
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0046}'`).get()?.n
       ).toBe(1)
     } finally {
       db.close()
@@ -1667,9 +1667,9 @@ describe('batch priority migration (0044)', () => {
   })
 })
 
-describe('bibliographic semantic profiles migration (0045)', () => {
-  const MIGRATION_0045 = '0045_bibliographic_semantic_profiles'
-  const mirrorPath = resolve(here, 'migrations/0045_bibliographic_semantic_profiles.sql')
+describe('bibliographic semantic profiles migration (0047)', () => {
+  const MIGRATION_0047 = '0047_bibliographic_semantic_profiles'
+  const mirrorPath = resolve(here, 'migrations/0047_bibliographic_semantic_profiles.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1689,21 +1689,21 @@ describe('bibliographic semantic profiles migration (0045)', () => {
     },
   })
 
-  it('registers 0045 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0047 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0045)
+    expect(migrationSql).toContain(MIGRATION_0047)
     expect(migrationSql).toContain('REFERENCES bibliographic_items(id) ON DELETE CASCADE')
     expect(migrationSql).toContain('idx_bibliographic_semantic_profiles_hash')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0045}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0047}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0045 without duplicating its registry row', async () => {
+  it('freshly applies and replays 0047 without duplicating its registry row', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1711,7 +1711,7 @@ describe('bibliographic semantic profiles migration (0045)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0045}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0047}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
@@ -1747,9 +1747,9 @@ describe('bibliographic semantic profiles migration (0045)', () => {
   })
 })
 
-describe('bibliography profile tasks migration (0046)', () => {
-  const MIGRATION_0046 = '0046_bibliography_profile_tasks'
-  const mirrorPath = resolve(here, 'migrations/0046_bibliography_profile_tasks.sql')
+describe('bibliography profile tasks migration (0048)', () => {
+  const MIGRATION_0048 = '0048_bibliography_profile_tasks'
+  const mirrorPath = resolve(here, 'migrations/0048_bibliography_profile_tasks.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1769,10 +1769,10 @@ describe('bibliography profile tasks migration (0046)', () => {
     },
   })
 
-  /** Build a database that has every migration before 0046 recorded. */
+  /** Build a database that has every migration before 0048 recorded. */
   const before0046 = (db: DatabaseSync) => {
     const fullFixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0046}`
+    const marker = `-- ${MIGRATION_0048}`
     const cut = fullFixture.indexOf(marker)
     const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
     db.exec(prefix)
@@ -1784,18 +1784,18 @@ describe('bibliography profile tasks migration (0046)', () => {
     }
   }
 
-  it('registers 0046 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0048 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0046)
+    expect(migrationSql).toContain(MIGRATION_0048)
     expect(migrationSql).toContain("'bibliography_profile'")
     expect(migrationSql).toContain('bibliographic_item_embeddings')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0046}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0048}\n${mirror}`)
   })
 
   const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
@@ -1803,7 +1803,7 @@ describe('bibliography profile tasks migration (0046)', () => {
       Object.values
     )
 
-  it('upgrades pre-0046 queue rows byte-identically and admits the profile kind', async () => {
+  it('upgrades pre-0048 queue rows byte-identically and admits the profile kind', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1849,7 +1849,7 @@ describe('bibliography profile tasks migration (0046)', () => {
       expect(tableRows(db, 'processing_attempts')).toEqual(beforeAttempts)
       expect(tableRows(db, 'processing_checkpoints')).toEqual(beforeCheckpoints)
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0046}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0048}'`).get()?.n
       ).toBe(1)
       // The widened kind admits a profile task through both tables.
       db.prepare(
@@ -1905,9 +1905,9 @@ describe('bibliography profile tasks migration (0046)', () => {
   })
 })
 
-describe('bibliographic index generations migration (0047)', () => {
-  const MIGRATION_0047 = '0047_bibliographic_index_generations'
-  const mirrorPath = resolve(here, 'migrations/0047_bibliographic_index_generations.sql')
+describe('bibliographic index generations migration (0049)', () => {
+  const MIGRATION_0049 = '0049_bibliographic_index_generations'
+  const mirrorPath = resolve(here, 'migrations/0049_bibliographic_index_generations.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -1927,22 +1927,22 @@ describe('bibliographic index generations migration (0047)', () => {
     },
   })
 
-  it('registers 0047 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0049 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0047)
+    expect(migrationSql).toContain(MIGRATION_0049)
     expect(migrationSql).toContain('bibliographic_embedding_contracts')
     expect(migrationSql).toContain('bibliographic_index_generations')
     expect(migrationSql).toContain('idx_bibliographic_generations_single_active')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0047}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0049}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0047 with one active generation per contract', async () => {
+  it('freshly applies and replays 0049 with one active generation per contract', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -1950,7 +1950,7 @@ describe('bibliographic index generations migration (0047)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0047}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0049}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO bibliographic_embedding_contracts
@@ -1980,9 +1980,9 @@ describe('bibliographic index generations migration (0047)', () => {
   })
 })
 
-describe('bibliographic embedding generations migration (0048)', () => {
-  const MIGRATION_0048 = '0048_bibliographic_embedding_generations'
-  const mirrorPath = resolve(here, 'migrations/0048_bibliographic_embedding_generations.sql')
+describe('bibliographic embedding generations migration (0050)', () => {
+  const MIGRATION_0050 = '0050_bibliographic_embedding_generations'
+  const mirrorPath = resolve(here, 'migrations/0050_bibliographic_embedding_generations.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2002,10 +2002,10 @@ describe('bibliographic embedding generations migration (0048)', () => {
     },
   })
 
-  /** Build a database that has every migration before 0048 recorded. */
+  /** Build a database that has every migration before 0050 recorded. */
   const before0048 = (db: DatabaseSync) => {
     const fullFixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0048}`
+    const marker = `-- ${MIGRATION_0050}`
     const cut = fullFixture.indexOf(marker)
     const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
     db.exec(prefix)
@@ -2022,18 +2022,18 @@ describe('bibliographic embedding generations migration (0048)', () => {
       Object.values
     )
 
-  it('registers 0048 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0050 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0048)
+    expect(migrationSql).toContain(MIGRATION_0050)
     expect(migrationSql).toContain('PRIMARY KEY (item_id, generation_id)')
     expect(migrationSql).toContain('gen-legacy-')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0048}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0050}\n${mirror}`)
   })
 
   it('keeps legacy vectors under honest retired ancestry and enforces object/generation uniqueness', async () => {
@@ -2062,7 +2062,7 @@ describe('bibliographic embedding generations migration (0048)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0048}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0050}'`).get()?.n
       ).toBe(1)
       const legacy = db.prepare(
         'SELECT generation_id, embedding, input_hash, profile_revision FROM bibliographic_item_embeddings WHERE item_id = ?'
@@ -2100,9 +2100,9 @@ describe('bibliographic embedding generations migration (0048)', () => {
   })
 })
 
-describe('bibliographic extraction tasks migration (0050)', () => {
-  const MIGRATION_0050 = '0050_bibliographic_extraction_tasks'
-  const mirrorPath = resolve(here, 'migrations/0050_bibliographic_extraction_tasks.sql')
+describe('bibliographic extraction tasks migration (0052)', () => {
+  const MIGRATION_0052 = '0052_bibliographic_extraction_tasks'
+  const mirrorPath = resolve(here, 'migrations/0052_bibliographic_extraction_tasks.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2122,10 +2122,10 @@ describe('bibliographic extraction tasks migration (0050)', () => {
     },
   })
 
-  /** Build a database that has every migration before 0050 recorded. */
+  /** Build a database that has every migration before 0052 recorded. */
   const before0050 = (db: DatabaseSync) => {
     const fullFixture = buildSchemaFixture()
-    const marker = `-- ${MIGRATION_0050}`
+    const marker = `-- ${MIGRATION_0052}`
     const cut = fullFixture.indexOf(marker)
     const prefix = cut < 0 ? fullFixture : fullFixture.slice(0, cut)
     db.exec(prefix)
@@ -2142,21 +2142,21 @@ describe('bibliographic extraction tasks migration (0050)', () => {
       Object.values
     )
 
-  it('registers 0050 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0050)
+    expect(migrationSql).toContain(MIGRATION_0052)
     expect(migrationSql).toContain("'bibliography_extract'")
     expect(migrationSql).toContain('bibliographic_extractions')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0050}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0052}\n${mirror}`)
   })
 
-  it('upgrades pre-0050 queue rows byte-identically and cascades extraction rows', async () => {
+  it('upgrades pre-0052 queue rows byte-identically and cascades extraction rows', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -2185,7 +2185,7 @@ describe('bibliographic extraction tasks migration (0050)', () => {
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0050}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0052}'`).get()?.n
       ).toBe(1)
       // The widened kind admits an extraction task.
       db.prepare(
@@ -2234,9 +2234,9 @@ describe('bibliographic extraction tasks migration (0050)', () => {
   })
 })
 
-describe('bibliographic page texts migration (0051)', () => {
-  const MIGRATION_0051 = '0051_bibliographic_page_texts'
-  const mirrorPath = resolve(here, 'migrations/0051_bibliographic_page_texts.sql')
+describe('bibliographic page texts migration (0053)', () => {
+  const MIGRATION_0053 = '0053_bibliographic_page_texts'
+  const mirrorPath = resolve(here, 'migrations/0053_bibliographic_page_texts.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2256,21 +2256,21 @@ describe('bibliographic page texts migration (0051)', () => {
     },
   })
 
-  it('registers 0051 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0053 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0051)
+    expect(migrationSql).toContain(MIGRATION_0053)
     expect(migrationSql).toContain('bibliographic_page_texts')
     expect(migrationSql).toContain('idx_bibliographic_page_texts_attachment')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0051}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0053}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0051 with per-page rows and cascade', async () => {
+  it('freshly applies and replays 0053 with per-page rows and cascade', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -2278,7 +2278,7 @@ describe('bibliographic page texts migration (0051)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0051}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0053}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
@@ -2324,9 +2324,9 @@ describe('bibliographic page texts migration (0051)', () => {
   })
 })
 
-describe('bibliographic chunks migration (0052)', () => {
-  const MIGRATION_0052 = '0052_bibliographic_chunks'
-  const mirrorPath = resolve(here, 'migrations/0052_bibliographic_chunks.sql')
+describe('bibliographic chunks migration (0054)', () => {
+  const MIGRATION_0054 = '0054_bibliographic_chunks'
+  const mirrorPath = resolve(here, 'migrations/0054_bibliographic_chunks.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2346,21 +2346,21 @@ describe('bibliographic chunks migration (0052)', () => {
     },
   })
 
-  it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0054 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0052)
+    expect(migrationSql).toContain(MIGRATION_0054)
     expect(migrationSql).toContain('bibliographic_chunks')
     expect(migrationSql).toContain('bibliographic_chunk_spans')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0052}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0054}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0052 with spans and cascade', async () => {
+  it('freshly applies and replays 0054 with spans and cascade', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -2368,7 +2368,7 @@ describe('bibliographic chunks migration (0052)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0052}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0054}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
@@ -2416,9 +2416,9 @@ describe('bibliographic chunks migration (0052)', () => {
   })
 })
 
-describe('bibliographic chunks migration (0052)', () => {
-  const MIGRATION_0052 = '0052_bibliographic_chunks'
-  const mirrorPath = resolve(here, 'migrations/0052_bibliographic_chunks.sql')
+describe('bibliographic chunks migration (0054)', () => {
+  const MIGRATION_0054 = '0054_bibliographic_chunks'
+  const mirrorPath = resolve(here, 'migrations/0054_bibliographic_chunks.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2438,21 +2438,21 @@ describe('bibliographic chunks migration (0052)', () => {
     },
   })
 
-  it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0054 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0052)
+    expect(migrationSql).toContain(MIGRATION_0054)
     expect(migrationSql).toContain('bibliographic_chunks')
     expect(migrationSql).toContain('bibliographic_chunk_spans')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0052}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0054}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0052 with spans and cascade', async () => {
+  it('freshly applies and replays 0054 with spans and cascade', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -2460,7 +2460,7 @@ describe('bibliographic chunks migration (0052)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0052}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0054}'`).get()?.n
       ).toBe(1)
       db.prepare(
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)
@@ -2508,9 +2508,9 @@ describe('bibliographic chunks migration (0052)', () => {
   })
 })
 
-describe('bibliographic chunk embeddings migration (0053)', () => {
-  const MIGRATION_0053 = '0053_bibliographic_chunk_embeddings'
-  const mirrorPath = resolve(here, 'migrations/0053_bibliographic_chunk_embeddings.sql')
+describe('bibliographic chunk embeddings migration (0055)', () => {
+  const MIGRATION_0055 = '0055_bibliographic_chunk_embeddings'
+  const mirrorPath = resolve(here, 'migrations/0055_bibliographic_chunk_embeddings.sql')
 
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
@@ -2530,21 +2530,21 @@ describe('bibliographic chunk embeddings migration (0053)', () => {
     },
   })
 
-  it('registers 0053 and keeps its checked-in SQL mirror byte-identical', async () => {
+  it('registers 0055 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await runMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
-    expect(migrationSql).toContain(MIGRATION_0053)
+    expect(migrationSql).toContain(MIGRATION_0055)
     expect(migrationSql).toContain('bibliographic_chunk_embeddings')
     expect(migrationSql).toContain('PRIMARY KEY (chunk_id, generation_id)')
     expect(migrationSql).toContain('BEGIN IMMEDIATE')
 
     const mirror = readFileSync(mirrorPath, 'utf8').trim()
-    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0053}\n${mirror}`)
+    expect(buildSchemaFixture()).toContain(`-- ${MIGRATION_0055}\n${mirror}`)
   })
 
-  it('freshly applies and replays 0053 with per-chunk generation uniqueness', async () => {
+  it('freshly applies and replays 0055 with per-chunk generation uniqueness', async () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
@@ -2552,7 +2552,7 @@ describe('bibliographic chunk embeddings migration (0053)', () => {
       await runMigrations(shim(db))
 
       expect(
-        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0053}'`).get()?.n
+        db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0055}'`).get()?.n
       ).toBe(1)
       for (const stmt of [
         `INSERT INTO zotero_connections (id, source_origin, capabilities_json, state, created_at, updated_at)

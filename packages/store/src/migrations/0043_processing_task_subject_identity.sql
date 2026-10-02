@@ -1,14 +1,14 @@
--- 0041_processing_task_subject_identity: additive task-subject identity columns (E2a-1).
+-- 0043_processing_task_subject_identity: additive task-subject identity columns (E2a-1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0041_processing_task_subject_identity']); this file mirrors it
+-- (MIGRATIONS['0043_processing_task_subject_identity']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0041 behind.
+-- bookkeeping can never leave a half-applied 0043 behind.
 --
 -- E2a-1 is additive only: every lookup keeps resolving on
 -- (kind, asset_id_snapshot) and the old partial unique

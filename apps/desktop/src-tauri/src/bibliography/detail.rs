@@ -430,12 +430,12 @@ mod tests {
     use rusqlite::Connection;
 
     const CATALOG_MIGRATION_SQL: &str =
-        include_str!("../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+        include_str!("../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql");
     const RELATIONS_MIGRATION_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+        "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
     );
     const RECONCILIATION_MIGRATION_SQL: &str = include_str!(
-        "../../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql"
+        "../../../../../packages/store/src/migrations/0042_bibliography_reconciliation.sql"
     );
 
     fn migrated_db() -> Connection {

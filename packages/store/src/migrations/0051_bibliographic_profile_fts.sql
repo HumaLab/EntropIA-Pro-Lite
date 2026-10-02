@@ -1,14 +1,14 @@
--- 0049_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
+-- 0051_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0049_bibliographic_profile_fts']); this file mirrors it
+-- (MIGRATIONS['0051_bibliographic_profile_fts']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0049 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0051 behind.
 --
 -- Plan section 6 "Indices FTS bibliograficos": FTS5 over the canonical text
 -- of every stored profile, maintained transactionally by triggers on the

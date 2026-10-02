@@ -1,14 +1,14 @@
--- 0054_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
+-- 0056_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0054_bibliographic_ingest_operations']); this file mirrors it
+-- (MIGRATIONS['0056_bibliographic_ingest_operations']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0054 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0056 behind.
 --
 -- One row per explicit user decision: link an existing work or create a
 -- parent (and eventually upload an attachment) in one library. `request_id`

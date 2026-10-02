@@ -17,11 +17,11 @@ use entropia_desktop_lib::bibliography::repository::{
 use rusqlite::Connection;
 
 const CATALOG_MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_catalog.sql");
 const RELATIONS_MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+    include_str!("../../../../packages/store/src/migrations/0041_bibliography_relations.sql");
 const RECONCILIATION_MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
+    include_str!("../../../../packages/store/src/migrations/0042_bibliography_reconciliation.sql");
 
 fn migrated_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open synthetic database");
@@ -51,9 +51,9 @@ fn migrated_db() -> Connection {
     }
 
     for name in [
-        "0038_bibliography_catalog",
-        "0039_bibliography_relations",
-        "0040_bibliography_reconciliation",
+        "0040_bibliography_catalog",
+        "0041_bibliography_relations",
+        "0042_bibliography_reconciliation",
     ] {
         conn.execute(
             "INSERT OR IGNORE INTO _migrations (name, applied_at) VALUES (?1, 1)",
@@ -156,7 +156,7 @@ fn migration_is_replay_safe_and_preserves_the_prior_catalog() {
 
     assert_eq!(
         conn.query_row(
-            "SELECT COUNT(*) FROM _migrations WHERE name='0040_bibliography_reconciliation'",
+            "SELECT COUNT(*) FROM _migrations WHERE name='0042_bibliography_reconciliation'",
             [],
             |row| row.get::<_, i64>(0),
         )

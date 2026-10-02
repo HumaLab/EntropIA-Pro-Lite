@@ -38,47 +38,47 @@ const MIGRATION_SQL: &str =
 const MIGRATION_0033_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0033_processing_source_invalidation.sql"
 );
-const MIGRATION_0038_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
-const MIGRATION_0039_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
 const MIGRATION_0040_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
-const MIGRATION_0041_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_catalog.sql");
+const MIGRATION_0041_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0041_bibliography_relations.sql");
+const MIGRATION_0042_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0042_bibliography_reconciliation.sql");
+const MIGRATION_0043_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0043_processing_task_subject_identity.sql"
 );
-const MIGRATION_0042_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+const MIGRATION_0044_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0044_processing_task_subject_cutover.sql"
 );
-const MIGRATION_0043_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
-const MIGRATION_0044_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0044_processing_priority.sql");
-const MIGRATION_0045_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
-);
+const MIGRATION_0045_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0045_bibliography_sync_tasks.sql");
 const MIGRATION_0046_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql");
+    include_str!("../../../../packages/store/src/migrations/0046_processing_priority.sql");
 const MIGRATION_0047_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+    "../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
 );
-const MIGRATION_0048_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
+const MIGRATION_0048_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0048_bibliography_profile_tasks.sql");
+const MIGRATION_0049_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
 );
-const MIGRATION_0049_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql");
 const MIGRATION_0050_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+    "../../../../packages/store/src/migrations/0050_bibliographic_embedding_generations.sql"
 );
 const MIGRATION_0051_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql");
-const MIGRATION_0052_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
-const MIGRATION_0053_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+    include_str!("../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql");
+const MIGRATION_0052_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0052_bibliographic_extraction_tasks.sql"
 );
-const MIGRATION_0054_SQL: &str = include_str!(
-    "../../../../packages/store/src/migrations/0054_bibliographic_ingest_operations.sql"
+const MIGRATION_0053_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0053_bibliographic_page_texts.sql");
+const MIGRATION_0054_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql");
+const MIGRATION_0055_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
+);
+const MIGRATION_0056_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0056_bibliographic_ingest_operations.sql"
 );
 
 /// Archive shape good enough for both claim arms: the corpus tables the
@@ -105,26 +105,26 @@ fn migrated_db() -> (tempfile::TempDir, rusqlite::Connection) {
     for (sql, name) in [
         (MIGRATION_SQL, "0032_batch_processing"),
         (MIGRATION_0033_SQL, "0033_processing_source_invalidation"),
-        (MIGRATION_0038_SQL, "0038_bibliography_catalog"),
-        (MIGRATION_0039_SQL, "0039_bibliography_relations"),
-        (MIGRATION_0040_SQL, "0040_bibliography_reconciliation"),
-        (MIGRATION_0041_SQL, "0041_processing_task_subject_identity"),
-        (MIGRATION_0042_SQL, "0042_processing_task_subject_cutover"),
-        (MIGRATION_0043_SQL, "0043_bibliography_sync_tasks"),
-        (MIGRATION_0044_SQL, "0044_processing_priority"),
-        (MIGRATION_0045_SQL, "0045_bibliographic_semantic_profiles"),
-        (MIGRATION_0046_SQL, "0046_bibliography_profile_tasks"),
-        (MIGRATION_0047_SQL, "0047_bibliographic_index_generations"),
+        (MIGRATION_0040_SQL, "0040_bibliography_catalog"),
+        (MIGRATION_0041_SQL, "0041_bibliography_relations"),
+        (MIGRATION_0042_SQL, "0042_bibliography_reconciliation"),
+        (MIGRATION_0043_SQL, "0043_processing_task_subject_identity"),
+        (MIGRATION_0044_SQL, "0044_processing_task_subject_cutover"),
+        (MIGRATION_0045_SQL, "0045_bibliography_sync_tasks"),
+        (MIGRATION_0046_SQL, "0046_processing_priority"),
+        (MIGRATION_0047_SQL, "0047_bibliographic_semantic_profiles"),
+        (MIGRATION_0048_SQL, "0048_bibliography_profile_tasks"),
+        (MIGRATION_0049_SQL, "0049_bibliographic_index_generations"),
         (
-            MIGRATION_0048_SQL,
-            "0048_bibliographic_embedding_generations",
+            MIGRATION_0050_SQL,
+            "0050_bibliographic_embedding_generations",
         ),
-        (MIGRATION_0049_SQL, "0049_bibliographic_profile_fts"),
-        (MIGRATION_0050_SQL, "0050_bibliographic_extraction_tasks"),
-        (MIGRATION_0051_SQL, "0051_bibliographic_page_texts"),
-        (MIGRATION_0052_SQL, "0052_bibliographic_chunks"),
-        (MIGRATION_0053_SQL, "0053_bibliographic_chunk_embeddings"),
-        (MIGRATION_0054_SQL, "0054_bibliographic_ingest_operations"),
+        (MIGRATION_0051_SQL, "0051_bibliographic_profile_fts"),
+        (MIGRATION_0052_SQL, "0052_bibliographic_extraction_tasks"),
+        (MIGRATION_0053_SQL, "0053_bibliographic_page_texts"),
+        (MIGRATION_0054_SQL, "0054_bibliographic_chunks"),
+        (MIGRATION_0055_SQL, "0055_bibliographic_chunk_embeddings"),
+        (MIGRATION_0056_SQL, "0056_bibliographic_ingest_operations"),
     ] {
         conn.execute_batch(sql).expect("apply migration");
         conn.execute(

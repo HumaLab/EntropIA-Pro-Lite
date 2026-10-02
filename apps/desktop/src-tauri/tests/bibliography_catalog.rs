@@ -21,14 +21,14 @@ use entropia_desktop_lib::bibliography::repository::{
 use rusqlite::Connection;
 
 const MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_catalog.sql");
 const RELATIONS_MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+    include_str!("../../../../packages/store/src/migrations/0041_bibliography_relations.sql");
 const RECONCILIATION_MIGRATION_SQL: &str =
-    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
-const MIGRATION_NAME: &str = "0038_bibliography_catalog";
-const RELATIONS_MIGRATION_NAME: &str = "0039_bibliography_relations";
-const RECONCILIATION_MIGRATION_NAME: &str = "0040_bibliography_reconciliation";
+    include_str!("../../../../packages/store/src/migrations/0042_bibliography_reconciliation.sql");
+const MIGRATION_NAME: &str = "0040_bibliography_catalog";
+const RELATIONS_MIGRATION_NAME: &str = "0041_bibliography_relations";
+const RECONCILIATION_MIGRATION_NAME: &str = "0042_bibliography_reconciliation";
 
 fn migrated_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory database");

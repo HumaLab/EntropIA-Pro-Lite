@@ -1,14 +1,14 @@
--- 0042_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).
+-- 0044_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0042_processing_task_subject_cutover']); this file mirrors it
+-- (MIGRATIONS['0044_processing_task_subject_cutover']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042/0043): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0042 behind.
+-- bookkeeping can never leave a half-applied 0044 behind.
 --
 -- E2a-2 cuts the single-flight authority from the snapshot-scoped partial
 -- unique idx_processing_tasks_active_unique to the composite partial unique

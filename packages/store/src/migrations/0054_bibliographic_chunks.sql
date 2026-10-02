@@ -1,14 +1,14 @@
--- 0052_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
+-- 0054_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0052_bibliographic_chunks']); this file mirrors it
+-- (MIGRATIONS['0054_bibliographic_chunks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0052 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0054 behind.
 --
 -- One chunk row per (work, ordinal) with its text, hash, and the chunking
 -- contract that produced it; one span row per page range the chunk covers,

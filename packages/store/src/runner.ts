@@ -1157,10 +1157,10 @@ CREATE INDEX IF NOT EXISTS idx_items_import_source
   ON items(collection_id, lower(json_extract(metadata, '$.__entropia_file_metadata.originalPath')));
 `.trim(),
 
-  // 0038 mirrors packages/store/src/migrations/0038_bibliography_catalog.sql.
+  // 0040 mirrors packages/store/src/migrations/0040_bibliography_catalog.sql.
   // This is the foundation only: later migrations own collections, tags,
   // attachments, tombstones and reconciliation state.
-  '0038_bibliography_catalog': `
+  '0040_bibliography_catalog': `
 -- E1b-1a bibliography catalog foundation.
 --
 -- Connections are namespaces for a Zotero source. A nullable source_instance_id
@@ -1235,16 +1235,16 @@ CREATE INDEX IF NOT EXISTS idx_bibliographic_items_key
 CREATE INDEX IF NOT EXISTS idx_bibliographic_items_title
   ON bibliographic_items(title COLLATE NOCASE);
 `.trim(),
-  // 0039 mirrors packages/store/src/migrations/0039_bibliography_relations.sql.
+  // 0041 mirrors packages/store/src/migrations/0041_bibliography_relations.sql.
   // Relational catalog entities use composite membership foreign keys so an
   // item cannot be associated with a collection or tag from another library.
-  '0039_bibliography_relations': `
+  '0041_bibliography_relations': `
 -- E1b-1b relational Zotero catalog slice.
 --
 -- Native collection/tag identity is qualified by the owning library. Attachment
 -- identity is qualified by its mandatory parent item. Parent collection keys are
 -- opaque native values: no parent FK is required and sync order is irrelevant.
--- Tombstones are side tables so 0038 snapshots and relations stay intact.
+-- Tombstones are side tables so 0040 snapshots and relations stay intact.
 
 -- Composite parent keys for the library-scoped membership foreign keys below.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bibliographic_items_id_library
@@ -1377,8 +1377,8 @@ CREATE TABLE IF NOT EXISTS zotero_attachment_tombstones (
   reason         TEXT NOT NULL CHECK(length(trim(reason)) > 0)
 );
 `.trim(),
-  // 0040 mirrors packages/store/src/migrations/0040_bibliography_reconciliation.sql.
-  '0040_bibliography_reconciliation': `
+  // 0042 mirrors packages/store/src/migrations/0042_bibliography_reconciliation.sql.
+  '0042_bibliography_reconciliation': `
 -- E1b-2 durable per-library bibliography reconciliation state.
 --
 -- The current row is keyed by the internal library FK. A generated run_id
@@ -1451,25 +1451,25 @@ CREATE TABLE IF NOT EXISTS zotero_reconciliation_seen (
 CREATE INDEX IF NOT EXISTS idx_zotero_reconciliation_seen_kind
   ON zotero_reconciliation_seen(library_id, run_id, entity_kind, entity_key);
 `.trim(),
-  // 0041 mirrors packages/store/src/migrations/0041_processing_task_subject_identity.sql.
+  // 0043 mirrors packages/store/src/migrations/0043_processing_task_subject_identity.sql.
   // Additive task-subject identity columns (E2a-1): corpus/asset dual-write
   // columns plus the parallel composite partial unique. The old snapshot
   // unique stays until the E2a-2 cutover. Applied in the trigger-safe
   // single-batch branch in runMigrations() below; the backfill must run
   // before the unique index is created (see the file header for the order
   // and replay contract).
-  '0041_processing_task_subject_identity': `
--- 0041_processing_task_subject_identity: additive task-subject identity columns (E2a-1).
+  '0043_processing_task_subject_identity': `
+-- 0043_processing_task_subject_identity: additive task-subject identity columns (E2a-1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0041_processing_task_subject_identity']); this file mirrors it
+-- (MIGRATIONS['0043_processing_task_subject_identity']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0041 behind.
+-- bookkeeping can never leave a half-applied 0043 behind.
 --
 -- E2a-1 is additive only: every lookup keeps resolving on
 -- (kind, asset_id_snapshot) and the old partial unique
@@ -1514,23 +1514,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_subject_active_unique
   ON processing_tasks(domain, subject_kind, subject_id, kind)
   WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');
 `.trim(),
-  // 0042 mirrors packages/store/src/migrations/0042_processing_task_subject_cutover.sql.
+  // 0044 mirrors packages/store/src/migrations/0044_processing_task_subject_cutover.sql.
   // Single-flight cutover (E2a-2): drops the snapshot-scoped partial unique so
-  // the composite built in 0041 becomes the sole authority. Applied in the
+  // the composite built in 0043 becomes the sole authority. Applied in the
   // trigger-safe single-batch branch in runMigrations() below; DROP INDEX IF
   // EXISTS makes it replay-safe by itself.
-  '0042_processing_task_subject_cutover': `
--- 0042_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).
+  '0044_processing_task_subject_cutover': `
+-- 0044_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0042_processing_task_subject_cutover']); this file mirrors it
+-- (MIGRATIONS['0044_processing_task_subject_cutover']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042/0043): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0042 behind.
+-- bookkeeping can never leave a half-applied 0044 behind.
 --
 -- E2a-2 cuts the single-flight authority from the snapshot-scoped partial
 -- unique idx_processing_tasks_active_unique to the composite partial unique
@@ -1550,26 +1550,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_subject_active_unique
 
 DROP INDEX IF EXISTS idx_processing_tasks_active_unique;
 `.trim(),
-  // 0043 mirrors packages/store/src/migrations/0043_bibliography_sync_tasks.sql.
+  // 0045 mirrors packages/store/src/migrations/0045_bibliography_sync_tasks.sql.
   // Bibliographic task admission (E2b-1): widens the kind CHECK on
   // processing_tasks/processing_batch_tasks to 'bibliography_sync' and the
   // origin CHECK on processing_batches to 'bibliography'. SQLite cannot ALTER
   // a CHECK, so the three tables are rebuilt preserving every column, both
   // task indexes, every FK, and every row byte-identically (dependents are
   // backed up and recreated verbatim). Applied in the trigger-safe
-  // single-batch branch in runMigrations() below like 0032/0041/0042.
-  '0043_bibliography_sync_tasks': `
--- 0043_bibliography_sync_tasks: bibliographic task admission and system-batch origin (E2b-1).
+  // single-batch branch in runMigrations() below like 0032/0043/0044.
+  '0045_bibliography_sync_tasks': `
+-- 0045_bibliography_sync_tasks: bibliographic task admission and system-batch origin (E2b-1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0043_bibliography_sync_tasks']); this file mirrors it
+-- (MIGRATIONS['0045_bibliography_sync_tasks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042): the whole body goes inside one BEGIN IMMEDIATE ...
+-- 0032/0040/0041/0042/0043/0044): the whole body goes inside one BEGIN IMMEDIATE ...
 -- COMMIT together with the _migrations row, so a crash between DDL and
--- bookkeeping can never leave a half-applied 0043 behind.
+-- bookkeeping can never leave a half-applied 0045 behind.
 --
 -- SQLite cannot ALTER a CHECK, so widening kind/origin requires rebuilding the
 -- three tables: processing_tasks and processing_batch_tasks gain
@@ -1577,7 +1577,7 @@ DROP INDEX IF EXISTS idx_processing_tasks_active_unique;
 -- All columns, both task indexes (partial composite subject unique +
 -- claimable), every FK, and every row are preserved byte-identically; old
 -- kinds ('ocr', 'embedding') and origins ('user', 'manual', 'repair') are
--- unchanged, and the snapshot-scoped unique dropped in the 0042 cutover stays
+-- unchanged, and the snapshot-scoped unique dropped in the 0044 cutover stays
 -- dropped (only claimable + composite subject unique are rebuilt).
 --
 -- DROP order is child-first per the actual FK direction (same order as
@@ -1605,14 +1605,14 @@ DROP INDEX IF EXISTS idx_processing_tasks_active_unique;
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0043_processing_batches AS SELECT * FROM processing_batches;
-CREATE TABLE _backup_0043_processing_batch_collections AS SELECT * FROM processing_batch_collections;
-CREATE TABLE _backup_0043_processing_batch_members AS SELECT * FROM processing_batch_members;
-CREATE TABLE _backup_0043_processing_tasks AS SELECT * FROM processing_tasks;
-CREATE TABLE _backup_0043_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
-CREATE TABLE _backup_0043_processing_requests AS SELECT * FROM processing_requests;
-CREATE TABLE _backup_0043_processing_attempts AS SELECT * FROM processing_attempts;
-CREATE TABLE _backup_0043_processing_checkpoints AS SELECT * FROM processing_checkpoints;
+CREATE TABLE _backup_0045_processing_batches AS SELECT * FROM processing_batches;
+CREATE TABLE _backup_0045_processing_batch_collections AS SELECT * FROM processing_batch_collections;
+CREATE TABLE _backup_0045_processing_batch_members AS SELECT * FROM processing_batch_members;
+CREATE TABLE _backup_0045_processing_tasks AS SELECT * FROM processing_tasks;
+CREATE TABLE _backup_0045_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
+CREATE TABLE _backup_0045_processing_requests AS SELECT * FROM processing_requests;
+CREATE TABLE _backup_0045_processing_attempts AS SELECT * FROM processing_attempts;
+CREATE TABLE _backup_0045_processing_checkpoints AS SELECT * FROM processing_checkpoints;
 
 DROP TABLE processing_checkpoints;
 DROP TABLE processing_attempts;
@@ -1748,46 +1748,46 @@ CREATE TABLE processing_checkpoints (
 );
 
 INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error)
-  SELECT id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error FROM _backup_0043_processing_batches;
+  SELECT id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error FROM _backup_0045_processing_batches;
 INSERT INTO processing_batch_collections (batch_id, collection_id_snapshot, name_snapshot)
-  SELECT batch_id, collection_id_snapshot, name_snapshot FROM _backup_0043_processing_batch_collections;
+  SELECT batch_id, collection_id_snapshot, name_snapshot FROM _backup_0045_processing_batch_collections;
 INSERT INTO processing_batch_members (batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason)
-  SELECT batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason FROM _backup_0043_processing_batch_members;
+  SELECT batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason FROM _backup_0045_processing_batch_members;
 INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)
-  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0043_processing_tasks;
+  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0045_processing_tasks;
 INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)
-  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0043_processing_batch_tasks;
+  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0045_processing_batch_tasks;
 INSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at)
-  SELECT request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at FROM _backup_0043_processing_requests;
+  SELECT request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at FROM _backup_0045_processing_requests;
 INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)
-  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0043_processing_attempts;
+  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0045_processing_attempts;
 INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
-  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0043_processing_checkpoints;
+  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0045_processing_checkpoints;
 
-DROP TABLE _backup_0043_processing_checkpoints;
-DROP TABLE _backup_0043_processing_attempts;
-DROP TABLE _backup_0043_processing_requests;
-DROP TABLE _backup_0043_processing_batch_tasks;
-DROP TABLE _backup_0043_processing_tasks;
-DROP TABLE _backup_0043_processing_batch_members;
-DROP TABLE _backup_0043_processing_batch_collections;
-DROP TABLE _backup_0043_processing_batches;
+DROP TABLE _backup_0045_processing_checkpoints;
+DROP TABLE _backup_0045_processing_attempts;
+DROP TABLE _backup_0045_processing_requests;
+DROP TABLE _backup_0045_processing_batch_tasks;
+DROP TABLE _backup_0045_processing_tasks;
+DROP TABLE _backup_0045_processing_batch_members;
+DROP TABLE _backup_0045_processing_batch_collections;
+DROP TABLE _backup_0045_processing_batches;
 `.trim(),
-  // 0045 mirrors packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql.
+  // 0047 mirrors packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql.
   // Per-work semantic profiles (E3b-WU1): one canonical-text row per verified
   // work. Runs through the trigger-safe single-batch path in runMigrations()
-  // below like 0032/0041/0042/0043/0044.
-  '0045_bibliographic_semantic_profiles': `-- 0045_bibliographic_semantic_profiles: per-work semantic profiles (E3b-WU1).
+  // below like 0032/0043/0044/0045/0046.
+  '0047_bibliographic_semantic_profiles': `-- 0047_bibliographic_semantic_profiles: per-work semantic profiles (E3b-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0045_bibliographic_semantic_profiles']); this file mirrors it
+-- (MIGRATIONS['0047_bibliographic_semantic_profiles']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042/0043/0044): the whole body goes inside one
+-- 0032/0040/0041/0042/0043/0044/0045/0046): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0045 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0047 behind.
 --
 -- Plan §6 bibliographic_semantic_profiles: one row per verified work —
 -- profile revision, template version, canonical text, field provenance, and
@@ -1811,21 +1811,21 @@ CREATE TABLE bibliographic_semantic_profiles (
 CREATE INDEX idx_bibliographic_semantic_profiles_hash
     ON bibliographic_semantic_profiles(input_hash);
 `.trim(),
-  // 0046 mirrors packages/store/src/migrations/0046_bibliography_profile_tasks.sql.
+  // 0048 mirrors packages/store/src/migrations/0048_bibliography_profile_tasks.sql.
   // Per-work profile tasks (E3b-WU2): widens the kind CHECK to
-  // bibliography_profile via the 0043-style table rebuild and adds the
+  // bibliography_profile via the 0045-style table rebuild and adds the
   // per-(work, contract) embedding table. Trigger-safe single-batch path.
-  '0046_bibliography_profile_tasks': `-- 0046_bibliography_profile_tasks: per-work profile tasks and embeddings (E3b-WU2).
+  '0048_bibliography_profile_tasks': `-- 0048_bibliography_profile_tasks: per-work profile tasks and embeddings (E3b-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0046_bibliography_profile_tasks']); this file mirrors it
+-- (MIGRATIONS['0048_bibliography_profile_tasks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042/0043/0044/0045): the whole body goes inside
+-- 0032/0040/0041/0042/0043/0044/0045/0046/0047): the whole body goes inside
 -- one BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a
--- crash between DDL and bookkeeping can never leave a half-applied 0046
+-- crash between DDL and bookkeeping can never leave a half-applied 0048
 -- behind.
 --
 -- Two changes:
@@ -1834,7 +1834,7 @@ CREATE INDEX idx_bibliographic_semantic_profiles_hash
 --    tables are rebuilt preserving every column, both task indexes, every
 --    FK, and every row byte-identically (dependents are backed up and
 --    recreated verbatim). processing_batches is untouched: its origin CHECK
---    already admits 'bibliography' and 0044's priority column survives
+--    already admits 'bibliography' and 0046's priority column survives
 --    because this migration never drops that table.
 -- 2. bibliographic_item_embeddings stores one vector per (work, contract)
 --    under the effective embedding contract, with the profile input hash it
@@ -1844,10 +1844,10 @@ CREATE INDEX idx_bibliographic_semantic_profiles_hash
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0046_processing_tasks AS SELECT * FROM processing_tasks;
-CREATE TABLE _backup_0046_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
-CREATE TABLE _backup_0046_processing_attempts AS SELECT * FROM processing_attempts;
-CREATE TABLE _backup_0046_processing_checkpoints AS SELECT * FROM processing_checkpoints;
+CREATE TABLE _backup_0048_processing_tasks AS SELECT * FROM processing_tasks;
+CREATE TABLE _backup_0048_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
+CREATE TABLE _backup_0048_processing_attempts AS SELECT * FROM processing_attempts;
+CREATE TABLE _backup_0048_processing_checkpoints AS SELECT * FROM processing_checkpoints;
 
 DROP TABLE processing_checkpoints;
 DROP TABLE processing_attempts;
@@ -1932,18 +1932,18 @@ CREATE TABLE processing_checkpoints (
 );
 
 INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)
-  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0046_processing_tasks;
+  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0048_processing_tasks;
 INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)
-  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0046_processing_batch_tasks;
+  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0048_processing_batch_tasks;
 INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)
-  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0046_processing_attempts;
+  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0048_processing_attempts;
 INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
-  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0046_processing_checkpoints;
+  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0048_processing_checkpoints;
 
-DROP TABLE _backup_0046_processing_checkpoints;
-DROP TABLE _backup_0046_processing_attempts;
-DROP TABLE _backup_0046_processing_batch_tasks;
-DROP TABLE _backup_0046_processing_tasks;
+DROP TABLE _backup_0048_processing_checkpoints;
+DROP TABLE _backup_0048_processing_attempts;
+DROP TABLE _backup_0048_processing_batch_tasks;
+DROP TABLE _backup_0048_processing_tasks;
 
 CREATE TABLE bibliographic_item_embeddings (
     item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,
@@ -1961,21 +1961,21 @@ CREATE TABLE bibliographic_item_embeddings (
 CREATE INDEX idx_bibliographic_item_embeddings_hash
     ON bibliographic_item_embeddings(input_hash);
 `.trim(),
-  // 0047 mirrors packages/store/src/migrations/0047_bibliographic_index_generations.sql.
+  // 0049 mirrors packages/store/src/migrations/0049_bibliographic_index_generations.sql.
   // Index generations (E3c-WU1): immutable contract rows plus generation
   // lifecycle with a per-contract active pointer. Trigger-safe single-batch.
-  '0047_bibliographic_index_generations': `-- 0047_bibliographic_index_generations: immutable embedding contracts and
+  '0049_bibliographic_index_generations': `-- 0049_bibliographic_index_generations: immutable embedding contracts and
 -- index generations with a single-global-active pointer (E3c-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0047_bibliographic_index_generations']); this file mirrors it
+-- (MIGRATIONS['0049_bibliographic_index_generations']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier processing/bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0047 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0049 behind.
 --
 -- Plan sections 6 and E3c: one immutable row names a vector space
 -- (provider, model, dimensions, chunking — the resolution inputs of
@@ -2015,22 +2015,22 @@ CREATE UNIQUE INDEX idx_bibliographic_generations_single_active
 CREATE INDEX idx_bibliographic_generations_contract
     ON bibliographic_index_generations(contract_hash, status);
 `.trim(),
-  // 0048 mirrors packages/store/src/migrations/0048_bibliographic_embedding_generations.sql.
+  // 0050 mirrors packages/store/src/migrations/0050_bibliographic_embedding_generations.sql.
   // Generation identity on work embeddings (E3c-WU2): primary key moves to
   // (item, generation) with honest retired legacy ancestry for pre-existing
   // rows. Trigger-safe single-batch.
-  '0048_bibliographic_embedding_generations': `-- 0048_bibliographic_embedding_generations: generation identity on work
+  '0050_bibliographic_embedding_generations': `-- 0050_bibliographic_embedding_generations: generation identity on work
 -- embeddings (E3c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0048_bibliographic_embedding_generations']); this file mirrors
+-- (MIGRATIONS['0050_bibliographic_embedding_generations']); this file mirrors
 -- it for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier processing/bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0048 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0050 behind.
 --
 -- Plan sections 6 and E3c demand uniqueness per object/generation: the
 -- primary key moves from (item_id, embedding_contract) to
@@ -2048,7 +2048,7 @@ CREATE INDEX idx_bibliographic_generations_contract
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0048_item_embeddings AS SELECT * FROM bibliographic_item_embeddings;
+CREATE TABLE _backup_0050_item_embeddings AS SELECT * FROM bibliographic_item_embeddings;
 
 DROP TABLE bibliographic_item_embeddings;
 
@@ -2075,14 +2075,14 @@ CREATE INDEX idx_bibliographic_item_embeddings_generation
 INSERT INTO bibliographic_embedding_contracts
   (contract_hash, provider, model, dimensions, chunking_contract, created_at)
   SELECT DISTINCT embedding_contract, 'unknown', embedding_model, dimensions, '', strftime('%s', 'now')
-    FROM _backup_0048_item_embeddings
+    FROM _backup_0050_item_embeddings
     WHERE embedding_contract NOT IN (SELECT contract_hash FROM bibliographic_embedding_contracts);
 
 INSERT INTO bibliographic_index_generations
   (id, contract_hash, status, expected_inputs, completed_inputs, created_at, retired_at)
   SELECT 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract, 'retired',
          COUNT(*), COUNT(*), strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000
-    FROM _backup_0048_item_embeddings
+    FROM _backup_0050_item_embeddings
    GROUP BY embedding_contract;
 
 INSERT INTO bibliographic_item_embeddings
@@ -2090,25 +2090,25 @@ INSERT INTO bibliographic_item_embeddings
    input_hash, profile_revision, created_at, updated_at)
   SELECT item_id, 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract,
          embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at
-    FROM _backup_0048_item_embeddings;
+    FROM _backup_0050_item_embeddings;
 
-DROP TABLE _backup_0048_item_embeddings;
+DROP TABLE _backup_0050_item_embeddings;
 `.trim(),
-  // 0050 mirrors packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql.
+  // 0052 mirrors packages/store/src/migrations/0052_bibliographic_extraction_tasks.sql.
   // Native extraction tasks and rows (E4a-WU2): kind CHECK widening plus
   // one whole-document native-text row per attachment. Trigger-safe
   // single-batch.
-  '0050_bibliographic_extraction_tasks': `-- 0050_bibliographic_extraction_tasks: native extraction tasks and rows (E4a-WU2).
+  '0052_bibliographic_extraction_tasks': `-- 0052_bibliographic_extraction_tasks: native extraction tasks and rows (E4a-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0050_bibliographic_extraction_tasks']); this file mirrors it
+-- (MIGRATIONS['0052_bibliographic_extraction_tasks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier processing/bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0050 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0052 behind.
 --
 -- Two changes:
 -- 1. The kind CHECK on processing_tasks and processing_batch_tasks widens to
@@ -2128,10 +2128,10 @@ DROP TABLE _backup_0048_item_embeddings;
 
 PRAGMA defer_foreign_keys=ON;
 
-CREATE TABLE _backup_0050_processing_tasks AS SELECT * FROM processing_tasks;
-CREATE TABLE _backup_0050_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
-CREATE TABLE _backup_0050_processing_attempts AS SELECT * FROM processing_attempts;
-CREATE TABLE _backup_0050_processing_checkpoints AS SELECT * FROM processing_checkpoints;
+CREATE TABLE _backup_0052_processing_tasks AS SELECT * FROM processing_tasks;
+CREATE TABLE _backup_0052_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;
+CREATE TABLE _backup_0052_processing_attempts AS SELECT * FROM processing_attempts;
+CREATE TABLE _backup_0052_processing_checkpoints AS SELECT * FROM processing_checkpoints;
 
 DROP TABLE processing_checkpoints;
 DROP TABLE processing_attempts;
@@ -2216,18 +2216,18 @@ CREATE TABLE processing_checkpoints (
 );
 
 INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)
-  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0050_processing_tasks;
+  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0052_processing_tasks;
 INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)
-  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0050_processing_batch_tasks;
+  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0052_processing_batch_tasks;
 INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)
-  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0050_processing_attempts;
+  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0052_processing_attempts;
 INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
-  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0050_processing_checkpoints;
+  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0052_processing_checkpoints;
 
-DROP TABLE _backup_0050_processing_checkpoints;
-DROP TABLE _backup_0050_processing_attempts;
-DROP TABLE _backup_0050_processing_batch_tasks;
-DROP TABLE _backup_0050_processing_tasks;
+DROP TABLE _backup_0052_processing_checkpoints;
+DROP TABLE _backup_0052_processing_attempts;
+DROP TABLE _backup_0052_processing_batch_tasks;
+DROP TABLE _backup_0052_processing_tasks;
 
 CREATE TABLE bibliographic_extractions (
     attachment_id TEXT PRIMARY KEY NOT NULL REFERENCES zotero_attachments(id) ON DELETE CASCADE,
@@ -2247,20 +2247,20 @@ CREATE TABLE bibliographic_extractions (
 CREATE INDEX idx_bibliographic_extractions_item
     ON bibliographic_extractions(item_id);
 `.trim(),
-  // 0051 mirrors packages/store/src/migrations/0051_bibliographic_page_texts.sql.
+  // 0053 mirrors packages/store/src/migrations/0053_bibliographic_page_texts.sql.
   // Per-page native texts (E4b-WU2): one row per attachment page with its
   // own hash and quality. Trigger-safe single-batch.
-  '0051_bibliographic_page_texts': `-- 0051_bibliographic_page_texts: per-page native texts (E4b-WU2).
+  '0053_bibliographic_page_texts': `-- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0051_bibliographic_page_texts']); this file mirrors it
+-- (MIGRATIONS['0053_bibliographic_page_texts']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0051 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0053 behind.
 --
 -- One row per (attachment, 1-based page): the native text layer of exactly
 -- that page with its own hash and quality verdict, so E4b-WU3's selective
@@ -2290,19 +2290,19 @@ CREATE TABLE bibliographic_page_texts (
 CREATE INDEX idx_bibliographic_page_texts_attachment
     ON bibliographic_page_texts(attachment_id, page_number);
 `.trim(),
-  // 0052 mirrors packages/store/src/migrations/0052_bibliographic_chunks.sql.
+  // 0054 mirrors packages/store/src/migrations/0054_bibliographic_chunks.sql.
   // Structural work chunks and spans (E4c-WU1). Trigger-safe single-batch.
-  '0052_bibliographic_chunks': `-- 0052_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
+  '0054_bibliographic_chunks': `-- 0054_bibliographic_chunks: structural work chunks and spans (E4c-WU1).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0052_bibliographic_chunks']); this file mirrors it
+-- (MIGRATIONS['0054_bibliographic_chunks']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0052 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0054 behind.
 --
 -- One chunk row per (work, ordinal) with its text, hash, and the chunking
 -- contract that produced it; one span row per page range the chunk covers,
@@ -2337,19 +2337,19 @@ CREATE TABLE bibliographic_chunk_spans (
 CREATE INDEX idx_bibliographic_chunks_item
     ON bibliographic_chunks(item_id, ordinal);
 `.trim(),
-  // 0053 mirrors packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql.
+  // 0055 mirrors packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql.
   // Chunk vectors per generation (E4c-WU2). Trigger-safe single-batch.
-  '0053_bibliographic_chunk_embeddings': `-- 0053_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
+  '0055_bibliographic_chunk_embeddings': `-- 0055_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0053_bibliographic_chunk_embeddings']); this file mirrors it
+-- (MIGRATIONS['0055_bibliographic_chunk_embeddings']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0053 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0055 behind.
 --
 -- One vector per (chunk, generation) under the effective embedding
 -- contract, stamping the chunk text hash it was computed from — the same
@@ -2378,19 +2378,19 @@ CREATE INDEX idx_bibliographic_chunk_embeddings_generation
 CREATE INDEX idx_bibliographic_chunk_embeddings_hash
     ON bibliographic_chunk_embeddings(input_hash);
 `.trim(),
-  // 0054 mirrors packages/store/src/migrations/0054_bibliographic_ingest_operations.sql.
+  // 0056 mirrors packages/store/src/migrations/0056_bibliographic_ingest_operations.sql.
   // Durable pending tray (E5a-WU1). Trigger-safe single-batch.
-  '0054_bibliographic_ingest_operations': `  -- 0054_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
+  '0056_bibliographic_ingest_operations': `  -- 0056_bibliographic_ingest_operations: durable pending tray (E5a-WU1).
   --
   -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
-  -- (MIGRATIONS['0054_bibliographic_ingest_operations']); this file mirrors it
+  -- (MIGRATIONS['0056_bibliographic_ingest_operations']); this file mirrors it
   -- for review and for the Rust processing tests (include_str!). Keep both
   -- identical.
   --
   -- Runs through the trigger-safe single-batch path in runMigrations() (same as
   -- earlier bibliography migrations): the whole body goes inside one
   -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
-  -- between DDL and bookkeeping can never leave a half-applied 0054 behind.
+  -- between DDL and bookkeeping can never leave a half-applied 0056 behind.
   --
   -- One row per explicit user decision: link an existing work or create a
   -- parent (and eventually upload an attachment) in one library. \`request_id\`
@@ -2419,20 +2419,20 @@ CREATE INDEX idx_bibliographic_chunk_embeddings_hash
       ON bibliographic_ingest_operations(state, library_id);
 
 `.trim(),
-  // 0049 mirrors packages/store/src/migrations/0049_bibliographic_profile_fts.sql.
+  // 0051 mirrors packages/store/src/migrations/0051_bibliographic_profile_fts.sql.
   // Lexical search over work profiles (E3c-WU3): FTS5 with transactional
   // triggers. Trigger-safe single-batch.
-  '0049_bibliographic_profile_fts': `-- 0049_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
+  '0051_bibliographic_profile_fts': `-- 0051_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0049_bibliographic_profile_fts']); this file mirrors it
+-- (MIGRATIONS['0051_bibliographic_profile_fts']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0049 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0051 behind.
 --
 -- Plan section 6 "Indices FTS bibliograficos": FTS5 over the canonical text
 -- of every stored profile, maintained transactionally by triggers on the
@@ -2466,21 +2466,21 @@ BEGIN
     VALUES (NEW.item_id, NEW.canonical_text);
 END;
 `.trim(),
-  // 0044 mirrors packages/store/src/migrations/0044_processing_priority.sql.
+  // 0046 mirrors packages/store/src/migrations/0046_processing_priority.sql.
   // Per-batch interactive priority (E2c-WU3): one additive column plus an
   // index. Runs through the trigger-safe single-batch path in runMigrations()
-  // below like 0032/0041/0042/0043.
-  '0044_processing_priority': `-- 0044_processing_priority: per-batch interactive priority (E2c-WU3).
+  // below like 0032/0043/0044/0045.
+  '0046_processing_priority': `-- 0046_processing_priority: per-batch interactive priority (E2c-WU3).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0044_processing_priority']); this file mirrors it
+-- (MIGRATIONS['0046_processing_priority']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0032/0038/0039/0040/0041/0042/0043): the whole body goes inside one BEGIN
+-- 0032/0040/0041/0042/0043/0044/0045): the whole body goes inside one BEGIN
 -- IMMEDIATE ... COMMIT together with the _migrations row, so a crash between
--- DDL and bookkeeping can never leave a half-applied 0044 behind.
+-- DDL and bookkeeping can never leave a half-applied 0046 behind.
 --
 -- E2c-WU3 is additive only: one priority column on processing_batches plus
 -- an index. Existing rows default to 0 (background); no backfill, no CHECK
@@ -2493,7 +2493,7 @@ END;
 -- replay-tolerant where SQLite allows it:
 -- - CREATE INDEX IF NOT EXISTS is a native no-op on replay;
 -- - ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS form in SQLite (same
---   limitation as 0011/0013/0014/0024/0026/0028/0033/0041, which rely on the
+--   limitation as 0011/0013/0014/0024/0026/0028/0033/0043, which rely on the
 --   runner's duplicate-column tolerance). Inside the single-batch path there
 --   is no per-statement rescue, so the registry skip above is what makes
 --   runner-level replay error-free; do not apply this file twice by hand.
@@ -2762,23 +2762,23 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0035_writing_workspace' ||
         name === '0036_writing_journal' ||
         name === '0038_processing_settle_on_terminal' ||
-        name === '0038_bibliography_catalog' ||
-        name === '0039_bibliography_relations' ||
-        name === '0040_bibliography_reconciliation' ||
-        name === '0041_processing_task_subject_identity' ||
-        name === '0042_processing_task_subject_cutover' ||
-        name === '0043_bibliography_sync_tasks' ||
-        name === '0044_processing_priority' ||
-        name === '0045_bibliographic_semantic_profiles' ||
-        name === '0046_bibliography_profile_tasks' ||
-        name === '0047_bibliographic_index_generations' ||
-        name === '0048_bibliographic_embedding_generations' ||
-        name === '0049_bibliographic_profile_fts' ||
-        name === '0050_bibliographic_extraction_tasks' ||
-        name === '0051_bibliographic_page_texts' ||
-        name === '0052_bibliographic_chunks' ||
-        name === '0053_bibliographic_chunk_embeddings' ||
-        name === '0054_bibliographic_ingest_operations'
+        name === '0040_bibliography_catalog' ||
+        name === '0041_bibliography_relations' ||
+        name === '0042_bibliography_reconciliation' ||
+        name === '0043_processing_task_subject_identity' ||
+        name === '0044_processing_task_subject_cutover' ||
+        name === '0045_bibliography_sync_tasks' ||
+        name === '0046_processing_priority' ||
+        name === '0047_bibliographic_semantic_profiles' ||
+        name === '0048_bibliography_profile_tasks' ||
+        name === '0049_bibliographic_index_generations' ||
+        name === '0050_bibliographic_embedding_generations' ||
+        name === '0051_bibliographic_profile_fts' ||
+        name === '0052_bibliographic_extraction_tasks' ||
+        name === '0053_bibliographic_page_texts' ||
+        name === '0054_bibliographic_chunks' ||
+        name === '0055_bibliographic_chunk_embeddings' ||
+        name === '0056_bibliographic_ingest_operations'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")

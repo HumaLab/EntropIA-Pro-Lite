@@ -1,14 +1,14 @@
--- 0051_bibliographic_page_texts: per-page native texts (E4b-WU2).
+-- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).
 --
 -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0051_bibliographic_page_texts']); this file mirrors it
+-- (MIGRATIONS['0053_bibliographic_page_texts']); this file mirrors it
 -- for review and for the Rust processing tests (include_str!). Keep both
 -- identical.
 --
 -- Runs through the trigger-safe single-batch path in runMigrations() (same as
 -- earlier bibliography migrations): the whole body goes inside one
 -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash
--- between DDL and bookkeeping can never leave a half-applied 0051 behind.
+-- between DDL and bookkeeping can never leave a half-applied 0053 behind.
 --
 -- One row per (attachment, 1-based page): the native text layer of exactly
 -- that page with its own hash and quality verdict, so E4b-WU3's selective

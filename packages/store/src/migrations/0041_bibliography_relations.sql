@@ -3,7 +3,7 @@
 -- Native collection/tag identity is qualified by the owning library. Attachment
 -- identity is qualified by its mandatory parent item. Parent collection keys are
 -- opaque native values: no parent FK is required and sync order is irrelevant.
--- Tombstones are side tables so 0038 snapshots and relations stay intact.
+-- Tombstones are side tables so 0040 snapshots and relations stay intact.
 
 -- Composite parent keys for the library-scoped membership foreign keys below.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bibliographic_items_id_library

@@ -399,7 +399,7 @@ export const processingTasks = sqliteTable(
     id: text('id').primaryKey(),
     kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
-    // E2a-1 task-subject identity (migration 0041). Dual-written alongside
+    // E2a-1 task-subject identity (migration 0043). Dual-written alongside
     // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
     // until the E2a-2 cutover. SQL (CHECKs, partial uniques) is authoritative.
     domain: text('domain').notNull().default('corpus'),
@@ -448,7 +448,7 @@ export const processingBatchTasks = sqliteTable(
       .references(() => processingTasks.id),
     kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
-    // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
+    // E2a-1 task-subject identity mirror (migration 0043); see processingTasks.
     domain: text('domain').notNull().default('corpus'),
     subjectKind: text('subject_kind').notNull().default('asset'),
     subjectId: text('subject_id').notNull().default(''),
@@ -530,7 +530,7 @@ export const processingMeta = sqliteTable('processing_meta', {
 })
 
 // ---------------------------------------------------------------------------
-// Zotero bibliography catalog foundation (migration 0038). A connection is
+// Zotero bibliography catalog foundation (migration 0040). A connection is
 // the source namespace; the library and native item key qualify an item. Later
 // migrations add collections, tags, attachments and reconciliation state.
 // ---------------------------------------------------------------------------
@@ -623,8 +623,8 @@ export const bibliographicItems = sqliteTable(
 )
 
 // ---------------------------------------------------------------------------
-// Zotero catalog relations (migration 0039). Native keys remain raw and
-// library-qualified; tombstones are separate one-to-one records so the 0038
+// Zotero catalog relations (migration 0041). Native keys remain raw and
+// library-qualified; tombstones are separate one-to-one records so the 0040
 // item snapshots and all membership edges remain intact.
 // ---------------------------------------------------------------------------
 export const zoteroCollections = sqliteTable(
@@ -806,7 +806,7 @@ export const zoteroAttachmentTombstones = sqliteTable('zotero_attachment_tombsto
 })
 
 // ---------------------------------------------------------------------------
-// Zotero reconciliation durability (migration 0040). One current run row is
+// Zotero reconciliation durability (migration 0042). One current run row is
 // retained per internal library; the normalized seen-set is scoped by both the
 // library FK and generated run id so native keys never cross either boundary.
 // ---------------------------------------------------------------------------
@@ -1136,7 +1136,7 @@ export const writingJournal = sqliteTable(
 
 // ---------------------------------------------------------------------------
 // Bibliographic semantic profiles — one canonical-text row per verified work
-// (migration 0045_bibliographic_semantic_profiles, E3b-WU1). Profiles are
+// (migration 0047_bibliographic_semantic_profiles, E3b-WU1). Profiles are
 // reconstructible from the verified catalog; embeddings keep their own
 // contract/generation tables, so model changes never rewrite profile history.
 // ---------------------------------------------------------------------------
@@ -1161,7 +1161,7 @@ export const bibliographicSemanticProfiles = sqliteTable(
 )
 
 // Bibliographic work embeddings — one vector per (work, contract) under the
-// effective embedding contract (migration 0046_bibliography_profile_tasks,
+// effective embedding contract (migration 0048_bibliography_profile_tasks,
 // E3b-WU2). Generations arrive in E3c without rewriting this identity.
 export const bibliographicItemEmbeddings = sqliteTable(
   'bibliographic_item_embeddings',
@@ -1193,7 +1193,7 @@ export const bibliographicItemEmbeddings = sqliteTable(
 
 // Bibliographic embedding contracts (immutable vector spaces) and index
 // generations with a per-contract active pointer (migration
-// 0047_bibliographic_index_generations, E3c-WU1). Execution in staging
+// 0049_bibliographic_index_generations, E3c-WU1). Execution in staging
 // generations (E3c-WU2) and hybrid retrieval (E3c-WU3) build on these rows.
 export const bibliographicEmbeddingContracts = sqliteTable('bibliographic_embedding_contracts', {
   contractHash: text('contract_hash').primaryKey(),
@@ -1230,7 +1230,7 @@ export const bibliographicIndexGenerations = sqliteTable(
 )
 
 // Bibliographic native extractions — one whole-document row per attachment
-// (migration 0050_bibliographic_extraction_tasks, E4a-WU2). Managed
+// (migration 0052_bibliographic_extraction_tasks, E4a-WU2). Managed
 // derivatives: a catalog row delete cascades. Per-page rows arrive with
 // selective OCR (E4b) under their own migration.
 export const bibliographicExtractions = sqliteTable(
@@ -1258,7 +1258,7 @@ export const bibliographicExtractions = sqliteTable(
 )
 
 // Bibliographic per-page native texts — one row per attachment page
-// (migration 0051_bibliographic_page_texts, E4b-WU2). The selective OCR pass
+// (migration 0053_bibliographic_page_texts, E4b-WU2). The selective OCR pass
 // (E4b-WU3) adds 'ocr' rows beside these; managed derivatives with catalog
 // cascade like the whole-document row.
 export const bibliographicPageTexts = sqliteTable(
@@ -1287,7 +1287,7 @@ export const bibliographicPageTexts = sqliteTable(
 
 // Bibliographic structural chunks and page spans — one chunk per (work,
 // ordinal) with exact page offsets, including multi-page chunks (migration
-// 0052_bibliographic_chunks, E4c-WU1). Chunk vectors keyed by chunk id and
+// 0054_bibliographic_chunks, E4c-WU1). Chunk vectors keyed by chunk id and
 // generation arrive in E4c-WU2.
 export const bibliographicChunks = sqliteTable(
   'bibliographic_chunks',
@@ -1328,7 +1328,7 @@ export const bibliographicChunkSpans = sqliteTable(
 
 // Bibliographic chunk embeddings — one vector per (chunk, generation)
 // under the effective embedding contract (migration
-// 0053_bibliographic_chunk_embeddings, E4c-WU2). Retrieval reads only the
+// 0055_bibliographic_chunk_embeddings, E4c-WU2). Retrieval reads only the
 // active generation of the query contract.
 export const bibliographicChunkEmbeddings = sqliteTable(
   'bibliographic_chunk_embeddings',
@@ -1358,7 +1358,7 @@ export const bibliographicChunkEmbeddings = sqliteTable(
 )
 
 // Bibliographic ingest operations — the durable pending tray (migration
-// 0054_bibliographic_ingest_operations, E5a-WU1). One row per explicit
+// 0056_bibliographic_ingest_operations, E5a-WU1). One row per explicit
 // user decision: link an existing work or create a parent (and eventually
 // upload an attachment) in one library. request_id is the idempotency
 // key; receipts carry the verified Zotero identity E5c gates on.

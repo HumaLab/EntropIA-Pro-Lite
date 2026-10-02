@@ -10,7 +10,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const MIGRATION_NAME: &str = "0040_bibliography_reconciliation";
+pub const MIGRATION_NAME: &str = "0042_bibliography_reconciliation";
 const MAX_ERROR_CODE_LENGTH: usize = 128;
 const MAX_ERROR_MESSAGE_LENGTH: usize = 1024;
 

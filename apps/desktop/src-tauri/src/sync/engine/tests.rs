@@ -276,7 +276,7 @@ fn read_schema_tag_is_the_highest_name_not_the_last_applied() {
     // that applied the same set in another order locks itself out.
     let conn = engine_session_db();
     conn.execute(
-        "INSERT INTO _migrations(name, applied_at) VALUES('0041_later_number', 1)",
+        "INSERT INTO _migrations(name, applied_at) VALUES('0043_later_number', 1)",
         [],
     )
     .unwrap();
@@ -285,7 +285,7 @@ fn read_schema_tag_is_the_highest_name_not_the_last_applied() {
         [],
     )
     .unwrap();
-    assert_eq!(read_schema_tag(&conn).unwrap(), "0041_later_number");
+    assert_eq!(read_schema_tag(&conn).unwrap(), "0043_later_number");
 }
 
 // --------------------------------------------------------------------------

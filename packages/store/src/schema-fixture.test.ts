@@ -289,10 +289,10 @@ describe('schema fixture export', () => {
       expect(sql, `fixture is missing: ${fragment}`).toContain(fragment)
     }
     // The 0032 section still carries the historical CREATE (migrations are
-    // never rewritten); E2a-2 drops it, so the 0042 section must carry the
+    // never rewritten); E2a-2 drops it, so the 0044 section must carry the
     // DROP and no later section may recreate it.
     expect(sql).toContain('DROP INDEX IF EXISTS idx_processing_tasks_active_unique')
-    const cutoverAt = sql.indexOf('-- 0042_processing_task_subject_cutover')
+    const cutoverAt = sql.indexOf('-- 0044_processing_task_subject_cutover')
     expect(cutoverAt).toBeGreaterThanOrEqual(0)
     expect(sql.slice(cutoverAt)).not.toContain(
       'CREATE UNIQUE INDEX idx_processing_tasks_active_unique'

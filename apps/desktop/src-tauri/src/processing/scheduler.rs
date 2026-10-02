@@ -786,106 +786,106 @@ mod tests {
         ))
         .expect("apply 0038");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+            "../../../../../packages/store/src/migrations/0043_processing_task_subject_identity.sql"
         ))
-        .expect("apply 0041");
+        .expect("apply 0043");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_processing_task_subject_identity', 1)",
             [],
         )
-        .expect("track 0041");
+        .expect("track 0043");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
-        ))
-        .expect("apply 0042");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0042_processing_task_subject_cutover', 1)",
-            [],
-        )
-        .expect("track 0042");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0044_processing_priority.sql"
+            "../../../../../packages/store/src/migrations/0044_processing_task_subject_cutover.sql"
         ))
         .expect("apply 0044");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_priority', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_task_subject_cutover', 1)",
             [],
         )
         .expect("track 0044");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
-        ))
-        .expect("apply 0045");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0045_bibliographic_semantic_profiles', 1)",
-            [],
-        )
-        .expect("track 0045");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
+            "../../../../../packages/store/src/migrations/0046_processing_priority.sql"
         ))
         .expect("apply 0046");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0046_bibliography_profile_tasks', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0046_processing_priority', 1)",
             [],
         )
         .expect("track 0046");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply 0047");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0047_bibliographic_index_generations', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0047_bibliographic_semantic_profiles', 1)",
             [],
         )
         .expect("track 0047");
-        // 0048 stays skipped here (catalog-table data half); 0049 needs
-        // only the profiles table.
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+            "../../../../../packages/store/src/migrations/0048_bibliography_profile_tasks.sql"
+        ))
+        .expect("apply 0048");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0048_bibliography_profile_tasks', 1)",
+            [],
+        )
+        .expect("track 0048");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply 0049");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0049_bibliographic_profile_fts', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0049_bibliographic_index_generations', 1)",
             [],
         )
         .expect("track 0049");
+        // 0050 stays skipped here (catalog-table data half); 0051 needs
+        // only the profiles table.
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
-        ))
-        .expect("apply 0050");
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0050_bibliographic_extraction_tasks', 1)",
-            [],
-        )
-        .expect("track 0050");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+            "../../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql"
         ))
         .expect("apply 0051");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0051_bibliographic_page_texts', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0051_bibliographic_profile_fts', 1)",
             [],
         )
         .expect("track 0051");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+            "../../../../../packages/store/src/migrations/0052_bibliographic_extraction_tasks.sql"
         ))
         .expect("apply 0052");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0052_bibliographic_chunks', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0052_bibliographic_extraction_tasks', 1)",
             [],
         )
         .expect("track 0052");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+            "../../../../../packages/store/src/migrations/0053_bibliographic_page_texts.sql"
         ))
         .expect("apply 0053");
         conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES ('0053_bibliographic_chunk_embeddings', 1)",
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0053_bibliographic_page_texts', 1)",
             [],
         )
         .expect("track 0053");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql"
+        ))
+        .expect("apply 0054");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0054_bibliographic_chunks', 1)",
+            [],
+        )
+        .expect("track 0054");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
+        ))
+        .expect("apply 0055");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0055_bibliographic_chunk_embeddings', 1)",
+            [],
+        )
+        .expect("track 0055");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

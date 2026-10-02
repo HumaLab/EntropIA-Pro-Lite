@@ -11,12 +11,12 @@ use rusqlite::{Connection, OptionalExtension as _};
 use super::repository::{BibliographyError, BibliographyResult};
 use crate::processing::repository::now_ms;
 
-/// Operation kinds, matching the `kind` CHECK in migration 0054.
+/// Operation kinds, matching the `kind` CHECK in migration 0056.
 pub const KIND_LINK_MATCH: &str = "link_match";
 pub const KIND_CREATE_PARENT: &str = "create_parent";
 pub const KIND_UPLOAD_ATTACHMENT: &str = "upload_attachment";
 
-/// Operation states, matching the `state` CHECK in migration 0054.
+/// Operation states, matching the `state` CHECK in migration 0056.
 pub const STATE_QUEUED: &str = "queued";
 pub const STATE_RUNNING: &str = "running";
 pub const STATE_BLOCKED: &str = "blocked";
@@ -1166,15 +1166,15 @@ mod tests {
     fn tray_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0054_bibliographic_ingest_operations.sql"
+            "../../../../../packages/store/src/migrations/0056_bibliographic_ingest_operations.sql"
         ))
         .expect("apply tray");
         conn

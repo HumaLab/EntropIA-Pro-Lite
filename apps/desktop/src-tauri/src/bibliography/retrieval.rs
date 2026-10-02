@@ -106,23 +106,23 @@ mod tests {
     fn search_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply profiles table");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply generations");
-        // Test-only stub of the pre-0048 embeddings shape (see 0046): the
-        // retrieval fixture never builds processing tables, so the 0046
+        // Test-only stub of the pre-0050 embeddings shape (see 0048): the
+        // retrieval fixture never builds processing tables, so the 0048
         // rebuild cannot run here. The real file stays pinned by the store
         // mirror tests.
         conn.execute_batch(
@@ -139,13 +139,13 @@ mod tests {
                PRIMARY KEY (item_id, embedding_contract)
              );",
         )
-        .expect("stub pre-0048 embeddings");
+        .expect("stub pre-0050 embeddings");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
+            "../../../../../packages/store/src/migrations/0050_bibliographic_embedding_generations.sql"
         ))
         .expect("apply embedding generations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+            "../../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql"
         ))
         .expect("apply profile FTS");
         conn
@@ -1341,34 +1341,34 @@ mod passage_tests {
     fn passage_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply profiles table");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply generations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+            "../../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql"
         ))
         .expect("apply chunks");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+            "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
         ))
         .expect("apply chunk embeddings");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+            "../../../../../packages/store/src/migrations/0051_bibliographic_profile_fts.sql"
         ))
         .expect("apply profile FTS");
-        // Test-only stub of the post-0048 work-vector shape: the inner
+        // Test-only stub of the post-0050 work-vector shape: the inner
         // work-level search always reads this table, even when the test
         // leaves it empty. The real file stays pinned by the store tests.
         conn.execute_batch(
@@ -2009,31 +2009,31 @@ mod expansion_tests {
     fn expansion_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply profiles table");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply generations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+            "../../../../../packages/store/src/migrations/0053_bibliographic_page_texts.sql"
         ))
         .expect("apply page texts");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+            "../../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql"
         ))
         .expect("apply chunks");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+            "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
         ))
         .expect("apply chunk embeddings");
         conn
@@ -2256,31 +2256,31 @@ mod open_tests {
         // generations, chunks, embeddings, page texts.
         let conn = rusqlite::Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("apply catalog foundation");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("apply relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+            "../../../../../packages/store/src/migrations/0047_bibliographic_semantic_profiles.sql"
         ))
         .expect("apply profiles table");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
         .expect("apply generations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+            "../../../../../packages/store/src/migrations/0053_bibliographic_page_texts.sql"
         ))
         .expect("apply page texts");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+            "../../../../../packages/store/src/migrations/0054_bibliographic_chunks.sql"
         ))
         .expect("apply chunks");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+            "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
         ))
         .expect("apply chunk embeddings");
         conn

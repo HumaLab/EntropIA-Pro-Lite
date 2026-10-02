@@ -370,9 +370,9 @@ mod tests {
     fn generations_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
         ))
-        .expect("apply 0047 mirror");
+        .expect("apply 0049 mirror");
         conn
     }
 

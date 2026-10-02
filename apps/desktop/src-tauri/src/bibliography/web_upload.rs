@@ -902,15 +902,15 @@ mod tests {
     fn plan_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0038_bibliography_catalog.sql"
+            "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
         ))
         .expect("catalog");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0039_bibliography_relations.sql"
+            "../../../../../packages/store/src/migrations/0041_bibliography_relations.sql"
         ))
         .expect("relations");
         conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0054_bibliographic_ingest_operations.sql"
+            "../../../../../packages/store/src/migrations/0056_bibliographic_ingest_operations.sql"
         ))
         .expect("tray");
         conn
