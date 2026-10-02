@@ -2165,6 +2165,39 @@ DROP TABLE _backup_0045_processing_batch_members;
 DROP TABLE _backup_0045_processing_batch_collections;
 DROP TABLE _backup_0045_processing_batches;
 
+-- Rebuilding processing_tasks and processing_batch_tasks above dropped the
+-- claim index, the dependency index and the settle trigger that
+-- 0038_processing_settle_on_terminal created on them. Restore them verbatim
+-- so the queue keeps settling dependents on every terminal transition.
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id
+  ON processing_tasks(state, id);
+
+CREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency
+  ON processing_batch_tasks(dependency_task_id)
+  WHERE dependency_task_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents
+AFTER UPDATE OF state ON processing_tasks
+WHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state
+BEGIN
+  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND outcome = 'open'
+     AND task_id IN (
+       SELECT l.task_id FROM processing_batch_tasks l
+         JOIN processing_tasks t ON t.id = l.task_id
+        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');
+  UPDATE processing_tasks
+     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',
+         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,
+         updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+  UPDATE processing_tasks
+     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state = 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+END;
+
 -- 0046_processing_priority
 -- 0046_processing_priority: per-batch interactive priority (E2c-WU3).
 --
@@ -2379,6 +2412,39 @@ CREATE TABLE bibliographic_item_embeddings (
 
 CREATE INDEX idx_bibliographic_item_embeddings_hash
     ON bibliographic_item_embeddings(input_hash);
+
+-- Rebuilding processing_tasks and processing_batch_tasks above dropped the
+-- claim index, the dependency index and the settle trigger that
+-- 0038_processing_settle_on_terminal created on them. Restore them verbatim
+-- so the queue keeps settling dependents on every terminal transition.
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id
+  ON processing_tasks(state, id);
+
+CREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency
+  ON processing_batch_tasks(dependency_task_id)
+  WHERE dependency_task_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents
+AFTER UPDATE OF state ON processing_tasks
+WHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state
+BEGIN
+  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND outcome = 'open'
+     AND task_id IN (
+       SELECT l.task_id FROM processing_batch_tasks l
+         JOIN processing_tasks t ON t.id = l.task_id
+        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');
+  UPDATE processing_tasks
+     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',
+         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,
+         updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+  UPDATE processing_tasks
+     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state = 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+END;
 
 -- 0049_bibliographic_index_generations
 -- 0049_bibliographic_index_generations: immutable embedding contracts and
@@ -2702,6 +2768,39 @@ CREATE TABLE bibliographic_extractions (
 
 CREATE INDEX idx_bibliographic_extractions_item
     ON bibliographic_extractions(item_id);
+
+-- Rebuilding processing_tasks and processing_batch_tasks above dropped the
+-- claim index, the dependency index and the settle trigger that
+-- 0038_processing_settle_on_terminal created on them. Restore them verbatim
+-- so the queue keeps settling dependents on every terminal transition.
+CREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id
+  ON processing_tasks(state, id);
+
+CREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency
+  ON processing_batch_tasks(dependency_task_id)
+  WHERE dependency_task_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents
+AFTER UPDATE OF state ON processing_tasks
+WHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state
+BEGIN
+  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND outcome = 'open'
+     AND task_id IN (
+       SELECT l.task_id FROM processing_batch_tasks l
+         JOIN processing_tasks t ON t.id = l.task_id
+        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');
+  UPDATE processing_tasks
+     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',
+         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,
+         updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state <> 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+  UPDATE processing_tasks
+     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
+   WHERE NEW.state = 'succeeded' AND state = 'blocked'
+     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
+END;
 
 -- 0053_bibliographic_page_texts
 -- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).

@@ -306,6 +306,49 @@ describe('fts contentless delete', () => {
 })
 
 describe('durable queue migration', () => {
+  it('keeps the 0038 settle trigger and queue indexes after every later table rebuild', async () => {
+    // 0045, 0048 and 0052 rebuild processing_tasks and processing_batch_tasks
+    // to widen CHECKs; dropping a table drops its indexes and triggers, so
+    // each rebuild must restore what 0038 put on them.
+    const db = new DatabaseSync(':memory:')
+    const client: DbClient = {
+      async execute(sql, params = []) {
+        return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+      },
+      async executeBatch(sql) {
+        db.exec(sql)
+      },
+      async select<T>(sql: string, params: unknown[] = []) {
+        return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+      },
+      async selectRows(sql, params = []) {
+        return db
+          .prepare(sql)
+          .all(...(params as SQLInputValue[]))
+          .map(Object.values)
+      },
+    }
+    try {
+      await runMigrations(client)
+      const names = db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE name IN (
+             'processing_tasks_settle_dependents',
+             'idx_processing_tasks_state_id',
+             'idx_processing_batch_tasks_dependency') ORDER BY name`
+        )
+        .all()
+        .map((row) => row.name)
+      expect(names).toEqual([
+        'idx_processing_batch_tasks_dependency',
+        'idx_processing_tasks_state_id',
+        'processing_tasks_settle_dependents',
+      ])
+    } finally {
+      db.close()
+    }
+  })
+
   it('rolls back schema when recording the migration fails and can retry', async () => {
     const db = new DatabaseSync(':memory:')
     const client: DbClient = {
