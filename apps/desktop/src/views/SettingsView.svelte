@@ -388,7 +388,7 @@
       } else {
         lines.push(
           t(group.write ? 'settings.zotero.groupWrite' : 'settings.zotero.groupRead', {
-            id: group.id,
+            id: group.name || group.id,
           })
         )
       }

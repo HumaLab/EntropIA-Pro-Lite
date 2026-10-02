@@ -76,7 +76,13 @@ export function testGlmOcrConnection(apiKey: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /** What a key may do in one library group (`all` is the default for every group). */
-export type ZoteroGroupAccess = { id: string; library: boolean; write: boolean }
+export type ZoteroGroupAccess = {
+  id: string
+  library: boolean
+  write: boolean
+  /** The group's name when Zotero returned it; the id is shown otherwise. */
+  name?: string | null
+}
 
 export type ZoteroKeyInfo = {
   user_id: number

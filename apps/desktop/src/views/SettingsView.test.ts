@@ -1398,7 +1398,8 @@ describe('SettingsView', () => {
       personal_write: true,
       groups: [
         { id: 'all', library: true, write: false },
-        { id: '777', library: true, write: true },
+        { id: '12', library: true, write: false, name: null },
+        { id: '777', library: true, write: true, name: 'prueba' },
       ],
     }
 
@@ -1439,7 +1440,9 @@ describe('SettingsView', () => {
       expect(await screen.findByText('Cuenta de Zotero: agus · id 4242')).toBeInTheDocument()
       expect(screen.getByText('Biblioteca personal: lectura y escritura')).toBeInTheDocument()
       expect(screen.getByText('Todos tus grupos: solo lectura')).toBeInTheDocument()
-      expect(screen.getByText('Grupo 777: lectura y escritura')).toBeInTheDocument()
+      // The name when Zotero gave one, the numeric id when it did not.
+      expect(screen.getByText('Grupo prueba: lectura y escritura')).toBeInTheDocument()
+      expect(screen.getByText('Grupo 12: solo lectura')).toBeInTheDocument()
     })
 
     it('reports a read-only key with no group access', async () => {

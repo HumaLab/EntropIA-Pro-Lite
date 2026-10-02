@@ -26,6 +26,8 @@ pub struct GroupAccess {
     pub id: String,
     pub library: bool,
     pub write: bool,
+    /// The group's name, when the lookup after verifying found it.
+    pub name: Option<String>,
 }
 
 /// `GET /keys/current`, reduced to what Settings shows and the writers need.
@@ -73,6 +75,7 @@ pub fn parse_key_info(body: &str) -> Result<KeyInfo, String> {
                     id: id.clone(),
                     library: flag(value, "library"),
                     write: flag(value, "write"),
+                    name: None,
                 })
                 .collect()
         })
@@ -94,23 +97,93 @@ pub fn parse_key_info(body: &str) -> Result<KeyInfo, String> {
     })
 }
 
+impl KeyInfo {
+    pub fn can_write_user(&self) -> bool {
+        self.personal_write
+    }
+
+    /// A group listed by id answers for itself; otherwise the `all` default does.
+    pub fn can_write_group(&self, group_id: &str) -> bool {
+        let entry = self
+            .groups
+            .iter()
+            .find(|g| g.id == group_id)
+            .or_else(|| self.groups.iter().find(|g| g.id == "all"));
+        entry.is_some_and(|g| g.library && g.write)
+    }
+}
+
 /// Zotero keys are alphanumeric. Anything else is not sent: it cannot be a key,
 /// and a malformed header value must not end up in an error.
 fn well_formed(key: &str) -> bool {
     !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Ask Zotero what `key` is. `Err` is for answers this build cannot classify;
-/// its text never includes the key.
+pub(crate) fn api_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| "Could not build the HTTP client".to_string())
+}
+
+/// Ask Zotero what `key` is, and name the groups it reaches (one extra request,
+/// best effort). `Err` is for answers this build cannot classify; its text never
+/// includes the key.
 pub async fn check_key_at(base: &str, key: &str) -> Result<KeyCheck, String> {
+    let mut check = fetch_key_info(base, key).await?;
+    if let KeyCheck::Valid(info) = &mut check {
+        if info.groups.iter().any(|g| g.id != "all") {
+            if let Some(names) = group_names(base, key.trim(), info.user_id).await {
+                for group in &mut info.groups {
+                    group.name = names.get(&group.id).cloned();
+                }
+            }
+        }
+    }
+    Ok(check)
+}
+
+/// `GET /users/{id}/groups`: group id to name. `None` on any failure, so the UI
+/// falls back to the numeric id.
+async fn group_names(
+    base: &str,
+    key: &str,
+    user_id: u64,
+) -> Option<std::collections::HashMap<String, String>> {
+    let response = api_client()
+        .ok()?
+        .get(format!(
+            "{}/users/{user_id}/groups?limit=100",
+            base.trim_end_matches('/')
+        ))
+        .header("Zotero-API-Key", key)
+        .header("Zotero-API-Version", API_VERSION)
+        .send()
+        .await
+        .ok()?;
+    if response.status().as_u16() != 200 {
+        return None;
+    }
+    let json: Value = serde_json::from_str(&response.text().await.ok()?).ok()?;
+    let names = json
+        .as_array()?
+        .iter()
+        .filter_map(|group| {
+            let id = group.get("id")?.as_u64()?;
+            let name = group.get("data")?.get("name")?.as_str()?;
+            Some((id.to_string(), name.to_string()))
+        })
+        .collect();
+    Some(names)
+}
+
+/// `GET /keys/current` only: what the key is and may do.
+pub async fn fetch_key_info(base: &str, key: &str) -> Result<KeyCheck, String> {
     let key = key.trim();
     if !well_formed(key) {
         return Ok(KeyCheck::InvalidKey);
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|_| "Could not build the HTTP client".to_string())?;
+    let client = api_client()?;
     let response = match client
         .get(format!("{}/keys/current", base.trim_end_matches('/')))
         .header("Zotero-API-Key", key)
@@ -273,27 +346,93 @@ mod tests {
         assert!(parse_key_info("not json").is_err());
     }
 
+    const GROUPS: &str = r#"[
+        {"id": 777, "version": 3, "data": {"id": 777, "name": "prueba"}},
+        {"id": 5, "version": 1, "data": {"id": 5, "name": "not in the key"}}
+    ]"#;
+
     #[test]
     fn a_valid_key_is_sent_in_the_header_with_the_api_version() {
-        let server = serve(vec![canned("GET", "/keys/current", 200, FULL_ACCESS)]);
+        let server = serve(vec![
+            canned("GET", "/keys/current", 200, FULL_ACCESS),
+            canned("GET", "/users/4242/groups", 200, GROUPS),
+        ]);
         let check = runtime().block_on(check_key_at(&server.base, KEY)).unwrap();
         assert!(matches!(check, KeyCheck::Valid(ref info) if info.user_id == 4242));
         let seen = server.seen.lock().unwrap();
-        assert_eq!(seen.len(), 1);
+        // One request for the key, one for the group names.
+        assert_eq!(seen.len(), 2);
         assert_eq!(seen[0].target, "/keys/current");
+        assert_eq!(seen[1].target, "/users/4242/groups?limit=100");
+        for request in seen.iter() {
+            assert_eq!(
+                request.headers.get("zotero-api-key").map(String::as_str),
+                Some(KEY)
+            );
+            assert_eq!(
+                request
+                    .headers
+                    .get("zotero-api-version")
+                    .map(String::as_str),
+                Some("3")
+            );
+            // The key travels in the header only, never in the address.
+            assert!(!request.target.contains(KEY));
+        }
+    }
+
+    #[test]
+    fn group_names_fill_the_groups_the_key_reaches() {
+        let server = serve(vec![
+            canned("GET", "/keys/current", 200, FULL_ACCESS),
+            canned("GET", "/users/4242/groups", 200, GROUPS),
+        ]);
+        let KeyCheck::Valid(info) = runtime().block_on(check_key_at(&server.base, KEY)).unwrap()
+        else {
+            panic!("valid key expected");
+        };
+        let names: Vec<(&str, Option<&str>)> = info
+            .groups
+            .iter()
+            .map(|g| (g.id.as_str(), g.name.as_deref()))
+            .collect();
+        // `all` and group 12 have no name to show; 777 does.
         assert_eq!(
-            seen[0].headers.get("zotero-api-key").map(String::as_str),
-            Some(KEY)
+            names,
+            vec![("all", None), ("12", None), ("777", Some("prueba"))]
         );
-        assert_eq!(
-            seen[0]
-                .headers
-                .get("zotero-api-version")
-                .map(String::as_str),
-            Some("3")
-        );
-        // The key travels in the header only, never in the address.
-        assert!(!seen[0].target.contains(KEY));
+    }
+
+    #[test]
+    fn a_failed_group_lookup_keeps_the_key_valid_with_ids_only() {
+        for (status, body) in [(500, "boom"), (200, "not json"), (404, "")] {
+            let server = serve(vec![
+                canned("GET", "/keys/current", 200, FULL_ACCESS),
+                canned("GET", "/users/4242/groups", status, body),
+            ]);
+            let KeyCheck::Valid(info) =
+                runtime().block_on(check_key_at(&server.base, KEY)).unwrap()
+            else {
+                panic!("valid key expected for {status}");
+            };
+            assert!(info.groups.iter().all(|g| g.name.is_none()), "{status}");
+        }
+    }
+
+    #[test]
+    fn write_access_is_per_library_with_the_all_default_as_fallback() {
+        let info = parse_key_info(FULL_ACCESS).unwrap();
+        assert!(info.can_write_user());
+        assert!(info.can_write_group("777"));
+        // 12 is listed read-only; `all` is read-only: both refuse.
+        assert!(!info.can_write_group("12"));
+        assert!(!info.can_write_group("999"));
+        let all_write = parse_key_info(
+            r#"{"userID":1,"username":"u","access":{"groups":{"all":{"library":true,"write":true}}}}"#,
+        )
+        .unwrap();
+        assert!(!all_write.can_write_user());
+        assert!(all_write.can_write_group("999"));
     }
 
     #[test]
