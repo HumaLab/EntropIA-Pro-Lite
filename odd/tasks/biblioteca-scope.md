@@ -39,6 +39,13 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   (see `bibliography::compose`).
 - No JS migration without reporting first; dev profile for any `tauri dev`.
 
+## Decisions
+
+- 2026-10-02, owner: bibliography citations in the chat behave exactly like
+  corpus citations: inline `[n]`, each source is a passage (snippet, page,
+  char range) that opens the document at that fragment, highlighted. This
+  makes B1 (PDF attachments + full text) a prerequisite of B4.
+
 ## Progress
 
 - 2026-10-02: plan opened; B1 started.
