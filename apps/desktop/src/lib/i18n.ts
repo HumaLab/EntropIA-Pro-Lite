@@ -4307,7 +4307,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.personal': 'My library',
   'navegador.zotero.loading': 'Reading the libraries…',
   'navegador.zotero.hint':
-    'If Zotero is not open the copy waits in a queue and is sent by itself once Zotero answers. If the item is already in the library it is not duplicated.',
+    'If Zotero is not open the copy waits in a queue and is sent by itself once Zotero answers. If the entry is already in the library it is not duplicated.',
   'navegador.zotero.confirm': 'Copy',
   'navegador.zotero.cancel': 'Cancel',
   'navegador.zotero.close': 'Close',
@@ -4315,7 +4315,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.sending': 'Sending to Zotero…',
   'navegador.zotero.done.copied': 'Copied to "{library}".',
   'navegador.zotero.done.linked':
-    'It was already in "{library}": it was not duplicated and the existing item was not modified.',
+    'It was already in "{library}": it was not duplicated and the existing entry was not modified.',
   'navegador.zotero.done.waiting':
     'Zotero is not answering. The copy to "{library}" stays in the queue and is sent when Zotero is open.',
   'navegador.zotero.done.failed': 'Could not copy: {message}',
@@ -4328,12 +4328,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.state.failed': 'Failed',
   'navegador.zotero.state.cancelled': 'Cancelled',
   'navegador.zotero.note.existing':
-    'The item already existed in the library: it was linked, not duplicated.',
+    'The entry already existed in the library: it was linked, not duplicated.',
   'navegador.zotero.note.pdf.attached': 'PDF attached.',
   'navegador.zotero.note.pdf.not_attached':
     'The PDF could not be attached: that library does not take files.',
   'navegador.zotero.note.pdf.parent_exists':
-    'The PDF was not attached: the item already existed and Zotero only allows attaching when creating it.',
+    'The PDF was not attached: the entry already existed and Zotero only allows attaching when creating it.',
   'navegador.zotero.note.pdf.already_there': 'The PDF was already attached.',
   'navegador.zotero.note.differs':
     'Some fields differ from the ones in Zotero; they were left as they are (never overwritten).',
@@ -4361,7 +4361,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Zotero has its local API turned off. Turn it on in Zotero Settings > Advanced.',
   'navegador.zotero.error.zotero_rejected': 'Zotero rejected the write: {message}',
   'navegador.zotero.error.readback_miss':
-    'Zotero accepted the item but does not return it yet. Retry: it will not be duplicated.',
+    'Zotero accepted the entry but does not return it yet. Retry: it will not be duplicated.',
   'navegador.zotero.error.file_missing': 'The saved PDF is no longer on disk.',
   'navegador.zotero.error.file_changed':
     'The saved PDF no longer matches what was verified when it was saved.',

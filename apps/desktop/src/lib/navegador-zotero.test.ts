@@ -57,7 +57,7 @@ describe('commands', () => {
       libraryId: '0',
       libraryName: null,
     })
-    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ captureId: null })
+    expect(vi.mocked(invoke).mock.calls[0]![1]).toMatchObject({ captureId: null })
   })
 
   it('lists, runs, cancels and launches through their own commands', async () => {

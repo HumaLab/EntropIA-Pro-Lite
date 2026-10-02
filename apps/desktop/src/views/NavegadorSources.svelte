@@ -15,13 +15,17 @@
    * own viewer (`onviewpdf`, by capture id), and a source made of PDFs opens its
    * page of origin rather than "the browser". A saved PDF can also be copied into
    * a collection (`NavegadorCopyDialog`): an explicit, independent copy that
-   * leaves the source as it is.
+   * leaves the source as it is. The source (and a saved PDF) can also be copied
+   * to Zotero (`NavegadorZoteroDialog`); the copies of the open source are listed
+   * with their state, and one that waits for Zotero is sent again while the
+   * source is open.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
   import { ActionIcon, Button, ConfirmDialog, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { navegadorStore } from '$lib/navegador-store'
   import NavegadorCopyDialog, { type CopiedTarget } from './NavegadorCopyDialog.svelte'
+  import NavegadorZoteroDialog from './NavegadorZoteroDialog.svelte'
   import {
     describeCapture,
     describeSource,
@@ -34,6 +38,16 @@
     type SourceDetail,
     type SourceSummary,
   } from '$lib/navegador-sources'
+  import {
+    describeCopy,
+    hasPending,
+    navegadorZoteroCancel,
+    navegadorZoteroLaunch,
+    navegadorZoteroList,
+    navegadorZoteroRequest,
+    navegadorZoteroRun,
+    type ZoteroCopy,
+  } from '$lib/navegador-zotero'
 
   /**
    * `onopen` loads an address in the browser's active tab (through the URL
@@ -59,6 +73,8 @@
   const currentLocale = locale
   /** How long typing must pause before the search runs. */
   const SEARCH_DELAY_MS = 250
+  /** How often a copy that waits for Zotero is sent again while its source is open. */
+  const ZOTERO_POLL_MS = 10_000
   const KINDS = ['page', 'selection', 'pdf']
 
   let query = $state('')
@@ -73,6 +89,12 @@
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
   let copying = $state<{ id: string; title: string; rendered: boolean } | null>(null)
+  let zoteroCopying = $state<{
+    source: { id: string; title: string }
+    capture: { id: string; title: string } | null
+  } | null>(null)
+  let zoteroCopies = $state<ZoteroCopy[]>([])
+  let zoteroNotice = $state<string | null>(null)
 
   let listRequest = 0
   let detailRequest = 0
@@ -85,6 +107,7 @@
     (detail?.captures ?? []).map((capture) => describeCapture(capture, lang))
   )
   const openAction = $derived(sourceOpenAction(detail?.captures ?? []))
+  const zoteroRows = $derived(zoteroCopies.map((copy) => ({ copy, view: describeCopy(copy) })))
   const savedCount = $derived(Object.keys($navegadorStore.saved).length)
   let seenSaved = 0
   let seenFocus = 0
@@ -123,6 +146,7 @@
       if (request !== detailRequest) return
       detail = result
       detailState = result ? 'ready' : 'gone'
+      if (result) void loadZoteroCopies(id, true)
     } catch (reason) {
       if (request !== detailRequest) return
       const { code, detail: message } = parseSourceError(reason)
@@ -131,8 +155,91 @@
     }
   }
 
+  /**
+   * The copies of one source. With `send`, a copy that waits is tried at once:
+   * opening a source whose copy was queued earlier is the moment to send it.
+   */
+  async function loadZoteroCopies(id: string, send = false) {
+    try {
+      const answer = await navegadorZoteroList(id)
+      if (id !== selectedId) return
+      const rows = Array.isArray(answer) ? answer : []
+      zoteroCopies = rows
+      if (send && hasPending(rows)) await sendWaiting(id)
+    } catch {
+      // The list of copies is a courtesy: the source itself still shows.
+    }
+  }
+
+  /** One drain, then the list again. Never starts Zotero. */
+  async function sendWaiting(id: string) {
+    try {
+      await navegadorZoteroRun()
+    } catch {
+      // A failed drain leaves the copy where it was: still waiting.
+    }
+    if (id !== selectedId) return
+    try {
+      const answer = await navegadorZoteroList(id)
+      if (Array.isArray(answer)) zoteroCopies = answer
+    } catch {
+      // Keep what is shown.
+    }
+  }
+
+  async function openZotero() {
+    try {
+      const outcome = await navegadorZoteroLaunch()
+      zoteroNotice = t(`navegador.zotero.launch.${outcome}`)
+    } catch (reason) {
+      zoteroNotice = describe(reason)
+    }
+  }
+
+  async function cancelZoteroCopy(copy: ZoteroCopy) {
+    try {
+      await navegadorZoteroCancel(copy.id)
+    } catch {
+      // Already moving on (it started or finished): the list below says which.
+    }
+    if (selectedId) await loadZoteroCopies(selectedId)
+  }
+
+  async function retryZoteroCopy(copy: ZoteroCopy) {
+    try {
+      await navegadorZoteroRequest(copy.sourceId, copy.captureId, {
+        libraryType: copy.libraryType,
+        libraryId: copy.libraryId,
+        libraryName: copy.libraryName,
+      })
+    } catch (reason) {
+      zoteroNotice = describe(reason)
+    }
+    if (selectedId) await sendWaiting(selectedId)
+  }
+
+  function zoteroErrorText(copy: ZoteroCopy): string | null {
+    if (copy.state !== 'failed') return null
+    const key = `navegador.zotero.error.${copy.errorCode ?? 'unknown'}`
+    const text = t(key, { message: copy.errorMessage ?? '' })
+    return text === key
+      ? t('navegador.zotero.error.unknown', { message: copy.errorMessage ?? '' })
+      : text
+  }
+
+  // While a copy of the open source waits, send it again every few seconds.
+  $effect(() => {
+    const id = selectedId
+    const waiting = hasPending(zoteroCopies)
+    if (!id || !waiting) return
+    const timer = setInterval(() => void sendWaiting(id), ZOTERO_POLL_MS)
+    return () => clearInterval(timer)
+  })
+
   function openDetail(id: string) {
     notice = null
+    zoteroCopies = []
+    zoteroNotice = null
     selectedId = id
     detail = null
     detailError = null
@@ -342,6 +449,17 @@
         <Button size="sm" variant="secondary" onclick={() => void copyUrl(detail!.finalUrl)}>
           {$currentLocale && t('navegador.sources.copyUrl')}
         </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          onclick={() =>
+            (zoteroCopying = {
+              source: { id: detail!.id, title: detail!.title?.trim() || detail!.finalUrl },
+              capture: null,
+            })}
+        >
+          {$currentLocale && t('navegador.zotero.copy')}
+        </Button>
         <Button size="sm" variant="danger" onclick={() => askToDelete(detail!)}>
           {$currentLocale && t('navegador.sources.delete')}
         </Button>
@@ -358,6 +476,62 @@
         <dt>{$currentLocale && t('navegador.sources.detail.firstAccessed')}</dt>
         <dd>{detail.firstAccessedAt}</dd>
       </dl>
+
+      {#if zoteroRows.length > 0}
+        <h3 class="sources__subtitle">{$currentLocale && t('navegador.zotero.section')}</h3>
+        <ul class="sources__captures">
+          {#each zoteroRows as { copy, view } (copy.id)}
+            <li class="sources__capture">
+              <div class="sources__capture-head">
+                <span class="sources__chip sources__chip--{view.tone}">
+                  {$currentLocale && t(view.stateKey)}
+                </span>
+                {#if copy.captureId}
+                  <span class="sources__chip">PDF</span>
+                {/if}
+              </div>
+              <span>
+                {$currentLocale &&
+                  t('navegador.zotero.library', {
+                    library: view.libraryName ?? t('navegador.zotero.personal'),
+                  })}
+              </span>
+              {#each view.notes as note (note)}
+                <span class="sources__muted">{$currentLocale && t(note)}</span>
+              {/each}
+              {#if zoteroErrorText(copy)}
+                <span class="sources__problem" role="alert">{zoteroErrorText(copy)}</span>
+              {/if}
+              {#if view.canLaunch || view.canCancel || view.canRetry}
+                <div class="sources__actions">
+                  {#if view.canLaunch}
+                    <Button size="sm" variant="secondary" onclick={() => void openZotero()}>
+                      {$currentLocale && t('navegador.zotero.openZotero')}
+                    </Button>
+                  {/if}
+                  {#if view.canCancel}
+                    <Button size="sm" variant="ghost" onclick={() => void cancelZoteroCopy(copy)}>
+                      {$currentLocale && t('navegador.zotero.cancelCopy')}
+                    </Button>
+                  {/if}
+                  {#if view.canRetry}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onclick={() => void retryZoteroCopy(copy)}
+                    >
+                      {$currentLocale && t('navegador.zotero.retry')}
+                    </Button>
+                  {/if}
+                </div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        {#if zoteroNotice}
+          <p class="sources__muted" role="status">{zoteroNotice}</p>
+        {/if}
+      {/if}
 
       <h3 class="sources__subtitle">{$currentLocale && t('navegador.sources.detail.captures')}</h3>
       {#if captures.length === 0}
@@ -398,7 +572,7 @@
                   {$currentLocale && t('navegador.sources.file.missing')}
                 </span>
               {/if}
-              {#if capture.canViewPdf || capture.canCopy}
+              {#if capture.canViewPdf || capture.canCopy || (capture.kind === 'pdf' && capture.file === 'present')}
                 <div class="sources__actions">
                   {#if capture.canViewPdf}
                     <Button
@@ -428,6 +602,26 @@
                       {$currentLocale && t('navegador.sources.copyToCollection')}
                     </Button>
                   {/if}
+                  {#if capture.kind === 'pdf' && capture.file === 'present'}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onclick={() =>
+                        (zoteroCopying = {
+                          source: {
+                            id: detail!.id,
+                            title: detail!.title?.trim() || detail!.finalUrl,
+                          },
+                          capture: {
+                            id: capture.id,
+                            title:
+                              capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
+                          },
+                        })}
+                    >
+                      {$currentLocale && t('navegador.zotero.copy')}
+                    </Button>
+                  {/if}
                 </div>
               {/if}
               {#if capture.quote}
@@ -449,6 +643,15 @@
     {/if}
   {/if}
 </aside>
+
+{#if zoteroCopying}
+  <NavegadorZoteroDialog
+    source={zoteroCopying.source}
+    capture={zoteroCopying.capture}
+    onclose={() => (zoteroCopying = null)}
+    onchange={() => selectedId && void loadZoteroCopies(selectedId)}
+  />
+{/if}
 
 {#if copying}
   <NavegadorCopyDialog
@@ -605,6 +808,18 @@
     overflow-wrap: anywhere;
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
+  }
+
+  .sources__chip--good {
+    color: var(--color-success, var(--color-text-primary));
+  }
+
+  .sources__chip--bad {
+    color: var(--color-danger, var(--color-text-primary));
+  }
+
+  .sources__chip--pending {
+    color: var(--color-accent);
   }
 
   .sources__subtitle {
