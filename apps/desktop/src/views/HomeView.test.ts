@@ -130,6 +130,7 @@ function makeActiveBatch(overrides: Partial<BatchSummary> = {}): BatchSummary {
     desiredState: 'running',
     operations: ['ocr'],
     revision: 1,
+    priority: 0,
     createdAt: 0,
     updatedAt: 0,
     activeUnits: 816,
