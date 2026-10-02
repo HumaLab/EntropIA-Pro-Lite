@@ -416,12 +416,11 @@ pub(crate) mod test_server {
         Server { base, seen }
     }
 
-    /// An address nothing listens on.
+    /// An address nothing listens on. Port 1 (tcpmux) is reserved and below the
+    /// ephemeral range, so no parallel test's `serve()` (which binds port 0) can
+    /// ever receive it, unlike a port that was bound and then freed.
     pub fn dead_base() -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        drop(listener);
-        base
+        "http://127.0.0.1:1".to_string()
     }
 }
 
