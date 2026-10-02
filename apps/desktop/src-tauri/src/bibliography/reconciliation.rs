@@ -525,7 +525,7 @@ fn require_state(
     run: &ReconciliationRun,
     allowed: &[ReconciliationState],
 ) -> BibliographyResult<()> {
-    if allowed.iter().any(|state| *state == run.state) {
+    if allowed.contains(&run.state) {
         return Ok(());
     }
     Err(error(

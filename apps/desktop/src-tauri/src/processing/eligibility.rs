@@ -127,8 +127,7 @@ pub fn resolve_effective_embedding_contract(
     } else {
         sha256_hex(
             format!(
-                "{provider}|{model}|{}|{RAG_CHUNKING_CONTRACT_V1}",
-                CANONICAL_EMBEDDING_DIMENSIONS
+                "{provider}|{model}|{CANONICAL_EMBEDDING_DIMENSIONS}|{RAG_CHUNKING_CONTRACT_V1}"
             )
             .as_bytes(),
         )

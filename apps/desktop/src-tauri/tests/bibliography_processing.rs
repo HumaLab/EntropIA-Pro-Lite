@@ -3578,7 +3578,7 @@ fn profile_commit_refuses_a_metadata_edit_mid_flight() {
     let (dir, mut conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let item_id = seed_catalog(&mut conn, "NOPDF0003", "Obra volátil", "Resumen original.");
-    let task_id = admit_profile_demand(&conn, &item_id);
+    let _task_id = admit_profile_demand(&conn, &item_id);
     let task = repository::claim_next(
         &conn,
         "profile-session",

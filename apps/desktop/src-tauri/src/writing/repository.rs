@@ -957,6 +957,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn saving_zotero_citations_preserves_source_identity_and_sql_null_instances() {
         let (_dir, mut conn) = migrated_db();
         create_document(&conn, new_doc("d1")).expect("d1");

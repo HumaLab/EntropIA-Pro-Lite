@@ -360,190 +360,6 @@ pub fn active_generation(
     Ok(row)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const CONTRACT_A: &str = "contract-a";
-    const CONTRACT_B: &str = "contract-b";
-
-    fn generations_db() -> Connection {
-        let conn = Connection::open_in_memory().expect("memory db");
-        conn.execute_batch(include_str!(
-            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
-        ))
-        .expect("apply 0049 mirror");
-        conn
-    }
-
-    fn contract(hash: &str) -> EmbeddingContractRow {
-        EmbeddingContractRow {
-            contract_hash: hash.to_string(),
-            provider: "api".to_string(),
-            model: "baai/bge-m3".to_string(),
-            dimensions: 1024,
-            chunking_contract: "rag-chunk-800-100-char-v1".to_string(),
-        }
-    }
-
-    #[test]
-    fn full_lifecycle_registers_once_stages_completes_and_switches_atomically() {
-        let mut conn = generations_db();
-        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register");
-        // Idempotent: the same space re-registers as the same row.
-        register_embedding_contract(&conn, &contract(CONTRACT_A), 2).expect("re-register");
-        let rows: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM bibliographic_embedding_contracts WHERE contract_hash = ?1",
-                [CONTRACT_A],
-                |row| row.get(0),
-            )
-            .expect("contract count");
-        assert_eq!(rows, 1);
-
-        let first = begin_index_generation(&conn, CONTRACT_A, "gen-1", 10).expect("begin");
-        assert_eq!(first.status, "staging");
-        // Second begin attaches to the same staging row.
-        let attached = begin_index_generation(&conn, CONTRACT_A, "gen-2", 11).expect("attach");
-        assert_eq!(attached.id, "gen-1", "no orphaned parallel staging");
-
-        // A partial generation cannot activate.
-        set_generation_manifest(&conn, "gen-1", 2, 12).expect("manifest");
-        assert_eq!(
-            note_generation_progress(&conn, "gen-1").expect("progress"),
-            1
-        );
-        let error = complete_index_generation(&mut conn, "gen-1", 13)
-            .expect_err("a partial generation must never activate");
-        assert_eq!(error.code, "generation_partial");
-        assert_eq!(
-            read_generation(&conn, "gen-1")
-                .expect("read")
-                .expect("row")
-                .status,
-            "staging",
-            "rejection keeps the generation staging"
-        );
-
-        // Complete the manifest: the switch activates and leaves one active.
-        assert_eq!(
-            note_generation_progress(&conn, "gen-1").expect("progress"),
-            2
-        );
-        let active = complete_index_generation(&mut conn, "gen-1", 14).expect("activate");
-        assert_eq!(active.status, "active");
-        assert_eq!(active.activated_at, Some(14));
-        assert_eq!(
-            active_generation(&conn, CONTRACT_A)
-                .expect("active read")
-                .expect("row")
-                .id,
-            "gen-1"
-        );
-
-        // A new generation retires the old one exactly at its own switch.
-        let next = begin_index_generation(&conn, CONTRACT_A, "gen-3", 20).expect("begin");
-        set_generation_manifest(&conn, "gen-3", 1, 21).expect("manifest");
-        note_generation_progress(&conn, "gen-3").expect("progress");
-        complete_index_generation(&mut conn, "gen-3", 22).expect("switch");
-        assert_eq!(
-            read_generation(&conn, "gen-1")
-                .expect("read")
-                .expect("row")
-                .status,
-            "retired",
-            "the previous space retires exactly at the switch"
-        );
-        assert_eq!(
-            read_generation(&conn, "gen-1")
-                .expect("read")
-                .expect("row")
-                .retired_at,
-            Some(22)
-        );
-        assert_eq!(
-            active_generation(&conn, CONTRACT_A)
-                .expect("read")
-                .expect("row")
-                .id,
-            "gen-3"
-        );
-    }
-
-    #[test]
-    fn contracts_isolate_their_actives_and_retire_opens_the_lexical_fallback() {
-        let mut conn = generations_db();
-        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register A");
-        register_embedding_contract(&conn, &contract(CONTRACT_B), 1).expect("register B");
-        for (contract_hash, generation_id) in [(CONTRACT_A, "gen-a"), (CONTRACT_B, "gen-b")] {
-            begin_index_generation(&conn, contract_hash, generation_id, 10).expect("begin");
-            set_generation_manifest(&conn, generation_id, 1, 11).expect("manifest");
-            note_generation_progress(&conn, generation_id).expect("progress");
-            complete_index_generation(&mut conn, generation_id, 12).expect("activate");
-        }
-        assert_eq!(
-            active_generation(&conn, CONTRACT_A)
-                .expect("read")
-                .expect("row")
-                .id,
-            "gen-a"
-        );
-        assert_eq!(
-            active_generation(&conn, CONTRACT_B)
-                .expect("read")
-                .expect("row")
-                .id,
-            "gen-b",
-            "each contract keeps its own queryable space"
-        );
-
-        // Retiring the active space with no replacement is legitimate: the
-        // query falls back to labeled lexical results until a new space
-        // completes.
-        retire_index_generation(&conn, "gen-a", 13).expect("retire active");
-        assert!(
-            active_generation(&conn, CONTRACT_A)
-                .expect("read")
-                .is_none(),
-            "no active space remains for A"
-        );
-        assert!(
-            active_generation(&conn, CONTRACT_B)
-                .expect("read")
-                .is_some(),
-            "the other contract is untouched"
-        );
-        // A retired generation never reactivates and rejects progress.
-        assert!(
-            note_generation_progress(&conn, "gen-a").is_err(),
-            "retired generations accept no progress"
-        );
-        assert!(
-            complete_index_generation(&mut conn, "gen-a", 14).is_err(),
-            "retired generations never reactivate"
-        );
-    }
-
-    #[test]
-    fn zero_manifest_or_unknown_generations_fail_honestly() {
-        let mut conn = generations_db();
-        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register");
-        begin_index_generation(&conn, CONTRACT_A, "gen-1", 10).expect("begin");
-        // No manifest declared: expected stays 0 and activation refuses.
-        let error = complete_index_generation(&mut conn, "gen-1", 11)
-            .expect_err("an unmanifested generation must not activate");
-        assert_eq!(error.code, "generation_partial");
-        assert!(
-            complete_index_generation(&mut conn, "gen-missing", 12).is_err(),
-            "unknown generations fail honestly"
-        );
-        assert!(
-            retire_index_generation(&conn, "gen-missing", 13).is_err(),
-            "retiring the unknown fails honestly"
-        );
-    }
-}
-
 // ── E3c-WU2: execution wiring helpers ──────────────────────────────────────
 //
 /// Ensures a staging generation exists for one contract: registers the
@@ -682,4 +498,188 @@ pub fn generation_has_item(
             format!("Failed to check generation item: {error}"),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONTRACT_A: &str = "contract-a";
+    const CONTRACT_B: &str = "contract-b";
+
+    fn generations_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("memory db");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0049_bibliographic_index_generations.sql"
+        ))
+        .expect("apply 0049 mirror");
+        conn
+    }
+
+    fn contract(hash: &str) -> EmbeddingContractRow {
+        EmbeddingContractRow {
+            contract_hash: hash.to_string(),
+            provider: "api".to_string(),
+            model: "baai/bge-m3".to_string(),
+            dimensions: 1024,
+            chunking_contract: "rag-chunk-800-100-char-v1".to_string(),
+        }
+    }
+
+    #[test]
+    fn full_lifecycle_registers_once_stages_completes_and_switches_atomically() {
+        let mut conn = generations_db();
+        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register");
+        // Idempotent: the same space re-registers as the same row.
+        register_embedding_contract(&conn, &contract(CONTRACT_A), 2).expect("re-register");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM bibliographic_embedding_contracts WHERE contract_hash = ?1",
+                [CONTRACT_A],
+                |row| row.get(0),
+            )
+            .expect("contract count");
+        assert_eq!(rows, 1);
+
+        let first = begin_index_generation(&conn, CONTRACT_A, "gen-1", 10).expect("begin");
+        assert_eq!(first.status, "staging");
+        // Second begin attaches to the same staging row.
+        let attached = begin_index_generation(&conn, CONTRACT_A, "gen-2", 11).expect("attach");
+        assert_eq!(attached.id, "gen-1", "no orphaned parallel staging");
+
+        // A partial generation cannot activate.
+        set_generation_manifest(&conn, "gen-1", 2, 12).expect("manifest");
+        assert_eq!(
+            note_generation_progress(&conn, "gen-1").expect("progress"),
+            1
+        );
+        let error = complete_index_generation(&mut conn, "gen-1", 13)
+            .expect_err("a partial generation must never activate");
+        assert_eq!(error.code, "generation_partial");
+        assert_eq!(
+            read_generation(&conn, "gen-1")
+                .expect("read")
+                .expect("row")
+                .status,
+            "staging",
+            "rejection keeps the generation staging"
+        );
+
+        // Complete the manifest: the switch activates and leaves one active.
+        assert_eq!(
+            note_generation_progress(&conn, "gen-1").expect("progress"),
+            2
+        );
+        let active = complete_index_generation(&mut conn, "gen-1", 14).expect("activate");
+        assert_eq!(active.status, "active");
+        assert_eq!(active.activated_at, Some(14));
+        assert_eq!(
+            active_generation(&conn, CONTRACT_A)
+                .expect("active read")
+                .expect("row")
+                .id,
+            "gen-1"
+        );
+
+        // A new generation retires the old one exactly at its own switch.
+        let _next = begin_index_generation(&conn, CONTRACT_A, "gen-3", 20).expect("begin");
+        set_generation_manifest(&conn, "gen-3", 1, 21).expect("manifest");
+        note_generation_progress(&conn, "gen-3").expect("progress");
+        complete_index_generation(&mut conn, "gen-3", 22).expect("switch");
+        assert_eq!(
+            read_generation(&conn, "gen-1")
+                .expect("read")
+                .expect("row")
+                .status,
+            "retired",
+            "the previous space retires exactly at the switch"
+        );
+        assert_eq!(
+            read_generation(&conn, "gen-1")
+                .expect("read")
+                .expect("row")
+                .retired_at,
+            Some(22)
+        );
+        assert_eq!(
+            active_generation(&conn, CONTRACT_A)
+                .expect("read")
+                .expect("row")
+                .id,
+            "gen-3"
+        );
+    }
+
+    #[test]
+    fn contracts_isolate_their_actives_and_retire_opens_the_lexical_fallback() {
+        let mut conn = generations_db();
+        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register A");
+        register_embedding_contract(&conn, &contract(CONTRACT_B), 1).expect("register B");
+        for (contract_hash, generation_id) in [(CONTRACT_A, "gen-a"), (CONTRACT_B, "gen-b")] {
+            begin_index_generation(&conn, contract_hash, generation_id, 10).expect("begin");
+            set_generation_manifest(&conn, generation_id, 1, 11).expect("manifest");
+            note_generation_progress(&conn, generation_id).expect("progress");
+            complete_index_generation(&mut conn, generation_id, 12).expect("activate");
+        }
+        assert_eq!(
+            active_generation(&conn, CONTRACT_A)
+                .expect("read")
+                .expect("row")
+                .id,
+            "gen-a"
+        );
+        assert_eq!(
+            active_generation(&conn, CONTRACT_B)
+                .expect("read")
+                .expect("row")
+                .id,
+            "gen-b",
+            "each contract keeps its own queryable space"
+        );
+
+        // Retiring the active space with no replacement is legitimate: the
+        // query falls back to labeled lexical results until a new space
+        // completes.
+        retire_index_generation(&conn, "gen-a", 13).expect("retire active");
+        assert!(
+            active_generation(&conn, CONTRACT_A)
+                .expect("read")
+                .is_none(),
+            "no active space remains for A"
+        );
+        assert!(
+            active_generation(&conn, CONTRACT_B)
+                .expect("read")
+                .is_some(),
+            "the other contract is untouched"
+        );
+        // A retired generation never reactivates and rejects progress.
+        assert!(
+            note_generation_progress(&conn, "gen-a").is_err(),
+            "retired generations accept no progress"
+        );
+        assert!(
+            complete_index_generation(&mut conn, "gen-a", 14).is_err(),
+            "retired generations never reactivate"
+        );
+    }
+
+    #[test]
+    fn zero_manifest_or_unknown_generations_fail_honestly() {
+        let mut conn = generations_db();
+        register_embedding_contract(&conn, &contract(CONTRACT_A), 1).expect("register");
+        begin_index_generation(&conn, CONTRACT_A, "gen-1", 10).expect("begin");
+        // No manifest declared: expected stays 0 and activation refuses.
+        let error = complete_index_generation(&mut conn, "gen-1", 11)
+            .expect_err("an unmanifested generation must not activate");
+        assert_eq!(error.code, "generation_partial");
+        assert!(
+            complete_index_generation(&mut conn, "gen-missing", 12).is_err(),
+            "unknown generations fail honestly"
+        );
+        assert!(
+            retire_index_generation(&conn, "gen-missing", 13).is_err(),
+            "retiring the unknown fails honestly"
+        );
+    }
 }

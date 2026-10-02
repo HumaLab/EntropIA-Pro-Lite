@@ -217,7 +217,6 @@ pub fn recover_ingest_operations(conn: &Connection) -> BibliographyResult<usize>
          WHERE state = 'running'",
         [clock_ms()],
     )
-    .map(|moved| moved as usize)
     .map_err(|error| {
         BibliographyError::new("sql_error", format!("Failed to recover ingest: {error}"))
     })
@@ -1498,7 +1497,7 @@ mod tests {
         for (request, payload, code) in [
             (
                 "req-unknown",
-                format!(r#"{{"mode":"link","item_id":"nope"}}"#),
+                r#"{"mode":"link","item_id":"nope"}"#.to_string(),
                 "unknown_item",
             ),
             (
@@ -1603,7 +1602,7 @@ mod tests {
 
     #[test]
     fn gate_verifies_a_completed_link_receipt() {
-        let (mut conn, library_id, _) = catalog_db();
+        let (conn, library_id, _) = catalog_db();
         let op =
             record_ingest_decision(&conn, "req-1", &link_decision(&library_id)).expect("record");
         succeed_with_receipt(
@@ -1619,7 +1618,7 @@ mod tests {
 
     #[test]
     fn gate_rejects_incomplete_staged_stale_and_revoked() {
-        let (mut conn, library_id, item_id) = catalog_db();
+        let (conn, library_id, item_id) = catalog_db();
         // Incomplete: still queued.
         let queued = record_ingest_decision(&conn, "req-queued", &link_decision(&library_id))
             .expect("record");

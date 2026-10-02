@@ -154,6 +154,109 @@ pub fn profile_input_hash(canonical_text: &str) -> String {
     output
 }
 
+// ── Catalog-backed extraction (E3b-WU2) ────────────────────────────────────
+
+use crate::bibliography::repository::BibliographyError;
+use crate::bibliography::repository::BibliographyResult;
+use rusqlite::OptionalExtension as _;
+
+fn json_str(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn normalize_csl_creators(value: &serde_json::Value) -> Vec<(String, String)> {
+    match value.get("author").and_then(|value| value.as_array()) {
+        Some(creators) => creators
+            .iter()
+            .map(|creator| (json_str(creator, "family"), json_str(creator, "given")))
+            .filter(|(family, given)| !family.is_empty() || !given.is_empty())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+fn csl_year(value: &serde_json::Value) -> Option<i64> {
+    let parts = value.get("issued")?.get("date-parts")?.as_array()?;
+    let first = parts.first()?.as_array()?;
+    first.first()?.as_i64()
+}
+
+fn native_tags(value: &serde_json::Value) -> Vec<String> {
+    match value.get("tags").and_then(|value| value.as_array()) {
+        Some(tags) => tags
+            .iter()
+            .filter_map(|tag| match tag {
+                serde_json::Value::String(text) => Some(text.clone()),
+                other => other
+                    .get("tag")
+                    .and_then(|text| text.as_str())
+                    .map(String::from),
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Reads one verified catalog row into the profile template input. `None`
+/// when the work does not exist. Fields come from the trusted snapshots:
+/// CSL carries title/creators/year/type/publication/abstract, the native
+/// snapshot carries Zotero tags. Malformed JSON degrades to empty fields —
+/// the snapshots are validated at write time, so this is defensive depth,
+/// never a silent acceptance path.
+pub fn profile_input_for_item(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+) -> BibliographyResult<Option<ProfileInput>> {
+    let row: Option<(String, Option<String>, String, String)> = conn
+        .query_row(
+            "SELECT csl_json_snapshot, creators_json, native_json_snapshot, title
+             FROM bibliographic_items WHERE id = ?1",
+            [item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read catalog item", error))?;
+    let Some((csl_json, creators_json, native_json, title)) = row else {
+        return Ok(None);
+    };
+    let csl: serde_json::Value = serde_json::from_str(&csl_json).unwrap_or(serde_json::Value::Null);
+    let native: serde_json::Value =
+        serde_json::from_str(&native_json).unwrap_or(serde_json::Value::Null);
+    let mut creators = normalize_csl_creators(&csl);
+    if creators.is_empty() {
+        if let Ok(serde_json::Value::Array(creators_json)) =
+            serde_json::from_str::<serde_json::Value>(creators_json.as_deref().unwrap_or("[]"))
+        {
+            creators = creators_json
+                .iter()
+                .map(|creator| (json_str(creator, "family"), json_str(creator, "given")))
+                .filter(|(family, given)| !family.is_empty() || !given.is_empty())
+                .collect();
+        }
+    }
+    let title = {
+        let csl_title = json_str(&csl, "title");
+        if csl_title.is_empty() {
+            title
+        } else {
+            csl_title
+        }
+    };
+    Ok(Some(ProfileInput {
+        title,
+        creators,
+        year: csl_year(&csl),
+        item_type: json_str(&csl, "type"),
+        publication: json_str(&csl, "publisher"),
+        abstract_text: json_str(&csl, "abstract"),
+        tags: native_tags(&native),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,107 +359,4 @@ mod tests {
         let digest = built.input_hash;
         assert_eq!(digest.len(), 64, "the hash is a hex sha256 digest");
     }
-}
-
-// ── Catalog-backed extraction (E3b-WU2) ────────────────────────────────────
-
-use crate::bibliography::repository::BibliographyError;
-use crate::bibliography::repository::BibliographyResult;
-use rusqlite::OptionalExtension as _;
-
-fn json_str(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn normalize_csl_creators(value: &serde_json::Value) -> Vec<(String, String)> {
-    match value.get("author").and_then(|value| value.as_array()) {
-        Some(creators) => creators
-            .iter()
-            .map(|creator| (json_str(creator, "family"), json_str(creator, "given")))
-            .filter(|(family, given)| !family.is_empty() || !given.is_empty())
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
-fn csl_year(value: &serde_json::Value) -> Option<i64> {
-    let parts = value.get("issued")?.get("date-parts")?.as_array()?;
-    let first = parts.first()?.as_array()?;
-    first.first()?.as_i64()
-}
-
-fn native_tags(value: &serde_json::Value) -> Vec<String> {
-    match value.get("tags").and_then(|value| value.as_array()) {
-        Some(tags) => tags
-            .iter()
-            .filter_map(|tag| match tag {
-                serde_json::Value::String(text) => Some(text.clone()),
-                other => other
-                    .get("tag")
-                    .and_then(|text| text.as_str())
-                    .map(String::from),
-            })
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
-/// Reads one verified catalog row into the profile template input. `None`
-/// when the work does not exist. Fields come from the trusted snapshots:
-/// CSL carries title/creators/year/type/publication/abstract, the native
-/// snapshot carries Zotero tags. Malformed JSON degrades to empty fields —
-/// the snapshots are validated at write time, so this is defensive depth,
-/// never a silent acceptance path.
-pub fn profile_input_for_item(
-    conn: &rusqlite::Connection,
-    item_id: &str,
-) -> BibliographyResult<Option<ProfileInput>> {
-    let row: Option<(String, Option<String>, String, String)> = conn
-        .query_row(
-            "SELECT csl_json_snapshot, creators_json, native_json_snapshot, title
-             FROM bibliographic_items WHERE id = ?1",
-            [item_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
-        .optional()
-        .map_err(|error| BibliographyError::sql("Failed to read catalog item", error))?;
-    let Some((csl_json, creators_json, native_json, title)) = row else {
-        return Ok(None);
-    };
-    let csl: serde_json::Value = serde_json::from_str(&csl_json).unwrap_or(serde_json::Value::Null);
-    let native: serde_json::Value =
-        serde_json::from_str(&native_json).unwrap_or(serde_json::Value::Null);
-    let mut creators = normalize_csl_creators(&csl);
-    if creators.is_empty() {
-        if let Ok(serde_json::Value::Array(creators_json)) =
-            serde_json::from_str::<serde_json::Value>(creators_json.as_deref().unwrap_or("[]"))
-        {
-            creators = creators_json
-                .iter()
-                .map(|creator| (json_str(creator, "family"), json_str(creator, "given")))
-                .filter(|(family, given)| !family.is_empty() || !given.is_empty())
-                .collect();
-        }
-    }
-    let title = {
-        let csl_title = json_str(&csl, "title");
-        if csl_title.is_empty() {
-            title
-        } else {
-            csl_title
-        }
-    };
-    Ok(Some(ProfileInput {
-        title,
-        creators,
-        year: csl_year(&csl),
-        item_type: json_str(&csl, "type"),
-        publication: json_str(&csl, "publisher"),
-        abstract_text: json_str(&csl, "abstract"),
-        tags: native_tags(&native),
-    }))
 }

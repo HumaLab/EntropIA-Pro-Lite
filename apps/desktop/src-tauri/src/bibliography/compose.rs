@@ -344,8 +344,8 @@ mod tests {
             )
             .expect("staging id");
         let _ = staging;
-        set_generation_manifest(&conn, &staging_id, 1, 11).expect("manifest");
-        note_generation_progress(&conn, &staging_id).expect("progress");
+        set_generation_manifest(conn, &staging_id, 1, 11).expect("manifest");
+        note_generation_progress(conn, &staging_id).expect("progress");
         complete_index_generation(conn, &staging_id, 20).expect("activate");
         conn.execute(
             "INSERT INTO bibliographic_item_embeddings

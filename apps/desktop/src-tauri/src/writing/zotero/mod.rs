@@ -731,6 +731,9 @@ mod tests {
     /// (6680944, item 7EMV3G8H) — the authorized session opened the select URI
     /// and the user confirmed the item got selected in Zotero.
     #[test]
+    // The gate is a constant on purpose: this test pins its value, so the
+    // constant assertion is the point, not an accident.
+    #[allow(clippy::assertions_on_constants)]
     fn e1c4_open_item_is_enabled_after_live_verification() {
         assert!(
             super::OPEN_ITEM_ENABLED,

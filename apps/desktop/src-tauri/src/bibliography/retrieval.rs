@@ -313,9 +313,9 @@ mod tests {
         // generation.rs tests; here the generation just needs to be active.
         // A zero manifest never activates, so floor it at one entry.
         let floor = expected.max(1);
-        set_generation_manifest(&conn, &staging, floor, 11).expect("manifest");
+        set_generation_manifest(conn, &staging, floor, 11).expect("manifest");
         for _ in 0..floor {
-            note_generation_progress(&conn, &staging).expect("progress");
+            note_generation_progress(conn, &staging).expect("progress");
         }
         complete_index_generation(&mut *conn, &staging, 20).expect("activate");
     }
@@ -681,7 +681,7 @@ mod tests {
 /// FTS5 match bound: lexical candidates stay a bounded pre-filter, never
 /// the whole catalog.
 fn lexical_limit(top_k: usize) -> usize {
-    top_k.saturating_mul(5).max(20).min(500)
+    top_k.saturating_mul(5).clamp(20, 500)
 }
 
 /// Lexical candidates over profile texts: FTS5 bm25 order, joined back to
@@ -1133,6 +1133,7 @@ pub struct PassageHit {
 /// tombstoned works never surface. Without a queryable space there is
 /// nothing vector to rank: the answer is empty and the embedder never
 /// runs.
+#[allow(clippy::too_many_arguments)]
 pub fn search_passages(
     conn: &Connection,
     contract_hash: &str,
@@ -1454,6 +1455,7 @@ mod passage_tests {
         (library.id, item.id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn seed_chunk(
         conn: &Connection,
         item_id: &str,
@@ -1524,7 +1526,7 @@ mod passage_tests {
             .expect("staging id");
         let _ = staging;
         set_generation_manifest(conn, &staging_id, 1, 11).expect("manifest");
-        note_generation_progress(&conn, &staging_id).expect("progress");
+        note_generation_progress(conn, &staging_id).expect("progress");
         complete_index_generation(conn, &staging_id, 20).expect("activate");
         staging_id
     }
@@ -1609,7 +1611,7 @@ mod passage_tests {
         let mut conn = passage_db();
         let (_lib, item) = seed_item(&mut conn, "ps", "s", "KS0001", "Obra sola");
         let text = "Texto original del fragmento con longitud.";
-        let hash = super::super::profile::profile_input_hash(text);
+        let _hash = super::super::profile::profile_input_hash(text);
         conn.execute(
             "INSERT INTO bibliographic_semantic_profiles
                (item_id, profile_revision, template_version, canonical_text,

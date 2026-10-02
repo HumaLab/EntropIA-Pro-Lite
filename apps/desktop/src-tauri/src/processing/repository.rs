@@ -334,6 +334,7 @@ fn link_batch_task(
 /// Subject-explicit link (E2b-1): the corpus wrapper above delegates with
 /// `corpus`/`asset` literals; bibliography admission passes its own subject
 /// with the library row id as the opaque `asset_id_snapshot` compat value.
+#[allow(clippy::too_many_arguments)]
 fn link_batch_task_subject(
     conn: &Connection,
     batch_id: &str,
@@ -3144,6 +3145,10 @@ fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result
 /// larger one takes the state-index walk. The count itself stops here.
 const CLAIM_LEVEL_DRIVER_LINKS: i64 = 5_000;
 
+/// One claim-scan row: id, kind, asset snapshot, domain, subject kind,
+/// subject id, contract hash, lease epoch.
+type ClaimCandidate = (String, String, String, String, String, String, String, i64);
+
 /// Claims the next runnable task for `session_id`: BEGIN IMMEDIATE, pick the oldest runnable unit with an actively-wanted batch,
 /// revalidate its input (admission data may be stale), CAS it to `running`
 /// with a fresh fencing epoch, open an attempt, COMMIT — all before any
@@ -3264,8 +3269,7 @@ pub fn claim_next(
             rows.collect::<Result<_, _>>()
                 .map_err(|e| format!("Failed to read batch priorities: {e}"))?
         };
-        let mut candidate: Option<(String, String, String, String, String, String, String, i64)> =
-            None;
+        let mut candidate: Option<ClaimCandidate> = None;
         for level in raised_levels {
             let links: i64 = conn
                 .query_row(
@@ -3870,6 +3874,7 @@ pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String
 /// the completed revision for embeddings, unblocks dependents, and bumps the
 /// batch revisions — all in
 /// ONE transaction on this connection. Nothing may COMMIT inside `publish`.
+#[allow(clippy::type_complexity)]
 pub fn commit_success_with(
     conn: &Connection,
     task_id: &str,
@@ -4539,11 +4544,6 @@ mod tests {
         "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
     );
     const MIGRATION_0055_NAME: &str = "0055_bibliographic_chunk_embeddings";
-
-    /// Pre-0043 database shape: 0032 + 0033 exactly as upgraded field
-    /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
-    /// here; [`migrated_db`] builds on top of it. One builder, so the legacy
-    /// shape cannot drift between the two.
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let (dir, conn) = legacy_db();
@@ -7283,8 +7283,7 @@ mod tests {
         let claimed = claim_next(&conn, "s", &["ocr"], 100).unwrap();
         assert!(
             claimed.is_none(),
-            "bibliography rows must never be claimed, got {:?}",
-            claimed
+            "bibliography rows must never be claimed, got {claimed:?}"
         );
         let after: (String, String) = conn
             .query_row(

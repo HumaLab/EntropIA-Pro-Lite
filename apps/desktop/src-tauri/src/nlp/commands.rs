@@ -318,7 +318,7 @@ pub(crate) fn admit_backfill(
     let candidates = super::embeddings::scan_text_assets(conn, limit, !force)?;
     let batch = repository::ensure_system_batch(conn, "manual")?;
     let current_contract =
-        crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?.hash;
+        crate::processing::eligibility::resolve_effective_embedding_contract(conn)?.hash;
     let contract = if force {
         format!("force:{current_contract}")
     } else {
