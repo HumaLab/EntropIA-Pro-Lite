@@ -254,14 +254,73 @@ waits in a queue until it is (likely reuse the durable
 `bibliographic_ingest_operations` tray); if feasible and safe, start Zotero in
 the background to drain the queue.
 
-- [ ] P5a — Investigate and report (no code): which write path to reuse from
-  `bibliography/` (`ingest.rs` connector `saveItems`, `web_upload.rs`), how a
-  library is chosen, how an existing item with the same URL is detected, what
-  happens without Zotero running or without a key, and how the copy is
-  recorded (provenance) so a second copy is detected. Product decisions go to
-  the owner.
-- [ ] P5b — Build the chosen path for page/selection/PDF sources.
-- [ ] P5c — User verification with a real Zotero (a test library/group).
+- [x] P5a - Investigation (evidence from the Zotero 9.0.6 installed on the dev
+  machine: `server_connector.js`, `saveSession.js`, `server_localAPI.js` read out
+  of `app/omni.ja`, plus read-only calls to the running local API).
+  - Write path: the connector, no key. The local API is GET-only (every
+    `supportedMethods` is `['GET']`); no API key is stored anywhere in the app
+    (`web_upload.rs` takes one at construction, only tests do). `saveItems`
+    takes full Zotero item JSON (`url`, `accessDate` ISO accepted,
+    `title`, `websiteTitle`), saves into the library the Zotero window has
+    selected and answers 201. `updateSession {sessionID, target: "L<id>"}` moves
+    the session's items to that library root (`moveToLibrary`, new key) and
+    selects it. `saveAttachment?sessionID=` + `X-Metadata {sessionID,
+    parentItemID, title, url}` + raw bytes attaches a file to an item of the SAME
+    session (not to an arbitrary existing item). So the connector can only
+    create; it cannot edit an existing item, and an existing item cannot get a
+    PDF afterwards.
+  - Library choice: `getSelectedCollection` lists every editable library as a
+    `level: 0` target (`L1` = personal, `L<n>` = groups, named like the group).
+    Verified live: `L1` present, 9 libraries, group names from
+    `/api/groups/<id>` match the target names. A group is matched BY NAME
+    (two with the same name fail `ambiguous_library`, never guessed).
+  - Existing item: `GET /api/{users/0|groups/id}/items?qmode=fields&q=<url>`
+    (verified live: finds an item by its URL; `qmode=everything` timed out on a
+    real library because it searches full text). Match = a work (not
+    attachment/note) whose `url` equals ours or the canonical one after
+    normalising (no fragment, trailing slash, host case). No DOI: the web
+    source has none.
+  - Queue: the ingest tray was NOT reused. Its `kind` CHECK forbids a new kind
+    (needs a migration), its rows hang off `zotero_libraries` (semantic catalog,
+    may be empty in Lite), its live transport is hard-wired to one test group
+    and nothing calls it from the UI. Own device-local table
+    `navegador_zotero_copies`, created by Rust at runtime like
+    `sync_web_pending_blobs` (no JS migration, not in the sync set).
+  - Starting Zotero: install folder found from `%ProgramFiles%`,
+    `%ProgramFiles(x86)%`, `%LOCALAPPDATA%` (`App Paths` on this machine says
+    `C:\Program Files\Zotero\zotero.exe`; registry not read, no new crate),
+    spawned with no shell and no arguments, only from the "Abrir Zotero" button,
+    at most once a minute.
+  - Merge rule (`plan.rs`): fields we own = title, url, accessDate,
+    websiteTitle. Empty in Zotero -> fill; differs and still equals what we
+    wrote -> update; differs otherwise -> keep (never overwrite what the person
+    edited). BECAUSE the connector cannot edit, the plan is computed and
+    REPORTED (`pendingFields`, `keptFields`), not applied.
+  - Provenance: the copy row (source, capture, library) -> Zotero item key,
+    plus `written` (what we wrote) in its detail JSON. A second request answers
+    from the row; a second device finds the item by URL.
+- [ ] P5b - Built; automated checks observed, unchecked until the user's run. Commits
+  `e5d570ed` (queue, plan, port, run, launch), `2452a2e1` (five commands, ACL),
+  `0893cde6` (dialog), `48a656b3` (drawer). Commands: `navegador_zotero_copy_
+  request|list|run|cancel`, `navegador_zotero_launch`.
+- [ ] P5c - User verification with a real Zotero (a test group library).
+  Checklist (dev profile `ENTROPIA_DEV_PROFILE=navegador`):
+  1. Zotero CLOSED: save a page, open it in Fuentes guardadas, "Copiar a Zotero"
+     -> personal library preselected -> Copiar. Expect "queda en cola", the
+     source shows "Esperando a Zotero".
+  2. Press "Abrir Zotero": Zotero starts (once). Within ~10 s the copy becomes
+     "Copiado"; the page item is in My Library root with url, access date,
+     title, website title; no tags added.
+  3. Copy the same source again to the same library: no second item. Copy it
+     to the test group: item appears in the group root (the Zotero window moves
+     to that library).
+  4. Edit the title in Zotero, copy again: "Ya estaba en Zotero", title kept.
+  5. A saved PDF: "Copiar a Zotero" on the capture with Zotero OPEN: the page
+     item gets the PDF as a child (title "Captura web <8 hex>.pdf"). Then try a
+     PDF whose page already exists: expect "Ya estaba..." and the note that
+     the PDF was not attached.
+  6. Zotero open but local API off: expect the "API local" message.
+  7. Cancel a waiting copy; retry a failed one.
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
