@@ -6084,6 +6084,16 @@ fn eval_seed_scores_vector_leg_with_bge_m3() {
         provider: EmbeddingProvider::Api,
         api_key,
         model_name: "baai/bge-m3".to_string(),
+        // The Pro build adds the local-model fields; the API provider ignores
+        // them (8192 mirrors the crate's DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH).
+        #[cfg(feature = "local-ml")]
+        local_model_dir: None,
+        #[cfg(feature = "local-ml")]
+        local_model_path: None,
+        #[cfg(feature = "local-ml")]
+        local_tokenizer_path: None,
+        #[cfg(feature = "local-ml")]
+        local_max_length: 8192,
     })
     .expect("init embedding engine");
 
@@ -6301,6 +6311,16 @@ fn eval_seed_scores_extended_set_with_rerank_candidate() {
         provider: EmbeddingProvider::Api,
         api_key: api_key.clone(),
         model_name: "baai/bge-m3".to_string(),
+        // The Pro build adds the local-model fields; the API provider ignores
+        // them (8192 mirrors the crate's DEFAULT_LOCAL_EMBEDDING_MAX_LENGTH).
+        #[cfg(feature = "local-ml")]
+        local_model_dir: None,
+        #[cfg(feature = "local-ml")]
+        local_model_path: None,
+        #[cfg(feature = "local-ml")]
+        local_tokenizer_path: None,
+        #[cfg(feature = "local-ml")]
+        local_max_length: 8192,
     })
     .expect("init embedding engine");
 
