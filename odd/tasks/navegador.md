@@ -303,7 +303,30 @@ the background to drain the queue.
   `e5d570ed` (queue, plan, port, run, launch), `2452a2e1` (five commands, ACL),
   `0893cde6` (dialog), `48a656b3` (drawer). Commands: `navegador_zotero_copy_
   request|list|run|cancel`, `navegador_zotero_launch`.
-- [ ] P5c - User verification with a real Zotero (a test group library).
+- 2026-10-02, first user run (real Zotero 9.0.6, dev profile `navegador`).
+  PASS: a page with its PDF became a `webpage` item in the personal library root
+  (URL, accessDate, title) with the PDF as a child ("Captura web 0a41e561.pdf");
+  a second copy did not duplicate; after retitling the item in Zotero the next
+  copy kept the user's title; with Zotero closed the copy queued ("Zotero no
+  responde. La copia a «Mi biblioteca» queda en cola...") and "Abrir Zotero"
+  started it and drained the queue. Two findings, fixed in `c4a590a0` (Rust:
+  `live_libraries`, `check_status`, commands `navegador_zotero_libraries` and
+  `navegador_zotero_status`) and `08909a1f` (dialog):
+  1. The picker showed only "Mi biblioteca": the list came from libraries the
+     archive knows (empty in a fresh dev profile). Now it is read live from
+     Zotero: editable `level: 0` connector targets matched with
+     `/api/users/0/groups` by name; personal first and preselected; the known
+     libraries only as a labelled fallback when Zotero does not answer.
+  2. Copying a source already in Zotero ran the whole flow and looked like a new
+     copy. Now the dialog checks the chosen library when it opens and on every
+     change (our record first when Zotero is closed, else lookup by address),
+     says "Ya está en Zotero («<library>»)", offers "Abrir en Zotero" (the
+     existing `writing_zotero_open_item`, `zotero://select/...`) instead of
+     "Copiar", and lists the fields it could not fill or update and the ones the
+     user edited. A PDF for an existing page says it cannot be attached. A record
+     of an item the user deleted in Zotero is dropped, so it can be copied again.
+- [ ] P5c - User verification with a real Zotero (a test group library); first run
+  above, rerun pending for the two fixes (groups listed; already-in-Zotero dialog).
   Checklist (dev profile `ENTROPIA_DEV_PROFILE=navegador`):
   1. Zotero CLOSED: save a page, open it in Fuentes guardadas, "Copiar a Zotero"
      -> personal library preselected -> Copiar. Expect "queda en cola", the
