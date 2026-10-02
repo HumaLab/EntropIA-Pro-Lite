@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "entropia-pro-desktop"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "base64 0.22.1",
  "cap-fs-ext",
