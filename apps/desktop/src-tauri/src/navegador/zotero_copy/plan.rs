@@ -125,6 +125,14 @@ pub struct Owned {
 }
 
 impl Owned {
+    /// The value of a field by its Zotero name.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.fields()
+            .into_iter()
+            .find(|(field, _)| *field == name)
+            .and_then(|(_, value)| value.as_deref())
+    }
+
     fn fields(&self) -> [(&'static str, &Option<String>); 4] {
         [
             ("title", &self.title),

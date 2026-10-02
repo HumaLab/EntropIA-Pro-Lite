@@ -23,6 +23,7 @@ use super::zotero_copy::run::{
     self as zotero_run, CopyStatus, DrainReport, LibraryList, RunOptions,
 };
 use super::zotero_copy::store::{self as zotero_store, LibraryRef, ZoteroCopy};
+use super::zotero_copy::web::WebApiPort;
 use super::{bounds, viewer, UNAVAILABLE};
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -472,7 +473,11 @@ pub async fn navegador_zotero_copy_run(
             &conn,
             &data_dir,
             &ConnectorPort::local(),
-            &RunOptions::default(),
+            // A stored Web API key lets an existing item be completed.
+            &RunOptions {
+                web: Some(std::sync::Arc::new(WebApiPort::live())),
+                ..RunOptions::default()
+            },
         )?;
         Ok(report.unwrap_or(DrainReport {
             reachable: true,

@@ -499,6 +499,14 @@
               {#each view.notes as note (note)}
                 <span class="sources__muted">{$currentLocale && t(note)}</span>
               {/each}
+              {#if view.completedKeys.length > 0}
+                <span class="sources__muted">
+                  {$currentLocale &&
+                    t('navegador.zotero.note.web.fields', {
+                      fields: view.completedKeys.map((key) => t(key)).join(', '),
+                    })}
+                </span>
+              {/if}
               {#if zoteroErrorText(copy)}
                 <span class="sources__problem" role="alert">{zoteroErrorText(copy)}</span>
               {/if}

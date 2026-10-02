@@ -15,6 +15,7 @@ import {
   navegadorZoteroRun,
   parseZoteroError,
   type ZoteroCopy,
+  type ZoteroCopyDetail,
 } from './navegador-zotero'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -152,6 +153,54 @@ describe('states', () => {
     )
     expect(created.notes).toEqual(['navegador.zotero.note.pdf.attached'])
     expect(describeCopy(copy({ state: 'copied', detail: null })).notes).toEqual([])
+  })
+
+  describe('what the Web API did for an existing item', () => {
+    const linked = (web: ZoteroCopyDetail['web']) =>
+      describeCopy(
+        copy({
+          state: 'linked',
+          detail: {
+            existing: true,
+            pdf: 'none',
+            pendingFields: [],
+            keptFields: [],
+            web,
+          },
+        })
+      )
+
+    it('says what was completed and that it reaches Zotero after it syncs', () => {
+      const view = linked({ state: 'completed', completed: ['accessDate', 'websiteTitle'] })
+      expect(view.notes).toEqual([
+        'navegador.zotero.note.existing',
+        'navegador.zotero.note.web.completed',
+      ])
+      expect(view.completedKeys).toEqual([
+        'navegador.zotero.field.accessDate',
+        'navegador.zotero.field.websiteTitle',
+      ])
+    })
+
+    it('has a note for each outcome that changed nothing for a reason worth knowing', () => {
+      for (const state of ['nothing_missing', 'conflict', 'failed', 'invalid_key'] as const) {
+        expect(linked({ state, completed: [] }).notes).toContain(
+          `navegador.zotero.note.web.${state}`
+        )
+      }
+    })
+
+    it('says nothing extra without a usable key, as before', () => {
+      for (const state of ['no_key', 'no_write'] as const) {
+        const view = linked({ state, completed: [] })
+        expect(view.notes).toEqual(['navegador.zotero.note.existing'])
+        expect(view.completedKeys).toEqual([])
+      }
+    })
+
+    it('reads a row from before the Web API existed', () => {
+      expect(linked(undefined).completedKeys).toEqual([])
+    })
   })
 
   it('a pdf that was not asked for says nothing', () => {

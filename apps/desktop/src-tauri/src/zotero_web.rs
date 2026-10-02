@@ -194,14 +194,18 @@ pub async fn fetch_key_info(base: &str, key: &str) -> Result<KeyCheck, String> {
         Ok(response) => response,
         Err(_) => return Ok(KeyCheck::Unreachable),
     };
-    match response.status().as_u16() {
-        200 => {
-            let body = response
-                .text()
-                .await
-                .map_err(|_| "Zotero's answer could not be read".to_string())?;
-            parse_key_info(&body).map(KeyCheck::Valid)
-        }
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|_| "Zotero's answer could not be read".to_string())?;
+    classify_key_response(status, &body)
+}
+
+/// What `GET /keys/current` answered, as a verdict on the key.
+pub(crate) fn classify_key_response(status: u16, body: &str) -> Result<KeyCheck, String> {
+    match status {
+        200 => parse_key_info(body).map(KeyCheck::Valid),
         403 | 404 => Ok(KeyCheck::InvalidKey),
         status => Err(format!("Zotero answered HTTP {status}")),
     }
@@ -210,7 +214,6 @@ pub async fn fetch_key_info(base: &str, key: &str) -> Result<KeyCheck, String> {
 /// The stored key and the account it belongs to, for code that writes through
 /// the Web API. `None` until a key is saved *and* verified: verifying is what
 /// learns the user id.
-#[allow(dead_code)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZoteroCredentials {
     pub key: String,
@@ -226,7 +229,6 @@ impl std::fmt::Debug for ZoteroCredentials {
     }
 }
 
-#[allow(dead_code)]
 pub fn stored_credentials(conn: &Connection) -> Option<ZoteroCredentials> {
     let key = get_setting(conn, ZOTERO_API_KEY)?.trim().to_string();
     if key.is_empty() {

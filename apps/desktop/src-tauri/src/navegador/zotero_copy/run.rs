@@ -13,6 +13,7 @@
 //!    so nothing is duplicated.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -24,8 +25,10 @@ use super::plan::{
 };
 use super::port::{PortError, Targets, ZoteroPort};
 use super::store::{self, ZoteroCopy};
+use super::web::{complete_item, Completion, WebLibrary, WebPort};
 use crate::navegador::sources;
 use crate::writing::zotero::{Library, LibraryType};
+use crate::zotero_web::{stored_credentials, KeyCheck};
 
 /// The largest PDF sent to Zotero.
 pub const MAX_PDF_BYTES: u64 = 50 * 1024 * 1024;
@@ -36,6 +39,9 @@ pub struct RunOptions {
     /// How many times the new item is looked for after it was written.
     pub readback_tries: u32,
     pub readback_delay_ms: u64,
+    /// The Web API, when this run may use it to complete an item that already
+    /// exists. `None` keeps the connector-only behaviour.
+    pub web: Option<Arc<dyn WebPort>>,
 }
 
 impl Default for RunOptions {
@@ -43,6 +49,7 @@ impl Default for RunOptions {
         Self {
             readback_tries: 5,
             readback_delay_ms: 1500,
+            web: None,
         }
     }
 }
@@ -303,6 +310,66 @@ fn names(fields: &[&'static str]) -> Value {
     json!(fields)
 }
 
+/// What the Web API did for an existing item.
+struct WebOutcome {
+    /// `completed`, `nothing_missing`, `conflict`, `no_key`, `invalid_key`,
+    /// `no_write` or `failed`.
+    state: &'static str,
+    completed: Vec<&'static str>,
+}
+
+impl WebOutcome {
+    fn of(state: &'static str) -> Self {
+        Self {
+            state,
+            completed: Vec::new(),
+        }
+    }
+}
+
+/// Fills in the fields an existing item lacks, when a stored key is still valid
+/// and may write to that library. Never fails the copy: whatever goes wrong, the
+/// item stays linked and the outcome says what happened.
+fn complete_through_web(
+    conn: &Connection,
+    web: &dyn WebPort,
+    row: &ZoteroCopy,
+    existing: &ExistingItem,
+    ours: &Owned,
+) -> WebOutcome {
+    let Some(credentials) = stored_credentials(conn) else {
+        return WebOutcome::of("no_key");
+    };
+    let info = match web.key_info(&credentials.key) {
+        Ok(KeyCheck::Valid(info)) => info,
+        Ok(KeyCheck::InvalidKey) => return WebOutcome::of("invalid_key"),
+        Ok(KeyCheck::Unreachable) | Err(_) => return WebOutcome::of("failed"),
+    };
+    // The personal library is the account the key belongs to.
+    let (library, writable) = if row.library_type == "group" {
+        (
+            WebLibrary::Group(row.library_id.clone()),
+            info.can_write_group(&row.library_id),
+        )
+    } else if row.library_id == "0" || row.library_id == credentials.user_id.to_string() {
+        (WebLibrary::User(credentials.user_id), info.can_write_user())
+    } else {
+        return WebOutcome::of("no_write");
+    };
+    if !writable {
+        return WebOutcome::of("no_write");
+    }
+    match complete_item(web, &credentials.key, &library, &existing.key, ours) {
+        Ok(Completion::Completed(fields)) => WebOutcome {
+            state: "completed",
+            completed: fields,
+        },
+        Ok(Completion::NothingMissing) => WebOutcome::of("nothing_missing"),
+        Ok(Completion::Conflict) => WebOutcome::of("conflict"),
+        Err(_) => WebOutcome::of("failed"),
+    }
+}
+
 fn attempt(
     conn: &Connection,
     data_dir: &Path,
@@ -322,7 +389,7 @@ fn attempt(
     let ours = owned_from_zotero(&item);
 
     if let Some(existing) = find_existing(port, &library, &urls)?.into_iter().next() {
-        let (pending, kept, pdf_note) = existing_report(
+        let (mut pending, kept, pdf_note) = existing_report(
             conn,
             port,
             &library,
@@ -331,15 +398,24 @@ fn attempt(
             pdf.as_ref().map(|pdf| pdf.sha256.as_str()),
             (&row.source_id, &row.library_type, &row.library_id),
         )?;
+        let mut detail = json!({
+            "existing": true,
+            "pdf": pdf_note,
+            "keptFields": names(&kept),
+        });
+        if let Some(web) = options.web.as_deref() {
+            let outcome = complete_through_web(conn, web, row, &existing, &ours);
+            pending.retain(|field| !outcome.completed.contains(field));
+            detail["web"] = json!({
+                "state": outcome.state,
+                "completed": names(&outcome.completed),
+            });
+        }
+        detail["pendingFields"] = names(&pending);
         return Ok(Done {
             state: store::STATE_LINKED,
             item_key: existing.key,
-            detail: json!({
-                "existing": true,
-                "pdf": pdf_note,
-                "pendingFields": names(&pending),
-                "keptFields": names(&kept),
-            }),
+            detail,
         });
     }
 
@@ -895,6 +971,7 @@ mod tests {
         RunOptions {
             readback_tries: 3,
             readback_delay_ms: 0,
+            ..RunOptions::default()
         }
     }
 
@@ -1448,5 +1525,258 @@ mod tests {
         };
         let error = check_status(&env.conn, &port, "src1", None, &bad).unwrap_err();
         assert!(error.starts_with("invalid_library"), "{error}");
+    }
+
+    // --- Completing an existing item through the Web API ------------------------
+
+    use super::super::web::{Patched, WebError, WebItem, WebLibrary, WebPort};
+    use crate::zotero_web::{GroupAccess, KeyCheck, KeyInfo};
+    use std::sync::{Arc, Mutex};
+
+    const WEB_KEY: &str = "AbCdEf0123456789abcdEFgh";
+
+    struct FakeWeb {
+        key: Result<KeyCheck, WebError>,
+        items: Mutex<Vec<Result<WebItem, WebError>>>,
+        patches: Mutex<Vec<Result<Patched, WebError>>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    fn key_info(personal_write: bool, group_write: bool) -> KeyCheck {
+        KeyCheck::Valid(KeyInfo {
+            user_id: 7,
+            username: "agus".into(),
+            personal_library: true,
+            personal_write,
+            groups: vec![GroupAccess {
+                id: "6680944".into(),
+                library: true,
+                write: group_write,
+                name: None,
+            }],
+        })
+    }
+
+    fn web_with(
+        key: Result<KeyCheck, WebError>,
+        items: Vec<Result<WebItem, WebError>>,
+        patches: Vec<Result<Patched, WebError>>,
+    ) -> Arc<FakeWeb> {
+        Arc::new(FakeWeb {
+            key,
+            items: Mutex::new(items),
+            patches: Mutex::new(patches),
+            calls: Mutex::new(vec![]),
+        })
+    }
+
+    /// The existing item as the Web API returns it.
+    fn web_item(extra: Value) -> Result<WebItem, WebError> {
+        let mut data = hit("OLDKEY22", "webpage")["data"].clone();
+        for (name, value) in extra.as_object().unwrap() {
+            data[name] = value.clone();
+        }
+        Ok(WebItem { version: 4, data })
+    }
+
+    impl WebPort for FakeWeb {
+        fn key_info(&self, _: &str) -> Result<KeyCheck, WebError> {
+            self.calls.lock().unwrap().push("key_info".into());
+            self.key.clone()
+        }
+        fn get_item(&self, _: &str, library: &WebLibrary, item: &str) -> Result<WebItem, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("get {item} {library:?}"));
+            self.items.lock().unwrap().remove(0)
+        }
+        fn patch_item(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            version: u64,
+            body: &Value,
+        ) -> Result<Patched, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("patch {item} v{version} {body}"));
+            self.patches.lock().unwrap().remove(0)
+        }
+    }
+
+    fn store_web_key(env: &Env) {
+        env.conn
+            .execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT OR REPLACE INTO app_settings (key, value) VALUES ('zotero_api_key', '{WEB_KEY}');
+                 INSERT OR REPLACE INTO app_settings (key, value) VALUES ('zotero_user_id', '7');"
+            ))
+            .unwrap();
+    }
+
+    fn existing_port() -> FakePort {
+        let port = FakePort::open();
+        *port.finds.borrow_mut() = VecDeque::from([Ok(vec![hit("OLDKEY22", "webpage")])]);
+        port
+    }
+
+    fn go_web(env: &Env, port: &FakePort, id: &str, web: &Arc<FakeWeb>) -> store::ZoteroCopy {
+        let options = RunOptions {
+            web: Some(web.clone()),
+            ..opts()
+        };
+        run_one(&env.conn, env.data.path(), port, id, &options).unwrap()
+    }
+
+    #[test]
+    fn a_verified_writing_key_completes_the_missing_fields_of_an_existing_item() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(
+            Ok(key_info(true, false)),
+            vec![web_item(json!({}))],
+            vec![Ok(Patched::Done)],
+        );
+        let port = existing_port();
+        let done = go_web(&env, &port, &row.id, &web);
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "completed");
+        assert_eq!(
+            detail["web"]["completed"],
+            json!(["accessDate", "websiteTitle"])
+        );
+        assert_eq!(detail["pendingFields"], json!([]));
+        let calls = web.calls.lock().unwrap().clone();
+        assert_eq!(calls[0], "key_info");
+        assert_eq!(calls[1], "get OLDKEY22 User(7)");
+        assert!(calls[2].starts_with("patch OLDKEY22 v4 "), "{}", calls[2]);
+        // The connector stays out of it: nothing is created or moved.
+        assert!(port.saved.borrow().is_empty() && port.moved.borrow().is_empty());
+    }
+
+    #[test]
+    fn without_a_stored_key_the_copy_behaves_as_before() {
+        let env = env();
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(Ok(key_info(true, true)), vec![], vec![]);
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "no_key");
+        assert_eq!(
+            detail["pendingFields"],
+            json!(["accessDate", "websiteTitle"])
+        );
+        assert!(web.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_key_that_cannot_write_to_that_library_is_left_alone() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(Ok(key_info(false, true)), vec![], vec![]);
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "no_write");
+        assert_eq!(*web.calls.lock().unwrap(), vec!["key_info"]);
+    }
+
+    #[test]
+    fn a_key_zotero_no_longer_recognises_is_reported_as_invalid() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(Ok(KeyCheck::InvalidKey), vec![], vec![]);
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "invalid_key");
+    }
+
+    #[test]
+    fn a_group_item_is_addressed_by_its_group_id() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &group()).unwrap();
+        let web = web_with(
+            Ok(key_info(false, true)),
+            vec![web_item(json!({}))],
+            vec![Ok(Patched::Done)],
+        );
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "completed");
+        assert_eq!(
+            web.calls.lock().unwrap()[1],
+            "get OLDKEY22 Group(\"6680944\")"
+        );
+    }
+
+    #[test]
+    fn nothing_missing_says_so_and_writes_nothing() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let full = json!({"accessDate": "2020-01-01T00:00:00Z", "websiteTitle": "Mine"});
+        let web = web_with(Ok(key_info(true, true)), vec![web_item(full)], vec![]);
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "nothing_missing");
+        assert_eq!(web.calls.lock().unwrap().len(), 2, "key_info and get only");
+    }
+
+    #[test]
+    fn a_conflict_after_the_retry_still_links_the_item() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(
+            Ok(key_info(true, true)),
+            vec![web_item(json!({})), web_item(json!({}))],
+            vec![Ok(Patched::Stale), Ok(Patched::Stale)],
+        );
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "conflict");
+        assert_eq!(
+            detail["pendingFields"],
+            json!(["accessDate", "websiteTitle"])
+        );
+    }
+
+    #[test]
+    fn a_web_api_failure_never_fails_the_copy() {
+        let failures = [
+            web_with(Err(WebError::Unreachable), vec![], vec![]),
+            web_with(
+                Ok(key_info(true, true)),
+                vec![web_item(json!({}))],
+                vec![Err(WebError::Rejected(400))],
+            ),
+        ];
+        for failing in failures {
+            let env = env();
+            store_web_key(&env);
+            let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+            let done = go_web(&env, &existing_port(), &row.id, &failing);
+            assert_eq!(done.state, store::STATE_LINKED);
+            let detail = done.detail.unwrap();
+            assert_eq!(detail["web"]["state"], "failed");
+            assert!(!detail.to_string().contains(WEB_KEY));
+        }
+    }
+
+    #[test]
+    fn a_newly_created_item_never_touches_the_web_api() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(Ok(key_info(true, true)), vec![], vec![]);
+        let done = go_web(&env, &FakePort::open().creating("NEWKEY22"), &row.id, &web);
+        assert_eq!(done.state, store::STATE_COPIED);
+        assert!(web.calls.lock().unwrap().is_empty());
     }
 }

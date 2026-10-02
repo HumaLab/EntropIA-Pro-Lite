@@ -2119,6 +2119,17 @@ const es = {
   'navegador.zotero.note.pdf.already_there': 'El PDF ya estaba adjunto.',
   'navegador.zotero.note.differs':
     'Algunos campos difieren de los de Zotero; se dejaron como están (nunca se pisan).',
+  'navegador.zotero.note.web.completed':
+    'Se completaron campos vacíos del elemento en Zotero a través de la Web API. Llegan a tu Zotero local cuando Zotero sincroniza.',
+  'navegador.zotero.note.web.fields': 'Campos completados: {fields}.',
+  'navegador.zotero.note.web.nothing_missing':
+    'No faltaba ningún campo en Zotero: no se cambió nada.',
+  'navegador.zotero.note.web.conflict':
+    'El elemento cambió en Zotero mientras se completaba y no se modificó. Reintenta la copia.',
+  'navegador.zotero.note.web.invalid_key':
+    'Zotero ya no reconoce la API key guardada: no se completó nada. Revísala en Configuración.',
+  'navegador.zotero.note.web.failed':
+    'No se pudieron completar los campos por la Web API; el elemento quedó enlazado sin cambios.',
   'navegador.zotero.section': 'Copias a Zotero',
   'navegador.zotero.library': 'Biblioteca: {library}',
   'navegador.zotero.openZotero': 'Abrir Zotero',
@@ -4397,6 +4408,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.note.pdf.already_there': 'The PDF was already attached.',
   'navegador.zotero.note.differs':
     'Some fields differ from the ones in Zotero; they were left as they are (never overwritten).',
+  'navegador.zotero.note.web.completed':
+    'Empty fields of the entry were completed in Zotero through the Web API. They reach your local Zotero when Zotero syncs.',
+  'navegador.zotero.note.web.fields': 'Completed fields: {fields}.',
+  'navegador.zotero.note.web.nothing_missing':
+    'No field was missing in Zotero: nothing was changed.',
+  'navegador.zotero.note.web.conflict':
+    'The entry changed in Zotero while it was being completed and was left alone. Retry the copy.',
+  'navegador.zotero.note.web.invalid_key':
+    'Zotero no longer recognises the stored API key: nothing was completed. Check it in Settings.',
+  'navegador.zotero.note.web.failed':
+    'The fields could not be completed through the Web API; the entry was linked unchanged.',
   'navegador.zotero.section': 'Copies to Zotero',
   'navegador.zotero.library': 'Library: {library}',
   'navegador.zotero.openZotero': 'Open Zotero',

@@ -178,6 +178,7 @@
     }
   })
   const notes = $derived(result ? describeCopy(result).notes : [])
+  const completedKeys = $derived(result ? describeCopy(result).completedKeys : [])
 
   async function openInZotero() {
     if (!chosen || !status?.itemKey) return
@@ -241,6 +242,14 @@
     {#each notes as note (note)}
       <p class="zotero-dialog__note">{$currentLocale && t(note)}</p>
     {/each}
+    {#if completedKeys.length > 0}
+      <p class="zotero-dialog__note">
+        {$currentLocale &&
+          t('navegador.zotero.note.web.fields', {
+            fields: completedKeys.map((key) => t(key)).join(', '),
+          })}
+      </p>
+    {/if}
   {:else}
     <p class="zotero-dialog__intro">
       {$currentLocale &&

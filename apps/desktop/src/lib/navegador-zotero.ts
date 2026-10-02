@@ -28,7 +28,27 @@ export type ZoteroCopyDetail = {
   pendingFields: string[]
   /** Fields the person edited in Zotero: never overwritten. */
   keptFields: string[]
+  /** What the Web API did for an existing item; absent on rows from before it. */
+  web?: { state: ZoteroWebState; completed: string[] }
 }
+
+export type ZoteroWebState =
+  | 'completed'
+  | 'nothing_missing'
+  | 'conflict'
+  | 'no_key'
+  | 'invalid_key'
+  | 'no_write'
+  | 'failed'
+
+/** The outcomes that earn a message; no key or no write access says nothing. */
+const WEB_NOTE_STATES: readonly ZoteroWebState[] = [
+  'completed',
+  'nothing_missing',
+  'conflict',
+  'invalid_key',
+  'failed',
+]
 
 export type ZoteroCopy = {
   id: string
@@ -119,6 +139,9 @@ export function describeCopy(copy: ZoteroCopy) {
   if (detail) {
     if (detail.existing) notes.push('navegador.zotero.note.existing')
     if (detail.pdf !== 'none') notes.push(`navegador.zotero.note.pdf.${detail.pdf}`)
+    if (detail.existing && detail.web && WEB_NOTE_STATES.includes(detail.web.state)) {
+      notes.push(`navegador.zotero.note.web.${detail.web.state}`)
+    }
     if (detail.existing && (detail.pendingFields.length > 0 || detail.keptFields.length > 0)) {
       notes.push('navegador.zotero.note.differs')
     }
@@ -132,6 +155,8 @@ export function describeCopy(copy: ZoteroCopy) {
       ? null
       : copy.libraryName?.trim() || `${copy.libraryType}/${copy.libraryId}`,
     notes,
+    /** Labels of the fields the Web API completed. */
+    completedKeys: fieldLabels(detail?.web?.state === 'completed' ? detail.web.completed : []),
     canLaunch: copy.state === 'waiting',
     canCancel: copy.state === 'queued' || copy.state === 'waiting',
     canRetry: copy.state === 'failed' || copy.state === 'cancelled',
@@ -200,17 +225,19 @@ export function navegadorZoteroOpenItem(
 
 const FIELDS = ['title', 'url', 'accessDate', 'websiteTitle']
 
+function fieldLabels(fields: string[]): string[] {
+  return fields
+    .filter((field) => FIELDS.includes(field))
+    .map((field) => `navegador.zotero.field.${field}`)
+}
+
 /** What the dialog shows about a status. Labels are i18n keys. */
 export function describeStatus(status: CopyStatus) {
-  const labels = (fields: string[]) =>
-    fields
-      .filter((field) => FIELDS.includes(field))
-      .map((field) => `navegador.zotero.field.${field}`)
   return {
     present: status.state === 'present' && status.itemKey !== null,
     fromRecord: status.source === 'record',
-    pendingKeys: labels(status.pendingFields),
-    keptKeys: labels(status.keptFields),
+    pendingKeys: fieldLabels(status.pendingFields),
+    keptKeys: fieldLabels(status.keptFields),
     pdfKey:
       status.state === 'present' && status.pdf !== 'none' && status.pdf !== 'unknown'
         ? `navegador.zotero.note.pdf.${status.pdf}`

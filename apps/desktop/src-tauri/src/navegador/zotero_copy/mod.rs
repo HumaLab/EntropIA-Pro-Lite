@@ -14,12 +14,14 @@
 //!
 //! The write path is Zotero's own connector (`/connector/saveItems`,
 //! `updateSession`, `saveAttachment`): it needs Zotero desktop running and no
-//! API key. It can only create. The local API is read-only and no key is stored
-//! in the app, so an item that already exists is found and linked, never
-//! duplicated and never edited; [`plan`] says what would differ.
+//! API key. It can only create. The local API is read-only, so an item that
+//! already exists is found and linked, never duplicated; [`plan`] says what
+//! would differ. With a Web API key stored in Settings that may write to the
+//! library, [`web`] also fills the item's empty fields (never a non-empty one).
 
 pub mod launch;
 pub mod plan;
 pub mod port;
 pub mod run;
 pub mod store;
+pub mod web;
