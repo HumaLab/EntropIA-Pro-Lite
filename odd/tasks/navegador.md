@@ -237,7 +237,7 @@ and capability gating keeps old clients unaffected.
   green against the new server: `research_sync_two_device` 3,
   `writing_sync_two_device` 3, `sync_e2e --ignored` 12. Dev-profile loopback sync:
   `4c80a832` (see "Trying two dev profiles by hand" below).
-- [ ] P3e — User verification on two dev profiles against a local server.
+- [x] P3e — User verification on two dev profiles against a local server.
 
 - [ ] T7 — Repeat the §10 matrix on macOS (WKWebView) and Linux (WebKitGTK).
   Known gaps there: sign-in popups do not close on `window.close()` (wry does
@@ -275,6 +275,18 @@ and capability gating keeps old clients unaffected.
   before `stat`, or have the command return the size.
 
 ## Verification evidence
+
+- 2026-10-02, user's hand run of P3e: two dev profiles (`a`, `b`) against a
+  local `entropia-sync-server` on 127.0.0.1:8787: register in A, sign in to
+  the same account in B, save a page, a selection and a PDF in A, all three
+  (with files) appear in B, deleting a source in B removes it in A — PASS.
+  Found and fixed during the run: the Windows instance guard used one mutex
+  name for every instance (`a11fb107`, per-profile name), and the settings
+  screen always sends the production server, which a dev profile refused, so
+  it could not sign in (`41c0f2b1`, a dev profile signs in to its local
+  server). The refusal itself was seen in the real app before that fix. P3
+  checked. Phase 3 closed pending integration.
+
 
 - 2026-10-01, user's Windows run of P4b/P4c (dev profile): PDF capture copied
   into a new collection, item opens with pages and the article title PASS;
