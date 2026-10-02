@@ -313,7 +313,10 @@ describe('BatchProcessingTab batch controls', () => {
         name: '7 de 10 páginas o fragmentos procesados',
       })
     ).toHaveAttribute('aria-valuenow', '70')
-    expect(screen.getByText('3 de 4 resueltos')).toBeInTheDocument()
+    // Settled tasks are the stats line's to count; the unit total is the one
+    // readout it cannot give.
+    expect(screen.getByText('7 de 10 páginas o fragmentos procesados')).toBeInTheDocument()
+    expect(screen.queryByText('3 de 4 resueltos')).toBeNull()
   })
 
   it('labels known and unknown bibliography totals without presenting unknown work as 0/0', async () => {
@@ -576,8 +579,8 @@ describe('BatchProcessingTab batch controls', () => {
     await fireEvent.click(firstRow)
 
     expect(await screen.findByText('Prioridad: Interactiva')).toBeInTheDocument()
-    const select = await screen.findByRole('combobox', { name: 'Prioridad' })
-    await fireEvent.change(select, { target: { value: '0' } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Prioridad Interactiva' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Fondo' }))
 
     await waitFor(() => {
       expect(priorityArg).toEqual({ batchId: 'b-run', priority: 0, expectedRevision: 2 })

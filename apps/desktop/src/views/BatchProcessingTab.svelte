@@ -133,6 +133,24 @@
     })),
   ])
 
+  // Same reasoning as the state filter: a one-of-three choice drawn with the
+  // app's own menu, never a native <select>.
+  let priorityItems = $derived<ToolbarMenuItem[]>(
+    detail
+      ? [0, 1, 2].map((priority) => {
+          const batch = detail!
+          return {
+            kind: 'radio' as const,
+            id: `priority-${priority}`,
+            label: priorityLabel(priority),
+            checked: batch.priority === priority,
+            disabled: busyBatchId === batch.id,
+            onselect: () => handleSetPriority(batch, priority),
+          }
+        })
+      : []
+  )
+
   let taskFilterLabel = $derived(
     taskStateFilter ? stateLabel(taskStateFilter) : t('batch.filterAll')
   )
@@ -797,18 +815,24 @@
       <div class="batch-tab__priority">
         <p>{priorityText(detail.priority)}</p>
         {#if !isTerminalBatchState(detail.state)}
-          <label>
+          <span class="batch-toolbar__label" id="batch-priority-label">
             {t('batch.priority')}
-            <select
-              value={detail.priority}
-              disabled={busyBatchId === detail.id}
-              onchange={(event) => handleSetPriority(detail!, Number(event.currentTarget.value))}
-            >
-              <option value={0}>{t('batch.priorityBackground')}</option>
-              <option value={1}>{t('batch.priorityHigh')}</option>
-              <option value={2}>{t('batch.priorityInteractive')}</option>
-            </select>
-          </label>
+          </span>
+          <ToolbarMenu label={t('batch.priority')} items={priorityItems}>
+            {#snippet trigger(props, { open })}
+              <button
+                type="button"
+                class="batch-select"
+                class:batch-select--open={open}
+                aria-labelledby="batch-priority-label batch-priority-value"
+                disabled={busyBatchId === detail!.id}
+                {...props}
+              >
+                <span id="batch-priority-value">{priorityLabel(detail!.priority)}</span>
+                <ActionIcon name="chevron-down" size={12} />
+              </button>
+            {/snippet}
+          </ToolbarMenu>
         {/if}
       </div>
 
