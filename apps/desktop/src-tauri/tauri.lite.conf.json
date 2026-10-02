@@ -1,7 +1,7 @@
 {
   "productName": "EntropIA Lite",
   "identifier": "com.entropia.lite",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "app": {
     "security": {
       "assetProtocol": {

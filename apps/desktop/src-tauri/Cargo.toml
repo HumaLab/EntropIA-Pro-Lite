@@ -1,6 +1,6 @@
 [package]
 name = "entropia-pro-desktop"
-version = "1.0.19"
+version = "1.0.20"
 edition = "2021"
 rust-version = "1.88"
 resolver = "3"
