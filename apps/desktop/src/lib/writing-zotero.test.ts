@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { processingSyncBibliographyLibrary } from './batch-processing'
 import { WritingZoteroStore } from './writing-zotero'
 
 /**
@@ -30,6 +31,22 @@ const DARNTON = JSON.stringify({
   issued: { 'date-parts': [[1984]] },
 })
 
+const MOORE = JSON.stringify({
+  id: 'moore1973',
+  type: 'book',
+  title: 'Los orígenes',
+  author: [{ family: 'Moore', given: 'Barrington' }],
+  issued: { 'date-parts': [[1973]] },
+})
+
+const MOORE_ITEM = {
+  key: '37C8RJP8',
+  itemVersion: 9756,
+  libraryType: 'user',
+  libraryId: '0',
+  cslJson: MOORE,
+}
+
 type Answers = Record<string, unknown | ((args: Record<string, unknown>) => unknown)>
 
 /** Answers each command as Zotero and the copy on disk would. */
@@ -49,6 +66,120 @@ const calls = (cmd: string) => mockInvoke.mock.calls.filter(([name]) => name ===
 
 beforeEach(() => {
   mockInvoke.mockReset()
+})
+
+describe('E2b-4 bibliography synchronization IPC', () => {
+  it('forwards the generated request and selected library and returns admission details', async () => {
+    const response = {
+      batchId: 'batch-bibliography',
+      taskId: 'task-bibliography',
+      created: true,
+      requeued: false,
+    }
+    mockInvoke.mockResolvedValue(response as never)
+
+    await expect(
+      processingSyncBibliographyLibrary('request-42', 'group', '6680944')
+    ).resolves.toEqual(response)
+    expect(mockInvoke).toHaveBeenCalledWith('processing_sync_bibliography_library', {
+      requestId: 'request-42',
+      libraryType: 'group',
+      libraryId: '6680944',
+    })
+  })
+})
+
+describe('E2b-4 bibliography synchronization request state', () => {
+  const requested = {
+    batchId: 'batch-bibliography',
+    taskId: 'task-bibliography',
+    created: true,
+    requeued: false,
+  }
+
+  it('requests the selected library once and reports admission without claiming completion', async () => {
+    let release: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd !== 'processing_sync_bibliography_library') {
+        return Promise.reject(new Error(`unexpected ${cmd}`))
+      }
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }) as never)
+    const store = new WritingZoteroStore()
+    store.select('group', '6680944')
+
+    const first = store.requestBibliographySync()
+    const joined = store.requestBibliographySync()
+
+    expect(joined).toBe(first)
+    expect(calls('processing_sync_bibliography_library')).toHaveLength(1)
+    expect(calls('processing_sync_bibliography_library')[0]?.[1]).toEqual({
+      requestId: expect.stringMatching(/\S/),
+      libraryType: 'group',
+      libraryId: '6680944',
+    })
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: true,
+      error: null,
+      requested: null,
+    })
+
+    release(requested)
+    await first
+
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: null,
+      requested,
+    })
+  })
+
+  it('invalidates a late request result after the selection changes', async () => {
+    const releases = new Map<string, (value: unknown) => void>()
+    mockInvoke.mockImplementation(((cmd: string, args: Record<string, unknown>) => {
+      if (cmd !== 'processing_sync_bibliography_library') {
+        return Promise.reject(new Error(`unexpected ${cmd}`))
+      }
+      return new Promise((resolve) => {
+        releases.set(String(args.libraryId), resolve)
+      })
+    }) as never)
+    const store = new WritingZoteroStore()
+    store.select('group', '1')
+
+    const requestA = store.requestBibliographySync()
+    store.select('group', '2')
+    const requestB = store.requestBibliographySync()
+    const requestedB = { ...requested, batchId: 'batch-b', taskId: 'task-b' }
+    releases.get('2')?.(requestedB)
+    await requestB
+
+    releases.get('1')?.(requested)
+    await requestA
+
+    expect(store.snapshot.selection).toEqual({ libraryType: 'group', libraryId: '2' })
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: null,
+      requested: requestedB,
+    })
+  })
+
+  it('exposes request errors separately from direct Zotero mirror errors', async () => {
+    mockInvoke.mockRejectedValue(new Error('catalog unavailable'))
+    const store = new WritingZoteroStore()
+
+    await store.requestBibliographySync()
+
+    expect(store.snapshot.bibliographySync).toEqual({
+      loading: false,
+      error: 'catalog unavailable',
+      requested: null,
+    })
+    expect(store.snapshot.error).toBeNull()
+  })
 })
 
 describe('probing', () => {
@@ -124,7 +255,10 @@ describe('opening the tab', () => {
     await store.connect()
 
     expect(store.snapshot.loaded).toBe(2)
-    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({ library: '0' })
+    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
   })
 
   it('keeps the list as it is when the library did not change', async () => {
@@ -198,6 +332,24 @@ describe('reading what Zotero sent', () => {
     const store = await listed([GINZBURG])
 
     expect(store.snapshot.entries[0]?.csl_json).toBe(GINZBURG)
+  })
+
+  it('keeps native Zotero identity when the CSL id names the work differently', async () => {
+    answer({
+      writing_zotero_cached: { items: [MOORE_ITEM], version: 9756 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(store.snapshot.entries[0]).toMatchObject({
+      key: '37C8RJP8',
+      itemVersion: 9756,
+      libraryType: 'user',
+      libraryId: '0',
+      csl_json: MOORE,
+    })
   })
 
   /** A library item we cannot parse is the library's business, not ours. */
@@ -332,7 +484,8 @@ describe('searching Zotero', () => {
     await store.searchLibrary(' Acha ')
 
     expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_search', {
-      library: '0',
+      libraryType: 'user',
+      libraryId: '0',
       query: 'Acha',
     })
   })
@@ -368,6 +521,26 @@ describe('searching Zotero', () => {
     expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234', 'IJKL9012'])
   })
 
+  it('keeps native Zotero identity on search results with a different CSL id', async () => {
+    const store = await loaded([])
+    // The search result is not in the cached list, so its identity must survive
+    // the connector -> store -> list boundary rather than being inferred from CSL.
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? Promise.resolve({ items: [MOORE_ITEM], version: 9756, total: 1, has_more: false })
+        : Promise.reject(new Error(`unexpected ${cmd}`))) as never)
+
+    await store.searchLibrary('Moore')
+
+    expect(store.snapshot.entries[0]).toMatchObject({
+      key: '37C8RJP8',
+      itemVersion: 9756,
+      libraryType: 'user',
+      libraryId: '0',
+      csl_json: MOORE,
+    })
+  })
+
   /** An answer that arrives after the box moved on answers nothing. */
   it('drops an answer for a search that is no longer in the box', async () => {
     const store = await loaded([])
@@ -393,5 +566,201 @@ describe('searching Zotero', () => {
     await store.searchLibrary('Acha')
 
     expect(store.snapshot.total).toBe(137)
+  })
+})
+
+/**
+ * E1c-1 (TS half): explicit selection with library-keyed stale-response
+ * isolation. RED first: none of this exists yet on the store.
+ */
+describe('E1c-1 library selection', () => {
+  it('defaults to the personal library user/0', async () => {
+    const store = new WritingZoteroStore()
+
+    expect(store.selection).toEqual({ libraryType: 'user', libraryId: '0' })
+  })
+
+  it('sends the current selection to cached and sync', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: AVAILABLE,
+      writing_zotero_sync: unchanged,
+    })
+    const store = new WritingZoteroStore()
+
+    await store.connect()
+
+    expect(calls('writing_zotero_cached')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
+    expect(calls('writing_zotero_sync')[0]?.[1]).toEqual({
+      libraryType: 'user',
+      libraryId: '0',
+    })
+  })
+
+  it('sends the current selection and query to search', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: [], version: 1, total: 0, has_more: false },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    mockInvoke.mockClear()
+
+    store.select('group', '6680944')
+    await store.searchLibrary('Acha')
+
+    expect(mockInvoke).toHaveBeenCalledWith('writing_zotero_search', {
+      libraryType: 'group',
+      libraryId: '6680944',
+      query: 'Acha',
+    })
+  })
+
+  it('changing selection clears library A so B never shows its data', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    expect(store.snapshot.loaded).toBe(1)
+
+    store.select('group', '6680944')
+
+    expect(store.selection).toEqual({ libraryType: 'group', libraryId: '6680944' })
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.total).toBeNull()
+    expect(store.snapshot.query).toBe('')
+  })
+
+  it('discards a late cached view from the previous selection', async () => {
+    let releaseCached: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') {
+        return new Promise((resolve) => {
+          releaseCached = resolve
+        })
+      }
+      if (cmd === 'writing_zotero_probe') return Promise.resolve(AVAILABLE)
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    const store = new WritingZoteroStore()
+
+    const openingA = store.connect()
+    store.select('group', '6680944')
+    releaseCached({ items: [GINZBURG], version: 1 })
+    await openingA
+
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.entries).toEqual([])
+  })
+
+  it('discards a late sync outcome from the previous selection', async () => {
+    let releaseSync: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') return Promise.resolve(NO_COPY)
+      if (cmd === 'writing_zotero_probe') return Promise.resolve(AVAILABLE)
+      if (cmd === 'writing_zotero_sync') {
+        return new Promise((resolve) => {
+          releaseSync = resolve
+        })
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    const store = new WritingZoteroStore()
+
+    const syncingA = store.sync()
+    store.select('group', '6680944')
+    releaseSync(synced([GINZBURG]))
+    await syncingA
+
+    expect(store.snapshot.loaded).toBe(0)
+    expect(store.snapshot.entries).toEqual([])
+  })
+
+  it('does not let the loaded===0 fast path leak across selections', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    expect(store.snapshot.loaded).toBe(2)
+
+    // A slow cached view for B starts while B is empty, then A is reselected
+    // before it answers: the late B view must not wipe the loaded A library.
+    let releaseB: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'writing_zotero_cached') {
+        return new Promise((resolve) => {
+          releaseB = resolve
+        })
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+    store.select('group', '6680944')
+    const openingB = store.connect()
+    store.select('user', '0')
+    // Reselecting A clears it (selection change always clears); what matters
+    // is the stale B answer changes nothing afterwards.
+    releaseB({ items: [GINZBURG], version: 1 })
+    await openingB
+
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.loaded).toBe(0)
+  })
+
+  it('drops a late search answer from another library with the same query', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG, DARNTON], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    let reply: (value: unknown) => void = () => {}
+    mockInvoke.mockReturnValueOnce(
+      new Promise((resolve) => {
+        reply = resolve
+      }) as never
+    )
+
+    const searchingA = store.searchLibrary('Ginzburg')
+    store.select('group', '6680944')
+    reply({ items: [GINZBURG], version: 1, total: 1, has_more: false })
+    await searchingA
+
+    expect(store.snapshot.query).toBe('')
+    expect(store.snapshot.entries).toEqual([])
+    expect(store.snapshot.total).toBeNull()
+  })
+
+  it('reselecting the current library leaves the held list intact', async () => {
+    answer({
+      writing_zotero_cached: { items: [GINZBURG], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+
+    store.select('user', '0')
+
+    expect(store.snapshot.loaded).toBe(1)
+    expect(store.snapshot.entries.map((e) => e.key)).toEqual(['ABCD1234'])
+  })
+
+  it('exposes the selection on the snapshot and never by reference', async () => {
+    const store = new WritingZoteroStore()
+    expect(store.snapshot.selection).toEqual({ libraryType: 'user', libraryId: '0' })
+
+    store.select('group', '6680944')
+    expect(store.snapshot.selection).toEqual({ libraryType: 'group', libraryId: '6680944' })
+
+    store.selection.libraryId = 'hacked'
+    expect(store.selection.libraryId).toBe('6680944')
   })
 })

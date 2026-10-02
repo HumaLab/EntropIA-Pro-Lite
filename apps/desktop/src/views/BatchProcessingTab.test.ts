@@ -40,6 +40,7 @@ function draftSnapshot() {
     planningCursor: 0,
     planningDone: false,
     revision: 0,
+    priority: 0,
     createdAt: 1,
     updatedAt: 1,
     startedAt: null,
@@ -47,6 +48,9 @@ function draftSnapshot() {
     lastError: null,
     membersTotal: 4,
     membersClassified: 1,
+    progressDone: 0,
+    progressTotal: null,
+    progressUnknownTasks: 0,
     tasksByState: [],
     tasksByKind: [],
     collections: [{ id: 'c1', name: 'Legajo 1' }],
@@ -61,7 +65,11 @@ function runningSnapshot() {
     desiredState: 'run',
     planningDone: true,
     revision: 2,
+    priority: 0,
     membersClassified: 4,
+    progressDone: 7,
+    progressTotal: 10,
+    progressUnknownTasks: 0,
     tasksByState: [
       { name: 'pending', count: 1 },
       { name: 'failed', count: 1 },
@@ -110,6 +118,32 @@ function taskDetail() {
       },
     ],
     sharedWithBatches: ['b-run'],
+  }
+}
+
+function bibliographyTask(taskId: string, itemsSeen: number | null, remoteTotal: number | null) {
+  return {
+    taskId,
+    kind: 'bibliography_sync',
+    assetId: `library-${taskId}`,
+    domain: 'bibliography',
+    subjectKind: 'library',
+    subjectId: `library-${taskId}`,
+    state: 'running',
+    stage: '',
+    progressDone: 1,
+    progressTotal: 0,
+    itemsSeen,
+    remoteTotal,
+    outcome: '',
+    attemptCount: 1,
+    retryCycle: 0,
+    nextRetryAt: null,
+    errorCode: null,
+    errorMessage: null,
+    updatedAt: 5,
+    requestState: 'active',
+    dependencyTaskId: null,
   }
 }
 
@@ -240,6 +274,118 @@ describe('BatchProcessingTab batch controls', () => {
       expect.objectContaining({ batchId: 'b-draft' })
     )
     await screen.findByText('Detalle del lote')
+  })
+
+  it('renders durable page/chunk progress with settled tasks as a secondary readout', async () => {
+    const running = runningSnapshot()
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as { states?: string[] } | undefined
+      if (command === 'processing_list_batches') {
+        if (!args?.states?.includes('running')) return { batches: [], nextCursor: null }
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 1,
+              succeededUnits: 2,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return running
+      if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await fireEvent.click(await screen.findByText('b-run'))
+
+    expect(
+      await screen.findByRole('progressbar', {
+        name: '7 de 10 páginas o fragmentos procesados',
+      })
+    ).toHaveAttribute('aria-valuenow', '70')
+    expect(screen.getByText('3 de 4 resueltos')).toBeInTheDocument()
+  })
+
+  it('labels known and unknown bibliography totals without presenting unknown work as 0/0', async () => {
+    const bibliography = {
+      ...draftSnapshot(),
+      id: 'b-bibliography',
+      origin: 'bibliography',
+      state: 'running',
+      desiredState: 'run',
+      operations: ['bibliography_sync'],
+      planningDone: true,
+      // A stale/mismatched read model must not promote bibliography's
+      // page-count numerator over its remote item-count denominator.
+      progressDone: 1,
+      progressTotal: 100,
+      progressUnknownTasks: 0,
+      tasksByState: [{ name: 'running', count: 2 }],
+      tasksByKind: [{ name: 'bibliography_sync', count: 2 }],
+      collections: [],
+    }
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as { states?: string[] } | undefined
+      if (command === 'processing_list_batches') {
+        if (!args?.states?.includes('running')) return { batches: [], nextCursor: null }
+        return {
+          batches: [
+            {
+              id: bibliography.id,
+              state: 'running',
+              desiredState: 'run',
+              operations: ['bibliography_sync'],
+              revision: 1,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 2,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return bibliography
+      if (command === 'processing_list_tasks') {
+        return {
+          tasks: [bibliographyTask('known', 25, 50), bibliographyTask('unknown', 3, null)],
+          nextCursor: null,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await fireEvent.click(await screen.findByText('b-bibliography'))
+
+    expect(await screen.findByRole('progressbar', { name: '0 de 2 resueltos' })).toHaveAttribute(
+      'aria-valuenow',
+      '0'
+    )
+    expect(
+      screen.queryByRole('progressbar', {
+        name: '1 de 100 páginas o fragmentos procesados',
+      })
+    ).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('25 de 50 ítems sincronizados')).toBeInTheDocument()
+    expect(
+      screen.getByLabelText('3 ítems sincronizados; total remoto desconocido')
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Tareas con total de páginas o fragmentos aún desconocido: 2.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('0/0')).not.toBeInTheDocument()
   })
 
   it('pauses a running batch with its revision', async () => {
@@ -388,6 +534,89 @@ describe('BatchProcessingTab batch controls', () => {
         })
       )
     })
+  })
+
+  it('shows the batch priority and changes it through a fenced request', async () => {
+    const running = { ...runningSnapshot(), priority: 2 }
+    let priorityArg: unknown = null
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              priority: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return running
+      if (command === 'processing_list_tasks') return { tasks: [failedTask()], nextCursor: null }
+      if (command === 'processing_set_priority') {
+        priorityArg = (rest[0] as { request: unknown }).request
+        running.priority = 0
+        return running
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    const [firstRow] = await screen.findAllByText('b-run')
+    if (!firstRow) throw new Error('expected a batch row')
+    await fireEvent.click(firstRow)
+
+    expect(await screen.findByText('Prioridad: Interactiva')).toBeInTheDocument()
+    const select = await screen.findByRole('combobox', { name: 'Prioridad' })
+    await fireEvent.change(select, { target: { value: '0' } })
+
+    await waitFor(() => {
+      expect(priorityArg).toEqual({ batchId: 'b-run', priority: 0, expectedRevision: 2 })
+    })
+    expect(await screen.findByText('Prioridad: Fondo')).toBeInTheDocument()
+  })
+
+  it('discloses that an in-flight unit may finish on cancel', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') {
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 2,
+              activeUnits: 1,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findAllByText('b-run')
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+
+    expect(await screen.findByRole('heading', { name: 'Cancelar lote' })).toBeInTheDocument()
+    expect(
+      screen.getByText(/la unidad en curso puede terminarse/i, { exact: false })
+    ).toBeInTheDocument()
   })
 })
 

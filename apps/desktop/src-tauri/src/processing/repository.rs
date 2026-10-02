@@ -10,6 +10,7 @@
 //! `read_snapshot` (those arrive in Unidades 2–3).
 
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 /// Migration that creates the processing tables. The frontend
 /// `runMigrations()` applies it; the backend never runs DDL itself — it only
@@ -217,11 +218,80 @@ pub struct AdmitOutcome {
     pub created: bool,
 }
 
-fn live_task(conn: &Connection, kind: &str, asset_id: &str) -> Result<Option<String>, String> {
+/// Result of one manual bibliography-library demand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BibliographyDemandOutcome {
+    pub batch_id: String,
+    pub task_id: String,
+    /// True only when this demand minted the physical scheduler task.
+    pub created: bool,
+    /// True when explicit demand made interrupted, blocked, or failed work
+    /// runnable again.
+    pub requeued: bool,
+}
+
+/// Stable contract hash pinned on every E2b-1 bibliography library sync task.
+///
+/// E2b-2 (claim/execute) and E2b-3 (gates/reconciliation) will formalize the
+/// executor contract (input shape, versioning, invalidation); until then this
+/// constant lets those slices detect pre-contract rows by plain equality and
+/// lets E2b-1 admission stay conservative without inventing per-row terms.
+pub const BIBLIOGRAPHY_SYNC_CONTRACT: &str = "bibliography_sync/v1";
+/// Pinned contract of every native extraction task: the extractor identity
+/// (whole-document pdf-extract text, E4a-WU2). Versioned so a future
+/// extractor change re-evaluates queued work instead of mixing outputs.
+pub const BIBLIOGRAPHY_EXTRACT_CONTRACT: &str = "bibliography-extract-v1";
+
+/// Explicit subject identity for one work unit (E2a-3 wrapper/core, E2b-1 bibliography arm).
+///
+/// Corpus (`corpus`/`asset`) is the pre-E2b path. E2b-1 opens one bibliography
+/// arm: `bibliography`/`library` keyed by the internal `zotero_libraries.id`
+/// row id (never the external Zotero id), admitted only as `bibliography_sync`
+/// after the library row is proven to exist. The subject-explicit
+/// core ([`admit_subject_or_attach`]) rejects anything else honestly with
+/// `unsupported_subject` — never a silent corpus fallback. The legacy
+/// [`admit_or_attach`] wrapper stays corpus-only by construction and
+/// delegates to the core with `corpus`/`asset`/`<asset id>` literals, so
+/// external callers (lib/nlp/ocr/transcription) need no change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSubject {
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+}
+
+impl TaskSubject {
+    pub fn corpus_asset(asset_id: &str) -> Self {
+        Self {
+            domain: "corpus".to_string(),
+            subject_kind: "asset".to_string(),
+            subject_id: asset_id.to_string(),
+        }
+    }
+
+    fn check_admittable(&self) -> Result<(), String> {
+        if self.domain != "corpus" || self.subject_kind != "asset" || self.subject_id.is_empty() {
+            return Err(format!(
+                "unsupported_subject: domain='{}' subject_kind='{}' is not admittable in E2a (corpus/asset only)",
+                self.domain, self.subject_kind
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn live_task(
+    conn: &Connection,
+    domain: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    kind: &str,
+) -> Result<Option<String>, String> {
     use rusqlite::OptionalExtension as _;
     // Single source of truth with TERMINAL_TASK_STATES: the literals below
-    // must stay in sync with the partial unique index, so they are built
-    // from the constant instead of repeated by hand.
+    // must stay in sync with the composite partial unique
+    // (idx_processing_tasks_subject_active_unique, E2a-2 cutover), so they
+    // are built from the constant instead of repeated by hand.
     let excluded = TERMINAL_TASK_STATES
         .iter()
         .map(|state| format!("'{state}'"))
@@ -229,13 +299,15 @@ fn live_task(conn: &Connection, kind: &str, asset_id: &str) -> Result<Option<Str
         .join(", ");
     conn.query_row(
         &format!(
-            "SELECT id FROM processing_tasks WHERE kind = ?1 AND asset_id_snapshot = ?2 AND state NOT IN ({excluded})"
+            "SELECT id FROM processing_tasks WHERE domain = ?1 AND subject_kind = ?2 AND subject_id = ?3 AND kind = ?4 AND state NOT IN ({excluded})"
         ),
-        rusqlite::params![kind, asset_id],
+        rusqlite::params![domain, subject_kind, subject_id, kind],
         |row| row.get(0),
     )
     .optional()
-    .map_err(|e| format!("Failed to look up live {kind} task for {asset_id}: {e}"))
+    .map_err(|e| {
+        format!("Failed to look up live {kind} task for {domain}/{subject_kind}/{subject_id}: {e}")
+    })
 }
 
 fn link_batch_task(
@@ -246,11 +318,47 @@ fn link_batch_task(
     asset_id: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<(), String> {
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        task_id,
+        kind,
+        asset_id,
+        "corpus",
+        "asset",
+        asset_id,
+        dependency_task_id,
+    )
+}
+
+/// Subject-explicit link (E2b-1): the corpus wrapper above delegates with
+/// `corpus`/`asset` literals; bibliography admission passes its own subject
+/// with the library row id as the opaque `asset_id_snapshot` compat value.
+fn link_batch_task_subject(
+    conn: &Connection,
+    batch_id: &str,
+    task_id: &str,
+    kind: &str,
+    asset_snapshot: &str,
+    domain: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    dependency_task_id: Option<&str>,
+) -> Result<(), String> {
     conn.execute(
         "INSERT OR IGNORE INTO processing_batch_tasks
-           (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id)
-         VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
-        rusqlite::params![batch_id, task_id, kind, asset_id, dependency_task_id],
+           (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state, dependency_task_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
+        rusqlite::params![
+            batch_id,
+            task_id,
+            kind,
+            asset_snapshot,
+            domain,
+            subject_kind,
+            subject_id,
+            dependency_task_id
+        ],
     )
     .map_err(|e| format!("Failed to link task {task_id} to batch {batch_id}: {e}"))?;
     Ok(())
@@ -266,16 +374,59 @@ fn link_batch_task(
 // else and add a type with exactly one caller, so the lint is acknowledged and
 // declined rather than worked around.
 #[allow(clippy::too_many_arguments)]
-pub fn admit_or_attach(
+/// Subject-explicit admission core (E2a-3 wrapper/core, E2b-1 bibliography arm).
+///
+/// Corpus (`corpus`/`asset` with `ocr`/`embedding`) follows the pre-E2b-1 logic
+/// verbatim, keyed by the subject id. Bibliography (`bibliography`/`library`
+/// with `bibliography_sync`) delegates to the library arm below, which admits
+/// only after proving the `zotero_libraries` row exists. Anything else fails
+/// honestly with `unsupported_subject` — never a silent corpus fallback.
+#[allow(clippy::too_many_arguments)]
+pub fn admit_subject_or_attach(
     conn: &Connection,
     batch_id: &str,
     kind: &str,
-    asset_id: &str,
+    subject: &TaskSubject,
     input_revision: i64,
     input_fingerprint: &str,
     contract_hash: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
+    if subject.domain == "bibliography" {
+        if subject.subject_kind == "attachment" {
+            return admit_bibliography_attachment_extract_or_attach(
+                conn,
+                batch_id,
+                kind,
+                subject,
+                dependency_task_id,
+            );
+        }
+        if subject.subject_kind == "item" {
+            return admit_bibliography_item_profile_or_attach(
+                conn,
+                batch_id,
+                kind,
+                subject,
+                dependency_task_id,
+            );
+        }
+        return admit_bibliography_library_or_attach(
+            conn,
+            batch_id,
+            kind,
+            subject,
+            dependency_task_id,
+        );
+    }
+    subject.check_admittable()?;
+    if kind != "ocr" && kind != "embedding" {
+        return Err(format!(
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding only)",
+            subject.domain, subject.subject_kind
+        ));
+    }
+    let asset_id = subject.subject_id.as_str();
     if kind == "embedding" {
         let origin: String = conn
             .query_row(
@@ -295,7 +446,7 @@ pub fn admit_or_attach(
             })?;
         }
     }
-    if let Some(task_id) = live_task(conn, kind, asset_id)? {
+    if let Some(task_id) = live_task(conn, "corpus", "asset", asset_id, kind)? {
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
         return Ok(AdmitOutcome {
             task_id,
@@ -312,8 +463,8 @@ pub fn admit_or_attach(
     let inserted = conn
         .execute(
             "INSERT OR IGNORE INTO processing_tasks
-               (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'corpus', 'asset', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
             rusqlite::params![
                 task_id,
                 kind,
@@ -328,7 +479,10 @@ pub fn admit_or_attach(
     if inserted == 0 {
         // Lost a race with a concurrent admitter (or a terminal row for the
         // same unit exists): fall back to the live row when there is one.
-        if let Some(existing) = live_task(conn, kind, asset_id)? {
+        // Single-flight now rests on the composite partial unique
+        // (E2a-2 cutover), so only the same subject identity collides here —
+        // a foreign-domain row sharing the snapshot string never does.
+        if let Some(existing) = live_task(conn, "corpus", "asset", asset_id, kind)? {
             link_batch_task(
                 conn,
                 batch_id,
@@ -353,16 +507,600 @@ pub fn admit_or_attach(
     })
 }
 
-/// Admits automatic embedding repair only when the same source revision was
-/// not explicitly cancelled and no user/manual request already owns it.
-pub fn admit_repair_or_attach(
+/// Bibliography library admission arm (E2b-1).
+///
+/// Accepts ONLY `bibliography`/`library`/`<zotero_libraries.id>` with
+/// `kind == bibliography_sync`, and ONLY after the library row is proven to
+/// exist via `bibliography::repository::library_row_exists` — a missing row
+/// fails honestly with `unknown_library`, never a silent corpus fallback and
+/// never an admitted orphan. The internal library row id doubles as the
+/// `asset_id_snapshot` compat value: it is opaque to bibliography (never
+/// interpreted as an asset) and exists only so the pre-E2b-1 corpus code
+/// paths that read the snapshot column keep working byte-identically.
+///
+/// Pins are conservative and caller-independent: `input_revision` is the
+/// library's `last_modified_version` (0 when NULL), the fingerprint is
+/// `library|<id>|<version>`, and the contract is [`BIBLIOGRAPHY_SYNC_CONTRACT`]
+/// (stable for E2b-2/3 to formalize). Caller-supplied revision/fingerprint/
+/// contract arguments are intentionally NOT plumbed here — the core takes none
+/// — so a stale caller can never pin a bibliography task to foreign terms.
+/// Admitted tasks sit `pending` (or `blocked` with a dependency); E2b-2
+/// makes them claimable through their own kind (`bibliography_sync`) while
+/// corpus-only registries still never see them.
+fn admit_bibliography_library_or_attach(
     conn: &Connection,
     batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if subject.subject_kind != "library" || subject.subject_id.is_empty() {
+        return Err(format!(
+            "unsupported_subject: domain='{}' subject_kind='{}' is not admittable in E2b-1 (bibliography/library only)",
+            subject.domain, subject.subject_kind
+        ));
+    }
+    if kind != "bibliography_sync" {
+        return Err(format!(
+            "unsupported_subject: domain='bibliography' subject_kind='library' kind='{kind}' is not admittable in E2b-1 (bibliography_sync only)"
+        ));
+    }
+    let library_id = subject.subject_id.as_str();
+    let exists = crate::bibliography::repository::library_row_exists(conn, library_id)
+        .map_err(|error| format!("Failed to check bibliography library: {error}"))?;
+    if !exists {
+        return Err(format!(
+            "unknown_library: no zotero_libraries row for '{library_id}'"
+        ));
+    }
+    let pin = crate::bibliography::repository::library_sync_pin(conn, library_id)
+        .map_err(|error| format!("Failed to read bibliography library pin: {error}"))?;
+    // Existence was just proven, so `None` here is only a lost race with a
+    // concurrent deleter: stay honest instead of pinning a phantom row.
+    let Some(version_nullable) = pin else {
+        return Err(format!(
+            "unknown_library: no zotero_libraries row for '{library_id}'"
+        ));
+    };
+    let version = version_nullable.unwrap_or(0);
+    let fingerprint = format!("library|{library_id}|{version}");
+    if let Some(task_id) = live_task(conn, "bibliography", "library", library_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            library_id,
+            "bibliography",
+            "library",
+            library_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'library', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![
+                task_id,
+                kind,
+                library_id,
+                version,
+                fingerprint,
+                BIBLIOGRAPHY_SYNC_CONTRACT,
+                state
+            ],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for library {library_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "library", library_id, kind)? {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                library_id,
+                "bibliography",
+                "library",
+                library_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for library {library_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        library_id,
+        "bibliography",
+        "library",
+        library_id,
+        dependency_task_id,
+    )?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// E4a-WU2: per-attachment native extraction demand. Single-flight on
+/// (bibliography, attachment, <attachment row id>, bibliography_extract).
+/// The input pin names the source file identity (mtime/size) at admission
+/// time, and the contract is the extractor identity — a replaced file or a
+/// new extractor makes in-flight work re-evaluate instead of publishing a
+/// stale text.
+fn admit_bibliography_attachment_extract_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if kind != "bibliography_extract" {
+        return Err(format!(
+            "unsupported_subject: domain='bibliography' subject_kind='attachment' kind='{kind}' is not admittable (bibliography_extract only)"
+        ));
+    }
+    if subject.subject_id.is_empty() {
+        return Err(
+            "unsupported_subject: a bibliography attachment subject needs a non-empty attachment row id"
+                .to_string(),
+        );
+    }
+    let attachment_id = subject.subject_id.as_str();
+    let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+        .map_err(|error| format!("Failed to check bibliography attachment: {error}"))?
+        .ok_or_else(|| {
+            format!("unknown_attachment: no zotero_attachments row for '{attachment_id}'")
+        })?;
+    let fingerprint = attachment_extraction_fingerprint(&attachment);
+    if let Some(task_id) = live_task(conn, "bibliography", "attachment", attachment_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            attachment_id,
+            "bibliography",
+            "attachment",
+            attachment_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'attachment', ?3, 0, ?4, ?5, ?6, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![
+                task_id,
+                kind,
+                attachment_id,
+                fingerprint,
+                BIBLIOGRAPHY_EXTRACT_CONTRACT,
+                state
+            ],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for attachment {attachment_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "attachment", attachment_id, kind)?
+        {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                attachment_id,
+                "bibliography",
+                "attachment",
+                attachment_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for attachment {attachment_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        attachment_id,
+        "bibliography",
+        "attachment",
+        attachment_id,
+        dependency_task_id,
+    )?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// Source file identity pinned on extraction tasks: the catalog's mtime
+/// and native version. The commit gate re-reads both, so a replaced file
+/// surfaces as `source_changed` instead of a stale text.
+fn attachment_extraction_fingerprint(
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> String {
+    format!(
+        "attachment|{}|mtime:{}|version:{}",
+        attachment.attachment_id,
+        attachment
+            .mtime
+            .map(|mtime| mtime.to_string())
+            .unwrap_or_default(),
+        attachment
+            .native_version
+            .map(|version| version.to_string())
+            .unwrap_or_default()
+    )
+}
+
+/// E3b-WU2: per-work profile demand. Single-flight on
+/// (bibliography, item, <item row id>, bibliography_profile); the input pin
+/// is the profile hash at admission time and the contract is the effective
+/// embedding contract, so a metadata edit or a model switch makes the
+/// in-flight work re-evaluate instead of publishing a stale space.
+fn admit_bibliography_item_profile_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
+    subject: &TaskSubject,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    if kind != "bibliography_profile" {
+        return Err(format!(
+            "unsupported_subject: domain=bibliography subject_kind=item kind={kind} is not admittable (bibliography_profile only)"
+        ));
+    }
+    if subject.subject_id.is_empty() {
+        return Err(
+            "unsupported_subject: a bibliography item subject needs a non-empty item row id"
+                .to_string(),
+        );
+    }
+    let item_id = subject.subject_id.as_str();
+    let exists = crate::bibliography::repository::bibliographic_item_exists(conn, item_id)
+        .map_err(|error| format!("Failed to check bibliography item: {error}"))?;
+    if !exists {
+        return Err(format!(
+            "unknown_item: no bibliographic_items row for {item_id}"
+        ));
+    }
+    let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+        .map_err(|error| {
+            format!(
+                "Failed to read profile input: {}: {}",
+                error.code, error.message
+            )
+        })?
+        .ok_or_else(|| format!("unknown_item: no bibliographic_items row for {item_id}"))?;
+    let fingerprint = crate::bibliography::profile::profile_input_hash(
+        &crate::bibliography::profile::build_profile(&input).canonical_text,
+    );
+    let revision: i64 = conn
+        .query_row(
+            "SELECT COALESCE(item_version, 0) FROM bibliographic_items WHERE id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read item version of {item_id}: {e}"))?;
+    let contract = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
+    if let Some(task_id) = live_task(conn, "bibliography", "item", item_id, kind)? {
+        link_batch_task_subject(
+            conn,
+            batch_id,
+            &task_id,
+            kind,
+            item_id,
+            "bibliography",
+            "item",
+            item_id,
+            dependency_task_id,
+        )?;
+        return Ok(AdmitOutcome {
+            task_id,
+            created: false,
+        });
+    }
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let state = if dependency_task_id.is_some() {
+        "blocked"
+    } else {
+        "pending"
+    };
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'bibliography', 'item', ?3, ?4, ?5, ?6, ?7, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
+            rusqlite::params![task_id, kind, item_id, revision, fingerprint, contract, state],
+        )
+        .map_err(|e| format!("Failed to admit {kind} task for item {item_id}: {e}"))?;
+    if inserted == 0 {
+        if let Some(existing) = live_task(conn, "bibliography", "item", item_id, kind)? {
+            link_batch_task_subject(
+                conn,
+                batch_id,
+                &existing,
+                kind,
+                item_id,
+                "bibliography",
+                "item",
+                item_id,
+                dependency_task_id,
+            )?;
+            return Ok(AdmitOutcome {
+                task_id: existing,
+                created: false,
+            });
+        }
+        return Err(format!(
+            "A terminal {kind} task already exists for item {item_id}; requeue it through an explicit retry"
+        ));
+    }
+    link_batch_task_subject(
+        conn,
+        batch_id,
+        &task_id,
+        kind,
+        item_id,
+        "bibliography",
+        "item",
+        item_id,
+        dependency_task_id,
+    )?;
+    Ok(AdmitOutcome {
+        task_id,
+        created: true,
+    })
+}
+
+/// Resolves one external Zotero namespace and admits its manual sync demand
+/// into the long-lived bibliography system batch.
+///
+/// External `(library_type, library_id)` values are deliberately not task
+/// identities: exactly one catalog row must own that namespace before its
+/// internal `zotero_libraries.id` becomes the scheduler subject. A missing or
+/// cross-connection duplicate namespace fails honestly instead of selecting a
+/// connection by row order. Repeated demand attaches to the one live physical
+/// task through [`admit_subject_or_attach`]. A fresh demand requeues
+/// interrupted/blocked work, opens a new retry cycle for failed work, and
+/// leaves `retry_wait` on its durable backoff instead of bypassing it.
+pub fn admit_bibliography_sync_demand(
+    conn: &Connection,
+    library_type: &str,
+    library_id: &str,
+) -> Result<BibliographyDemandOutcome, String> {
+    if library_type != "user" && library_type != "group" {
+        return Err(format!(
+            "invalid_library: unknown Zotero library type '{library_type}'"
+        ));
+    }
+    if library_id.trim().is_empty() {
+        return Err("invalid_library: the library id must not be empty".to_string());
+    }
+
+    let library_rows = {
+        let mut statement = conn
+            .prepare(
+                "SELECT id FROM zotero_libraries
+                 WHERE library_type = ?1 AND library_id = ?2
+                 ORDER BY id LIMIT 2",
+            )
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?;
+        let rows = statement
+            .query_map(rusqlite::params![library_type, library_id], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to resolve Zotero library namespace: {error}"))?;
+        rows
+    };
+    let library_row_id = match library_rows.as_slice() {
+        [] => {
+            return Err(format!(
+                "unknown_library: no catalog row for {library_type}/{library_id}"
+            ))
+        }
+        [library_row_id] => library_row_id.clone(),
+        _ => {
+            return Err(format!(
+                "ambiguous_library: more than one catalog row owns {library_type}/{library_id}"
+            ))
+        }
+    };
+
+    conn.execute_batch("SAVEPOINT bibliography_manual_demand")
+        .map_err(|error| format!("Failed to begin bibliography demand: {error}"))?;
+    let demanded = (|| {
+        use rusqlite::OptionalExtension as _;
+
+        let batch_id = ensure_system_batch(conn, "bibliography")?;
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: library_row_id.clone(),
+        };
+        let live = live_task(
+            conn,
+            "bibliography",
+            "library",
+            &library_row_id,
+            "bibliography_sync",
+        )?;
+        if live.is_none() {
+            let latest: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT id, state FROM processing_tasks
+                     WHERE domain = 'bibliography' AND subject_kind = 'library'
+                       AND subject_id = ?1 AND kind = 'bibliography_sync'
+                     ORDER BY rowid DESC LIMIT 1",
+                    [&library_row_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| {
+                    format!("Failed to inspect prior bibliography demand: {error}")
+                })?;
+            if let Some((task_id, _)) = latest.filter(|(_, state)| state == "failed") {
+                link_batch_task_subject(
+                    conn,
+                    &batch_id,
+                    &task_id,
+                    "bibliography_sync",
+                    &library_row_id,
+                    "bibliography",
+                    "library",
+                    &library_row_id,
+                    None,
+                )?;
+                let reopened = retry_failed(conn, &batch_id, Some(&task_id))?;
+                if reopened != 1 {
+                    return Err(format!(
+                        "invalid_transition: failed bibliography task {task_id} was not reopened"
+                    ));
+                }
+                return Ok(BibliographyDemandOutcome {
+                    batch_id,
+                    task_id,
+                    created: false,
+                    requeued: true,
+                });
+            }
+        }
+
+        let admitted = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_sync",
+            &subject,
+            0,
+            "",
+            "",
+            None,
+        )?;
+        let requeued = !admitted.created
+            && conn
+                .execute(
+                    "UPDATE processing_tasks SET state = 'pending', outcome = '',
+                       owner_session = NULL, next_retry_at = NULL,
+                       last_error_code = NULL, last_error_message = NULL,
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1 AND state IN ('interrupted', 'blocked')",
+                    [&admitted.task_id],
+                )
+                .map_err(|error| {
+                    format!(
+                        "Failed to requeue interrupted bibliography task {}: {error}",
+                        admitted.task_id
+                    )
+                })?
+                == 1;
+        Ok(BibliographyDemandOutcome {
+            batch_id,
+            task_id: admitted.task_id,
+            created: admitted.created,
+            requeued,
+        })
+    })();
+    match demanded {
+        Ok(outcome) => {
+            conn.execute_batch("RELEASE bibliography_manual_demand")
+                .map_err(|error| format!("Failed to commit bibliography demand: {error}"))?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO bibliography_manual_demand; RELEASE bibliography_manual_demand",
+            );
+            Err(error)
+        }
+    }
+}
+
+/// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
+///
+/// External callers (lib/nlp/ocr/transcription) stay on this signature: it
+/// passes the explicit `corpus`/`asset`/`<asset id>` literals to the core,
+/// so no silent fallback is possible and no outside file changes.
+#[allow(dead_code)]
+// One argument per column, which is what a persistence function for this row
+// looks like. Bundling them into a struct would move the same fields somewhere
+// else and add a type with exactly one caller, so the lint is acknowledged and
+// declined rather than worked around.
+#[allow(clippy::too_many_arguments)]
+pub fn admit_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    kind: &str,
     asset_id: &str,
     input_revision: i64,
     input_fingerprint: &str,
     contract_hash: &str,
+    dependency_task_id: Option<&str>,
+) -> Result<AdmitOutcome, String> {
+    admit_subject_or_attach(
+        conn,
+        batch_id,
+        kind,
+        &TaskSubject::corpus_asset(asset_id),
+        input_revision,
+        input_fingerprint,
+        contract_hash,
+        dependency_task_id,
+    )
+}
+
+/// Repair core over an explicit subject (E2a-3): same validation as
+/// [`admit_subject_or_attach`] — only `corpus`/`asset` proceeds, anything
+/// else fails with `unsupported_subject` before touching repair state.
+pub fn admit_repair_subject_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    subject: &TaskSubject,
+    input_revision: i64,
+    input_fingerprint: &str,
+    contract_hash: &str,
 ) -> Result<Option<AdmitOutcome>, String> {
+    subject.check_admittable()?;
+    let asset_id = subject.subject_id.as_str();
     let origin: String = conn
         .query_row(
             "SELECT origin FROM processing_batches WHERE id = ?1",
@@ -375,7 +1113,7 @@ pub fn admit_repair_or_attach(
             "invalid_selection: batch {batch_id} is not a repair batch"
         ));
     }
-    if live_task(conn, "embedding", asset_id)?.is_some() {
+    if live_task(conn, "corpus", "asset", asset_id, "embedding")?.is_some() {
         return Ok(None);
     }
     let suppressed: Option<i64> = conn
@@ -393,17 +1131,39 @@ pub fn admit_repair_or_attach(
     if suppressed == Some(input_revision) {
         return Ok(None);
     }
-    admit_or_attach(
+    admit_subject_or_attach(
         conn,
         batch_id,
         "embedding",
-        asset_id,
+        subject,
         input_revision,
         input_fingerprint,
         contract_hash,
         None,
     )
     .map(Some)
+}
+
+/// Admits automatic embedding repair only when the same source revision was
+/// not explicitly cancelled and no user/manual request already owns it.
+/// Corpus-only wrapper: delegates to [`admit_repair_subject_or_attach`] with
+/// explicit `corpus`/`asset` literals so external callers stay untouched.
+pub fn admit_repair_or_attach(
+    conn: &Connection,
+    batch_id: &str,
+    asset_id: &str,
+    input_revision: i64,
+    input_fingerprint: &str,
+    contract_hash: &str,
+) -> Result<Option<AdmitOutcome>, String> {
+    admit_repair_subject_or_attach(
+        conn,
+        batch_id,
+        &TaskSubject::corpus_asset(asset_id),
+        input_revision,
+        input_fingerprint,
+        contract_hash,
+    )
 }
 
 /// Cheap identity of the OCR input: asset id, stored path, and byte size.
@@ -589,6 +1349,15 @@ pub fn control_batch(
                     [batch_id],
                 )
                 .map_err(|e| format!("Failed to flip links of {batch_id}: {e}"))?;
+                // A cancelled batch keeps no scheduling priority: if it is
+                // ever revived through resume, it re-enters as background.
+                conn.execute(
+                    "UPDATE processing_batches SET priority = 0,
+                       updated_at = strftime('%s', 'now') * 1000
+                     WHERE id = ?1",
+                    [batch_id],
+                )
+                .map_err(|e| format!("Failed to reset priority of {batch_id}: {e}"))?;
                 cancel_orphaned_tasks(conn)?;
                 maybe_finalize_batch(conn, batch_id)?;
             }
@@ -607,13 +1376,296 @@ pub fn control_batch(
         }
     }
 }
+/// Sets one batch's scheduling priority (0 = background, 1 = high,
+/// 2 = interactive). Revision-fenced like [control_batch]: callers display
+/// the snapshot revision and send it back. Out-of-range values, unknown
+/// batches, and terminal batches fail closed without touching the row.
+pub fn set_batch_priority(
+    conn: &Connection,
+    batch_id: &str,
+    priority: i64,
+    expected_revision: Option<i64>,
+) -> Result<(), String> {
+    if !(0..=2).contains(&priority) {
+        return Err(format!(
+            "invalid_selection: priority {priority} is outside 0..=2 (0 = background, 1 = high, 2 = interactive)"
+        ));
+    }
+    let row: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT state, revision FROM processing_batches WHERE id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!("Failed to read batch {batch_id}: {other}")),
+        })?;
+    let Some((state, revision)) = row else {
+        return Err(format!("invalid_selection: unknown batch {batch_id}"));
+    };
+    if let Some(expected) = expected_revision {
+        if expected != revision {
+            return Err(format!(
+                "revision_conflict: batch {batch_id} is at revision {revision}, not {expected}"
+            ));
+        }
+    }
+    if ["completed", "completed_with_errors", "cancelled"].contains(&state.as_str()) {
+        return Err(format!(
+            "invalid_transition: batch {batch_id} is already {state}"
+        ));
+    }
+    conn.execute(
+        "UPDATE processing_batches SET priority = ?1,
+           updated_at = strftime('%s', 'now') * 1000, revision = revision + 1
+         WHERE id = ?2",
+        rusqlite::params![priority, batch_id],
+    )
+    .map_err(|e| format!("Failed to set priority on {batch_id}: {e}"))?;
+    Ok(())
+}
+
+/// Starvation bound for background batches (E2c-WU3): promotes background
+/// batches whose oldest runnable unit has waited longer than
+/// [PRIORITY_AGING_STARVE_MS] to high. Capped at 1 and idempotent — a
+/// second pass matches nothing — and interactive batches are never touched.
+/// Returns how many batches were promoted.
+pub const PRIORITY_AGING_STARVE_MS: i64 = 30 * 60 * 1000;
+
+pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, String> {
+    let promoted = conn
+        .execute(
+            "UPDATE processing_batches SET priority = 1,
+               updated_at = ?1, revision = revision + 1
+             WHERE priority = 0 AND state IN ('running', 'ready') AND desired_state = 'run'
+               AND EXISTS (
+                     SELECT 1 FROM processing_batch_tasks l
+                     JOIN processing_tasks t ON t.id = l.task_id
+                     WHERE l.batch_id = processing_batches.id
+                       AND l.request_state = 'active'
+                       AND t.state IN ('pending', 'retry_wait')
+                       AND t.created_at <= ?2)",
+            rusqlite::params![now_ms, now_ms - PRIORITY_AGING_STARVE_MS],
+        )
+        .map_err(|e| format!("Failed to age batch priorities: {e}"))?;
+    Ok(promoted)
+}
+
+/// E3b-WU3: chains profile demand at sync success. For every live catalog
+/// work of the library whose profile is missing or whose canonical text
+/// moved, admits (or attaches to shared) a profile task inside the caller
+/// transaction — the sync commit owns the surround, so a committed sync
+/// never loses its reindex follow-up to a crash. Unchanged works get
+/// nothing: no revision churn, no re-embedding of identical text. A stale
+/// hash always mints a new task because terminal profile history is never
+/// rewritten.
+pub fn admit_stale_profile_demands(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<usize, String> {
+    let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // The demand chains into the staging generation of the effective
+    // contract; the manifest grows monotonically by the fresh chains of
+    // this call over the distinct works already published.
+    let effective = super::eligibility::resolve_effective_embedding_contract(conn)?;
+    let generation = crate::bibliography::generation::ensure_staging_generation_for_contract(
+        conn,
+        &crate::bibliography::generation::EmbeddingContractRow {
+            contract_hash: effective.hash.clone(),
+            provider: effective.provider.clone(),
+            model: effective.model.clone(),
+            dimensions: effective.dimensions as i64,
+            chunking_contract: crate::nlp::embeddings::RAG_CHUNKING_CONTRACT_V1.to_string(),
+        },
+        now_ms(),
+    )
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    let mut items = conn
+        .prepare(
+            "SELECT i.id FROM bibliographic_items i
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+             WHERE i.library_id = ?1 AND t.item_id IS NULL
+             ORDER BY i.item_key",
+        )
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?
+        .query_map([library_row_id], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?;
+    items.dedup();
+    let mut created = 0;
+    for item_id in &items {
+        let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+            .map_err(|error| {
+                format!(
+                    "Failed to read profile input: {}: {}",
+                    error.code, error.message
+                )
+            })?
+            .ok_or_else(|| {
+                format!("unknown_item: live catalog row {item_id} vanished mid-commit")
+            })?;
+        let fresh = crate::bibliography::profile::build_profile(&input).canonical_text;
+        let fresh_hash = crate::bibliography::profile::profile_input_hash(&fresh);
+        let stored = crate::bibliography::repository::get_semantic_profile(conn, item_id).map_err(
+            |error| {
+                format!(
+                    "Failed to read stored profile of {item_id}: {}: {}",
+                    error.code, error.message
+                )
+            },
+        )?;
+        if let Some(stored) = stored {
+            if stored.input_hash == fresh_hash {
+                continue;
+            }
+        }
+        let fresh_chain =
+            !crate::bibliography::generation::generation_has_item(conn, &generation.id, item_id)
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        let outcome = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_profile",
+            &TaskSubject {
+                domain: "bibliography".to_string(),
+                subject_kind: "item".to_string(),
+                subject_id: item_id.clone(),
+            },
+            0,
+            "",
+            "",
+            None,
+        )?;
+        if outcome.created {
+            created += 1;
+            // A chained item that has never landed in this generation
+            // grows the eligible set; re-chains of already published
+            // works leave the manifest untouched.
+            if fresh_chain {
+                let distinct = crate::bibliography::generation::generation_distinct_published(
+                    conn,
+                    &generation.id,
+                )
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+                let manifest = distinct + created as i64;
+                crate::bibliography::generation::raise_generation_manifest(
+                    conn,
+                    &generation.id,
+                    manifest,
+                )
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            }
+        }
+    }
+    Ok(created)
+}
+
+/// E4a-WU3: chains extraction demand at sync success. For every attachment
+/// of the library's live works whose file resolves locally, admits an
+/// extraction task when no extraction row exists or the stored source
+/// identity (mtime/bytes of the resolved file) moved. Attachments with no
+/// readable file get no demand — the executor would only park them blocked.
+/// Runs inside the sync-success transaction, so a committed sync never
+/// loses its extraction follow-up.
+pub fn admit_stale_extraction_demands(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<usize, String> {
+    let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // Same key the extractor resolves with: demand only chains for files
+    // the executor can actually read.
+    let data_dir = crate::settings::get_setting(
+        conn,
+        crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+    );
+    let attachments: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT a.id, a.item_id FROM zotero_attachments a
+             JOIN bibliographic_items i ON i.id = a.item_id
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+             WHERE i.library_id = ?1 AND t.item_id IS NULL
+             ORDER BY a.id",
+        )
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
+        .query_map([library_row_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?;
+    let mut created = 0;
+    for (attachment_id, _item_id) in &attachments {
+        let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+            .map_err(|error| format!("Failed to read attachment: {error}"))?
+            .ok_or_else(|| {
+                format!("unknown_attachment: live row {attachment_id} vanished mid-commit")
+            })?;
+        let path = match crate::bibliography::attachment::resolve_attachment_file(
+            &attachment,
+            data_dir.as_deref(),
+        ) {
+            crate::bibliography::attachment::AttachmentResolution::File(path) => path,
+            crate::bibliography::attachment::AttachmentResolution::Unavailable { .. } => continue,
+        };
+        let (mtime, bytes) = match std::fs::metadata(&path) {
+            Ok(metadata) => (
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs() as i64),
+                metadata.len() as i64,
+            ),
+            Err(_) => continue,
+        };
+        let fresh: Option<(Option<i64>, i64)> = conn
+            .query_row(
+                "SELECT source_mtime, source_bytes FROM bibliographic_extractions WHERE attachment_id = ?1",
+                [attachment_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(format!("Failed to read extraction of {attachment_id}: {other}")),
+            })?;
+        if let Some((stored_mtime, stored_bytes)) = fresh {
+            if stored_mtime == mtime && stored_bytes == bytes {
+                continue;
+            }
+        }
+        let outcome = admit_subject_or_attach(
+            conn,
+            &batch_id,
+            "bibliography_extract",
+            &TaskSubject {
+                domain: "bibliography".to_string(),
+                subject_kind: "attachment".to_string(),
+                subject_id: attachment_id.clone(),
+            },
+            0,
+            "",
+            "",
+            None,
+        )?;
+        if outcome.created {
+            created += 1;
+        }
+    }
+    Ok(created)
+}
+
 /// Long-lived system batches that own out-of-band work: deliberate manual
-/// actions (`manual`) and automatic maintenance (`repair`). Created lazily,
+/// actions (`manual`), automatic maintenance (`repair`), and bibliography
+/// library sync (`bibliography`, E2b-1). Created lazily,
 /// always `running` with a complete (empty) snapshot, so admitted units flow
 /// straight to the scheduler without a UI batch around them. Hidden from the
 /// batch history by origin (Unidad 5 lists `user` batches).
 pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, String> {
-    if origin != "manual" && origin != "repair" {
+    if origin != "manual" && origin != "repair" && origin != "bibliography" {
         return Err(format!("invalid_selection: unknown system origin {origin}"));
     }
     let request_id = format!("system-{origin}");
@@ -1060,7 +2112,7 @@ pub fn retry_failed(
 /// fails units, and running units keep their pinned contract until commit,
 /// which re-checks (see `commit_success_with`).
 pub fn reconcile_contracts(conn: &Connection) -> Result<usize, String> {
-    let current = super::eligibility::current_embedding_contract_hash();
+    let current = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
     let changed = conn
         .execute(
             "UPDATE processing_tasks SET state = 'blocked', outcome = 'configuration_changed',
@@ -1240,6 +2292,7 @@ pub struct BatchSnapshot {
     pub planning_cursor: i64,
     pub planning_done: bool,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub started_at: Option<i64>,
@@ -1247,6 +2300,16 @@ pub struct BatchSnapshot {
     pub last_error: Option<String>,
     pub members_total: i64,
     pub members_classified: i64,
+    /// Sum of linked OCR/embedding tasks' durable, checkpoint-backed units.
+    /// Bibliography page counts are incompatible with remote item totals and
+    /// are deliberately excluded.
+    pub progress_done: i64,
+    /// Sum of positive OCR/embedding task totals. `None` means no compatible
+    /// linked task has declared a total yet.
+    pub progress_total: Option<i64>,
+    /// Compatible tasks without totals plus every task whose units are not
+    /// compatible with the OCR/embedding aggregate.
+    pub progress_unknown_tasks: i64,
     pub tasks_by_state: Vec<(String, i64)>,
     pub tasks_by_kind: Vec<(String, i64)>,
     pub collections: Vec<(String, String)>,
@@ -1261,18 +2324,18 @@ pub struct BatchSnapshot {
 pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSnapshot, String> {
     let row: Option<(
         String, String, String, String, String, String, i64, i64, i64, i64, i64,
-        Option<i64>, Option<i64>, Option<String>,
+        Option<i64>, Option<i64>, Option<String>, i64,
     )> = conn
         .query_row(
             "SELECT id, request_id, origin, state, desired_state, operations, planning_cursor,
-                    planning_done, revision, created_at, updated_at, started_at, finished_at, last_error
+                    planning_done, revision, created_at, updated_at, started_at, finished_at, last_error, priority
              FROM processing_batches WHERE id = ?1",
             [batch_id],
             |row| {
                 Ok((
                     row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
                     row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
                 ))
             },
         )
@@ -1299,6 +2362,27 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
             |row| row.get(0),
         )
         .map_err(|e| format!("Failed to count classified members of {batch_id}: {e}"))?;
+    let (progress_done, progress_total, progress_unknown_tasks): (i64, Option<i64>, i64) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(CASE
+                                    WHEN t.kind IN ('ocr', 'embedding') THEN t.progress_done
+                                    ELSE 0
+                                  END), 0),
+                    SUM(CASE
+                          WHEN t.kind IN ('ocr', 'embedding') AND t.progress_total > 0
+                            THEN t.progress_total
+                        END),
+                    COUNT(CASE
+                            WHEN t.kind NOT IN ('ocr', 'embedding') OR t.progress_total <= 0
+                              THEN 1
+                          END)
+             FROM processing_batch_tasks l
+             JOIN processing_tasks t ON t.id = l.task_id
+             WHERE l.batch_id = ?1",
+            [batch_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|e| format!("Failed to aggregate progress of {batch_id}: {e}"))?;
     let mut states = conn
         .prepare(
             "SELECT t.state, COUNT(*) FROM processing_batch_tasks l
@@ -1344,6 +2428,7 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         planning_cursor: batch.6,
         planning_done: batch.7 == 1,
         revision: batch.8,
+        priority: batch.14,
         created_at: batch.9,
         updated_at: batch.10,
         started_at: batch.11,
@@ -1351,6 +2436,9 @@ pub fn read_batch_snapshot(conn: &Connection, batch_id: &str) -> Result<BatchSna
         last_error: batch.13,
         members_total,
         members_classified,
+        progress_done,
+        progress_total,
+        progress_unknown_tasks,
         tasks_by_state,
         tasks_by_kind,
         collections,
@@ -1365,6 +2453,7 @@ pub struct BatchSummary {
     pub desired_state: String,
     pub operations: Vec<String>,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub active_units: i64,
@@ -1414,7 +2503,7 @@ pub fn list_batches(
         }
     }
     let mut sql = String::from(
-        "SELECT id, state, desired_state, operations, revision, created_at, updated_at FROM processing_batches",
+        "SELECT id, state, desired_state, operations, revision, priority, created_at, updated_at FROM processing_batches",
     );
     // The listings are the user's own work. `manual` and `repair` containers
     // are always running by construction and never finalize, so listing them
@@ -1454,6 +2543,7 @@ pub fn list_batches(
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             },
         )
@@ -1462,7 +2552,7 @@ pub fn list_batches(
         .map_err(|e| format!("Failed to list batches: {e}"))?;
     let has_more = rows.len() > limit as usize;
     let mut summaries = Vec::new();
-    for (id, state, desired, operations, revision, created, updated) in
+    for (id, state, desired, operations, revision, priority, created, updated) in
         rows.into_iter().take(limit as usize)
     {
         let operations: Vec<String> = serde_json::from_str(&operations).unwrap_or_default();
@@ -1490,6 +2580,7 @@ pub fn list_batches(
             desired_state: desired,
             operations,
             revision,
+            priority,
             created_at: created,
             updated_at: updated,
             active_units: active,
@@ -1507,17 +2598,112 @@ pub fn list_batches(
     Ok((summaries, next))
 }
 
+fn read_bibliography_progress(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    domain: &str,
+    subject_kind: &str,
+) -> Result<(Option<i64>, Option<i64>), String> {
+    if kind != "bibliography_sync" || domain != "bibliography" || subject_kind != "library" {
+        return Ok((None, None));
+    }
+
+    // A terminal receipt is task-scoped and authoritative. While work is in
+    // flight, each page checkpoint carries the same confirmed next cursor and
+    // optional remote total that were committed with the catalog page. Reading
+    // those existing records avoids a second progress store and, unlike a join
+    // by library id, cannot attach a newer reconciliation run to an old task.
+    let receipt: Option<String> = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to read bibliography receipt of {task_id}: {error}"))?;
+    if let Some(receipt) = receipt {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&receipt) {
+            if let Some(items_seen) = value.get("itemsSeen").and_then(|value| value.as_i64()) {
+                let remote_total = value.get("remoteTotal").and_then(|value| value.as_i64());
+                return Ok((Some(items_seen), remote_total));
+            }
+        }
+    }
+
+    let mut checkpoints = conn
+        .prepare(
+            "SELECT c.unit_key, c.payload, c.payload_checksum
+             FROM processing_checkpoints c
+             JOIN processing_tasks t ON t.id = c.task_id
+             WHERE c.task_id = ?1
+               AND c.input_fingerprint = t.input_fingerprint
+               AND c.contract_hash = t.contract_hash
+             ORDER BY c.created_at DESC, c.rowid DESC",
+        )
+        .map_err(|error| {
+            format!("Failed to read bibliography checkpoints of {task_id}: {error}")
+        })?;
+    let records = checkpoints
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| {
+            format!("Failed to read bibliography checkpoints of {task_id}: {error}")
+        })?;
+    let mut items_seen = None;
+    let mut remote_total = None;
+    for record in records {
+        let (unit_key, payload, checksum) = record.map_err(|error| {
+            format!("Failed to read bibliography checkpoint of {task_id}: {error}")
+        })?;
+        let first_page = unit_key == "page:0";
+        if format!("{:x}", Sha256::digest(payload.as_bytes())) == checksum {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
+                if items_seen.is_none() {
+                    items_seen = value.get("next_start").and_then(|value| value.as_i64());
+                }
+                if remote_total.is_none() {
+                    remote_total = value.get("total").and_then(|value| value.as_i64());
+                }
+            }
+        }
+        // `page:0` is overwritten when a retry restarts enumeration. Older
+        // higher-page keys can remain, so never fill an unknown total across
+        // that boundary.
+        if first_page || (items_seen.is_some() && remote_total.is_some()) {
+            break;
+        }
+    }
+    Ok((items_seen, remote_total))
+}
+
 /// One unit row of a batch detail view. Result payloads and full attempt
 /// histories stay behind `read_task_detail` — list pages never haul them.
+/// E2a-3 carries the subject identity alongside the legacy `asset_id`
+/// snapshot (documentary `subject_id` mirrors it); old readers ignore the
+/// new columns.
 #[derive(Debug, Clone)]
 pub struct TaskSummary {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    /// Confirmed bibliography item cursor derived from this task's existing
+    /// receipt/checkpoints. Both fields are `None` for non-bibliography tasks
+    /// or before a run exists; `remote_total=None` with `items_seen=Some(_)`
+    /// is an honest unknown total, not zero work.
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -1569,7 +2755,8 @@ pub fn list_tasks(
         }
     }
     let mut sql = String::from(
-        "SELECT t.id, t.kind, t.asset_id_snapshot, t.state, t.stage, t.progress_done, t.progress_total,
+        "SELECT t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
+                t.state, t.stage, t.progress_done, t.progress_total,
                 t.outcome, t.attempt_count, t.retry_cycle, t.next_retry_at, t.last_error_code,
                 t.last_error_message, t.updated_at, l.request_state, l.dependency_task_id
          FROM processing_batch_tasks l JOIN processing_tasks t ON t.id = l.task_id
@@ -1588,7 +2775,7 @@ pub fn list_tasks(
     let mut stmt = conn
         .prepare(&sql)
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(
             rusqlite::params![
                 batch_id,
@@ -1603,25 +2790,39 @@ pub fn list_tasks(
                     task_id: row.get(0)?,
                     kind: row.get(1)?,
                     asset_id: row.get(2)?,
-                    state: row.get(3)?,
-                    stage: row.get(4)?,
-                    progress_done: row.get(5)?,
-                    progress_total: row.get(6)?,
-                    outcome: row.get(7)?,
-                    attempt_count: row.get(8)?,
-                    retry_cycle: row.get(9)?,
-                    next_retry_at: row.get(10)?,
-                    error_code: row.get(11)?,
-                    error_message: row.get(12)?,
-                    updated_at: row.get(13)?,
-                    request_state: row.get(14)?,
-                    dependency_task_id: row.get(15)?,
+                    domain: row.get(3)?,
+                    subject_kind: row.get(4)?,
+                    subject_id: row.get(5)?,
+                    state: row.get(6)?,
+                    stage: row.get(7)?,
+                    progress_done: row.get(8)?,
+                    progress_total: row.get(9)?,
+                    items_seen: None,
+                    remote_total: None,
+                    outcome: row.get(10)?,
+                    attempt_count: row.get(11)?,
+                    retry_cycle: row.get(12)?,
+                    next_retry_at: row.get(13)?,
+                    error_code: row.get(14)?,
+                    error_message: row.get(15)?,
+                    updated_at: row.get(16)?,
+                    request_state: row.get(17)?,
+                    dependency_task_id: row.get(18)?,
                 })
             },
         )
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list units of {batch_id}: {e}"))?;
+    for task in &mut rows {
+        (task.items_seen, task.remote_total) = read_bibliography_progress(
+            conn,
+            &task.task_id,
+            &task.kind,
+            &task.domain,
+            &task.subject_kind,
+        )?;
+    }
     let next = rows
         .get(limit as usize)
         .map(|_| rows[(limit as usize) - 1].task_id.clone());
@@ -1647,10 +2848,15 @@ pub struct TaskDetail {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -1691,11 +2897,12 @@ pub fn read_task_detail(
         ));
     }
     let task: Option<(
-        String, String, String, String, i64, i64, String, i64, i64, Option<i64>, Option<String>,
-        Option<String>, i64,
+        String, String, String, String, String, String, String, i64, i64, String, i64, i64,
+        Option<i64>, Option<String>, Option<String>, i64,
     )> = conn
         .query_row(
-            "SELECT kind, asset_id_snapshot, state, stage, progress_done, progress_total, outcome,
+            "SELECT kind, asset_id_snapshot, domain, subject_kind, subject_id, state, stage,
+                    progress_done, progress_total, outcome,
                     attempt_count, retry_cycle, next_retry_at, last_error_code, last_error_message, updated_at
              FROM processing_tasks WHERE id = ?1",
             [task_id],
@@ -1703,7 +2910,8 @@ pub fn read_task_detail(
                 Ok((
                     row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
                     row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-                    row.get(10)?, row.get(11)?, row.get(12)?,
+                    row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
+                    row.get(15)?,
                 ))
             },
         )
@@ -1715,6 +2923,8 @@ pub fn read_task_detail(
     let Some(task) = task else {
         return Err(format!("invalid_selection: unknown task {task_id}"));
     };
+    let (items_seen, remote_total) =
+        read_bibliography_progress(conn, task_id, &task.0, &task.2, &task.3)?;
     let mut cps = conn
         .prepare(
             "SELECT unit_key, payload_checksum, created_at FROM processing_checkpoints
@@ -1761,16 +2971,21 @@ pub fn read_task_detail(
         task_id: task_id.to_string(),
         kind: task.0,
         asset_id: task.1,
-        state: task.2,
-        stage: task.3,
-        progress_done: task.4,
-        progress_total: task.5,
-        outcome: task.6,
-        attempt_count: task.7,
-        retry_cycle: task.8,
-        next_retry_at: task.9,
-        error_code: task.10,
-        error_message: task.11,
+        domain: task.2,
+        subject_kind: task.3,
+        subject_id: task.4,
+        state: task.5,
+        stage: task.6,
+        progress_done: task.7,
+        progress_total: task.8,
+        items_seen,
+        remote_total,
+        outcome: task.9,
+        attempt_count: task.10,
+        retry_cycle: task.11,
+        next_retry_at: task.12,
+        error_code: task.13,
+        error_message: task.14,
         checkpoints,
         attempts,
         shared_with_batches,
@@ -1843,11 +3058,18 @@ fn provider_retry_after_ms(message: &str) -> Option<i64> {
 pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
 
 /// A task under exclusive ownership of one supervisor thread.
+/// E2a-3 carries the subject identity read at claim time: corpus/asset
+/// rows populate `domain`/`subject_kind`/`subject_id` from the task row
+/// (documentary `subject_id` mirrors `asset_id`); bibliography/library
+/// rows (E2b-2) carry their own subject identity the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimedTask {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub input_revision: i64,
     pub input_fingerprint: String,
     pub contract_hash: String,
@@ -1919,11 +3141,17 @@ fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result
     Ok(())
 }
 
+/// A raised priority level whose running batches actively link fewer units
+/// than this is scanned from its batches (cost bounded by the links); a
+/// larger one takes the state-index walk. The count itself stops here.
+const CLAIM_LEVEL_DRIVER_LINKS: i64 = 5_000;
+
 /// Claims the next runnable task for `session_id`: BEGIN IMMEDIATE, pick the oldest runnable unit with an actively-wanted batch,
 /// revalidate its input (admission data may be stale), CAS it to `running`
 /// with a fresh fencing epoch, open an attempt, COMMIT — all before any
 /// compute starts. Returns `None` when no unit is runnable. `kinds` lists
-/// the operations this supervisor can execute; anything else stays queued.
+/// the operations this supervisor can execute (`ocr`, `embedding`, and
+/// since E2b-2 `bibliography_sync`); anything else stays queued.
 pub fn claim_next(
     conn: &Connection,
     session_id: &str,
@@ -1934,7 +3162,12 @@ pub fn claim_next(
         return Ok(None);
     }
     for kind in kinds {
-        if *kind != "ocr" && *kind != "embedding" {
+        if *kind != "ocr"
+            && *kind != "embedding"
+            && *kind != "bibliography_sync"
+            && *kind != "bibliography_profile"
+            && *kind != "bibliography_extract"
+        {
             return Err(format!("unknown task kind: {kind}"));
         }
     }
@@ -1943,8 +3176,21 @@ pub fn claim_next(
         .map(|kind| format!("'{kind}'"))
         .collect::<Vec<_>>()
         .join(", ");
+    // E2a-3/E2b-2 domain dispatch: the scan admits every claim arm by its
+    // full subject identity — corpus/asset for ocr/embedding, and one
+    // bibliography subject per bibliographic kind. A bibliography row of any
+    // other shape matches no arm and stays queued forever.
     let runnable = format!(
         "t.kind IN ({kind_list})
+         AND (
+               (t.domain = 'corpus' AND t.subject_kind = 'asset')
+               OR (t.domain = 'bibliography' AND t.subject_kind = 'library'
+                   AND t.kind = 'bibliography_sync')
+               OR (t.domain = 'bibliography' AND t.subject_kind = 'item'
+                   AND t.kind = 'bibliography_profile')
+               OR (t.domain = 'bibliography' AND t.subject_kind = 'attachment'
+                   AND t.kind = 'bibliography_extract')
+             )
          AND EXISTS (
                SELECT 1 FROM processing_batch_tasks l
                JOIN processing_batches b ON b.id = l.batch_id
@@ -1959,47 +3205,147 @@ pub fn claim_next(
         .map_err(|e| format!("Failed to begin claim: {e}"))?;
     let claimed = (|| -> Result<Option<ClaimedTask>, String> {
         use rusqlite::OptionalExtension as _;
-        let candidate: Option<(String, String, String, String, i64)> = conn
-            .query_row(
-                &format!(
-                    // One branch per state, each walking its own index in id
-                    // order and stopping at the first runnable unit. A single
-                    // `pending OR retry_wait` filter gathered and sorted every
-                    // pending unit on each claim: 1.2 s per claim at 200k pages.
-                    "SELECT id, kind, asset_id_snapshot, contract_hash, lease_epoch FROM (
+        // The scan walks the claim arms in priority order (E2c-WU3): every
+        // priority above background held by a running batch first, highest
+        // first, then the background walk. Within a level the oldest unit
+        // (smallest id) wins. A unit's level is the highest priority among the
+        // running batches that actively want it; a unit with a higher level is
+        // runnable at every lower level too, but it is always found at its own
+        // level first, so a level only ever returns units of that level.
+        //
+        // Cost (0038): the background walk is one branch per state, each
+        // walking its own index in id order and stopping at the first runnable
+        // unit — a single `pending OR retry_wait` filter gathered and sorted
+        // every pending unit on each claim (1.2 s per claim at 200k pages). A
+        // raised level holding few links is driven from its batches; one
+        // holding many (an aged backlog) takes the same state walk, filtered
+        // to units linked to that level.
+        let map_candidate = |row: &rusqlite::Row<'_>| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        };
+        let columns = "t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
+                       t.contract_hash, t.lease_epoch";
+        let state_walk = |level_filter: &str| {
+            format!(
+                "SELECT * FROM (
                    SELECT * FROM (
-                     SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                     SELECT {columns}
                      FROM processing_tasks t
-                     WHERE t.state = 'pending' AND {runnable}
+                     WHERE t.state = 'pending' AND {runnable}{level_filter}
                      ORDER BY t.id LIMIT 1)
                    UNION ALL
                    SELECT * FROM (
-                     SELECT t.id, t.kind, t.asset_id_snapshot, t.contract_hash, t.lease_epoch
+                     SELECT {columns}
                      FROM processing_tasks t
                      WHERE t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1
-                       AND {runnable}
+                       AND {runnable}{level_filter}
                      ORDER BY t.id LIMIT 1))
                  ORDER BY id LIMIT 1"
-                ),
-                [now_ms],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
-                    ))
-                },
             )
-            .optional()
-            .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
-        let Some((task_id, kind, asset_id, contract_hash, epoch)) = candidate else {
+        };
+        let raised_levels: Vec<i64> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT DISTINCT priority FROM processing_batches
+                     WHERE priority > 0 AND state = 'running' AND desired_state = 'run'
+                     ORDER BY priority DESC",
+                )
+                .map_err(|e| format!("Failed to read batch priorities: {e}"))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, i64>(0))
+                .map_err(|e| format!("Failed to read batch priorities: {e}"))?;
+            rows.collect::<Result<_, _>>()
+                .map_err(|e| format!("Failed to read batch priorities: {e}"))?
+        };
+        let mut candidate: Option<(String, String, String, String, String, String, String, i64)> =
+            None;
+        for level in raised_levels {
+            let links: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM (
+                       SELECT 1 FROM processing_batches pb
+                       JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
+                       WHERE pb.priority = ?1 AND pb.state = 'running' AND pb.desired_state = 'run'
+                         AND pl.request_state = 'active'
+                       LIMIT ?2)",
+                    rusqlite::params![level, CLAIM_LEVEL_DRIVER_LINKS],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to size priority level {level}: {e}"))?;
+            let sql = if links < CLAIM_LEVEL_DRIVER_LINKS {
+                format!(
+                    "SELECT {columns}
+                     FROM processing_batches pb
+                     JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
+                     JOIN processing_tasks t ON t.id = pl.task_id
+                     WHERE pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run'
+                       AND pl.request_state = 'active'
+                       AND (t.state = 'pending'
+                            OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
+                       AND {runnable}
+                     ORDER BY t.id LIMIT 1"
+                )
+            } else {
+                state_walk(
+                    "
+                     AND EXISTS (
+                           SELECT 1 FROM processing_batch_tasks pl
+                           JOIN processing_batches pb ON pb.id = pl.batch_id
+                           WHERE pl.task_id = t.id AND pl.request_state = 'active'
+                             AND pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run')",
+                )
+            };
+            candidate = conn
+                .query_row(&sql, rusqlite::params![now_ms, level], map_candidate)
+                .optional()
+                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+            if candidate.is_some() {
+                break;
+            }
+        }
+        if candidate.is_none() {
+            candidate = conn
+                .query_row(&state_walk(""), [now_ms], map_candidate)
+                .optional()
+                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+        }
+        let Some((task_id, kind, asset_id, domain, subject_kind, subject_id, contract_hash, epoch)) =
+            candidate
+        else {
             return Ok(None);
         };
+        // Defensive depth: unreachable while the scan filters by the full
+        // subject identity, but a row outside the two admitted arms must
+        // fail honestly here — before any mutation — rather than fall
+        // through to a foreign validator.
+        if !((domain == "corpus" && subject_kind == "asset")
+            || (domain == "bibliography"
+                && subject_kind == "library"
+                && kind == "bibliography_sync")
+            || (domain == "bibliography"
+                && subject_kind == "item"
+                && kind == "bibliography_profile")
+            || (domain == "bibliography"
+                && subject_kind == "attachment"
+                && kind == "bibliography_extract"))
+        {
+            return Err(format!(
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{kind}' is not claimable (corpus/asset for ocr/embedding, bibliography/library for bibliography_sync, bibliography/item for bibliography_profile, bibliography/attachment for bibliography_extract)"
+            ));
+        }
         // The world may have moved between admission and this claim: refresh
         // the pinned input, or skip the unit without ever calling a motor.
-        let validated = validate_claim_input(conn, &task_id, &kind, &asset_id, &contract_hash)?;
+        let validated =
+            validate_claim_input(conn, &task_id, &domain, &kind, &asset_id, &contract_hash)?;
         let Some((input_revision, input_fingerprint)) = validated else {
             return Ok(None);
         };
@@ -2039,6 +3385,9 @@ pub fn claim_next(
             task_id,
             kind,
             asset_id,
+            domain,
+            subject_kind,
+            subject_id,
             input_revision,
             input_fingerprint,
             contract_hash,
@@ -2062,7 +3411,188 @@ pub fn claim_next(
 /// Revalidates one candidate inside the claim transaction. Returns the fresh
 /// `(revision, fingerprint)` to pin, or `None` after transitioning the task
 /// to a terminal-or-blocked state that needs no motor call.
+///
+/// Domain dispatch: the `corpus` arm is the pre-E2b logic byte-identical
+/// (assets row, eligibility, fingerprint/contract pinning); the
+/// `bibliography` arm (E2b-2) re-proves the internal `zotero_libraries` row
+/// and re-pins the admission terms; any other domain rejects honestly with
+/// `unsupported_subject` before any mutation.
 fn validate_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    domain: &str,
+    kind: &str,
+    asset_id: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    match domain {
+        "corpus" => validate_corpus_claim_input(conn, task_id, kind, asset_id, contract_hash),
+        "bibliography" => {
+            validate_bibliography_claim_input(conn, task_id, kind, contract_hash)
+        }
+        other => Err(format!(
+            "unsupported_subject: task {task_id} domain='{other}' is not claimable (corpus or bibliography only)"
+        )),
+    }
+}
+
+/// E2b-2 bibliography claim validation: re-proves the internal library row
+/// exists and re-pins the admission terms (revision = the library's
+/// `last_modified_version` or 0, fingerprint = `library|<id>|<version>`,
+/// contract = [`BIBLIOGRAPHY_SYNC_CONTRACT`]). A library row that vanished
+/// between admission and claim is a terminal skip mirroring corpus
+/// `source_deleted` — no motor call, no attempt opened. A task pinning a
+/// foreign contract parks blocked on `configuration_changed` exactly like a
+/// moved embedding contract.
+fn validate_bibliography_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    let subject_kind: String = conn
+        .query_row(
+            "SELECT subject_kind FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    if subject_kind == "item" {
+        return validate_bibliography_item_claim_input(conn, task_id, kind, contract_hash);
+    }
+    if subject_kind == "attachment" {
+        return validate_bibliography_attachment_claim_input(conn, task_id, kind, contract_hash);
+    }
+    if kind != "bibliography_sync" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_sync or bibliography_profile only)"
+        ));
+    }
+    if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the pinned bibliography sync contract differs from the one this build runs; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let library_row_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let pin = crate::bibliography::repository::library_sync_pin(conn, &library_row_id)
+        .map_err(|error| format!("Failed to check bibliography library: {error}"))?;
+    let Some(version_nullable) = pin else {
+        mark_skipped(conn, task_id, "library_missing")?;
+        return Ok(None);
+    };
+    let version = version_nullable.unwrap_or(0);
+    Ok(Some((
+        version,
+        format!("library|{library_row_id}|{version}"),
+    )))
+}
+
+/// E4a-WU2 attachment extraction claim validation: re-proves the
+/// attachment row still exists and re-pins the source file identity, so a
+/// file replaced between admission and claim re-pins instead of extracting
+/// stale bytes. A foreign contract parks the task blocked.
+fn validate_bibliography_attachment_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    if kind != "bibliography_extract" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_extract only)"
+        ));
+    }
+    if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the bibliography extraction contract changed while this task waited; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let item_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let attachment = crate::bibliography::attachment::attachment_ref_for(conn, &item_id)
+        .map_err(|error| format!("Failed to read attachment: {error}"))?;
+    let Some(attachment) = attachment else {
+        mark_skipped(conn, task_id, "attachment_missing")?;
+        return Ok(None);
+    };
+    Ok(Some((0, attachment_extraction_fingerprint(&attachment))))
+}
+
+/// E3b-WU2 item profile claim validation: re-proves the work still exists,
+/// re-computes its profile hash (a metadata edit re-pins the claim), and
+/// gates on the effective embedding contract — a model switch parks the
+/// task blocked instead of computing into a dead space.
+fn validate_bibliography_item_claim_input(
+    conn: &Connection,
+    task_id: &str,
+    kind: &str,
+    contract_hash: &str,
+) -> Result<Option<(i64, String)>, String> {
+    if kind != "bibliography_profile" {
+        return Err(format!(
+            "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_profile only)"
+        ));
+    }
+    if contract_hash != super::eligibility::resolve_effective_embedding_contract(conn)?.hash {
+        mark_blocked(
+            conn,
+            task_id,
+            "configuration_changed",
+            "the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate",
+        )?;
+        return Ok(None);
+    }
+    let item_id: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read subject of {task_id}: {e}"))?;
+    let input =
+        crate::bibliography::profile::profile_input_for_item(conn, &item_id).map_err(|error| {
+            format!(
+                "Failed to read profile input: {}: {}",
+                error.code, error.message
+            )
+        })?;
+    let Some(input) = input else {
+        mark_skipped(conn, task_id, "item_missing")?;
+        return Ok(None);
+    };
+    let fingerprint = crate::bibliography::profile::profile_input_hash(
+        &crate::bibliography::profile::build_profile(&input).canonical_text,
+    );
+    let revision: i64 = conn
+        .query_row(
+            "SELECT COALESCE(item_version, 0) FROM bibliographic_items WHERE id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read item version of {item_id}: {e}"))?;
+    Ok(Some((revision, fingerprint)))
+}
+
+fn validate_corpus_claim_input(
     conn: &Connection,
     task_id: &str,
     kind: &str,
@@ -2104,13 +3634,14 @@ fn validate_claim_input(
     let contract_hash = contract_hash
         .strip_prefix("force:")
         .unwrap_or(contract_hash);
+    let effective = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
     let decision = super::eligibility::embedding_decision(conn, asset_id)?;
     if force
         && !matches!(
             decision,
             super::eligibility::EmbeddingDecision::NoSourceText
         )
-        && contract_hash == super::eligibility::current_embedding_contract_hash()
+        && contract_hash == effective
     {
         return Ok(Some((
             source_revision(conn, asset_id)?,
@@ -2128,7 +3659,7 @@ fn validate_claim_input(
             Ok(None)
         }
         super::eligibility::EmbeddingDecision::Eligible { .. } => {
-            if contract_hash != super::eligibility::current_embedding_contract_hash() {
+            if contract_hash != effective {
                 mark_blocked(conn, task_id, "configuration_changed",
                     "the effective embedding contract changed while this task waited; resume with the current configuration to re-evaluate")?;
                 return Ok(None);
@@ -2207,9 +3738,9 @@ pub struct NewCheckpoint {
     pub payload_checksum: String,
 }
 
-/// Persists one checkpoint under the caller's fencing epoch. A supervisor
-/// whose lease was revoked (recovery, cancel, newer claim) gets zero rows
-/// updated and must stop: its writes belong to a dead attempt.
+/// Persists one checkpoint under the caller's fencing epoch while at least one
+/// active batch still wants the task. Lease or demand loss rolls the whole
+/// attempt back; checkpoints committed before demand withdrawal remain intact.
 pub fn save_checkpoint(
     conn: &Connection,
     task_id: &str,
@@ -2230,6 +3761,11 @@ pub fn save_checkpoint(
         if changed == 0 {
             return Err(format!(
                 "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+            ));
+        }
+        if !execution_wanted(conn, task_id)? {
+            return Err(format!(
+                "demand_lost: {task_id} is no longer wanted by any batch"
             ));
         }
         conn.execute(
@@ -2330,10 +3866,11 @@ pub fn execution_wanted(conn: &Connection, task_id: &str) -> Result<bool, String
     Ok(count > 0)
 }
 
-/// Final publish of one task: validates lease, revision, contract, and
-/// demand, runs the engine-specific `publish` (canonical rows + receipt),
-/// marks `succeeded`, closes the attempt, stamps the completed revision for
-/// embeddings, unblocks dependents, and bumps the batch revisions — all in
+/// Final publish of one task: validates lease, domain/subject/kind route,
+/// source pin, contract, and demand, runs the engine-specific `publish`
+/// (canonical rows + receipt), marks `succeeded`, closes the attempt, stamps
+/// the completed revision for embeddings, unblocks dependents, and bumps the
+/// batch revisions — all in
 /// ONE transaction on this connection. Nothing may COMMIT inside `publish`.
 pub fn commit_success_with(
     conn: &Connection,
@@ -2348,9 +3885,20 @@ pub fn commit_success_with(
         .map_err(|e| format!("Failed to begin commit of {task_id}: {e}"))?;
     let committed = (|| -> Result<(), String> {
         use rusqlite::OptionalExtension as _;
-        let row: Option<(String, i64, String, String)> = conn
+        let row: Option<(
+            String,
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        )> = conn
             .query_row(
-                "SELECT state, input_revision, input_fingerprint, asset_id_snapshot
+                "SELECT state, input_revision, input_fingerprint, asset_id_snapshot,
+                        domain, subject_kind, subject_id, kind, contract_hash
                  FROM processing_tasks WHERE id = ?1 AND lease_epoch = ?2",
                 rusqlite::params![task_id, lease_epoch],
                 |row| {
@@ -2359,16 +3907,54 @@ pub fn commit_success_with(
                         row.get::<_, i64>(1)?,
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| format!("Failed to read {task_id} for commit: {e}"))?;
-        let Some((state, input_revision, input_fingerprint, asset_id)) = row else {
+        let Some((
+            state,
+            input_revision,
+            input_fingerprint,
+            asset_id,
+            domain,
+            subject_kind,
+            subject_id,
+            stored_kind,
+            contract_hash,
+        )) = row
+        else {
             return Err(format!(
                 "lease_lost: {task_id} has no row for epoch {lease_epoch}"
             ));
         };
+        let corpus_route = domain == "corpus"
+            && subject_kind == "asset"
+            && matches!(stored_kind.as_str(), "ocr" | "embedding");
+        let bibliography_route = domain == "bibliography"
+            && subject_kind == "library"
+            && stored_kind == "bibliography_sync";
+        let bibliography_profile_route = domain == "bibliography"
+            && subject_kind == "item"
+            && stored_kind == "bibliography_profile";
+        let bibliography_extract_route = domain == "bibliography"
+            && subject_kind == "attachment"
+            && stored_kind == "bibliography_extract";
+        if stored_kind != kind
+            || (!corpus_route
+                && !bibliography_route
+                && !bibliography_profile_route
+                && !bibliography_extract_route)
+        {
+            return Err(format!(
+                "unsupported_subject: task {task_id} domain='{domain}' subject_kind='{subject_kind}' kind='{stored_kind}' cannot commit as '{kind}'"
+            ));
+        }
         if state != "running" {
             return Err(format!("lease_lost: {task_id} is {state}, not running"));
         }
@@ -2377,16 +3963,95 @@ pub fn commit_success_with(
                 "demand_lost: {task_id} is no longer wanted by any batch"
             ));
         }
-        // The source must not have moved under the computation: revision
-        // first (every text write bumps it in the same transaction), then
-        // the pinned fingerprint for anything the revision cannot see.
-        let current_revision = source_revision(conn, &asset_id)?;
-        if current_revision != input_revision {
-            return Err(format!(
-                "source_changed: {asset_id} moved from revision {input_revision} to {current_revision}"
-            ));
+        // The source must not have moved under the computation. Corpus keeps
+        // its documentary revision/fingerprint gates unchanged; bibliography
+        // re-proves the library pin and contract before its own publisher.
+        if bibliography_extract_route {
+            // Extraction tasks pin the extractor identity and the source
+            // file identity: a new extractor is a configuration change, a
+            // replaced file is a source change. The publisher is the only
+            // writer of the extraction row.
+            if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+                return Err("configuration_changed: extraction contract changed".to_string());
+            }
+            let attachment_id = subject_id.as_str();
+            let attachment =
+                crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+                    .map_err(|error| format!("Failed to read attachment: {error}"))?
+                    .ok_or_else(|| {
+                        format!("source_changed: bibliography attachment {attachment_id} vanished")
+                    })?;
+            let fresh = attachment_extraction_fingerprint(&attachment);
+            if fresh != input_fingerprint {
+                return Err(format!(
+                    "source_changed: source file of bibliography attachment {attachment_id} moved mid-computation"
+                ));
+            }
+        } else if bibliography_profile_route {
+            // Profile tasks pin the effective embedding contract at admission
+            // and the profile hash as their fingerprint: a model switch is a
+            // configuration change, a metadata edit is a source change. The
+            // publisher (commit transaction) is the only writer of the
+            // profile and its vector.
+            let effective = super::eligibility::resolve_effective_embedding_contract(conn)?;
+            if contract_hash != effective.hash {
+                return Err("configuration_changed: embedding contract changed".to_string());
+            }
+            let item_id = subject_id.as_str();
+            let exists = crate::bibliography::repository::bibliographic_item_exists(conn, item_id)
+                .map_err(|error| format!("Failed to check bibliography item: {error}"))?;
+            if !exists {
+                return Err(format!(
+                    "source_changed: bibliography item {item_id} vanished"
+                ));
+            }
+            let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
+                .map_err(|error| {
+                    format!(
+                        "Failed to read profile input: {}: {}",
+                        error.code, error.message
+                    )
+                })?
+                .ok_or_else(|| format!("source_changed: bibliography item {item_id} vanished"))?;
+            let fresh_hash = crate::bibliography::profile::profile_input_hash(
+                &crate::bibliography::profile::build_profile(&input).canonical_text,
+            );
+            if fresh_hash != input_fingerprint {
+                return Err(format!(
+                    "source_changed: profile input of bibliography item {item_id} moved mid-computation"
+                ));
+            }
+        } else if bibliography_route {
+            if contract_hash != BIBLIOGRAPHY_SYNC_CONTRACT {
+                return Err("configuration_changed: bibliography sync contract changed".to_string());
+            }
+            let current =
+                crate::bibliography::repository::required_library_sync_pin(conn, &subject_id)
+                    .map_err(|error| format!("Failed to read bibliography library pin: {error}"))?
+                    .ok_or_else(|| {
+                        format!("source_changed: bibliography library {subject_id} vanished")
+                    })?
+                    .unwrap_or(0);
+            if current != input_revision {
+                return Err(format!(
+                    "source_changed: bibliography library {subject_id} moved from version {input_revision} to {current}"
+                ));
+            }
+            let current_fingerprint = format!("library|{subject_id}|{current}");
+            if current_fingerprint != input_fingerprint {
+                return Err(format!(
+                    "source_changed: input set of bibliography library {subject_id} moved mid-computation"
+                ));
+            }
+        } else {
+            let current_revision = source_revision(conn, &asset_id)?;
+            if current_revision != input_revision {
+                return Err(format!(
+                    "source_changed: {asset_id} moved from revision {input_revision} to {current_revision}"
+                ));
+            }
         }
-        if kind == "embedding" {
+        if corpus_route && kind == "embedding" {
             let pinned: String = conn
                 .query_row(
                     "SELECT contract_hash FROM processing_tasks WHERE id=?1",
@@ -2394,9 +4059,8 @@ pub fn commit_success_with(
                     |row| row.get(0),
                 )
                 .map_err(|e| e.to_string())?;
-            if pinned.strip_prefix("force:").unwrap_or(&pinned)
-                != super::eligibility::current_embedding_contract_hash()
-            {
+            let effective = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
+            if pinned.strip_prefix("force:").unwrap_or(&pinned) != effective {
                 return Err("configuration_changed: embedding contract changed".to_string());
             }
             let current = super::eligibility::embedding_input_fingerprint(conn, &asset_id)?;
@@ -2405,7 +4069,7 @@ pub fn commit_success_with(
                     "source_changed: input set of {asset_id} moved mid-computation"
                 ));
             }
-        } else if kind == "ocr" {
+        } else if corpus_route && kind == "ocr" {
             let current = ocr_fingerprint(conn, &asset_id)?
                 .ok_or_else(|| format!("source_deleted: {asset_id} vanished mid-computation"))?;
             if current != input_fingerprint {
@@ -2628,17 +4292,20 @@ pub fn classify_batch_page(
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin classification page: {e}"))?;
     let outcome = (|| -> Result<ClassifyPageOutcome, String> {
+        let emb_contract = super::eligibility::resolve_effective_embedding_contract(conn)?.hash;
         let mut admitted = 0;
         let mut last_ordinal = cursor;
         for work in &works {
             let mut ocr_id = None;
             if let Some((kind, fingerprint, contract)) = &work.ocr_task {
                 let revision = source_revision(conn, &work.asset_id)?;
-                let out = admit_or_attach(
+                // Explicit corpus/asset subject at admission (E2a-3): the
+                // classifier only ever mints documentary work.
+                let out = admit_subject_or_attach(
                     conn,
                     batch_id,
                     kind,
-                    &work.asset_id,
+                    &TaskSubject::corpus_asset(&work.asset_id),
                     revision,
                     fingerprint,
                     contract,
@@ -2651,14 +4318,15 @@ pub fn classify_batch_page(
             }
             if let Some((kind, fingerprint, dependency)) = &work.emb_task {
                 let revision = source_revision(conn, &work.asset_id)?;
-                let out = admit_or_attach(
+                // Explicit corpus/asset subject at admission (E2a-3).
+                let out = admit_subject_or_attach(
                     conn,
                     batch_id,
                     kind,
-                    &work.asset_id,
+                    &TaskSubject::corpus_asset(&work.asset_id),
                     revision,
                     fingerprint,
-                    &super::eligibility::current_embedding_contract_hash(),
+                    &emb_contract,
                     if dependency.is_some() {
                         ocr_id.as_deref()
                     } else {
@@ -2799,8 +4467,195 @@ mod tests {
     const MIGRATION_0038_SQL: &str = include_str!(
         "../../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
     );
+    // E2a-1 task-subject identity: additive corpus/asset columns + backfill +
+    // parallel partial unique, exercised here so registry/file drift breaks a
+    // test instead of reaching a user database.
+    const MIGRATION_0041_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+    );
+    const MIGRATION_0041_NAME: &str = "0041_processing_task_subject_identity";
+    // E2a-2 single-flight cutover: drops the snapshot-scoped partial unique so
+    // the composite built in 0041 becomes the sole authority, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0042_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+    );
+    const MIGRATION_0042_NAME: &str = "0042_processing_task_subject_cutover";
+    // E2b-1 bibliography admission: widens the kind CHECK to bibliography_sync
+    // and the batch origin CHECK to bibliography, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0043_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql"
+    );
+    const MIGRATION_0043_NAME: &str = "0043_bibliography_sync_tasks";
+    // E2c-WU3 per-batch priority: additive column + index, exercised here so
+    // registry/file drift breaks a test instead of reaching a user database.
+    const MIGRATION_0044_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0044_processing_priority.sql");
+    const MIGRATION_0044_NAME: &str = "0044_processing_priority";
+    // E3b-WU1 semantic profiles: additive catalog-adjacent table, exercised
+    // here so registry/file drift breaks a test instead of reaching a user db.
+    const MIGRATION_0045_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+    );
+    const MIGRATION_0045_NAME: &str = "0045_bibliographic_semantic_profiles";
+    // E3b-WU2 profile tasks: kind CHECK widening + per-contract embeddings,
+    // exercised here so registry/file drift breaks a test instead of a user db.
+    const MIGRATION_0046_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
+    );
+    const MIGRATION_0046_NAME: &str = "0046_bibliography_profile_tasks";
+    // E3c-WU1 index generations: immutable contracts + lifecycle rows,
+    // exercised here so registry/file drift breaks a test instead of a user db.
+    const MIGRATION_0047_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+    );
+    const MIGRATION_0047_NAME: &str = "0047_bibliographic_index_generations";
+    // E3c-WU3 profile FTS: virtual table plus transactional triggers. No
+    // catalog-row dependency at apply time, so the corpus harness takes it.
+    const MIGRATION_0049_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+    );
+    const MIGRATION_0049_NAME: &str = "0049_bibliographic_profile_fts";
+    // E4a-WU2 native extraction: kind CHECK widening plus the per-attachment
+    // rows. The data half is DDL plus a rebuild with no inserts, so the
+    // corpus harness takes it like 0049.
+    const MIGRATION_0050_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+    );
+    const MIGRATION_0050_NAME: &str = "0050_bibliographic_extraction_tasks";
+    // E4b-WU2 per-page native texts: DDL-only, no catalog-row dependency
+    // at apply time, so the corpus harness takes it.
+    const MIGRATION_0051_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+    );
+    const MIGRATION_0051_NAME: &str = "0051_bibliographic_page_texts";
+    // E4c-WU1 structural chunks and spans: DDL-only, no catalog-row
+    // dependency at apply time, so the corpus harness takes it.
+    const MIGRATION_0052_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
+    const MIGRATION_0052_NAME: &str = "0052_bibliographic_chunks";
+    // E4c-WU2 chunk vectors per generation: DDL-only, no catalog-row
+    // dependency at apply time, so the corpus harness takes it.
+    const MIGRATION_0053_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+    );
+    const MIGRATION_0053_NAME: &str = "0053_bibliographic_chunk_embeddings";
+
+    /// Pre-0041 database shape: 0032 + 0033 exactly as upgraded field
+    /// databases look before the E2a-1 slice. Upgrade tests seed legacy rows
+    /// here; [`migrated_db`] builds on top of it. One builder, so the legacy
+    /// shape cannot drift between the two.
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
+        let (dir, conn) = legacy_db();
+        // E2a-1 additive subject identity: dual-write columns plus the
+        // parallel composite unique. E2a-2 cuts the single-flight authority
+        // over to that composite and drops the snapshot-scoped unique, so
+        // lookups resolve on the full subject identity from here on.
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+        conn.execute_batch(MIGRATION_0042_SQL)
+            .expect("apply 0042 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0042_NAME],
+        )
+        .expect("track 0042");
+        // E2b-1 bibliography admission widening (kind + origin CHECKs) with
+        // byte-identical row preservation; bibliography tests seed on top.
+        conn.execute_batch(MIGRATION_0043_SQL)
+            .expect("apply 0043 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0043_NAME],
+        )
+        .expect("track 0043");
+        // E2c-WU3 batch priority column; existing rows default to background.
+        conn.execute_batch(MIGRATION_0044_SQL)
+            .expect("apply 0044 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0044_NAME],
+        )
+        .expect("track 0044");
+        // E3b-WU1 semantic profiles table.
+        conn.execute_batch(MIGRATION_0045_SQL)
+            .expect("apply 0045 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0045_NAME],
+        )
+        .expect("track 0045");
+        // E3b-WU2 profile-task kind widening.
+        conn.execute_batch(MIGRATION_0046_SQL)
+            .expect("apply 0046 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0046_NAME],
+        )
+        .expect("track 0046");
+        // E3c-WU1 index generations.
+        conn.execute_batch(MIGRATION_0047_SQL)
+            .expect("apply 0047 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0047_NAME],
+        )
+        .expect("track 0047");
+        // 0048 is deliberately skipped here: its data half inserts rows
+        // whose FK requires bibliographic_items, a catalog table this
+        // corpus-only harness never builds. Coverage lives in
+        // bibliography_processing and processing_recovery.
+        // 0049 needs only the profiles table (already applied above).
+        conn.execute_batch(MIGRATION_0049_SQL)
+            .expect("apply 0049 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0049_NAME],
+        )
+        .expect("track 0049");
+        conn.execute_batch(MIGRATION_0050_SQL)
+            .expect("apply 0050 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0050_NAME],
+        )
+        .expect("track 0050");
+        conn.execute_batch(MIGRATION_0051_SQL)
+            .expect("apply 0051 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0051_NAME],
+        )
+        .expect("track 0051");
+        conn.execute_batch(MIGRATION_0052_SQL)
+            .expect("apply 0052 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0052_NAME],
+        )
+        .expect("track 0052");
+        conn.execute_batch(MIGRATION_0053_SQL)
+            .expect("apply 0053 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0053_NAME],
+        )
+        .expect("track 0053");
+        (dir, conn)
+    }
+
+    /// Pre-0041 shape for the E2a-1 upgrade tests: 0032 + 0033 only, legacy
+    /// snapshot-scoped rows, no subject columns. [`migrated_db`] delegates
+    /// here, so the upgrade path stays exercisable without a second copy of
+    /// the legacy setup.
+    fn legacy_db() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("entropia.sqlite");
         let conn = crate::db::open::open_archive_connection(&db_path).expect("open");
@@ -2816,8 +4671,6 @@ mod tests {
             .expect("minimal transcriptions");
         conn.execute_batch("CREATE TABLE _migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);")
             .expect("migrations tracking");
-        // Same single-batch application the frontend runner uses for 0032,
-        // then the additive 0033 counter column.
         conn.execute_batch(&format!("BEGIN IMMEDIATE;\n{MIGRATION_SQL}\nCOMMIT;"))
             .expect("apply 0032 mirror");
         conn.execute(
@@ -2835,6 +4688,16 @@ mod tests {
         conn.execute_batch(MIGRATION_0038_SQL)
             .expect("apply 0038 mirror");
         (dir, conn)
+    }
+
+    fn index_present(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            [name],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
     }
 
     #[test]
@@ -2874,6 +4737,719 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("collect");
         assert_eq!(tables.len(), 10, "all ten processing tables: {tables:?}");
+    }
+
+    /// E2a-1 (a): upgrading a database that already holds documentary work
+    /// backfills the subject identity from the snapshot and leaves every
+    /// documentary field — state, pins, checkpoints — byte-identical.
+    #[test]
+    fn upgrade_backfills_subject_identity_without_touching_documentary_fields() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        // Live and terminal documentary units, each with distinct pins so a
+        // rewrite would show. Same asset across kinds is legal: the old
+        // partial unique is scoped by (kind, asset_id_snapshot).
+        for (id, kind, asset, revision, fingerprint, contract, state) in [
+            ("t-pending", "ocr", "a1", 3, "fp-a1", "ch-a1", "pending"),
+            (
+                "t-interrupted",
+                "embedding",
+                "a2",
+                5,
+                "fp-a2",
+                "ch-a2",
+                "interrupted",
+            ),
+            ("t-done", "ocr", "a3", 7, "fp-a3", "ch-a3", "succeeded"),
+            ("t-failed", "embedding", "a1", 9, "fp-a4", "ch-a4", "failed"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 10, 11)",
+                rusqlite::params![id, kind, asset, revision, fingerprint, contract, state],
+            )
+            .expect("legacy task");
+        }
+        for (task, kind, asset, request_state) in [
+            ("t-pending", "ocr", "a1", "active"),
+            ("t-interrupted", "embedding", "a2", "paused"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+                 VALUES ('b1', ?1, ?2, ?3, ?4)",
+                rusqlite::params![task, kind, asset, request_state],
+            )
+            .expect("legacy link");
+        }
+        conn.execute(
+            "INSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
+             VALUES ('t-pending', 'page:1', 'fp-a1', 'ch-a1', '{}', 16),
+                    ('t-done', 'page:1', 'fp-a3', 'ch-a3', '{}', 17)",
+            [],
+        )
+        .expect("checkpoints");
+        let documentary_before: Vec<String> = conn
+            .prepare(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_revision || '|' || input_fingerprint || '|' || contract_hash || '|' || state
+                 FROM processing_tasks ORDER BY id",
+            )
+            .expect("snapshot query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        let checkpoints_before: Vec<String> = conn
+            .prepare(
+                "SELECT task_id || '|' || unit_key || '|' || input_fingerprint || '|' || contract_hash || '|' || payload || '|' || created_at
+                 FROM processing_checkpoints ORDER BY task_id",
+            )
+            .expect("checkpoint query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+
+        // Every row — live and terminal — reads back as corpus/asset identity
+        // keyed by its own snapshot, never by a rewritten fingerprint.
+        let subjects: Vec<(String, String, String, String, String)> = conn
+            .prepare("SELECT id, asset_id_snapshot, domain, subject_kind, subject_id FROM processing_tasks ORDER BY id")
+            .expect("subject query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(
+            subjects.len(),
+            4,
+            "no task lost or duplicated by the upgrade"
+        );
+        for (id, snapshot, domain, subject_kind, subject_id) in &subjects {
+            assert_eq!(domain, "corpus", "{id} must backfill the corpus domain");
+            assert_eq!(
+                subject_kind, "asset",
+                "{id} must backfill the asset subject kind"
+            );
+            assert_eq!(
+                subject_id, snapshot,
+                "{id} must backfill subject_id from its own snapshot"
+            );
+        }
+
+        let links: Vec<(String, String, String, String, String)> = conn
+            .prepare("SELECT task_id, asset_id_snapshot, domain, subject_kind, subject_id FROM processing_batch_tasks ORDER BY task_id")
+            .expect("link query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "t-interrupted".to_string(),
+                    "a2".to_string(),
+                    "corpus".to_string(),
+                    "asset".to_string(),
+                    "a2".to_string()
+                ),
+                (
+                    "t-pending".to_string(),
+                    "a1".to_string(),
+                    "corpus".to_string(),
+                    "asset".to_string(),
+                    "a1".to_string()
+                ),
+            ]
+        );
+
+        // Documentary fields are byte-identical across the upgrade.
+        let documentary_after: Vec<String> = conn
+            .prepare(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_revision || '|' || input_fingerprint || '|' || contract_hash || '|' || state
+                 FROM processing_tasks ORDER BY id",
+            )
+            .expect("snapshot query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(documentary_before, documentary_after);
+        let checkpoints_after: Vec<String> = conn
+            .prepare(
+                "SELECT task_id || '|' || unit_key || '|' || input_fingerprint || '|' || contract_hash || '|' || payload || '|' || created_at
+                 FROM processing_checkpoints ORDER BY task_id",
+            )
+            .expect("checkpoint query")
+            .query_map([], |row| row.get(0))
+            .expect("map")
+            .collect::<Result<_, _>>()
+            .expect("collect");
+        assert_eq!(checkpoints_before, checkpoints_after);
+
+        // The new partial unique is built now; the old one stays until E2a-2.
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the subject-scoped partial unique must exist after the upgrade"
+        );
+        assert!(
+            index_present(&conn, "idx_processing_tasks_active_unique"),
+            "the snapshot-scoped partial unique must survive until the E2a-2 cutover"
+        );
+    }
+
+    /// E2a-1 (b), still true after the E2a-2 cutover: admitting after the
+    /// upgrade resolves on the composite subject identity — the 0041 backfill
+    /// keeps it aligned with the snapshot for corpus rows — so the live task
+    /// is attached, never duplicated — while new rows dual-write the subject
+    /// identity.
+    #[test]
+    fn admit_after_upgrade_attaches_to_the_live_task_without_duplicating() {
+        let (_dir, conn) = legacy_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t-live', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy live task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+             VALUES ('b1', 't-live', 'ocr', 'a1', 'active')",
+            [],
+        )
+        .expect("legacy link");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+
+        let attached =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 3, "fp-a1", "ch-a1", None).expect("admit");
+        assert_eq!(attached.task_id, "t-live");
+        assert!(
+            !attached.created,
+            "a live unit must attach, never duplicate"
+        );
+        let live_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(live_count, 1);
+
+        // A genuinely new unit dual-writes corpus/asset identity on both rows.
+        let fresh = admit_or_attach(&conn, "b2", "ocr", "a9", 1, "fp-a9", "ch-a9", None)
+            .expect("admit fresh");
+        assert!(fresh.created);
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = ?1",
+                [&fresh.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("task subject");
+        assert_eq!(domain, "corpus");
+        assert_eq!(subject_kind, "asset");
+        assert_eq!(subject_id, "a9");
+        let (link_domain, link_kind, link_subject): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_batch_tasks
+                 WHERE batch_id = 'b2' AND task_id = ?1",
+                [&fresh.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("link subject");
+        assert_eq!(link_domain, "corpus");
+        assert_eq!(link_kind, "asset");
+        assert_eq!(link_subject, "a9");
+
+        assert!(index_present(
+            &conn,
+            "idx_processing_tasks_subject_active_unique"
+        ));
+        assert!(index_present(&conn, "idx_processing_tasks_active_unique"));
+    }
+
+    /// E2a-1 (c): old readers naming only the snapshot columns keep working
+    /// after the upgrade, old writers land on corpus/asset defaults, and the
+    /// claim DTO is unchanged (no subject fields anywhere on the path).
+    #[test]
+    fn legacy_snapshot_selects_keep_working_and_claimed_dtos_are_unchanged() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
+            [],
+        )
+        .expect("collection");
+        conn.execute(
+            "INSERT INTO items (id, title, collection_id, created_at, updated_at) VALUES ('i1', 'doc', 'c1', 1, 1)",
+            [],
+        )
+        .expect("item");
+        for asset in ["a1", "a2"] {
+            conn.execute(
+                "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES (?1, 'i1', 'scan.png', 'image', 10, 1)",
+                [asset],
+            )
+            .expect("asset");
+        }
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t1', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
+             VALUES ('b1', 't1', 'ocr', 'a1', 'active')",
+            [],
+        )
+        .expect("legacy link");
+
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        // E2c-WU3 priority is an additive batches-table column: the claim
+        // scan orders by it, so even this legacy-shape database needs it.
+        // The snapshot-column premise below is unaffected.
+        conn.execute_batch(MIGRATION_0044_SQL)
+            .expect("apply 0044 mirror");
+
+        // Old readers name only the snapshot columns.
+        let (id, kind, snapshot): (String, String, String) = conn
+            .query_row(
+                "SELECT id, kind, asset_id_snapshot FROM processing_tasks WHERE id = 't1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("legacy select");
+        assert_eq!(id, "t1");
+        assert_eq!(kind, "ocr");
+        assert_eq!(snapshot, "a1");
+
+        // Old writers omit the new columns and land on corpus/asset defaults.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+             VALUES ('t-old', 'ocr', 'a2', 'pending', 1, 1)",
+            [],
+        )
+        .expect("legacy insert");
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = 't-old'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("defaults");
+        assert_eq!(domain, "corpus");
+        assert_eq!(subject_kind, "asset");
+        assert_eq!(subject_id, "");
+
+        // The claim path still resolves on (kind, asset_id_snapshot) and the
+        // DTO carries exactly the pre-slice fields — compile-time proof, plus
+        // runtime values.
+        let claimed = claim_next(&conn, "s", &["ocr"], 100)
+            .expect("claim")
+            .expect("a runnable task");
+        assert_eq!(claimed.task_id, "t1");
+        assert_eq!(claimed.kind, "ocr");
+        assert_eq!(claimed.asset_id, "a1");
+    }
+
+    #[test]
+    fn cutover_leaves_composite_as_sole_single_flight_authority_on_fresh_db() {
+        let (_dir, conn) = migrated_db();
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the composite partial unique must exist after the cutover"
+        );
+        assert!(
+            !index_present(&conn, "idx_processing_tasks_active_unique"),
+            "E2a-2 drops the snapshot-scoped unique: the composite is the sole single-flight authority"
+        );
+    }
+
+    /// E2a-2 (upgraded): a 0041-era database keeps its documentary rows while
+    /// the cutover drops the old snapshot-scoped unique. The checked-in 0042
+    /// file is applied exactly as the runner applies it.
+    #[test]
+    fn cutover_drops_old_unique_on_upgraded_db_without_touching_rows() {
+        let (_dir, conn) = legacy_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+             VALUES ('t-live', 'ocr', 'a1', 3, 'fp-a1', 'ch-a1', 'pending', 10, 11)",
+            [],
+        )
+        .expect("legacy live task");
+        conn.execute_batch(MIGRATION_0041_SQL)
+            .expect("apply 0041 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0041_NAME],
+        )
+        .expect("track 0041");
+        conn.execute_batch(MIGRATION_0042_SQL)
+            .expect("apply 0042 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0042_NAME],
+        )
+        .expect("track 0042");
+
+        let documentary: String = conn
+            .query_row(
+                "SELECT id || '|' || kind || '|' || asset_id_snapshot || '|' || input_fingerprint || '|' || state
+                 FROM processing_tasks WHERE id = 't-live'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("documentary row");
+        assert_eq!(documentary, "t-live|ocr|a1|fp-a1|pending");
+        assert!(
+            !index_present(&conn, "idx_processing_tasks_active_unique"),
+            "E2a-2 drops the snapshot-scoped unique on upgraded databases too"
+        );
+        assert!(
+            index_present(&conn, "idx_processing_tasks_subject_active_unique"),
+            "the composite partial unique must survive the cutover"
+        );
+    }
+
+    /// E2a-2 (a), adversarial equal-string: a live bibliography row whose
+    /// snapshot string collides with a corpus asset must NOT capture corpus
+    /// admission. The old (kind, asset_id_snapshot) lookup matched that row;
+    /// the composite (domain, subject_kind, subject_id, kind) lookup does not.
+    #[test]
+    fn corpus_admission_ignores_live_bibliography_row_with_colliding_snapshot() {
+        let (_dir, conn) = migrated_db();
+        conn.execute(
+            "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b1', 'req-1', 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+            [],
+        )
+        .expect("batch");
+        // Bibliography rows are admitted only by direct SQL until E2b (kind
+        // CHECK still ocr|embedding; the subject string lives in subject_id).
+        // asset_id_snapshot is deliberately 'a1': the exact collision the old
+        // lookup could not tell apart from corpus work for asset a1.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-biblio', 'ocr', 'a1', 'bibliography', 'item', 'a1', 'pending', 1, 1)",
+            [],
+        )
+        .expect("adversarial bibliography row");
+
+        let admitted =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit");
+        assert!(
+            admitted.created,
+            "corpus admission must create its own task, never attach to a bibliography row"
+        );
+        assert_ne!(
+            admitted.task_id, "t-biblio",
+            "a bibliography row must never be returned by corpus admission"
+        );
+
+        let (domain, subject_kind, subject_id): (String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id FROM processing_tasks WHERE id = ?1",
+                [&admitted.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("admitted subject");
+        assert_eq!(domain.as_str(), "corpus");
+        assert_eq!(subject_kind.as_str(), "asset");
+        assert_eq!(subject_id.as_str(), "a1");
+
+        // The bibliography row is untouched: still live, still foreign.
+        let biblio: (String, String, String, String) = conn
+            .query_row(
+                "SELECT domain, subject_kind, subject_id, state FROM processing_tasks WHERE id = 't-biblio'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("bibliography row survives");
+        assert_eq!(biblio.0.as_str(), "bibliography");
+        assert_eq!(biblio.1.as_str(), "item");
+        assert_eq!(biblio.2.as_str(), "a1");
+        assert_eq!(biblio.3.as_str(), "pending");
+
+        // Exactly one live corpus unit for (ocr, a1): the biblio row never
+        // blocked it and never counted toward it.
+        let live_corpus: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE domain = 'corpus' AND subject_kind = 'asset' AND subject_id = 'a1' AND kind = 'ocr'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count live corpus units");
+        assert_eq!(live_corpus, 1);
+    }
+
+    /// E2a-2 (c1): attaching over a live corpus task reuses its task_id —
+    /// two batches share one physical task.
+    #[test]
+    fn shared_corpus_task_across_batches_survives_cutover() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b1");
+        assert!(first.created);
+        let second =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b2");
+        assert!(
+            !second.created,
+            "a live corpus unit must attach, never duplicate"
+        );
+        assert_eq!(second.task_id, first.task_id);
+        let physical: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count physical units");
+        assert_eq!(physical, 1);
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("count links");
+        assert_eq!(links, 2);
+    }
+
+    /// E2a-2 (c2): terminal rows are never resurrected. The explicit-retry
+    /// path refuses non-failed units, and a fresh demand after a terminal
+    /// row mints a new identity while the history row stays terminal.
+    #[test]
+    fn terminal_row_is_never_resurrected_only_failed_units_retry() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&first.task_id],
+        )
+        .expect("succeed");
+        // The explicit-retry path rejects anything that is not failed.
+        assert!(
+            retry_failed(&conn, "b1", Some(&first.task_id)).is_err(),
+            "retrying a succeeded unit must error, not resurrect it"
+        );
+        let (state, cycle): (String, i64) = conn
+            .query_row(
+                "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("terminal row untouched");
+        assert_eq!(state.as_str(), "succeeded");
+        assert_eq!(cycle, 0);
+        // A fresh demand mints a new live identity; the terminal row is history.
+        let second = admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+            .expect("fresh demand");
+        assert!(second.created);
+        assert_ne!(second.task_id, first.task_id);
+        let old_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("history row");
+        assert_eq!(old_state.as_str(), "succeeded");
+    }
+
+    /// E2a-2 (c3): pausing one batch keeps the other batch's demand — the
+    /// shared task stays live while the paused link parks.
+    #[test]
+    fn pausing_one_batch_keeps_other_batch_demand() {
+        let (_dir, conn) = migrated_db();
+        for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                rusqlite::params![id, request_id],
+            )
+            .expect("batch");
+        }
+        let first =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b1");
+        let second =
+            admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None).expect("admit b2");
+        assert_eq!(second.task_id, first.task_id);
+
+        control_batch(&conn, "b1", BatchAction::Pause, None).expect("pause b1");
+
+        let b1_link: String = conn
+            .query_row(
+                "SELECT request_state FROM processing_batch_tasks WHERE batch_id = 'b1' AND task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("b1 link parked");
+        let b2_link: String = conn
+            .query_row(
+                "SELECT request_state FROM processing_batch_tasks WHERE batch_id = 'b2' AND task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("b2 link kept");
+        assert_eq!(b1_link.as_str(), "paused");
+        assert_eq!(b2_link.as_str(), "active");
+        // The shared unit is still live under the composite identity.
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE domain = 'corpus' AND subject_kind = 'asset' AND subject_id = 'a1' AND kind = 'ocr'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("shared unit stays live");
+        assert_eq!(live, 1);
+    }
+
+    /// E2a-2 (d): two connections admitting the same corpus unit at once
+    /// converge on exactly one physical task — one creator, one attacher —
+    /// with both batches linked. The INSERT OR IGNORE + race-fallback path
+    /// rests on the composite unique after the cutover.
+    #[test]
+    fn concurrent_double_admit_yields_single_shared_task() {
+        let (dir, _held) = migrated_db();
+        let db_path = dir.path().join("entropia.sqlite");
+        {
+            let conn = crate::db::open::open_archive_connection(&db_path).expect("open");
+            for (id, request_id) in [("b1", "req-1"), ("b2", "req-2")] {
+                conn.execute(
+                    "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                     VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 1, 1)",
+                    rusqlite::params![id, request_id],
+                )
+                .expect("batch");
+            }
+        }
+        // Both admitters run on archive connections, so the busy_timeout the
+        // queue requires is active on each side of the race.
+        let probe = crate::db::open::open_archive_connection(&db_path).expect("probe");
+        let busy_timeout: i64 = probe
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .expect("read busy_timeout");
+        assert!(busy_timeout > 0, "the race must run with busy_timeout set");
+        drop(probe);
+
+        let barrier = std::sync::Barrier::new(2);
+        let (first, second) = std::thread::scope(|scope| {
+            let a = scope.spawn(|| {
+                let conn = crate::db::open::open_archive_connection(&db_path).expect("open worker");
+                barrier.wait();
+                admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+                    .expect("concurrent admit")
+            });
+            let b = scope.spawn(|| {
+                let conn = crate::db::open::open_archive_connection(&db_path).expect("open worker");
+                barrier.wait();
+                admit_or_attach(&conn, "b2", "ocr", "a1", 0, "fp-a1", "ch-a1", None)
+                    .expect("concurrent admit")
+            });
+            (a.join().expect("worker b1"), b.join().expect("worker b2"))
+        });
+
+        assert!(
+            first.created != second.created,
+            "exactly one admitter must create, the other must attach"
+        );
+        assert_eq!(first.task_id, second.task_id);
+        let conn = crate::db::open::open_archive_connection(&db_path).expect("reopen");
+        let physical: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                 WHERE kind = 'ocr' AND asset_id_snapshot = 'a1'
+                   AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count physical units");
+        assert_eq!(physical, 1);
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("count links");
+        assert_eq!(links, 2);
     }
 
     #[test]
@@ -3318,7 +5894,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("dependency link");
-        assert_eq!(dep, live_task(&conn, "ocr", "a1").unwrap());
+        assert_eq!(
+            dep,
+            live_task(&conn, "corpus", "asset", "a1", "ocr").unwrap()
+        );
         let state: String = conn
             .query_row(
                 "SELECT state FROM processing_tasks WHERE kind = 'embedding' AND asset_id_snapshot = 'a1'",
@@ -3546,6 +6125,448 @@ mod tests {
     }
 
     #[test]
+    fn batch_snapshot_aggregates_durable_task_progress_without_hiding_unknown_totals() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        conn.execute(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, progress_total, created_at, updated_at)
+             VALUES ('t-known-1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'running', 2, 5, 1, 1),
+                    ('t-known-2', 'embedding', 'a2', 'corpus', 'asset', 'a2', 'running', 3, 7, 1, 1),
+                    ('t-bibliography', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1', 'running', 1, 100, 1, 1)",
+            [],
+        )
+        .expect("tasks with compatible and incompatible progress units");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+                (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-known-1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active'),
+                    ('b1', 't-known-2', 'embedding', 'a2', 'corpus', 'asset', 'a2', 'active'),
+                    ('b1', 't-bibliography', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1', 'active')",
+            [],
+        )
+        .expect("link tasks");
+
+        let snapshot = read_batch_snapshot(&conn, "b1").expect("snapshot");
+        assert_eq!(snapshot.progress_done, 5);
+        assert_eq!(snapshot.progress_total, Some(12));
+        assert_eq!(snapshot.progress_unknown_tasks, 1);
+
+        conn.execute(
+            "INSERT INTO processing_batches
+                (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('b-bibliography', 'req-bibliography', 'bibliography', 'running', 'run',
+                     '[\"bibliography_sync\"]', 1, 2, 2)",
+            [],
+        )
+        .expect("bibliography-only batch");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+                (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b-bibliography', 't-bibliography', 'bibliography_sync', 'lib-1',
+                     'bibliography', 'library', 'lib-1', 'active')",
+            [],
+        )
+        .expect("link bibliography task");
+
+        let bibliography =
+            read_batch_snapshot(&conn, "b-bibliography").expect("bibliography snapshot");
+        assert_eq!(bibliography.progress_done, 0);
+        assert_eq!(bibliography.progress_total, None);
+        assert_eq!(bibliography.progress_unknown_tasks, 1);
+    }
+
+    #[test]
+    fn interactive_batch_claims_ahead_of_background_without_preempting_running() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b-bg", "req-bg", r#"["ocr"]"#);
+        insert_batch(&conn, "b-hi", "req-hi", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id IN ('b-bg', 'b-hi')",
+            [],
+        )
+        .expect("start batches");
+        let bg = admit_or_attach(&conn, "b-bg", "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("admit background unit");
+        let hi = admit_or_attach(&conn, "b-hi", "ocr", "a6", 0, "", "ocr:light", None)
+            .expect("admit interactive unit");
+        // Roles follow the physical id order so the test is deterministic:
+        // the smaller id is background, the larger one interactive. FIFO
+        // by id would serve the background unit first.
+        let (bg_batch, hi_batch) = if bg.task_id < hi.task_id {
+            ("b-bg", "b-hi")
+        } else {
+            ("b-hi", "b-bg")
+        };
+        let (bg_task, hi_task) = if bg.task_id < hi.task_id {
+            (&bg.task_id, &hi.task_id)
+        } else {
+            (&hi.task_id, &bg.task_id)
+        };
+        conn.execute(
+            "UPDATE processing_batches SET priority = 2 WHERE id = ?1",
+            [hi_batch],
+        )
+        .expect("raise interactive batch");
+        assert_eq!(
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [bg_batch],
+                |row| row.get::<_, i64>(0)
+            )
+            .expect("background priority"),
+            0
+        );
+        let first = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("a unit must be runnable");
+        assert_eq!(
+            first.task_id, *hi_task,
+            "the interactive batch jumps ahead of the background backlog"
+        );
+        // The running unit is never preempted: the next claim serves the
+        // background unit, not the running one.
+        let second = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("the survivor must be runnable");
+        assert_eq!(second.task_id, *bg_task);
+        assert!(claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("drain")
+            .is_none());
+    }
+
+    #[test]
+    fn set_batch_priority_validates_range_fences_revision_and_bumps() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        set_batch_priority(&conn, "b1", 2, None).expect("raise to interactive");
+        let (priority, revision): (i64, i64) = conn
+            .query_row(
+                "SELECT priority, revision FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("priority row");
+        assert_eq!((priority, revision), (2, 1));
+        let stale = set_batch_priority(&conn, "b1", 1, Some(0));
+        assert!(stale.is_err(), "a stale revision must fail closed");
+        for bad in [-1, 3, 99] {
+            assert!(
+                set_batch_priority(&conn, "b1", bad, None).is_err(),
+                "priority {bad} is outside 0..=2"
+            );
+        }
+        assert!(set_batch_priority(&conn, "nope", 1, None).is_err());
+        let unchanged: (i64, i64) = conn
+            .query_row(
+                "SELECT priority, revision FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("priority row");
+        assert_eq!(unchanged, (2, 1), "rejected writes change nothing");
+        set_batch_priority(&conn, "b1", 1, Some(1)).expect("fenced write with the fresh revision");
+        let lowered: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(lowered, 1);
+    }
+
+    #[test]
+    fn cancel_resets_batch_priority_to_background() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        set_batch_priority(&conn, "b1", 2, None).expect("raise to interactive");
+        control_batch(&conn, "b1", BatchAction::Cancel, None).expect("cancel");
+        let priority: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(priority, 0, "a cancelled batch keeps no priority");
+        assert!(
+            set_batch_priority(&conn, "b1", 1, None).is_err(),
+            "a terminal batch takes no new priority"
+        );
+    }
+
+    #[test]
+    fn aging_promotes_exactly_one_starved_background_batch_to_high() {
+        let (_dir, conn) = batch_db();
+        for (id, req) in [
+            ("b-old", "req-old"),
+            ("b-new", "req-new"),
+            ("b-hi", "req-hi"),
+            ("b-empty", "req-empty"),
+        ] {
+            insert_batch(&conn, id, req, r#"["ocr"]"#);
+        }
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id LIKE 'b-%'",
+            [],
+        )
+        .expect("start batches");
+        let old = admit_or_attach(&conn, "b-old", "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("old unit");
+        admit_or_attach(&conn, "b-new", "ocr", "a6", 0, "", "ocr:light", None).expect("new unit");
+        admit_or_attach(&conn, "b-hi", "ocr", "a2", 0, "", "ocr:light", None).expect("high unit");
+        set_batch_priority(&conn, "b-hi", 2, None).expect("raise high batch");
+        let now_ms: i64 = 10_000_000_000;
+        conn.execute(
+            "UPDATE processing_tasks SET created_at = ?1 WHERE id = ?2",
+            rusqlite::params![now_ms - 1_900_000, old.task_id],
+        )
+        .expect("starve the old unit past the 30-minute bound");
+        assert_eq!(apply_priority_aging(&conn, now_ms).expect("age"), 1);
+        let priority = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("priority row")
+        };
+        assert_eq!(priority("b-old"), 1);
+        assert_eq!(priority("b-new"), 0);
+        assert_eq!(
+            priority("b-hi"),
+            2,
+            "aging never touches interactive batches"
+        );
+        assert_eq!(
+            priority("b-empty"),
+            0,
+            "a batch with nothing runnable gains nothing"
+        );
+        // Idempotent and capped: a second pass promotes nothing, never to 2.
+        assert_eq!(apply_priority_aging(&conn, now_ms).expect("age again"), 0);
+        assert_eq!(priority("b-old"), 1);
+    }
+
+    #[test]
+    fn custom_model_settings_stop_trusting_canonical_rows() {
+        let (_dir, conn) = batch_db();
+        assert_eq!(
+            super::super::eligibility::embedding_decision(&conn, "a2").expect("decision"),
+            super::super::eligibility::EmbeddingDecision::Fresh,
+            "canonical rows are fresh under canonical settings"
+        );
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', 'custom/model')",
+            [],
+        )
+        .expect("custom model");
+        let stale = super::super::eligibility::embedding_decision(&conn, "a2").expect("decision");
+        assert!(
+            matches!(
+                stale,
+                super::super::eligibility::EmbeddingDecision::Eligible { .. }
+            ),
+            "canonical rows under a custom model must reindex, got {stale:?}"
+        );
+        conn.execute(
+            "UPDATE app_settings SET value = 'baai/bge-m3' WHERE key = 'openrouter_embedding_model'",
+            [],
+        )
+        .expect("restore canonical model");
+        assert_eq!(
+            super::super::eligibility::embedding_decision(&conn, "a2").expect("decision"),
+            super::super::eligibility::EmbeddingDecision::Fresh,
+            "restoring the canonical model restores trust"
+        );
+    }
+
+    #[test]
+    fn custom_model_pin_commits_while_stable_and_refuses_after_a_switch() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set_model = |model: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [model],
+            )
+            .expect("model setting");
+        };
+        set_model("custom/model");
+        insert_batch(&conn, "b1", "req-1", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        let fingerprint = super::super::eligibility::embedding_input_fingerprint(&conn, "a9")
+            .expect("fingerprint");
+        let admitted = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a9",
+            0,
+            &fingerprint,
+            "emb-ch",
+            None,
+        )
+        .expect("admit");
+        // NOTE: admit_or_attach takes the caller contract verbatim; the
+        // planning path resolves the effective pin (covered below by the
+        // commit gate refusing a stale pin after a model switch).
+        let _ = admitted;
+        let effective = super::super::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("resolve");
+        assert_ne!(
+            effective.hash,
+            super::super::eligibility::current_embedding_contract_hash(),
+            "a custom model owns its own space"
+        );
+        // A task pinned to the legacy space no longer commits once settings
+        // moved: the gate refuses configuration_changed without publishing.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 3, contract_hash = ?1 WHERE id = ?2",
+            rusqlite::params![
+                super::super::eligibility::current_embedding_contract_hash(),
+                admitted.task_id
+            ],
+        )
+        .expect("legacy pin");
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &admitted.task_id,
+            3,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("a legacy pin under custom settings must fail");
+        assert!(
+            err.starts_with("configuration_changed"),
+            "a moved contract must fail configuration_changed, got: {err}"
+        );
+        assert!(!published.get(), "a refused commit publishes nothing");
+    }
+
+    #[test]
+    fn custom_space_pin_commits_while_stable_and_refuses_after_a_switch() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch("CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .expect("settings table");
+        let set_model = |model: &str| {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('openrouter_embedding_model', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [model],
+            )
+            .expect("model setting");
+        };
+        set_model("custom/model");
+        let effective = super::super::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("resolve");
+        assert_ne!(
+            effective.hash,
+            super::super::eligibility::current_embedding_contract_hash(),
+            "a custom model owns its own space"
+        );
+        insert_batch(&conn, "b1", "req-1", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = 'b1'",
+            [],
+        )
+        .expect("start batch");
+        // Admission pins the resolved space (what advance_planning stores).
+        let fingerprint = super::super::eligibility::embedding_input_fingerprint(&conn, "a9")
+            .expect("fingerprint");
+        let admitted = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a9",
+            0,
+            &fingerprint,
+            &effective.hash,
+            None,
+        )
+        .expect("admit");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 3 WHERE id = ?1",
+            [&admitted.task_id],
+        )
+        .expect("run it");
+        let published = std::cell::Cell::new(false);
+        commit_success_with(
+            &conn,
+            &admitted.task_id,
+            3,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect("a stable custom space commits");
+        assert!(published.get());
+        // Switching models invalidates the pin: the gate refuses without
+        // publishing, so old-space vectors are never reused.
+        set_model("other/model");
+        let fingerprint2 = super::super::eligibility::embedding_input_fingerprint(&conn, "a8")
+            .expect("fingerprint");
+        let admitted2 = admit_or_attach(
+            &conn,
+            "b1",
+            "embedding",
+            "a8",
+            0,
+            &fingerprint2,
+            &effective.hash,
+            None,
+        )
+        .expect("admit with the stale pin");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'running', lease_epoch = 5 WHERE id = ?1",
+            [&admitted2.task_id],
+        )
+        .expect("run it");
+        let published2 = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &admitted2.task_id,
+            5,
+            "embedding",
+            "embedded",
+            "{}",
+            |_| {
+                published2.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("a moved contract must fail");
+        assert!(
+            err.starts_with("configuration_changed"),
+            "a moved contract must fail configuration_changed, got: {err}"
+        );
+        assert!(!published2.get(), "a refused commit publishes nothing");
+    }
+
+    #[test]
     fn snapshots_list_and_detail_read_durable_state() {
         let (_dir, conn) = batch_db();
         insert_batch(&conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
@@ -3624,8 +6645,8 @@ mod tests {
         prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
         advance_planning(&conn, "b1", 10, 200).expect("plan");
-        let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
-        let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr").unwrap().unwrap();
+        let embedding_id = live_task(&conn, "corpus", "asset", "a1", "embedding").unwrap().unwrap();
         let state = |id: &str| -> String {
             conn.query_row(
                 "SELECT state FROM processing_tasks WHERE id = ?1",
@@ -3650,8 +6671,12 @@ mod tests {
         prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
         advance_planning(&conn, "b1", 10, 200).expect("plan");
-        let ocr_id = live_task(&conn, "ocr", "a1").unwrap().unwrap();
-        let embedding_id = live_task(&conn, "embedding", "a1").unwrap().unwrap();
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let embedding_id = live_task(&conn, "corpus", "asset", "a1", "embedding")
+            .unwrap()
+            .unwrap();
         // Fail the OCR unit terminally: its blocked embedding must follow,
         // with no settle call — the 0038 trigger does it on the transition.
         conn.execute(
@@ -4147,5 +7172,932 @@ mod tests {
                 next_retry_at: 121_000
             }
         );
+    }
+
+    // ── E2a-3 domain-dispatched lock-in ──
+    // Unsupported bibliography shapes remain isolated from the documentary
+    // route; E2b-3 adds only bibliography/library/bibliography_sync.
+
+    #[test]
+    fn e2a3_red_bibliography_only_pending_is_never_claimed_nor_mutated() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        // Bibliography row until E2b: minted by direct SQL only. The snapshot
+        // string deliberately collides with corpus asset a1 so a
+        // snapshot-scoped lookup could not tell them apart.
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-biblio-only', 'ocr', 'a1', 'bibliography', 'item', 'bib-row-1', 'pending', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-biblio-only', 'ocr', 'a1', 'bibliography', 'item', 'bib-row-1', 'active')",
+            [],
+        )
+        .unwrap();
+        let before: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = 't-biblio-only'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let attempts_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = 't-biblio-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let claimed = claim_next(&conn, "s", &["ocr"], 100).unwrap();
+        assert!(
+            claimed.is_none(),
+            "bibliography rows must never be claimed, got {:?}",
+            claimed
+        );
+        let after: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = 't-biblio-only'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            before, after,
+            "claiming must never mutate a bibliography row"
+        );
+        let attempts_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = 't-biblio-only'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            attempts_before, attempts_after,
+            "claiming must never open an attempt on a bibliography row"
+        );
+    }
+
+    #[test]
+    fn e2a3_red_commit_rejects_bibliography_without_publishing() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let fingerprint: String = conn
+            .query_row(
+                "SELECT id || '|' || path || '|' || COALESCE(size, -1) FROM assets WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               input_revision, input_fingerprint, contract_hash, state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES ('t-biblio-commit', 'ocr', 'a1', 'bibliography', 'item', 'bib-commit-1',
+               0, ?1, 'ocr:light', 'running', 's1', 7, 1, 1)",
+            rusqlite::params![fingerprint],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 't-biblio-commit', 'ocr', 'a1', 'bibliography', 'item', 'bib-commit-1', 'active')",
+            [],
+        )
+        .unwrap();
+        let published = std::cell::Cell::new(false);
+        let result = commit_success_with(&conn, "t-biblio-commit", 7, "ocr", "text", "{}", |_| {
+            published.set(true);
+            Ok(())
+        });
+        assert!(
+            result.is_err(),
+            "commit on a bibliography task must fail, got Ok"
+        );
+        assert!(
+            result.unwrap_err().contains("unsupported_subject"),
+            "bibliography commit must reject honestly"
+        );
+        assert!(
+            !published.get(),
+            "a rejected bibliography commit must never publish canonical rows"
+        );
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-biblio-commit'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state.as_str(), "running");
+    }
+
+    // Documentary lock-in: passes before and after E2a-3, proving the slice
+    // changed no scheduling/priority meaning on documentary rows.
+    #[test]
+    fn e2a3_lockin_retry_never_resurrects_cancelled_or_succeeded() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let cancelled =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'cancelled' WHERE id = ?1",
+            [&cancelled.task_id],
+        )
+        .unwrap();
+        assert!(
+            retry_failed(&conn, "b1", Some(&cancelled.task_id)).is_err(),
+            "retrying a cancelled unit must error, not resurrect it"
+        );
+        let succeeded =
+            admit_or_attach(&conn, "b1", "ocr", "a2", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&succeeded.task_id],
+        )
+        .unwrap();
+        assert!(
+            retry_failed(&conn, "b1", Some(&succeeded.task_id)).is_err(),
+            "retrying a succeeded unit must error, not resurrect it"
+        );
+        for id in [&cancelled.task_id, &succeeded.task_id] {
+            let (state, cycle): (String, i64) = conn
+                .query_row(
+                    "SELECT state, retry_cycle FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert!(
+                state == "cancelled" || state == "succeeded",
+                "terminal history must stay terminal"
+            );
+            assert_eq!(cycle, 0);
+        }
+    }
+
+    // ── E2a-3 GREEN: subject core, claim identity, DTO identity ──
+
+    #[test]
+    fn e2a3_green_subject_core_rejects_non_corpus_without_fallback() {
+        let (_dir, conn) = migrated_db();
+        for (id, request) in [("b1", "req-1"), ("repair", "req-repair")] {
+            let origin = if id == "repair" { "repair" } else { "user" };
+            conn.execute(
+                "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, 1, 1)",
+                rusqlite::params![id, request, origin],
+            )
+            .unwrap();
+        }
+        let biblio = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "item".to_string(),
+            subject_id: "bib-row-1".to_string(),
+        };
+        let err =
+            admit_subject_or_attach(&conn, "b1", "ocr", &biblio, 0, "fp", "ch", None).unwrap_err();
+        assert!(
+            err.contains("unsupported_subject"),
+            "bibliography admission must reject honestly, got: {err}"
+        );
+        let non_asset = TaskSubject {
+            domain: "corpus".to_string(),
+            subject_kind: "document".to_string(),
+            subject_id: "a1".to_string(),
+        };
+        assert!(
+            admit_subject_or_attach(&conn, "b1", "ocr", &non_asset, 0, "fp", "ch", None)
+                .unwrap_err()
+                .contains("unsupported_subject"),
+            "non-asset subject kinds must reject"
+        );
+        let empty = TaskSubject {
+            domain: "corpus".to_string(),
+            subject_kind: "asset".to_string(),
+            subject_id: String::new(),
+        };
+        assert!(
+            admit_subject_or_attach(&conn, "b1", "ocr", &empty, 0, "fp", "ch", None)
+                .unwrap_err()
+                .contains("unsupported_subject"),
+            "empty subject ids must reject"
+        );
+        // No silent fallback: nothing was admitted for the foreign subjects.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM processing_tasks", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        // The corpus core admits; the legacy wrapper delegates to it and
+        // attaches instead of duplicating.
+        let created = admit_subject_or_attach(
+            &conn,
+            "b1",
+            "ocr",
+            &TaskSubject::corpus_asset("a1"),
+            0,
+            "fp-a1",
+            "ch-a1",
+            None,
+        )
+        .unwrap();
+        assert!(created.created);
+        let attached =
+            admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).unwrap();
+        assert!(!attached.created);
+        assert_eq!(attached.task_id, created.task_id);
+        // Repair core validates before touching repair state.
+        let repair_err = admit_repair_subject_or_attach(
+            &conn,
+            "repair",
+            &biblio,
+            0,
+            "fp",
+            &super::super::eligibility::current_embedding_contract_hash(),
+        )
+        .unwrap_err();
+        assert!(
+            repair_err.contains("unsupported_subject"),
+            "repair must reject bibliography before origin checks, got: {repair_err}"
+        );
+    }
+
+    #[test]
+    fn e2a3_green_claimed_task_carries_corpus_subject() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "s", &["ocr"], 100)
+            .unwrap()
+            .expect("corpus unit must be claimable");
+        assert_eq!(claimed.task_id, admitted.task_id);
+        assert_eq!(claimed.domain.as_str(), "corpus");
+        assert_eq!(claimed.subject_kind.as_str(), "asset");
+        assert_eq!(claimed.subject_id.as_str(), "a1");
+        assert_eq!(claimed.asset_id.as_str(), "a1");
+    }
+
+    #[test]
+    fn e2a3_green_list_and_detail_carry_subject_alongside_snapshot() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let (tasks, _) = list_tasks(&conn, "b1", None, None, None, 50, 0).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_id, admitted.task_id);
+        assert_eq!(tasks[0].asset_id.as_str(), "a1");
+        assert_eq!(tasks[0].domain.as_str(), "corpus");
+        assert_eq!(tasks[0].subject_kind.as_str(), "asset");
+        assert_eq!(tasks[0].subject_id.as_str(), "a1");
+        let detail = read_task_detail(&conn, "b1", &admitted.task_id, 10).unwrap();
+        assert_eq!(detail.asset_id.as_str(), "a1");
+        assert_eq!(detail.domain.as_str(), "corpus");
+        assert_eq!(detail.subject_kind.as_str(), "asset");
+        assert_eq!(detail.subject_id.as_str(), "a1");
+    }
+
+    // Documentary lock-in: cancelling one sharer never cancels the
+    // survivor's demand and never publishes; with no survivor the commit
+    // fails `demand_lost`.
+    #[test]
+    fn e2a3_lockin_cancel_shared_task_settles_per_survivor_demand() {
+        let (_dir, conn) = batch_db();
+        for (id, request) in [("a", "req-a"), ("b", "req-b")] {
+            insert_batch(&conn, id, request, r#"["ocr"]"#);
+            conn.execute(
+                "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        }
+        let first = admit_or_attach(&conn, "a", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let second = admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        assert_eq!(first.task_id, second.task_id);
+        let task_id = first.task_id.clone();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("shared unit must be claimable");
+        assert_eq!(claimed.task_id, task_id);
+        control_batch(&conn, "a", BatchAction::Cancel, None).unwrap();
+        let (a_link, b_link): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT request_state FROM processing_batch_tasks WHERE batch_id='a' AND task_id=?1),
+                        (SELECT request_state FROM processing_batch_tasks WHERE batch_id='b' AND task_id=?1)",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(a_link.as_str(), "cancelled");
+        assert_eq!(
+            b_link.as_str(),
+            "active",
+            "cancelling A must not touch B's demand"
+        );
+        assert!(
+            execution_wanted(&conn, &task_id).unwrap(),
+            "survivor demand keeps the unit wanted"
+        );
+        let published = std::cell::Cell::new(false);
+        commit_success_with(
+            &conn,
+            &task_id,
+            claimed.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .expect("commit with survivor demand must succeed");
+        assert!(published.get());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "succeeded"
+        );
+        // No survivor: the late commit fails `demand_lost` and publishes nothing.
+        for (id, request) in [("c", "req-c"), ("d", "req-d")] {
+            insert_batch(&conn, id, request, r#"["ocr"]"#);
+            conn.execute(
+                "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        }
+        let c = admit_or_attach(&conn, "c", "ocr", "a5p1", 0, "", "ocr:light", None).unwrap();
+        admit_or_attach(&conn, "d", "ocr", "a5p1", 0, "", "ocr:light", None).unwrap();
+        let stale = claim_next(&conn, "worker", &["ocr"], 2_000)
+            .unwrap()
+            .expect("second shared unit must be claimable");
+        assert_eq!(stale.task_id, c.task_id);
+        control_batch(&conn, "c", BatchAction::Cancel, None).unwrap();
+        control_batch(&conn, "d", BatchAction::Cancel, None).unwrap();
+        assert!(
+            !execution_wanted(&conn, &stale.task_id).unwrap(),
+            "with every sharer cancelled nothing wants the unit"
+        );
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &stale.task_id,
+            stale.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("demand_lost"),
+            "a commit with no survivor demand must fail demand_lost, got: {err}"
+        );
+        assert!(!published.get());
+        cancel_running_task(&conn, &stale.task_id, stale.lease_epoch).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id=?1",
+                [&stale.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn checkpoint_attempt_rolls_back_when_last_batch_withdraws_demand() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b1'",
+            [],
+        )
+        .unwrap();
+        let admitted = admit_or_attach(&conn, "b1", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("unit must be claimable");
+        assert_eq!(claimed.task_id, admitted.task_id);
+
+        save_checkpoint(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:1".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":1}"#.to_string(),
+                payload_checksum: "confirmed-checksum".to_string(),
+            },
+            1_100,
+        )
+        .expect("first checkpoint commits while demand is active");
+
+        control_batch(&conn, "b1", BatchAction::Cancel, None).expect("withdraw last demand");
+        assert!(!execution_wanted(&conn, &claimed.task_id).unwrap());
+        let error = save_checkpoint(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:2".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":2}"#.to_string(),
+                payload_checksum: "rejected-checksum".to_string(),
+            },
+            1_200,
+        )
+        .expect_err("a checkpoint without live demand must fail closed");
+        assert_eq!(
+            error,
+            format!(
+                "demand_lost: {} is no longer wanted by any batch",
+                claimed.task_id
+            )
+        );
+
+        let durable: (i64, i64, Option<i64>) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id=?1),
+                        progress_done, heartbeat_at
+                   FROM processing_tasks WHERE id=?1",
+                [&claimed.task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("durable checkpoint state");
+        assert_eq!(durable, (1, 1, Some(1_100)));
+        let payload: String = conn
+            .query_row(
+                "SELECT payload FROM processing_checkpoints WHERE task_id=?1 AND unit_key='page:1'",
+                [&claimed.task_id],
+                |row| row.get(0),
+            )
+            .expect("previous checkpoint survives demand withdrawal");
+        assert_eq!(payload, r#"{"page":1}"#);
+    }
+
+    // Documentary lock-in: claim-time transitions fire identically on corpus
+    // fixtures — OCR `already_satisfied` on a newly arrived extraction,
+    // embedding `already_satisfied` on a Fresh input, and
+    // `configuration_changed` on a stale contract.
+    #[test]
+    fn e2a3_lockin_claim_time_transitions_fire_identically() {
+        let (_dir, conn) = batch_db();
+        // OCR: a newly arrived extraction satisfies the queued unit.
+        insert_batch(&conn, "b-ocr", "req-ocr", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-ocr'",
+            [],
+        )
+        .unwrap();
+        let ocr = admit_or_attach(&conn, "b-ocr", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, created_at)
+             VALUES ('new-ocr', 'a1', 'edited text', 'ocr', 1)",
+            [],
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["ocr"], 1).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&ocr.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "skipped|already_satisfied"
+        );
+        // Embedding Fresh: another path satisfied the input while queued.
+        insert_batch(&conn, "b-fresh", "req-fresh", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-fresh'",
+            [],
+        )
+        .unwrap();
+        let fresh = admit_or_attach(
+            &conn,
+            "b-fresh",
+            "embedding",
+            "a2",
+            0,
+            "fp-a2",
+            &super::super::eligibility::current_embedding_contract_hash(),
+            None,
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["embedding"], 2).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&fresh.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "skipped|already_satisfied"
+        );
+        // Embedding stale contract: parks blocked for resume.
+        insert_batch(&conn, "b-stale", "req-stale", r#"["embeddings"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-stale'",
+            [],
+        )
+        .unwrap();
+        let stale = admit_or_attach(
+            &conn,
+            "b-stale",
+            "embedding",
+            "a4",
+            0,
+            "fp-a4",
+            "old-contract",
+            None,
+        )
+        .unwrap();
+        assert!(claim_next(&conn, "s", &["embedding"], 3).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT state || '|' || outcome FROM processing_tasks WHERE id=?1",
+                [&stale.task_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .as_str(),
+            "blocked|configuration_changed"
+        );
+    }
+
+    // Documentary lock-in: the corpus commit gates are unchanged — a source
+    // move under the computation fails `source_changed` and publishes nothing.
+    #[test]
+    fn e2a3_lockin_commit_source_changed_still_guards_corpus() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .unwrap()
+            .expect("corpus unit must be claimable");
+        conn.execute("UPDATE assets SET size = 999 WHERE id = 'a1'", [])
+            .unwrap();
+        let published = std::cell::Cell::new(false);
+        let err = commit_success_with(
+            &conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("source_changed"),
+            "a moved source must fail source_changed, got: {err}"
+        );
+        assert!(!published.get());
+    }
+
+    #[test]
+    fn e2b1_red_admits_only_existing_bibliography_libraries_and_pins_the_row() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "CREATE TABLE zotero_libraries (
+               id TEXT PRIMARY KEY,
+               last_modified_version INTEGER,
+               revision INTEGER NOT NULL DEFAULT 0
+             )",
+        )
+        .expect("synthetic bibliography library table");
+        conn.execute(
+            "INSERT INTO zotero_libraries (id, last_modified_version, revision)
+             VALUES ('library-row-1', 7, 2)",
+            [],
+        )
+        .expect("synthetic library");
+
+        let batch = ensure_system_batch(&conn, "bibliography").expect("bibliography batch");
+        assert_eq!(
+            ensure_system_batch(&conn, "bibliography").expect("reopen bibliography batch"),
+            batch
+        );
+        let origin: String = conn
+            .query_row(
+                "SELECT origin FROM processing_batches WHERE id = ?1",
+                [&batch],
+                |row| row.get(0),
+            )
+            .expect("bibliography origin");
+        assert_eq!(origin, "bibliography");
+
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "library-row-1".to_string(),
+        };
+        let admitted = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &subject,
+            999,
+            "caller-fingerprint",
+            "caller-contract",
+            None,
+        )
+        .expect("existing library admission");
+        assert!(admitted.created);
+
+        let row: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                            state, input_revision, input_fingerprint, contract_hash, outcome
+                       FROM processing_tasks WHERE id = ?1",
+                [&admitted.task_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                    ))
+                },
+            )
+            .expect("admitted bibliography row");
+        assert_eq!(
+            row,
+            (
+                "bibliography_sync".to_string(),
+                "library-row-1".to_string(),
+                "bibliography".to_string(),
+                "library".to_string(),
+                "library-row-1".to_string(),
+                "pending".to_string(),
+                7,
+                "library|library-row-1|7".to_string(),
+                "bibliography_sync/v1".to_string(),
+                "".to_string(),
+            )
+        );
+
+        let attached = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &subject,
+            0,
+            "different",
+            "different",
+            None,
+        )
+        .expect("attach existing bibliography task");
+        assert!(!attached.created);
+        assert_eq!(attached.task_id, admitted.task_id);
+
+        let missing = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "missing-library".to_string(),
+        };
+        let error = admit_subject_or_attach(
+            &conn,
+            &batch,
+            "bibliography_sync",
+            &missing,
+            0,
+            "",
+            "",
+            None,
+        )
+        .expect_err("missing library must not be admitted");
+        assert!(
+            error.contains("unknown_library"),
+            "honest missing-library error: {error}"
+        );
+    }
+
+    // ── E2b-2 RED: bibliography claim eligibility (claim/validate routing) ──
+    // Admitted E2b-1 rows become claimable through their own kind only; the
+    // corpus arm (ocr/embedding claim/validate) must not move. These must
+    // FAIL before the E2b-2 claim dispatch lands and PASS after.
+
+    fn synthetic_zotero_libraries(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE zotero_libraries (
+               id TEXT PRIMARY KEY,
+               connection_id TEXT NOT NULL,
+               library_type TEXT NOT NULL CHECK(library_type IN ('user', 'group')),
+               library_id TEXT NOT NULL,
+               name TEXT NOT NULL,
+               last_modified_version INTEGER,
+               revision INTEGER NOT NULL DEFAULT 0,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             )",
+        )
+        .expect("synthetic bibliography library table");
+        conn.execute(
+            "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name,
+                                            last_modified_version, revision, created_at, updated_at)
+             VALUES ('lib-row-1', 'conn-1', 'user', '0', 'Personal', 7, 1, 1, 1)",
+            [],
+        )
+        .expect("synthetic library");
+    }
+
+    fn admit_bibliography_task(conn: &Connection) -> String {
+        let batch = ensure_system_batch(conn, "bibliography").expect("bibliography batch");
+        let subject = TaskSubject {
+            domain: "bibliography".to_string(),
+            subject_kind: "library".to_string(),
+            subject_id: "lib-row-1".to_string(),
+        };
+        admit_subject_or_attach(conn, &batch, "bibliography_sync", &subject, 0, "", "", None)
+            .expect("admit bibliography sync task")
+            .task_id
+    }
+
+    #[test]
+    fn e2b2_bibliography_sync_is_claimable_only_through_its_kind() {
+        let (_dir, conn) = migrated_db();
+        synthetic_zotero_libraries(&conn);
+        let task_id = admit_bibliography_task(&conn);
+
+        // A corpus-only supervisor (today's production registry) never
+        // claims bibliography work, and never mutates it.
+        let corpus_only =
+            claim_next(&conn, "s-corpus", &["ocr", "embedding"], 100).expect("corpus claim scan");
+        assert!(
+            corpus_only.is_none(),
+            "an ocr/embedding registry must not claim bibliography_sync"
+        );
+        let untouched: (String, i64) = conn
+            .query_row(
+                "SELECT state, attempt_count FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("bibliography row");
+        assert_eq!(untouched, ("pending".to_string(), 0));
+
+        // A registry that owns bibliography_sync claims it with the honest
+        // subject identity and the admission pin still attached.
+        let claimed = claim_next(&conn, "s-biblio", &["bibliography_sync"], 100)
+            .expect("bibliography claim scan")
+            .expect("claimable bibliography task");
+        assert_eq!(claimed.task_id, task_id);
+        assert_eq!(claimed.kind, "bibliography_sync");
+        assert_eq!(claimed.domain, "bibliography");
+        assert_eq!(claimed.subject_kind, "library");
+        assert_eq!(claimed.subject_id, "lib-row-1");
+        assert_eq!(claimed.asset_id, "lib-row-1");
+        assert_eq!(claimed.input_revision, 7);
+        assert_eq!(claimed.input_fingerprint, "library|lib-row-1|7");
+        assert_eq!(claimed.contract_hash, BIBLIOGRAPHY_SYNC_CONTRACT);
+
+        // And a bibliography-only registry never claims corpus rows: mint
+        // one the corpus arm would take (E2a fixtures) and prove the kinds
+        // partition the queue.
+        conn.execute(
+            "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES ('a1', 'i0', 'a1.png', 'image', 10, 1)",
+            [],
+        )
+        .unwrap();
+        insert_batch(&conn, "b-corpus", "req-corpus", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-corpus'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('t-corpus', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'pending', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b-corpus', 't-corpus', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active')",
+            [],
+        )
+        .unwrap();
+        let biblio_only = claim_next(&conn, "s-biblio2", &["bibliography_sync"], 200)
+            .expect("bibliography-only claim scan");
+        assert!(
+            biblio_only.is_none(),
+            "a bibliography_sync registry must not claim corpus rows"
+        );
+        let corpus_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-corpus'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(corpus_state, "pending");
+        // The corpus row stays claimable by its own kind right after.
+        let corpus = claim_next(&conn, "s-corpus2", &["ocr"], 300)
+            .expect("corpus claim after bibliography")
+            .expect("corpus task claimable");
+        assert_eq!(corpus.task_id, "t-corpus");
+    }
+
+    #[test]
+    fn e2b2_missing_library_row_skips_at_claim_without_a_motor() {
+        let (_dir, conn) = migrated_db();
+        synthetic_zotero_libraries(&conn);
+        let task_id = admit_bibliography_task(&conn);
+        // The library row disappears between admission and claim: the
+        // subject is gone from the catalog, which is a terminal skip
+        // (mirroring corpus `source_deleted`), never a motor call.
+        conn.execute("DELETE FROM zotero_libraries WHERE id = 'lib-row-1'", [])
+            .unwrap();
+        let claimed = claim_next(&conn, "s", &["bibliography_sync"], 100).expect("claim scan");
+        assert!(claimed.is_none(), "no motor may run for a lost library");
+        let settled: (String, String) = conn
+            .query_row(
+                "SELECT state, outcome FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("settled bibliography row");
+        assert_eq!(
+            settled,
+            ("skipped".to_string(), "library_missing".to_string())
+        );
+        let attempts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_attempts WHERE task_id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 0, "a skipped task opens no attempt");
     }
 }

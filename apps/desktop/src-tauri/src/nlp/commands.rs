@@ -263,7 +263,7 @@ fn admit_manual_embedding(
         asset_id,
         revision,
         &fingerprint,
-        &crate::processing::eligibility::current_embedding_contract_hash(),
+        &crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?.hash,
         None,
     )?;
     let _ = item_id;
@@ -317,7 +317,8 @@ pub(crate) fn admit_backfill(
     let coverage = super::embeddings::summarize_asset_embedding_coverage(conn)?;
     let candidates = super::embeddings::scan_text_assets(conn, limit, !force)?;
     let batch = repository::ensure_system_batch(conn, "manual")?;
-    let current_contract = crate::processing::eligibility::current_embedding_contract_hash();
+    let current_contract =
+        crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?.hash;
     let contract = if force {
         format!("force:{current_contract}")
     } else {

@@ -23,6 +23,45 @@ const MIGRATION_0033_SQL: &str = include_str!(
 const MIGRATION_0038_SQL: &str = include_str!(
     "../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
 );
+const MIGRATION_0038_CATALOG_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0038_bibliography_catalog.sql");
+const MIGRATION_0039_RELATIONS_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0039_bibliography_relations.sql");
+const MIGRATION_0040_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0040_bibliography_reconciliation.sql");
+const MIGRATION_0041_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+);
+const MIGRATION_0042_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+);
+const MIGRATION_0043_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0043_bibliography_sync_tasks.sql");
+const MIGRATION_0044_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0044_processing_priority.sql");
+const MIGRATION_0045_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+);
+const MIGRATION_0046_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql");
+const MIGRATION_0047_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+);
+const MIGRATION_0048_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0048_bibliographic_embedding_generations.sql"
+);
+const MIGRATION_0049_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql");
+const MIGRATION_0050_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+);
+const MIGRATION_0051_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql");
+const MIGRATION_0052_SQL: &str =
+    include_str!("../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql");
+const MIGRATION_0053_SQL: &str = include_str!(
+    "../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+);
 
 fn base_tables(conn: &rusqlite::Connection) {
     conn.execute_batch(
@@ -112,6 +151,52 @@ fn kill_mid_claim_recovers_without_losing_or_rerunning_work() {
             [],
         )
         .expect("track 0038");
+        for (sql, name) in [
+            (MIGRATION_0038_CATALOG_SQL, "0038_bibliography_catalog"),
+            (MIGRATION_0039_RELATIONS_SQL, "0039_bibliography_relations"),
+            (MIGRATION_0040_SQL, "0040_bibliography_reconciliation"),
+        ] {
+            conn.execute_batch(sql)
+                .expect("apply bibliography migration");
+            conn.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+                [name],
+            )
+            .expect("track bibliography migration");
+        }
+        conn.execute_batch(MIGRATION_0041_SQL).expect("apply 0041");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
+            [],
+        )
+        .expect("track 0041");
+        conn.execute_batch(MIGRATION_0042_SQL).expect("apply 0042");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0042_processing_task_subject_cutover', 1)",
+            [],
+        )
+        .expect("track 0042");
+        conn.execute_batch(MIGRATION_0043_SQL).expect("apply 0043");
+        conn.execute_batch(MIGRATION_0044_SQL).expect("apply 0044");
+        conn.execute_batch(MIGRATION_0045_SQL).expect("apply 0045");
+        conn.execute_batch(MIGRATION_0046_SQL).expect("apply 0046");
+        conn.execute_batch(MIGRATION_0047_SQL).expect("apply 0047");
+        conn.execute_batch(MIGRATION_0048_SQL).expect("apply 0048");
+        conn.execute_batch(MIGRATION_0049_SQL).expect("apply 0049");
+        conn.execute_batch(MIGRATION_0050_SQL).expect("apply 0050");
+        conn.execute_batch(MIGRATION_0051_SQL).expect("apply 0051");
+        conn.execute_batch(MIGRATION_0052_SQL).expect("apply 0052");
+        conn.execute_batch(MIGRATION_0053_SQL).expect("apply 0053");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0043_bibliography_sync_tasks', 1)",
+            [],
+        )
+        .expect("track 0043");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_priority', 1)",
+            [],
+        )
+        .expect("track 0044");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],

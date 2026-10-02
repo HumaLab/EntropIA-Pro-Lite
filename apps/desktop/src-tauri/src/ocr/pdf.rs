@@ -427,7 +427,9 @@ pub fn pdf_page_count(bytes: &[u8]) -> Result<usize, String> {
 /// It names the cause and the way out. The message it replaced — a complaint
 /// about a document without pages — sent people looking at the file for damage
 /// that was not there.
-pub(crate) const ENCRYPTED_PDF_MESSAGE: &str =
+/// Shared with the bibliography extractor so locked files name the lock
+/// and the way out in both pipelines.
+pub const ENCRYPTED_PDF_MESSAGE: &str =
     "El PDF está protegido con contraseña y no se puede leer. Quitale la protección y volvé a importarlo.";
 
 /// True when the document opened but stayed locked.

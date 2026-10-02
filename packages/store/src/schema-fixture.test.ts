@@ -109,4 +109,349 @@ describe('schema fixture export', () => {
     expect(sql).toContain('idx_rag_chunks_asset_id')
     expect(sql).toContain('idx_rag_chunks_item_id')
   })
+
+  it('exports the bibliography catalog foundation with qualified Zotero identity and snapshots', () => {
+    for (const table of ['zoteroConnections', 'zoteroLibraries', 'bibliographicItems']) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const column of [
+      "source_origin TEXT NOT NULL CHECK(source_origin IN ('local', 'web'))",
+      'source_instance_id TEXT',
+      'connection_id TEXT NOT NULL REFERENCES zotero_connections(id) ON DELETE CASCADE',
+      'library_id TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE',
+      'item_key TEXT NOT NULL',
+      'item_version INTEGER',
+      'native_json_snapshot TEXT NOT NULL',
+      'csl_json_snapshot TEXT NOT NULL',
+      'created_at INTEGER NOT NULL',
+      'updated_at INTEGER NOT NULL',
+    ]) {
+      expect(normalized).toContain(column)
+    }
+    expect(normalized).toContain('idx_bibliographic_items_library_key')
+    expect(normalized).toContain('ON bibliographic_items(library_id, item_key)')
+  })
+
+  it('declares the bibliography catalog relationships in the drizzle schema', () => {
+    const connection = getTableConfig(schema.zoteroConnections)
+    const library = getTableConfig(schema.zoteroLibraries)
+    const item = getTableConfig(schema.bibliographicItems)
+
+    expect(connection.name).toBe('zotero_connections')
+    expect(library.name).toBe('zotero_libraries')
+    expect(item.name).toBe('bibliographic_items')
+    expect(library.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_libraries_identity'
+    )
+    expect(item.indexes.map((index) => index.config.name)).toContain(
+      'idx_bibliographic_items_library_key'
+    )
+  })
+
+  it('declares the E1b-1b relational catalog and tombstone schema', () => {
+    for (const table of [
+      'zoteroCollections',
+      'zoteroTags',
+      'zoteroAttachments',
+      'zoteroItemCollections',
+      'zoteroItemTags',
+      'zoteroItemTombstones',
+      'zoteroCollectionTombstones',
+      'zoteroTagTombstones',
+      'zoteroAttachmentTombstones',
+    ]) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture().replace(/\s+/g, ' ')
+    for (const column of [
+      'collection_key TEXT NOT NULL',
+      'parent_collection_key TEXT',
+      'native_json_snapshot TEXT NOT NULL',
+      'native_version INTEGER',
+      'tag_text TEXT NOT NULL',
+      'tag_type TEXT',
+      'attachment_key TEXT NOT NULL',
+      'item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE',
+      'content_type TEXT',
+      'link_mode TEXT',
+      'filename TEXT',
+      'native_path TEXT',
+      'url TEXT',
+      'md5 TEXT',
+      'mtime INTEGER',
+      'reason TEXT NOT NULL',
+    ]) {
+      expect(sql).toContain(column)
+    }
+    expect(sql).toContain('FOREIGN KEY (item_id, library_id)')
+    expect(sql).toContain('FOREIGN KEY (collection_id, library_id)')
+    expect(sql).toContain('FOREIGN KEY (tag_id, library_id)')
+    expect(sql).toContain('CHECK(length(trim(reason)) > 0)')
+  })
+
+  it('keeps composite identity and membership indexes in the drizzle schema', () => {
+    const collection = getTableConfig(schema.zoteroCollections)
+    const tag = getTableConfig(schema.zoteroTags)
+    const attachment = getTableConfig(schema.zoteroAttachments)
+    const itemCollections = getTableConfig(schema.zoteroItemCollections)
+    const itemTags = getTableConfig(schema.zoteroItemTags)
+
+    expect(collection.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_collections_library_key'
+    )
+    expect(tag.indexes.map((index) => index.config.name)).toContain('idx_zotero_tags_library_text')
+    expect(attachment.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_attachments_item_key'
+    )
+    expect(itemCollections.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'item_id', 'collection_id'])
+    )
+    expect(itemTags.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'item_id', 'tag_id'])
+    )
+  })
+
+  it('declares durable reconciliation state and normalized seen-set tables', () => {
+    for (const table of ['zoteroReconciliationRuns', 'zoteroReconciliationSeen']) {
+      expect(schema).toHaveProperty(table)
+    }
+
+    const sql = buildSchemaFixture().replace(/\s+/g, ' ')
+    for (const column of [
+      'library_id TEXT PRIMARY KEY NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE',
+      'run_id TEXT NOT NULL',
+      'connection_revision INTEGER NOT NULL',
+      'cursor_start INTEGER NOT NULL DEFAULT 0',
+      'cursor_limit INTEGER NOT NULL',
+      'remote_total INTEGER',
+      'target_version INTEGER',
+      'checkpoint_version INTEGER',
+      'retry_count INTEGER NOT NULL DEFAULT 0',
+      'attempt_count INTEGER NOT NULL DEFAULT 0',
+      'latest_error_message TEXT',
+      'latest_error_retryable INTEGER',
+      'revision INTEGER NOT NULL DEFAULT 0',
+      'checkpointed_at INTEGER',
+      'completed_at INTEGER',
+      'run_id TEXT NOT NULL',
+      'entity_kind TEXT NOT NULL',
+      'entity_key TEXT NOT NULL CHECK(length(trim(entity_key)) > 0)',
+      "parent_key TEXT NOT NULL DEFAULT ''",
+      'remote_version INTEGER',
+      'observed_at INTEGER NOT NULL',
+    ]) {
+      expect(sql).toContain(column)
+    }
+    expect(sql).toContain(
+      "CHECK(state IN ('running', 'retry_wait', 'interrupted', 'blocked', 'failed', 'completed'))"
+    )
+    expect(sql).toContain("CHECK(phase IN ('versions', 'catalog', 'finalize'))")
+    expect(sql).toContain("CHECK(entity_kind IN ('item', 'collection', 'tag', 'attachment'))")
+    expect(sql).toContain('ON DELETE CASCADE')
+  })
+
+  it('keeps reconciliation composite identity and foreign-key alignment in drizzle', () => {
+    const runs = getTableConfig(schema.zoteroReconciliationRuns)
+    const seen = getTableConfig(schema.zoteroReconciliationSeen)
+
+    expect(runs.name).toBe('zotero_reconciliation_runs')
+    expect(seen.name).toBe('zotero_reconciliation_seen')
+    expect(runs.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_reconciliation_runs_library_run'
+    )
+    expect(runs.indexes.map((index) => index.config.name)).toContain(
+      'idx_zotero_reconciliation_runs_run_id_unique'
+    )
+    expect(seen.primaryKeys[0]?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['library_id', 'run_id', 'entity_kind', 'entity_key', 'parent_key'])
+    )
+    expect(
+      seen.foreignKeys.some(
+        (foreignKey) => foreignKey.getName() === 'zotero_reconciliation_seen_run_fkey'
+      )
+    ).toBe(true)
+  })
+
+  it('exports the E2a-2 subject cutover: the composite is the sole single-flight authority', () => {
+    const sql = buildSchemaFixture()
+
+    for (const fragment of [
+      "domain TEXT NOT NULL DEFAULT 'corpus'",
+      "subject_kind TEXT NOT NULL DEFAULT 'asset'",
+      "subject_id TEXT NOT NULL DEFAULT ''",
+      'idx_processing_tasks_subject_active_unique',
+      'ON processing_tasks(domain, subject_kind, subject_id, kind)',
+    ]) {
+      expect(sql, `fixture is missing: ${fragment}`).toContain(fragment)
+    }
+    // The 0032 section still carries the historical CREATE (migrations are
+    // never rewritten); E2a-2 drops it, so the 0042 section must carry the
+    // DROP and no later section may recreate it.
+    expect(sql).toContain('DROP INDEX IF EXISTS idx_processing_tasks_active_unique')
+    const cutoverAt = sql.indexOf('-- 0042_processing_task_subject_cutover')
+    expect(cutoverAt).toBeGreaterThanOrEqual(0)
+    expect(sql.slice(cutoverAt)).not.toContain(
+      'CREATE UNIQUE INDEX idx_processing_tasks_active_unique'
+    )
+  })
+
+  it('declares the subject-identity columns on the drizzle processing tables', () => {
+    const tasks = getTableConfig(schema.processingTasks)
+    const batchTasks = getTableConfig(schema.processingBatchTasks)
+
+    for (const config of [tasks, batchTasks]) {
+      expect(config.columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining(['domain', 'subject_kind', 'subject_id'])
+      )
+    }
+    expect(tasks.name).toBe('processing_tasks')
+    expect(batchTasks.name).toBe('processing_batch_tasks')
+  })
+
+  it('exports the durable ingest pending tray', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_ingest_operations',
+      'request_id',
+      'receipt_json',
+      'idx_bibliographic_ingest_operations_state',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicIngestOperations')
+  })
+
+  it('exports chunk vectors keyed by chunk and generation', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_chunk_embeddings',
+      'PRIMARY KEY (chunk_id, generation_id)',
+      'idx_bibliographic_chunk_embeddings_generation',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicChunkEmbeddings')
+  })
+
+  it('exports structural chunks with multi-page spans', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_chunks',
+      'bibliographic_chunk_spans',
+      'idx_bibliographic_chunks_item',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicChunks')
+    expect(schema).toHaveProperty('bibliographicChunkSpans')
+  })
+
+  it('exports per-page native texts with attachment cascade', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_page_texts',
+      'idx_bibliographic_page_texts_attachment',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicPageTexts')
+  })
+
+  it('exports native extraction tasks and per-attachment rows', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'))")
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_extractions',
+      'PRIMARY KEY',
+      'idx_bibliographic_extractions_item',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicExtractions')
+    expect(schema.processingTasks.kind.enumValues).toContain('bibliography_extract')
+  })
+
+  it('keys work embeddings by object and generation', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'PRIMARY KEY (item_id, generation_id)',
+      'idx_bibliographic_item_embeddings_generation',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema.bibliographicItemEmbeddings.generationId).toBeDefined()
+  })
+
+  it('exports E3c index generations with a per-contract active pointer', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_embedding_contracts',
+      'bibliographic_index_generations',
+      'idx_bibliographic_generations_single_active',
+      'idx_bibliographic_generations_contract',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicEmbeddingContracts')
+    expect(schema).toHaveProperty('bibliographicIndexGenerations')
+    expect(schema.bibliographicIndexGenerations.status.enumValues).toEqual([
+      'staging',
+      'active',
+      'retired',
+    ])
+  })
+
+  it('exports E3b work profile tasks and per-contract embeddings', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain("CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile'))")
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_item_embeddings',
+      'PRIMARY KEY (item_id, embedding_contract)',
+      'idx_bibliographic_item_embeddings_hash',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicItemEmbeddings')
+    expect(schema.processingTasks.kind.enumValues).toContain('bibliography_profile')
+  })
+
+  it('exports E3b per-work semantic profiles with catalog cascade', () => {
+    const sql = buildSchemaFixture()
+    const normalized = sql.replace(/\s+/g, ' ')
+    for (const fragment of [
+      'bibliographic_semantic_profiles',
+      'item_id TEXT PRIMARY KEY NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE',
+      'profile_revision INTEGER NOT NULL',
+      'template_version TEXT NOT NULL',
+      'canonical_text TEXT NOT NULL',
+      'input_hash TEXT NOT NULL',
+      'field_provenance_json TEXT NOT NULL',
+      'idx_bibliographic_semantic_profiles_hash',
+    ]) {
+      expect(normalized).toContain(fragment)
+    }
+    expect(schema).toHaveProperty('bibliographicSemanticProfiles')
+  })
+
+  it('exports E2c per-batch priority in SQL and drizzle', () => {
+    const sql = buildSchemaFixture()
+    expect(sql).toContain('priority INTEGER NOT NULL DEFAULT 0')
+    expect(sql).toContain('CHECK(priority IN (0, 1, 2))')
+    expect(sql).toContain('idx_processing_batches_priority')
+    expect(sql).toContain('ON processing_batches(priority, created_at, id)')
+    const batches = getTableConfig(schema.processingBatches)
+    expect(batches.columns.map((column) => column.name)).toContain('priority')
+  })
 })

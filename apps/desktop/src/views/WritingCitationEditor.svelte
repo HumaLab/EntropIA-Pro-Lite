@@ -1,6 +1,11 @@
 <script module lang="ts">
   export interface CitationWork {
     itemKey: string
+    sourceOrigin?: string
+    sourceInstanceId?: string | null
+    libraryType?: string
+    libraryId?: string
+    itemVersion?: number | null
     title: string
     snapshot: string
     locator: string
@@ -109,9 +114,25 @@
     changed()
   }
 
+  function identityAttrs(work: CitationWork) {
+    const attrs: Partial<
+      Pick<
+        CitationWork,
+        'sourceOrigin' | 'sourceInstanceId' | 'libraryType' | 'libraryId' | 'itemVersion'
+      >
+    > = {}
+    if (work.sourceOrigin !== undefined) attrs.sourceOrigin = work.sourceOrigin
+    if (work.sourceInstanceId !== undefined) attrs.sourceInstanceId = work.sourceInstanceId
+    if (work.libraryType !== undefined) attrs.libraryType = work.libraryType
+    if (work.libraryId !== undefined) attrs.libraryId = work.libraryId
+    if (work.itemVersion !== undefined) attrs.itemVersion = work.itemVersion
+    return attrs
+  }
+
   function apply() {
     onapply({
       items: works.map((work) => ({
+        ...identityAttrs(work),
         itemKey: work.itemKey,
         metadataSnapshot: work.snapshot,
         locator: work.locator || null,

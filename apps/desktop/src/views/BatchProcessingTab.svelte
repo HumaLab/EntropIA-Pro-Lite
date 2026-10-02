@@ -15,6 +15,7 @@
     processingListTasks,
     processingPrepare,
     processingRetry,
+    processingSetPriority,
     processingStart,
     taskHasDetail,
     type BatchSnapshot,
@@ -466,14 +467,58 @@
     }
   }
 
-  function progressOf(snapshot: BatchSnapshot): {
-    total: number
-    settled: number
-    succeeded: number
-    failed: number
-    ratio: number | null
-  } {
+  function progressOf(snapshot: BatchSnapshot): ReturnType<typeof batchProgress> {
     return batchProgress(snapshot)
+  }
+
+  function priorityLabel(priority: number): string {
+    switch (priority) {
+      case 2:
+        return t('batch.priorityInteractive')
+      case 1:
+        return t('batch.priorityHigh')
+      default:
+        return t('batch.priorityBackground')
+    }
+  }
+
+  function priorityText(priority: number): string {
+    return `${t('batch.priority')}: ${priorityLabel(priority)}`
+  }
+
+  async function handleSetPriority(batch: BatchSnapshot, priority: number): Promise<void> {
+    if (priority === batch.priority) return
+    busyBatchId = batch.id
+    try {
+      detail = await processingSetPriority(batch.id, priority, batch.revision)
+      await loadLists()
+      void batchStore.refresh()
+    } catch (error) {
+      fail(error, 'priority')
+    } finally {
+      busyBatchId = null
+    }
+  }
+
+  function primaryProgressLabel(progress: ReturnType<typeof batchProgress>): string {
+    const unitTotal = progress.unitsTotal
+    return progress.basis === 'units' && unitTotal !== null
+      ? t('batch.unitsOf', { done: progress.unitsDone, total: unitTotal })
+      : t('batch.resolvedOf', { done: progress.settled, total: progress.total })
+  }
+
+  function bibliographyProgressLabel(task: BatchTaskSummary): string {
+    if (task.itemsSeen == null) {
+      return task.remoteTotal == null
+        ? t('batch.bibliographyTotalUnknown')
+        : t('batch.bibliographyRemoteTotalOnly', { total: task.remoteTotal })
+    }
+    return task.remoteTotal == null
+      ? t('batch.bibliographyProgressUnknown', { done: task.itemsSeen })
+      : t('batch.bibliographyProgress', {
+          done: task.itemsSeen,
+          total: task.remoteTotal,
+        })
   }
 
   function stateLabel(state: string): string {
@@ -749,6 +794,24 @@
         </div>
       </div>
 
+      <div class="batch-tab__priority">
+        <p>{priorityText(detail.priority)}</p>
+        {#if !isTerminalBatchState(detail.state)}
+          <label>
+            {t('batch.priority')}
+            <select
+              value={detail.priority}
+              disabled={busyBatchId === detail.id}
+              onchange={(event) => handleSetPriority(detail!, Number(event.currentTarget.value))}
+            >
+              <option value={0}>{t('batch.priorityBackground')}</option>
+              <option value={1}>{t('batch.priorityHigh')}</option>
+              <option value={2}>{t('batch.priorityInteractive')}</option>
+            </select>
+          </label>
+        {/if}
+      </div>
+
       {@const progress = progressOf(detail)}
       {#if progress.ratio === null}
         <p class="batch-tab__empty">{t('batch.noWork')}</p>
@@ -779,13 +842,20 @@
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(progress.ratio * 100)}
-          aria-label={t('batch.resolvedOf', { done: progress.settled, total: progress.total })}
+          aria-label={primaryProgressLabel(progress)}
         >
           <div
             class="batch-tab__progress-bar"
             style={`width: ${Math.round(progress.ratio * 100)}%`}
           ></div>
         </div>
+        <!-- The stats above already count settled units; pages or chunks
+             are the one total they cannot show. -->
+        {#if progress.basis === 'units'}
+          <p>{primaryProgressLabel(progress)}</p>
+        {:else if progress.unknownUnitTasks > 0}
+          <p>{t('batch.unknownProgressTotals', { count: progress.unknownUnitTasks })}</p>
+        {/if}
       {/if}
 
       <div class="batch-toolbar">
@@ -888,8 +958,16 @@
                     >
                       {stateLabel(task.state)}
                     </span>
-                    <span class="batch-table__cell batch-table__cell--num" role="cell">
-                      {#if task.progressTotal > 0}
+                    <span
+                      class="batch-table__cell batch-table__cell--num"
+                      role="cell"
+                      aria-label={task.kind === 'bibliography_sync'
+                        ? bibliographyProgressLabel(task)
+                        : undefined}
+                    >
+                      {#if task.kind === 'bibliography_sync'}
+                        {bibliographyProgressLabel(task)}
+                      {:else if task.progressTotal > 0}
                         {task.progressDone}/{task.progressTotal}
                       {:else}
                         —

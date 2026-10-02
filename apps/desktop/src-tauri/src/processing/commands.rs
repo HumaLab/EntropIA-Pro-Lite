@@ -63,6 +63,7 @@ pub struct BatchSnapshotDto {
     pub planning_cursor: i64,
     pub planning_done: bool,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub started_at: Option<i64>,
@@ -70,6 +71,9 @@ pub struct BatchSnapshotDto {
     pub last_error: Option<String>,
     pub members_total: i64,
     pub members_classified: i64,
+    pub progress_done: i64,
+    pub progress_total: Option<i64>,
+    pub progress_unknown_tasks: i64,
     pub tasks_by_state: Vec<StateCountDto>,
     pub tasks_by_kind: Vec<StateCountDto>,
     pub collections: Vec<CollectionRefDto>,
@@ -97,6 +101,7 @@ pub struct BatchSummaryDto {
     pub desired_state: String,
     pub operations: Vec<String>,
     pub revision: i64,
+    pub priority: i64,
     pub created_at: i64,
     pub updated_at: i64,
     pub active_units: i64,
@@ -124,10 +129,15 @@ pub struct TaskSummaryDto {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -173,10 +183,15 @@ pub struct TaskDetailDto {
     pub task_id: String,
     pub kind: String,
     pub asset_id: String,
+    pub domain: String,
+    pub subject_kind: String,
+    pub subject_id: String,
     pub state: String,
     pub stage: String,
     pub progress_done: i64,
     pub progress_total: i64,
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
     pub outcome: String,
     pub attempt_count: i64,
     pub retry_cycle: i64,
@@ -202,6 +217,19 @@ pub struct RetryResponse {
     pub operation_id: String,
 }
 
+/// Durable answer for one manual per-library bibliography synchronization
+/// request. `created=false` means the request attached to existing work;
+/// `requeued=true` means it explicitly reopened interrupted, blocked, or
+/// failed work.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographySyncResponse {
+    pub batch_id: String,
+    pub task_id: String,
+    pub created: bool,
+    pub requeued: bool,
+}
+
 fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
     BatchSnapshotDto {
         id: snapshot.id,
@@ -213,6 +241,7 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
         planning_cursor: snapshot.planning_cursor,
         planning_done: snapshot.planning_done,
         revision: snapshot.revision,
+        priority: snapshot.priority,
         created_at: snapshot.created_at,
         updated_at: snapshot.updated_at,
         started_at: snapshot.started_at,
@@ -220,6 +249,9 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
         last_error: snapshot.last_error,
         members_total: snapshot.members_total,
         members_classified: snapshot.members_classified,
+        progress_done: snapshot.progress_done,
+        progress_total: snapshot.progress_total,
+        progress_unknown_tasks: snapshot.progress_unknown_tasks,
         tasks_by_state: snapshot
             .tasks_by_state
             .into_iter()
@@ -239,6 +271,88 @@ fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
+
+/// Transactional core for the manual bibliography command. A request id owns
+/// one selected external namespace and one durable response, so a lost IPC
+/// response replays without reapplying demand. New request ids pass through to
+/// the repository's shared single-flight admission/requeue path.
+pub fn apply_bibliography_sync_request(
+    conn: &Connection,
+    request_id: &str,
+    library_type: &str,
+    library_id: &str,
+) -> Result<BibliographySyncResponse, String> {
+    if request_id.trim().is_empty() {
+        return Err("invalid_selection: a request id is required".to_string());
+    }
+    let hash = payload_hash(&[library_type, library_id]);
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| format!("Failed to begin bibliography sync request: {error}"))?;
+    let applied = (|| {
+        if let Some(previous) = repository::find_request(conn, request_id)? {
+            if previous.payload_hash != hash {
+                return Err(format!(
+                    "invalid_selection: request {request_id} was already used with different parameters"
+                ));
+            }
+            let response = previous.response_json.ok_or_else(|| {
+                format!("invalid_storage: request {request_id} has no durable response")
+            })?;
+            return serde_json::from_str::<BibliographySyncResponse>(&response).map_err(|error| {
+                format!("invalid_storage: request {request_id} has an invalid response: {error}")
+            });
+        }
+
+        let outcome = repository::admit_bibliography_sync_demand(conn, library_type, library_id)?;
+        let response = BibliographySyncResponse {
+            batch_id: outcome.batch_id,
+            task_id: outcome.task_id,
+            created: outcome.created,
+            requeued: outcome.requeued,
+        };
+        let response_json = serde_json::to_string(&response)
+            .map_err(|error| format!("Failed to encode bibliography sync response: {error}"))?;
+        repository::record_request(
+            conn,
+            request_id,
+            "bibliography_sync",
+            Some(&response.batch_id),
+            &hash,
+            &response_json,
+            repository::now_ms(),
+        )?;
+        Ok(response)
+    })();
+    match applied {
+        Ok(response) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|error| format!("Failed to commit bibliography sync request: {error}"))?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Manually admits or requeues synchronization for one unambiguous catalog
+/// library. It schedules through the shared bibliography system batch and
+/// returns immediately; the scheduler performs all Zotero page work.
+#[tauri::command]
+pub async fn processing_sync_bibliography_library(
+    request_id: String,
+    library_type: String,
+    library_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<BibliographySyncResponse, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        apply_bibliography_sync_request(&conn, &request_id, &library_type, &library_id)
+    })
+    .await
+}
 
 /// Snapshots one batch scope durably and returns its id immediately.
 /// Retried requests with the same `request_id` return the original batch;
@@ -387,9 +501,18 @@ pub struct ControlRequest {
     pub expected_revision: Option<i64>,
 }
 
+fn validate_control_scope(request: &ControlRequest) -> Result<(), String> {
+    if request.batch_id.is_none() && request.expected_revision.is_some() {
+        return Err("invalid_selection: expected_revision requires a batch_id".to_string());
+    }
+    Ok(())
+}
+
 /// Pauses, resumes, or cancels one batch — or every live batch when
 /// `batch_id` is absent (pause/resume only; cancelling everything at once is
-/// rejected so a misclick cannot wipe the whole queue).
+/// rejected so a misclick cannot wipe the whole queue). Bulk control rejects
+/// a scalar expected revision before opening the database; unfenced bulk calls
+/// validate each target against its own current revision.
 #[tauri::command]
 pub async fn processing_control(
     request: ControlRequest,
@@ -401,6 +524,7 @@ pub async fn processing_control(
         "cancel" => BatchAction::Cancel,
         other => return Err(format!("invalid_selection: unknown action {other}")),
     };
+    validate_control_scope(&request)?;
     if request.batch_id.is_none() && action == BatchAction::Cancel {
         return Err("invalid_selection: cancelling every batch at once is not allowed".to_string());
     }
@@ -426,6 +550,39 @@ pub async fn processing_control(
             _ => None,
         };
         Ok(ControlResponse { affected, snapshot })
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPriorityRequest {
+    pub batch_id: String,
+    pub priority: i64,
+    pub expected_revision: Option<i64>,
+}
+
+/// Sets one batch scheduling priority (0 = background, 1 = high,
+/// 2 = interactive) and answers with the fresh snapshot. Revision-fenced:
+/// a stale UI fails closed instead of silently overriding a newer intent.
+#[tauri::command]
+pub async fn processing_set_priority(
+    request: SetPriorityRequest,
+    db: State<'_, AppDbState>,
+) -> Result<BatchSnapshotDto, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        repository::set_batch_priority(
+            &conn,
+            &request.batch_id,
+            request.priority,
+            request.expected_revision,
+        )?;
+        Ok(snapshot_dto(repository::read_batch_snapshot(
+            &conn,
+            &request.batch_id,
+        )?))
     })
     .await
 }
@@ -498,6 +655,7 @@ pub async fn processing_list_batches(
                     desired_state: b.desired_state,
                     operations: b.operations,
                     revision: b.revision,
+                    priority: b.priority,
                     created_at: b.created_at,
                     updated_at: b.updated_at,
                     active_units: b.active_units,
@@ -555,10 +713,15 @@ pub async fn processing_list_tasks(
                     task_id: t.task_id,
                     kind: t.kind,
                     asset_id: t.asset_id,
+                    domain: t.domain,
+                    subject_kind: t.subject_kind,
+                    subject_id: t.subject_id,
                     state: t.state,
                     stage: t.stage,
                     progress_done: t.progress_done,
                     progress_total: t.progress_total,
+                    items_seen: t.items_seen,
+                    remote_total: t.remote_total,
                     outcome: t.outcome,
                     attempt_count: t.attempt_count,
                     retry_cycle: t.retry_cycle,
@@ -592,10 +755,15 @@ pub async fn processing_get_task(
             task_id: detail.task_id,
             kind: detail.kind,
             asset_id: detail.asset_id,
+            domain: detail.domain,
+            subject_kind: detail.subject_kind,
+            subject_id: detail.subject_id,
             state: detail.state,
             stage: detail.stage,
             progress_done: detail.progress_done,
             progress_total: detail.progress_total,
+            items_seen: detail.items_seen,
+            remote_total: detail.remote_total,
             outcome: detail.outcome,
             attempt_count: detail.attempt_count,
             retry_cycle: detail.retry_cycle,
@@ -629,4 +797,36 @@ pub async fn processing_get_task(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bulk_control_rejects_one_revision_for_divergent_targets() {
+        let error = validate_control_scope(&ControlRequest {
+            batch_id: None,
+            action: "pause".to_string(),
+            expected_revision: Some(7),
+        })
+        .expect_err("one revision cannot fence a bulk target set");
+        assert_eq!(
+            error,
+            "invalid_selection: expected_revision requires a batch_id"
+        );
+
+        assert!(validate_control_scope(&ControlRequest {
+            batch_id: None,
+            action: "pause".to_string(),
+            expected_revision: None,
+        })
+        .is_ok());
+        assert!(validate_control_scope(&ControlRequest {
+            batch_id: Some("batch-1".to_string()),
+            action: "pause".to_string(),
+            expected_revision: Some(7),
+        })
+        .is_ok());
+    }
 }

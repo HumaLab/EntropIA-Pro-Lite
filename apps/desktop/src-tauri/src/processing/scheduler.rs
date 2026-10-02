@@ -85,11 +85,16 @@ pub enum ExecOutput {
 pub enum EngineOutput {
     Ocr(super::ocr::OcrComputeOutput),
     Embedding(super::embedding::EmbeddingComputeOutput),
+    Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
+    BibliographyProfile(crate::bibliography::processing::BibliographyProfileComputeOutput),
+    BibliographyExtract(crate::bibliography::processing::BibliographyExtractComputeOutput),
 }
 
 /// Execution context handed to every engine run: archive location for
-/// short-lived read connections (snapshots, resume scans). Engines never
-/// receive the supervisor connection and never write queue tables.
+/// short-lived connections (snapshots, resume scans and fenced complete-unit
+/// checkpoints). Engines never receive the supervisor connection or settle
+/// task/attempt state; only complete checkpoints may be written before the
+/// supervisor publishes a verdict.
 #[derive(Debug, Clone)]
 pub struct ExecCtx {
     pub db_path: PathBuf,
@@ -147,9 +152,11 @@ impl ExecCtx {
     }
 }
 
-/// The full product of one execution: staged checkpoints plus the verdict.
-/// The supervisor persists checkpoints and publishes; the executor never
-/// writes the archive itself (it may open short-lived read connections).
+/// The full product of one execution: confirmed checkpoints plus the verdict.
+/// The supervisor idempotently persists returned checkpoints and publishes.
+/// Engines normally stage them in memory; an engine whose canonical page and
+/// queue payload share one transaction may pre-persist through the same fenced
+/// checkpoint seam and still returns them for ordinary supervisor accounting.
 #[derive(Debug)]
 pub struct ExecResult {
     pub checkpoints: Vec<NewCheckpoint>,
@@ -165,7 +172,8 @@ pub trait Executor: Send + Sync {
     /// Task kinds this executor runs (`"ocr"`, `"embedding"`).
     fn kinds(&self) -> &[&str];
     /// Executes one claimed unit to a verdict, honoring `stop` between
-    /// output units. Must not write queue tables.
+    /// output units. It must not settle queue task/attempt state; only fenced,
+    /// complete-unit checkpoints may be persisted before returning.
     fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, stop: &StopFlag) -> ExecResult;
 }
 
@@ -304,11 +312,14 @@ pub fn run_one(
         }
     }
     for checkpoint in &result.checkpoints {
-        if repository::save_checkpoint(conn, &task.task_id, task.lease_epoch, checkpoint, now_ms)
-            .is_err()
+        if let Err(error) =
+            repository::save_checkpoint(conn, &task.task_id, task.lease_epoch, checkpoint, now_ms)
         {
-            // Lease lost mid-run (recovery, cancel, newer claim): the attempt
-            // is already someone else's problem. Never publish.
+            if error.starts_with("demand_lost") {
+                repository::interrupt_task(conn, &task.task_id, task.lease_epoch)?;
+            }
+            // Demand withdrawal interrupts this attempt; a lost lease already
+            // belongs to recovery or a newer owner. Neither path may publish.
             return Ok(RunOneOutcome::Stopped {
                 task_id: task.task_id,
             });
@@ -434,11 +445,44 @@ fn publish_engine_output(
     task: &ClaimedTask,
     output: &EngineOutput,
 ) -> Result<(), String> {
-    match output {
-        EngineOutput::Ocr(ocr) => super::ocr::publish_ocr_output(conn, &task.asset_id, ocr),
-        EngineOutput::Embedding(embedding) => {
+    match (
+        task.domain.as_str(),
+        task.subject_kind.as_str(),
+        task.kind.as_str(),
+        output,
+    ) {
+        ("corpus", "asset", "ocr", EngineOutput::Ocr(ocr)) => {
+            super::ocr::publish_ocr_output(conn, &task.asset_id, ocr)
+        }
+        ("corpus", "asset", "embedding", EngineOutput::Embedding(embedding)) => {
             super::embedding::publish_embedding_output(conn, &task.asset_id, embedding)
         }
+        (
+            "bibliography",
+            "library",
+            "bibliography_sync",
+            EngineOutput::Bibliography(bibliography),
+        ) => crate::bibliography::processing::publish_bibliography_output(conn, task, bibliography),
+        (
+            "bibliography",
+            "item",
+            "bibliography_profile",
+            EngineOutput::BibliographyProfile(profile),
+        ) => crate::bibliography::processing::publish_bibliography_profile_output(
+            conn, task, profile,
+        ),
+        (
+            "bibliography",
+            "attachment",
+            "bibliography_extract",
+            EngineOutput::BibliographyExtract(extraction),
+        ) => crate::bibliography::processing::publish_bibliography_extract_output(
+            conn, task, extraction,
+        ),
+        _ => Err(format!(
+            "unsupported_subject: task {} domain='{}' subject_kind='{}' kind='{}' cannot publish this engine output",
+            task.task_id, task.domain, task.subject_kind, task.kind
+        )),
     }
 }
 
@@ -481,6 +525,7 @@ pub fn scheduler_tick(
         repository::advance_planning(conn, &batch_id, 1, 200)?;
     }
     repository::promote_ready_batches(conn)?;
+    repository::apply_priority_aging(conn, now_ms)?;
     heartbeat_owned(conn, session_id, now_ms)?;
     let outcome = run_one(
         conn,
@@ -642,6 +687,35 @@ mod tests {
         }
     }
 
+    struct WithdrawDemandExecutor;
+
+    impl Executor for WithdrawDemandExecutor {
+        fn kinds(&self) -> &[&str] {
+            &["ocr"]
+        }
+
+        fn run(&self, ctx: &ExecCtx, task: &ClaimedTask, _stop: &StopFlag) -> ExecResult {
+            let conn = open_archive_connection(&ctx.db_path).expect("open cancellation connection");
+            repo::control_batch(&conn, "b1", repo::BatchAction::Cancel, None)
+                .expect("withdraw demand while the unit is in flight");
+            ExecResult {
+                checkpoints: vec![NewCheckpoint {
+                    unit_key: "page-1".to_string(),
+                    input_fingerprint: task.input_fingerprint.clone(),
+                    contract_hash: task.contract_hash.clone(),
+                    payload: "{}".to_string(),
+                    payload_checksum: "0".to_string(),
+                }],
+                progress_total: None,
+                engine_output: Some(test_ocr_output()),
+                output: ExecOutput::Success {
+                    outcome: "text".to_string(),
+                    receipt: r#"{"status":"completed"}"#.to_string(),
+                },
+            }
+        }
+    }
+
     /// Minimal staged OCR output: the commit path publishes real extraction
     /// rows for it, which keeps these scheduler tests honest about the
     /// receipt sharing a transaction with canonical writes.
@@ -711,6 +785,107 @@ mod tests {
             "../../../../../packages/store/src/migrations/0038_processing_settle_on_terminal.sql"
         ))
         .expect("apply 0038");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0041_processing_task_subject_identity.sql"
+        ))
+        .expect("apply 0041");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0041_processing_task_subject_identity', 1)",
+            [],
+        )
+        .expect("track 0041");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0042_processing_task_subject_cutover.sql"
+        ))
+        .expect("apply 0042");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0042_processing_task_subject_cutover', 1)",
+            [],
+        )
+        .expect("track 0042");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0044_processing_priority.sql"
+        ))
+        .expect("apply 0044");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_priority', 1)",
+            [],
+        )
+        .expect("track 0044");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0045_bibliographic_semantic_profiles.sql"
+        ))
+        .expect("apply 0045");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0045_bibliographic_semantic_profiles', 1)",
+            [],
+        )
+        .expect("track 0045");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0046_bibliography_profile_tasks.sql"
+        ))
+        .expect("apply 0046");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0046_bibliography_profile_tasks', 1)",
+            [],
+        )
+        .expect("track 0046");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0047_bibliographic_index_generations.sql"
+        ))
+        .expect("apply 0047");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0047_bibliographic_index_generations', 1)",
+            [],
+        )
+        .expect("track 0047");
+        // 0048 stays skipped here (catalog-table data half); 0049 needs
+        // only the profiles table.
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0049_bibliographic_profile_fts.sql"
+        ))
+        .expect("apply 0049");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0049_bibliographic_profile_fts', 1)",
+            [],
+        )
+        .expect("track 0049");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0050_bibliographic_extraction_tasks.sql"
+        ))
+        .expect("apply 0050");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0050_bibliographic_extraction_tasks', 1)",
+            [],
+        )
+        .expect("track 0050");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0051_bibliographic_page_texts.sql"
+        ))
+        .expect("apply 0051");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0051_bibliographic_page_texts', 1)",
+            [],
+        )
+        .expect("track 0051");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0052_bibliographic_chunks.sql"
+        ))
+        .expect("apply 0052");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0052_bibliographic_chunks', 1)",
+            [],
+        )
+        .expect("track 0052");
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0053_bibliographic_chunk_embeddings.sql"
+        ))
+        .expect("apply 0053");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0053_bibliographic_chunk_embeddings', 1)",
+            [],
+        )
+        .expect("track 0053");
         conn.execute(
             "INSERT INTO collections (id, name, created_at, updated_at) VALUES ('c1', 'legajo', 1, 1)",
             [],
@@ -738,14 +913,14 @@ mod tests {
         )
         .expect("scope");
         conn.execute(
-            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
-             VALUES ('ocr-a1', 'ocr', 'a1', 'pending', 1, 1)",
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('ocr-a1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'pending', 1, 1)",
             [],
         )
         .expect("task");
         conn.execute(
-            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
-             VALUES ('b1', 'ocr-a1', 'ocr', 'a1', 'active')",
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 'ocr-a1', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active')",
             [],
         )
         .expect("link");
@@ -768,14 +943,14 @@ mod tests {
         )
         .expect("second asset");
         conn.execute(
-            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
-             VALUES ('ocr-a2', 'ocr', 'a2', 'pending', 2, 2)",
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             VALUES ('ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'pending', 2, 2)",
             [],
         )
         .expect("second task");
         conn.execute(
-            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state)
-             VALUES ('b1', 'ocr-a2', 'ocr', 'a2', 'active')",
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b1', 'ocr-a2', 'ocr', 'a2', 'corpus', 'asset', 'a2', 'active')",
             [],
         )
         .expect("second link");
@@ -897,6 +1072,40 @@ mod tests {
             )
             .expect("state");
         assert_eq!(state, "cancelled");
+    }
+
+    #[test]
+    fn demand_lost_at_checkpoint_interrupts_without_publishing_success() {
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
+        let mut registry = ExecutorRegistry::new();
+        registry.register(Arc::new(WithdrawDemandExecutor));
+        let commit_observed = std::cell::Cell::new(false);
+
+        let outcome = run_one(
+            &conn,
+            &ctx,
+            &registry,
+            "s1",
+            1_000,
+            &|_, _| commit_observed.set(true),
+            &noop_terminal,
+        )
+        .expect("demand loss is a stopped outcome");
+        assert!(matches!(outcome, RunOneOutcome::Stopped { .. }));
+        assert!(!commit_observed.get(), "a success observer must never run");
+
+        let durable: (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT state,
+                        (SELECT COUNT(*) FROM processing_checkpoints WHERE task_id='ocr-a1'),
+                        result_receipt_json
+                   FROM processing_tasks WHERE id='ocr-a1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("stopped task state");
+        assert_eq!(durable, ("interrupted".to_string(), 0, None));
     }
 
     #[test]

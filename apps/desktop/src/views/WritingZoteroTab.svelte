@@ -1,12 +1,19 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { ActionIcon, Button, SearchBar } from '@entropia/ui'
+  import { ActionIcon, Button, IconButton, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
-  import { writingZotero, type ZoteroState } from '$lib/writing-zotero'
+  import { writingZotero, type LibraryEntry, type ZoteroState } from '$lib/writing-zotero'
+  import {
+    addLibraryChecked,
+    libraryLabel,
+    loadLibraries,
+    type LibraryOption,
+  } from '$lib/writing-zotero-libraries'
   import WritingCitationEditor, {
     type CitationDraft,
     type CitationEditSession,
   } from './WritingCitationEditor.svelte'
+  import WritingZoteroDetails from './WritingZoteroDetails.svelte'
 
   /**
    * The Zotero tab of the research panel (plan-editor.md §6.3, §11).
@@ -47,10 +54,87 @@
 
   let cited = $state(false)
 
+  /**
+   * The work whose ficha is open (E1c-3). Local to the tab: opening it
+   * selects nothing in the store, cites nothing and leaves the offered
+   * library list exactly as it was.
+   */
+  let detailsEntry = $state<LibraryEntry | null>(null)
+
+  /**
+   * The libraries offered (E1c-2): backend-known merged with hand-added.
+   * Personal only until the merge answers, so the untouched tab reads exactly
+   * what it always read. Selection itself lives in the store (E1c-1).
+   */
+  let libraries = $state<LibraryOption[]>([
+    { libraryType: 'user', libraryId: '0', name: null, source: 'personal', unverified: false },
+  ])
+  let showAdd = $state(false)
+  let addType = $state<'user' | 'group'>('group')
+  let addId = $state('')
+  let addError = $state<string | null>(null)
+  let adding = $state(false)
+
+  function nameOf(option: LibraryOption): string {
+    const base = libraryLabel(option, t('writing.zoteroLibraryPersonal'))
+    return option.unverified ? `${base} ${t('writing.zoteroLibraryUnverified')}` : base
+  }
+
+  function chooseLibrary(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value
+    const slash = value.indexOf('/')
+    if (slash < 0) return
+    const type = value.slice(0, slash)
+    const id = value.slice(slash + 1)
+    if ((type !== 'user' && type !== 'group') || !id) return
+    store.select(type, id)
+    void store.connect()
+  }
+
+  function addErrorText(code: 'invalid' | 'not_found' | 'check_failed'): string {
+    switch (code) {
+      case 'not_found':
+        return t('writing.zoteroLibraryNotFound')
+      case 'invalid':
+        return t('writing.zoteroLibraryInvalid')
+      default:
+        return t('writing.zoteroLibraryCheckFailed')
+    }
+  }
+
+  async function submitAdd(event: Event) {
+    event.preventDefault()
+    if (adding) return
+    const id = addId.trim()
+    if (!id) {
+      addError = t('writing.zoteroLibraryInvalid')
+      return
+    }
+    adding = true
+    addError = null
+    try {
+      const outcome = await addLibraryChecked(addType, id)
+      if (!outcome.ok) {
+        addError = addErrorText(outcome.error)
+        return
+      }
+      libraries = outcome.libraries
+      addId = ''
+      showAdd = false
+      store.select(outcome.selected.libraryType, outcome.selected.libraryId)
+      void store.connect()
+    } finally {
+      adding = false
+    }
+  }
+
   onMount(() => {
     // Opening the tab is the request: the copy on disk is listed at once, and
     // Zotero is asked only what changed since.
     void store.connect()
+    void loadLibraries().then((list) => {
+      libraries = list
+    })
   })
 
   onDestroy(unsubscribe)
@@ -71,9 +155,18 @@
     }
   }
 
-  function cite(csl_json: string, key: string) {
+  function cite(entry: (typeof snapshot.entries)[number]) {
     if (!oncite) return
-    cited = oncite({ itemKey: key, metadataSnapshot: csl_json }) !== null
+    cited =
+      oncite({
+        sourceOrigin: 'local',
+        sourceInstanceId: null,
+        itemKey: entry.key,
+        itemVersion: entry.itemVersion,
+        libraryType: entry.libraryType,
+        libraryId: entry.libraryId,
+        metadataSnapshot: entry.csl_json,
+      }) !== null
   }
 </script>
 
@@ -89,6 +182,124 @@
       />
     {/key}
   {:else}
+    <div class="zotero__library">
+      <label class="zotero__library-label" for="zotero-library">
+        {t('writing.zoteroLibrary')}
+      </label>
+      <!-- Keyed on the offered set: the list arrives after the mount, and a
+        select keeps the value it was mounted with when its options change
+        underneath it. Remounting applies the store selection together with
+        the full options, so a selection outside the initial personal-only
+        option still shows. Reloads happen on mount and after an add, never
+        mid-interaction with the select itself. -->
+      {#key libraries.map((option) => `${option.libraryType}/${option.libraryId}`).join(',')}
+        <select
+          id="zotero-library"
+          class="zotero__select"
+          value={`${snapshot.selection.libraryType}/${snapshot.selection.libraryId}`}
+          onchange={chooseLibrary}
+        >
+          {#each libraries as option (`${option.libraryType}/${option.libraryId}`)}
+            <option value={`${option.libraryType}/${option.libraryId}`}>
+              {nameOf(option)}
+            </option>
+          {/each}
+        </select>
+      {/key}
+      <Button
+        variant="ghost"
+        size="sm"
+        onclick={() => {
+          showAdd = !showAdd
+          addError = null
+        }}
+      >
+        <ActionIcon name="add" size={14} />
+        {t('writing.zoteroAddLibrary')}
+      </Button>
+    </div>
+
+    {#if showAdd}
+      <form class="zotero__add" onsubmit={submitAdd}>
+        <label class="zotero__add-label" for="zotero-add-type">
+          {t('writing.zoteroLibraryType')}
+        </label>
+        <select
+          id="zotero-add-type"
+          class="zotero__select"
+          value={addType}
+          onchange={(event) => {
+            const next = (event.currentTarget as HTMLSelectElement).value
+            if (next === 'user' || next === 'group') addType = next
+          }}
+        >
+          <option value="user">{t('writing.zoteroLibraryTypeUser')}</option>
+          <option value="group">{t('writing.zoteroLibraryTypeGroup')}</option>
+        </select>
+        <label class="zotero__add-label" for="zotero-add-id">
+          {t('writing.zoteroLibraryId')}
+        </label>
+        <input
+          id="zotero-add-id"
+          class="zotero__input"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder={t('writing.zoteroLibraryIdPlaceholder')}
+          bind:value={addId}
+        />
+        <div class="zotero__add-actions">
+          <Button variant="secondary" size="sm" type="submit" loading={adding}>
+            {t('writing.zoteroLibraryAdd')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onclick={() => {
+              showAdd = false
+              addError = null
+            }}
+          >
+            {t('writing.zoteroLibraryCancel')}
+          </Button>
+        </div>
+        {#if addError}
+          <p class="zotero__error" role="alert">{addError}</p>
+        {/if}
+      </form>
+    {/if}
+
+    <div class="zotero__bibliography-sync">
+      <p class="zotero__bibliography-sync-help">
+        {t('writing.zoteroBibliographySyncHelp')}
+      </p>
+      <div class="zotero__bibliography-sync-action">
+        <Button
+          variant="primary"
+          size="sm"
+          loading={snapshot.bibliographySync.loading}
+          onclick={() => void store.requestBibliographySync()}
+        >
+          {t('writing.zoteroBibliographySync')}
+        </Button>
+        {#if snapshot.bibliographySync.loading}
+          <p class="zotero__notice" role="status">
+            {t('writing.zoteroBibliographySyncRequesting')}
+          </p>
+        {:else if snapshot.bibliographySync.error}
+          <p class="zotero__error" role="alert">
+            {t('writing.zoteroBibliographySyncError', {
+              detail: snapshot.bibliographySync.error,
+            })}
+          </p>
+        {:else if snapshot.bibliographySync.requested}
+          <p class="zotero__notice" role="status">
+            {t('writing.zoteroBibliographySyncRequested')}
+          </p>
+        {/if}
+      </div>
+    </div>
+
     {#if snapshot.status}
       <!-- Observed, never inferred. §11.3 forbids claiming Zotero is closed or
          absent without evidence, and this line is where that promise is kept
@@ -106,6 +317,11 @@
       <p class="zotero__error" role="alert">{snapshot.error}</p>
     {/if}
 
+    {#if detailsEntry}
+      <!-- The ficha reads one work; the list underneath stays exactly as it
+         was. Opening it selects nothing and cites nothing. -->
+      <WritingZoteroDetails entry={detailsEntry} onclose={() => (detailsEntry = null)} />
+    {:else}
     <div class="zotero__actions">
       <Button
         variant="secondary"
@@ -151,14 +367,23 @@
                 {[entry.authors, entry.year].filter(Boolean).join(' · ')}
               </span>
             </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={!oncite}
-              onclick={() => cite(entry.csl_json, entry.key)}
-            >
-              {t('writing.zoteroCite')}
-            </Button>
+            <span class="zotero__row-actions">
+              <IconButton
+                size="sm"
+                label={t('writing.zoteroDetails')}
+                onclick={() => (detailsEntry = entry)}
+              >
+                <ActionIcon name="eye" size={14} />
+              </IconButton>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!oncite}
+                onclick={() => cite(entry)}
+              >
+                {t('writing.zoteroCite')}
+              </Button>
+            </span>>
           </li>
         {/each}
       </ul>
@@ -166,6 +391,7 @@
       <p class="zotero__notice">{t('writing.zoteroEmpty')}</p>
     {:else if snapshot.loaded === 0 && !snapshot.loading && !snapshot.error}
       <p class="zotero__notice">{t('writing.zoteroStart')}</p>
+    {/if}
     {/if}
 
     <p class="zotero__notice" role="status">
@@ -208,6 +434,76 @@
     flex-wrap: wrap;
   }
 
+  .zotero__bibliography-sync {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-surface);
+    background: var(--color-accent-faint);
+  }
+
+  .zotero__bibliography-sync-help {
+    flex: 1 1 14rem;
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-2xs);
+    line-height: var(--line-height-base);
+  }
+
+  .zotero__bibliography-sync-action {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    flex: 1 1 12rem;
+    flex-wrap: wrap;
+  }
+
+  .zotero__library {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .zotero__library-label,
+  .zotero__add-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .zotero__select,
+  .zotero__input {
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    max-width: 100%;
+  }
+
+  .zotero__select {
+    flex: 1 1 10rem;
+  }
+
+  .zotero__add {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .zotero__add-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
   .zotero__list {
     display: flex;
     flex-direction: column;
@@ -229,6 +525,13 @@
 
   .zotero__row:hover {
     background: var(--color-accent-faint);
+  }
+
+  .zotero__row-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
   }
 
   .zotero__work {

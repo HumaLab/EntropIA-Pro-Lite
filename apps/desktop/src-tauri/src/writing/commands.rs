@@ -12,6 +12,7 @@ use tauri::State;
 use super::repository::{
     self, DocumentRow, NewDocument, SaveDocument, WritingError, WritingResult,
 };
+use super::zotero::{Library, LibraryType};
 use super::{journal, recovery, sync_conflict, versions};
 
 // Re-exported so the command's answer type is publicly reachable from the
@@ -274,6 +275,90 @@ pub async fn writing_apply_retention(
     .map_err(|e| joined("writing_apply_retention", e))?
 }
 
+/// The ficha for one work: confirmed catalog metadata, the tombstone with
+/// the last snapshot, or the explicit state telling the UI to render from
+/// its held CSL (E1c-3).
+///
+/// Read-only. A blank library is `invalid_library` like every other command
+/// taking one; a blank item key is `invalid_item_key`. An archive that cannot
+/// be opened reads `catalog_unavailable` rather than failing: a ficha must
+/// not break because the database is busy.
+#[tauri::command]
+pub async fn writing_zotero_item_detail(
+    db: State<'_, AppDbState>,
+    library_type: LibraryType,
+    library_id: String,
+    item_key: String,
+) -> WritingResult<crate::bibliography::detail::ItemDetail> {
+    let library = resolve_library(library_type, library_id)?;
+    let item_key = resolve_item_key(item_key)?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || read_item_detail(&db_path, &library, &item_key))
+        .await
+        .map_err(|e| joined("writing_zotero_item_detail", e))?
+}
+
+/// Opens one item in Zotero via its select URI (E1c-4, live-verified).
+///
+/// Identity resolves exactly like the other commands: a blank library is
+/// `invalid_library`, a blank item key is `invalid_item_key`. When
+/// [`super::zotero::OPEN_ITEM_ENABLED`] is false the command still fails closed
+/// with `open_item_disabled` — an honest state, never a Zotero diagnosis.
+/// With the gate on after live verification against group prueba (6680944,
+/// item 7EMV3G8H), a key or id that cannot build a select URI answers
+/// `invalid_item_key`; otherwise the OS opener is spawned and `Ok(())`
+/// reports only that the open was launched.
+#[tauri::command]
+pub async fn writing_zotero_open_item(
+    library_type: LibraryType,
+    library_id: String,
+    item_key: String,
+) -> WritingResult<()> {
+    let library = resolve_library(library_type, library_id)?;
+    let item_key = resolve_item_key(item_key)?;
+    if !super::zotero::OPEN_ITEM_ENABLED {
+        return Err(WritingError::new(
+            "open_item_disabled",
+            "opening in Zotero is disabled until live verification",
+        ));
+    }
+    let Some(uri) = super::zotero::select_uri(&library, &item_key) else {
+        return Err(WritingError::new(
+            "invalid_item_key",
+            "the item key cannot address a Zotero item",
+        ));
+    };
+    super::zotero::open_select_uri(&uri)
+        .map_err(|detail| WritingError::new("open_item_failed", detail))
+}
+
+/// A blank item key addresses nothing, so it is rejected before any read.
+fn resolve_item_key(item_key: String) -> WritingResult<String> {
+    if item_key.trim().is_empty() {
+        return Err(WritingError::new(
+            "invalid_item_key",
+            "the item key must not be empty",
+        ));
+    }
+    Ok(item_key)
+}
+
+/// One blocking detail read. Only an archive that cannot be opened falls back
+/// here; a confirmed catalog that fails to read is reported, because silent
+/// metadata would be worse than an explicit error once the database answered.
+fn read_item_detail(
+    db_path: &std::path::Path,
+    library: &Library,
+    item_key: &str,
+) -> WritingResult<crate::bibliography::detail::ItemDetail> {
+    let conn = match open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(crate::bibliography::detail::ItemDetail::CatalogUnavailable),
+    };
+    crate::bibliography::detail::item_detail(&conn, library, item_key)
+        .map_err(|error| WritingError::new(&error.code, error.message))
+}
+
 /// The Zotero client, built once. `reqwest` pools connections, so rebuilding it
 /// per call would open a fresh socket for every page of the library and every
 /// search. A client that failed to build is not remembered, so the next call
@@ -300,10 +385,90 @@ pub async fn writing_zotero_probe() -> WritingResult<super::zotero::ZoteroState>
     Ok(super::zotero::connector::probe(&zotero_client()?).await)
 }
 
-fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<std::path::PathBuf> {
+/// Builds the typed library from the camelCase wire params (`libraryType` /
+/// `libraryId` on the wire, `library_type` / `library_id` here). An empty id
+/// is an error, never a silent personal library; an unknown kind never
+/// reaches this code because it already failed to parse as [`LibraryType`].
+fn resolve_library(library_type: LibraryType, library_id: String) -> WritingResult<Library> {
+    Library::new(library_type, library_id)
+        .map_err(|detail| WritingError::new("invalid_library", detail))
+}
+
+/// The confirmed catalog is the personal namespace only. Group libraries
+/// always read the on-disk mirror, even when a catalog exists.
+fn confirmed_catalog_applies(library: &Library) -> bool {
+    library.is_user()
+}
+
+fn zotero_mirror_path(
+    app: &tauri::AppHandle,
+    library: &Library,
+) -> WritingResult<std::path::PathBuf> {
     let cache =
         crate::path_utils::cache_dir(app).map_err(|e| WritingError::new("cache_unavailable", e))?;
     Ok(super::zotero::mirror::path_for(&cache, library))
+}
+
+fn catalog_item_to_zotero_item(
+    item: crate::bibliography::repository::BibliographicItem,
+) -> Option<super::zotero::mirror::ZoteroItem> {
+    let item_version = item
+        .item_version
+        .and_then(|version| u64::try_from(version).ok())?;
+    Some(super::zotero::mirror::ZoteroItem {
+        key: item.identity.item_key,
+        item_version,
+        library_type: "user".to_string(),
+        library_id: item.identity.library_id,
+        csl_json: item.csl_json_snapshot,
+    })
+}
+
+fn project_confirmed_catalog(
+    catalog: crate::bibliography::repository::BibliographyResult<
+        Option<Vec<crate::bibliography::repository::BibliographicItem>>,
+    >,
+    fallback: super::zotero::mirror::MirrorView,
+) -> super::zotero::mirror::MirrorView {
+    let Ok(Some(items)) = catalog else {
+        return fallback;
+    };
+    let Some(items) = items
+        .into_iter()
+        .map(catalog_item_to_zotero_item)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return fallback;
+    };
+
+    super::zotero::mirror::MirrorView {
+        items,
+        version: None,
+    }
+}
+
+fn load_cached_zotero_view(
+    mirror_path: &std::path::Path,
+    db_path: &std::path::Path,
+    library: &Library,
+) -> super::zotero::mirror::MirrorView {
+    let fallback = || super::zotero::mirror::Mirror::load(mirror_path, library).view(library);
+    if !confirmed_catalog_applies(library) {
+        return fallback();
+    }
+    let conn = match open(db_path) {
+        Ok(conn) => conn,
+        Err(_) => return fallback(),
+    };
+    let catalog = match crate::bibliography::repository::confirmed_local_personal_catalog(
+        &conn,
+        &library.library_id,
+    ) {
+        Ok(catalog) => catalog,
+        Err(_) => return fallback(),
+    };
+
+    project_confirmed_catalog(Ok(catalog), fallback())
 }
 
 /// The copy of the library read last time, without asking Zotero (§11.2).
@@ -313,12 +478,16 @@ fn zotero_mirror_path(app: &tauri::AppHandle, library: &str) -> WritingResult<st
 #[tauri::command]
 pub async fn writing_zotero_cached(
     app: tauri::AppHandle,
-    library: String,
+    db: State<'_, AppDbState>,
+    library_type: LibraryType,
+    library_id: String,
 ) -> WritingResult<super::zotero::mirror::MirrorView> {
+    let library = resolve_library(library_type, library_id)?;
     let path = zotero_mirror_path(&app, &library)?;
-    tokio::task::spawn_blocking(move || super::zotero::mirror::Mirror::load(&path, &library).view())
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || Ok(load_cached_zotero_view(&path, &db_path, &library)))
         .await
-        .map_err(|e| joined("writing_zotero_cached", e))
+        .map_err(|e| joined("writing_zotero_cached", e))?
 }
 
 /// Brings the copy of the library up to date with Zotero (§11.2).
@@ -328,13 +497,15 @@ pub async fn writing_zotero_cached(
 #[tauri::command]
 pub async fn writing_zotero_sync(
     app: tauri::AppHandle,
-    library: String,
+    library_type: LibraryType,
+    library_id: String,
 ) -> WritingResult<super::zotero::mirror::SyncOutcome> {
     // One sync at a time: two would read the same changes and race to write
     // the same file.
     static SYNCING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _turn = SYNCING.lock().await;
 
+    let library = resolve_library(library_type, library_id)?;
     let path = zotero_mirror_path(&app, &library)?;
     super::zotero::mirror::sync(&zotero_client()?, &path, &library)
         .await
@@ -347,13 +518,133 @@ pub async fn writing_zotero_sync(
 /// the PDF belongs to, never as the attachment.
 #[tauri::command]
 pub async fn writing_zotero_search(
-    library: String,
+    library_type: LibraryType,
+    library_id: String,
     query: String,
 ) -> WritingResult<super::zotero::connector::LibraryPage> {
+    let library = resolve_library(library_type, library_id)?;
     let client = zotero_client()?;
     super::zotero::connector::search_works(&client, &library, &query)
         .await
         .map_err(zotero_error)
+}
+
+/// Every library the UI can offer without asking Zotero (E1c-2).
+///
+/// Personal is always first; mirror files and catalog rows follow with the
+/// catalog winning over the mirror for the same library. Never fails on a
+/// missing cache directory or a missing catalog: those contribute no entries.
+#[tauri::command]
+pub async fn writing_zotero_known_libraries(
+    app: tauri::AppHandle,
+    db: State<'_, AppDbState>,
+) -> WritingResult<Vec<super::zotero::KnownLibrary>> {
+    let cache = crate::path_utils::cache_dir(&app)
+        .map_err(|e| WritingError::new("cache_unavailable", e))?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || Ok(known_libraries(&cache, &db_path)))
+        .await
+        .map_err(|e| joined("writing_zotero_known_libraries", e))?
+}
+
+/// Whether Zotero answers for one library (E1c-2).
+///
+/// A state, never an error: `unverifiable` keeps adding the library allowed,
+/// and only a definitive 404 is `not_found`. A blank id is `invalid_library`,
+/// like every other command taking a library.
+#[tauri::command]
+pub async fn writing_zotero_check_library(
+    library_type: LibraryType,
+    library_id: String,
+) -> WritingResult<super::zotero::CheckLibrary> {
+    let library = resolve_library(library_type, library_id)?;
+    let version = super::zotero::connector::library_version(&zotero_client()?, &library).await;
+    Ok(super::zotero::CheckLibrary::from_result(version))
+}
+
+/// The libraries mirror files name, read from filenames alone.
+///
+/// The filename already encodes the storage key, so payloads are never read —
+/// and an unreadable or missing cache directory simply means no entries.
+fn mirror_libraries(cache_dir: &std::path::Path) -> Vec<Library> {
+    let mut libraries = Vec::new();
+    let entries = match std::fs::read_dir(cache_dir.join("zotero")) {
+        Ok(entries) => entries,
+        Err(_) => return libraries,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(library) = super::zotero::library_from_mirror_filename(name) {
+            libraries.push(library);
+        }
+    }
+    libraries
+}
+
+/// The libraries the archive catalog trusts, when it exists.
+///
+/// A missing `zotero_libraries` table — or a row that no longer parses —
+/// contributes nothing instead of failing: there is simply no catalog yet.
+fn catalog_libraries(conn: &rusqlite::Connection) -> Vec<(Library, String)> {
+    let installed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'zotero_libraries'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if installed != 1 {
+        return Vec::new();
+    }
+    let mut statement = match conn.prepare(
+        "SELECT library_type, library_id, name FROM zotero_libraries ORDER BY library_type, library_id",
+    ) {
+        Ok(statement) => statement,
+        Err(_) => return Vec::new(),
+    };
+    let rows = match statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+    let mut libraries = Vec::new();
+    for row in rows.flatten() {
+        let (kind, id, name) = row;
+        let library_type = match kind.as_str() {
+            "user" => LibraryType::User,
+            "group" => LibraryType::Group,
+            _ => continue,
+        };
+        if let Ok(library) = Library::new(library_type, id) {
+            libraries.push((library, name));
+        }
+    }
+    libraries
+}
+
+/// Personal, mirror and catalog merged into the offered list. An archive that
+/// cannot be opened contributes no catalog rows, like a missing table.
+fn known_libraries(
+    cache_dir: &std::path::Path,
+    db_path: &std::path::Path,
+) -> Vec<super::zotero::KnownLibrary> {
+    let mirror = mirror_libraries(cache_dir);
+    let catalog = open(db_path)
+        .ok()
+        .map(|conn| catalog_libraries(&conn))
+        .unwrap_or_default();
+    super::zotero::merge_known_libraries(mirror, catalog)
 }
 
 /// The state is the diagnosis; the code is what the frontend branches on. Both
@@ -724,4 +1015,380 @@ pub async fn writing_duplicate_document(
     })
     .await
     .map_err(|e| joined("writing_duplicate_document", e))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::writing::zotero::mirror::{Mirror, MirrorItem};
+    use std::path::{Path, PathBuf};
+
+    fn saved_mirror(dir: &Path) -> (PathBuf, Mirror) {
+        let mirror_path = dir.join("library.json");
+        let mirror = Mirror {
+            library: "0".to_string(),
+            version: Some(7),
+            items: vec![MirrorItem {
+                key: "CACHED".to_string(),
+                version: 7,
+                csl: r#"{"id":"cached","type":"book"}"#.to_string(),
+            }],
+        };
+        mirror.save(&mirror_path).expect("save mirror");
+        (mirror_path, mirror)
+    }
+
+    #[test]
+    fn confirmed_empty_catalog_overrides_filesystem_mirror() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (_, mirror) = saved_mirror(dir.path());
+
+        let personal = super::super::zotero::Library::user("0");
+        let projected = project_confirmed_catalog(Ok(Some(Vec::new())), mirror.view(&personal));
+
+        assert!(projected.items.is_empty());
+        assert_eq!(projected.version, None);
+    }
+
+    #[test]
+    fn cached_view_falls_back_when_archive_db_cannot_open() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (mirror_path, mirror) = saved_mirror(dir.path());
+        let missing_db_path = dir.path().join("missing").join("archive.sqlite");
+        let personal = super::super::zotero::Library::user("0");
+
+        assert_eq!(
+            load_cached_zotero_view(&mirror_path, &missing_db_path, &personal),
+            mirror.view(&personal)
+        );
+    }
+
+    /// E1c-1 RED: an empty id is invalid rather than silently personal.
+    #[test]
+    fn e1c1_empty_library_id_is_invalid() {
+        assert!(
+            resolve_library(super::super::zotero::LibraryType::User, "   ".to_string()).is_err()
+        );
+        assert!(resolve_library(super::super::zotero::LibraryType::Group, String::new()).is_err());
+    }
+
+    /// E1c-1 TRIANGULATE: valid ids of either kind resolve verbatim.
+    #[test]
+    fn e1c1_valid_library_ids_resolve_verbatim() {
+        let user = resolve_library(super::super::zotero::LibraryType::User, "0".to_string())
+            .expect("personal default must resolve");
+        assert_eq!(user, super::super::zotero::Library::personal());
+        let group = resolve_library(
+            super::super::zotero::LibraryType::Group,
+            "6680944".to_string(),
+        )
+        .expect("group test library must resolve");
+        assert_eq!(group, super::super::zotero::Library::group("6680944"));
+    }
+
+    /// E1c-1 RED: the confirmed catalog stays personal-only; groups read the mirror.
+    #[test]
+    fn e1c1_confirmed_catalog_applies_to_user_only() {
+        let user = super::super::zotero::Library::user("0");
+        let group = super::super::zotero::Library::group("6680944");
+        assert!(confirmed_catalog_applies(&user));
+        assert!(!confirmed_catalog_applies(&group));
+    }
+
+    /// E1c-1 RED: the wire speaks camelCase `libraryType`/`libraryId`.
+    #[test]
+    fn e1c1_wire_params_use_camel_case_library_type_and_id() {
+        let parsed: super::super::zotero::Library = serde_json::from_value(serde_json::json!({
+            "libraryType": "group",
+            "libraryId": "6680944"
+        }))
+        .unwrap();
+        assert_eq!(parsed.library_id, "6680944");
+        assert!(
+            serde_json::from_value::<super::super::zotero::Library>(serde_json::json!({
+                "libraryType": "team",
+                "libraryId": "6680944"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cached_view_falls_back_when_confirmed_catalog_read_fails() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let (mirror_path, mirror) = saved_mirror(dir.path());
+        let db_path = dir.path().join("archive.sqlite");
+        let conn = rusqlite::Connection::open(&db_path).expect("open malformed archive");
+        for table in [
+            "zotero_connections",
+            "zotero_libraries",
+            "bibliographic_items",
+            "zotero_reconciliation_runs",
+            "zotero_reconciliation_seen",
+            "zotero_item_tombstones",
+        ] {
+            conn.execute(&format!("CREATE TABLE {table} (id TEXT)"), [])
+                .expect("create malformed catalog table");
+        }
+        drop(conn);
+
+        let personal = super::super::zotero::Library::user("0");
+        assert_eq!(
+            load_cached_zotero_view(&mirror_path, &db_path, &personal),
+            mirror.view(&personal)
+        );
+    }
+
+    /// E1c-2 RED: personal is always listed first, even with no cache and no catalog.
+    #[test]
+    fn e1c2_known_libraries_always_lists_personal_first() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing_db = dir.path().join("missing").join("archive.sqlite");
+
+        assert_eq!(
+            known_libraries(dir.path(), &missing_db),
+            vec![super::super::zotero::KnownLibrary {
+                library_type: super::super::zotero::LibraryType::User,
+                library_id: "0".to_string(),
+                name: None,
+                source: super::super::zotero::KnownLibrarySource::Personal,
+            }]
+        );
+    }
+
+    fn e1c2_mirror_fixture(dir: &Path, file_name: &str, contents: &str) {
+        let cache = dir.join("zotero");
+        std::fs::create_dir_all(&cache).expect("create mirror cache");
+        std::fs::write(cache.join(file_name), contents).expect("write mirror fixture");
+    }
+
+    fn e1c2_catalog_db(db_path: &Path, rows: &[(&str, &str, &str)]) {
+        let conn = rusqlite::Connection::open(db_path).expect("open temp catalog");
+        conn.execute_batch(
+            "CREATE TABLE zotero_libraries (
+               id TEXT PRIMARY KEY,
+               connection_id TEXT NOT NULL,
+               library_type TEXT NOT NULL,
+               library_id TEXT NOT NULL,
+               name TEXT NOT NULL
+             )",
+        )
+        .expect("create catalog table");
+        for (index, (library_type, library_id, name)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name)
+                 VALUES (?1, 'c', ?2, ?3, ?4)",
+                rusqlite::params![format!("l{index}"), library_type, library_id, name],
+            )
+            .expect("insert catalog row");
+        }
+    }
+
+    /// E1c-2 RED: mirror files and catalog rows merge with catalog winning,
+    /// filenames alone identify libraries, bad names are skipped.
+    #[test]
+    fn e1c2_known_libraries_merges_mirror_and_catalog() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        // The group payload is garbage on purpose: scanning reads filenames,
+        // never item payloads.
+        e1c2_mirror_fixture(dir.path(), "library-group-6680944.json", "{ not json");
+        e1c2_mirror_fixture(
+            dir.path(),
+            "library-123.json",
+            r#"{"library":"123","version":null,"items":[]}"#,
+        );
+        e1c2_mirror_fixture(dir.path(), "library-.json", "{}");
+        e1c2_mirror_fixture(dir.path(), "notes.txt", "{}");
+        let db_path = dir.path().join("archive.sqlite");
+        e1c2_catalog_db(&db_path, &[("group", "6680944", "Test Group")]);
+
+        assert_eq!(
+            known_libraries(dir.path(), &db_path),
+            vec![
+                super::super::zotero::KnownLibrary {
+                    library_type: super::super::zotero::LibraryType::User,
+                    library_id: "0".to_string(),
+                    name: None,
+                    source: super::super::zotero::KnownLibrarySource::Personal,
+                },
+                super::super::zotero::KnownLibrary {
+                    library_type: super::super::zotero::LibraryType::Group,
+                    library_id: "6680944".to_string(),
+                    name: Some("Test Group".to_string()),
+                    source: super::super::zotero::KnownLibrarySource::Catalog,
+                },
+                super::super::zotero::KnownLibrary {
+                    library_type: super::super::zotero::LibraryType::User,
+                    library_id: "123".to_string(),
+                    name: None,
+                    source: super::super::zotero::KnownLibrarySource::Mirror,
+                },
+            ]
+        );
+    }
+
+    /// E1c-2 RED: a catalog table that is absent or malformed contributes
+    /// nothing instead of failing.
+    #[test]
+    fn e1c2_known_libraries_tolerates_missing_catalog_tables() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        e1c2_mirror_fixture(
+            dir.path(),
+            "library-123.json",
+            r#"{"library":"123","version":null,"items":[]}"#,
+        );
+        let db_path = dir.path().join("archive.sqlite");
+        rusqlite::Connection::open(&db_path)
+            .expect("open temp archive")
+            .execute_batch("CREATE TABLE zotero_libraries (id TEXT)")
+            .expect("create malformed catalog table");
+
+        assert_eq!(
+            known_libraries(dir.path(), &db_path),
+            vec![
+                super::super::zotero::KnownLibrary {
+                    library_type: super::super::zotero::LibraryType::User,
+                    library_id: "0".to_string(),
+                    name: None,
+                    source: super::super::zotero::KnownLibrarySource::Personal,
+                },
+                super::super::zotero::KnownLibrary {
+                    library_type: super::super::zotero::LibraryType::User,
+                    library_id: "123".to_string(),
+                    name: None,
+                    source: super::super::zotero::KnownLibrarySource::Mirror,
+                },
+            ]
+        );
+    }
+
+    /// E1c-2 RED: blank ids are `invalid_library`, never a silent personal check.
+    #[tokio::test]
+    async fn e1c2_check_library_rejects_blank_ids() {
+        let error = writing_zotero_check_library(
+            super::super::zotero::LibraryType::User,
+            "   ".to_string(),
+        )
+        .await
+        .expect_err("blank id must be invalid");
+        assert_eq!(error.code, "invalid_library");
+    }
+
+    /// E1c-2 TRIANGULATE: personal is never displaced by a mirror file or a
+    /// catalog row for user/0; directories, unknown kinds and blank ids are
+    /// skipped rather than listed.
+    #[test]
+    fn e1c2_known_libraries_personal_wins_and_junk_is_skipped() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        e1c2_mirror_fixture(
+            dir.path(),
+            "library-0.json",
+            r#"{"library":"0","version":null,"items":[]}"#,
+        );
+        std::fs::create_dir_all(dir.path().join("zotero").join("library-999.json"))
+            .expect("create mirror directory fixture");
+        let db_path = dir.path().join("archive.sqlite");
+        e1c2_catalog_db(
+            &db_path,
+            &[
+                ("user", "0", "Should Not Win"),
+                ("team", "1", "Unknown Kind"),
+                ("user", "", "Blank Id"),
+            ],
+        );
+
+        assert_eq!(
+            known_libraries(dir.path(), &db_path),
+            vec![super::super::zotero::KnownLibrary {
+                library_type: super::super::zotero::LibraryType::User,
+                library_id: "0".to_string(),
+                name: None,
+                source: super::super::zotero::KnownLibrarySource::Personal,
+            }]
+        );
+    }
+
+    /// E1c-3 RED: a blank item key is `invalid_item_key`, never a lookup.
+    #[test]
+    fn e1c3_item_detail_rejects_blank_item_keys() {
+        for blank in [String::new(), "   ".to_string()] {
+            let error = resolve_item_key(blank).expect_err("blank item key must be invalid");
+            assert_eq!(error.code, "invalid_item_key");
+        }
+        assert_eq!(
+            resolve_item_key("DETAIL1".to_string()).expect("non-blank key"),
+            "DETAIL1"
+        );
+    }
+
+    /// E1c-3 RED: a ficha must not fail because the archive is busy — an
+    /// archive that cannot be opened reads `catalog_unavailable`.
+    #[test]
+    fn e1c3_item_detail_is_unavailable_when_archive_cannot_open() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing_db_path = dir.path().join("missing").join("archive.sqlite");
+        let personal = super::super::zotero::Library::user("0");
+
+        assert_eq!(
+            read_item_detail(&missing_db_path, &personal, "DETAIL1")
+                .expect("busy archive must not fail"),
+            crate::bibliography::detail::ItemDetail::CatalogUnavailable
+        );
+    }
+
+    /// E1c-4: with the gate on, URI validation refuses before any open — a
+    /// syntactically invalid key is `invalid_item_key`, never a spawn; blank
+    /// library ids still resolve first as `invalid_library`.
+    #[tokio::test]
+    async fn e1c4_open_item_rejects_invalid_key_before_open() {
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::Group,
+            "6680944".to_string(),
+            "nope".to_string(),
+        )
+        .await
+        .expect_err("invalid key must be rejected before any open");
+        assert_eq!(error.code, "invalid_item_key");
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::Group,
+            "   ".to_string(),
+            "nope".to_string(),
+        )
+        .await
+        .expect_err("blank library id must be invalid first");
+        assert_eq!(error.code, "invalid_library");
+    }
+
+    /// E1c-4 RED: identity resolves before the gate — blanks are library/key
+    /// errors, not the disabled state.
+    #[tokio::test]
+    async fn e1c4_open_item_rejects_blank_params() {
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::User,
+            "   ".to_string(),
+            "7EMV3G8H".to_string(),
+        )
+        .await
+        .expect_err("blank library id must be invalid");
+        assert_eq!(error.code, "invalid_library");
+        let error = writing_zotero_open_item(
+            super::super::zotero::LibraryType::User,
+            "0".to_string(),
+            "   ".to_string(),
+        )
+        .await
+        .expect_err("blank item key must be invalid");
+        assert_eq!(error.code, "invalid_item_key");
+    }
+
+    /// E1c-4 RED: the command is registered on the Tauri wire (same handler
+    /// list that serves `writing_zotero_item_detail`).
+    #[test]
+    fn e1c4_open_item_is_wired_as_tauri_command() {
+        // Fails to compile until the command exists; pins the symbol so a
+        // rename breaks here, not in the frontend. Registration itself is
+        // verified by `cargo check` on the `generate_handler!` list in lib.rs.
+        let handler = writing_zotero_open_item;
+        let _ = handler;
+    }
 }

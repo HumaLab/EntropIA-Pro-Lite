@@ -183,11 +183,15 @@ export function citationProjection(document: CanonicalDocument | null): Document
 }
 
 /** One row of `writing_zotero_citations` (§9.5), in the shape Rust reads. */
+export type ZoteroSourceOrigin = 'local' | 'web'
+
 export interface ZoteroCitationRow {
   id: string
   citation_node_id: string
   citation_cluster_id: string
   item_position: number
+  source_origin: ZoteroSourceOrigin
+  source_instance_id: string | null
   library_type: string
   library_id: string
   item_key: string
@@ -235,6 +239,11 @@ export function zoteroCitationsFromDocument(doc: Node): ZoteroCitationRow[] {
         citation_node_id: clusterId,
         citation_cluster_id: clusterId,
         item_position: position,
+        // Source identity belongs to the work, not the cluster: one cluster may
+        // cite local and web works together. Missing v1 fields are local with
+        // an unknown instance, without mutating the canonical document.
+        source_origin: item.sourceOrigin === 'web' ? 'web' : 'local',
+        source_instance_id: str(item.sourceInstanceId),
         library_type: str(item.libraryType) ?? 'user',
         library_id: str(item.libraryId) ?? '0',
         item_key: itemKey,

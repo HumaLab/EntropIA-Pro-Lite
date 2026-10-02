@@ -1,5 +1,5 @@
 <script module lang="ts">
-  export type ResearchTab = 'corpus' | 'zotero' | 'notes' | 'agent' | 'export'
+  export type ResearchTab = 'corpus' | 'zotero' | 'bibliography' | 'notes' | 'agent' | 'export'
 </script>
 
 <script lang="ts">
@@ -8,6 +8,7 @@
   import WritingCorpusTab from './WritingCorpusTab.svelte'
   import WritingNotesTab from './WritingNotesTab.svelte'
   import WritingZoteroTab from './WritingZoteroTab.svelte'
+  import BibliographySearchTab from './BibliographySearchTab.svelte'
   import WritingAgentTab from './WritingAgentTab.svelte'
   import WritingExportTab from './WritingExportTab.svelte'
   import { DEFAULT_EXPORT_PREFERENCES, type ExportPreferences } from '$lib/export-preferences'
@@ -90,6 +91,11 @@
   const TABS: { id: ResearchTab; label: I18nKey; pending: I18nKey }[] = [
     { id: 'corpus', label: 'writing.tab.corpus', pending: 'writing.tabPending.corpus' },
     { id: 'zotero', label: 'writing.tab.zotero', pending: 'writing.tabPending.zotero' },
+    {
+      id: 'bibliography',
+      label: 'writing.tab.bibliography',
+      pending: 'writing.tabPending.bibliography',
+    },
     { id: 'notes', label: 'writing.tab.notes', pending: 'writing.tabPending.notes' },
     { id: 'agent', label: 'writing.tab.agent', pending: 'writing.tabPending.agent' },
     { id: 'export', label: 'writing.tab.export', pending: 'writing.tabPending.export' },
@@ -132,6 +138,8 @@
           {onapplycitation}
           {oncancelcitation}
         />
+      {:else if active.id === 'bibliography'}
+        <BibliographySearchTab getSelection={selection} />
       {:else if active.id === 'notes'}
         <WritingNotesTab oncopy={oncopynote} onlink={onlinknote} {selection} />
       {:else if active.id === 'agent'}

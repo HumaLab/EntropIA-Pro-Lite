@@ -338,7 +338,7 @@ export const llmResults = sqliteTable(
 export const processingBatches = sqliteTable('processing_batches', {
   id: text('id').primaryKey(),
   requestId: text('request_id').notNull().unique(),
-  origin: text('origin').notNull(),
+  origin: text('origin', { enum: ['user', 'manual', 'repair', 'bibliography'] }).notNull(),
   state: text('state').notNull(),
   desiredState: text('desired_state').notNull(),
   operations: text('operations').notNull(),
@@ -346,6 +346,7 @@ export const processingBatches = sqliteTable('processing_batches', {
   planningCursor: integer('planning_cursor').notNull().default(0),
   planningDone: integer('planning_done').notNull().default(0),
   revision: integer('revision').notNull().default(0),
+  priority: integer('priority').notNull().default(0),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
   startedAt: integer('started_at'),
@@ -396,8 +397,14 @@ export const processingTasks = sqliteTable(
   'processing_tasks',
   {
     id: text('id').primaryKey(),
-    kind: text('kind').notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    // E2a-1 task-subject identity (migration 0041). Dual-written alongside
+    // the snapshot for corpus rows; lookups stay on (kind, assetIdSnapshot)
+    // until the E2a-2 cutover. SQL (CHECKs, partial uniques) is authoritative.
+    domain: text('domain').notNull().default('corpus'),
+    subjectKind: text('subject_kind').notNull().default('asset'),
+    subjectId: text('subject_id').notNull().default(''),
     inputRevision: integer('input_revision').notNull().default(0),
     inputFingerprint: text('input_fingerprint').notNull().default(''),
     contractHash: text('contract_hash').notNull().default(''),
@@ -439,8 +446,12 @@ export const processingBatchTasks = sqliteTable(
     taskId: text('task_id')
       .notNull()
       .references(() => processingTasks.id),
-    kind: text('kind').notNull(),
+    kind: text('kind', { enum: ['ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract'] }).notNull(),
     assetIdSnapshot: text('asset_id_snapshot').notNull(),
+    // E2a-1 task-subject identity mirror (migration 0041); see processingTasks.
+    domain: text('domain').notNull().default('corpus'),
+    subjectKind: text('subject_kind').notNull().default('asset'),
+    subjectId: text('subject_id').notNull().default(''),
     requestState: text('request_state').notNull().default('active'),
     dependencyTaskId: text('dependency_task_id').references(() => processingTasks.id),
   },
@@ -517,6 +528,367 @@ export const processingMeta = sqliteTable('processing_meta', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 })
+
+// ---------------------------------------------------------------------------
+// Zotero bibliography catalog foundation (migration 0038). A connection is
+// the source namespace; the library and native item key qualify an item. Later
+// migrations add collections, tags, attachments and reconciliation state.
+// ---------------------------------------------------------------------------
+export const zoteroConnections = sqliteTable(
+  'zotero_connections',
+  {
+    id: text('id').primaryKey(),
+    sourceOrigin: text('source_origin', { enum: ['local', 'web'] }).notNull(),
+    sourceInstanceId: text('source_instance_id'),
+    endpoint: text('endpoint'),
+    capabilitiesJson: text('capabilities_json').notNull().default('{}'),
+    credentialRef: text('credential_ref'),
+    state: text('state').notNull().default('unknown'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    sourceIdx: index('idx_zotero_connections_source').on(
+      table.sourceOrigin,
+      table.sourceInstanceId
+    ),
+  })
+)
+
+export const zoteroLibraries = sqliteTable(
+  'zotero_libraries',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => zoteroConnections.id, { onDelete: 'cascade' }),
+    libraryType: text('library_type', { enum: ['user', 'group'] }).notNull(),
+    libraryId: text('library_id').notNull(),
+    name: text('name').notNull(),
+    lastModifiedVersion: integer('last_modified_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    identityUnique: uniqueIndex('idx_zotero_libraries_identity').on(
+      table.connectionId,
+      table.libraryType,
+      table.libraryId
+    ),
+    connectionIdx: index('idx_zotero_libraries_connection').on(table.connectionId),
+  })
+)
+
+export const bibliographicItems = sqliteTable(
+  'bibliographic_items',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemKey: text('item_key').notNull(),
+    itemVersion: integer('item_version'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    cslJsonSnapshot: text('csl_json_snapshot').notNull(),
+    itemType: text('item_type'),
+    title: text('title'),
+    creatorsJson: text('creators_json'),
+    publicationTitle: text('publication_title'),
+    publisher: text('publisher'),
+    date: text('date'),
+    doi: text('doi'),
+    isbn: text('isbn'),
+    abstract: text('abstract'),
+    language: text('language'),
+    url: text('url'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryKeyUnique: uniqueIndex('idx_bibliographic_items_library_key').on(
+      table.libraryId,
+      table.itemKey
+    ),
+    entityLibraryUnique: uniqueIndex('idx_bibliographic_items_id_library').on(
+      table.id,
+      table.libraryId
+    ),
+    keyIdx: index('idx_bibliographic_items_key').on(table.itemKey),
+    titleIdx: index('idx_bibliographic_items_title').on(sql`${table.title} COLLATE NOCASE`),
+  })
+)
+
+// ---------------------------------------------------------------------------
+// Zotero catalog relations (migration 0039). Native keys remain raw and
+// library-qualified; tombstones are separate one-to-one records so the 0038
+// item snapshots and all membership edges remain intact.
+// ---------------------------------------------------------------------------
+export const zoteroCollections = sqliteTable(
+  'zotero_collections',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    collectionKey: text('collection_key').notNull(),
+    name: text('name').notNull(),
+    parentCollectionKey: text('parent_collection_key'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryKeyUnique: uniqueIndex('idx_zotero_collections_library_key').on(
+      table.libraryId,
+      table.collectionKey
+    ),
+    entityLibraryUnique: uniqueIndex('idx_zotero_collections_id_library').on(
+      table.id,
+      table.libraryId
+    ),
+    libraryIdx: index('idx_zotero_collections_library').on(table.libraryId),
+  })
+)
+
+export const zoteroTags = sqliteTable(
+  'zotero_tags',
+  {
+    id: text('id').primaryKey(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    tagText: text('tag_text').notNull(),
+    tagType: text('tag_type'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    libraryTextUnique: uniqueIndex('idx_zotero_tags_library_text').on(
+      table.libraryId,
+      table.tagText
+    ),
+    entityLibraryUnique: uniqueIndex('idx_zotero_tags_id_library').on(table.id, table.libraryId),
+    libraryIdx: index('idx_zotero_tags_library').on(table.libraryId),
+  })
+)
+
+export const zoteroAttachments = sqliteTable(
+  'zotero_attachments',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    attachmentKey: text('attachment_key').notNull(),
+    contentType: text('content_type'),
+    linkMode: text('link_mode'),
+    filename: text('filename'),
+    nativePath: text('native_path'),
+    url: text('url'),
+    md5: text('md5'),
+    mtime: integer('mtime'),
+    nativeJsonSnapshot: text('native_json_snapshot').notNull(),
+    nativeVersion: integer('native_version'),
+    revision: integer('revision').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    verifiedAt: integer('verified_at').notNull(),
+  },
+  (table) => ({
+    itemKeyUnique: uniqueIndex('idx_zotero_attachments_item_key').on(
+      table.itemId,
+      table.attachmentKey
+    ),
+    itemIdx: index('idx_zotero_attachments_item').on(table.itemId),
+  })
+)
+
+export const zoteroItemCollections = sqliteTable(
+  'zotero_item_collections',
+  {
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    collectionId: text('collection_id').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryId, table.itemId, table.collectionId] }),
+    itemLibraryFk: foreignKey({
+      columns: [table.itemId, table.libraryId],
+      foreignColumns: [bibliographicItems.id, bibliographicItems.libraryId],
+      name: 'zotero_item_collections_item_library_fkey',
+    }).onDelete('cascade'),
+    collectionLibraryFk: foreignKey({
+      columns: [table.collectionId, table.libraryId],
+      foreignColumns: [zoteroCollections.id, zoteroCollections.libraryId],
+      name: 'zotero_item_collections_collection_library_fkey',
+    }).onDelete('cascade'),
+    itemIdx: index('idx_zotero_item_collections_item').on(table.libraryId, table.itemId),
+    collectionIdx: index('idx_zotero_item_collections_collection').on(
+      table.libraryId,
+      table.collectionId
+    ),
+  })
+)
+
+export const zoteroItemTags = sqliteTable(
+  'zotero_item_tags',
+  {
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    tagId: text('tag_id').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryId, table.itemId, table.tagId] }),
+    itemLibraryFk: foreignKey({
+      columns: [table.itemId, table.libraryId],
+      foreignColumns: [bibliographicItems.id, bibliographicItems.libraryId],
+      name: 'zotero_item_tags_item_library_fkey',
+    }).onDelete('cascade'),
+    tagLibraryFk: foreignKey({
+      columns: [table.tagId, table.libraryId],
+      foreignColumns: [zoteroTags.id, zoteroTags.libraryId],
+      name: 'zotero_item_tags_tag_library_fkey',
+    }).onDelete('cascade'),
+    itemIdx: index('idx_zotero_item_tags_item').on(table.libraryId, table.itemId),
+    tagIdx: index('idx_zotero_item_tags_tag').on(table.libraryId, table.tagId),
+  })
+)
+
+export const zoteroItemTombstones = sqliteTable('zotero_item_tombstones', {
+  itemId: text('item_id')
+    .primaryKey()
+    .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroCollectionTombstones = sqliteTable('zotero_collection_tombstones', {
+  collectionId: text('collection_id')
+    .primaryKey()
+    .references(() => zoteroCollections.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroTagTombstones = sqliteTable('zotero_tag_tombstones', {
+  tagId: text('tag_id')
+    .primaryKey()
+    .references(() => zoteroTags.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+export const zoteroAttachmentTombstones = sqliteTable('zotero_attachment_tombstones', {
+  attachmentId: text('attachment_id')
+    .primaryKey()
+    .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+  observedAt: integer('observed_at').notNull(),
+  remoteVersion: integer('remote_version'),
+  reason: text('reason').notNull(),
+})
+
+// ---------------------------------------------------------------------------
+// Zotero reconciliation durability (migration 0040). One current run row is
+// retained per internal library; the normalized seen-set is scoped by both the
+// library FK and generated run id so native keys never cross either boundary.
+// ---------------------------------------------------------------------------
+export const zoteroReconciliationRuns = sqliteTable(
+  'zotero_reconciliation_runs',
+  {
+    libraryId: text('library_id')
+      .primaryKey()
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    runId: text('run_id').notNull(),
+    connectionRevision: integer('connection_revision').notNull(),
+    state: text('state', {
+      enum: ['running', 'retry_wait', 'interrupted', 'blocked', 'failed', 'completed'],
+    }).notNull(),
+    phase: text('phase', { enum: ['versions', 'catalog', 'finalize'] }).notNull(),
+    cursorStart: integer('cursor_start').notNull().default(0),
+    cursorLimit: integer('cursor_limit').notNull(),
+    remoteTotal: integer('remote_total'),
+    targetVersion: integer('target_version'),
+    checkpointVersion: integer('checkpoint_version'),
+    retryCount: integer('retry_count').notNull().default(0),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    nextRetryAt: integer('next_retry_at'),
+    lastAttemptAt: integer('last_attempt_at'),
+    latestErrorPhase: text('latest_error_phase', {
+      enum: ['versions', 'catalog', 'finalize'],
+    }),
+    latestErrorCode: text('latest_error_code'),
+    latestErrorMessage: text('latest_error_message'),
+    latestErrorRetryable: integer('latest_error_retryable'),
+    latestErrorAt: integer('latest_error_at'),
+    revision: integer('revision').notNull().default(0),
+    checkpointedAt: integer('checkpointed_at'),
+    completedAt: integer('completed_at'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    runUnique: uniqueIndex('idx_zotero_reconciliation_runs_library_run').on(
+      table.libraryId,
+      table.runId
+    ),
+    runIdUnique: uniqueIndex('idx_zotero_reconciliation_runs_run_id_unique').on(table.runId),
+    stateIdx: index('idx_zotero_reconciliation_runs_state').on(
+      table.state,
+      table.nextRetryAt,
+      table.libraryId
+    ),
+  })
+)
+
+export const zoteroReconciliationSeen = sqliteTable(
+  'zotero_reconciliation_seen',
+  {
+    libraryId: text('library_id').notNull(),
+    runId: text('run_id').notNull(),
+    entityKind: text('entity_kind', {
+      enum: ['item', 'collection', 'tag', 'attachment'],
+    }).notNull(),
+    entityKey: text('entity_key').notNull(),
+    parentKey: text('parent_key').notNull().default(''),
+    remoteVersion: integer('remote_version'),
+    observedAt: integer('observed_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [table.libraryId, table.runId, table.entityKind, table.entityKey, table.parentKey],
+    }),
+    runFk: foreignKey({
+      columns: [table.libraryId, table.runId],
+      foreignColumns: [zoteroReconciliationRuns.libraryId, zoteroReconciliationRuns.runId],
+      name: 'zotero_reconciliation_seen_run_fkey',
+    }).onDelete('cascade'),
+    kindIdx: index('idx_zotero_reconciliation_seen_kind').on(
+      table.libraryId,
+      table.runId,
+      table.entityKind,
+      table.entityKey
+    ),
+  })
+)
 
 // ---------------------------------------------------------------------------
 // Writing workspace (plan-editor.md §9). The canonical manuscript is the
@@ -758,6 +1130,260 @@ export const writingJournal = sqliteTable(
       table.documentId,
       table.baseRevision,
       table.seq
+    ),
+  })
+)
+
+// ---------------------------------------------------------------------------
+// Bibliographic semantic profiles — one canonical-text row per verified work
+// (migration 0045_bibliographic_semantic_profiles, E3b-WU1). Profiles are
+// reconstructible from the verified catalog; embeddings keep their own
+// contract/generation tables, so model changes never rewrite profile history.
+// ---------------------------------------------------------------------------
+export const bibliographicSemanticProfiles = sqliteTable(
+  'bibliographic_semantic_profiles',
+  {
+    itemId: text('item_id')
+      .primaryKey()
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    profileRevision: integer('profile_revision').notNull(),
+    templateVersion: text('template_version').notNull(),
+    canonicalText: text('canonical_text').notNull(),
+    inputHash: text('input_hash').notNull(),
+    fieldProvenanceJson: text('field_provenance_json').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    hashIdx: index('idx_bibliographic_semantic_profiles_hash').on(table.inputHash),
+  })
+)
+
+// Bibliographic work embeddings — one vector per (work, contract) under the
+// effective embedding contract (migration 0046_bibliography_profile_tasks,
+// E3b-WU2). Generations arrive in E3c without rewriting this identity.
+export const bibliographicItemEmbeddings = sqliteTable(
+  'bibliographic_item_embeddings',
+  {
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    generationId: text('generation_id')
+      .notNull()
+      .references(() => bibliographicIndexGenerations.id),
+    embeddingContract: text('embedding_contract').notNull(),
+    embeddingModel: text('embedding_model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+    inputHash: text('input_hash').notNull(),
+    profileRevision: integer('profile_revision').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.itemId, table.generationId] }),
+    hashIdx: index('idx_bibliographic_item_embeddings_hash').on(table.inputHash),
+    generationIdx: index('idx_bibliographic_item_embeddings_generation').on(
+      table.generationId,
+      table.itemId
+    ),
+  })
+)
+
+// Bibliographic embedding contracts (immutable vector spaces) and index
+// generations with a per-contract active pointer (migration
+// 0047_bibliographic_index_generations, E3c-WU1). Execution in staging
+// generations (E3c-WU2) and hybrid retrieval (E3c-WU3) build on these rows.
+export const bibliographicEmbeddingContracts = sqliteTable('bibliographic_embedding_contracts', {
+  contractHash: text('contract_hash').primaryKey(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  dimensions: integer('dimensions').notNull(),
+  chunkingContract: text('chunking_contract').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+export const bibliographicIndexGenerations = sqliteTable(
+  'bibliographic_index_generations',
+  {
+    id: text('id').primaryKey(),
+    contractHash: text('contract_hash')
+      .notNull()
+      .references(() => bibliographicEmbeddingContracts.contractHash),
+    status: text('status', { enum: ['staging', 'active', 'retired'] }).notNull(),
+    expectedInputs: integer('expected_inputs').notNull().default(0),
+    completedInputs: integer('completed_inputs').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    activatedAt: integer('activated_at'),
+    retiredAt: integer('retired_at'),
+  },
+  (table) => ({
+    singleActive: uniqueIndex('idx_bibliographic_generations_single_active')
+      .on(table.contractHash)
+      .where(sql`status = 'active'`),
+    contractIdx: index('idx_bibliographic_generations_contract').on(
+      table.contractHash,
+      table.status
+    ),
+  })
+)
+
+// Bibliographic native extractions — one whole-document row per attachment
+// (migration 0050_bibliographic_extraction_tasks, E4a-WU2). Managed
+// derivatives: a catalog row delete cascades. Per-page rows arrive with
+// selective OCR (E4b) under their own migration.
+export const bibliographicExtractions = sqliteTable(
+  'bibliographic_extractions',
+  {
+    attachmentId: text('attachment_id')
+      .primaryKey()
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    itemId: text('item_id').notNull(),
+    pageCount: integer('page_count').notNull(),
+    method: text('method', { enum: ['native'] }).notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    textChars: integer('text_chars').notNull(),
+    quality: text('quality', { enum: ['rich', 'sparse', 'empty'] }).notNull(),
+    sourceMtime: integer('source_mtime'),
+    sourceBytes: integer('source_bytes').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    itemIdx: index('idx_bibliographic_extractions_item').on(table.itemId),
+  })
+)
+
+// Bibliographic per-page native texts — one row per attachment page
+// (migration 0051_bibliographic_page_texts, E4b-WU2). The selective OCR pass
+// (E4b-WU3) adds 'ocr' rows beside these; managed derivatives with catalog
+// cascade like the whole-document row.
+export const bibliographicPageTexts = sqliteTable(
+  'bibliographic_page_texts',
+  {
+    attachmentId: text('attachment_id')
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    pageNumber: integer('page_number').notNull(),
+    method: text('method', { enum: ['native', 'ocr'] }).notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    textChars: integer('text_chars').notNull(),
+    quality: text('quality', { enum: ['rich', 'sparse', 'empty', 'unreadable'] }).notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.attachmentId, table.pageNumber] }),
+    attachmentIdx: index('idx_bibliographic_page_texts_attachment').on(
+      table.attachmentId,
+      table.pageNumber
+    ),
+  })
+)
+
+// Bibliographic structural chunks and page spans — one chunk per (work,
+// ordinal) with exact page offsets, including multi-page chunks (migration
+// 0052_bibliographic_chunks, E4c-WU1). Chunk vectors keyed by chunk id and
+// generation arrive in E4c-WU2.
+export const bibliographicChunks = sqliteTable(
+  'bibliographic_chunks',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => bibliographicItems.id, { onDelete: 'cascade' }),
+    attachmentId: text('attachment_id')
+      .notNull()
+      .references(() => zoteroAttachments.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    textContent: text('text_content').notNull(),
+    textHash: text('text_hash').notNull(),
+    chunkingContract: text('chunking_contract').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    itemIdx: index('idx_bibliographic_chunks_item').on(table.itemId, table.ordinal),
+  })
+)
+
+export const bibliographicChunkSpans = sqliteTable(
+  'bibliographic_chunk_spans',
+  {
+    chunkId: text('chunk_id')
+      .notNull()
+      .references(() => bibliographicChunks.id, { onDelete: 'cascade' }),
+    pageNumber: integer('page_number').notNull(),
+    startChar: integer('start_char').notNull(),
+    endChar: integer('end_char').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chunkId, table.pageNumber, table.startChar] }),
+  })
+)
+
+// Bibliographic chunk embeddings — one vector per (chunk, generation)
+// under the effective embedding contract (migration
+// 0053_bibliographic_chunk_embeddings, E4c-WU2). Retrieval reads only the
+// active generation of the query contract.
+export const bibliographicChunkEmbeddings = sqliteTable(
+  'bibliographic_chunk_embeddings',
+  {
+    chunkId: text('chunk_id')
+      .notNull()
+      .references(() => bibliographicChunks.id, { onDelete: 'cascade' }),
+    generationId: text('generation_id')
+      .notNull()
+      .references(() => bibliographicIndexGenerations.id),
+    embeddingContract: text('embedding_contract').notNull(),
+    embeddingModel: text('embedding_model').notNull(),
+    dimensions: integer('dimensions').notNull(),
+    embedding: blob('embedding', { mode: 'buffer' }).notNull(),
+    inputHash: text('input_hash').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chunkId, table.generationId] }),
+    generationIdx: index('idx_bibliographic_chunk_embeddings_generation').on(
+      table.generationId,
+      table.chunkId
+    ),
+    hashIdx: index('idx_bibliographic_chunk_embeddings_hash').on(table.inputHash),
+  })
+)
+
+// Bibliographic ingest operations — the durable pending tray (migration
+// 0054_bibliographic_ingest_operations, E5a-WU1). One row per explicit
+// user decision: link an existing work or create a parent (and eventually
+// upload an attachment) in one library. request_id is the idempotency
+// key; receipts carry the verified Zotero identity E5c gates on.
+export const bibliographicIngestOperations = sqliteTable(
+  'bibliographic_ingest_operations',
+  {
+    id: text('id').primaryKey(),
+    requestId: text('request_id').notNull().unique(),
+    kind: text('kind').notNull(),
+    libraryId: text('library_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    payloadJson: text('payload_json').notNull(),
+    state: text('state').notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    receiptJson: text('receipt_json'),
+    lastErrorCode: text('last_error_code'),
+    lastErrorMessage: text('last_error_message'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    stateIdx: index('idx_bibliographic_ingest_operations_state').on(
+      table.state,
+      table.libraryId
     ),
   })
 )

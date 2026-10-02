@@ -24,6 +24,98 @@ function snapshotOf(item: Record<string, unknown>): string {
     : JSON.stringify(item.metadataSnapshot ?? {})
 }
 
+type QualifiedIdentity = {
+  sourceOrigin: string
+  sourceInstanceId: string | null
+  libraryType: string
+  libraryId: string
+}
+
+/** A fully qualified item is safe to namespace; partial identity stays legacy. */
+function qualifiedIdentityOf(item: Record<string, unknown>): QualifiedIdentity | null {
+  if (
+    typeof item.sourceOrigin !== 'string' ||
+    typeof item.libraryType !== 'string' ||
+    typeof item.libraryId !== 'string' ||
+    (item.sourceInstanceId !== null && typeof item.sourceInstanceId !== 'string')
+  ) {
+    return null
+  }
+
+  return {
+    sourceOrigin: item.sourceOrigin,
+    sourceInstanceId: item.sourceInstanceId,
+    libraryType: item.libraryType,
+    libraryId: item.libraryId,
+  }
+}
+
+/** Keep each identity component safe from the namespace separator. */
+function escapeIdentityComponent(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
+function derivedCslId(
+  item: Record<string, unknown>,
+  snapshot: Record<string, unknown>,
+  identity: QualifiedIdentity,
+  citationNodeId: unknown,
+  itemPosition: number
+): string {
+  const baseId = readString(item.itemKey) ?? readString(snapshot.id) ?? 'work'
+  const instance =
+    identity.sourceInstanceId === null
+      ? 'instance-null'
+      : `instance-value-${escapeIdentityComponent(identity.sourceInstanceId)}`
+  const parts = [
+    'csl-identity',
+    escapeIdentityComponent(baseId),
+    escapeIdentityComponent(identity.sourceOrigin),
+    escapeIdentityComponent(identity.libraryType),
+    escapeIdentityComponent(identity.libraryId),
+    instance,
+  ]
+
+  if (identity.sourceInstanceId === null) {
+    parts.push(
+      escapeIdentityComponent(typeof citationNodeId === 'string' ? citationNodeId : ''),
+      String(itemPosition)
+    )
+  }
+
+  return parts.join(':')
+}
+
+/**
+ * Only the renderer's derived copy may receive a namespaced id. The canonical
+ * metadata snapshot object carried by the citation is never modified.
+ */
+function derivedSnapshotOf(
+  item: Record<string, unknown>,
+  citationNodeId: unknown,
+  itemPosition: number
+): string {
+  const snapshot = snapshotOf(item)
+  const identity = qualifiedIdentityOf(item)
+  if (!identity) return snapshot
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(snapshot)
+  } catch {
+    return snapshot
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return snapshot
+
+  const csl = parsed as Record<string, unknown>
+  return JSON.stringify({
+    ...csl,
+    id: derivedCslId(item, csl, identity, citationNodeId, itemPosition),
+  })
+}
+
 /**
  * One cluster, in the shape the engine reads.
  *
@@ -35,7 +127,7 @@ export function clusterOf(attrs: Record<string, unknown>): ClusterItem[] {
   return worksOf({ attrs }).map((raw, index) => {
     const item = (raw ?? {}) as Record<string, unknown>
     return {
-      csl_json: snapshotOf(item),
+      csl_json: derivedSnapshotOf(item, attrs.citationNodeId, index),
       locator: readString(item.locator),
       locator_kind: readString(item.locatorType),
       // The affixes belong to the cluster, not to one of its works, so they
@@ -52,9 +144,10 @@ export function clusterOf(attrs: Record<string, unknown>): ClusterItem[] {
  * the CSL-JSON `writing_csl_bibliography` parses — not as their ids. Handing it
  * bare ids is what made serde answer "expected value at line 1 column 1".
  *
- * The identity is the CSL id, because that is what the engine's bibliography is
- * keyed by. A work cited twice is one entry — a bibliography that listed it
- * twice would be read as a mistake by the author.
+ * The identity is the derived CSL id, because that is what the engine's
+ * bibliography is keyed by. Qualified citations use source identity there;
+ * legacy citations keep their stored CSL id. A work cited twice is one entry —
+ * a bibliography that listed it twice would be read as a mistake by the author.
  */
 export function citedWorks(clusters: ClusterItem[][]): string[] {
   const works: string[] = []

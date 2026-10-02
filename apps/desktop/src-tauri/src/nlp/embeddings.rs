@@ -115,10 +115,10 @@ pub struct RagChunkDraft {
     pub chunking_contract: &'static str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RagChunkEmbeddingSpec {
-    pub model: &'static str,
-    pub contract: &'static str,
+    pub model: String,
+    pub contract: String,
     pub dimensions: usize,
 }
 
@@ -171,10 +171,16 @@ impl EmbeddingProvider {
             #[cfg(not(feature = "local-ml"))]
             None => Ok(Self::Api),
             #[cfg(not(feature = "local-ml"))]
-            // Lite/lean builds do not compile the local ONNX engine. Existing Pro/dev
-            // databases may still carry `embedding_provider=local`; normalize those
-            // legacy values to API instead of blocking the embedding worker forever.
-            Some("local") | Some("offline") | Some("onnx") => Ok(Self::Api),
+            // Lite/lean builds do not compile the local ONNX engine. A Pro
+            // database migrated to Lite fails closed instead of silently
+            // switching to the remote provider: sending text externally
+            // without a fresh authorization is exactly what the consent
+            // contract forbids (E3a-WU2). The worker parks those units as
+            // configuration_required with this message.
+            Some("local") | Some("offline") | Some("onnx") => Err(
+                "El proveedor de embeddings local no está disponible en esta build. Elegí \'api\' o instalá la variante Pro para usar el motor local."
+                    .to_string(),
+            ),
             Some("api") | Some("openrouter") => Ok(Self::Api),
             Some(other) => Err(format!(
                 "Proveedor de embeddings no soportado: {other}. Usá 'api' o 'local'."
@@ -1724,8 +1730,8 @@ pub fn backfill_asset_rag_chunks(
     }
 
     let embedding = RagChunkEmbeddingSpec {
-        model: CANONICAL_EMBEDDING_MODEL,
-        contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+        model: CANONICAL_EMBEDDING_MODEL.to_string(),
+        contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
         dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
     };
     let tx = conn
@@ -1733,9 +1739,12 @@ pub fn backfill_asset_rag_chunks(
         .map_err(|error| format!("Failed to start asset RAG chunk backfill: {error}"))?;
     let mut outcomes = Vec::with_capacity(sources.len());
     for source in &sources {
-        outcomes.push(backfill_rag_chunks(&tx, source, embedding, |text| {
-            engine.embed_text(text)
-        })?);
+        outcomes.push(backfill_rag_chunks(
+            &tx,
+            source,
+            embedding.clone(),
+            |text| engine.embed_text(text),
+        )?);
     }
     let current_sources = sources
         .iter()
@@ -1900,18 +1909,14 @@ pub(crate) fn upsert_vec_asset(
     item_id: &str,
     asset_id: &str,
     blob: &[u8],
+    model: &str,
+    contract: &str,
+    dimensions: i64,
 ) -> Result<(), String> {
     retry_sqlite_busy_locked(|| {
         conn.execute(
             "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions) VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(asset_id) DO UPDATE SET item_id=excluded.item_id, embedding=excluded.embedding, embedding_model=excluded.embedding_model, embedding_contract=excluded.embedding_contract, dimensions=excluded.dimensions",
-            params![
-                asset_id,
-                item_id,
-                blob,
-                CANONICAL_EMBEDDING_MODEL,
-                CANONICAL_EMBEDDING_CONTRACT_V1,
-                CANONICAL_EMBEDDING_DIMENSIONS as i64
-            ],
+            params![asset_id, item_id, blob, model, contract, dimensions],
         )?;
         Ok(())
     })
@@ -2188,24 +2193,37 @@ mod tests {
 
     #[cfg(not(feature = "local-ml"))]
     #[test]
-    fn config_from_settings_normalizes_legacy_local_provider_to_api_in_lean_build() {
-        let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
-        conn.execute_batch(
-            "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
-             INSERT INTO app_settings(key, value) VALUES ('embedding_provider', 'local');\
-             INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');",
-        )
-        .expect("settings table should be created");
+    fn config_from_settings_fails_closed_for_local_provider_in_lean_build() {
+        // E3a-WU2: a Pro database migrated to Lite must never silently switch
+        // to the remote provider — that would send text externally without a
+        // new authorization (plan §E3 consent row). The engine fails closed
+        // naming the unavailable provider instead.
+        for provider in ["local", "offline", "onnx"] {
+            let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+            conn.execute_batch(&format!(
+                "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
+                 INSERT INTO app_settings(key, value) VALUES ('embedding_provider', '{provider}');\
+                 INSERT INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test');"
+            ))
+            .expect("settings table should be created");
 
-        let config = config_from_settings(&conn).expect("legacy local provider should normalize");
-
-        assert_eq!(config.provider, EmbeddingProvider::Api);
-        assert_eq!(config.model_name, DEFAULT_OPENROUTER_EMBEDDING_MODEL);
+            let error = match config_from_settings(&conn) {
+                Ok(_) => panic!("provider '{provider}' must fail closed in lean"),
+                Err(error) => error,
+            };
+            assert!(
+                error.contains("no está disponible en esta build"),
+                "provider '{provider}' must name the unavailable local engine: {error}"
+            );
+        }
     }
 
     #[cfg(not(feature = "local-ml"))]
     #[test]
     fn config_from_settings_lean_missing_api_key_does_not_suggest_local_provider() {
+        // E3a-WU2: in lean, a `local` provider setting fails closed naming
+        // the unavailable engine — the error must never recommend the local
+        // ONNX path this build cannot run.
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         conn.execute_batch(
             "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);\
@@ -2214,11 +2232,14 @@ mod tests {
         .expect("settings table should be created");
 
         let error = match config_from_settings(&conn) {
-            Ok(_) => panic!("missing API key should fail"),
+            Ok(_) => panic!("a local provider must fail closed in lean"),
             Err(error) => error,
         };
 
-        assert!(error.contains("OpenRouter API key"));
+        assert!(
+            error.contains("no está disponible en esta build"),
+            "{error}"
+        );
         assert!(!error.contains("Local ONNX"));
     }
 
@@ -2606,7 +2627,16 @@ mod tests {
         )
         .expect("vec_assets table should be created");
 
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[9, 8, 7, 6]).expect("upsert should succeed");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[9, 8, 7, 6],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("upsert should succeed");
 
         let stored: (String, String, i64) = conn
             .query_row(
@@ -2632,8 +2662,26 @@ mod tests {
         ensure_capture(&conn).expect("ensure capture");
         set_session_with_capture(&conn);
 
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[1u8, 2, 3]).expect("first upsert");
-        upsert_vec_asset(&conn, "item-1", "asset-1", &[4u8, 5, 6]).expect("second upsert");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[1u8, 2, 3],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("first upsert");
+        upsert_vec_asset(
+            &conn,
+            "item-1",
+            "asset-1",
+            &[4u8, 5, 6],
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS as i64,
+        )
+        .expect("second upsert");
 
         let deletes: i64 = conn
             .query_row(
@@ -2957,8 +3005,8 @@ mod tests {
         )
         .expect("chunk backfill schema should initialize");
         let embedding = RagChunkEmbeddingSpec {
-            model: CANONICAL_EMBEDDING_MODEL,
-            contract: CANONICAL_EMBEDDING_CONTRACT_V1,
+            model: CANONICAL_EMBEDDING_MODEL.to_string(),
+            contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
             dimensions: CANONICAL_EMBEDDING_DIMENSIONS,
         };
         let original = RagChunkSource {
@@ -2971,7 +3019,7 @@ mod tests {
         let embed = |_text: &str| Ok(vec![0.25; CANONICAL_EMBEDDING_DIMENSIONS]);
 
         assert_eq!(
-            backfill_rag_chunks(&conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding.clone(), embed)
                 .expect("first backfill should succeed"),
             RagChunkBackfillOutcome::Replaced
         );
@@ -2983,7 +3031,7 @@ mod tests {
             .collect::<Result<_, _>>()
             .expect("rows should decode");
         assert_eq!(
-            backfill_rag_chunks(&conn, &original, embedding, embed)
+            backfill_rag_chunks(&conn, &original, embedding.clone(), embed)
                 .expect("current backfill should succeed"),
             RagChunkBackfillOutcome::Current
         );

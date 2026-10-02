@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { WRITING_SCHEMA_VERSION } from '@entropia/ui'
 import {
   WritingStore,
   citationsForAsset,
@@ -625,6 +626,79 @@ describe('writing store - the citation projection', () => {
         quoted_text: null,
         source_text_hash: null,
         metadata_snapshot_json: '{}',
+      },
+    ])
+    store.dispose()
+  })
+
+  it('saves schema version 2 and the complete item-level Zotero row', async () => {
+    const content = {
+      schemaVersion: WRITING_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'zoteroCitation',
+                attrs: {
+                  citationNodeId: 'z1',
+                  prefix: 'see',
+                  suffix: 'et seq.',
+                  items: [
+                    {
+                      sourceOrigin: 'web',
+                      sourceInstanceId: 'web-instance',
+                      libraryType: 'group',
+                      libraryId: 'library-42',
+                      itemKey: 'WEB1234',
+                      itemVersion: 9,
+                      locatorType: 'page',
+                      locator: '12',
+                      suppressAuthor: true,
+                      authorOnly: true,
+                      metadataSnapshot: { id: 'WEB1234', title: 'A web work' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }
+
+    const { store, now } = makeStore()
+    await store.openDocument('d1')
+    store.applyEdit(content)
+    now.value += 5_000
+    await store.flush()
+
+    const save = mockInvoke.mock.calls.find(([command]) => command === 'writing_save_document')
+    const payload = save?.[1] as {
+      save: { schema_version: number; zotero_citations: unknown[] }
+    }
+    expect(payload.save.schema_version).toBe(2)
+    expect(payload.save.zotero_citations).toEqual([
+      {
+        id: 'z1:0',
+        citation_node_id: 'z1',
+        citation_cluster_id: 'z1',
+        item_position: 0,
+        source_origin: 'web',
+        source_instance_id: 'web-instance',
+        library_type: 'group',
+        library_id: 'library-42',
+        item_key: 'WEB1234',
+        item_version: 9,
+        locator_type: 'page',
+        locator: '12',
+        prefix: 'see',
+        suffix: 'et seq.',
+        suppress_author: true,
+        author_only: true,
+        item_csl_json_snapshot: '{"id":"WEB1234","title":"A web work"}',
       },
     ])
     store.dispose()

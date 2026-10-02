@@ -25,10 +25,49 @@ import { newCitationId } from './unique-citation-ids'
  */
 
 /** Whether two entries name the same work. Identity, never a rendered string. */
+function hasQualifiedFields(work: Record<string, unknown>): boolean {
+  return (
+    typeof work.sourceOrigin === 'string' ||
+    work.sourceInstanceId === null ||
+    typeof work.sourceInstanceId === 'string' ||
+    typeof work.libraryType === 'string' ||
+    typeof work.libraryId === 'string'
+  )
+}
+
+function isQualified(work: Record<string, unknown>): boolean {
+  return (
+    typeof work.sourceOrigin === 'string' &&
+    typeof work.libraryType === 'string' &&
+    typeof work.libraryId === 'string' &&
+    (work.sourceInstanceId === null || typeof work.sourceInstanceId === 'string')
+  )
+}
+
 function sameWork(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const left = a.itemKey
   const right = b.itemKey
-  return typeof left === 'string' && left.length > 0 && left === right
+  if (typeof left !== 'string' || left.length === 0 || left !== right) return false
+
+  const leftIsQualified = hasQualifiedFields(a)
+  const rightIsQualified = hasQualifiedFields(b)
+  // V1 citation items carry only itemKey. Keep their historical fallback, but
+  // never guess that a partially qualified item names the same work.
+  if (!leftIsQualified && !rightIsQualified) return true
+  if (!isQualified(a) || !isQualified(b)) return false
+
+  if (
+    a.sourceOrigin !== b.sourceOrigin ||
+    a.libraryType !== b.libraryType ||
+    a.libraryId !== b.libraryId
+  ) {
+    return false
+  }
+
+  // A null instance is explicit uncertainty, not a shared instance. Without a
+  // corroborated source instance, equal library fields do not prove identity.
+  if (a.sourceInstanceId === null || b.sourceInstanceId === null) return false
+  return a.sourceInstanceId === b.sourceInstanceId
 }
 
 /**

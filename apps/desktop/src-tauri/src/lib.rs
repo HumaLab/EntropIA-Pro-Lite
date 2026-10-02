@@ -1,6 +1,7 @@
 mod app_logs;
 mod asset_integrity;
 mod audio_preview;
+pub mod bibliography;
 mod db;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name
@@ -23,6 +24,10 @@ mod path_utils;
 // drive claim/recover through the real module boundary, like sync_e2e.rs
 // does for the sync engine.
 pub mod processing;
+/// Live-test seam: the eval harness drives the production embedding
+/// client and credential resolution against the configured provider.
+pub use crate::nlp::embeddings::{EmbeddingConfig, EmbeddingEngine, EmbeddingProvider};
+pub use crate::settings::{get_setting, OPENROUTER_API_KEY};
 #[cfg(feature = "local-ml")]
 mod python_discovery;
 mod rag;
@@ -193,15 +198,28 @@ fn processing_commit_observer(
                                         &task.asset_id,
                                     )
                                     .unwrap_or_default();
-                                if let Err(error) = processing::repository::admit_repair_or_attach(
+                                match processing::eligibility::resolve_effective_embedding_contract(
                                     &conn,
-                                    &batch,
-                                    &task.asset_id,
-                                    revision,
-                                    &fingerprint,
-                                    &processing::eligibility::current_embedding_contract_hash(),
                                 ) {
-                                    eprintln!("[processing] follow-up admit failed: {error}");
+                                    Ok(contract) => {
+                                        if let Err(error) =
+                                            processing::repository::admit_repair_or_attach(
+                                                &conn,
+                                                &batch,
+                                                &task.asset_id,
+                                                revision,
+                                                &fingerprint,
+                                                &contract.hash,
+                                            )
+                                        {
+                                            eprintln!(
+                                                "[processing] follow-up admit failed: {error}"
+                                            );
+                                        }
+                                    }
+                                    Err(error) => eprintln!(
+                                        "[processing] follow-up contract unresolved: {error}",
+                                    ),
                                 }
                             }
                             Err(error) => {
@@ -213,6 +231,18 @@ fn processing_commit_observer(
                 Err(error) => eprintln!("[processing] follow-up connection failed: {error}"),
             }
         }
+        processing::scheduler::EngineOutput::BibliographyExtract(_) => {
+            let _ = app_handle.emit(
+                "processing:changed",
+                serde_json::json!({ "taskId": task.task_id }),
+            );
+        }
+        processing::scheduler::EngineOutput::BibliographyProfile(_) => {
+            let _ = app_handle.emit(
+                "processing:changed",
+                serde_json::json!({ "taskId": task.task_id }),
+            );
+        }
         processing::scheduler::EngineOutput::Embedding(embedding) => {
             let _ = app_handle.emit(
                 "nlp:complete",
@@ -223,6 +253,10 @@ fn processing_commit_observer(
                     entity_count: None,
                 },
             );
+        }
+        processing::scheduler::EngineOutput::Bibliography(_) => {
+            // `processing:changed` above is the durable bibliography signal;
+            // no corpus compatibility event or follow-up applies.
         }
     }
 }
@@ -930,6 +964,32 @@ pub fn run() {
             scheduler_registry.register(std::sync::Arc::new(
                 processing::embedding::EmbeddingExecutor::new(scheduler_app.clone(), db_path.clone()),
             ));
+            scheduler_registry.register(std::sync::Arc::new(
+                bibliography::processing::BibliographySyncExecutor::production(),
+            ));
+            // Bibliographic work profiles (E3b) and native extraction (E4a)
+            // run in production behind the same durable queue. The profile
+            // executor resolves the settings-driven embedding engine lazily
+            // and parks honestly when none is configured; the extract
+            // executor runs its native pass always and its OCR pass only
+            // with configured renderer/provider deps (E4b-WU4 wires them).
+            scheduler_registry.register(std::sync::Arc::new(
+                bibliography::processing::BibliographyProfileExecutor::new(
+                    std::sync::Arc::new(bibliography::processing::EngineProfileEmbedder::new(
+                        db_path.clone(),
+                    )),
+                ),
+            ));
+            // Native extraction plus production selective OCR: pages
+            // without native text render through pdfium and recognize
+            // through the configured provider. Missing models or keys park
+            // those units as configuration instead of failing them.
+            scheduler_registry.register(std::sync::Arc::new(
+                bibliography::processing::BibliographyExtractExecutor::with_production_ocr(
+                    scheduler_app.clone(),
+                    db_path.clone(),
+                ),
+            ));
             let scheduler_on_commit =
                 std::sync::Arc::new(move |task: processing::scheduler::ClaimedTask,
                                          output: processing::scheduler::EngineOutput| {
@@ -1085,7 +1145,11 @@ pub fn run() {
             processing::commands::processing_prepare,
             processing::commands::processing_start,
             processing::commands::processing_control,
+            processing::commands::processing_set_priority,
             processing::commands::processing_retry,
+            processing::commands::processing_sync_bibliography_library,
+            bibliography::commands::bibliography_search_works,
+            bibliography::commands::bibliography_open_passage,
             processing::commands::processing_list_batches,
             processing::commands::processing_get_batch,
             processing::commands::processing_list_tasks,
@@ -1109,6 +1173,10 @@ pub fn run() {
             writing::commands::writing_zotero_cached,
             writing::commands::writing_zotero_sync,
             writing::commands::writing_zotero_search,
+            writing::commands::writing_zotero_known_libraries,
+            writing::commands::writing_zotero_check_library,
+            writing::commands::writing_zotero_item_detail,
+            writing::commands::writing_zotero_open_item,
             writing::commands::writing_csl_render,
             writing::commands::writing_csl_render_document,
             writing::commands::writing_csl_bibliography,

@@ -32,6 +32,20 @@ const ITEMS = [
   },
 ]
 
+const QUALIFIED_ITEM = {
+  itemKey: 'A',
+  sourceOrigin: 'local',
+  sourceInstanceId: 'zotero-profile-a',
+  libraryType: 'group',
+  libraryId: '123',
+  itemVersion: 42,
+  title: LONG_TITLE,
+  snapshot: JSON.stringify({ id: 'csl-a', title: LONG_TITLE }),
+  locator: '',
+  locatorType: 'page',
+  suppressAuthor: false,
+}
+
 const mockRenderCluster = vi.mocked(renderCluster)
 
 function mount(overrides: Record<string, unknown> = {}) {
@@ -122,6 +136,35 @@ describe('the lateral citation editor', () => {
         prefix: 'véase ',
         suffix: ', passim',
         renderedText: 'véase [section:45-50:true], passim',
+      })
+    )
+  })
+
+  it('preserves qualified identity when applying locator and affix edits', async () => {
+    const onapply = vi.fn()
+    mount({ items: [{ ...QUALIFIED_ITEM }], onapply })
+
+    await fireEvent.input(screen.getByLabelText('Localizador'), { target: { value: '45-50' } })
+    await fireEvent.input(screen.getByLabelText('Antes de la cita'), {
+      target: { value: 'véase ' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Listo' }))
+
+    expect(onapply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            sourceOrigin: 'local',
+            sourceInstanceId: 'zotero-profile-a',
+            libraryType: 'group',
+            libraryId: '123',
+            itemKey: 'A',
+            itemVersion: 42,
+            metadataSnapshot: QUALIFIED_ITEM.snapshot,
+            locator: '45-50',
+          }),
+        ],
+        prefix: 'véase ',
       })
     )
   })

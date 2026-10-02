@@ -1,4 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
+import {
+  newBatchRequestId,
+  processingSyncBibliographyLibrary,
+  type BibliographySyncResponse,
+} from './batch-processing'
 
 /**
  * The Zotero tab's state (plan-editor.md §6.3, §11).
@@ -26,9 +31,20 @@ export type ZoteroState =
   | { state: 'timeout' }
   | { state: 'invalid_response'; detail: string }
 
+/** One work returned by the local connector or mirror. */
+export interface ZoteroItem {
+  /** Native Zotero item key; deliberately not the CSL `id`. */
+  key: string
+  itemVersion: number
+  libraryType: string
+  libraryId: string
+  /** The untouched CSL-JSON. What gets cited, and what gets snapshotted. */
+  cslJson: string
+}
+
 export interface LibraryPage {
-  /** Each item as CSL-JSON text, ready for the renderer with no conversion. */
-  items: string[]
+  /** Items with native Zotero identity beside their CSL-JSON. */
+  items: ZoteroItem[]
   /** `Last-Modified-Version` — the only instance identity Zotero 9 offers. */
   version: number | null
   /** What the library says it holds for this query, when it says so. */
@@ -38,13 +54,13 @@ export interface LibraryPage {
 
 /** The copy of the library kept on disk, as the backend hands it over. */
 interface MirrorView {
-  items: string[]
+  items: ZoteroItem[]
   version: number | null
 }
 
 /** What a sync did. `items` is the whole library, and only when it changed. */
 interface SyncOutcome {
-  items: string[] | null
+  items: ZoteroItem[] | null
   version: number | null
   fetched: number
   removed: number
@@ -52,13 +68,32 @@ interface SyncOutcome {
 
 /** One work, read out of its CSL-JSON just enough to list it. */
 export interface LibraryEntry {
+  /** Native Zotero identity, kept separate from the CSL citation id. */
   key: string
+  itemVersion: number
+  libraryType: string
+  libraryId: string
   title: string
   authors: string
   year: string
   /** The untouched CSL-JSON. What gets cited, and what gets snapshotted. */
   csl_json: string
 }
+
+export interface ZoteroLibrarySelection {
+  libraryType: 'user' | 'group'
+  libraryId: string
+}
+
+/** Admission state only: the background worker may still be pending. */
+export interface BibliographySyncRequestState {
+  loading: boolean
+  error: string | null
+  requested: BibliographySyncResponse | null
+}
+
+/** The personal default: exactly user/0, unchanged by E1c-1. */
+const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
 
 export interface ZoteroSnapshot {
   /** Null until the first probe answers. */
@@ -72,6 +107,16 @@ export interface ZoteroSnapshot {
   /** What the library says it holds for the current query. */
   total: number | null
   error: string | null
+  /** Which library the list belongs to (E1c-1: explicit selection). */
+  selection: ZoteroLibrarySelection
+  /** Manual scheduler admission for this selection, not worker completion. */
+  bibliographySync: BibliographySyncRequestState
+}
+
+const EMPTY_BIBLIOGRAPHY_SYNC: BibliographySyncRequestState = {
+  loading: false,
+  error: null,
+  requested: null,
 }
 
 const EMPTY: ZoteroSnapshot = {
@@ -83,6 +128,8 @@ const EMPTY: ZoteroSnapshot = {
   loaded: 0,
   total: null,
   error: null,
+  selection: { ...PERSONAL },
+  bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
 }
 
 /** How many rows the list shows. Filtering happens over the whole library. */
@@ -98,7 +145,10 @@ function message(error: unknown): string {
 }
 
 /** Reads the few fields a list needs, without disturbing the CSL-JSON itself. */
-function describe(csl_json: string): LibraryEntry | null {
+function describe(source: ZoteroItem | string): LibraryEntry | null {
+  const legacy = typeof source === 'string'
+  const csl_json = legacy ? source : source.cslJson
+
   try {
     const item = JSON.parse(csl_json) as Record<string, unknown>
     const authors = Array.isArray(item.author)
@@ -110,7 +160,12 @@ function describe(csl_json: string): LibraryEntry | null {
     const issued = item.issued as { 'date-parts'?: number[][] } | undefined
     const year = issued?.['date-parts']?.[0]?.[0]
     return {
-      key: String(item.id ?? ''),
+      // CSL-only responses predate the transport identity. Current
+      // connector/mirror items always take this key from Zotero, not CSL.
+      key: legacy ? String(item.id ?? '') : source.key,
+      itemVersion: legacy ? 0 : source.itemVersion,
+      libraryType: legacy ? 'user' : source.libraryType,
+      libraryId: legacy ? '0' : source.libraryId,
       title: String(item.title ?? ''),
       authors,
       year: year ? String(year) : '',
@@ -124,11 +179,19 @@ function describe(csl_json: string): LibraryEntry | null {
 }
 
 export class WritingZoteroStore {
-  #state: ZoteroSnapshot = { ...EMPTY }
+  #state: ZoteroSnapshot = {
+    ...EMPTY,
+    selection: { ...EMPTY.selection },
+    bibliographySync: { ...EMPTY.bibliographySync },
+  }
   #subscribers = new Set<Subscriber>()
   #all: LibraryEntry[] = []
   #restoring: Promise<void> | null = null
   #syncing: Promise<void> | null = null
+  #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
+  #selection: ZoteroLibrarySelection = { ...PERSONAL }
+  /** Bumped on every effective selection change; late responses compare it. */
+  #epoch = 0
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -143,6 +206,51 @@ export class WritingZoteroStore {
 
   get snapshot(): ZoteroSnapshot {
     return this.#state
+  }
+
+  /** The library the list belongs to. A copy: mutating it changes nothing. */
+  get selection(): ZoteroLibrarySelection {
+    return { ...this.#selection }
+  }
+
+  /**
+   * Switches the library the store reads (E1c-1: explicit selection, no UI).
+   *
+   * Library B never shows library A's data: in-flight bookkeeping is reset
+   * so the next connect()/sync() fetches B, and the held list is cleared at
+   * once. Late answers from the previous selection carry its epoch and are
+   * discarded on arrival. Selecting the current library changes nothing.
+   */
+  select(libraryType: ZoteroLibrarySelection['libraryType'], libraryId: string): void {
+    if (
+      this.#selection.libraryType === libraryType &&
+      this.#selection.libraryId === libraryId
+    ) {
+      return
+    }
+    this.#selection = { libraryType, libraryId }
+    this.#epoch += 1
+    this.#restoring = null
+    this.#syncing = null
+    this.#bibliographySyncing = null
+    this.#all = []
+    this.#set({
+      selection: { ...this.#selection },
+      entries: [],
+      loaded: 0,
+      total: null,
+      query: '',
+      loading: false,
+      error: null,
+      bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+    })
+  }
+
+  #sameSelection(selection: ZoteroLibrarySelection): boolean {
+    return (
+      this.#selection.libraryType === selection.libraryType &&
+      this.#selection.libraryId === selection.libraryId
+    )
   }
 
   /** Asks what can be said about Zotero, and says only that. */
@@ -167,11 +275,15 @@ export class WritingZoteroStore {
    * screen at once — and stays there when Zotero is closed. Opening the tab is
    * the request; a button to be allowed to cite was one step too many.
    */
-  async connect(library = '0'): Promise<void> {
-    this.#restoring ??= this.#restore(library)
-    await this.#restoring
+  async connect(): Promise<void> {
+    const epoch = this.#epoch
+    const selection = { ...this.#selection }
+    const restoring = (this.#restoring ??= this.#restore(selection, epoch))
+    await restoring
+    if (epoch !== this.#epoch) return
     const status = await this.probe()
-    if (status?.state === 'available') await this.sync(library)
+    if (epoch !== this.#epoch) return
+    if (status?.state === 'available') await this.sync()
   }
 
   /**
@@ -180,16 +292,73 @@ export class WritingZoteroStore {
    * One small request when nothing changed. A sync already running is joined
    * rather than started again.
    */
-  sync(library = '0'): Promise<void> {
-    this.#syncing ??= this.#sync(library).finally(() => {
-      this.#syncing = null
-    })
+  sync(): Promise<void> {
+    if (!this.#syncing) {
+      const epoch = this.#epoch
+      const selection = { ...this.#selection }
+      const task = this.#sync(selection, epoch).finally(() => {
+        if (this.#syncing === task) this.#syncing = null
+      })
+      this.#syncing = task
+    }
     return this.#syncing
   }
 
-  async #restore(library: string): Promise<void> {
+  /**
+   * Requests durable background synchronization for the selected library.
+   *
+   * This resolves when the scheduler accepts the request, not when its worker
+   * finishes. Concurrent requests for the same selection join one IPC call.
+   */
+  requestBibliographySync(): Promise<void> {
+    const current = this.#bibliographySyncing
+    if (current?.epoch === this.#epoch) return current.promise
+
+    const epoch = this.#epoch
+    const selection = { ...this.#selection }
+    const task = this.#requestBibliographySync(selection, epoch).finally(() => {
+      if (this.#bibliographySyncing?.promise === task) this.#bibliographySyncing = null
+    })
+    this.#bibliographySyncing = { epoch, promise: task }
+    return task
+  }
+
+  async #requestBibliographySync(
+    selection: ZoteroLibrarySelection,
+    epoch: number
+  ): Promise<void> {
+    this.#set({
+      bibliographySync: { loading: true, error: null, requested: null },
+    })
     try {
-      const copy = await invoke<MirrorView>('writing_zotero_cached', { library })
+      const requested = await processingSyncBibliographyLibrary(
+        newBatchRequestId(),
+        selection.libraryType,
+        selection.libraryId
+      )
+      if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
+      this.#set({
+        bibliographySync: { loading: false, error: null, requested },
+      })
+    } catch (error) {
+      if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
+      this.#set({
+        bibliographySync: { loading: false, error: message(error), requested: null },
+      })
+    }
+  }
+
+  async #restore(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
+    try {
+      const copy = await invoke<MirrorView>('writing_zotero_cached', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+      })
+      // A late answer from the previous selection changes nothing: the epoch
+      // subsumes the loaded===0 fast path below, which keeps its original
+      // meaning within one selection only.
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       // A sync that finished first holds a newer library than the copy.
       if (this.#state.loaded === 0) this.#hold(copy.items)
     } catch {
@@ -197,13 +366,20 @@ export class WritingZoteroStore {
     }
   }
 
-  async #sync(library: string): Promise<void> {
+  async #sync(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     this.#set({ loading: true, error: null })
     try {
-      const outcome = await invoke<SyncOutcome>('writing_zotero_sync', { library })
+      const outcome = await invoke<SyncOutcome>('writing_zotero_sync', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+      })
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (outcome.items) this.#hold(outcome.items)
       this.#set({ loading: false })
     } catch (error) {
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       // The copy is still the library as it last was, so it stays listed. With
       // no copy the list is empty — beside an error, never as an answer: a
       // library that could not be read is not a library with nothing in it.
@@ -212,7 +388,7 @@ export class WritingZoteroStore {
   }
 
   /** Makes `items` the library the list filters. */
-  #hold(items: string[]) {
+  #hold(items: Array<ZoteroItem | string>) {
     this.#all = items.map(describe).filter((entry): entry is LibraryEntry => entry !== null)
     this.#set({ loaded: this.#all.length, entries: this.#filtered() })
   }
@@ -226,7 +402,9 @@ export class WritingZoteroStore {
    * whatever it finds only there is added below the list's matches. The
    * library that was read is left alone: a search is not a new library.
    */
-  async searchLibrary(query: string, library = '0'): Promise<void> {
+  async searchLibrary(query: string): Promise<void> {
+    const selection = { ...this.#selection }
+    const epoch = this.#epoch
     this.#set({ query })
     const needle = query.trim()
     if (!needle) {
@@ -235,8 +413,15 @@ export class WritingZoteroStore {
     }
 
     try {
-      const page = await invoke<LibraryPage>('writing_zotero_search', { library, query: needle })
-      // The box moved on while Zotero was answering; this answers nothing now.
+      const page = await invoke<LibraryPage>('writing_zotero_search', {
+        libraryType: selection.libraryType,
+        libraryId: selection.libraryId,
+        query: needle,
+      })
+      // The box moved on while Zotero was answering, or the library did:
+      // a late answer of another query or another selection changes nothing.
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (this.#state.query !== query) return
       const matched = this.#filtered()
       const shown = new Set(matched.map((entry) => entry.csl_json))
@@ -249,6 +434,8 @@ export class WritingZoteroStore {
         error: null,
       })
     } catch (error) {
+      if (epoch !== this.#epoch) return
+      if (!this.#sameSelection(selection)) return
       if (this.#state.query !== query) return
       this.#set({ error: message(error) })
     }

@@ -28,6 +28,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use super::Library;
+
 /// One work as the copy holds it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MirrorItem {
@@ -36,6 +38,32 @@ pub struct MirrorItem {
     pub version: u64,
     /// The work as CSL-JSON text — the same text the panel cites from.
     pub csl: String,
+}
+
+/// One work crossing the connector/mirror boundary.
+///
+/// The native key and version stay beside the CSL text. The CSL `id` is an
+/// author-chosen citation identifier and is not a substitute for Zotero's key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoteroItem {
+    pub key: String,
+    pub item_version: u64,
+    pub library_type: String,
+    pub library_id: String,
+    pub csl_json: String,
+}
+
+impl MirrorItem {
+    pub(crate) fn as_zotero_item(&self, library: &Library) -> ZoteroItem {
+        ZoteroItem {
+            key: self.key.clone(),
+            item_version: self.version,
+            library_type: library.library_type.as_str().into(),
+            library_id: library.library_id.clone(),
+            csl_json: self.csl.clone(),
+        }
+    }
 }
 
 /// The copy of one library.
@@ -69,9 +97,9 @@ impl Plan {
 pub const FULL_READ_THRESHOLD: usize = 300;
 
 impl Mirror {
-    pub fn empty(library: &str) -> Self {
+    pub fn empty(library: &Library) -> Self {
         Self {
-            library: library.to_string(),
+            library: library.storage_key(),
             version: None,
             items: Vec::new(),
         }
@@ -80,12 +108,15 @@ impl Mirror {
     /// The copy on disk, or an empty one.
     ///
     /// Missing, unreadable and "belongs to another library" all mean the same
-    /// thing — there is no copy to trust — so none of them is an error.
-    pub fn load(path: &Path, library: &str) -> Self {
+    /// thing — there is no copy to trust — so none of them is an error. The
+    /// comparison is on the per-library storage key, so user/0 keeps reading
+    /// the file it always has while groups read only their own.
+    pub fn load(path: &Path, library: &Library) -> Self {
+        let key = library.storage_key();
         std::fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Mirror>(&bytes).ok())
-            .filter(|mirror| mirror.library == library)
+            .filter(|mirror| mirror.library == key)
             .unwrap_or_else(|| Self::empty(library))
     }
 
@@ -141,19 +172,37 @@ impl Mirror {
         self.version = version;
     }
 
+    fn ordered(&self) -> Vec<&MirrorItem> {
+        let mut ordered: Vec<&MirrorItem> = self.items.iter().collect();
+        ordered.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| a.key.cmp(&b.key)));
+        ordered
+    }
+
     /// The works as CSL-JSON, most recently changed first — the same order
     /// Zotero lists a library in by default.
     pub fn csl(&self) -> Vec<String> {
-        let mut ordered: Vec<&MirrorItem> = self.items.iter().collect();
-        ordered.sort_by(|a, b| b.version.cmp(&a.version).then_with(|| a.key.cmp(&b.key)));
-        ordered.into_iter().map(|item| item.csl.clone()).collect()
+        self.ordered()
+            .into_iter()
+            .map(|item| item.csl.clone())
+            .collect()
+    }
+
+    /// The works with native identity, in the same order as [`Self::csl`].
+    ///
+    /// The identity comes from the requested library, not from the stored
+    /// key: the key only filters which copy is read.
+    pub fn public_items(&self, library: &Library) -> Vec<ZoteroItem> {
+        self.ordered()
+            .into_iter()
+            .map(|item| item.as_zotero_item(library))
+            .collect()
     }
 }
 
 /// The copy as the panel receives it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct MirrorView {
-    pub items: Vec<String>,
+    pub items: Vec<ZoteroItem>,
     pub version: Option<u64>,
 }
 
@@ -162,16 +211,16 @@ pub struct MirrorView {
 pub struct SyncOutcome {
     /// The whole library, only when it changed: an unchanged library is not
     /// sent across again.
-    pub items: Option<Vec<String>>,
+    pub items: Option<Vec<ZoteroItem>>,
     pub version: Option<u64>,
     pub fetched: usize,
     pub removed: usize,
 }
 
 impl Mirror {
-    pub fn view(&self) -> MirrorView {
+    pub fn view(&self, library: &Library) -> MirrorView {
         MirrorView {
-            items: self.csl(),
+            items: self.public_items(library),
             version: self.version,
         }
     }
@@ -190,11 +239,11 @@ pub fn reads_whole_library(mirror: &Mirror, plan: &Plan) -> bool {
 pub async fn sync(
     client: &reqwest::Client,
     path: &Path,
-    library: &str,
+    library: &Library,
 ) -> Result<SyncOutcome, super::ZoteroState> {
     use super::connector;
 
-    let (at, lib) = (path.to_path_buf(), library.to_string());
+    let (at, lib) = (path.to_path_buf(), library.clone());
     let mut mirror = tokio::task::spawn_blocking(move || Mirror::load(&at, &lib))
         .await
         .unwrap_or_else(|_| Mirror::empty(library));
@@ -228,7 +277,7 @@ pub async fn sync(
         mirror.apply(items, &plan.remove, version);
     }
 
-    let items = mirror.csl();
+    let items = mirror.public_items(library);
     persist(mirror, path).await;
     Ok(SyncOutcome {
         items: Some(items),
@@ -251,12 +300,18 @@ async fn persist(mirror: Mirror, path: &Path) {
 }
 
 /// Where the copy of a library lives inside the cache directory.
-pub fn path_for(cache_dir: &Path, library: &str) -> PathBuf {
-    // Only what can be part of a library id survives, so the id cannot name
-    // a directory or climb out of this one.
+///
+/// Keyed by [`Library::storage_key`]: user libraries keep today's file name
+/// byte-identically (user/0 is still `library-0.json`), while groups take a
+/// prefixed file so they never share one with a user id.
+///
+/// Only alphanumerics and `-` survive, so the key cannot name a directory or
+/// climb out of this one.
+pub fn path_for(cache_dir: &Path, library: &Library) -> PathBuf {
     let safe: String = library
+        .storage_key()
         .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect();
     cache_dir
         .join("zotero")
@@ -298,8 +353,12 @@ mod tests {
         }
     }
 
+    fn user_zero() -> super::super::Library {
+        super::super::Library::user("0")
+    }
+
     fn mirror(items: &[(&str, u64)]) -> Mirror {
-        let mut mirror = Mirror::empty("0");
+        let mut mirror = Mirror::empty(&user_zero());
         mirror.replace(items.iter().map(|(k, v)| item(k, *v)).collect(), Some(100));
         mirror
     }
@@ -319,7 +378,7 @@ mod tests {
 
     #[test]
     fn a_first_read_reads_the_whole_library() {
-        let copy = Mirror::empty("0");
+        let copy = Mirror::empty(&user_zero());
 
         assert!(reads_whole_library(&copy, &copy.plan(&remote(&[("A", 1)]))));
     }
@@ -349,10 +408,33 @@ mod tests {
     fn a_view_carries_the_works_and_the_version_they_match() {
         let copy = mirror(&[("A", 1), ("B", 2)]);
 
-        let view = copy.view();
+        let view = copy.view(&user_zero());
 
         assert_eq!(view.items.len(), 2);
         assert_eq!(view.version, Some(100));
+    }
+
+    #[test]
+    fn a_view_carries_native_identity_separately_from_the_csl_id() {
+        let mut copy = Mirror::empty(&user_zero());
+        copy.replace(
+            vec![MirrorItem {
+                key: "37C8RJP8".into(),
+                version: 9756,
+                csl: r#"{"id":"moore1973","title":"Los orígenes"}"#.into(),
+            }],
+            Some(9756),
+        );
+
+        let view = serde_json::to_value(copy.view(&user_zero())).unwrap();
+        let item = &view["items"][0];
+
+        assert_eq!(item["key"], "37C8RJP8");
+        assert_eq!(item["itemVersion"], 9756);
+        assert_eq!(item["libraryType"], "user");
+        assert_eq!(item["libraryId"], "0");
+        assert_eq!(item["cslJson"], r#"{"id":"moore1973","title":"Los orígenes"}"#);
+        assert_eq!(view["version"], 9756);
     }
 
     #[test]
@@ -421,12 +503,12 @@ mod tests {
     #[test]
     fn a_copy_survives_being_written_and_read_back() {
         let dir = scratch("roundtrip");
-        let path = path_for(&dir, "0");
+        let path = path_for(&dir, &user_zero());
         let copy = mirror(&[("A", 1), ("B", 2)]);
 
         copy.save(&path).unwrap();
 
-        assert_eq!(Mirror::load(&path, "0"), copy);
+        assert_eq!(Mirror::load(&path, &user_zero()), copy);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -434,7 +516,7 @@ mod tests {
     fn no_copy_on_disk_is_an_empty_copy() {
         let dir = scratch("missing");
 
-        let copy = Mirror::load(&path_for(&dir, "0"), "0");
+        let copy = Mirror::load(&path_for(&dir, &user_zero()), &user_zero());
 
         assert!(copy.items.is_empty());
         assert_eq!(copy.version, None);
@@ -445,23 +527,23 @@ mod tests {
     #[test]
     fn a_corrupt_copy_is_an_empty_copy() {
         let dir = scratch("corrupt");
-        let path = path_for(&dir, "0");
+        let path = path_for(&dir, &user_zero());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{ not json").unwrap();
 
-        assert!(Mirror::load(&path, "0").items.is_empty());
+        assert!(Mirror::load(&path, &user_zero()).items.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_copy_of_another_library_is_not_this_ones() {
         let dir = scratch("other");
-        let path = path_for(&dir, "0");
+        let path = path_for(&dir, &user_zero());
         let mut other = mirror(&[("A", 1)]);
         other.library = "9".into();
         other.save(&path).unwrap();
 
-        assert!(Mirror::load(&path, "0").items.is_empty());
+        assert!(Mirror::load(&path, &user_zero()).items.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -471,7 +553,7 @@ mod tests {
     fn a_library_id_cannot_escape_the_cache_directory() {
         let dir = PathBuf::from("cache");
 
-        let path = path_for(&dir, "../../etc/passwd");
+        let path = path_for(&dir, &super::super::Library::user("../../etc/passwd"));
 
         assert!(path.starts_with(dir.join("zotero")), "{path:?}");
         assert_eq!(path.components().count(), 3, "{path:?}");
@@ -497,5 +579,69 @@ mod tests {
         let answer = serde_json::json!({ "key": "37C8RJP8", "version": 1 });
 
         assert_eq!(item_from_json(&answer), None);
+    }
+
+    /// E1c-1 RED: user libraries keep today's file name byte-identically.
+    #[test]
+    fn e1c1_user_mirror_path_is_byte_identical_to_today() {
+        let dir = PathBuf::from("cache");
+        let typed = path_for(&dir, &super::super::Library::user("0"));
+        assert_eq!(typed, dir.join("zotero").join("library-0.json"));
+    }
+
+    /// E1c-1 TRIANGULATE: a hostile group id still cannot escape the cache.
+    #[test]
+    fn e1c1_group_library_id_cannot_escape_the_cache_directory() {
+        let dir = PathBuf::from("cache");
+
+        let path = path_for(&dir, &super::super::Library::group("../../etc/passwd"));
+
+        assert!(path.starts_with(dir.join("zotero")), "{path:?}");
+        assert_eq!(path.components().count(), 3, "{path:?}");
+    }
+
+    /// E1c-1 RED: a group never shares a file with the user id it mirrors.
+    #[test]
+    fn e1c1_group_mirror_path_is_distinct_from_user_with_same_id() {
+        let dir = PathBuf::from("cache");
+        let user = path_for(&dir, &super::super::Library::user("6680944"));
+        let group = path_for(&dir, &super::super::Library::group("6680944"));
+        assert_ne!(user, group);
+        assert!(
+            group.to_string_lossy().contains("group"),
+            "group path must name the kind: {group:?}"
+        );
+    }
+
+    /// E1c-1 RED: items carry the typed identity of the library they came from.
+    #[test]
+    fn e1c1_mirror_items_carry_typed_identity() {
+        let work = item("A", 1);
+        let user = work.as_zotero_item(&super::super::Library::user("0"));
+        assert_eq!(user.library_type, "user");
+        assert_eq!(user.library_id, "0");
+        let group = work.as_zotero_item(&super::super::Library::group("6680944"));
+        assert_eq!(group.library_type, "group");
+        assert_eq!(group.library_id, "6680944");
+    }
+
+    /// E1c-1 RED: copies are filtered per library key, never mixed.
+    #[test]
+    fn e1c1_mirror_copies_stay_per_library_key() {
+        let dir = scratch("e1c1-per-key");
+        let user = super::super::Library::user("0");
+        let group = super::super::Library::group("6680944");
+        let mut user_mirror = Mirror::empty(&user);
+        user_mirror.replace(vec![item("A", 1)], Some(1));
+        user_mirror.save(&path_for(&dir, &user)).unwrap();
+
+        assert!(Mirror::load(&path_for(&dir, &group), &group)
+            .items
+            .is_empty());
+        assert!(Mirror::load(&path_for(&dir, &user), &group)
+            .items
+            .is_empty());
+        assert_eq!(Mirror::load(&path_for(&dir, &user), &user).items.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

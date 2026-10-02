@@ -24,7 +24,7 @@ import { createWritingExtensions } from './extensions'
  */
 
 /** Bumped only for a change the old reader cannot understand (§8.3). */
-export const WRITING_SCHEMA_VERSION = 1
+export const WRITING_SCHEMA_VERSION = 2
 
 export interface CanonicalDocument {
   schemaVersion: number
