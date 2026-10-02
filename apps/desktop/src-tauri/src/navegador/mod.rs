@@ -42,6 +42,9 @@ pub mod sweep;
 // webviews needs the `navegador` feature.
 #[allow(dead_code)]
 pub mod tabs;
+// Copying a saved source to Zotero: a durable queue and the connector writes.
+#[allow(dead_code)]
+pub mod zotero_copy;
 // The navigation callbacks that use the rest of the policy exist only when the
 // `navegador` feature is on.
 #[allow(dead_code)]
