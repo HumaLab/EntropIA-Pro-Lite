@@ -164,6 +164,12 @@ pub(crate) async fn run_catchup<A: SyncApi>(
         }
         retry_pending_rows(conn, &mut ctx, false).map_err(SyncError::Decode)?;
         record_catchup_done(conn, &epoch).map_err(SyncError::Decode)?;
+        // The pull loop's drains already ran this cycle: install what the
+        // catch-up queued now instead of waiting for the next one.
+        drain_folder_removals(conn, app_data_dir).map_err(SyncError::Decode)?;
+        super::web_blobs::drain_pending_web_blobs(api, token, conn, app_data_dir)
+            .await
+            .map_err(SyncError::Decode)?;
         return Ok(());
     }
 }

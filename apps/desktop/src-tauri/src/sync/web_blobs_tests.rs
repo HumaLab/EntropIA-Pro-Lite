@@ -770,3 +770,47 @@ fn only_plain_ids_can_name_a_folder_to_remove() {
     assert!(outside.exists());
     assert!(dir.path().exists());
 }
+
+#[tokio::test]
+async fn files_of_rows_found_by_the_catch_up_are_installed_in_the_same_cycle() {
+    let conn = session_db();
+    // Not yet caught up for this epoch; the shared cursor is ahead of the rows.
+    conn.execute(
+        "DELETE FROM sync_meta WHERE key = 'web_capture_catchup_epoch'",
+        [],
+    )
+    .unwrap();
+    meta_set(&conn, "last_pull_seq", "50").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let html = b"<html>found by the catch-up</html>";
+    let api = MockSyncApi::default();
+    api.server_capabilities
+        .lock()
+        .unwrap()
+        .push("web-capture-v1".to_string());
+    api.put_blob_bytes(&sha(html), html.to_vec());
+    let page = |rows: Vec<PullRow>, next_since: i64| PullResponse {
+        rows,
+        next_since,
+        has_more: false,
+        schema_tag: String::new(),
+        server_epoch: EPOCH.to_string(),
+        server_now_ms: 1_700_000_000_000,
+        capabilities: vec!["web-capture-v1".to_string()],
+    };
+    api.queue_pull_page(page(vec![], 50));
+    api.queue_pull_page(page(
+        vec![source_pull_row(3), capture_pull_row(html, None, 4)],
+        4,
+    ));
+    run_cycle(&api, "tok", &conn, dir.path(), &|_| {})
+        .await
+        .expect("cycle");
+    let path = dir
+        .path()
+        .join("web-captures")
+        .join(SOURCE)
+        .join(format!("{CAPTURE}.html"));
+    assert_eq!(std::fs::read(path).unwrap(), html);
+    assert!(!has_pending_download(&conn, CAPTURE));
+}
