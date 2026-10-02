@@ -183,7 +183,14 @@ describe('states', () => {
     })
 
     it('has a note for each outcome that changed nothing for a reason worth knowing', () => {
-      for (const state of ['nothing_missing', 'conflict', 'failed', 'invalid_key'] as const) {
+      for (const state of [
+        'nothing_missing',
+        'conflict',
+        'failed',
+        'invalid_key',
+        'other_account',
+        'account_unknown',
+      ] as const) {
         expect(linked({ state, completed: [] }).notes).toContain(
           `navegador.zotero.note.web.${state}`
         )

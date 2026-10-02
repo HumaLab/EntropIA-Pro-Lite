@@ -313,7 +313,7 @@ fn names(fields: &[&'static str]) -> Value {
 /// What the Web API did for an existing item.
 struct WebOutcome {
     /// `completed`, `nothing_missing`, `conflict`, `no_key`, `invalid_key`,
-    /// `no_write` or `failed`.
+    /// `no_write`, `other_account`, `account_unknown` or `failed`.
     state: &'static str,
     completed: Vec<&'static str>,
 }
@@ -332,6 +332,7 @@ impl WebOutcome {
 /// item stays linked and the outcome says what happened.
 fn complete_through_web(
     conn: &Connection,
+    port: &dyn ZoteroPort,
     web: &dyn WebPort,
     row: &ZoteroCopy,
     existing: &ExistingItem,
@@ -358,6 +359,15 @@ fn complete_through_web(
     };
     if !writable {
         return WebOutcome::of("no_write");
+    }
+    if let WebLibrary::User(key_account) = &library {
+        // The personal library is whichever account the open Zotero is signed in
+        // to. A key of another account would write to someone else's library.
+        match port.local_user_id() {
+            Ok(Some(open)) if open == *key_account => {}
+            Ok(Some(_)) => return WebOutcome::of("other_account"),
+            Ok(None) | Err(_) => return WebOutcome::of("account_unknown"),
+        }
     }
     match complete_item(web, &credentials.key, &library, &existing.key, ours) {
         Ok(Completion::Completed(fields)) => WebOutcome {
@@ -404,7 +414,7 @@ fn attempt(
             "keptFields": names(&kept),
         });
         if let Some(web) = options.web.as_deref() {
-            let outcome = complete_through_web(conn, web, row, &existing, &ours);
+            let outcome = complete_through_web(conn, port, web, row, &existing, &ours);
             pending.retain(|field| !outcome.completed.contains(field));
             detail["web"] = json!({
                 "state": outcome.state,
@@ -790,6 +800,8 @@ mod tests {
         children: Vec<Value>,
         save: Result<(), PortError>,
         attach: Result<bool, PortError>,
+        /// The account the open Zotero belongs to (7 matches the test key).
+        user_id: Result<Option<u64>, PortError>,
         saved: RefCell<Vec<(String, String, Value)>>,
         moved: RefCell<Vec<(String, String)>>,
         attached: RefCell<Vec<Attached>>,
@@ -823,6 +835,7 @@ mod tests {
                 children: vec![],
                 save: Ok(()),
                 attach: Ok(true),
+                user_id: Ok(Some(7)),
                 saved: RefCell::new(vec![]),
                 moved: RefCell::new(vec![]),
                 attached: RefCell::new(vec![]),
@@ -871,6 +884,10 @@ mod tests {
                 .collect();
             all.sort();
             Ok(all)
+        }
+        fn local_user_id(&self) -> Result<Option<u64>, PortError> {
+            self.calls.borrow_mut().push("local_user_id".into());
+            self.user_id.clone()
         }
         fn find_items(&self, library: &Library, url: &str) -> Result<Vec<Value>, PortError> {
             self.calls
@@ -1767,6 +1784,65 @@ mod tests {
             assert_eq!(detail["web"]["state"], "failed");
             assert!(!detail.to_string().contains(WEB_KEY));
         }
+    }
+
+    #[test]
+    fn a_key_of_another_account_never_writes_to_the_personal_library() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(Ok(key_info(true, true)), vec![], vec![]);
+        let mut port = existing_port();
+        port.user_id = Ok(Some(99));
+        let done = go_web(&env, &port, &row.id, &web);
+        assert_eq!(done.state, store::STATE_LINKED);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "other_account");
+        assert_eq!(*web.calls.lock().unwrap(), vec!["key_info"]);
+    }
+
+    #[test]
+    fn an_account_that_cannot_be_read_is_never_guessed() {
+        for unreadable in [Ok(None), Err(PortError::Unreachable)] {
+            let env = env();
+            store_web_key(&env);
+            let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+            let web = web_with(Ok(key_info(true, true)), vec![], vec![]);
+            let mut port = existing_port();
+            port.user_id = unreadable;
+            let done = go_web(&env, &port, &row.id, &web);
+            assert_eq!(done.detail.unwrap()["web"]["state"], "account_unknown");
+            assert_eq!(*web.calls.lock().unwrap(), vec!["key_info"]);
+        }
+    }
+
+    #[test]
+    fn the_matching_account_is_read_before_the_write_and_a_group_needs_no_check() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = web_with(
+            Ok(key_info(true, true)),
+            vec![web_item(json!({}))],
+            vec![Ok(Patched::Done)],
+        );
+        let port = existing_port();
+        let done = go_web(&env, &port, &row.id, &web);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "completed");
+        assert!(port.calls().contains(&"local_user_id".to_string()));
+
+        // A group is addressed by its own id: the open account is not consulted,
+        // even when it would not match.
+        let group_row = store::request(&env.conn, "src1", None, &group()).unwrap();
+        let web = web_with(
+            Ok(key_info(false, true)),
+            vec![web_item(json!({}))],
+            vec![Ok(Patched::Done)],
+        );
+        let mut port = existing_port();
+        port.user_id = Ok(Some(99));
+        let done = go_web(&env, &port, &group_row.id, &web);
+        assert_eq!(done.detail.unwrap()["web"]["state"], "completed");
+        assert!(!port.calls().contains(&"local_user_id".to_string()));
     }
 
     #[test]

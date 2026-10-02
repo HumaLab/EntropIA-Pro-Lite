@@ -39,6 +39,8 @@ export type ZoteroWebState =
   | 'no_key'
   | 'invalid_key'
   | 'no_write'
+  | 'other_account'
+  | 'account_unknown'
   | 'failed'
 
 /** The outcomes that earn a message; no key or no write access says nothing. */
@@ -47,6 +49,8 @@ const WEB_NOTE_STATES: readonly ZoteroWebState[] = [
   'nothing_missing',
   'conflict',
   'invalid_key',
+  'other_account',
+  'account_unknown',
   'failed',
 ]
 

@@ -56,6 +56,10 @@ pub trait ZoteroPort {
     fn groups(&self) -> Result<Vec<(String, String)>, PortError>;
     /// The group's name (local API), `None` when Zotero has no such group.
     fn group_name(&self, group_id: &str) -> Result<Option<String>, PortError>;
+    /// The Zotero account the open Zotero's personal library belongs to, read
+    /// from the `library` of any item there. `None` when it cannot say (an empty
+    /// library): the caller never guesses.
+    fn local_user_id(&self) -> Result<Option<u64>, PortError>;
     /// Raw items of the library that may carry `url` (the caller filters).
     fn find_items(&self, library: &Library, url: &str) -> Result<Vec<Value>, PortError>;
     fn children(&self, library: &Library, key: &str) -> Result<Vec<Value>, PortError>;
@@ -225,6 +229,20 @@ impl ZoteroPort for ConnectorPort {
             body.pointer("/data/name")
                 .and_then(Value::as_str)
                 .map(str::to_string)
+        }))
+    }
+
+    fn local_user_id(&self) -> Result<Option<u64>, PortError> {
+        let url = format!("{}/api/users/0/items/top?format=json&limit=1", self.base);
+        let Some(Value::Array(items)) = self.get_json(&url)? else {
+            return Ok(None);
+        };
+        Ok(items.first().and_then(|item| {
+            let library = item.get("library")?;
+            if library.get("type")?.as_str()? != "user" {
+                return None;
+            }
+            library.get("id")?.as_u64()
         }))
     }
 
@@ -687,6 +705,34 @@ mod tests {
                 ("6680944".to_string(), "prueba".to_string()),
                 ("7".to_string(), "otra".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn the_open_zotero_account_is_read_from_the_library_of_any_item() {
+        let body = json!([{"key": "A", "library": {"type": "user", "id": 1091838, "name": "x"}}])
+            .to_string();
+        let server = serve(vec![canned("GET", "/api/users/0/items/top", 200, &body)]);
+        let id = ConnectorPort::new(&server.base).local_user_id().unwrap();
+        assert_eq!(id, Some(1091838));
+        let seen = server.seen.lock().unwrap();
+        assert!(seen[0].target.contains("limit=1"), "{}", seen[0].target);
+    }
+
+    #[test]
+    fn an_empty_library_or_a_group_library_gives_no_account() {
+        let empty = serve(vec![canned("GET", "/api/users/0/items/top", 200, "[]")]);
+        assert_eq!(ConnectorPort::new(&empty.base).local_user_id(), Ok(None));
+        let group = json!([{"library": {"type": "group", "id": 5}}]).to_string();
+        let server = serve(vec![canned("GET", "/api/users/0/items/top", 200, &group)]);
+        assert_eq!(ConnectorPort::new(&server.base).local_user_id(), Ok(None));
+    }
+
+    #[test]
+    fn a_closed_zotero_gives_no_account_by_error_not_by_guess() {
+        assert_eq!(
+            ConnectorPort::new(&dead_base()).local_user_id(),
+            Err(PortError::Unreachable)
         );
     }
 }

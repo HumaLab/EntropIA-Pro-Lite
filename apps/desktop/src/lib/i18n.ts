@@ -2128,6 +2128,10 @@ const es = {
     'El elemento cambió en Zotero mientras se completaba y no se modificó. Reintenta la copia.',
   'navegador.zotero.note.web.invalid_key':
     'Zotero ya no reconoce la API key guardada: no se completó nada. Revísala en Configuración.',
+  'navegador.zotero.note.web.other_account':
+    'La API key de la Web API pertenece a otra cuenta de Zotero que el Zotero abierto: no se completó nada.',
+  'navegador.zotero.note.web.account_unknown':
+    'No se pudo leer la cuenta del Zotero abierto (¿biblioteca vacía?): no se completó nada por la Web API.',
   'navegador.zotero.note.web.failed':
     'No se pudieron completar los campos por la Web API; el elemento quedó enlazado sin cambios.',
   'navegador.zotero.section': 'Copias a Zotero',
@@ -4417,6 +4421,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'The entry changed in Zotero while it was being completed and was left alone. Retry the copy.',
   'navegador.zotero.note.web.invalid_key':
     'Zotero no longer recognises the stored API key: nothing was completed. Check it in Settings.',
+  'navegador.zotero.note.web.other_account':
+    'The Web API key belongs to another Zotero account than the open Zotero: nothing was completed.',
+  'navegador.zotero.note.web.account_unknown':
+    'The account of the open Zotero could not be read (empty library?): nothing was completed through the Web API.',
   'navegador.zotero.note.web.failed':
     'The fields could not be completed through the Web API; the entry was linked unchanged.',
   'navegador.zotero.section': 'Copies to Zotero',
