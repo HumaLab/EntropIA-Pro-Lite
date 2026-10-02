@@ -103,8 +103,8 @@ jobs:
           ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64 }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'EntropIA Pro ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download the EntropIA Pro installer for your platform. The local ML runtime downloads automatically on first launch.'
+          releaseName: 'EntropIA Pro & Lite ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download the EntropIA Pro and EntropIA Lite installers for your platform. EntropIA Pro downloads its local ML runtime automatically on first launch.'
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.build_args }}
