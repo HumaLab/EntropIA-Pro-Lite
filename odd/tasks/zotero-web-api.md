@@ -70,8 +70,36 @@ that has write access to the library.
   `accessDate` and `websiteTitle`, read-back showed them filled and the title
   untouched; second run `NothingMissing`; a stale precondition returned 412;
   delete 204, then 404.
-- [ ] Z3 — Copy to Zotero attaches the PDF to an existing item via the Web API
-  upload flow. Route: delegated writer.
+- [x] Z2b — Account guard for the personal library. Commit `4e76872c`. Before
+  any Web API write to the personal library the open Zotero's account is read
+  from the local API (`/api/users/0/items/top?limit=1`, the `library.id` of the
+  first item) and compared with the key's verified user id. A different account
+  records `other_account`, an unreadable one (empty library, Zotero closed)
+  records `account_unknown`, and nothing is written; groups are addressed by
+  group id and need no check. Each outcome has its own note.
+- [x] Z3 — Copy to Zotero attaches the PDF to an existing item via the Web API
+  upload flow. Route: delegated writer. Commit `35d6eafd`.
+  Behaviour: behind the same guard, children of the item are listed first and
+  the PDF is skipped when one has the same md5 (or, with no md5 yet, the same
+  filename, which carries the file's hash). Otherwise an `imported_file`
+  attachment child is created (write token), upload is authorized
+  (`md5/filename/filesize/mtime`, `If-None-Match: *`), `{"exists":1}` needs no
+  upload, the bytes go to the storage address with prefix/suffix and without
+  the API key, and the upload is registered (`upload=<key>`). An attachment
+  that could not get its file is deleted again. `413` is the `quota` outcome;
+  anything else is `failed`; neither fails the copy. Notes say the PDF reaches
+  the local Zotero after Zotero syncs, files included. New dependency: `md-5`
+  (already in `Cargo.lock` through another crate; git pin line intact).
+  Evidence (RED observed first for the Rust parts; the Vitest additions were
+  written together with their code): `pnpm lint` 0 errors; `pnpm typecheck` 0
+  errors; `pnpm format:check` clean; desktop `pnpm test` 230 files green;
+  `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean;
+  `cargo test` 2154 lib tests + ACL guards green. Live check (group "prueba"
+  only; throwaway parent, tiny PDF generated in the temp dir, all deleted):
+  first attach `Attached` (child `imported_file`, `application/pdf`, md5
+  matches, the stored file downloads byte-identical); second run
+  `AlreadyThere`, still one child; attachment and parent deleted, parent then
+  404.
 - [ ] Z4 — Owner's manual check in the app (Lite).
 
 ## Progress
@@ -79,3 +107,4 @@ that has write access to the library.
 - 2026-10-02: opened.
 - 2026-10-02: Z1 done (`7151ebc6`).
 - 2026-10-02: Z2 done (`9e28b7e1`), live-checked on group prueba.
+- 2026-10-02: account guard (`4e76872c`) and Z3 (`35d6eafd`) done; Z3 live-checked on group prueba.
