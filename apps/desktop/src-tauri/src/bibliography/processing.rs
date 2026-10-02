@@ -2344,6 +2344,9 @@ impl BibliographyExtractExecutor {
 /// the renderer converts to pdfium's 0-based index.
 pub struct ProductionSelectiveOcr {
     app: tauri::AppHandle,
+    // Only the remote GLM path reads it (for the API key); the Paddle build
+    // recognises locally.
+    #[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
     db_path: std::path::PathBuf,
     #[cfg(feature = "paddle-ocr")]
     paddle: std::sync::Mutex<Option<crate::ocr::paddle::PaddleOcrProvider>>,
@@ -2393,7 +2396,7 @@ impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelective
     fn recognize_page(&self, image_bytes: &[u8]) -> Result<String, String> {
         #[cfg(feature = "paddle-ocr")]
         {
-            return self.paddle_recognize(image_bytes);
+            self.paddle_recognize(image_bytes)
         }
         #[cfg(not(feature = "paddle-ocr"))]
         {
