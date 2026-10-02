@@ -6242,6 +6242,69 @@ mod tests {
     }
 
     #[test]
+    fn a_raised_level_with_many_links_still_jumps_ahead_through_the_state_walk() {
+        // Same race as above, but the raised batch carries more links than
+        // CLAIM_LEVEL_DRIVER_LINKS (an aged backlog), so its level is found by
+        // the state-index walk instead of being scanned from the batch.
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b-bg", "req-bg", r#"["ocr"]"#);
+        insert_batch(&conn, "b-hi", "req-hi", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id IN ('b-bg', 'b-hi')",
+            [],
+        )
+        .expect("start batches");
+        let first_admitted = admit_or_attach(&conn, "b-bg", "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("admit background unit");
+        let second_admitted =
+            admit_or_attach(&conn, "b-hi", "ocr", "a6", 0, "", "ocr:light", None)
+                .expect("admit raised unit");
+        // Roles follow the physical id order: the smaller id is background.
+        let (hi_batch, bg_task, hi_task) = if first_admitted.task_id < second_admitted.task_id {
+            ("b-hi", first_admitted.task_id, second_admitted.task_id)
+        } else {
+            ("b-bg", second_admitted.task_id, first_admitted.task_id)
+        };
+        conn.execute(
+            "UPDATE processing_batches SET priority = 1 WHERE id = ?1",
+            [hi_batch],
+        )
+        .expect("raise batch");
+        // Settled units the raised batch still links: they count as links but
+        // are never candidates.
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+             INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+             SELECT 'zz-filler-' || i, 'ocr', 'filler-' || i, 'corpus', 'asset', 'filler-' || i, 'succeeded', 1, 1 FROM n",
+            [CLAIM_LEVEL_DRIVER_LINKS],
+        )
+        .expect("filler tasks");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, domain, subject_kind, subject_id)
+             SELECT ?1, id, 'ocr', asset_id_snapshot, 'active', 'corpus', 'asset', subject_id
+             FROM processing_tasks WHERE id LIKE 'zz-filler-%'",
+            [hi_batch],
+        )
+        .expect("filler links");
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_batch_tasks WHERE batch_id = ?1",
+                [hi_batch],
+                |row| row.get(0),
+            )
+            .expect("links");
+        assert!(links > CLAIM_LEVEL_DRIVER_LINKS);
+        let first = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("a unit must be runnable");
+        assert_eq!(first.task_id, hi_task, "the raised level is served first");
+        let second = claim_next(&conn, "worker", &["ocr"], 1_000)
+            .expect("claim")
+            .expect("the background unit must be runnable");
+        assert_eq!(second.task_id, bg_task);
+    }
+
+    #[test]
     fn set_batch_priority_validates_range_fences_revision_and_bumps() {
         let (_dir, conn) = batch_db();
         insert_batch(&conn, "b1", "req-1", r#"["ocr"]"#);
