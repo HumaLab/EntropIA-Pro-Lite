@@ -38,8 +38,17 @@ that has write access to the library.
 
 ## Tasks
 
-- [ ] Z1 — Settings card + secret storage + key validation (`/keys/current`).
-  Route: delegated writer (2+ non-trivial files).
+- [x] Z1 — Settings card + secret storage + key validation (`/keys/current`).
+  Route: delegated writer (2+ non-trivial files). Commit `7151ebc6`.
+  Evidence (RED observed first for Rust and Vitest, then GREEN): `pnpm lint`
+  0 errors (pre-existing warnings only); `pnpm typecheck` 0 errors;
+  `pnpm format:check` clean; `pnpm test` desktop 230 files passed;
+  `cargo fmt --check` clean; `cargo clippy --all-targets -- -D warnings`
+  clean; `cargo test` all green (2098 lib tests + ACL guards). One first
+  run failed `zotero_copy::port::tests::nothing_listening_is_unreachable...`
+  and passed on rerun: `test_server::dead_base` frees a port that a parallel
+  test server can take. Z2/Z3 call `zotero_web::stored_credentials(conn)`
+  (key + user id; `None` until the key is saved and verified).
 - [ ] Z2 — Copy to Zotero completes an existing item's missing fields via the
   Web API. Route: delegated writer.
 - [ ] Z3 — Copy to Zotero attaches the PDF to an existing item via the Web API
@@ -49,3 +58,4 @@ that has write access to the library.
 ## Progress
 
 - 2026-10-02: opened.
+- 2026-10-02: Z1 done (`7151ebc6`).
