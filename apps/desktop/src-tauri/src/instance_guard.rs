@@ -45,10 +45,20 @@ pub struct InstanceGuard {
     _file: std::fs::File,
 }
 
+/// The mutex name for this process's archive. The shared archive keeps the
+/// contract name; a dev profile has its own archive, so it gets its own name:
+/// two profiles may run at once, the same profile never twice.
+pub fn instance_name(dev_profile: Option<&str>) -> String {
+    match dev_profile {
+        Some(profile) => format!("{INSTANCE_NAME}-dev-{profile}"),
+        None => INSTANCE_NAME.to_string(),
+    }
+}
+
 /// Claims the archive for this process. `data_dir` is only used where a lock
 /// file stands in for the named mutex.
 pub fn acquire(data_dir: &Path) -> Result<InstanceGuard, GuardError> {
-    acquire_named(INSTANCE_NAME, data_dir)
+    acquire_named(&instance_name(crate::dev_profile::active()), data_dir)
 }
 
 #[cfg(windows)]
@@ -154,6 +164,38 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         )
+    }
+
+    #[test]
+    fn the_shared_archive_keeps_the_contract_name() {
+        assert_eq!(instance_name(None), INSTANCE_NAME);
+    }
+
+    #[test]
+    fn each_dev_profile_guards_its_own_archive() {
+        let a = instance_name(Some("a"));
+        let b = instance_name(Some("b"));
+        assert_ne!(a, INSTANCE_NAME, "a profile never takes the shared name");
+        assert_ne!(a, b);
+        assert_eq!(
+            a,
+            instance_name(Some("a")),
+            "the same profile maps to one name"
+        );
+    }
+
+    #[test]
+    fn two_dev_profiles_can_run_at_once_but_not_twice_each() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = unique("profiles");
+        let name_a = format!("{base}-{}", instance_name(Some("a")));
+        let name_b = format!("{base}-{}", instance_name(Some("b")));
+        let _a = acquire_named(&name_a, dir.path()).expect("profile a");
+        let _b = acquire_named(&name_b, dir.path()).expect("profile b runs alongside a");
+        assert!(matches!(
+            acquire_named(&name_a, dir.path()),
+            Err(GuardError::AlreadyRunning)
+        ));
     }
 
     #[test]
