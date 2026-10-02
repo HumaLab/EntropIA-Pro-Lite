@@ -25,6 +25,10 @@ review panel on 2026-09-29.
 - D4: captures sync from v1 (rows gated by capability `web-capture-v1`, own
   blob path). Sync work waits for `feat/investigations-sync` to land on main.
 - New migration must not use numbers 0038–0054 (owned by the Zotero branch).
+- 2026-10-01, integration into main: the Zotero layer landed as 0040–0056, so
+  `0055_web_captures` was renumbered to `0057_web_captures` (registry key,
+  `.sql` mirror, tests, `schema_full.sql`). Earlier mentions of 0055 below are
+  history and cite the old name.
 
 ## Constraints
 

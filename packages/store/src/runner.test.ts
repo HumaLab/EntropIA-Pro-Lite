@@ -2741,7 +2741,7 @@ describe('bibliographic chunk embeddings migration (0055)', () => {
   })
 })
 
-describe('web captures migration (0055)', () => {
+describe('web captures migration (0057)', () => {
   const shim = (db: DatabaseSync): DbClient => ({
     async execute(sql, params = []) {
       return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
@@ -2783,14 +2783,16 @@ describe('web captures migration (0055)', () => {
       )
       .run(id, sourceId, kind)
 
-  it('is registered under 0055 and never inside the range the Zotero branch owns', () => {
+  it('is registered under 0057, above every other migration, with a number of its own', () => {
     const names = [...buildSchemaFixture().matchAll(/^-- (\d{4})_(\w+)$/gm)].map((m) => ({
       number: Number(m[1]),
       name: `${m[1]}_${m[2]}`,
     }))
 
-    expect(names.map((n) => n.name)).toContain('0055_web_captures')
-    expect(names.filter((n) => n.number >= 38 && n.number <= 54)).toEqual([])
+    expect(names.map((n) => n.name)).toContain('0057_web_captures')
+    expect(names.at(-1)?.name).toBe('0057_web_captures')
+    const numbers = names.map((n) => n.number)
+    expect(new Set(numbers).size).toBe(numbers.length)
   })
 
   it('creates both tables and their indexes, and is idempotent', async () => {
@@ -2813,7 +2815,7 @@ describe('web captures migration (0055)', () => {
         ).toBeDefined()
       }
       expect(
-        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0055_web_captures'").get()?.n
+        db.prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0057_web_captures'").get()?.n
       ).toBe(1)
     } finally {
       db.close()
@@ -2904,7 +2906,7 @@ describe('web captures migration (0055)', () => {
 
   it('has a standalone .sql mirror that matches the registry', () => {
     const flat = (text: string) => text.replaceAll('\r', '').trim()
-    const mirror = flat(readFileSync(resolve(here, 'migrations/0055_web_captures.sql'), 'utf8'))
+    const mirror = flat(readFileSync(resolve(here, 'migrations/0057_web_captures.sql'), 'utf8'))
     expect(flat(buildSchemaFixture())).toContain(mirror)
   })
 

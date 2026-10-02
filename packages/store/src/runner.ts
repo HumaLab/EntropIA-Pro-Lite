@@ -2612,10 +2612,11 @@ ALTER TABLE processing_batches ADD COLUMN priority INTEGER NOT NULL DEFAULT 0 CH
 CREATE INDEX IF NOT EXISTS idx_processing_batches_priority
   ON processing_batches(priority, created_at, id);
 `.trim(),
-  // 0055 mirrors packages/store/src/migrations/0055_web_captures.sql. The number
-  // skips 0038-0054 on purpose: the Zotero branch owns them. The runner applies by
-  // name, so the gap is harmless.
-  '0055_web_captures': `
+  // 0057 mirrors packages/store/src/migrations/0057_web_captures.sql. Written as
+  // 0055 on the browser branch and renumbered when it merged after the Zotero
+  // range (0040-0056): the sync schema tag is the highest applied name, so a
+  // new migration must sort above every one already on main.
+  '0057_web_captures': `
 -- Web sources and their captures (Navegador, docs/navegador/plan.md section 5).
 --
 -- A web source is one page the person saved from the in-app browser. It
@@ -2951,7 +2952,7 @@ export async function runMigrations(client: DbClient): Promise<void> {
         name === '0054_bibliographic_chunks' ||
         name === '0055_bibliographic_chunk_embeddings' ||
         name === '0056_bibliographic_ingest_operations' ||
-        name === '0055_web_captures'
+        name === '0057_web_captures'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")
