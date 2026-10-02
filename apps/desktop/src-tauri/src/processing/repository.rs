@@ -976,9 +976,7 @@ pub fn admit_bibliography_sync_demand(
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()
-                .map_err(|error| {
-                    format!("Failed to inspect prior bibliography demand: {error}")
-                })?;
+                .map_err(|error| format!("Failed to inspect prior bibliography demand: {error}"))?;
             if let Some((task_id, _)) = latest.filter(|(_, state)| state == "failed") {
                 link_batch_task_subject(
                     conn,
@@ -6256,9 +6254,8 @@ mod tests {
         .expect("start batches");
         let first_admitted = admit_or_attach(&conn, "b-bg", "ocr", "a1", 0, "", "ocr:light", None)
             .expect("admit background unit");
-        let second_admitted =
-            admit_or_attach(&conn, "b-hi", "ocr", "a6", 0, "", "ocr:light", None)
-                .expect("admit raised unit");
+        let second_admitted = admit_or_attach(&conn, "b-hi", "ocr", "a6", 0, "", "ocr:light", None)
+            .expect("admit raised unit");
         // Roles follow the physical id order: the smaller id is background.
         let (hi_batch, bg_task, hi_task) = if first_admitted.task_id < second_admitted.task_id {
             ("b-hi", first_admitted.task_id, second_admitted.task_id)
@@ -6708,8 +6705,12 @@ mod tests {
         prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
         control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
         advance_planning(&conn, "b1", 10, 200).expect("plan");
-        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr").unwrap().unwrap();
-        let embedding_id = live_task(&conn, "corpus", "asset", "a1", "embedding").unwrap().unwrap();
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let embedding_id = live_task(&conn, "corpus", "asset", "a1", "embedding")
+            .unwrap()
+            .unwrap();
         let state = |id: &str| -> String {
             conn.query_row(
                 "SELECT state FROM processing_tasks WHERE id = ?1",

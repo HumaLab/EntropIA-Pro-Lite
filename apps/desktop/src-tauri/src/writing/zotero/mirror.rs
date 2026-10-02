@@ -433,7 +433,10 @@ mod tests {
         assert_eq!(item["itemVersion"], 9756);
         assert_eq!(item["libraryType"], "user");
         assert_eq!(item["libraryId"], "0");
-        assert_eq!(item["cslJson"], r#"{"id":"moore1973","title":"Los orígenes"}"#);
+        assert_eq!(
+            item["cslJson"],
+            r#"{"id":"moore1973","title":"Los orígenes"}"#
+        );
         assert_eq!(view["version"], 9756);
     }
 
