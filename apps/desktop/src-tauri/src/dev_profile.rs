@@ -280,6 +280,25 @@ pub fn sync_server() -> Option<&'static str> {
     }
 }
 
+/// The server a sign-in or registration really talks to. The settings screen
+/// always offers the production server; a dev profile with a local server
+/// replaces it with that server, so the screen can never pick another one.
+pub fn effective_server_url(
+    profile_active: bool,
+    local_server: Option<&str>,
+    requested: &str,
+) -> String {
+    match (profile_active, local_server) {
+        (true, Some(local)) => local.to_string(),
+        _ => requested.to_string(),
+    }
+}
+
+/// `effective_server_url` for this process.
+pub fn server_for(requested: &str) -> String {
+    effective_server_url(active().is_some(), sync_server(), requested)
+}
+
 /// Call before building any sync client: a dev profile may reach only its local
 /// server. Always `Ok` outside a dev profile.
 pub fn require_server(url: &str) -> Result<(), String> {
@@ -304,6 +323,26 @@ pub fn require_sync() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dev_profile_signs_in_to_its_local_server_whatever_the_screen_sends() {
+        assert_eq!(
+            effective_server_url(
+                true,
+                Some("http://127.0.0.1:8787"),
+                "https://entropia-cloud.app.hlab.com.ar/"
+            ),
+            "http://127.0.0.1:8787"
+        );
+    }
+
+    #[test]
+    fn the_real_archive_keeps_the_requested_server() {
+        let prod = "https://entropia-cloud.app.hlab.com.ar/";
+        assert_eq!(effective_server_url(false, None, prod), prod);
+        // A profile without a local server is sync-disabled; nothing is swapped.
+        assert_eq!(effective_server_url(true, None, prod), prod);
+    }
 
     #[test]
     fn no_variable_means_no_profile() {

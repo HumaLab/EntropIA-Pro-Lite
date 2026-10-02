@@ -373,6 +373,7 @@ pub async fn sync_register_account(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     crate::dev_profile::require_sync()?;
+    let server_url = crate::dev_profile::server_for(&server_url);
     // Build the API in a blocking task: the constructor validates the TLS rule
     // and reqwest client construction is cheap but not free.
     let api = HttpSyncApi::new(&server_url).map_err(String::from)?;
@@ -454,6 +455,7 @@ pub async fn sync_login(
     app_handle: AppHandle,
 ) -> Result<(), String> {
     crate::dev_profile::require_sync()?;
+    let server_url = crate::dev_profile::server_for(&server_url);
     let validated_url =
         crate::sync::http::validate_server_url(&server_url).map_err(String::from)?;
     let api = HttpSyncApi::new(&validated_url).map_err(String::from)?;
