@@ -773,6 +773,9 @@ impl HttpSyncApi {
     /// Builds a client for `server_url`. Re-validates the TLS rule at use-time
     /// (PROTOCOL "Transporte") so a stored URL can never be used over cleartext.
     pub fn new(server_url: &str) -> Result<Self, SyncError> {
+        // A dev profile reaches only its local server: this is the one door
+        // every sync request goes through (dev_profile.rs).
+        crate::dev_profile::require_server(server_url).map_err(SyncError::InvalidUrl)?;
         let base_url = validate_server_url(server_url)?;
         let client = reqwest::Client::builder()
             .user_agent("EntropIA-Desktop-Sync/1.0")

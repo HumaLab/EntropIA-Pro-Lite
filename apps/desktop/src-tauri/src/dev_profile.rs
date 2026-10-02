@@ -22,6 +22,23 @@
 //!
 //! A variable that is set but invalid is an error, never a silent fall back:
 //! the fallback would be the real archive.
+//!
+//! ## Loopback sync, for trying two profiles by hand
+//!
+//! `ENTROPIA_DEV_SYNC_SERVER=http://127.0.0.1:<port>` (debug build, with a
+//! profile) turns sync back on for that profile, against that one server only:
+//!
+//! - The value must be a plain loopback origin (`127.0.0.1`, `localhost` or
+//!   `[::1]`, plain `http`, an explicit port, no path or credentials). Anything
+//!   else is a startup error, as is the variable without a profile.
+//! - [`require_server`] runs inside `HttpSyncApi::new`, the one door every sync
+//!   request goes through, and refuses any address that is not exactly that
+//!   origin. A profile can therefore never contact the production host, even if
+//!   a stored `server_url` names it.
+//! - The device token lives under a keyring entry scoped to the profile
+//!   (`sync::session::token_target`), never the real `com.entropia.lite sync`
+//!   entry, so the real session can be neither read nor replaced.
+//! - A release build never reads the variable: the read is compiled out.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -78,11 +95,18 @@ pub fn profile_dirs(name: &str, shared_data: &Path, shared_cache: &Path) -> (Pat
     )
 }
 
-/// The one line the app logs at startup saying which archive it opened.
-pub fn startup_line(profile: Option<&str>, data: &Path, cache: &Path) -> String {
-    let (profile, sync) = match profile {
-        Some(name) => (format!("dev:{name}"), "disabled"),
-        None => ("shared".to_string(), "enabled"),
+/// The one line the app logs at startup saying which archive it opened and what
+/// sync does: on against the real account, off, or on against a local server.
+pub fn startup_line(
+    profile: Option<&str>,
+    sync_server: Option<&str>,
+    data: &Path,
+    cache: &Path,
+) -> String {
+    let (profile, sync) = match (profile, sync_server) {
+        (Some(name), Some(server)) => (format!("dev:{name}"), format!("local:{server}")),
+        (Some(name), None) => (format!("dev:{name}"), "disabled".to_string()),
+        (None, _) => ("shared".to_string(), "enabled".to_string()),
     };
     format!(
         "profile={profile} data_dir={} cache_dir={} sync={sync}",
@@ -126,7 +150,140 @@ pub fn active() -> Option<&'static str> {
 
 /// Whether sync must stay off. Always false in a release build.
 pub fn sync_disabled() -> bool {
-    active().is_some()
+    sync_disabled_for(active().is_some(), sync_server())
+}
+
+/// The decision behind [`sync_disabled`], separate from the process-wide state:
+/// a profile syncs only once a local server was given.
+pub fn sync_disabled_for(profile_active: bool, local_server: Option<&str>) -> bool {
+    profile_active && local_server.is_none()
+}
+
+/// The environment variable that names the local server (debug builds only).
+pub const SYNC_SERVER_VAR: &str = "ENTROPIA_DEV_SYNC_SERVER";
+
+/// What a refused server address answers. The UI maps the code.
+pub const SERVER_REFUSED: &str = "sync_server_refused_in_dev_profile: un perfil de desarrollo solo puede sincronizar con el servidor local indicado";
+
+/// Check a local server address: plain `http`, host `127.0.0.1`, `localhost` or
+/// `[::1]`, an explicit port in `1..=65535`, nothing after it but an optional
+/// `/`. Returns the normalised origin (lower case, no trailing slash).
+pub fn parse_local_server(raw: &str) -> Result<String, String> {
+    let refuse = |why: &str| {
+        Err(format!(
+            "{SYNC_SERVER_VAR} must be http://127.0.0.1:<port>, http://localhost:<port> or \
+             http://[::1]:<port> ({why}; got {raw:?})"
+        ))
+    };
+    let text = raw.trim();
+    let lower = text.to_ascii_lowercase();
+    let Some(rest) = lower.strip_prefix("http://") else {
+        return refuse("only plain http to this machine");
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    let (host, port) = if let Some(inner) = rest.strip_prefix('[') {
+        match inner.split_once("]:") {
+            Some((host, port)) => (format!("[{host}]"), port),
+            None => return refuse("a bracketed host needs a port"),
+        }
+    } else {
+        match rest.rsplit_once(':') {
+            Some((host, port)) => (host.to_string(), port),
+            None => return refuse("the port is required"),
+        }
+    };
+    if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]") {
+        return refuse("the host must be loopback");
+    }
+    let port_ok = !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u32>().is_ok_and(|p| (1..=65535).contains(&p));
+    if !port_ok {
+        return refuse("the port must be a number from 1 to 65535");
+    }
+    Ok(format!("http://{host}:{port}"))
+}
+
+/// The local server to use, given whether this build may read the variable,
+/// whether a profile is active and the variable's value. Never silently ignores
+/// a value: without a profile it is an error.
+pub fn requested_sync_server(
+    enabled: bool,
+    profile_active: bool,
+    raw: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    if !profile_active {
+        return Err(format!(
+            "{SYNC_SERVER_VAR} needs {ENV_VAR}: refusing to point the real archive at a local server"
+        ));
+    }
+    parse_local_server(raw).map(Some)
+}
+
+/// Whether `url` may be used by sync, given the profile and its local server. No
+/// profile means no restriction; a profile reaches exactly its local origin.
+pub fn check_server(
+    profile_active: bool,
+    local_server: Option<&str>,
+    url: &str,
+) -> Result<(), String> {
+    if !profile_active {
+        return Ok(());
+    }
+    match (local_server, parse_local_server(url)) {
+        (Some(allowed), Ok(candidate)) if candidate == allowed => Ok(()),
+        _ => Err(SERVER_REFUSED.to_string()),
+    }
+}
+
+#[cfg(debug_assertions)]
+fn sync_server_env_value() -> Option<String> {
+    std::env::var(SYNC_SERVER_VAR).ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn sync_server_env_value() -> Option<String> {
+    None
+}
+
+/// The local server this process was asked to sync with, from the environment.
+/// Always `Ok(None)` in a release build.
+pub fn sync_server_from_env(profile_active: bool) -> Result<Option<String>, String> {
+    requested_sync_server(
+        cfg!(debug_assertions),
+        profile_active,
+        sync_server_env_value().as_deref(),
+    )
+}
+
+static SYNC_SERVER: OnceLock<String> = OnceLock::new();
+
+/// Record the local server this process syncs with. Called once, during setup,
+/// right after the profile is activated.
+pub fn activate_sync_server(url: String) {
+    let _ = SYNC_SERVER.set(url);
+}
+
+/// The active profile's local server, if any.
+pub fn sync_server() -> Option<&'static str> {
+    if cfg!(debug_assertions) {
+        SYNC_SERVER.get().map(String::as_str)
+    } else {
+        None
+    }
+}
+
+/// Call before building any sync client: a dev profile may reach only its local
+/// server. Always `Ok` outside a dev profile.
+pub fn require_server(url: &str) -> Result<(), String> {
+    check_server(active().is_some(), sync_server(), url)
 }
 
 /// The guard's decision, separate from the process-wide state so it is testable.
@@ -231,6 +388,7 @@ mod tests {
     fn the_startup_line_names_the_profile_the_directories_and_sync() {
         let line = startup_line(
             Some("navegador"),
+            None,
             Path::new("/d/com.entropia.shared/dev-profiles/navegador"),
             Path::new("/c/com.entropia.shared/dev-profiles/navegador"),
         );
@@ -240,6 +398,7 @@ mod tests {
         assert!(!line.contains('\n'));
 
         let real = startup_line(
+            None,
             None,
             Path::new("/d/com.entropia.shared"),
             Path::new("/c/com.entropia.shared"),
@@ -352,6 +511,184 @@ mod tests {
         assert!(
             body(&engine, "pub fn start_engine(").contains("sync_disabled()"),
             "start_engine would spawn the engine in the dev profile"
+        );
+    }
+
+    // ---- Loopback sync for hand testing -----------------------------------
+    //
+    // A dev profile may sync, but only against a server on this machine that the
+    // person named explicitly, and never with the real session.
+
+    #[test]
+    fn only_a_plain_loopback_origin_with_a_port_is_a_local_sync_server() {
+        for (raw, expected) in [
+            ("http://127.0.0.1:8787", "http://127.0.0.1:8787"),
+            ("http://127.0.0.1:8787/", "http://127.0.0.1:8787"),
+            ("http://localhost:9000", "http://localhost:9000"),
+            ("HTTP://LocalHost:9000", "http://localhost:9000"),
+            ("http://[::1]:8787", "http://[::1]:8787"),
+            ("  http://127.0.0.1:1  ", "http://127.0.0.1:1"),
+        ] {
+            assert_eq!(parse_local_server(raw), Ok(expected.to_string()), "{raw}");
+        }
+    }
+
+    #[test]
+    fn anything_that_could_reach_another_host_is_refused() {
+        for raw in [
+            "",
+            "https://entropia-cloud.app.hlab.com.ar",
+            "https://127.0.0.1:8787",
+            "http://entropia-cloud.app.hlab.com.ar",
+            "http://127.0.0.1",
+            "http://localhost",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:99999",
+            "http://127.0.0.1:80a",
+            "http://127.0.0.1.evil.com:8787",
+            "http://localhost.evil.com:8787",
+            "http://user@127.0.0.1:8787",
+            "http://127.0.0.1:8787@evil.com",
+            "http://evil.com:8787@127.0.0.1:8787",
+            "http://127.0.0.1:8787/v1",
+            "http://127.0.0.1:8787?x=1",
+            "http://127.0.0.1:8787#x",
+            "http://0.0.0.0:8787",
+            "http://127.0.0.2:8787",
+            "http://[::1:8787",
+            "ftp://127.0.0.1:8787",
+            "127.0.0.1:8787",
+            "http://127.0.0.1:8787 http://evil.com",
+            "http://127.0.0.1:8787\\evil.com",
+        ] {
+            assert!(parse_local_server(raw).is_err(), "{raw:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn the_server_variable_needs_a_profile_and_a_debug_build() {
+        // A release build never looks, whatever the variable holds.
+        assert_eq!(requested_sync_server(false, true, Some("junk")), Ok(None));
+        assert_eq!(requested_sync_server(false, false, Some("junk")), Ok(None));
+        // Not set: no local sync, with or without a profile.
+        assert_eq!(requested_sync_server(true, true, None), Ok(None));
+        assert_eq!(requested_sync_server(true, false, None), Ok(None));
+        // Set with a profile: parsed.
+        assert_eq!(
+            requested_sync_server(true, true, Some("http://127.0.0.1:8787")),
+            Ok(Some("http://127.0.0.1:8787".to_string()))
+        );
+        // Set without a profile: refused, never ignored (ignoring it would run
+        // the real archive with real sync while the person expects a local one).
+        assert!(requested_sync_server(true, false, Some("http://127.0.0.1:8787")).is_err());
+        // Set but invalid: refused, never a fall back.
+        assert!(requested_sync_server(true, true, Some("https://example.com")).is_err());
+    }
+
+    #[test]
+    fn a_dev_profile_may_only_talk_to_the_server_it_was_given() {
+        let local = Some("http://127.0.0.1:8787");
+        // No profile: nothing to enforce (the real app).
+        assert_eq!(check_server(false, None, "https://real.example"), Ok(()));
+        // A profile with no local server never reaches any server.
+        assert!(check_server(true, None, "http://127.0.0.1:8787").is_err());
+        // A profile with a local server reaches exactly that origin.
+        assert_eq!(check_server(true, local, "http://127.0.0.1:8787"), Ok(()));
+        assert_eq!(check_server(true, local, "http://127.0.0.1:8787/"), Ok(()));
+        for other in [
+            "https://entropia-cloud.app.hlab.com.ar",
+            "http://127.0.0.1:8788",
+            "http://localhost:8787",
+            "http://127.0.0.1:8787.evil.com",
+            "http://127.0.0.1:8787/../x",
+            "",
+        ] {
+            let refused = check_server(true, local, other).unwrap_err();
+            assert!(
+                refused.starts_with("sync_server_refused_in_dev_profile"),
+                "{other:?}: {refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_is_off_in_a_profile_only_until_a_local_server_is_given() {
+        assert!(sync_disabled_for(true, None));
+        assert!(!sync_disabled_for(true, Some("http://127.0.0.1:8787")));
+        assert!(!sync_disabled_for(false, None));
+    }
+
+    #[test]
+    fn the_startup_line_says_which_server_a_profile_syncs_with() {
+        let line = startup_line(
+            Some("a"),
+            Some("http://127.0.0.1:8787"),
+            Path::new("/d"),
+            Path::new("/c"),
+        );
+        assert!(line.contains("sync=local:http://127.0.0.1:8787"), "{line}");
+        let off = startup_line(Some("a"), None, Path::new("/d"), Path::new("/c"));
+        assert!(off.contains("sync=disabled"), "{off}");
+    }
+
+    /// The new variable is read once, in a debug-only function, and nowhere else.
+    #[test]
+    fn the_server_variable_is_read_only_by_a_debug_only_function() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let own = std::fs::read_to_string(src.join("dev_profile.rs")).unwrap();
+        let runtime = own.split("#[cfg(test)]").next().unwrap();
+        let reads: Vec<usize> = runtime
+            .match_indices("std::env::var(SYNC_SERVER_VAR)")
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(reads.len(), 1, "one read of the variable");
+        let before = &runtime[..reads[0]];
+        let attribute = before
+            .rfind("#[cfg(")
+            .map(|at| before[at..].lines().next().unwrap_or_default())
+            .unwrap_or_default();
+        assert_eq!(attribute, "#[cfg(debug_assertions)]");
+
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| n != "dev_profile.rs")
+                {
+                    let body = std::fs::read_to_string(&path).unwrap();
+                    assert!(
+                        !body.contains("ENTROPIA_DEV_SYNC_SERVER")
+                            && !body.contains("dev_profile::SYNC_SERVER_VAR"),
+                        "{} reads the server variable itself",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The transport constructor is the one door every sync request goes
+    /// through; it must ask the dev profile before it builds a client.
+    #[test]
+    fn the_transport_constructor_checks_the_dev_profile_server() {
+        let http = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("sync")
+                .join("http.rs"),
+        )
+        .unwrap();
+        let at = http
+            .find("pub fn new(server_url: &str)")
+            .expect("HttpSyncApi::new");
+        let body = &http[at..];
+        let body = &body[..body.find("\n    }\n").unwrap()];
+        assert!(
+            body.contains("dev_profile::require_server("),
+            "HttpSyncApi::new does not call dev_profile::require_server"
         );
     }
 

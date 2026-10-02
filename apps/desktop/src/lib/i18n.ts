@@ -542,6 +542,8 @@ const es = {
   'sync.error.emailTaken': 'Ya existe una cuenta con ese email.',
   'sync.error.generic': 'No se pudo completar la operación de sincronización.',
   'sync.error.devProfile': 'La sincronización está desactivada en el perfil de desarrollo aislado.',
+  'sync.error.devProfileServer':
+    'El perfil de desarrollo solo puede sincronizar con el servidor local indicado en ENTROPIA_DEV_SYNC_SERVER.',
   'sync.card.devProfile':
     'La sincronización está desactivada en el perfil de desarrollo aislado: esta copia no toca tu cuenta ni tu sesión.',
   'sync.error.credentialStoreUnavailable':
@@ -3157,6 +3159,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'sync.error.emailTaken': 'An account with that email already exists.',
   'sync.error.generic': 'The sync operation could not be completed.',
   'sync.error.devProfile': 'Sync is turned off in the isolated development profile.',
+  'sync.error.devProfileServer':
+    'The development profile can only sync with the local server named in ENTROPIA_DEV_SYNC_SERVER.',
   'sync.card.devProfile':
     'Sync is turned off in the isolated development profile: this copy never touches your account or session.',
   'sync.error.credentialStoreUnavailable':

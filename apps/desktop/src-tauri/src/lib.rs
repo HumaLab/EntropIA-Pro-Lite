@@ -623,7 +623,12 @@ pub fn run() {
             // `tauri dev` shows it before anything else happens.
             eprintln!(
                 "[setup] {}",
-                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir)
+                dev_profile::startup_line(
+                    dev_profile::active(),
+                    dev_profile::sync_server(),
+                    &app_dir,
+                    &cache_dir,
+                )
             );
             // One EntropIA at a time, before anything touches the archive: a
             // second process on the same database — above all a Store build
@@ -727,7 +732,12 @@ pub fn run() {
             app_logs::info(
                 &app.handle().clone(),
                 "setup",
-                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir),
+                dev_profile::startup_line(
+                    dev_profile::active(),
+                    dev_profile::sync_server(),
+                    &app_dir,
+                    &cache_dir,
+                ),
             );
             let db_path = app_dir.join("entropia.sqlite");
 
@@ -1120,6 +1130,8 @@ pub fn run() {
             app.manage(sync_engine);
             if dev_profile::sync_disabled() {
                 eprintln!("[sync] disabled in the dev profile: no engine, no keyring access");
+            } else if let Some(server) = dev_profile::sync_server() {
+                eprintln!("[sync] dev profile syncs with {server} only (profile-scoped keyring entry)");
             } else {
                 eprintln!("[sync] engine spawned (gated until capture + session)");
             }

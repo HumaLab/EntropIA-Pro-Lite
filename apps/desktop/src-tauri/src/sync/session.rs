@@ -168,11 +168,26 @@ fn mint_session_incarnation(conn: &Connection) -> Result<Option<Uuid>, String> {
 // Token keyring helpers (DESIGN §8 — token NEVER touches SQLite or logs)
 // ---------------------------------------------------------------------------
 
+/// The keyring `(service, user)` of the device token. A dev profile gets its own
+/// entry, named after the profile, so it can neither read nor replace the real
+/// session and two profiles never share one.
+fn token_target(profile: Option<&str>) -> (String, String) {
+    match profile {
+        None => (SYNC_KEYRING_SERVICE.to_string(), TOKEN_KEY.to_string()),
+        Some(name) => (
+            format!("{SYNC_KEYRING_SERVICE} (dev profile)"),
+            format!("{TOKEN_KEY}@dev-profile:{name}"),
+        ),
+    }
+}
+
 fn token_entry() -> Result<keyring::Entry, String> {
-    // The one door to the sync token: the dev profile never opens it, so it can
-    // neither read nor replace the real session.
+    // The one door to the sync token: a dev profile without a local server
+    // never opens it, and one with a local server opens only its own entry, so
+    // it can neither read nor replace the real session.
     crate::dev_profile::require_sync()?;
-    keyring::Entry::new(SYNC_KEYRING_SERVICE, TOKEN_KEY)
+    let (service, user) = token_target(crate::dev_profile::active());
+    keyring::Entry::new(&service, &user)
         .map_err(|e| format!("[sync] failed to open keyring for device token: {e}"))
 }
 
@@ -1161,6 +1176,25 @@ mod tests {
             )
             .expect("blob row survives");
         assert_eq!(uploaded, 1, "blob reset rolled back");
+    }
+
+    #[test]
+    fn a_dev_profile_never_uses_the_real_keyring_entry() {
+        let real = token_target(None);
+        assert_eq!(
+            real,
+            (SYNC_KEYRING_SERVICE.to_string(), TOKEN_KEY.to_string())
+        );
+        let a = token_target(Some("alpha"));
+        let b = token_target(Some("beta"));
+        assert_ne!(
+            a, real,
+            "a profile must not read or replace the real session"
+        );
+        assert_ne!(a.0, real.0, "even the service differs");
+        assert_ne!(a.1, real.1);
+        assert_ne!(a, b, "two profiles never share a session");
+        assert!(a.1.contains("alpha") && b.1.contains("beta"));
     }
 
     #[test]

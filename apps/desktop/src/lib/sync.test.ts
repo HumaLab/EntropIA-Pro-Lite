@@ -218,6 +218,18 @@ describe('describeSyncError', () => {
     expect(describeSyncError(raw)).toBe('Sync is turned off in the isolated development profile.')
   })
 
+  it('explains that a dev profile may only sync with its local server', () => {
+    const raw =
+      'sync_server_refused_in_dev_profile: un perfil de desarrollo solo puede sincronizar con el servidor local indicado'
+    expect(describeSyncError(raw)).toBe(
+      'El perfil de desarrollo solo puede sincronizar con el servidor local indicado en ENTROPIA_DEV_SYNC_SERVER.'
+    )
+    locale.set('en')
+    expect(describeSyncError(raw)).toBe(
+      'The development profile can only sync with the local server named in ENTROPIA_DEV_SYNC_SERVER.'
+    )
+  })
+
   it('maps the stable error codes/statuses to human messages', () => {
     expect(describeSyncError('api error 426 (schema_upgrade_required): old')).toBe(
       'Actualizá la app: el servidor pide un esquema más nuevo.'

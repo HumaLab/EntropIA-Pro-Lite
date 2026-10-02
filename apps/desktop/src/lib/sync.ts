@@ -357,6 +357,7 @@ export function describeSyncError(error: unknown): string {
   // The isolated dev profile (src-tauri/src/dev_profile.rs) answers with this
   // code; no server was contacted.
   if (lower.includes('sync_disabled_in_dev_profile')) return t('sync.error.devProfile')
+  if (lower.includes('sync_server_refused_in_dev_profile')) return t('sync.error.devProfileServer')
 
   // HTTP status / stable code mapping (DESIGN §11, PROTOCOL "Errores").
   if (lower.includes('426') || lower.includes('schema_upgrade_required')) return t('sync.error.426')

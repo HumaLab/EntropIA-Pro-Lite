@@ -334,10 +334,18 @@ pub fn resolve_and_remember_dirs(
     let (nominal_data, nominal_cache) = match crate::dev_profile::from_env()? {
         Some(name) => {
             let dirs = crate::dev_profile::profile_dirs(&name, &nominal_data, &nominal_cache);
+            let local_server = crate::dev_profile::sync_server_from_env(true)?;
             crate::dev_profile::activate(name);
+            if let Some(url) = local_server {
+                crate::dev_profile::activate_sync_server(url);
+            }
             dirs
         }
-        None => (nominal_data, nominal_cache),
+        None => {
+            // A local server without a profile is an error, not an ignored value.
+            crate::dev_profile::sync_server_from_env(false)?;
+            (nominal_data, nominal_cache)
+        }
     };
 
     let data = resolve_real_dir(nominal_data.clone())?;
