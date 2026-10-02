@@ -204,6 +204,8 @@
     "allow-navegador-zotero-copy-run",
     "allow-navegador-zotero-copy-cancel",
     "allow-navegador-zotero-launch",
+    "allow-navegador-zotero-libraries",
+    "allow-navegador-zotero-status",
     "core:default",
     "core:path:default",
     "core:event:default",

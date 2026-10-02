@@ -377,6 +377,46 @@ pub fn recover(conn: &Connection) -> Result<usize, String> {
     .map_err(db_error)
 }
 
+/// The item key a finished copy of this source recorded for this library.
+pub fn recorded_item(
+    conn: &Connection,
+    source_id: &str,
+    library_type: &str,
+    library_id: &str,
+) -> Result<Option<String>, String> {
+    ensure_table(conn)?;
+    conn.query_row(
+        "SELECT item_key FROM navegador_zotero_copies
+         WHERE source_id = ?1 AND library_type = ?2 AND library_id = ?3
+           AND state IN ('copied','linked') AND item_key IS NOT NULL
+         ORDER BY created_at LIMIT 1",
+        params![source_id, library_type, library_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Drops the result of finished copies whose Zotero item is gone, so a new
+/// request queues them again instead of answering with a stale item key.
+pub fn forget_result(
+    conn: &Connection,
+    source_id: &str,
+    library_type: &str,
+    library_id: &str,
+) -> Result<(), String> {
+    ensure_table(conn)?;
+    conn.execute(
+        "UPDATE navegador_zotero_copies
+         SET state = 'queued', item_key = NULL, detail_json = NULL, updated_at = ?4
+         WHERE source_id = ?1 AND library_type = ?2 AND library_id = ?3
+           AND state IN ('copied','linked')",
+        params![source_id, library_type, library_id, now_ms()],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 /// A deleted source takes its rows with it. Never fails for a missing table.
 pub fn forget_source(conn: &Connection, source_id: &str) -> Result<(), String> {
     let present: i64 = conn

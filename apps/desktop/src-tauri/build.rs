@@ -184,6 +184,8 @@ const APP_COMMANDS: &[&str] = &[
     "navegador_zotero_copy_run",
     "navegador_zotero_copy_cancel",
     "navegador_zotero_launch",
+    "navegador_zotero_libraries",
+    "navegador_zotero_status",
     "check_microsoft_store_update",
     "splash_finish",
     "sync_ensure_capture",

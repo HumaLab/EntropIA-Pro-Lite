@@ -180,6 +180,16 @@ fn navegador_zotero_launch() -> &'static str {
     "ran"
 }
 
+#[tauri::command]
+fn navegador_zotero_libraries() -> &'static str {
+    "ran"
+}
+
+#[tauri::command]
+fn navegador_zotero_status() -> &'static str {
+    "ran"
+}
+
 /// The label of the navegador's first tab, the webview remote content lives in.
 const EXTERNAL_LABEL: &str = "navegador-web-1";
 
@@ -225,7 +235,7 @@ const SENSITIVE_APP_COMMANDS: [&str; 4] = [
 
 /// The commands the Navegador view drives its child webview with. The page
 /// inside that webview must never reach them.
-const NAVEGADOR_COMMANDS: [&str; 29] = [
+const NAVEGADOR_COMMANDS: [&str; 31] = [
     "navegador_open",
     "navegador_navigate",
     "navegador_back",
@@ -255,6 +265,8 @@ const NAVEGADOR_COMMANDS: [&str; 29] = [
     "navegador_zotero_copy_run",
     "navegador_zotero_copy_cancel",
     "navegador_zotero_launch",
+    "navegador_zotero_libraries",
+    "navegador_zotero_status",
 ];
 
 /// A file-system read through a plugin: plugin commands are ACL-checked with
@@ -297,7 +309,9 @@ fn build_app() -> App<tauri::test::MockRuntime> {
             navegador_zotero_copy_list,
             navegador_zotero_copy_run,
             navegador_zotero_copy_cancel,
-            navegador_zotero_launch
+            navegador_zotero_launch,
+            navegador_zotero_libraries,
+            navegador_zotero_status
         ])
         .build(tauri::generate_context!())
         .expect("build the app with its real context")

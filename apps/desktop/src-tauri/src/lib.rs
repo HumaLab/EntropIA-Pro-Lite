@@ -1350,6 +1350,8 @@ pub fn run() {
             navegador::commands::navegador_zotero_copy_run,
             navegador::commands::navegador_zotero_copy_cancel,
             navegador::commands::navegador_zotero_launch,
+            navegador::commands::navegador_zotero_libraries,
+            navegador::commands::navegador_zotero_status,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,

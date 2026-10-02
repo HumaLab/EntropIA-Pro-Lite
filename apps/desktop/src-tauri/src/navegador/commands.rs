@@ -19,7 +19,9 @@ use super::tabs::BrowserState;
 use super::url_policy::{self, NavigationKind};
 use super::zotero_copy::launch::{self, LaunchOutcome};
 use super::zotero_copy::port::{ConnectorPort, ZoteroPort};
-use super::zotero_copy::run::{self as zotero_run, DrainReport, RunOptions};
+use super::zotero_copy::run::{
+    self as zotero_run, CopyStatus, DrainReport, LibraryList, RunOptions,
+};
 use super::zotero_copy::store::{self as zotero_store, LibraryRef, ZoteroCopy};
 use super::{bounds, viewer, UNAVAILABLE};
 use crate::db::open::open_archive_connection;
@@ -506,6 +508,41 @@ pub async fn navegador_zotero_launch() -> Result<LaunchOutcome, String> {
     })
     .await
     .map_err(|e| format!("task_failed: {e}"))
+}
+
+/// The libraries Zotero itself offers for writing (personal first, then the
+/// groups). `reachable: false` when Zotero does not answer: the UI then falls
+/// back to the libraries the archive knows and says so.
+#[tauri::command]
+pub async fn navegador_zotero_libraries() -> Result<LibraryList, String> {
+    tokio::task::spawn_blocking(|| zotero_run::live_libraries(&ConnectorPort::local()))
+        .await
+        .map_err(|e| format!("task_failed: {e}"))?
+}
+
+/// Whether the source (and, for a PDF capture, its PDF) is already in the
+/// library, before anything is copied. Reads only. Errors are a stable code
+/// (`not_found`, `invalid_library`, `zotero_api_disabled`, `db_error`).
+#[tauri::command]
+pub async fn navegador_zotero_status(
+    db: State<'_, AppDbState>,
+    source_id: String,
+    capture_id: Option<String>,
+    library: LibraryRef,
+) -> Result<CopyStatus, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        zotero_run::check_status(
+            &conn,
+            &ConnectorPort::local(),
+            &source_id,
+            capture_id.as_deref(),
+            &library,
+        )
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
 }
 
 #[cfg(test)]

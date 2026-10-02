@@ -115,18 +115,20 @@ struct Pdf {
     bytes: Vec<u8>,
 }
 
-fn load(
+/// The source as Zotero would see it. With a capture, the item records when that
+/// PDF was saved rather than the latest access.
+fn load_source(
     conn: &Connection,
-    data_dir: &Path,
-    row: &ZoteroCopy,
-) -> Result<(SourceFacts, Option<Pdf>), Stop> {
+    source_id: &str,
+    capture_id: Option<&str>,
+) -> Result<SourceFacts, Stop> {
     let source = conn
         .query_row(
             "SELECT s.title, s.final_url, s.canonical_url, s.site_name,
                     COALESCE((SELECT MAX(accessed_at) FROM web_captures WHERE web_source_id = s.id),
                              s.first_accessed_at)
              FROM web_sources s WHERE s.id = ?1",
-            [&row.source_id],
+            [source_id],
             |r| {
                 Ok((
                     r.get::<_, Option<String>>(0)?,
@@ -139,17 +141,36 @@ fn load(
         )
         .optional()
         .map_err(|error| fail("db_error", error.to_string()))?;
-    let Some((title, final_url, canonical_url, site_name, accessed_at)) = source else {
+    let Some((title, final_url, canonical_url, site_name, mut accessed_at)) = source else {
         return Err(fail("not_found", "the source no longer exists"));
     };
-    let mut facts = SourceFacts {
-        source_id: row.source_id.clone(),
+    if let Some(capture) = capture_id {
+        accessed_at = conn
+            .query_row(
+                "SELECT accessed_at FROM web_captures WHERE id = ?1 AND web_source_id = ?2",
+                rusqlite::params![capture, source_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|error| fail("db_error", error.to_string()))?
+            .ok_or_else(|| fail("not_found", "there is no such capture"))?;
+    }
+    Ok(SourceFacts {
+        source_id: source_id.to_string(),
         title,
         final_url,
         canonical_url,
         site_name,
         accessed_at,
-    };
+    })
+}
+
+fn load(
+    conn: &Connection,
+    data_dir: &Path,
+    row: &ZoteroCopy,
+) -> Result<(SourceFacts, Option<Pdf>), Stop> {
+    let facts = load_source(conn, &row.source_id, row.capture_id.as_deref())?;
     let Some(capture_id) = row.capture_id.as_deref() else {
         return Ok((facts, None));
     };
@@ -158,11 +179,11 @@ fn load(
     if ticket.provenance.rendering.is_some() {
         return Err(fail("not_a_pdf", "only a saved PDF goes along"));
     }
-    let (capture_url, accessed): (String, String) = conn
+    let capture_url: String = conn
         .query_row(
-            "SELECT final_url, accessed_at FROM web_captures WHERE id = ?1",
+            "SELECT final_url FROM web_captures WHERE id = ?1",
             [capture_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .map_err(|error| fail("db_error", error.to_string()))?;
     let length = std::fs::metadata(&ticket.path)
@@ -173,7 +194,6 @@ fn load(
     }
     let bytes = std::fs::read(&ticket.path)
         .map_err(|_| fail("file_missing", "the saved PDF is not on disk"))?;
-    facts.accessed_at = accessed;
     Ok((
         facts,
         Some(Pdf {
@@ -256,14 +276,19 @@ fn find_existing(
 }
 
 /// What a copy of the same source wrote earlier in this library, if any.
-fn previous_written(conn: &Connection, row: &ZoteroCopy) -> Owned {
+fn previous_written(
+    conn: &Connection,
+    source_id: &str,
+    library_type: &str,
+    library_id: &str,
+) -> Owned {
     let json: Option<String> = conn
         .query_row(
             "SELECT detail_json FROM navegador_zotero_copies
              WHERE source_id = ?1 AND library_type = ?2 AND library_id = ?3
                AND state = 'copied' AND detail_json IS NOT NULL
              ORDER BY created_at LIMIT 1",
-            rusqlite::params![row.source_id, row.library_type, row.library_id],
+            rusqlite::params![source_id, library_type, library_id],
             |r| r.get(0),
         )
         .optional()
@@ -297,23 +322,15 @@ fn attempt(
     let ours = owned_from_zotero(&item);
 
     if let Some(existing) = find_existing(port, &library, &urls)?.into_iter().next() {
-        let merge = plan_merge(&ours, &existing.owned, &previous_written(conn, row));
-        let pdf_note = match &pdf {
-            None => "none",
-            Some(pdf) => {
-                let title = attachment_title(&pdf.sha256);
-                let children = port.children(&library, &existing.key).map_err(read_error)?;
-                let there = children.iter().any(|child| {
-                    child.pointer("/data/title").and_then(Value::as_str) == Some(title.as_str())
-                });
-                if there {
-                    "already_there"
-                } else {
-                    "parent_exists"
-                }
-            }
-        };
-        let pending: Vec<&'static str> = merge.fill.iter().chain(&merge.update).copied().collect();
+        let (pending, kept, pdf_note) = existing_report(
+            conn,
+            port,
+            &library,
+            &existing,
+            &ours,
+            pdf.as_ref().map(|pdf| pdf.sha256.as_str()),
+            (&row.source_id, &row.library_type, &row.library_id),
+        )?;
         return Ok(Done {
             state: store::STATE_LINKED,
             item_key: existing.key,
@@ -321,7 +338,7 @@ fn attempt(
                 "existing": true,
                 "pdf": pdf_note,
                 "pendingFields": names(&pending),
-                "keptFields": names(&merge.kept),
+                "keptFields": names(&kept),
             }),
         });
     }
@@ -436,6 +453,203 @@ pub fn drain(
         }
     }
     Ok(report)
+}
+
+/// What an item that is already in Zotero would need: the fields a copy could
+/// fill or update, the ones the person edited (kept), and what a PDF could do.
+fn existing_report(
+    conn: &Connection,
+    port: &dyn ZoteroPort,
+    library: &Library,
+    existing: &ExistingItem,
+    ours: &Owned,
+    pdf_sha: Option<&str>,
+    written_for: (&str, &str, &str),
+) -> Result<(Vec<&'static str>, Vec<&'static str>, &'static str), Stop> {
+    let written = previous_written(conn, written_for.0, written_for.1, written_for.2);
+    let merge = plan_merge(ours, &existing.owned, &written);
+    let pdf_note = match pdf_sha {
+        None => "none",
+        Some(sha) => {
+            let title = attachment_title(sha);
+            let children = port.children(library, &existing.key).map_err(read_error)?;
+            let there = children.iter().any(|child| {
+                child.pointer("/data/title").and_then(Value::as_str) == Some(title.as_str())
+            });
+            if there {
+                "already_there"
+            } else {
+                "parent_exists"
+            }
+        }
+    };
+    let pending = merge.fill.iter().chain(&merge.update).copied().collect();
+    Ok((pending, merge.kept, pdf_note))
+}
+
+/// One library Zotero offers for writing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveLibrary {
+    pub library_type: String,
+    pub library_id: String,
+    /// `None` for the personal library (the UI has its own word for it).
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryList {
+    /// `false` when Zotero did not answer: the list is then empty and the UI
+    /// falls back to the libraries the archive knows.
+    pub reachable: bool,
+    pub libraries: Vec<LiveLibrary>,
+}
+
+/// The libraries Zotero itself offers for writing: the personal one first, then
+/// the groups whose name is among the editable targets of the connector.
+pub fn live_libraries(port: &dyn ZoteroPort) -> Result<LibraryList, String> {
+    let unreachable = LibraryList {
+        reachable: false,
+        libraries: Vec::new(),
+    };
+    if port.ping().is_err() {
+        return Ok(unreachable);
+    }
+    let Ok(targets) = port.targets() else {
+        return Ok(unreachable);
+    };
+    let mut libraries = vec![LiveLibrary {
+        library_type: "user".into(),
+        library_id: "0".into(),
+        name: None,
+    }];
+    for (id, name) in port.groups().unwrap_or_default() {
+        if targets
+            .libraries
+            .iter()
+            .any(|target| target.id != "L1" && target.name == name)
+        {
+            libraries.push(LiveLibrary {
+                library_type: "group".into(),
+                library_id: id,
+                name: Some(name),
+            });
+        }
+    }
+    Ok(LibraryList {
+        reachable: true,
+        libraries,
+    })
+}
+
+/// Whether a source is already in a library, before anything is copied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyStatus {
+    /// `absent`, `present` or `unreachable` (Zotero closed and no record).
+    pub state: String,
+    /// `zotero` (found by address) or `record` (our copy record, Zotero closed).
+    pub source: String,
+    pub item_key: Option<String>,
+    pub pdf: String,
+    pub pending_fields: Vec<String>,
+    pub kept_fields: Vec<String>,
+}
+
+fn status(state: &str, source: &str) -> CopyStatus {
+    CopyStatus {
+        state: state.into(),
+        source: source.into(),
+        item_key: None,
+        pdf: "none".into(),
+        pending_fields: Vec::new(),
+        kept_fields: Vec::new(),
+    }
+}
+
+/// Checks, without writing to Zotero, whether the source is already in the
+/// library: by address when Zotero answers, else from our own record. A record
+/// of an item Zotero no longer has is dropped so the source can be copied again.
+pub fn check_status(
+    conn: &Connection,
+    port: &dyn ZoteroPort,
+    source_id: &str,
+    capture_id: Option<&str>,
+    library: &store::LibraryRef,
+) -> Result<CopyStatus, String> {
+    let (lib_type, lib_id) = (library.library_type.trim(), library.library_id.trim());
+    let kind = match lib_type {
+        "group" => LibraryType::Group,
+        "user" => LibraryType::User,
+        _ => return Err("invalid_library: the library is not a Zotero library".into()),
+    };
+    let zotero_library =
+        Library::new(kind, lib_id).map_err(|message| format!("invalid_library: {message}"))?;
+    let to_text = |stop: Stop| match stop {
+        Stop::Wait => "zotero_unavailable: Zotero did not answer".to_string(),
+        Stop::Fail { code, message } => format!("{code}: {message}"),
+    };
+    let facts = load_source(conn, source_id, capture_id).map_err(to_text)?;
+    let recorded = store::recorded_item(conn, source_id, lib_type, lib_id)?;
+    let from_record = |recorded: Option<String>| match recorded {
+        Some(key) => CopyStatus {
+            item_key: Some(key),
+            pdf: if capture_id.is_some() {
+                "unknown"
+            } else {
+                "none"
+            }
+            .into(),
+            ..status("present", "record")
+        },
+        None => status("unreachable", "none"),
+    };
+
+    if port.ping().is_err() {
+        return Ok(from_record(recorded));
+    }
+    let urls = lookup_urls(&facts);
+    let found = match find_existing(port, &zotero_library, &urls) {
+        Ok(found) => found,
+        Err(Stop::Wait) => return Ok(from_record(recorded)),
+        Err(stop) => return Err(to_text(stop)),
+    };
+    let Some(existing) = found.into_iter().next() else {
+        if recorded.is_some() {
+            store::forget_result(conn, source_id, lib_type, lib_id)?;
+        }
+        return Ok(status("absent", "none"));
+    };
+    let ours = owned_from_zotero(&webpage_item(&facts, CONNECTOR_ID));
+    let sha: Option<String> = match capture_id {
+        None => None,
+        Some(capture) => conn
+            .query_row(
+                "SELECT sha256 FROM web_captures WHERE id = ?1",
+                [capture],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("db_error: {error}"))?,
+    };
+    let (pending, kept, pdf) = existing_report(
+        conn,
+        port,
+        &zotero_library,
+        &existing,
+        &ours,
+        sha.as_deref(),
+        (source_id, lib_type, lib_id),
+    )
+    .map_err(to_text)?;
+    Ok(CopyStatus {
+        item_key: Some(existing.key),
+        pdf: pdf.into(),
+        pending_fields: pending.into_iter().map(String::from).collect(),
+        kept_fields: kept.into_iter().map(String::from).collect(),
+        ..status("present", "zotero")
+    })
 }
 
 static DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -571,6 +785,16 @@ mod tests {
                 .borrow_mut()
                 .push(format!("group_name {group_id}"));
             Ok(self.groups.get(group_id).cloned().flatten())
+        }
+        fn groups(&self) -> Result<Vec<(String, String)>, PortError> {
+            self.calls.borrow_mut().push("groups".into());
+            let mut all: Vec<(String, String)> = self
+                .groups
+                .iter()
+                .filter_map(|(id, name)| Some((id.clone(), name.clone()?)))
+                .collect();
+            all.sort();
+            Ok(all)
         }
         fn find_items(&self, library: &Library, url: &str) -> Result<Vec<Value>, PortError> {
             self.calls
@@ -1055,5 +1279,174 @@ mod tests {
         let port = FakePort::open().creating("K");
         go(&env, &port, &row.id);
         assert_eq!(port.searched.borrow()[0], "https://a.test/x");
+    }
+
+    // --- live library list and the "already in Zotero" check -------------------
+
+    #[test]
+    fn libraries_come_from_zotero_personal_first_and_only_the_editable_groups() {
+        let mut port = FakePort::open();
+        port.groups
+            .insert("111".into(), Some("not editable here".into()));
+        let list = live_libraries(&port).unwrap();
+        assert!(list.reachable);
+        let got: Vec<(&str, &str, Option<&str>)> = list
+            .libraries
+            .iter()
+            .map(|l| {
+                (
+                    l.library_type.as_str(),
+                    l.library_id.as_str(),
+                    l.name.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![("user", "0", None), ("group", "6680944", Some("prueba"))]
+        );
+    }
+
+    #[test]
+    fn a_closed_zotero_lists_nothing_and_says_unreachable() {
+        let mut port = FakePort::open();
+        port.ping = Err(PortError::Unreachable);
+        let list = live_libraries(&port).unwrap();
+        assert!(!list.reachable);
+        assert!(list.libraries.is_empty());
+    }
+
+    #[test]
+    fn without_the_group_list_the_personal_library_is_still_offered() {
+        let mut port = FakePort::open();
+        port.targets = Err(PortError::Unreachable);
+        let list = live_libraries(&port).unwrap();
+        assert!(!list.reachable);
+    }
+
+    fn status(env: &Env, port: &FakePort, capture: Option<&str>) -> CopyStatus {
+        check_status(&env.conn, port, "src1", capture, &personal()).unwrap()
+    }
+
+    #[test]
+    fn a_source_not_in_zotero_is_absent_and_nothing_is_written() {
+        let env = env();
+        let port = FakePort::open();
+        let got = status(&env, &port, None);
+        assert_eq!(got.state, "absent");
+        assert_eq!(got.item_key, None);
+        assert!(port.saved.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_source_found_by_address_is_present_with_what_would_differ() {
+        let env = env();
+        let port = FakePort::open();
+        let mut existing = hit("OLDKEY22", "webpage");
+        existing["data"]["title"] = json!("My own title");
+        *port.finds.borrow_mut() = VecDeque::from([Ok(vec![existing])]);
+        let got = status(&env, &port, None);
+        assert_eq!(got.state, "present");
+        assert_eq!(got.source, "zotero");
+        assert_eq!(got.item_key.as_deref(), Some("OLDKEY22"));
+        assert_eq!(got.kept_fields, vec!["title"]);
+        assert_eq!(got.pending_fields, vec!["accessDate", "websiteTitle"]);
+        assert_eq!(got.pdf, "none");
+    }
+
+    #[test]
+    fn a_pdf_that_cannot_join_an_existing_page_is_said_up_front() {
+        let env = env();
+        let port = FakePort::open();
+        *port.finds.borrow_mut() = VecDeque::from([Ok(vec![hit("OLDKEY22", "webpage")])]);
+        assert_eq!(status(&env, &port, Some("cap-pdf")).pdf, "parent_exists");
+    }
+
+    #[test]
+    fn a_pdf_already_attached_is_recognised_up_front() {
+        let env = env();
+        let mut port = FakePort::open();
+        let sha = format!("{:x}", Sha256::digest(PDF));
+        port.children = vec![json!({"data": {"title": format!("Captura web {}.pdf", &sha[..8])}})];
+        *port.finds.borrow_mut() = VecDeque::from([Ok(vec![hit("OLDKEY22", "webpage")])]);
+        assert_eq!(status(&env, &port, Some("cap-pdf")).pdf, "already_there");
+    }
+
+    #[test]
+    fn a_closed_zotero_answers_from_our_record_when_there_is_one() {
+        let env = env();
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        store::claim(&env.conn, &row.id).unwrap();
+        store::finish(
+            &env.conn,
+            &row.id,
+            store::STATE_COPIED,
+            Some("RECKEY22"),
+            "{}",
+        )
+        .unwrap();
+        let mut port = FakePort::open();
+        port.ping = Err(PortError::Unreachable);
+        let got = status(&env, &port, None);
+        assert_eq!(
+            (got.state.as_str(), got.source.as_str()),
+            ("present", "record")
+        );
+        assert_eq!(got.item_key.as_deref(), Some("RECKEY22"));
+    }
+
+    #[test]
+    fn a_closed_zotero_without_a_record_is_unreachable() {
+        let env = env();
+        let mut port = FakePort::open();
+        port.ping = Err(PortError::Unreachable);
+        assert_eq!(status(&env, &port, None).state, "unreachable");
+    }
+
+    #[test]
+    fn a_record_of_an_item_the_person_deleted_is_dropped_so_it_can_be_copied_again() {
+        let env = env();
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        store::claim(&env.conn, &row.id).unwrap();
+        store::finish(
+            &env.conn,
+            &row.id,
+            store::STATE_COPIED,
+            Some("GONEKEY2"),
+            "{}",
+        )
+        .unwrap();
+        let port = FakePort::open();
+        assert_eq!(status(&env, &port, None).state, "absent");
+        let again = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        assert_eq!(again.state, store::STATE_QUEUED);
+        assert_eq!(again.item_key, None);
+    }
+
+    #[test]
+    fn a_disabled_local_api_is_an_error_not_a_guess() {
+        let env = env();
+        let port = FakePort::open();
+        *port.finds.borrow_mut() = VecDeque::from([Err(PortError::Rejected {
+            status: 403,
+            detail: String::new(),
+        })]);
+        let error = check_status(&env.conn, &port, "src1", None, &personal()).unwrap_err();
+        assert!(error.starts_with("zotero_api_disabled"), "{error}");
+    }
+
+    #[test]
+    fn the_status_of_a_missing_source_or_bad_library_is_refused() {
+        let env = env();
+        let port = FakePort::open();
+        let gone = check_status(&env.conn, &port, "nope", None, &personal()).unwrap_err();
+        assert!(gone.starts_with("not_found"), "{gone}");
+        let bad = LibraryRef {
+            library_type: "team".into(),
+            library_id: "1".into(),
+            library_name: None,
+        };
+        let error = check_status(&env.conn, &port, "src1", None, &bad).unwrap_err();
+        assert!(error.starts_with("invalid_library"), "{error}");
     }
 }

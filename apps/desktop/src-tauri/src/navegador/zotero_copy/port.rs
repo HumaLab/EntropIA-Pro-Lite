@@ -52,6 +52,8 @@ pub struct Targets {
 pub trait ZoteroPort {
     fn ping(&self) -> Result<(), PortError>;
     fn targets(&self) -> Result<Targets, PortError>;
+    /// Every group the user belongs to, as `(id, name)` (local API).
+    fn groups(&self) -> Result<Vec<(String, String)>, PortError>;
     /// The group's name (local API), `None` when Zotero has no such group.
     fn group_name(&self, group_id: &str) -> Result<Option<String>, PortError>;
     /// Raw items of the library that may carry `url` (the caller filters).
@@ -200,6 +202,21 @@ impl ZoteroPort for ConnectorPort {
             selected_library: format!("L{selected}"),
             libraries,
         })
+    }
+
+    fn groups(&self) -> Result<Vec<(String, String)>, PortError> {
+        let url = format!("{}/api/users/0/groups?format=json&limit=100", self.base);
+        let Some(Value::Array(items)) = self.get_json(&url)? else {
+            return Ok(Vec::new());
+        };
+        Ok(items
+            .iter()
+            .filter_map(|group| {
+                let id = group.get("id")?.as_u64()?;
+                let name = group.pointer("/data/name")?.as_str()?;
+                Some((id.to_string(), name.to_string()))
+            })
+            .collect())
     }
 
     fn group_name(&self, group_id: &str) -> Result<Option<String>, PortError> {
@@ -653,5 +670,24 @@ mod tests {
         );
         assert_eq!(port.group_name("7").unwrap().as_deref(), Some("prueba"));
         assert_eq!(port.group_name("8").unwrap(), None);
+    }
+
+    #[test]
+    fn the_users_groups_are_listed_by_id_and_name() {
+        let body = json!([
+            {"id": 6680944, "data": {"id": 6680944, "name": "prueba"}},
+            {"id": 7, "data": {"name": "otra"}},
+            {"id": 8, "data": {}}
+        ])
+        .to_string();
+        let server = serve(vec![canned("GET", "/api/users/0/groups", 200, &body)]);
+        let groups = ConnectorPort::new(&server.base).groups().unwrap();
+        assert_eq!(
+            groups,
+            vec![
+                ("6680944".to_string(), "prueba".to_string()),
+                ("7".to_string(), "otra".to_string())
+            ]
+        );
     }
 }
