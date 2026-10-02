@@ -59,6 +59,7 @@ zip = { version = "2", default-features = false, features = ["deflate"], optiona
 urlencoding = "2"
 httpdate = "1"
 sha2 = "0.10"
+md-5 = "0.10"
 base64 = "0.22"
 ed25519-dalek = { version = "2", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary

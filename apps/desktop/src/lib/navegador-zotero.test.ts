@@ -205,6 +205,45 @@ describe('states', () => {
       }
     })
 
+    describe('the PDF', () => {
+      const withPdf = (pdf: 'attached' | 'already_there' | 'quota' | 'failed') =>
+        describeCopy(
+          copy({
+            state: 'linked',
+            detail: {
+              existing: true,
+              pdf: pdf === 'attached' || pdf === 'already_there' ? pdf : 'parent_exists',
+              pendingFields: [],
+              keptFields: [],
+              web: { state: 'nothing_missing', completed: [], pdf },
+            },
+          })
+        )
+
+      it('says it reaches Zotero after Zotero syncs, files included', () => {
+        expect(withPdf('attached').notes).toEqual([
+          'navegador.zotero.note.existing',
+          'navegador.zotero.note.pdf.attached',
+          'navegador.zotero.note.web.nothing_missing',
+          'navegador.zotero.note.web.pdf.attached',
+        ])
+      })
+
+      it('does not claim a sync for a PDF that was already there', () => {
+        expect(withPdf('already_there').notes).not.toContain(
+          'navegador.zotero.note.web.pdf.attached'
+        )
+      })
+
+      it('explains a full quota or a failure instead of the old attach-on-create note', () => {
+        for (const pdf of ['quota', 'failed'] as const) {
+          const notes = withPdf(pdf).notes
+          expect(notes).toContain(`navegador.zotero.note.web.pdf.${pdf}`)
+          expect(notes).not.toContain('navegador.zotero.note.pdf.parent_exists')
+        }
+      })
+    })
+
     it('reads a row from before the Web API existed', () => {
       expect(linked(undefined).completedKeys).toEqual([])
     })

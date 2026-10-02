@@ -29,8 +29,11 @@ export type ZoteroCopyDetail = {
   /** Fields the person edited in Zotero: never overwritten. */
   keptFields: string[]
   /** What the Web API did for an existing item; absent on rows from before it. */
-  web?: { state: ZoteroWebState; completed: string[] }
+  web?: { state: ZoteroWebState; completed: string[]; pdf?: ZoteroWebPdf }
 }
+
+/** What the Web API did with the PDF of an existing item. */
+export type ZoteroWebPdf = 'attached' | 'already_there' | 'quota' | 'failed'
 
 export type ZoteroWebState =
   | 'completed'
@@ -142,9 +145,18 @@ export function describeCopy(copy: ZoteroCopy) {
   const detail = copy.detail
   if (detail) {
     if (detail.existing) notes.push('navegador.zotero.note.existing')
-    if (detail.pdf !== 'none') notes.push(`navegador.zotero.note.pdf.${detail.pdf}`)
+    const webPdf = detail.web?.pdf
+    // A full quota or a failure has its own explanation; the old note (attaching
+    // only works when creating) would contradict it.
+    const explained = webPdf === 'quota' || webPdf === 'failed'
+    if (detail.pdf !== 'none' && !(explained && detail.pdf === 'parent_exists')) {
+      notes.push(`navegador.zotero.note.pdf.${detail.pdf}`)
+    }
     if (detail.existing && detail.web && WEB_NOTE_STATES.includes(detail.web.state)) {
       notes.push(`navegador.zotero.note.web.${detail.web.state}`)
+    }
+    if (detail.existing && webPdf && webPdf !== 'already_there') {
+      notes.push(`navegador.zotero.note.web.pdf.${webPdf}`)
     }
     if (detail.existing && (detail.pendingFields.length > 0 || detail.keptFields.length > 0)) {
       notes.push('navegador.zotero.note.differs')

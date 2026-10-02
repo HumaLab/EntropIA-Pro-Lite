@@ -25,7 +25,10 @@ use super::plan::{
 };
 use super::port::{PortError, Targets, ZoteroPort};
 use super::store::{self, ZoteroCopy};
-use super::web::{complete_item, Completion, WebLibrary, WebPort};
+use super::web::{
+    attach_pdf_via_web, complete_item, md5_hex, Completion, PdfFile, PdfOutcome, WebLibrary,
+    WebPort,
+};
 use crate::navegador::sources;
 use crate::writing::zotero::{Library, LibraryType};
 use crate::zotero_web::{stored_credentials, KeyCheck};
@@ -316,6 +319,9 @@ struct WebOutcome {
     /// `no_write`, `other_account`, `account_unknown` or `failed`.
     state: &'static str,
     completed: Vec<&'static str>,
+    /// What became of the PDF: `attached`, `already_there`, `quota` or `failed`.
+    /// `None` when there was none to attach or the access was not granted.
+    pdf: Option<&'static str>,
 }
 
 impl WebOutcome {
@@ -323,8 +329,20 @@ impl WebOutcome {
         Self {
             state,
             completed: Vec::new(),
+            pdf: None,
         }
     }
+}
+
+/// What a copy knows about the item that is already in Zotero.
+#[derive(Clone, Copy)]
+struct ExistingCopy<'a> {
+    row: &'a ZoteroCopy,
+    existing: &'a ExistingItem,
+    ours: &'a Owned,
+    pdf: Option<&'a Pdf>,
+    /// What the local API shows of the PDF (`already_there`, `parent_exists`...).
+    pdf_note: &'a str,
 }
 
 /// Fills in the fields an existing item lacks, when a stored key is still valid
@@ -334,10 +352,15 @@ fn complete_through_web(
     conn: &Connection,
     port: &dyn ZoteroPort,
     web: &dyn WebPort,
-    row: &ZoteroCopy,
-    existing: &ExistingItem,
-    ours: &Owned,
+    job: &ExistingCopy,
 ) -> WebOutcome {
+    let ExistingCopy {
+        row,
+        existing,
+        ours,
+        pdf,
+        pdf_note,
+    } = *job;
     let Some(credentials) = stored_credentials(conn) else {
         return WebOutcome::of("no_key");
     };
@@ -369,15 +392,40 @@ fn complete_through_web(
             Ok(None) | Err(_) => return WebOutcome::of("account_unknown"),
         }
     }
-    match complete_item(web, &credentials.key, &library, &existing.key, ours) {
+    let mut outcome = match complete_item(web, &credentials.key, &library, &existing.key, ours) {
         Ok(Completion::Completed(fields)) => WebOutcome {
             state: "completed",
             completed: fields,
+            pdf: None,
         },
         Ok(Completion::NothingMissing) => WebOutcome::of("nothing_missing"),
         Ok(Completion::Conflict) => WebOutcome::of("conflict"),
         Err(_) => WebOutcome::of("failed"),
+    };
+    // Zotero's own children (read locally) already show this PDF: nothing to do.
+    if let Some(pdf) = pdf.filter(|_| pdf_note != "already_there") {
+        let short: String = pdf.sha256.chars().take(8).collect();
+        let file = PdfFile {
+            title: attachment_title(&pdf.sha256),
+            filename: format!("web-capture-{short}.pdf"),
+            md5: md5_hex(&pdf.bytes),
+            size: pdf.bytes.len() as u64,
+            mtime_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis() as u64)
+                .unwrap_or(0),
+            bytes: pdf.bytes.clone(),
+        };
+        outcome.pdf = Some(
+            match attach_pdf_via_web(web, &credentials.key, &library, &existing.key, &file) {
+                PdfOutcome::Attached => "attached",
+                PdfOutcome::AlreadyThere => "already_there",
+                PdfOutcome::Quota => "quota",
+                PdfOutcome::Failed => "failed",
+            },
+        );
     }
+    outcome
 }
 
 fn attempt(
@@ -414,12 +462,30 @@ fn attempt(
             "keptFields": names(&kept),
         });
         if let Some(web) = options.web.as_deref() {
-            let outcome = complete_through_web(conn, port, web, row, &existing, &ours);
+            let outcome = complete_through_web(
+                conn,
+                port,
+                web,
+                &ExistingCopy {
+                    row,
+                    existing: &existing,
+                    ours: &ours,
+                    pdf: pdf.as_ref(),
+                    pdf_note,
+                },
+            );
             pending.retain(|field| !outcome.completed.contains(field));
             detail["web"] = json!({
                 "state": outcome.state,
                 "completed": names(&outcome.completed),
             });
+            if let Some(result) = outcome.pdf {
+                detail["web"]["pdf"] = json!(result);
+                // Attached, or found already there: the PDF is in Zotero now.
+                if matches!(result, "attached" | "already_there") {
+                    detail["pdf"] = json!(result);
+                }
+            }
         }
         detail["pendingFields"] = names(&pending);
         return Ok(Done {
@@ -1546,7 +1612,10 @@ mod tests {
 
     // --- Completing an existing item through the Web API ------------------------
 
-    use super::super::web::{Patched, WebError, WebItem, WebLibrary, WebPort};
+    use super::super::web::{
+        md5_hex, Authorization, Patched, PdfFile, UploadTicket, WebError, WebItem, WebLibrary,
+        WebPort,
+    };
     use crate::zotero_web::{GroupAccess, KeyCheck, KeyInfo};
     use std::sync::{Arc, Mutex};
 
@@ -1557,6 +1626,29 @@ mod tests {
         items: Mutex<Vec<Result<WebItem, WebError>>>,
         patches: Mutex<Vec<Result<Patched, WebError>>>,
         calls: Mutex<Vec<String>>,
+        files: Mutex<FileScript>,
+    }
+
+    /// What the file-upload side answers; the default is a flow that works.
+    struct FileScript {
+        children: Vec<Value>,
+        auth: Result<Authorization, WebError>,
+        upload: Result<(), WebError>,
+    }
+
+    impl FakeWeb {
+        fn script_children(&self, children: Vec<Value>) {
+            self.files.lock().unwrap().children = children;
+        }
+        fn script_auth(&self, auth: Result<Authorization, WebError>) {
+            self.files.lock().unwrap().auth = auth;
+        }
+        fn script_upload(&self, upload: Result<(), WebError>) {
+            self.files.lock().unwrap().upload = upload;
+        }
+        fn log(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
     }
 
     fn key_info(personal_write: bool, group_write: bool) -> KeyCheck {
@@ -1584,6 +1676,17 @@ mod tests {
             items: Mutex::new(items),
             patches: Mutex::new(patches),
             calls: Mutex::new(vec![]),
+            files: Mutex::new(FileScript {
+                children: vec![],
+                auth: Ok(Authorization::Upload(UploadTicket {
+                    url: "https://storage.test/u".into(),
+                    content_type: "multipart/form-data; boundary=x".into(),
+                    prefix: "--x\r\n".into(),
+                    suffix: "\r\n--x--".into(),
+                    upload_key: "UPKEY".into(),
+                })),
+                upload: Ok(()),
+            }),
         })
     }
 
@@ -1621,6 +1724,63 @@ mod tests {
                 .unwrap()
                 .push(format!("patch {item} v{version} {body}"));
             self.patches.lock().unwrap().remove(0)
+        }
+        fn children(&self, _: &str, _: &WebLibrary, parent: &str) -> Result<Vec<Value>, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("children {parent}"));
+            Ok(self.files.lock().unwrap().children.clone())
+        }
+        fn create_attachment(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            body: &Value,
+            _: &str,
+        ) -> Result<(String, u64), WebError> {
+            self.calls.lock().unwrap().push(format!("create {body}"));
+            Ok(("ATTKEY12".into(), 31))
+        }
+        fn authorize_upload(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            file: &PdfFile,
+        ) -> Result<Authorization, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("authorize {item} {}", file.md5));
+            self.files.lock().unwrap().auth.clone()
+        }
+        fn upload_file(&self, _: &UploadTicket, bytes: &[u8]) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("upload {}", bytes.len()));
+            self.files.lock().unwrap().upload.clone()
+        }
+        fn register_upload(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            upload_key: &str,
+        ) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("register {item} {upload_key}"));
+            Ok(())
+        }
+        fn delete_item(&self, _: &str, _: &WebLibrary, item: &str, v: u64) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("delete {item} v{v}"));
+            Ok(())
         }
     }
 
@@ -1843,6 +2003,129 @@ mod tests {
         let done = go_web(&env, &port, &group_row.id, &web);
         assert_eq!(done.detail.unwrap()["web"]["state"], "completed");
         assert!(!port.calls().contains(&"local_user_id".to_string()));
+    }
+
+    // --- The PDF of an existing item through the Web API ------------------------
+
+    /// A writing key, the matching account, and an item already in Zotero, with
+    /// the captured PDF of the source.
+    fn pdf_copy(web: &Arc<FakeWeb>, port: &FakePort) -> (Env, store::ZoteroCopy) {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", Some("cap-pdf"), &personal()).unwrap();
+        let done = go_web(&env, port, &row.id, web);
+        (env, done)
+    }
+
+    fn pdf_web() -> Arc<FakeWeb> {
+        // The fields are all there already: only the PDF is left to do.
+        let full = json!({"accessDate": "2020-01-01T00:00:00Z", "websiteTitle": "Mine"});
+        web_with(Ok(key_info(true, true)), vec![web_item(full)], vec![])
+    }
+
+    #[test]
+    fn the_captured_pdf_is_attached_to_the_existing_item_through_the_web_api() {
+        let web = pdf_web();
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["pdf"], "attached");
+        assert_eq!(detail["web"]["pdf"], "attached");
+        let calls = web.log();
+        let md5 = md5_hex(PDF);
+        let at = |prefix: &str| calls.iter().position(|c| c.starts_with(prefix)).unwrap();
+        assert!(at("children OLDKEY22") < at("create"));
+        assert!(at("create") < at("authorize ATTKEY12"));
+        assert!(calls.contains(&format!("authorize ATTKEY12 {md5}")));
+        assert!(at("authorize") < at("upload") && at("upload") < at("register"));
+        assert_eq!(
+            calls.iter().find(|c| c.starts_with("upload")).unwrap(),
+            &format!("upload {}", PDF.len())
+        );
+        let create = calls.iter().find(|c| c.starts_with("create")).unwrap();
+        assert!(create.contains("\"parentItem\":\"OLDKEY22\""), "{create}");
+        assert!(create.contains("Captura web "), "{create}");
+    }
+
+    #[test]
+    fn a_pdf_the_item_already_has_is_not_attached_twice() {
+        let web = pdf_web();
+        web.script_children(vec![json!({
+            "itemType": "attachment", "md5": md5_hex(PDF), "filename": "old.pdf"
+        })]);
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["pdf"], "already_there");
+        assert_eq!(detail["pdf"], "already_there");
+        assert!(!web.log().iter().any(|c| c.starts_with("create")));
+    }
+
+    #[test]
+    fn a_pdf_zotero_already_stores_is_linked_without_an_upload() {
+        let web = pdf_web();
+        web.script_auth(Ok(Authorization::Exists));
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        assert_eq!(done.detail.unwrap()["web"]["pdf"], "attached");
+        assert!(!web.log().iter().any(|c| c.starts_with("upload")));
+    }
+
+    #[test]
+    fn a_full_quota_is_reported_and_never_fails_the_copy() {
+        let web = pdf_web();
+        web.script_auth(Err(WebError::Rejected(413)));
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["pdf"], "quota");
+        assert_eq!(detail["pdf"], "parent_exists", "the PDF is still not there");
+        assert!(web.log().contains(&"delete ATTKEY12 v31".to_string()));
+    }
+
+    #[test]
+    fn any_other_upload_failure_is_a_failed_pdf_not_a_failed_copy() {
+        let web = pdf_web();
+        web.script_upload(Err(WebError::Rejected(500)));
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["pdf"], "failed");
+        assert!(!detail.to_string().contains(WEB_KEY));
+    }
+
+    #[test]
+    fn a_source_without_a_pdf_never_asks_for_children() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = pdf_web();
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert!(done.detail.unwrap()["web"].get("pdf").is_none());
+        assert!(!web.log().iter().any(|c| c.starts_with("children")));
+    }
+
+    #[test]
+    fn the_guard_applies_to_the_pdf_too() {
+        let web = pdf_web();
+        let mut port = existing_port();
+        port.user_id = Ok(Some(99));
+        let (_env, done) = pdf_copy(&web, &port);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "other_account");
+        assert!(detail["web"].get("pdf").is_none());
+        assert_eq!(web.log(), vec!["key_info"]);
+    }
+
+    #[test]
+    fn a_pdf_zotero_shows_locally_is_not_looked_up_again() {
+        let web = pdf_web();
+        let mut port = existing_port();
+        let sha = format!("{:x}", Sha256::digest(PDF));
+        port.children = vec![json!({"data": {"title": attachment_title(&sha)}})];
+        let (_env, done) = pdf_copy(&web, &port);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["pdf"], "already_there");
+        assert!(detail["web"].get("pdf").is_none());
+        assert!(!web.log().iter().any(|c| c.starts_with("children")));
     }
 
     #[test]

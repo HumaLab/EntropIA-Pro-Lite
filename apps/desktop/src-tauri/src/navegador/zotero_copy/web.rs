@@ -44,6 +44,34 @@ pub struct WebItem {
     pub data: Value,
 }
 
+/// A file to attach, with the facts Zotero's upload authorization asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfFile {
+    pub title: String,
+    pub filename: String,
+    pub md5: String,
+    pub size: u64,
+    pub mtime_ms: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// Where and how to send the bytes, as Zotero's upload authorization says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadTicket {
+    pub url: String,
+    pub content_type: String,
+    pub prefix: String,
+    pub suffix: String,
+    pub upload_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authorization {
+    /// `{"exists":1}`: Zotero already stores this file; nothing to upload.
+    Exists,
+    Upload(UploadTicket),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Patched {
     Done,
@@ -64,6 +92,41 @@ pub trait WebPort: Send + Sync {
         version: u64,
         body: &Value,
     ) -> Result<Patched, WebError>;
+
+    // The file-upload flow. Defaults refuse, so a port that only edits fields
+    // (and the fakes of its tests) need not know about files.
+    fn children(&self, _: &str, _: &WebLibrary, _: &str) -> Result<Vec<Value>, WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
+    /// Creates the attachment item; the write token makes a repeated create a
+    /// no-op. Returns its key and version.
+    fn create_attachment(
+        &self,
+        _: &str,
+        _: &WebLibrary,
+        _: &Value,
+        _: &str,
+    ) -> Result<(String, u64), WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
+    fn authorize_upload(
+        &self,
+        _: &str,
+        _: &WebLibrary,
+        _: &str,
+        _: &PdfFile,
+    ) -> Result<Authorization, WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
+    fn upload_file(&self, _: &UploadTicket, _: &[u8]) -> Result<(), WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
+    fn register_upload(&self, _: &str, _: &WebLibrary, _: &str, _: &str) -> Result<(), WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
+    fn delete_item(&self, _: &str, _: &WebLibrary, _: &str, _: u64) -> Result<(), WebError> {
+        Err(WebError::Invalid("files are not supported".into()))
+    }
 }
 
 /// api.zotero.org, over blocking HTTP (the copy drain is synchronous).
@@ -156,6 +219,275 @@ impl WebPort for WebApiPort {
             200 | 204 => Ok(Patched::Done),
             412 => Ok(Patched::Stale),
             status => Err(WebError::Rejected(status)),
+        }
+    }
+
+    fn children(
+        &self,
+        key: &str,
+        library: &WebLibrary,
+        parent: &str,
+    ) -> Result<Vec<Value>, WebError> {
+        let client = self.client()?;
+        let url = format!(
+            "{}/{}/items/{parent}/children?limit=100",
+            self.base,
+            library.path()
+        );
+        let response = self.send(client.get(url), key)?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(WebError::Rejected(status));
+        }
+        let json: Value = response
+            .json()
+            .map_err(|_| WebError::Invalid("unreadable children".into()))?;
+        Ok(json
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|i| i.get("data").cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn create_attachment(
+        &self,
+        key: &str,
+        library: &WebLibrary,
+        body: &Value,
+        token: &str,
+    ) -> Result<(String, u64), WebError> {
+        let client = self.client()?;
+        let url = format!("{}/{}/items", self.base, library.path());
+        let request = client
+            .post(url)
+            .header("Zotero-Write-Token", token)
+            .json(body);
+        let response = self.send(request, key)?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(WebError::Rejected(status));
+        }
+        let json: Value = response
+            .json()
+            .map_err(|_| WebError::Invalid("unreadable create answer".into()))?;
+        if let Some(code) = json.pointer("/failed/0/code").and_then(Value::as_u64) {
+            return Err(WebError::Rejected(code as u16));
+        }
+        let created = json
+            .pointer("/successful/0")
+            .ok_or_else(|| WebError::Invalid("the attachment was not created".into()))?;
+        let item = created
+            .get("key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| WebError::Invalid("created item without key".into()))?;
+        let version = created.get("version").and_then(Value::as_u64).unwrap_or(0);
+        Ok((item.to_string(), version))
+    }
+
+    fn authorize_upload(
+        &self,
+        key: &str,
+        library: &WebLibrary,
+        item: &str,
+        file: &PdfFile,
+    ) -> Result<Authorization, WebError> {
+        let client = self.client()?;
+        let url = format!("{}/{}/items/{item}/file", self.base, library.path());
+        let form = format!(
+            "md5={}&filename={}&filesize={}&mtime={}",
+            file.md5,
+            urlencoding::encode(&file.filename),
+            file.size,
+            file.mtime_ms
+        );
+        let request = client
+            .post(url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("If-None-Match", "*")
+            .body(form);
+        let response = self.send(request, key)?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(WebError::Rejected(status));
+        }
+        let json: Value = response
+            .json()
+            .map_err(|_| WebError::Invalid("unreadable authorization".into()))?;
+        if json.get("exists").and_then(Value::as_u64) == Some(1) {
+            return Ok(Authorization::Exists);
+        }
+        let text = |name: &str| json.get(name).and_then(Value::as_str).map(str::to_string);
+        match (
+            text("url"),
+            text("contentType"),
+            text("prefix"),
+            text("suffix"),
+            text("uploadKey"),
+        ) {
+            (Some(url), Some(content_type), Some(prefix), Some(suffix), Some(upload_key)) => {
+                Ok(Authorization::Upload(UploadTicket {
+                    url,
+                    content_type,
+                    prefix,
+                    suffix,
+                    upload_key,
+                }))
+            }
+            _ => Err(WebError::Invalid("incomplete authorization".into())),
+        }
+    }
+
+    fn upload_file(&self, ticket: &UploadTicket, bytes: &[u8]) -> Result<(), WebError> {
+        // The storage address belongs to Zotero's storage, not to the API: it
+        // gets no key and no API headers.
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|_| WebError::Invalid("http client".into()))?;
+        let mut body = Vec::with_capacity(ticket.prefix.len() + bytes.len() + ticket.suffix.len());
+        body.extend_from_slice(ticket.prefix.as_bytes());
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(ticket.suffix.as_bytes());
+        let response = client
+            .post(&ticket.url)
+            .header("Content-Type", &ticket.content_type)
+            .body(body)
+            .send()
+            .map_err(|_| WebError::Unreachable)?;
+        match response.status().as_u16() {
+            200 | 201 | 204 => Ok(()),
+            status => Err(WebError::Rejected(status)),
+        }
+    }
+
+    fn register_upload(
+        &self,
+        key: &str,
+        library: &WebLibrary,
+        item: &str,
+        upload_key: &str,
+    ) -> Result<(), WebError> {
+        let client = self.client()?;
+        let url = format!("{}/{}/items/{item}/file", self.base, library.path());
+        let request = client
+            .post(url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("If-None-Match", "*")
+            .body(format!("upload={upload_key}"));
+        match self.send(request, key)?.status().as_u16() {
+            200 | 204 => Ok(()),
+            status => Err(WebError::Rejected(status)),
+        }
+    }
+
+    fn delete_item(
+        &self,
+        key: &str,
+        library: &WebLibrary,
+        item: &str,
+        version: u64,
+    ) -> Result<(), WebError> {
+        let client = self.client()?;
+        let url = format!("{}/{}/items/{item}", self.base, library.path());
+        let request = client
+            .delete(url)
+            .header("If-Unmodified-Since-Version", version.to_string());
+        match self.send(request, key)?.status().as_u16() {
+            200 | 204 => Ok(()),
+            status => Err(WebError::Rejected(status)),
+        }
+    }
+}
+
+pub fn md5_hex(bytes: &[u8]) -> String {
+    use md5::{Digest, Md5};
+    Md5::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PdfOutcome {
+    Attached,
+    /// An attachment with this file is already a child of the item.
+    AlreadyThere,
+    /// The person's Zotero storage is full (`413`).
+    Quota,
+    Failed,
+}
+
+fn already_a_child(children: &[Value], file: &PdfFile) -> bool {
+    children.iter().any(|child| {
+        if child.get("itemType").and_then(Value::as_str) != Some("attachment") {
+            return false;
+        }
+        match child
+            .get("md5")
+            .and_then(Value::as_str)
+            .filter(|md5| !md5.is_empty())
+        {
+            Some(md5) => md5.eq_ignore_ascii_case(&file.md5),
+            // No digest yet (an upload that never finished): the filename is
+            // named by the file's hash, so it says the same.
+            None => child.get("filename").and_then(Value::as_str) == Some(file.filename.as_str()),
+        }
+    })
+}
+
+fn write_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Attaches `file` to `parent` through the upload flow, unless the item already
+/// has it. Never fails the caller: the outcome says what happened. An attachment
+/// item that could not get its file is deleted again, so no empty one is left.
+pub fn attach_pdf_via_web(
+    web: &dyn WebPort,
+    key: &str,
+    library: &WebLibrary,
+    parent: &str,
+    file: &PdfFile,
+) -> PdfOutcome {
+    match web.children(key, library, parent) {
+        Ok(children) if already_a_child(&children, file) => return PdfOutcome::AlreadyThere,
+        Ok(_) => {}
+        Err(_) => return PdfOutcome::Failed,
+    }
+    let body = serde_json::json!([{
+        "itemType": "attachment",
+        "parentItem": parent,
+        "linkMode": "imported_file",
+        "title": file.title,
+        "contentType": "application/pdf",
+        "filename": file.filename,
+    }]);
+    let Ok((attachment, version)) = web.create_attachment(key, library, &body, &write_token())
+    else {
+        return PdfOutcome::Failed;
+    };
+    let uploaded = (|| -> Result<(), WebError> {
+        match web.authorize_upload(key, library, &attachment, file)? {
+            Authorization::Exists => Ok(()),
+            Authorization::Upload(ticket) => {
+                web.upload_file(&ticket, &file.bytes)?;
+                web.register_upload(key, library, &attachment, &ticket.upload_key)
+            }
+        }
+    })();
+    match uploaded {
+        Ok(()) => PdfOutcome::Attached,
+        Err(error) => {
+            let _ = web.delete_item(key, library, &attachment, version);
+            if error == WebError::Rejected(413) {
+                PdfOutcome::Quota
+            } else {
+                PdfOutcome::Failed
+            }
         }
     }
 }
@@ -515,5 +847,413 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, WebError::Unreachable);
         assert!(!format!("{error:?}").contains(KEY));
+    }
+
+    // --- Attaching a PDF through the file-upload flow ---------------------------
+
+    fn pdf() -> PdfFile {
+        PdfFile {
+            title: "Captura web abcd1234.pdf".into(),
+            filename: "web-capture-abcd1234.pdf".into(),
+            md5: md5_hex(b"%PDF-1.4 fake"),
+            size: 13,
+            mtime_ms: 1_700_000_000_000,
+            bytes: b"%PDF-1.4 fake".to_vec(),
+        }
+    }
+
+    fn ticket() -> Authorization {
+        Authorization::Upload(UploadTicket {
+            url: "https://storage.test/upload".into(),
+            content_type: "multipart/form-data; boundary=x".into(),
+            prefix: "--x\r\n".into(),
+            suffix: "\r\n--x--".into(),
+            upload_key: "UPKEY".into(),
+        })
+    }
+
+    /// A scripted file-upload side of the Web API. Every call is logged.
+    struct FakeFiles {
+        children: Vec<Value>,
+        create: Result<(String, u64), WebError>,
+        auth: Result<Authorization, WebError>,
+        upload: Result<(), WebError>,
+        register: Result<(), WebError>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl FakeFiles {
+        fn working() -> Self {
+            Self {
+                children: vec![],
+                create: Ok(("ATTKEY12".into(), 31)),
+                auth: Ok(ticket()),
+                upload: Ok(()),
+                register: Ok(()),
+                calls: Mutex::new(vec![]),
+            }
+        }
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    impl WebPort for FakeFiles {
+        fn key_info(&self, _: &str) -> Result<crate::zotero_web::KeyCheck, WebError> {
+            unreachable!()
+        }
+        fn get_item(&self, _: &str, _: &WebLibrary, _: &str) -> Result<WebItem, WebError> {
+            unreachable!()
+        }
+        fn patch_item(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            _: &str,
+            _: u64,
+            _: &Value,
+        ) -> Result<Patched, WebError> {
+            unreachable!()
+        }
+        fn children(&self, _: &str, _: &WebLibrary, parent: &str) -> Result<Vec<Value>, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("children {parent}"));
+            Ok(self.children.clone())
+        }
+        fn create_attachment(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            body: &Value,
+            token: &str,
+        ) -> Result<(String, u64), WebError> {
+            assert_eq!(token.len(), 32, "a write token makes the create idempotent");
+            self.calls.lock().unwrap().push(format!("create {body}"));
+            self.create.clone()
+        }
+        fn authorize_upload(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            file: &PdfFile,
+        ) -> Result<Authorization, WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("authorize {item} {} {}", file.md5, file.size));
+            self.auth.clone()
+        }
+        fn upload_file(&self, ticket: &UploadTicket, bytes: &[u8]) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("upload {} {}", ticket.url, bytes.len()));
+            self.upload.clone()
+        }
+        fn register_upload(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            upload_key: &str,
+        ) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("register {item} {upload_key}"));
+            self.register.clone()
+        }
+        fn delete_item(
+            &self,
+            _: &str,
+            _: &WebLibrary,
+            item: &str,
+            version: u64,
+        ) -> Result<(), WebError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("delete {item} v{version}"));
+            Ok(())
+        }
+    }
+
+    fn attach(web: &FakeFiles) -> PdfOutcome {
+        attach_pdf_via_web(web, KEY, &WebLibrary::User(7), "PARENT12", &pdf())
+    }
+
+    #[test]
+    fn a_pdf_is_created_authorized_uploaded_and_registered_in_that_order() {
+        let web = FakeFiles::working();
+        assert_eq!(attach(&web), PdfOutcome::Attached);
+        let calls = web.calls();
+        assert_eq!(calls[0], "children PARENT12");
+        assert!(calls[1].starts_with("create "));
+        let body: Value = serde_json::from_str(calls[1].trim_start_matches("create ")).unwrap();
+        let item = &body[0];
+        assert_eq!(item["itemType"], "attachment");
+        assert_eq!(item["linkMode"], "imported_file");
+        assert_eq!(item["parentItem"], "PARENT12");
+        assert_eq!(item["contentType"], "application/pdf");
+        assert_eq!(item["filename"], "web-capture-abcd1234.pdf");
+        assert_eq!(item["title"], "Captura web abcd1234.pdf");
+        assert_eq!(
+            calls[2],
+            format!("authorize ATTKEY12 {} 13", md5_hex(b"%PDF-1.4 fake"))
+        );
+        // prefix + file + suffix
+        assert_eq!(
+            calls[3],
+            "upload https://storage.test/upload 13".to_string()
+        );
+        assert_eq!(calls[4], "register ATTKEY12 UPKEY");
+        assert_eq!(calls.len(), 5);
+    }
+
+    #[test]
+    fn a_file_zotero_already_stores_needs_no_upload() {
+        let mut web = FakeFiles::working();
+        web.auth = Ok(Authorization::Exists);
+        assert_eq!(attach(&web), PdfOutcome::Attached);
+        let calls = web.calls();
+        assert!(!calls
+            .iter()
+            .any(|c| c.starts_with("upload") || c.starts_with("register")));
+        assert!(
+            !calls.iter().any(|c| c.starts_with("delete")),
+            "the attachment stays"
+        );
+    }
+
+    #[test]
+    fn the_same_md5_among_the_children_is_never_attached_twice() {
+        let mut web = FakeFiles::working();
+        web.children = vec![
+            json!({"itemType": "note"}),
+            json!({"itemType": "attachment", "md5": md5_hex(b"%PDF-1.4 fake").to_uppercase(), "filename": "other.pdf"}),
+        ];
+        assert_eq!(attach(&web), PdfOutcome::AlreadyThere);
+        assert_eq!(web.calls(), vec!["children PARENT12"]);
+    }
+
+    #[test]
+    fn without_an_md5_the_filename_is_what_says_it_is_there() {
+        let mut web = FakeFiles::working();
+        web.children =
+            vec![json!({"itemType": "attachment", "filename": "web-capture-abcd1234.pdf"})];
+        assert_eq!(attach(&web), PdfOutcome::AlreadyThere);
+        // A different file with its own md5 does not count.
+        let mut web = FakeFiles::working();
+        web.children =
+            vec![json!({"itemType": "attachment", "md5": "0".repeat(32), "filename": "else.pdf"})];
+        assert_eq!(attach(&web), PdfOutcome::Attached);
+    }
+
+    #[test]
+    fn a_full_storage_quota_is_its_own_outcome_and_leaves_no_empty_attachment() {
+        let mut web = FakeFiles::working();
+        web.auth = Err(WebError::Rejected(413));
+        assert_eq!(attach(&web), PdfOutcome::Quota);
+        let calls = web.calls();
+        assert_eq!(calls.last().unwrap(), "delete ATTKEY12 v31");
+        assert!(!calls.iter().any(|c| c.starts_with("upload")));
+    }
+
+    #[test]
+    fn a_precondition_failure_or_any_refusal_fails_and_cleans_up() {
+        for refusal in [412, 403, 500] {
+            let mut web = FakeFiles::working();
+            web.auth = Err(WebError::Rejected(refusal));
+            assert_eq!(attach(&web), PdfOutcome::Failed, "{refusal}");
+            assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
+        }
+        let mut web = FakeFiles::working();
+        web.upload = Err(WebError::Rejected(500));
+        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
+        let mut web = FakeFiles::working();
+        web.register = Err(WebError::Rejected(412));
+        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
+    }
+
+    #[test]
+    fn a_failure_to_create_the_attachment_has_nothing_to_clean() {
+        let mut web = FakeFiles::working();
+        web.create = Err(WebError::Rejected(400));
+        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert!(!web.calls().iter().any(|c| c.starts_with("delete")));
+    }
+
+    #[test]
+    fn the_real_port_creates_an_attachment_with_a_write_token() {
+        let reply = r#"{"successful":{"0":{"key":"ATTKEY12","version":31,"data":{}}},"success":{"0":"ATTKEY12"},"failed":{}}"#;
+        let server = serve(vec![canned("POST", "/users/7/items", 200, reply)]);
+        let (key, version) = WebApiPort::new(&server.base)
+            .create_attachment(
+                KEY,
+                &WebLibrary::User(7),
+                &json!([{"itemType": "attachment"}]),
+                &"a".repeat(32),
+            )
+            .unwrap();
+        assert_eq!((key.as_str(), version), ("ATTKEY12", 31));
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(
+            seen[0]
+                .headers
+                .get("zotero-write-token")
+                .map(String::as_str),
+            Some("a".repeat(32).as_str())
+        );
+        assert_eq!(
+            seen[0].headers.get("zotero-api-key").map(String::as_str),
+            Some(KEY)
+        );
+    }
+
+    #[test]
+    fn a_failed_create_entry_is_a_refusal() {
+        let reply = r#"{"successful":{},"success":{},"failed":{"0":{"code":400,"message":"bad"}}}"#;
+        let server = serve(vec![canned("POST", "/users/7/items", 200, reply)]);
+        let error = WebApiPort::new(&server.base)
+            .create_attachment(KEY, &WebLibrary::User(7), &json!([{}]), &"a".repeat(32))
+            .unwrap_err();
+        assert_eq!(error, WebError::Rejected(400));
+    }
+
+    #[test]
+    fn the_real_port_asks_for_upload_authorization_with_the_file_facts() {
+        let reply = r#"{"url":"https://s.test/u","contentType":"multipart/form-data; boundary=x","prefix":"--x\r\n","suffix":"\r\n--x--","uploadKey":"UPKEY"}"#;
+        let server = serve(vec![canned(
+            "POST",
+            "/groups/9/items/ATTKEY12/file",
+            200,
+            reply,
+        )]);
+        let auth = WebApiPort::new(&server.base)
+            .authorize_upload(KEY, &WebLibrary::Group("9".into()), "ATTKEY12", &pdf())
+            .unwrap();
+        assert_eq!(auth, ticket_from_reply());
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(
+            seen[0].headers.get("if-none-match").map(String::as_str),
+            Some("*")
+        );
+        assert_eq!(
+            seen[0].headers.get("content-type").map(String::as_str),
+            Some("application/x-www-form-urlencoded")
+        );
+        let body = String::from_utf8(seen[0].body.clone()).unwrap();
+        assert!(
+            body.contains(&format!("md5={}", md5_hex(b"%PDF-1.4 fake"))),
+            "{body}"
+        );
+        assert!(body.contains("filename=web-capture-abcd1234.pdf"), "{body}");
+        assert!(body.contains("filesize=13"), "{body}");
+        assert!(body.contains("mtime=1700000000000"), "{body}");
+    }
+
+    fn ticket_from_reply() -> Authorization {
+        Authorization::Upload(UploadTicket {
+            url: "https://s.test/u".into(),
+            content_type: "multipart/form-data; boundary=x".into(),
+            prefix: "--x\r\n".into(),
+            suffix: "\r\n--x--".into(),
+            upload_key: "UPKEY".into(),
+        })
+    }
+
+    #[test]
+    fn exists_one_means_no_upload_and_413_maps_to_a_refusal() {
+        let server = serve(vec![canned(
+            "POST",
+            "/users/7/items/A/file",
+            200,
+            r#"{"exists":1}"#,
+        )]);
+        let auth = WebApiPort::new(&server.base)
+            .authorize_upload(KEY, &WebLibrary::User(7), "A", &pdf())
+            .unwrap();
+        assert_eq!(auth, Authorization::Exists);
+        for status in [413, 412] {
+            let server = serve(vec![canned("POST", "/users/7/items/A/file", status, "no")]);
+            let error = WebApiPort::new(&server.base)
+                .authorize_upload(KEY, &WebLibrary::User(7), "A", &pdf())
+                .unwrap_err();
+            assert_eq!(error, WebError::Rejected(status));
+        }
+    }
+
+    #[test]
+    fn the_file_goes_to_the_given_address_with_prefix_and_suffix_and_without_the_key() {
+        let server = serve(vec![canned("POST", "/upload", 201, "")]);
+        let ticket = UploadTicket {
+            url: format!("{}/upload", server.base),
+            content_type: "multipart/form-data; boundary=x".into(),
+            prefix: "--x\r\n".into(),
+            suffix: "\r\n--x--".into(),
+            upload_key: "UPKEY".into(),
+        };
+        WebApiPort::new(&dead_base())
+            .upload_file(&ticket, b"%PDF-1.4 fake")
+            .unwrap();
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(seen[0].body, b"--x\r\n%PDF-1.4 fake\r\n--x--".to_vec());
+        assert_eq!(
+            seen[0].headers.get("content-type").map(String::as_str),
+            Some("multipart/form-data; boundary=x")
+        );
+        assert!(
+            !seen[0].headers.contains_key("zotero-api-key"),
+            "storage never sees the key"
+        );
+    }
+
+    #[test]
+    fn registering_an_upload_needs_the_upload_key_and_no_existing_file() {
+        let server = serve(vec![canned("POST", "/users/7/items/A/file", 204, "")]);
+        WebApiPort::new(&server.base)
+            .register_upload(KEY, &WebLibrary::User(7), "A", "UPKEY")
+            .unwrap();
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(
+            String::from_utf8(seen[0].body.clone()).unwrap(),
+            "upload=UPKEY"
+        );
+        assert_eq!(
+            seen[0].headers.get("if-none-match").map(String::as_str),
+            Some("*")
+        );
+    }
+
+    #[test]
+    fn the_real_port_lists_children_and_deletes_with_a_version() {
+        let children = r#"[{"key":"C1","version":2,"data":{"itemType":"attachment","md5":"abc","filename":"f.pdf"}}]"#;
+        let server = serve(vec![
+            canned("GET", "/users/7/items/P/children", 200, children),
+            canned("DELETE", "/users/7/items/A", 204, ""),
+        ]);
+        let port = WebApiPort::new(&server.base);
+        let got = port.children(KEY, &WebLibrary::User(7), "P").unwrap();
+        assert_eq!(got[0]["md5"], "abc");
+        port.delete_item(KEY, &WebLibrary::User(7), "A", 31)
+            .unwrap();
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(
+            seen[1]
+                .headers
+                .get("if-unmodified-since-version")
+                .map(String::as_str),
+            Some("31")
+        );
+    }
+
+    #[test]
+    fn md5_is_the_hex_digest_zotero_expects() {
+        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
     }
 }

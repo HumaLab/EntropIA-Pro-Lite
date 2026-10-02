@@ -2122,6 +2122,12 @@ const es = {
   'navegador.zotero.note.web.completed':
     'Se completaron campos vacíos del elemento en Zotero a través de la Web API. Llegan a tu Zotero local cuando Zotero sincroniza.',
   'navegador.zotero.note.web.fields': 'Campos completados: {fields}.',
+  'navegador.zotero.note.web.pdf.attached':
+    'El PDF llega a tu Zotero local cuando Zotero sincroniza, y los archivos cuando sincroniza también archivos.',
+  'navegador.zotero.note.web.pdf.quota':
+    'No se adjuntó el PDF: tu almacenamiento de Zotero está lleno. El elemento quedó enlazado.',
+  'navegador.zotero.note.web.pdf.failed':
+    'No se pudo adjuntar el PDF por la Web API. El elemento quedó enlazado.',
   'navegador.zotero.note.web.nothing_missing':
     'No faltaba ningún campo en Zotero: no se cambió nada.',
   'navegador.zotero.note.web.conflict':
@@ -4415,6 +4421,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.note.web.completed':
     'Empty fields of the entry were completed in Zotero through the Web API. They reach your local Zotero when Zotero syncs.',
   'navegador.zotero.note.web.fields': 'Completed fields: {fields}.',
+  'navegador.zotero.note.web.pdf.attached':
+    'The PDF reaches your local Zotero when Zotero syncs, and files when it syncs files too.',
+  'navegador.zotero.note.web.pdf.quota':
+    'The PDF was not attached: your Zotero storage is full. The entry was linked.',
+  'navegador.zotero.note.web.pdf.failed':
+    'The PDF could not be attached through the Web API. The entry was linked.',
   'navegador.zotero.note.web.nothing_missing':
     'No field was missing in Zotero: nothing was changed.',
   'navegador.zotero.note.web.conflict':
