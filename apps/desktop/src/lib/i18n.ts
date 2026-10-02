@@ -2126,6 +2126,21 @@ const es = {
     'El PDF guardado ya no coincide con lo que se verificó al guardarlo.',
   'navegador.zotero.error.file_too_large': 'El PDF es demasiado grande para copiarlo a Zotero.',
   'navegador.zotero.error.db_error': 'Error del archivo de datos ({message}).',
+  'navegador.zotero.present': 'Ya está en Zotero («{library}»).',
+  'navegador.zotero.present.pending':
+    'Campos que podrían completarse y no se modifican desde aquí: {fields}.',
+  'navegador.zotero.present.kept': 'Campos que editaste en Zotero y se respetan: {fields}.',
+  'navegador.zotero.present.record':
+    'Zotero no responde: esto sale del registro de EntropIA, no de Zotero.',
+  'navegador.zotero.open': 'Abrir en Zotero',
+  'navegador.zotero.checking': 'Comprobando si ya está en Zotero…',
+  'navegador.zotero.fallback':
+    'Zotero no responde: se muestran las bibliotecas conocidas por EntropIA, que pueden estar incompletas.',
+  'navegador.zotero.openFailed': 'No se pudo abrir en Zotero.',
+  'navegador.zotero.field.title': 'título',
+  'navegador.zotero.field.url': 'dirección',
+  'navegador.zotero.field.accessDate': 'fecha de acceso',
+  'navegador.zotero.field.websiteTitle': 'sitio web',
   'navegador.zotero.error.unknown': '{message}',
 } as const
 
@@ -4367,6 +4382,21 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'The saved PDF no longer matches what was verified when it was saved.',
   'navegador.zotero.error.file_too_large': 'The PDF is too large to copy to Zotero.',
   'navegador.zotero.error.db_error': 'Data file error ({message}).',
+  'navegador.zotero.present': 'It is already in Zotero ("{library}").',
+  'navegador.zotero.present.pending':
+    'Fields that could be filled in and are not changed from here: {fields}.',
+  'navegador.zotero.present.kept': 'Fields you edited in Zotero and that are respected: {fields}.',
+  'navegador.zotero.present.record':
+    'Zotero is not answering: this comes from the EntropIA record, not from Zotero.',
+  'navegador.zotero.open': 'Open in Zotero',
+  'navegador.zotero.checking': 'Checking whether it is already in Zotero…',
+  'navegador.zotero.fallback':
+    'Zotero is not answering: showing the libraries EntropIA knows, which may be incomplete.',
+  'navegador.zotero.openFailed': 'Could not open it in Zotero.',
+  'navegador.zotero.field.title': 'title',
+  'navegador.zotero.field.url': 'address',
+  'navegador.zotero.field.accessDate': 'access date',
+  'navegador.zotero.field.websiteTitle': 'website',
   'navegador.zotero.error.unknown': '{message}',
 }
 

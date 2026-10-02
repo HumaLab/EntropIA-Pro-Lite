@@ -159,3 +159,61 @@ export function parseZoteroError(reason: unknown): {
   if (!code) return { code: 'unknown', detail: message }
   return { code, detail: rest.length > 0 ? rest.join(': ') : null }
 }
+
+export type LiveLibrary = { libraryType: 'user' | 'group'; libraryId: string; name: string | null }
+
+/** `reachable: false` means Zotero did not answer and the list is empty. */
+export type LiveLibraryList = { reachable: boolean; libraries: LiveLibrary[] }
+
+export type CopyStatus = {
+  state: 'absent' | 'present' | 'unreachable'
+  /** `zotero`: found by address. `record`: from our own record, Zotero closed. */
+  source: 'zotero' | 'record' | 'none'
+  itemKey: string | null
+  pdf: ZoteroCopyDetail['pdf'] | 'unknown'
+  pendingFields: string[]
+  keptFields: string[]
+}
+
+/** The libraries Zotero itself offers for writing, personal first. */
+export function navegadorZoteroLibraries(): Promise<LiveLibraryList> {
+  return invoke<LiveLibraryList>('navegador_zotero_libraries')
+}
+
+/** Whether the source (and its PDF) is already in the library. Reads only. */
+export function navegadorZoteroStatus(
+  sourceId: string,
+  captureId: string | null,
+  library: ZoteroLibraryChoice
+): Promise<CopyStatus> {
+  return invoke<CopyStatus>('navegador_zotero_status', { sourceId, captureId, library })
+}
+
+/** Selects an item in Zotero (the `zotero://select/...` link, built in Rust). */
+export function navegadorZoteroOpenItem(
+  libraryType: 'user' | 'group',
+  libraryId: string,
+  itemKey: string
+): Promise<void> {
+  return invoke<void>('writing_zotero_open_item', { libraryType, libraryId, itemKey })
+}
+
+const FIELDS = ['title', 'url', 'accessDate', 'websiteTitle']
+
+/** What the dialog shows about a status. Labels are i18n keys. */
+export function describeStatus(status: CopyStatus) {
+  const labels = (fields: string[]) =>
+    fields
+      .filter((field) => FIELDS.includes(field))
+      .map((field) => `navegador.zotero.field.${field}`)
+  return {
+    present: status.state === 'present' && status.itemKey !== null,
+    fromRecord: status.source === 'record',
+    pendingKeys: labels(status.pendingFields),
+    keptKeys: labels(status.keptFields),
+    pdfKey:
+      status.state === 'present' && status.pdf !== 'none' && status.pdf !== 'unknown'
+        ? `navegador.zotero.note.pdf.${status.pdf}`
+        : null,
+  }
+}

@@ -6,6 +6,10 @@ import {
   isPending,
   navegadorZoteroCancel,
   navegadorZoteroLaunch,
+  navegadorZoteroLibraries,
+  navegadorZoteroOpenItem,
+  navegadorZoteroStatus,
+  describeStatus,
   navegadorZoteroList,
   navegadorZoteroRequest,
   navegadorZoteroRun,
@@ -158,6 +162,73 @@ describe('states', () => {
       })
     )
     expect(plain.notes).toEqual([])
+  })
+})
+
+describe('library list and status', () => {
+  it('asks Zotero for its libraries and for the status of a source in one of them', async () => {
+    vi.mocked(invoke).mockResolvedValue({ reachable: true, libraries: [] })
+    await navegadorZoteroLibraries()
+    expect(invoke).toHaveBeenLastCalledWith('navegador_zotero_libraries')
+    await navegadorZoteroStatus('s1', 'c1', {
+      libraryType: 'group',
+      libraryId: '7',
+      libraryName: 'prueba',
+    })
+    expect(invoke).toHaveBeenLastCalledWith('navegador_zotero_status', {
+      sourceId: 's1',
+      captureId: 'c1',
+      library: { libraryType: 'group', libraryId: '7', libraryName: 'prueba' },
+    })
+  })
+
+  it('opens an item through the existing select command, by key and library', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await navegadorZoteroOpenItem('group', '7', 'ABCD2345')
+    expect(invoke).toHaveBeenLastCalledWith('writing_zotero_open_item', {
+      libraryType: 'group',
+      libraryId: '7',
+      itemKey: 'ABCD2345',
+    })
+  })
+
+  it('describes a present status with its field labels and PDF note', () => {
+    const view = describeStatus({
+      state: 'present',
+      source: 'zotero',
+      itemKey: 'ABCD2345',
+      pdf: 'parent_exists',
+      pendingFields: ['accessDate', 'websiteTitle'],
+      keptFields: ['title'],
+    })
+    expect(view.present).toBe(true)
+    expect(view.fromRecord).toBe(false)
+    expect(view.pendingKeys).toEqual([
+      'navegador.zotero.field.accessDate',
+      'navegador.zotero.field.websiteTitle',
+    ])
+    expect(view.keptKeys).toEqual(['navegador.zotero.field.title'])
+    expect(view.pdfKey).toBe('navegador.zotero.note.pdf.parent_exists')
+  })
+
+  it('an absent or unreachable status is not present, and a record is flagged', () => {
+    const base = {
+      itemKey: null,
+      pdf: 'none' as const,
+      pendingFields: [] as string[],
+      keptFields: [] as string[],
+    }
+    expect(describeStatus({ ...base, state: 'absent', source: 'none' }).present).toBe(false)
+    expect(describeStatus({ ...base, state: 'unreachable', source: 'none' }).present).toBe(false)
+    const record = describeStatus({
+      ...base,
+      state: 'present',
+      source: 'record',
+      itemKey: 'K',
+      pdf: 'unknown',
+    })
+    expect(record.fromRecord).toBe(true)
+    expect(record.pdfKey).toBeNull()
   })
 })
 

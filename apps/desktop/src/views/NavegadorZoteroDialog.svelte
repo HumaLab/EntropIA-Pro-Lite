@@ -9,15 +9,25 @@
    * showing it and sends it when Zotero answers. An item that is already in the
    * library is linked, never duplicated.
    *
+   * The libraries are listed live from Zotero (the archive's known libraries
+   * only when Zotero does not answer, and the dialog says so). When a library is
+   * chosen the dialog checks whether the source is already in it; if so it says
+   * so up front and offers "Abrir en Zotero" instead of copying.
+   *
    * The work is `$lib/navegador-zotero`; this component holds the choice and
    * the result. Rust finds the file and builds the item from its own rows.
    */
   import { onMount } from 'svelte'
   import { ConfirmDialog } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
-  import { libraryLabel, loadLibraries, type LibraryOption } from '$lib/writing-zotero-libraries'
+  import { libraryLabel, loadLibraries } from '$lib/writing-zotero-libraries'
   import {
     describeCopy,
+    describeStatus,
+    navegadorZoteroLibraries,
+    navegadorZoteroOpenItem,
+    navegadorZoteroStatus,
+    type CopyStatus,
     navegadorZoteroRequest,
     navegadorZoteroRun,
     parseZoteroError,
@@ -40,26 +50,79 @@
 
   const currentLocale = locale
 
-  let libraries = $state<LibraryOption[]>([])
+  type Option = { libraryType: 'user' | 'group'; libraryId: string; name: string | null }
+
+  let libraries = $state<Option[]>([])
+  let fromKnown = $state(false)
+  let status = $state<CopyStatus | null>(null)
+  let checking = $state(false)
+  let statusRequest = 0
   let loading = $state(true)
   let choice = $state('user:0')
   let phase = $state<'choosing' | 'sending' | 'done'>('choosing')
   let problem = $state<string | null>(null)
   let result = $state<ZoteroCopy | null>(null)
 
-  const keyOf = (option: Pick<LibraryOption, 'libraryType' | 'libraryId'>) =>
+  const keyOf = (option: Pick<Option, 'libraryType' | 'libraryId'>) =>
     `${option.libraryType}:${option.libraryId}`
-  const label = (option: LibraryOption) => libraryLabel(option, t('navegador.zotero.personal'))
+  const label = (option: Option) =>
+    libraryLabel(
+      { ...option, source: 'catalog', unverified: false },
+      t('navegador.zotero.personal')
+    )
   const chosen = $derived(libraries.find((option) => keyOf(option) === choice) ?? null)
   const chosenLabel = $derived(chosen ? label(chosen) : '')
 
   onMount(async () => {
     try {
-      libraries = await loadLibraries()
+      let live: Option[] = []
+      try {
+        const answer = await navegadorZoteroLibraries()
+        if (answer?.reachable) live = answer.libraries
+      } catch {
+        // Treated like a closed Zotero: the known libraries are offered instead.
+      }
+      if (live.length > 0) {
+        libraries = live
+      } else {
+        fromKnown = true
+        libraries = (await loadLibraries()).map((option) => ({
+          libraryType: option.libraryType,
+          libraryId: option.libraryId,
+          name: option.name ?? null,
+        }))
+      }
     } finally {
       loading = false
     }
   })
+
+  // Whenever the chosen library changes, ask whether the source is already in it.
+  $effect(() => {
+    const library = chosen
+    if (!library || phase !== 'choosing') return
+    const request = ++statusRequest
+    status = null
+    checking = true
+    navegadorZoteroStatus(source.id, capture?.id ?? null, {
+      libraryType: library.libraryType,
+      libraryId: library.libraryId,
+      libraryName: library.name,
+    })
+      .then((answer) => {
+        if (request === statusRequest) status = answer
+      })
+      .catch(() => {
+        // A failed check never blocks copying: the run reports its own problem.
+        if (request === statusRequest) status = null
+      })
+      .finally(() => {
+        if (request === statusRequest) checking = false
+      })
+  })
+
+  const present = $derived(status ? describeStatus(status) : null)
+  const isPresent = $derived(present?.present === true)
 
   function describeFailure(copy: ZoteroCopy): string {
     const code = copy.errorCode ?? 'unknown'
@@ -116,16 +179,37 @@
   })
   const notes = $derived(result ? describeCopy(result).notes : [])
 
+  async function openInZotero() {
+    if (!chosen || !status?.itemKey) return
+    try {
+      await navegadorZoteroOpenItem(chosen.libraryType, chosen.libraryId, status.itemKey)
+      onclose()
+    } catch {
+      problem = t('navegador.zotero.openFailed')
+    }
+  }
+
   function confirm() {
     if (phase === 'done') {
       onclose()
+      return
+    }
+    if (phase === 'choosing' && isPresent) {
+      void openInZotero()
       return
     }
     if (phase === 'choosing' && chosen) void copy()
   }
 
   const confirmLabel = $derived(
-    $currentLocale && t(phase === 'done' ? 'navegador.zotero.ok' : 'navegador.zotero.confirm')
+    $currentLocale &&
+      t(
+        phase === 'done'
+          ? 'navegador.zotero.ok'
+          : isPresent
+            ? 'navegador.zotero.open'
+            : 'navegador.zotero.confirm'
+      )
   )
 </script>
 
@@ -136,7 +220,7 @@
   cancelDisabled={phase === 'sending'}
   dismissOnOverlay={false}
   {confirmLabel}
-  confirmDisabled={phase === 'choosing' ? loading || !chosen : false}
+  confirmDisabled={phase === 'choosing' ? loading || !chosen || checking : false}
   confirming={phase === 'sending'}
   error={problem}
   oncancel={() => phase !== 'sending' && onclose()}
@@ -186,7 +270,44 @@
         </div>
       {/if}
     </fieldset>
-    <p class="zotero-dialog__note">{$currentLocale && t('navegador.zotero.hint')}</p>
+    {#if fromKnown && !loading}
+      <p class="zotero-dialog__note" role="status">
+        {$currentLocale && t('navegador.zotero.fallback')}
+      </p>
+    {/if}
+    {#if checking}
+      <p class="zotero-dialog__note" role="status">
+        {$currentLocale && t('navegador.zotero.checking')}
+      </p>
+    {:else if present?.present && status}
+      <p class="zotero-dialog__status" role="status">
+        {$currentLocale && t('navegador.zotero.present', { library: chosenLabel })}
+      </p>
+      {#if present.fromRecord}
+        <p class="zotero-dialog__note">{$currentLocale && t('navegador.zotero.present.record')}</p>
+      {/if}
+      {#if present.pdfKey}
+        <p class="zotero-dialog__note">{$currentLocale && t(present.pdfKey)}</p>
+      {/if}
+      {#if present.pendingKeys.length > 0}
+        <p class="zotero-dialog__note">
+          {$currentLocale &&
+            t('navegador.zotero.present.pending', {
+              fields: present.pendingKeys.map((key) => t(key)).join(', '),
+            })}
+        </p>
+      {/if}
+      {#if present.keptKeys.length > 0}
+        <p class="zotero-dialog__note">
+          {$currentLocale &&
+            t('navegador.zotero.present.kept', {
+              fields: present.keptKeys.map((key) => t(key)).join(', '),
+            })}
+        </p>
+      {/if}
+    {:else}
+      <p class="zotero-dialog__note">{$currentLocale && t('navegador.zotero.hint')}</p>
+    {/if}
   {/if}
 </ConfirmDialog>
 

@@ -34,6 +34,27 @@ const KNOWN = [
 
 let requested: unknown[] = []
 let answers: { request: () => unknown; run: () => unknown }
+let live: { reachable: boolean; libraries: unknown[] }
+let statusFor: (args: { library: { libraryId: string } }) => unknown
+let opened: unknown[] = []
+let statusCalls: unknown[] = []
+
+const ABSENT = {
+  state: 'absent',
+  source: 'none',
+  itemKey: null,
+  pdf: 'none',
+  pendingFields: [],
+  keptFields: [],
+}
+const PRESENT = {
+  state: 'present',
+  source: 'zotero',
+  itemKey: 'OLDKEY22',
+  pdf: 'none',
+  pendingFields: [],
+  keptFields: [],
+}
 
 const onclose = vi.fn()
 
@@ -47,6 +68,16 @@ beforeEach(() => {
   locale.set('es')
   onclose.mockReset()
   requested = []
+  opened = []
+  statusCalls = []
+  live = {
+    reachable: true,
+    libraries: [
+      { libraryType: 'user', libraryId: '0', name: null },
+      { libraryType: 'group', libraryId: '6680944', name: 'prueba' },
+    ],
+  }
+  statusFor = () => ABSENT
   localStorage.clear()
   answers = {
     request: () => row(),
@@ -55,12 +86,122 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset()
   vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
     if (command === 'writing_zotero_known_libraries') return KNOWN
+    if (command === 'navegador_zotero_libraries') return live
+    if (command === 'navegador_zotero_status') {
+      statusCalls.push(args)
+      return statusFor(args as { library: { libraryId: string } })
+    }
+    if (command === 'writing_zotero_open_item') {
+      opened.push(args)
+      return undefined
+    }
     if (command === 'navegador_zotero_copy_request') {
       requested.push(args)
       return answers.request()
     }
     if (command === 'navegador_zotero_copy_run') return answers.run()
     throw new Error(`unexpected command ${command}`)
+  })
+})
+
+describe('live libraries', () => {
+  it('lists the groups Zotero reports, not only what the archive knows', async () => {
+    open()
+    expect(await screen.findByRole('radio', { name: 'prueba' })).toBeTruthy()
+    expect(vi.mocked(invoke).mock.calls.map((call) => call[0])).not.toContain(
+      'writing_zotero_known_libraries'
+    )
+  })
+
+  it('falls back to the known libraries when Zotero does not answer, and says so', async () => {
+    live = { reachable: false, libraries: [] }
+    open()
+    expect(await screen.findByRole('radio', { name: 'prueba' })).toBeTruthy()
+    expect(screen.getByText(/muestran las bibliotecas conocidas/)).toBeTruthy()
+  })
+
+  it('falls back too when asking Zotero for the list fails', async () => {
+    const inner = vi.mocked(invoke).getMockImplementation()!
+    vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'navegador_zotero_libraries') throw new Error('boom')
+      return inner(command, args as never)
+    })
+    open()
+    expect(await screen.findByRole('radio', { name: 'prueba' })).toBeTruthy()
+    expect(screen.getByText(/muestran las bibliotecas conocidas/)).toBeTruthy()
+  })
+})
+
+describe('already in Zotero', () => {
+  it('checks the source in the chosen library by id as soon as the dialog opens', async () => {
+    open({ capture: { id: 'c1', title: 'Informe' } })
+    await screen.findByRole('radio', { name: 'Mi biblioteca' })
+    await waitFor(() => expect(statusCalls).toHaveLength(1))
+    expect(statusCalls[0]).toEqual({
+      sourceId: 's1',
+      captureId: 'c1',
+      library: { libraryType: 'user', libraryId: '0', libraryName: null },
+    })
+  })
+
+  it('says so up front and offers to open it instead of copying', async () => {
+    statusFor = () => PRESENT
+    open()
+    await screen.findByText(/Ya está en Zotero \(«Mi biblioteca»\)/)
+    expect(screen.queryByRole('button', { name: 'Copiar' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Abrir en Zotero' }))
+    await waitFor(() =>
+      expect(opened).toEqual([{ libraryType: 'user', libraryId: '0', itemKey: 'OLDKEY22' }])
+    )
+    expect(requested).toHaveLength(0)
+    await waitFor(() => expect(onclose).toHaveBeenCalled())
+  })
+
+  it('lists the fields it could not fill or update and the ones the person edited', async () => {
+    statusFor = () => ({
+      ...PRESENT,
+      pendingFields: ['accessDate', 'websiteTitle'],
+      keptFields: ['title'],
+    })
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.getByText(/fecha de acceso, sitio web/)).toBeTruthy()
+    expect(screen.getByText(/editaste en Zotero.*título/)).toBeTruthy()
+  })
+
+  it('says a PDF cannot join a page that already exists', async () => {
+    statusFor = () => ({ ...PRESENT, pdf: 'parent_exists' })
+    open({ capture: { id: 'c1', title: 'Informe' } })
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.getByText(/El PDF no se adjuntó/)).toBeTruthy()
+  })
+
+  it('checks again when another library is chosen', async () => {
+    statusFor = (args) => (args.library.libraryId === '0' ? PRESENT : ABSENT)
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    await fireEvent.click(screen.getByRole('radio', { name: 'prueba' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copiar' })).toBeTruthy())
+    expect(statusCalls).toHaveLength(2)
+    expect(screen.queryByText(/Ya está en Zotero/)).toBeNull()
+  })
+
+  it('says when the answer comes from our own record because Zotero is closed', async () => {
+    statusFor = () => ({ ...PRESENT, source: 'record', pdf: 'unknown' })
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.getByText(/sale del registro de EntropIA/)).toBeTruthy()
+  })
+
+  it('a failing check never blocks copying', async () => {
+    statusFor = () => {
+      throw new Error('zotero_api_disabled: off')
+    }
+    open()
+    await screen.findByRole('radio', { name: 'Mi biblioteca' })
+    await waitFor(() => expect(statusCalls).toHaveLength(1))
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
+    await waitFor(() => expect(requested).toHaveLength(1))
   })
 })
 
