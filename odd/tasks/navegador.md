@@ -247,6 +247,13 @@ main. Plan §7: a Zotero `webpage` item with `url`, `accessDate`, `title`, plus
 the PDF as an attachment when there is one; needs Zotero desktop running (local
 connector) or the web API with a key. Copy, never move, never by default (D3).
 
+User decisions (2026-10-02): the personal library by default, with a choice
+of another library; never duplicate — if the item is already in Zotero, fill
+in missing fields and update changed ones; if Zotero is not running, the copy
+waits in a queue until it is (likely reuse the durable
+`bibliographic_ingest_operations` tray); if feasible and safe, start Zotero in
+the background to drain the queue.
+
 - [ ] P5a — Investigate and report (no code): which write path to reuse from
   `bibliography/` (`ingest.rs` connector `saveItems`, `web_upload.rs`), how a
   library is chosen, how an existing item with the same URL is detected, what
