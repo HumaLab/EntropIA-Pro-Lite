@@ -71,6 +71,13 @@
   const writingHeldElsewhere = $derived(
     currentViewName === 'writing' && writingOwnerTabId !== null && writingOwnerTabId !== paneId
   )
+  // The Navegador is one browser, so one tab: same guard as Writing.
+  const navegadorOwnerTabId = $derived(wsSnapshot.navegadorOwnerId)
+  const navegadorHeldElsewhere = $derived(
+    currentViewName === 'navegador' &&
+      navegadorOwnerTabId !== null &&
+      navegadorOwnerTabId !== paneId
+  )
   const currentItemId = $derived(currentView.name === 'item' ? currentView.itemId : null)
   const currentCollectionId = $derived(
     currentView.name === 'item'
@@ -433,6 +440,17 @@
           variant="secondary"
           size="sm"
           onclick={() => workspace.activateTab(writingOwnerTabId!)}
+        >
+          {t('workpane.writingElsewhereAction')}
+        </Button>
+      </div>
+    {:else if navegadorHeldElsewhere}
+      <div class="writing-elsewhere" role="status" aria-live="polite">
+        <p>{t('workpane.navegadorElsewhereNotice')}</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          onclick={() => workspace.activateTab(navegadorOwnerTabId!)}
         >
           {t('workpane.writingElsewhereAction')}
         </Button>

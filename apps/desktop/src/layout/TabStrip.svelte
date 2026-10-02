@@ -20,6 +20,7 @@
     activeTabId: workspace.activeTabId,
     split: null,
     writingOwnerId: workspace.writingOwnerId,
+    navegadorOwnerId: workspace.navegadorOwnerId,
   })
 
   $effect(() => {

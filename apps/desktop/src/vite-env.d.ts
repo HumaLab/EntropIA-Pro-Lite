@@ -11,6 +11,12 @@ interface ImportMetaEnv {
    */
   readonly VITE_LOCAL_ML: string
 
+  /**
+   * '1' shows the experimental Navegador section (needs the Cargo feature
+   * `navegador` too). Read it through `$lib/capabilities`, not directly.
+   */
+  readonly VITE_NAVEGADOR: string
+
   /** Product name injected from the active Tauri configuration. */
   readonly VITE_PRODUCT_NAME: string
 }

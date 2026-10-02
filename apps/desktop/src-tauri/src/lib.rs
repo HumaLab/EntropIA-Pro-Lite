@@ -3,6 +3,7 @@ mod asset_integrity;
 mod audio_preview;
 pub mod bibliography;
 mod db;
+mod dev_profile;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name
 // + its command/struct surface are identical in both arms (DependencyId diverges
@@ -17,6 +18,7 @@ mod geo;
 mod image_edit;
 mod instance_guard;
 mod llm;
+mod navegador;
 mod nlp;
 mod ocr;
 mod path_utils;
@@ -489,8 +491,10 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
     // Phase 2 — one best-effort sync cycle (the existing SyncNow path). The
     // durable copy is already local; a slow server only delays the push. Cycle
     // completion is read directly from the engine's shared status cell.
+    // The dev profile has no sync engine to wait for.
     let cell = app_handle
         .try_state::<SyncEngine>()
+        .filter(|_| !dev_profile::sync_disabled())
         .map(|engine| engine.status_cell());
     let sync = match cell {
         Some(cell) => {
@@ -525,6 +529,9 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
         CLOSE_LOG_SOURCE,
         "Cierre: se destruye la ventana principal",
     );
+    // With a child webview open Tauri no longer reports `main` as a webview
+    // window, so the browser has to go first.
+    navegador::shutdown(app_handle);
     if let Some(window) = app_handle.get_webview_window("main") {
         let _ = window.destroy();
     }
@@ -612,6 +619,12 @@ pub fn run() {
                 path_utils::resolve_and_remember_dirs(app.handle()).map_err(|e| {
                     fail("No se pudieron resolver las carpetas de datos y caché.", e)
                 })?;
+            // Which archive this run opened, on stderr as early as possible so
+            // `tauri dev` shows it before anything else happens.
+            eprintln!(
+                "[setup] {}",
+                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir)
+            );
             // One EntropIA at a time, before anything touches the archive: a
             // second process on the same database — above all a Store build
             // next to a non-Store one — can corrupt it (instance_guard.rs).
@@ -642,8 +655,12 @@ pub fn run() {
                 }
             }
 
-            migrate_legacy_app_dir(&app_dir)
-                .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
+            // An isolated dev profile starts empty: it never pulls a legacy
+            // archive into itself.
+            if dev_profile::active().is_none() {
+                migrate_legacy_app_dir(&app_dir)
+                    .map_err(|e| fail("No se pudo preparar la carpeta de datos heredada.", e))?;
+            }
             std::fs::create_dir_all(&app_dir).map_err(|e| {
                 fail(
                     &format!("No se pudo crear la carpeta de datos {}.", app_dir.display()),
@@ -686,6 +703,7 @@ pub fn run() {
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app.manage(store_updates::StoreUpdateState::new());
+            navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
 
             // Where the app decided its files live, in the log rather than on
@@ -705,6 +723,11 @@ pub fn run() {
                         _ => String::new(),
                     }
                 ),
+            );
+            app_logs::info(
+                &app.handle().clone(),
+                "setup",
+                dev_profile::startup_line(dev_profile::active(), &app_dir, &cache_dir),
             );
             let db_path = app_dir.join("entropia.sqlite");
 
@@ -1085,13 +1108,21 @@ pub fn run() {
                 Err(error) => eprintln!("[sync] orphan .part cleanup failed: {error}"),
             }
 
+            // Saved web captures: remove what a crash or a failed delete left in
+            // `web-captures/`. Background, bounded, logged, never fatal.
+            navegador::sweep_captures(app.handle().clone(), app_dir.clone(), db_path.clone());
+
             // Sync engine (DESIGN §3.1): single long-lived task owning its own
             // connection. Spawned PAUSED — it runs no cycle until the gate opens
             // (capture ensured + a session exists). Held in managed state so the
             // sync_now / sync_status commands can reach it.
             let sync_engine = sync::engine::start_engine(app.handle().clone(), db_path.clone());
             app.manage(sync_engine);
-            eprintln!("[sync] engine spawned (gated until capture + session)");
+            if dev_profile::sync_disabled() {
+                eprintln!("[sync] disabled in the dev profile: no engine, no keyring access");
+            } else {
+                eprintln!("[sync] engine spawned (gated until capture + session)");
+            }
 
             // Close orchestration (app-close.ts handshake): durably flush the
             // open editor first, then one best-effort sync cycle, then close —
@@ -1278,6 +1309,30 @@ pub fn run() {
             app_logs::logs_append,
             app_close_flushed,
             open_external_url,
+            navegador::commands::navegador_open,
+            navegador::commands::navegador_navigate,
+            navegador::commands::navegador_back,
+            navegador::commands::navegador_forward,
+            navegador::commands::navegador_reload,
+            navegador::commands::navegador_new_tab,
+            navegador::commands::navegador_activate_tab,
+            navegador::commands::navegador_close_tab,
+            navegador::commands::navegador_set_bounds,
+            navegador::commands::navegador_set_visible,
+            navegador::commands::navegador_close,
+            navegador::commands::navegador_state,
+            navegador::commands::navegador_capture_page,
+            navegador::commands::navegador_capture_selection,
+            navegador::commands::navegador_download_dir,
+            navegador::commands::navegador_set_download_dir,
+            navegador::commands::navegador_save_capture,
+            navegador::commands::navegador_save_download,
+            navegador::commands::navegador_discard_draft,
+            navegador::commands::navegador_list_sources,
+            navegador::commands::navegador_source_detail,
+            navegador::commands::navegador_delete_source,
+            navegador::commands::navegador_pdf_file,
+            navegador::commands::navegador_copy_ticket,
             store_updates::check_microsoft_store_update,
             splash::splash_finish,
             sync::sync_ensure_capture,

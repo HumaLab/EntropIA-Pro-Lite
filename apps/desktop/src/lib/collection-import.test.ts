@@ -251,6 +251,110 @@ describe('importClassifiedPathsIntoCollection', () => {
     })
   })
 
+  describe('overrides for a single file that has its own identity', () => {
+    const pdfImported = {
+      originalName: 'The paper.pdf',
+      originalPath: '/data/web-captures/s1/c1.pdf',
+      destPath: 'assets/col-1/item-1/uuid_The paper.pdf',
+      type: 'pdf' as const,
+      size: 500,
+      originalMetadata: {
+        originalName: 'The paper.pdf',
+        originalPath: '/data/web-captures/s1/c1.pdf',
+        importedAt: 'now',
+        sizeBytes: 500,
+      },
+    }
+
+    function readyToImport() {
+      fileImportRef.classifyFiles.mockReturnValue({
+        classified: [{ sourcePath: '/data/web-captures/s1/c1.pdf', name: 'c1.pdf', type: 'pdf' }],
+        rejected: [],
+      })
+      storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
+      storeRef.current.assets.create.mockResolvedValue({ id: 'parent-asset' })
+      fileImportRef.importSingleFile.mockResolvedValue(pdfImported)
+      fileImportRef.splitPdfPages.mockResolvedValue([
+        { page_number: 1, pdf_path: 'assets/col-1/item-1/p1.pdf' },
+      ])
+    }
+
+    const run = (
+      overrides?: Parameters<typeof importClassifiedPathsIntoCollection>[2]['overrides']
+    ) =>
+      importClassifiedPathsIntoCollection(['/data/web-captures/s1/c1.pdf'], 'col-1', {
+        baseErrorMessage: 'Failed to import files',
+        overrides,
+      })
+
+    it('titles the item as asked instead of after the file name', async () => {
+      readyToImport()
+
+      const result = await run({ title: 'The paper' })
+
+      expect(storeRef.current.items.create).toHaveBeenCalledWith({
+        title: 'The paper',
+        collectionId: 'col-1',
+        metadata: null,
+      })
+      expect(result.createdItems).toEqual([{ id: 'item-1', title: 'The paper' }])
+    })
+
+    it('stores the copy under the name asked for', async () => {
+      readyToImport()
+
+      await run({ fileName: 'The paper.pdf' })
+
+      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(
+        '/data/web-captures/s1/c1.pdf',
+        'col-1',
+        'item-1',
+        'The paper.pdf'
+      )
+    })
+
+    it('writes the extra metadata beside the imported-file metadata', async () => {
+      readyToImport()
+      const provenance = { sourceId: 's1', captureId: 'c1' }
+
+      await run({ extraMetadata: { __entropia_web_capture: provenance } })
+
+      const written = JSON.parse(storeRef.current.items.update.mock.calls[0]![1].metadata)
+      expect(written.__entropia_web_capture).toEqual(provenance)
+      expect(written.__entropia_file_metadata.originalName).toBe('The paper.pdf')
+    })
+
+    it('never lets the extra metadata replace the imported-file metadata', async () => {
+      readyToImport()
+
+      await run({ extraMetadata: { __entropia_file_metadata: { originalName: 'forged' } } })
+
+      const written = JSON.parse(storeRef.current.items.update.mock.calls[0]![1].metadata)
+      expect(written.__entropia_file_metadata.originalName).toBe('The paper.pdf')
+    })
+
+    it('imports again, without asking the store, when a duplicate was allowed', async () => {
+      readyToImport()
+      storeRef.current.items.findImportedFromSource.mockResolvedValue('earlier-item')
+
+      const result = await run({ allowDuplicate: true })
+
+      expect(storeRef.current.items.findImportedFromSource).not.toHaveBeenCalled()
+      expect(result.alreadyImported).toEqual([])
+      expect(result.createdItems).toHaveLength(1)
+    })
+
+    it('still skips an exact earlier import when nothing allowed a duplicate', async () => {
+      readyToImport()
+      storeRef.current.items.findImportedFromSource.mockResolvedValue('earlier-item')
+
+      const result = await run()
+
+      expect(result.alreadyImported).toEqual(['c1.pdf'])
+      expect(result.createdItems).toEqual([])
+    })
+  })
+
   it('discards the item and collects the error when importing a file fails', async () => {
     fileImportRef.classifyFiles.mockReturnValue({
       classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],

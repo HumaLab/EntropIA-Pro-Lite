@@ -55,6 +55,11 @@
   })
 
   const loggedIn = $derived(status.state !== 'disabled')
+  /** The isolated dev profile has sync off for good: the backend says so in the status. */
+  const devProfile = $derived(
+    status.state === 'disabled' &&
+      Boolean(status.message?.startsWith('sync_disabled_in_dev_profile'))
+  )
 
   const disabledStatus: SyncStatus = {
     state: 'disabled',
@@ -119,8 +124,10 @@
 
   // ── Validation ──
   const passwordValid = $derived(password.length >= 10)
-  const canRegister = $derived(Boolean(email.trim() && passwordValid) && busy === null)
-  const canLogin = $derived(Boolean(email.trim() && password) && busy === null)
+  const canRegister = $derived(
+    Boolean(email.trim() && passwordValid) && busy === null && !devProfile
+  )
+  const canLogin = $derived(Boolean(email.trim() && password) && busy === null && !devProfile)
 
   onMount(() => {
     void syncStore.initialize()
@@ -536,6 +543,12 @@
         role={feedback.tone === 'error' ? 'alert' : 'status'}
       >
         {feedback.text}
+      </p>
+    {/if}
+
+    {#if devProfile}
+      <p class="surface-message settings__feedback" role="status">
+        {$currentLocale ? t('sync.card.devProfile') : ''}
       </p>
     {/if}
 

@@ -208,6 +208,16 @@ describe('describeSyncError', () => {
     locale.set('es')
   })
 
+  it('explains that the isolated dev profile has sync off', () => {
+    const raw =
+      'sync_disabled_in_dev_profile: la sincronización está desactivada en el perfil de desarrollo'
+    expect(describeSyncError(raw)).toBe(
+      'La sincronización está desactivada en el perfil de desarrollo aislado.'
+    )
+    locale.set('en')
+    expect(describeSyncError(raw)).toBe('Sync is turned off in the isolated development profile.')
+  })
+
   it('maps the stable error codes/statuses to human messages', () => {
     expect(describeSyncError('api error 426 (schema_upgrade_required): old')).toBe(
       'Actualizá la app: el servidor pide un esquema más nuevo.'

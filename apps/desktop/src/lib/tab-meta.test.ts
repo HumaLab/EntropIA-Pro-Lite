@@ -25,6 +25,11 @@ describe('tab-meta', () => {
     expect(tabTitle({ name: 'settings' })).toBe('Configuración')
   })
 
+  it('titles and icons the experimental navegador section', () => {
+    expect(tabTitle({ name: 'navegador' })).toBe('Navegador')
+    expect(tabIcon({ name: 'navegador' })).toBe('browser')
+  })
+
   it('titles writing by its open document, falling back to the section name with none open', () => {
     expect(tabTitle({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscrito' })).toBe(
       'Manuscrito'

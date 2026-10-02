@@ -816,3 +816,30 @@ async fn network_error_in_cycle_surfaces_as_offline() {
         other => panic!("network failure must surface as Offline, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The dormant engine (dev profile: no cycle, no keyring, no network)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_dormant_engine_reports_disabled_with_a_reason_and_ignores_every_request() {
+    let engine = dormant_engine();
+
+    let snapshot = engine.snapshot();
+    assert_eq!(snapshot.state, SyncState::Disabled);
+    assert!(snapshot
+        .message
+        .as_deref()
+        .is_some_and(|m| m.starts_with("sync_disabled_in_dev_profile")));
+
+    for request in [
+        SyncRequest::SyncNow,
+        SyncRequest::FullResync,
+        SyncRequest::Tick,
+        SyncRequest::Shutdown,
+    ] {
+        engine.request(request);
+    }
+    engine.shutdown();
+    assert_eq!(engine.snapshot().state, SyncState::Disabled);
+}

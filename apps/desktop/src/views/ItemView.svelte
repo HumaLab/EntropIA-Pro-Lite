@@ -10,6 +10,7 @@
     normalizeMetadataKey,
     parseImportedFileMetadata,
     parseMetadataRecord,
+    parseWebCaptureProvenance,
     type ImportedFileMetadata,
   } from '$lib/item-metadata'
   import {
@@ -1000,6 +1001,7 @@
   let originalFileMetadata = $derived<ImportedFileMetadata | null>(
     item?.metadata ? parseImportedFileMetadata(item.metadata) : null
   )
+  let webCaptureProvenance = $derived(parseWebCaptureProvenance(item?.metadata))
   let customMetadataNormalizedKeys = $derived(
     new Set(Object.keys(metadataValue).map((key) => normalizeMetadataKey(key)))
   )
@@ -1065,6 +1067,7 @@
       selectedAsset,
       collection,
       originalFileMetadata,
+      webCapture: webCaptureProvenance,
       customMetadataKeys: customMetadataNormalizedKeys,
     })
   )

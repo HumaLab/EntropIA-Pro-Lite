@@ -47,10 +47,12 @@ export type View =
   // open on its document list and then deep-link into one.
   | { name: 'writing'; documentId?: string | null; documentTitle?: string | null }
   | { name: 'settings' }
+  // Experimental in-app browser; reachable only with VITE_NAVEGADOR=1.
+  | { name: 'navegador' }
 
 type RootSectionView = Extract<
   View,
-  { name: 'home' | 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' }
+  { name: 'home' | 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' | 'navegador' }
 >
 
 type NavigationSnapshot = {
@@ -140,6 +142,7 @@ export class NavigationStore {
     if (view.name === 'db-browser') return [root, t('nav.dbBrowser')]
     if (view.name === 'rag-chat') return [root, t('nav.ragChat')]
     if (view.name === 'research') return [root, t('nav.research')]
+    if (view.name === 'navegador') return [root, t('nav.navegador')]
     if (view.name === 'investigation') return [root, t('nav.research'), view.title]
     if (view.name === 'writing') {
       return view.documentTitle

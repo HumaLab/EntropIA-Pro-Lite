@@ -169,6 +169,9 @@ fn mint_session_incarnation(conn: &Connection) -> Result<Option<Uuid>, String> {
 // ---------------------------------------------------------------------------
 
 fn token_entry() -> Result<keyring::Entry, String> {
+    // The one door to the sync token: the dev profile never opens it, so it can
+    // neither read nor replace the real session.
+    crate::dev_profile::require_sync()?;
     keyring::Entry::new(SYNC_KEYRING_SERVICE, TOKEN_KEY)
         .map_err(|e| format!("[sync] failed to open keyring for device token: {e}"))
 }
@@ -351,6 +354,7 @@ pub async fn sync_register_account(
     password: String,
     app_handle: AppHandle,
 ) -> Result<String, String> {
+    crate::dev_profile::require_sync()?;
     // Build the API in a blocking task: the constructor validates the TLS rule
     // and reqwest client construction is cheap but not free.
     let api = HttpSyncApi::new(&server_url).map_err(String::from)?;
@@ -431,6 +435,7 @@ pub async fn sync_login(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    crate::dev_profile::require_sync()?;
     let validated_url =
         crate::sync::http::validate_server_url(&server_url).map_err(String::from)?;
     let api = HttpSyncApi::new(&validated_url).map_err(String::from)?;
@@ -480,6 +485,7 @@ pub async fn sync_login(
 /// the token removed from the keyring. Local app data is untouched.
 #[tauri::command]
 pub async fn sync_logout(db: State<'_, AppDbState>, app_handle: AppHandle) -> Result<(), String> {
+    crate::dev_profile::require_sync()?;
     let db_path = db.db_path.clone();
 
     // Read the server URL and token to attempt a best-effort remote revoke.

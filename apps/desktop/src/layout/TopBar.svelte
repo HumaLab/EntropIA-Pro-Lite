@@ -5,7 +5,7 @@
   import { getStore } from '$lib/db'
   import { locale, t } from '$lib/i18n'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
-  import { LOCAL_ML } from '$lib/capabilities'
+  import { LOCAL_ML, NAVEGADOR } from '$lib/capabilities'
   import { PRODUCT_NAME } from '$lib/product'
   // Black on transparent, the 'e' only: hlab-mark.png is a white disc behind
   // the 'e', so as a mask it paints a full circle.
@@ -96,6 +96,12 @@
   )
   const researchAria = $derived(
     $currentLocale ? translate('topbar.researchAria') : 'Abrir agente de investigación'
+  )
+  const navegadorTitle = $derived(
+    $currentLocale ? translate('topbar.navegadorTitle') : 'Navegador (experimental)'
+  )
+  const navegadorAria = $derived(
+    $currentLocale ? translate('topbar.navegadorAria') : 'Abrir el Navegador experimental'
   )
   const writingTitle = $derived($currentLocale ? translate('topbar.writingTitle') : 'Escritura')
   const writingAria = $derived($currentLocale ? translate('topbar.writingAria') : 'Abrir Escritura')
@@ -463,6 +469,19 @@
     >
       <ActionIcon name="edit" size={16} />
     </IconButton>
+
+    {#if NAVEGADOR}
+      <IconButton
+        class="topbar__icon-btn"
+        size="md"
+        variant="secondary"
+        label={navegadorAria}
+        onclick={() => workspace.navigateActive({ name: 'navegador' })}
+        title={navegadorTitle}
+      >
+        <ActionIcon name="browser" size={16} />
+      </IconButton>
+    {/if}
 
     <IconButton
       class="topbar__icon-btn"

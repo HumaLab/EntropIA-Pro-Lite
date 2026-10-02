@@ -124,6 +124,12 @@ describe('TopBar', () => {
     ).toBeInTheDocument()
   })
 
+  it('does not offer the experimental navegador unless VITE_NAVEGADOR=1', () => {
+    render(TopBar)
+
+    expect(screen.queryByRole('button', { name: 'Abrir el Navegador experimental' })).toBeNull()
+  })
+
   it('navigates to db browser from the database icon button', async () => {
     render(TopBar)
 

@@ -1400,3 +1400,57 @@ export const bibliographicIngestOperations = sqliteTable(
     stateIdx: index('idx_bibliographic_ingest_operations_state').on(table.state, table.libraryId),
   })
 )
+
+// ---------------------------------------------------------------------------
+// Web sources and captures (Navegador). Written only by the Rust side, which
+// saves the files and the rows together; the renderer reads them. Local only:
+// not in the sync set yet.
+// ---------------------------------------------------------------------------
+export const webSources = sqliteTable(
+  'web_sources',
+  {
+    id: text('id').primaryKey(),
+    originalUrl: text('original_url').notNull(),
+    finalUrl: text('final_url').notNull(),
+    canonicalUrl: text('canonical_url'),
+    title: text('title'),
+    siteName: text('site_name'),
+    /** RFC 3339 UTC text: provenance, shown exactly as it was recorded. */
+    firstAccessedAt: text('first_accessed_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    finalUrlIdx: index('idx_web_sources_final_url').on(table.finalUrl),
+    updatedIdx: index('idx_web_sources_updated').on(table.updatedAt),
+  })
+)
+
+/** One saved version of a web source. Never updated once written. */
+export const webCaptures = sqliteTable(
+  'web_captures',
+  {
+    id: text('id').primaryKey(),
+    webSourceId: text('web_source_id')
+      .notNull()
+      .references(() => webSources.id, { onDelete: 'cascade' }),
+    accessedAt: text('accessed_at').notNull(),
+    finalUrl: text('final_url').notNull(),
+    kind: text('kind').notNull(),
+    mimeType: text('mime_type').notNull(),
+    text: text('text'),
+    textRelPath: text('text_rel_path'),
+    quotePrefix: text('quote_prefix'),
+    quoteSuffix: text('quote_suffix'),
+    relPath: text('rel_path'),
+    sha256: text('sha256').notNull(),
+    hashOf: text('hash_of').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    extractorVersion: text('extractor_version'),
+    title: text('title'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    sourceIdx: index('idx_web_captures_source').on(table.webSourceId, table.accessedAt),
+  })
+)

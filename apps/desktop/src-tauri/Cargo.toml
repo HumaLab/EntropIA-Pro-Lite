@@ -2,13 +2,15 @@
 name = "entropia-pro-desktop"
 version = "1.0.18"
 edition = "2021"
+rust-version = "1.88"
+resolver = "3"
 
 [lib]
 name = "entropia_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 # The research engine. Cargo.lock pins the exact commit; `cargo update -p
@@ -17,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 # (gitignored). The patch rewrites Cargo.lock while it is active, so never
 # commit the lock with it on; CI rejects a lock that lost the pinned commit.
 entropia-agent = { git = "https://github.com/HumaLab/EntropIA-Agent", branch = "main" }
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2.11.6", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
@@ -91,11 +93,19 @@ windows = { version = "0.61", features = [
 # Awaiting the Store operation needs its `IntoFuture`, which only this crate's
 # `std` feature provides (`windows` depends on it without default features).
 windows-future = "0.2"
+# The Navegador closes a sign-in popup when its page calls `window.close()`:
+# wry only destroys the popup's inner container window, so the app subscribes
+# to WebView2's `WindowCloseRequested` itself (viewer.rs). Pinned to the version
+# Tauri/wry already resolve; adds no new crate to the tree.
+webview2-com = "=0.38.2"
 
 [dev-dependencies]
 # Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
 # for blob-download tests (transitively present via reqwest 0.12).
 http = "1"
+# Test-only: `tauri::test` drives the real IPC entry point (`Webview::on_message`)
+# with the real capabilities, which is how tests/app_acl.rs proves the ACL holds.
+tauri = { version = "2.11.6", features = ["test"] }
 
 # Local performance measurement only — never ships. Mirrors the release
 # optimization level so numbers mean something, while still inheriting `dev` so
@@ -137,3 +147,7 @@ local-ml = [
 # The build-mnn-from-source flag in the ocr-rs dependency ensures MNN compiles
 # locally via CMake, which resolves the linker symbols correctly.
 paddle-ocr = ["dep:ocr-rs"]
+# The embedded browser is a child webview, which Tauri gates behind `unstable`.
+# Off by default: the commands still exist (so the ACL manifest is the same in
+# every build) but answer "unavailable". See src/navegador/viewer.rs.
+navegador = ["tauri/unstable"]

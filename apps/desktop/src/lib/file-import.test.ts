@@ -238,6 +238,29 @@ describe('importSingleFile', () => {
     expect(copyFile).toHaveBeenCalled()
   })
 
+  it('stores the copy under the name asked for, classified by the real file', async () => {
+    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
+    const { join } = await import('@tauri-apps/api/path')
+    vi.mocked(mkdir).mockResolvedValue(undefined)
+    vi.mocked(copyFile).mockResolvedValue(undefined)
+    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
+
+    const result = await importSingleFile(
+      'C:/data/web-captures/s1/c1.pdf',
+      'coll-1',
+      'item-1',
+      'The paper.pdf'
+    )
+
+    expect(result.originalName).toBe('The paper.pdf')
+    expect(result.originalMetadata.originalName).toBe('The paper.pdf')
+    expect(result.originalPath).toBe('C:/data/web-captures/s1/c1.pdf')
+    expect(result.type).toBe('pdf')
+    expect(result.destPath).toMatch(/\/[0-9a-f-]{36}_The paper\.pdf$/)
+    expect(result.destPath).not.toContain('c1.pdf')
+    expect(copyFile).toHaveBeenCalledWith('C:/data/web-captures/s1/c1.pdf', expect.any(String))
+  })
+
   it('throws for unsupported file types', async () => {
     await expect(importSingleFile('C:/docs/readme.docx', 'coll-1', 'item-1')).rejects.toThrow(
       'Unsupported file format'

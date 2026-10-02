@@ -27,6 +27,7 @@ const LOG_SOURCE: &str = "sync";
 /// Reads the persisted `server_url` and the keyring token, erroring when either is
 /// missing (the user is not logged in). The token is never logged.
 async fn session_creds(db_path: std::path::PathBuf) -> Result<(String, String), String> {
+    crate::dev_profile::require_sync()?;
     let url = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         let conn = open_sync_connection(&db_path)?;
         meta_get(&conn, "server_url")
@@ -69,6 +70,7 @@ pub async fn sync_now(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<SyncStatus, String> {
+    crate::dev_profile::require_sync()?;
     if let Some(engine) = app_handle.try_state::<SyncEngine>() {
         engine.request(SyncRequest::SyncNow);
     }
@@ -90,6 +92,7 @@ pub async fn sync_full_resync(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<SyncStatus, String> {
+    crate::dev_profile::require_sync()?;
     if let Some(engine) = app_handle.try_state::<SyncEngine>() {
         engine.request(SyncRequest::FullResync);
     }
@@ -110,6 +113,7 @@ pub async fn sync_set_auto(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
+    crate::dev_profile::require_sync()?;
     let db_path = db.db_path.clone();
     let interval = interval_min.max(1);
     tokio::task::spawn_blocking(move || -> Result<(), String> {

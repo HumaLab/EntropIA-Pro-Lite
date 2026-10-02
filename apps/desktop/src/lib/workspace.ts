@@ -34,9 +34,20 @@ export interface WorkspaceSnapshot {
   activeTabId: string
   split: SplitGroup | null
   writingOwnerId: string | null
+  navegadorOwnerId: string | null
 }
 
 type WorkspaceSubscriber = (snapshot: WorkspaceSnapshot) => void
+
+/** What a tab-closed listener learns: which tab, what it was showing, who is left. */
+export interface TabClosedEvent {
+  readonly tabId: string
+  /** The view the tab was showing when it closed. */
+  readonly view: View
+  readonly remaining: readonly Tab[]
+}
+
+type TabClosedListener = (event: TabClosedEvent) => void
 
 /** Chrome-style: four tabs is the ceiling, matching the design's `+` cap. */
 export const MAX_TABS = 4
@@ -78,8 +89,13 @@ export class WorkspaceStore {
   // bypassing navigateActive()'s redirect — "first tab in tab-list order"
   // could then hand ownership away from an incumbent actively showing it).
   private writingOwnerTabId: string | null = null
+  // The Navegador is one browser (its tabs are native webviews), so it can
+  // live in one workspace tab only. Same rules as Writing: the first tab to
+  // arrive owns it, and a later arrival never steals it.
+  private navegadorOwnerTabId: string | null = null
   private readonly subscribers = new Set<WorkspaceSubscriber>()
   private readonly tabUnsubscribes = new Map<string, () => void>()
+  private readonly tabClosedListeners = new Set<TabClosedListener>()
 
   constructor() {
     const home = this.createTab()
@@ -99,6 +115,7 @@ export class WorkspaceStore {
       tab.id,
       nav.subscribe(() => {
         this.syncWritingOwner(tab.id, nav.current.name === 'writing')
+        this.syncNavegadorOwner(tab.id, nav.current.name === 'navegador')
         this.emit()
       })
     )
@@ -137,6 +154,30 @@ export class WorkspaceStore {
         ?.id ?? null
   }
 
+  /** The Navegador twin of `syncWritingOwner`: same hand-over rules. */
+  private syncNavegadorOwner(changedTabId: string, changedIsNavegador: boolean): void {
+    if (this.navegadorOwnerTabId === null) {
+      if (changedIsNavegador) this.navegadorOwnerTabId = changedTabId
+      return
+    }
+    if (this.navegadorOwnerTabId !== changedTabId || changedIsNavegador) return
+    this.navegadorOwnerTabId =
+      this.tabList.find((t) => t.id !== changedTabId && t.navigation.current.name === 'navegador')
+        ?.id ?? null
+  }
+
+  /**
+   * Hear about tabs that are closed on purpose (not the workspace being
+   * disposed). Runs after the tab is gone; a listener that throws never keeps
+   * the tab from closing or the other listeners from running.
+   */
+  onTabClosed(listener: TabClosedListener): () => void {
+    this.tabClosedListeners.add(listener)
+    return () => {
+      this.tabClosedListeners.delete(listener)
+    }
+  }
+
   subscribe(run: WorkspaceSubscriber): () => void {
     this.subscribers.add(run)
     run(this.snapshot())
@@ -151,6 +192,7 @@ export class WorkspaceStore {
       activeTabId: this.activeId,
       split: this.splitState,
       writingOwnerId: this.writingOwnerTabId,
+      navegadorOwnerId: this.navegadorOwnerTabId,
     }
   }
 
@@ -174,6 +216,11 @@ export class WorkspaceStore {
   /** The tab that owns Writing, or `null` if no tab currently shows it. */
   get writingOwnerId(): string | null {
     return this.writingOwnerTabId
+  }
+
+  /** The tab that owns the Navegador, or `null` if no tab currently shows it. */
+  get navegadorOwnerId(): string | null {
+    return this.navegadorOwnerTabId
   }
 
   /** The pair when the active tab is one of its members (so the group is
@@ -204,6 +251,11 @@ export class WorkspaceStore {
    *  or `null` when the four-tab cap is already reached (the `+` button is
    *  disabled at that point, but the store enforces it independently). */
   openTab(view: View = { name: 'home' }): string | null {
+    // The Navegador is in one tab only: ask for it again and that tab is shown.
+    if (view.name === 'navegador' && this.navegadorOwnerTabId !== null) {
+      this.activateTab(this.navegadorOwnerTabId)
+      return this.navegadorOwnerTabId
+    }
     if (this.tabList.length >= MAX_TABS) return null
     const tab = this.createTab()
     if (view.name !== 'home') tab.navigation.navigate(view)
@@ -221,6 +273,7 @@ export class WorkspaceStore {
 
     this.tabUnsubscribes.get(tabId)?.()
     this.tabUnsubscribes.delete(tabId)
+    const closedView = this.tabList[index]!.navigation.current
     this.tabList[index]!.navigation.dispose()
     const remaining = this.tabList.filter((tab) => tab.id !== tabId)
 
@@ -235,6 +288,10 @@ export class WorkspaceStore {
     // The owner tab closed — hand ownership to a remaining incumbent (the
     // same hazard `syncWritingOwner` tracks) rather than leaving it stuck on
     // a closed tab id.
+    if (this.navegadorOwnerTabId === tabId) {
+      this.navegadorOwnerTabId =
+        remaining.find((tab) => tab.navigation.current.name === 'navegador')?.id ?? null
+    }
     if (this.writingOwnerTabId === tabId) {
       this.writingOwnerTabId =
         remaining.find((tab) => tab.navigation.current.name === 'writing')?.id ?? null
@@ -247,6 +304,13 @@ export class WorkspaceStore {
 
     this.tabList = remaining
     this.emit()
+    this.tabClosedListeners.forEach((listener) => {
+      try {
+        listener({ tabId, view: closedView, remaining })
+      } catch (reason) {
+        console.warn('[workspace] a tab-closed listener failed:', reason)
+      }
+    })
   }
 
   /** Releases every tab's subscriptions and drops this store's subscribers. */
@@ -255,6 +319,7 @@ export class WorkspaceStore {
     this.tabUnsubscribes.clear()
     this.tabList.forEach((tab) => tab.navigation.dispose())
     this.subscribers.clear()
+    this.tabClosedListeners.clear()
   }
 
   activateTab(tabId: string): void {
@@ -280,6 +345,14 @@ export class WorkspaceStore {
       const owner = this.writingOwnerTabId
       this.activateTab(owner)
       if (view.documentId) this.navigationFor(owner).navigate(view)
+      return
+    }
+    if (
+      view.name === 'navegador' &&
+      this.navegadorOwnerTabId !== null &&
+      this.navegadorOwnerTabId !== this.activeId
+    ) {
+      this.activateTab(this.navegadorOwnerTabId)
       return
     }
     this.activeNavigation.navigate(view)

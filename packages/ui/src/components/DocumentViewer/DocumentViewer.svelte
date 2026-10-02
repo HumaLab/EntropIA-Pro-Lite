@@ -975,11 +975,18 @@
   })
 
   $effect(() => {
-    if (type !== 'pdf' || !pdfDoc) {
+    // Read the requested page and the page count before any early return:
+    // `pdfDoc` is not reactive, so an effect that bails out before touching
+    // them on its first run (the document is still loading) would never run
+    // again, and paging would be ignored. `totalPages` turning non-zero is the
+    // "document loaded" signal.
+    const requestedPage = currentPage
+    const pageCount = totalPages
+    if (type !== 'pdf' || !pdfDoc || pageCount === 0) {
       return
     }
 
-    const nextPage = Math.min(Math.max(currentPage, 1), Math.max(totalPages, 1))
+    const nextPage = Math.min(Math.max(requestedPage, 1), Math.max(pageCount, 1))
     if (nextPage === pdfPage) {
       return
     }

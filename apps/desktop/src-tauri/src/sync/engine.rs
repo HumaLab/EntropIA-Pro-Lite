@@ -253,6 +253,10 @@ impl SyncEngine {
 /// session exists); the first request after the gate opens runs a startup cycle.
 /// Called from `setup()`.
 pub fn start_engine(app_handle: AppHandle, db_path: PathBuf) -> SyncEngine {
+    // The dev profile never talks to the real account: no thread, no ticker.
+    if crate::dev_profile::sync_disabled() {
+        return dormant_engine();
+    }
     // A small bounded channel: capacity 1 plus the in-flight slot gives the
     // single-flight "at most one pending run" semantics for free.
     let (sender, receiver) = mpsc::channel::<SyncRequest>(1);
@@ -303,6 +307,21 @@ pub fn start_engine(app_handle: AppHandle, db_path: PathBuf) -> SyncEngine {
     }
 
     SyncEngine { sender, status }
+}
+
+/// An engine that never runs a cycle. The dev profile (dev_profile.rs) uses it
+/// so the commands that read the managed engine keep working, and report why
+/// sync is off, without a thread, a ticker, a keyring read or a request.
+pub(crate) fn dormant_engine() -> SyncEngine {
+    // The receiver is dropped at once: every request lands on a closed channel,
+    // which `request` and `shutdown` already ignore.
+    let (sender, _receiver) = mpsc::channel::<SyncRequest>(1);
+    let mut status = SyncStatus::disabled();
+    status.message = Some(crate::dev_profile::SYNC_DISABLED.to_string());
+    SyncEngine {
+        sender,
+        status: Arc::new(Mutex::new(status)),
+    }
 }
 
 // ---------------------------------------------------------------------------

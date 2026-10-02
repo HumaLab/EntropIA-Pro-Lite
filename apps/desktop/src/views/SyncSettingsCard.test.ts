@@ -600,3 +600,46 @@ describe('SyncSettingsCard — manual sync flushes the writing editor (W-GUARD1)
     expect(mockInvoke.mock.calls.filter(([command]) => command === 'sync_now')).toHaveLength(0)
   })
 })
+
+describe('SyncSettingsCard — isolated dev profile', () => {
+  const devProfileStatus = () =>
+    status({
+      state: 'disabled',
+      message:
+        'sync_disabled_in_dev_profile: la sincronización está desactivada en el perfil de desarrollo',
+    })
+
+  beforeEach(() => {
+    locale.set('es')
+    mockInvoke.mockReset()
+    routeInvoke()
+  })
+
+  afterEach(() => {
+    mockInvoke.mockReset()
+    setSyncState(status())
+  })
+
+  it('says sync is off and offers no way to sign in or register', async () => {
+    setSyncState(devProfileStatus())
+    render(SyncSettingsCard)
+
+    expect(
+      await screen.findByText(/desactivada en el perfil de desarrollo aislado: esta copia/)
+    ).toBeInTheDocument()
+    await fireEvent.input(screen.getByLabelText('Email'), { target: { value: 'a@b.co' } })
+    await fireEvent.input(screen.getByLabelText('Contraseña'), {
+      target: { value: 'correct horse battery' },
+    })
+    expect(screen.getByRole('button', { name: 'Iniciar sesión' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Registrar cuenta' })).toBeDisabled()
+  })
+
+  it('shows nothing extra when sync is simply not signed in', async () => {
+    setSyncState(status({ state: 'disabled' }))
+    render(SyncSettingsCard)
+
+    await screen.findByRole('button', { name: 'Iniciar sesión' })
+    expect(screen.queryByText(/perfil de desarrollo/)).not.toBeInTheDocument()
+  })
+})

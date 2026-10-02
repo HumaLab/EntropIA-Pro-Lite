@@ -26,6 +26,8 @@ export function tabTitle(view: View): string {
       return view.documentTitle ?? t('writing.title')
     case 'settings':
       return t('nav.settings')
+    case 'navegador':
+      return t('nav.navegador')
     default: {
       const exhaustive: never = view
       return exhaustive
@@ -53,6 +55,8 @@ export function tabIcon(view: View): ActionIconName {
       return 'edit'
     case 'settings':
       return 'settings'
+    case 'navegador':
+      return 'browser'
     default: {
       const exhaustive: never = view
       return exhaustive
