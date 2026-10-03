@@ -1,5 +1,6 @@
 mod app_logs;
 mod asset_integrity;
+mod asset_sweep;
 mod audio_preview;
 pub mod bibliography;
 mod db;
@@ -1130,6 +1131,11 @@ pub fn run() {
             // Saved web captures: remove what a crash or a failed delete left in
             // `web-captures/`. Background, bounded, logged, never fatal.
             navegador::sweep_captures(app.handle().clone(), app_dir.clone(), db_path.clone());
+
+            // Files under `assets/` that no row points at (left by pulled deletes
+            // before they removed their own file). Once per archive, background,
+            // bounded, logged, never fatal.
+            asset_sweep::spawn(app.handle().clone(), app_dir.clone(), db_path.clone());
 
             // Sync engine (DESIGN §3.1): single long-lived task owning its own
             // connection. Spawned PAUSED — it runs no cycle until the gate opens
