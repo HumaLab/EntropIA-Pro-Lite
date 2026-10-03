@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::bibliography::processing::{EngineProfileEmbedder, ProfileEmbedder};
 use crate::bibliography::retrieval::{
-    search_works, HybridAnswer, HybridQuery, WorkFilters, WorkHit,
+    resolve_zotero_library_rows, search_works, HybridAnswer, HybridQuery, WorkFilters, WorkHit,
 };
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -34,6 +34,11 @@ pub struct SearchWorksRequest {
     pub year_to: Option<i64>,
     pub item_types: Option<Vec<String>>,
     pub tags: Option<Vec<String>>,
+    /// Scope the search to one Zotero library as the Writing tab names it
+    /// (`user`/`group` + native id). Resolved here to the internal library
+    /// rows; both fields must be present for the scope to apply.
+    pub zotero_library_type: Option<String>,
+    pub zotero_library_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -58,6 +63,10 @@ pub struct SearchWorksResponse {
     pub vector_available: bool,
     pub active_generation_id: Option<String>,
     pub contract_hash: String,
+    /// False only when a Zotero library scope was requested and that library
+    /// has never been synced into the catalog: there is nothing to search,
+    /// which is different from searching it and finding nothing.
+    pub library_synced: bool,
 }
 
 fn hit_dto(hit: WorkHit) -> SearchWorkHitDto {
@@ -160,6 +169,7 @@ fn answer_dto(answer: HybridAnswer) -> SearchWorksResponse {
         vector_available: answer.vector_available,
         active_generation_id: answer.active_generation_id,
         contract_hash: answer.contract_hash,
+        library_synced: true,
     }
 }
 
@@ -177,11 +187,28 @@ pub async fn bibliography_search_works(
         let conn = open_archive_connection(&db_path)?;
         let effective =
             crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?;
+        let mut library_ids = request.library_ids.unwrap_or_default();
+        if let (Some(library_type), Some(native_id)) =
+            (&request.zotero_library_type, &request.zotero_library_id)
+        {
+            let rows = resolve_zotero_library_rows(&conn, library_type, native_id)
+                .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            if rows.is_empty() {
+                return Ok(SearchWorksResponse {
+                    hits: Vec::new(),
+                    vector_available: false,
+                    active_generation_id: None,
+                    contract_hash: effective.hash,
+                    library_synced: false,
+                });
+            }
+            library_ids.extend(rows);
+        }
         let query = HybridQuery {
             text: request.text,
             top_k: request.top_k.unwrap_or(20).clamp(1, 100),
             filters: WorkFilters {
-                library_ids: request.library_ids.unwrap_or_default(),
+                library_ids,
                 year_from: request.year_from,
                 year_to: request.year_to,
                 item_types: request.item_types.unwrap_or_default(),

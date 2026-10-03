@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { bibliographySearchWorks } from './bibliography-search'
 import {
   newBatchRequestId,
   processingSyncBibliographyLibrary,
@@ -78,7 +79,18 @@ export interface LibraryEntry {
   year: string
   /** The untouched CSL-JSON. What gets cited, and what gets snapshotted. */
   csl_json: string
+  /** Set only on works found by meaning (not by any text match) in the last search. */
+  semantic?: true
 }
+
+/**
+ * What the meaning-based half of the last search could say. It travels beside
+ * the results so a missing semantic leg is never mistaken for "no similar
+ * works": `not_synced` (library never synced into EntropIA), `lexical_only`
+ * (no active embedding generation or the query could not be embedded) and
+ * `failed` are each stated, never inferred.
+ */
+export type SemanticSearchStatus = 'idle' | 'ok' | 'not_synced' | 'lexical_only' | 'failed'
 
 export interface ZoteroLibrarySelection {
   libraryType: 'user' | 'group'
@@ -111,6 +123,7 @@ export interface ZoteroSnapshot {
   selection: ZoteroLibrarySelection
   /** Manual scheduler admission for this selection, not worker completion. */
   bibliographySync: BibliographySyncRequestState
+  semanticStatus: SemanticSearchStatus
 }
 
 const EMPTY_BIBLIOGRAPHY_SYNC: BibliographySyncRequestState = {
@@ -130,6 +143,7 @@ const EMPTY: ZoteroSnapshot = {
   error: null,
   selection: { ...PERSONAL },
   bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+  semanticStatus: 'idle',
 }
 
 /** How many rows the list shows. Filtering happens over the whole library. */
@@ -240,6 +254,7 @@ export class WritingZoteroStore {
       loading: false,
       error: null,
       bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+      semanticStatus: 'idle',
     })
   }
 
@@ -388,13 +403,23 @@ export class WritingZoteroStore {
   }
 
   /**
-   * Asks Zotero as well as the list.
+   * Asks Zotero and the bibliography as well as the list.
    *
    * The list already holds the whole library, so it answers for titles,
    * authors and years on its own. Zotero's search also reaches full text and
    * notes — a match inside a PDF comes back as the work it belongs to — and
    * whatever it finds only there is added below the list's matches. The
    * library that was read is left alone: a search is not a new library.
+   *
+   * The bibliography's hybrid search (`search_works`: lexical plus semantic
+   * over work profiles) runs beside it, scoped to this library. Ranking rule:
+   * the two engines' scores are on unrelated scales and are never added or
+   * compared. Text matches (list, then Zotero-only) come first, in their own
+   * order; then every work only the bibliography found, in the order it
+   * ranked them, flagged `semantic` when its hit used the vector leg. A hit
+   * is the same work as a text match when the Zotero item key is equal
+   * (the search is already scoped to one library). A hit whose key is not in
+   * the library read from Zotero is dropped: it could not be cited.
    */
   async searchLibrary(query: string): Promise<void> {
     const selection = { ...this.#selection }
@@ -402,37 +427,59 @@ export class WritingZoteroStore {
     this.#set({ query })
     const needle = query.trim()
     if (!needle) {
-      this.#set({ entries: this.#filtered() })
+      this.#set({ entries: this.#filtered(), semanticStatus: 'idle' })
       return
     }
 
-    try {
-      const page = await invoke<LibraryPage>('writing_zotero_search', {
+    const [zotero, meaning] = await Promise.allSettled([
+      invoke<LibraryPage>('writing_zotero_search', {
         libraryType: selection.libraryType,
         libraryId: selection.libraryId,
         query: needle,
-      })
-      // The box moved on while Zotero was answering, or the library did:
-      // a late answer of another query or another selection changes nothing.
-      if (epoch !== this.#epoch) return
-      if (!this.#sameSelection(selection)) return
-      if (this.#state.query !== query) return
-      const matched = this.#filtered()
-      const shown = new Set(matched.map((entry) => entry.csl_json))
-      const found = page.items
-        .map(describe)
-        .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.csl_json))
-      this.#set({
-        total: page.total,
-        entries: [...matched, ...found].slice(0, VISIBLE),
-        error: null,
-      })
-    } catch (error) {
-      if (epoch !== this.#epoch) return
-      if (!this.#sameSelection(selection)) return
-      if (this.#state.query !== query) return
-      this.#set({ error: message(error) })
+      }),
+      bibliographySearchWorks(needle, { zoteroLibrary: selection }),
+    ])
+    // The box moved on while they were answering, or the library did:
+    // a late answer of another query or another selection changes nothing.
+    if (epoch !== this.#epoch) return
+    if (!this.#sameSelection(selection)) return
+    if (this.#state.query !== query) return
+
+    const matched = this.#filtered()
+    const shown = new Set(matched.map((entry) => entry.csl_json))
+    const found =
+      zotero.status === 'fulfilled'
+        ? zotero.value.items
+            .map(describe)
+            .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.csl_json))
+        : []
+    const entries = [...matched, ...found]
+
+    let semanticStatus: SemanticSearchStatus = 'failed'
+    if (meaning.status === 'fulfilled') {
+      const answer = meaning.value
+      semanticStatus = !answer.librarySynced
+        ? 'not_synced'
+        : !answer.vectorAvailable
+          ? 'lexical_only'
+          : 'ok'
+      const keys = new Set(entries.map((entry) => entry.key))
+      const library = new Map(this.#all.map((entry) => [entry.key, entry]))
+      for (const hit of answer.hits) {
+        const entry = library.get(hit.itemKey)
+        if (!entry || keys.has(entry.key)) continue
+        keys.add(entry.key)
+        entries.push(hit.method === 'lexical' ? entry : { ...entry, semantic: true })
+      }
     }
+
+    this.#set({
+      semanticStatus,
+      ...(zotero.status === 'fulfilled'
+        ? { total: zotero.value.total, error: null }
+        : { error: message(zotero.reason) }),
+      entries: entries.slice(0, VISIBLE),
+    })
   }
 
   /** Narrows what is already on screen. Typing never asks the library. */

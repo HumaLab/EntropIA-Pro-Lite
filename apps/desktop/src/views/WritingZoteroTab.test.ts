@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { fireEvent, render, screen } from '@testing-library/svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockInvoke = vi.mocked(invoke)
 
@@ -374,5 +374,86 @@ describe('E1c-3 opening the work details (ficha)', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Citar' }))
     expect(oncite).toHaveBeenCalledOnce()
+  })
+})
+
+describe('B2 search by meaning in the Zotero tab', () => {
+  type Entry = (typeof zoteroStore.snapshot.entries)[number] & { semantic?: true }
+  type Snapshot = Omit<typeof zoteroStore.snapshot, 'entries'> & {
+    semanticStatus: string
+    entries: Entry[]
+  }
+  const snapshot = zoteroStore.snapshot as unknown as Snapshot
+  const original = zoteroStore.snapshot.entries[0]!
+
+  afterEach(() => {
+    snapshot.semanticStatus = 'idle'
+    snapshot.query = ''
+    snapshot.entries = [original]
+  })
+
+  it('says the library is not synced when the meaning search had nothing to read', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'revoluciones'
+    snapshot.semanticStatus = 'not_synced'
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText(/todavía no está sincronizada en EntropIA/i)).toBeInTheDocument()
+  })
+
+  it('says only the text match ran when there is no active embedding generation', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'revoluciones'
+    snapshot.semanticStatus = 'lexical_only'
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText(/sin espacio semántico activo/i)).toBeInTheDocument()
+  })
+
+  it('says the meaning search failed without hiding the text results', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'revoluciones'
+    snapshot.semanticStatus = 'failed'
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText(/falló la búsqueda por significado/i)).toBeInTheDocument()
+    expect(screen.getByText('Los orígenes')).toBeInTheDocument()
+  })
+
+  it('stays silent when the meaning search worked or nothing was searched', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'revoluciones'
+    snapshot.semanticStatus = 'ok'
+
+    render(WritingZoteroTab, { props: {} })
+
+    await screen.findByText('Los orígenes')
+    expect(screen.queryByText(/sincronizada en EntropIA/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/sin espacio semántico/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/falló la búsqueda por significado/i)).not.toBeInTheDocument()
+  })
+
+  it('tags works found only by meaning', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'revoluciones'
+    snapshot.semanticStatus = 'ok'
+    snapshot.entries = [
+      original,
+      {
+        ...original,
+        key: 'SEM1',
+        title: 'Otra obra',
+        csl_json: JSON.stringify({ id: 'sem1', title: 'Otra obra' }),
+        semantic: true,
+      },
+    ]
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText('Otra obra')).toBeInTheDocument()
+    expect(screen.getAllByText('Por significado')).toHaveLength(1)
   })
 })

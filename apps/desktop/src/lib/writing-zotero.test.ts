@@ -570,6 +570,194 @@ describe('searching Zotero', () => {
 })
 
 /**
+ * B2: the same box also finds works by meaning, through the bibliography's
+ * own hybrid search. Its scores never meet Zotero's: semantic-only works are
+ * appended after every text match, in the order the bibliography ranked them.
+ */
+describe('searching by meaning', () => {
+  const item = (key: string, csl: string) => ({
+    key,
+    itemVersion: 1,
+    libraryType: 'user',
+    libraryId: '0',
+    cslJson: csl,
+  })
+  const hit = (itemKey: string, method: 'lexical' | 'vector' | 'hybrid') => ({
+    itemId: `row-${itemKey}`,
+    itemKey,
+    libraryId: 'row-library',
+    title: itemKey,
+    method,
+    lexicalScore: method === 'vector' ? null : -1.5,
+    vectorScore: method === 'lexical' ? null : 0.9,
+    fusedScore: 0.03,
+    contractHash: null,
+    generationId: null,
+  })
+  const semantic = (hits: unknown[], extra: Record<string, unknown> = {}) => ({
+    hits,
+    vectorAvailable: true,
+    activeGenerationId: 'gen-1',
+    contractHash: 'contract',
+    librarySynced: true,
+    ...extra,
+  })
+
+  async function loaded(bibliography: unknown, zotero: unknown = { items: [], total: 0 }) {
+    answer({
+      writing_zotero_cached: {
+        items: [item('GIN1', GINZBURG), item('DAR1', DARNTON), item('MOO1', MOORE)],
+        version: 1,
+      },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: zotero,
+      bibliography_search_works: bibliography,
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+    mockInvoke.mockClear()
+    return store
+  }
+
+  it('scopes the bibliography search to the selected Zotero library', async () => {
+    const store = await loaded(semantic([]))
+    store.select('group', '6680944')
+
+    await store.searchLibrary('revoluciones')
+
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_works', {
+      request: expect.objectContaining({
+        text: 'revoluciones',
+        zoteroLibraryType: 'group',
+        zoteroLibraryId: '6680944',
+      }),
+    })
+  })
+
+  it('appends works only the meaning found after every text match, in ranked order', async () => {
+    const store = await loaded(
+      semantic([hit('MOO1', 'vector'), hit('GIN1', 'hybrid'), hit('DAR1', 'vector')])
+    )
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'MOO1', 'DAR1'])
+    expect(store.snapshot.entries.map((entry) => entry.semantic)).toEqual([undefined, true, true])
+    expect(store.snapshot.semanticStatus).toBe('ok')
+  })
+
+  it('never lists a work twice when both searches find it', async () => {
+    const store = await loaded(semantic([hit('GIN1', 'hybrid')]), {
+      items: [item('GIN1', GINZBURG)],
+      total: 1,
+    })
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
+  })
+
+  it('skips a hit that is not in the library read from Zotero, which cannot be cited', async () => {
+    const store = await loaded(semantic([hit('GONE', 'vector'), hit('DAR1', 'vector')]))
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
+  })
+
+  it('says the library is not synced into EntropIA and keeps the text results', async () => {
+    const store = await loaded(semantic([], { librarySynced: false, vectorAvailable: false }))
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.semanticStatus).toBe('not_synced')
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
+  })
+
+  it('says only the text match ran when there is no active embedding generation', async () => {
+    const store = await loaded(
+      semantic([hit('DAR1', 'lexical')], { vectorAvailable: false, activeGenerationId: null })
+    )
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.semanticStatus).toBe('lexical_only')
+    // A text match over the profile still adds the work, but is not labeled semantic.
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.semantic])).toEqual([
+      ['GIN1', undefined],
+      ['DAR1', undefined],
+    ])
+  })
+
+  it('keeps the text results and reports a failed bibliography search', async () => {
+    answer({
+      writing_zotero_cached: { items: [item('GIN1', GINZBURG)], version: 1 },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: [], total: 0 },
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.semanticStatus).toBe('failed')
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
+    expect(store.snapshot.error).toBeNull()
+  })
+
+  it('still finds by meaning when Zotero itself cannot answer', async () => {
+    answer({
+      writing_zotero_cached: {
+        items: [item('GIN1', GINZBURG), item('DAR1', DARNTON)],
+        version: 1,
+      },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: () => Promise.reject(new Error('timeout')),
+      bibliography_search_works: semantic([hit('DAR1', 'vector')]),
+    })
+    const store = new WritingZoteroStore()
+    await store.connect()
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
+    expect(store.snapshot.error).toBe('timeout')
+  })
+
+  it('drops a meaning answer for a query that is no longer in the box', async () => {
+    const store = await loaded(semantic([hit('DAR1', 'vector')]))
+    let reply: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'bibliography_search_works'
+        ? new Promise((resolve) => {
+            reply = resolve
+          })
+        : Promise.resolve({ items: [], total: 0 })) as never)
+
+    const searching = store.searchLibrary('formaggio')
+    store.search('Moore')
+    reply(semantic([hit('DAR1', 'vector')]))
+    await searching
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['MOO1'])
+    expect(store.snapshot.semanticStatus).toBe('idle')
+  })
+
+  it('resets the notice when the library changes or the box is emptied', async () => {
+    const store = await loaded(semantic([], { librarySynced: false }))
+    await store.searchLibrary('formaggio')
+    expect(store.snapshot.semanticStatus).toBe('not_synced')
+
+    await store.searchLibrary('')
+    expect(store.snapshot.semanticStatus).toBe('idle')
+
+    await store.searchLibrary('formaggio')
+    store.select('group', '1')
+    expect(store.snapshot.semanticStatus).toBe('idle')
+  })
+})
+
+/**
  * E1c-1 (TS half): explicit selection with library-keyed stale-response
  * isolation. RED first: none of this exists yet on the store.
  */

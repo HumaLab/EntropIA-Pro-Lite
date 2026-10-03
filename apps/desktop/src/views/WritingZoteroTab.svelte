@@ -355,6 +355,19 @@
         />
       {/if}
 
+      {#if snapshot.query.trim() && snapshot.semanticStatus !== 'idle' && snapshot.semanticStatus !== 'ok'}
+        <!-- Said, never implied: a missing meaning search is not "no similar works". -->
+        <p class="zotero__notice" role="status">
+          {t(
+            snapshot.semanticStatus === 'not_synced'
+              ? 'writing.zoteroSemanticNotSynced'
+              : snapshot.semanticStatus === 'lexical_only'
+                ? 'writing.zoteroSemanticLexicalOnly'
+                : 'writing.zoteroSemanticFailed'
+          )}
+        </p>
+      {/if}
+
       {#if snapshot.entries.length > 0}
         <ul class="zotero__list">
           <!-- Keyed by the whole item, not its citation key: two works can share
@@ -365,6 +378,9 @@
                 <span class="zotero__title">{entry.title}</span>
                 <span class="zotero__meta">
                   {[entry.authors, entry.year].filter(Boolean).join(' · ')}
+                  {#if entry.semantic}
+                    <span class="zotero__semantic">{t('writing.zoteroSemanticTag')}</span>
+                  {/if}
                 </span>
               </span>
               <span class="zotero__row-actions">
@@ -554,6 +570,14 @@
     margin: 0;
     font-size: var(--font-size-xs);
     line-height: var(--line-height-base);
+  }
+
+  .zotero__semantic {
+    margin-left: var(--space-1);
+    padding: 0 var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
   }
 
   .zotero__notice {

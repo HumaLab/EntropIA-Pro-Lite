@@ -223,6 +223,30 @@ mod tests {
         .id
     }
 
+    #[test]
+    fn zotero_library_resolves_to_the_internal_rows_it_names() {
+        let mut conn = search_db();
+        seed_work(&mut conn, "a", "Uno", "x", 2020, "book", vec![]);
+        seed_work(&mut conn, "b", "Dos", "x", 2020, "book", vec![]);
+        let rows_a = resolve_zotero_library_rows(&conn, "user", "lib-a").expect("resolve");
+        let stored: String = conn
+            .query_row(
+                "SELECT id FROM zotero_libraries WHERE library_id = 'lib-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("row");
+        assert_eq!(rows_a, vec![stored]);
+        // The type is part of the identity: a group with the same numeric id
+        // is a different library, and an unknown one resolves to nothing.
+        assert!(resolve_zotero_library_rows(&conn, "group", "lib-a")
+            .expect("resolve")
+            .is_empty());
+        assert!(resolve_zotero_library_rows(&conn, "user", "nope")
+            .expect("resolve")
+            .is_empty());
+    }
+
     fn profile_text(
         title: &str,
         abstract_text: &str,
@@ -918,6 +942,31 @@ fn matches_filters(meta: &WorkMeta, filters: &WorkFilters) -> bool {
         return false;
     }
     true
+}
+
+/// Maps a Zotero library as the UI names it (`library_type` + native
+/// `library_id`, e.g. `user`/`0`) to the internal `zotero_libraries.id` rows
+/// that [`WorkFilters::library_ids`] and every [`WorkHit::library_id`] use.
+/// Empty means the library was never synced into the catalog. The type is
+/// part of the identity: user 0 and group 0 are different libraries.
+pub fn resolve_zotero_library_rows(
+    conn: &Connection,
+    library_type: &str,
+    library_id: &str,
+) -> BibliographyResult<Vec<String>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id FROM zotero_libraries
+              WHERE library_type = ?1 AND library_id = ?2
+              ORDER BY id",
+        )
+        .map_err(|error| err("Failed to prepare Zotero library lookup", error))?;
+    let rows = statement
+        .query_map([library_type, library_id], |row| row.get::<_, String>(0))
+        .map_err(|error| err("Failed to look up Zotero library", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to read Zotero library rows", error))?;
+    Ok(rows)
 }
 
 /// Full hybrid search: resolves the active generation of the query

@@ -891,6 +891,13 @@ const es = {
     'El documento está intacto y no se modificó. El detalle técnico es este:',
   'writing.zoteroLoaded': '{count} referencia(s) leída(s).',
   'writing.zoteroEmpty': 'Ninguna referencia coincide con esa búsqueda.',
+  'writing.zoteroSemanticTag': 'Por significado',
+  'writing.zoteroSemanticNotSynced':
+    'Esta biblioteca todavía no está sincronizada en EntropIA: solo se muestran coincidencias de texto. «Sincronizar biblioteca» habilita también la búsqueda por significado.',
+  'writing.zoteroSemanticLexicalOnly':
+    'Búsqueda por significado no disponible: sin espacio semántico activo. Solo se muestran coincidencias de texto.',
+  'writing.zoteroSemanticFailed':
+    'Falló la búsqueda por significado; se muestran solo las coincidencias de texto.',
   'writing.zoteroStart': 'Tu biblioteca aparece acá cuando Zotero responde.',
   'writing.zoteroCite': 'Citar',
   'writing.zoteroNoDocument': 'Abrí un documento para insertar la cita.',
@@ -2607,6 +2614,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'The document is intact and was not changed. The technical detail is this:',
   'writing.zoteroLoaded': '{count} reference(s) read.',
   'writing.zoteroEmpty': 'No reference matches that search.',
+  'writing.zoteroSemanticTag': 'By meaning',
+  'writing.zoteroSemanticNotSynced':
+    'This library is not synced into EntropIA yet: only text matches are shown. “Synchronize library” also enables search by meaning.',
+  'writing.zoteroSemanticLexicalOnly':
+    'Search by meaning is unavailable: no active semantic space. Only text matches are shown.',
+  'writing.zoteroSemanticFailed': 'Search by meaning failed; only text matches are shown.',
   'writing.zoteroStart': 'Your library appears here once Zotero answers.',
   'writing.zoteroCite': 'Cite',
   'writing.zoteroNoDocument': 'Open a document to insert the citation into.',
