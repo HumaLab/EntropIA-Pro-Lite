@@ -355,17 +355,29 @@ pub(crate) fn persist_setting(
     key: &str,
     value: &str,
 ) -> Result<(), String> {
+    persist_setting_with(conn, key, value, store_secret, delete_secret)
+}
+
+/// [`persist_setting`] with the credential store passed in, so tests never
+/// write to or delete from the real system keyring.
+fn persist_setting_with(
+    conn: &rusqlite::Connection,
+    key: &str,
+    value: &str,
+    store: impl FnOnce(&str, &str) -> Result<(), String>,
+    delete: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<(), String> {
     forget_zotero_user_id_for(conn, key);
     if is_secret_setting_key(key) {
         if value.trim().is_empty() {
             conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
                 .map_err(|error| format!("Failed to delete empty protected setting: {error}"))?;
-            if let Err(error) = delete_secret(key) {
+            if let Err(error) = delete(key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
             }
             return Ok(());
         }
-        store_secret(key, value)?;
+        store(key, value)?;
         conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
             params![key, secret_reference(key)],
@@ -955,11 +967,40 @@ mod tests {
         let conn = in_memory_settings_db();
         set_setting(&conn, ZOTERO_USER_ID_KEY, "4242").expect("save user id");
 
-        // Clearing takes the keyring-free path; saving a new key forgets the id
-        // through the same helper before it touches the credential store.
-        persist_setting(&conn, ZOTERO_API_KEY, "").expect("clear key");
+        // The credential store is stubbed: a test must never delete the real
+        // keyring entry (an earlier version of this test erased the owner's key).
+        let deleted = std::cell::RefCell::new(Vec::new());
+        persist_setting_with(
+            &conn,
+            ZOTERO_API_KEY,
+            "",
+            |_, _| panic!("clearing must not store"),
+            |key| {
+                deleted.borrow_mut().push(key.to_string());
+                Ok(())
+            },
+        )
+        .expect("clear key");
 
         assert_eq!(get_raw_setting(&conn, ZOTERO_USER_ID_KEY), None);
+        assert_eq!(deleted.into_inner(), vec![ZOTERO_API_KEY.to_string()]);
+
+        set_setting(&conn, ZOTERO_USER_ID_KEY, "4242").expect("save user id");
+        let stored = std::cell::RefCell::new(Vec::new());
+        persist_setting_with(
+            &conn,
+            ZOTERO_API_KEY,
+            "new-key",
+            |key, _| {
+                stored.borrow_mut().push(key.to_string());
+                Ok(())
+            },
+            |_| panic!("saving must not delete"),
+        )
+        .expect("replace key");
+
+        assert_eq!(get_raw_setting(&conn, ZOTERO_USER_ID_KEY), None);
+        assert_eq!(stored.into_inner(), vec![ZOTERO_API_KEY.to_string()]);
     }
 
     #[cfg(feature = "local-ml")]
