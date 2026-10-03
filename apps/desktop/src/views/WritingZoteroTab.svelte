@@ -391,9 +391,14 @@
                 >
                   <ActionIcon name="eye" size={14} />
                 </IconButton>
-                <Button variant="ghost" size="sm" disabled={!oncite} onclick={() => cite(entry)}>
-                  {t('writing.zoteroCite')}
-                </Button>
+                <IconButton
+                  size="sm"
+                  label={t('writing.zoteroCite')}
+                  disabled={!oncite}
+                  onclick={() => cite(entry)}
+                >
+                  <ActionIcon name="text-quote" size={14} />
+                </IconButton>
               </span>
             </li>
           {/each}

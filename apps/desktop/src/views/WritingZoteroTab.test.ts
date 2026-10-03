@@ -350,6 +350,16 @@ describe('E1c-3 opening the work details (ficha)', () => {
     expect(strayText).toEqual([])
   })
 
+  it('cites with a quote icon whose accessible name is still Citar', async () => {
+    answerKnownLibraries([PERSONAL])
+    render(WritingZoteroTab, { props: {} })
+
+    await screen.findByText('Los orígenes')
+    const cite = screen.getByRole('button', { name: 'Citar' })
+    expect(cite.textContent?.trim()).toBe('')
+    expect(cite.querySelector('svg')).not.toBeNull()
+  })
+
   it('offers a ficha per row that opens without touching the selection', async () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {
