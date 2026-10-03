@@ -7507,3 +7507,193 @@ fn a_failing_publication_ends_the_attempt_instead_of_stranding_it_running() {
         "stranded running; run_one said {outcome:?}"
     );
 }
+
+// ── Manual sync outranks the derived bibliography backlog ──────────────────
+
+/// Inserts `count` pending derived tasks (profile and extract) linked to the
+/// system bibliography batch. Their ids sort before any UUID, so a plain
+/// id-ordered walk would always take them first.
+fn seed_derived_backlog(conn: &rusqlite::Connection, batch_id: &str, count: usize) {
+    for n in 0..count {
+        for (kind, subject_kind) in [
+            ("bibliography_extract", "attachment"),
+            ("bibliography_profile", "item"),
+        ] {
+            let id = format!("00000000-{kind}-{n:03}");
+            let subject = format!("subject-{kind}-{n:03}");
+            conn.execute(
+                "INSERT INTO processing_tasks
+                   (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+                    state, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'bibliography', ?4, ?3, 'pending', 1, 1)",
+                rusqlite::params![id, kind, subject, subject_kind],
+            )
+            .expect("derived task");
+            conn.execute(
+                "INSERT INTO processing_batch_tasks
+                   (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind,
+                    subject_id, request_state)
+                 VALUES (?1, ?2, ?3, ?4, 'bibliography', ?5, ?4, 'active')",
+                rusqlite::params![batch_id, id, kind, subject, subject_kind],
+            )
+            .expect("derived link");
+        }
+    }
+}
+
+const ALL_BIBLIOGRAPHY_KINDS: [&str; 3] = [
+    "bibliography_sync",
+    "bibliography_profile",
+    "bibliography_extract",
+];
+
+/// The owner's report: a requested sync sat `pending` for hours behind
+/// thousands of derived tasks that share its batch (and its aged priority).
+#[test]
+fn a_manual_sync_is_claimed_before_the_derived_background_backlog() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let system = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    // The aged state of the real archive: starvation aging already raised
+    // the shared batch to high.
+    repository::set_batch_priority(&conn, &system, 1, None).expect("aged batch");
+    seed_derived_backlog(&conn, &system, 40);
+
+    let demand =
+        repository::admit_bibliography_sync_demand(&conn, "user", "0").expect("manual demand");
+
+    let claimed = repository::claim_next(
+        &conn,
+        "bib-session",
+        &ALL_BIBLIOGRAPHY_KINDS,
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("something is claimable");
+    assert_eq!(
+        claimed.task_id, demand.task_id,
+        "the requested sync must not wait behind {} ({})",
+        claimed.task_id, claimed.kind
+    );
+}
+
+/// The lane is one extra link, not a second task: repeated clicks keep one
+/// physical task, one expedite batch and one link, and the backlog keeps its
+/// own batch and priority.
+#[test]
+fn repeated_manual_sync_demand_keeps_one_expedite_link_and_leaves_the_backlog_alone() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let first = repository::admit_bibliography_sync_demand(&conn, "user", "0").expect("first");
+    let second = repository::admit_bibliography_sync_demand(&conn, "user", "0").expect("second");
+    assert_eq!(first.task_id, second.task_id);
+    assert_eq!(
+        first.batch_id, second.batch_id,
+        "answer keeps the system batch"
+    );
+
+    let links: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+            [&first.task_id],
+            |row| row.get(0),
+        )
+        .expect("links");
+    assert_eq!(links, 2, "system batch plus the expedite batch");
+    let priorities: Vec<(String, i64)> = conn
+        .prepare("SELECT id, priority FROM processing_batches ORDER BY id")
+        .expect("batches")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("batch map")
+        .collect::<Result<_, _>>()
+        .expect("batch collect");
+    assert_eq!(
+        priorities,
+        vec![
+            ("batch-system-bibliography".to_string(), 0),
+            ("batch-system-bibliography-sync".to_string(), 2),
+        ]
+    );
+}
+
+/// A manual sync is the user's retry for work that failed for a reason since
+/// fixed (the `executor_panicked` extractions): the sync that follows opens a
+/// fresh extraction task for every attachment that still has no extraction.
+#[test]
+fn a_manual_sync_re_admits_failed_extractions_that_still_have_no_text() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let first = repository::admit_bibliography_sync_demand(&conn, "user", "0").expect("demand");
+    let works = || vec![custom_page_item("PDFWORK01", 1, "Obra con PDF", "Resumen.")];
+    let run_sync = |conn: &rusqlite::Connection| {
+        let source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+            works(),
+            Some(1),
+        ))]));
+        run_one(
+            conn,
+            &ctx_of(&dir),
+            &registry_with(executor(source)),
+            "bib-session",
+            repository::now_ms(),
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("sync run")
+    };
+    let outcome = run_sync(&conn);
+    assert!(
+        matches!(&outcome, RunOneOutcome::Succeeded { task_id } if task_id == &first.task_id),
+        "first sync must succeed, got {outcome:?}"
+    );
+
+    let item_id = items_by_key(&conn, "PDFWORK01");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Texto extraible del adjunto con longitud suficiente para calidad",
+    )]);
+    let path = write_temp_pdf(&dir, "adjunto.pdf", &pdf);
+    let attachment = seed_attachment(
+        &mut conn,
+        &item_id,
+        "FAILPDF01",
+        "linked_file",
+        Some(&path),
+        "adjunto.pdf",
+        "application/pdf",
+    );
+    // The extraction panicked once and ended `failed`, leaving no text row.
+    let failed_task = admit_extract_demand(&conn, &attachment);
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'failed', outcome = 'executor_panicked'
+         WHERE id = ?1",
+        [&failed_task],
+    )
+    .expect("simulate the panic");
+
+    let second = apply_bibliography_sync_request(&conn, "sync-after-fix", "user", "0")
+        .expect("manual request");
+    assert!(
+        second.created,
+        "the previous sync succeeded, so this is a new task"
+    );
+    let outcome = run_sync(&conn);
+    assert!(
+        matches!(&outcome, RunOneOutcome::Succeeded { task_id } if task_id == &second.task_id),
+        "second sync must succeed, got {outcome:?}"
+    );
+
+    let live: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+             WHERE kind = 'bibliography_extract' AND subject_id = ?1 AND state = 'pending'",
+        )
+        .expect("live query")
+        .query_map([&attachment], |row| row.get(0))
+        .expect("live map")
+        .collect::<Result<_, _>>()
+        .expect("live collect");
+    assert_eq!(live.len(), 1, "a new retry cycle for the failed attachment");
+    assert_ne!(live[0], failed_task, "terminal history is never rewritten");
+}

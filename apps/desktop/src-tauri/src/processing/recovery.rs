@@ -337,6 +337,17 @@ mod tests {
             [],
         )
         .expect("track 0045");
+        // A manual sync demand links into the interactive lane, which names
+        // the batch priority column.
+        conn.execute_batch(include_str!(
+            "../../../../../packages/store/src/migrations/0046_processing_priority.sql"
+        ))
+        .expect("apply 0046");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES ('0046_processing_priority', 1)",
+            [],
+        )
+        .expect("track 0046");
         (dir, conn)
     }
 

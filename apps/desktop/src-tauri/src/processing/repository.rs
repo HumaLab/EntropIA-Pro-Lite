@@ -1106,7 +1106,31 @@ pub fn admit_bibliography_sync_demand(
             created: admitted.created,
             requeued,
         })
-    })();
+    })()
+    .and_then(|outcome| {
+        // A requested sync is quick, user-visible work: link it into the
+        // interactive lane so it is not queued behind the derived backlog.
+        let lane = ensure_bibliography_sync_lane(conn)?;
+        link_batch_task_subject(
+            conn,
+            &lane,
+            &outcome.task_id,
+            "bibliography_sync",
+            &library_row_id,
+            "bibliography",
+            "library",
+            &library_row_id,
+            None,
+        )?;
+        // A repeat click after a lane pause/cancel makes the demand active again.
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state = 'active'
+             WHERE batch_id = ?1 AND task_id = ?2 AND request_state != 'active'",
+            rusqlite::params![lane, outcome.task_id],
+        )
+        .map_err(|e| format!("Failed to reactivate the sync lane link: {e}"))?;
+        Ok(outcome)
+    });
     match demanded {
         Ok(outcome) => {
             conn.execute_batch("RELEASE bibliography_manual_demand")
@@ -1735,11 +1759,51 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
     if origin != "manual" && origin != "repair" && origin != "bibliography" {
         return Err(format!("invalid_selection: unknown system origin {origin}"));
     }
-    let request_id = format!("system-{origin}");
+    ensure_system_batch_row(
+        conn,
+        origin,
+        &format!("system-{origin}"),
+        &format!("batch-system-{origin}"),
+        None,
+    )
+}
+
+/// Request id of the bibliography sync lane (see [`ensure_bibliography_sync_lane`]).
+const BIBLIOGRAPHY_SYNC_LANE_REQUEST_ID: &str = "system-bibliography-sync";
+const BIBLIOGRAPHY_SYNC_LANE_BATCH_ID: &str = "batch-system-bibliography-sync";
+
+/// The long-lived `running` batch that carries user-requested library syncs
+/// at interactive priority.
+///
+/// Priority belongs to a batch, and every bibliography task (the sync and the
+/// thousands of derived extract/profile tasks it chains) lives in the one
+/// `bibliography` system batch, which starvation aging promotes to high. A
+/// sync linked only there waits behind its own backlog in id order, so a
+/// manual request is also linked here: a second, tiny batch at priority 2 that
+/// owns nothing but the syncs the user asked for. The claim scan finds the
+/// task at that level first and never reorders anything else; the lane is
+/// reopened (and re-raised, a cancel resets priority) on every demand.
+fn ensure_bibliography_sync_lane(conn: &Connection) -> Result<String, String> {
+    ensure_system_batch_row(
+        conn,
+        "bibliography",
+        BIBLIOGRAPHY_SYNC_LANE_REQUEST_ID,
+        BIBLIOGRAPHY_SYNC_LANE_BATCH_ID,
+        Some(2),
+    )
+}
+
+fn ensure_system_batch_row(
+    conn: &Connection,
+    origin: &str,
+    request_id: &str,
+    new_batch_id: &str,
+    priority: Option<i64>,
+) -> Result<String, String> {
     if let Some(id) = conn
         .query_row(
             "SELECT id FROM processing_batches WHERE request_id = ?1",
-            [&request_id],
+            [request_id],
             |row| row.get::<_, String>(0),
         )
         .map(Some)
@@ -1752,17 +1816,31 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
             "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors')",
             [&id],
         ).map_err(|e| format!("Failed to reopen system batch: {e}"))?;
+        if let Some(priority) = priority {
+            conn.execute(
+                "UPDATE processing_batches SET priority = ?1 WHERE id = ?2 AND priority != ?1",
+                rusqlite::params![priority, id],
+            )
+            .map_err(|e| format!("Failed to raise system batch {origin}: {e}"))?;
+        }
         return Ok(id);
     }
-    let batch_id = format!("batch-system-{origin}");
+    // The priority column arrives with 0046; background batches never name it.
     conn.execute(
         "INSERT INTO processing_batches
            (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'running', 'run', '[\"ocr\", \"embeddings\"]', 1, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000)",
-        rusqlite::params![batch_id, request_id, origin],
+        rusqlite::params![new_batch_id, request_id, origin],
     )
     .map_err(|e| format!("Failed to create system batch {origin}: {e}"))?;
-    Ok(batch_id)
+    if let Some(priority) = priority {
+        conn.execute(
+            "UPDATE processing_batches SET priority = ?1 WHERE id = ?2",
+            rusqlite::params![priority, new_batch_id],
+        )
+        .map_err(|e| format!("Failed to raise system batch {origin}: {e}"))?;
+    }
+    Ok(new_batch_id.to_string())
 }
 /// A recorded control-plane request: the durable answer to "did this
 /// requestId already run, and with which parameters?". Double-clicks,
