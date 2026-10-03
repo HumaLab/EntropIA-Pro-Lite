@@ -506,7 +506,7 @@ pub async fn delete_asset_files(
 
 /// Strip a trailing `_v{digits}` version suffix from a file stem.
 /// Mirrors the suffix produced by [`next_version_path`].
-fn strip_version_suffix(stem: &str) -> &str {
+pub(crate) fn strip_version_suffix(stem: &str) -> &str {
     if let Some(idx) = stem.rfind("_v") {
         let suffix = &stem[idx + 2..];
         if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) {
@@ -530,7 +530,7 @@ const ASSET_IMAGE_EXTENSIONS: &[&str] =
 /// deliberately spans ALL known image extensions: format-converting edits
 /// (e.g. fine rotation forces PNG output) leave older versions on disk with
 /// a different extension than the asset's current file.
-fn file_belongs_to_asset_family(file_name: &str, base: &str) -> bool {
+pub(crate) fn file_belongs_to_asset_family(file_name: &str, base: &str) -> bool {
     let candidate = Path::new(file_name);
     let Some(stem) = candidate.file_stem().and_then(|s| s.to_str()) else {
         return false;

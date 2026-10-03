@@ -743,6 +743,138 @@ fn a_file_that_cannot_be_removed_never_fails_the_drain() {
     assert!(dir.path().join("assets/c1/i1/odd.png").is_dir());
 }
 
+fn apply_and_drain_with_cache(
+    conn: &Connection,
+    dir: &std::path::Path,
+    cache: &std::path::Path,
+    rows: &[PullRow],
+) -> usize {
+    let mut ctx = ApplyContext::new(dir);
+    apply_page(conn, &mut ctx, rows, 99).expect("apply");
+    crate::sync::asset_files::drain_with_cache(conn, dir, Some(cache)).expect("drain")
+}
+
+fn file_name_hash(asset_id: &str, path: &str) -> String {
+    crate::ocr::commands::image_thumbnail_file_name(asset_id, path)
+}
+
+#[test]
+fn pulled_asset_delete_removes_the_edit_versions_of_the_file() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let original = put_file(dir.path(), "assets/c1/i1/a.jpg");
+    let v2 = put_file(dir.path(), "assets/c1/i1/a_v2.png");
+    let v3 = put_file(dir.path(), "assets/c1/i1/a_v3.png");
+    let near_miss = put_file(dir.path(), "assets/c1/i1/a_final.png");
+    let other = put_file(dir.path(), "assets/c1/i1/b.png");
+    let not_image = put_file(dir.path(), "assets/c1/i1/a_v4.txt");
+    seed_asset(&conn, "a1", "assets/c1/i1/a_v3.png", None);
+    seed_asset(&conn, "b1", "assets/c1/i1/b.png", None);
+
+    let removed = apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert_eq!(removed, 3, "the current file and its two older versions");
+    assert!(!original.exists() && !v2.exists() && !v3.exists());
+    assert!(near_miss.exists(), "another family is never touched");
+    assert!(other.exists(), "a live asset's file stays");
+    assert!(not_image.exists(), "only image versions are swept");
+}
+
+#[test]
+fn a_version_another_asset_still_uses_keeps_the_whole_family() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let original = put_file(dir.path(), "assets/c1/i1/a.png");
+    let v2 = put_file(dir.path(), "assets/c1/i1/a_v2.png");
+    let v3 = put_file(dir.path(), "assets/c1/i1/a_v3.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+    seed_asset(&conn, "a2", "assets/c1/i1/a_v2.png", None);
+
+    apply_and_drain(&conn, dir.path(), &[delete_row("assets", "a1", 50)]);
+
+    assert!(!original.exists(), "the deleted asset's own file goes");
+    assert!(v2.exists(), "a2 still points at it");
+    assert!(v3.exists(), "its family is live, so nothing else is swept");
+}
+
+#[test]
+fn pulled_asset_delete_removes_its_cached_thumbnails() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    let cache = tmp_app_dir();
+    put_file(dir.path(), "assets/c1/i1/a.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+    seed_asset(&conn, "a2", "assets/c1/i1/b.png", None);
+    let thumbs = cache.path().join("thumbnails");
+    let pdf_thumb = put_file(cache.path(), "thumbnails/a1.png");
+    let img_old = put_file(
+        cache.path(),
+        &format!("thumbnails/{}", file_name_hash("a1", "assets/c1/i1/a.png")),
+    );
+    let img_new = put_file(
+        cache.path(),
+        &format!(
+            "thumbnails/{}",
+            file_name_hash("a1", "assets/c1/i1/a_v2.png")
+        ),
+    );
+    let other = put_file(
+        cache.path(),
+        &format!("thumbnails/{}", file_name_hash("a2", "assets/c1/i1/b.png")),
+    );
+    let lookalike = put_file(cache.path(), "thumbnails/image-a1-notahash.png");
+    let sibling_id = put_file(cache.path(), "thumbnails/a10.png");
+
+    apply_and_drain_with_cache(
+        &conn,
+        dir.path(),
+        cache.path(),
+        &[delete_row("assets", "a1", 50)],
+    );
+
+    assert!(!pdf_thumb.exists() && !img_old.exists() && !img_new.exists());
+    assert!(other.exists(), "another asset's thumbnail stays");
+    assert!(lookalike.exists(), "only exact thumbnail names match");
+    assert!(
+        sibling_id.exists(),
+        "an id that merely starts the same stays"
+    );
+    assert!(thumbs.exists());
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_meta WHERE key LIKE 'asset_thumb_remove:%'"
+        ),
+        0,
+        "the queue is drained"
+    );
+}
+
+#[test]
+fn a_thumbnail_queue_waits_while_the_cache_dir_is_unknown() {
+    let conn = capturing_db();
+    seed_item(&conn);
+    let dir = tmp_app_dir();
+    put_file(dir.path(), "assets/c1/i1/a.png");
+    seed_asset(&conn, "a1", "assets/c1/i1/a.png", None);
+    let mut ctx = ApplyContext::new(dir.path());
+    apply_page(&conn, &mut ctx, &[delete_row("assets", "a1", 50)], 99).expect("apply");
+
+    crate::sync::asset_files::drain_with_cache(&conn, dir.path(), None).expect("drain");
+
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM sync_meta WHERE key LIKE 'asset_thumb_remove:%'"
+        ),
+        1,
+        "kept for a later cycle"
+    );
+}
+
 // --------------------------------------------------------------------------
 // Tombstone of a parent with a local RESTRICT (non-cascade) dependent.
 // --------------------------------------------------------------------------
