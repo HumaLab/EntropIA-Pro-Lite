@@ -2665,12 +2665,35 @@ impl BibliographyExtractExecutor {
             });
         }
         let page_count = document.get_pages().len() as i64;
-        let text = crate::ocr::pdf::extract_pdf_text(bytes).map_err(|error| ExecOutput::Fatal {
-            code: "extraction_failed".to_string(),
-            message: error,
-        })?;
-        let quality = extraction_quality(&text);
         let pages = read_native_page_texts(bytes, page_count)?;
+        // The whole-document parser is the primary text source. When it
+        // fails (or panics, contained inside `extract_pdf_text`) the
+        // per-page lopdf layer — already read for the page rows — still
+        // holds the text, so the file is read instead of failed. Only a
+        // document with no text on either path reports the parser error.
+        let text = match crate::ocr::pdf::extract_pdf_text(bytes) {
+            Ok(text) => text,
+            Err(error) => {
+                let joined = pages
+                    .iter()
+                    .map(|page| page.text_content.as_str())
+                    .filter(|text| !text.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+
+",
+                    );
+                if joined.is_empty() {
+                    return Err(ExecOutput::Fatal {
+                        code: "extraction_failed".to_string(),
+                        message: error,
+                    });
+                }
+                joined
+            }
+        };
+        let quality = extraction_quality(&text);
         let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
         Ok(ExtractedDocument {
             page_count,

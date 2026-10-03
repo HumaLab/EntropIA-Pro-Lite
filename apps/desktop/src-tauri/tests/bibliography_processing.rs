@@ -4488,6 +4488,48 @@ fn extract_task_publishes_native_text_without_ocr() {
     );
 }
 
+/// `pdf-extract` panics on whole families of valid-but-unusual PDFs
+/// (here a PostScript tint transform). The panic used to take the task
+/// down as `executor_panicked`; now the whole-document parser is
+/// contained and the per-page lopdf layer still delivers the text.
+#[test]
+fn extract_task_reads_text_when_the_whole_document_parser_panics() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFPANIC1", "Obra con PDF raro", "Resumen.");
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf-type4-tint-transform.pdf"
+    ))
+    .expect("fixture");
+    let path = write_temp_pdf(&dir, "raro.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT002",
+        "linked_file",
+        Some(&path),
+        "raro.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    run_extract(&dir, &conn, &task_id);
+
+    let (page_count, text): (i64, String) = conn
+        .query_row(
+            "SELECT page_count, text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(page_count, 1);
+    assert!(
+        text.contains("Texto nativo legible"),
+        "the text came through the per-page layer: {text}"
+    );
+}
+
 /// An attachment with no resolvable file parks blocked with the resolver
 /// reason — never failed, never retried blindly.
 #[test]

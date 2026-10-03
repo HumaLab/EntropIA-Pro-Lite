@@ -390,10 +390,25 @@ fn dll_name_display() -> &'static str {
 
 /// Extract text from the native text layer of a PDF byte slice.
 /// Returns the raw extracted text or an error message.
+///
+/// `pdf-extract` signals unsupported constructs (function type 4 tint
+/// transforms, DeviceN spaces, dangling references, fonts without a unicode
+/// map) with `panic!` instead of an error, and that panic is contained here,
+/// at the narrowest boundary, so every caller — bibliography extraction,
+/// corpus import, OCR fallback — receives an ordinary `Err`. Containment
+/// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
 pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
-    pdf_extract::extract_text_from_mem(bytes)
-        .map_err(|e| format!("PDF text extraction failed: {e}"))
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(bytes)
+    })) {
+        Ok(result) => result.map_err(|e| format!("PDF text extraction failed: {e}")),
+        Err(_) => Err(UNREADABLE_PDF_TEXT_MESSAGE.to_string()),
+    }
 }
+
+/// What a user reads when the PDF text parser gives up on a file's structure.
+pub const UNREADABLE_PDF_TEXT_MESSAGE: &str =
+    "No se pudo leer el texto de este PDF: su estructura interna no es compatible con el lector.";
 
 /// Returns `true` if the text contains at least `MIN_ALPHANUM_CHARS` valid
 /// UTF-8 alphanumeric characters. Used to decide whether native PDF text is
@@ -1171,6 +1186,24 @@ mod tests {
     /// A PDF carrying a real USER password: it cannot be read without it.
     const USER_PASSWORD_PDF: &[u8] =
         include_bytes!("../../tests/fixtures/pdf-aes128-user-password.pdf");
+
+    /// 816 bytes minimised from real library PDFs: a page whose colour space
+    /// is a `Separation` with a PostScript-calculator (`/FunctionType 4`) tint
+    /// transform. `pdf-extract` 0.7 answers it with `panic!("unhandled
+    /// function type 4")` instead of an error.
+    const TYPE4_TINT_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-type4-tint-transform.pdf");
+
+    #[test]
+    fn extract_pdf_text_turns_a_parser_panic_into_an_error() {
+        // The same parser panics on other malformed inputs (DeviceN spaces,
+        // dangling references, fonts without a unicode map). A panic must
+        // never cross this boundary: callers get an honest Err they can
+        // route, not an unwinding thread.
+        let error = extract_pdf_text(TYPE4_TINT_PDF).expect_err("the parser panics on this file");
+
+        assert_eq!(error, UNREADABLE_PDF_TEXT_MESSAGE);
+    }
 
     #[test]
     fn load_lopdf_document_opens_a_pdf_with_an_owner_password_only() {

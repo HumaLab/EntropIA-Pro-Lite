@@ -123,7 +123,11 @@ debug-assertions = false
 overflow-checks = false
 
 [profile.release]
-panic = "abort"
+# Unwinding, not abort: third-party parsers (pdf-extract) panic on unusual
+# files and the code contains those panics with `catch_unwind` (see
+# `ocr::pdf::extract_pdf_text` and the scheduler's executor guard). Under
+# `abort` every one of those would kill the whole app instead.
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
