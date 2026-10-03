@@ -26,6 +26,7 @@
     "allow-bibliography-open-passage",
     "allow-bibliography-passage-context",
     "allow-bibliography-library-status",
+    "allow-bibliography-search-passages",
     "allow-processing-list-batches",
     "allow-processing-get-batch",
     "allow-processing-list-tasks",

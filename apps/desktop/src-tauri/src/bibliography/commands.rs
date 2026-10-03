@@ -346,3 +346,53 @@ pub async fn bibliography_search_works(
     })
     .await
 }
+
+/// One passage search request from the Writing "Obras" tab.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPassagesRequest {
+    pub text: String,
+    pub top_k: Option<usize>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPassagesResponse {
+    pub passages: Vec<crate::rag::scope::PassageResult>,
+    /// Why nothing was searched (same codes as the chat's Biblioteca notice:
+    /// `no_library_synced`, `no_embeddings`, `embedding_unavailable`,
+    /// `failed`); `None` when the search ran.
+    pub notice: Option<String>,
+}
+
+/// Passages of the synced Zotero libraries for a query, ranked by similarity
+/// (vector-only: with no active generation the answer is empty and says
+/// `no_embeddings`). Same leg, floor and location rules as the research chat.
+#[tauri::command]
+pub async fn bibliography_search_passages(
+    request: SearchPassagesRequest,
+    db: State<'_, AppDbState>,
+) -> Result<SearchPassagesResponse, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let effective =
+            crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?;
+        let mut params = crate::rag::params::rag_params_from_settings(&conn);
+        params.top_k = request.top_k.unwrap_or(12).clamp(1, 50);
+        let embedder = EngineProfileEmbedder::new(db_path);
+        let found = crate::rag::scope::passage_search(
+            &conn,
+            &effective.hash,
+            &request.text,
+            &[],
+            &params,
+            &|text| embedder.embed(text),
+        );
+        Ok(SearchPassagesResponse {
+            passages: found.passages,
+            notice: found.notice.map(|notice| notice.code().to_string()),
+        })
+    })
+    .await
+}

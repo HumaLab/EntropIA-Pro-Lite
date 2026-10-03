@@ -354,6 +354,78 @@ fn passage_location(conn: &Connection, hit: &PassageHit) -> Option<RagBibliograp
     })
 }
 
+/// One passage as the Writing "Obras" tab lists it: the work it belongs to
+/// (enough to cite it), the snippet and where in the work it sits.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageResult {
+    pub chunk_id: String,
+    pub item_id: String,
+    pub item_key: String,
+    pub title: String,
+    pub authors: String,
+    pub year: Option<i64>,
+    pub library_name: String,
+    pub library_type: String,
+    pub library_native_id: String,
+    /// The catalog's CSL-JSON, what a citation snapshots.
+    pub csl_json: String,
+    pub snippet: String,
+    pub location: Option<RagBibliographyLocation>,
+    pub score: f64,
+}
+
+pub(crate) struct PassageSearch {
+    pub passages: Vec<PassageResult>,
+    pub notice: Option<BibliographyNotice>,
+}
+
+/// Passage search for the Writing tab: the same leg the chat uses (same
+/// libraries, similarity floor, snippet and location rules, same honest
+/// notices), shaped as results rather than prompt sources. One source of truth
+/// for what a passage is.
+pub(crate) fn passage_search(
+    conn: &Connection,
+    contract_hash: &str,
+    query: &str,
+    libraries: &[RagLibraryRef],
+    params: &RagParams,
+    embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
+) -> PassageSearch {
+    let leg = bibliography_leg(conn, contract_hash, query, libraries, params, embed);
+    let passages = leg
+        .sources
+        .into_iter()
+        .filter_map(|source| {
+            let meta = source.bibliography?;
+            let csl_json = crate::bibliography::retrieval::read_work_display(conn, &source.item_id)
+                .ok()
+                .flatten()
+                .map(|display| display.csl_json)
+                .unwrap_or_default();
+            Some(PassageResult {
+                chunk_id: meta.chunk_id,
+                item_id: source.item_id,
+                item_key: meta.item_key,
+                title: source.item_title,
+                authors: meta.authors,
+                year: meta.year,
+                library_name: meta.library_name,
+                library_type: meta.library_type,
+                library_native_id: meta.library_native_id,
+                csl_json,
+                snippet: source.snippet,
+                location: meta.location,
+                score: source.score,
+            })
+        })
+        .collect();
+    PassageSearch {
+        passages,
+        notice: leg.notice,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -768,5 +840,43 @@ mod tests {
                 to: 3
             })
         );
+    }
+
+    #[test]
+    fn passage_search_lists_cards_with_csl_snippet_and_location() {
+        let (conn, chunk_a, _) = two_library_catalog();
+        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        assert_eq!(found.notice, None);
+        assert_eq!(found.passages.len(), 2);
+        let first = &found.passages[0];
+        assert_eq!(first.chunk_id, chunk_a);
+        assert_eq!(first.item_key, "KA0001");
+        assert_eq!(first.title, "Obra A");
+        assert_eq!(first.library_native_id, "lib-a");
+        assert_eq!(first.snippet, "Texto de la obra A.");
+        assert!(!first.csl_json.is_empty(), "a citation needs the CSL data");
+        assert_eq!(
+            first.location,
+            Some(RagBibliographyLocation {
+                kind: "pages".into(),
+                from: 3,
+                to: 3
+            })
+        );
+    }
+
+    #[test]
+    fn passage_search_says_why_it_found_nothing() {
+        let empty = passage_db();
+        let found = passage_search(&empty, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        assert_eq!(found.notice, Some(BibliographyNotice::NoLibrarySynced));
+        assert!(found.passages.is_empty());
+
+        let mut conn = passage_db();
+        let (_l, _item) = seed_item(&mut conn, "pa", "a", "KA0001", "Obra A");
+        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &|_| {
+            panic!("the embedder must not run without an active generation")
+        });
+        assert_eq!(found.notice, Some(BibliographyNotice::NoEmbeddings));
     }
 }

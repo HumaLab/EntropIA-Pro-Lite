@@ -1210,6 +1210,7 @@ pub fn run() {
             bibliography::commands::bibliography_open_passage,
             bibliography::commands::bibliography_passage_context,
             bibliography::commands::bibliography_library_status,
+            bibliography::commands::bibliography_search_passages,
             processing::commands::processing_list_batches,
             processing::commands::processing_get_batch,
             processing::commands::processing_list_tasks,
