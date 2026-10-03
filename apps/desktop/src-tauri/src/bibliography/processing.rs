@@ -1785,6 +1785,18 @@ pub struct BibliographyProfileComputeOutput {
 /// verifiable without a network or model files.
 pub trait ProfileEmbedder: Send + Sync {
     fn embed(&self, text: &str) -> Result<Vec<f32>, String>;
+    /// Embeds several texts, one vector per text in input order. The default
+    /// keeps single-call embedders correct; providers that can batch override
+    /// it. Implementations must fail the whole call rather than return a
+    /// partial result.
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        texts.iter().map(|text| self.embed(text)).collect()
+    }
+    /// How many chunk texts one `embed_many` call should carry. One keeps the
+    /// historical per-chunk granularity for embedders that do not batch.
+    fn batch_hint(&self) -> usize {
+        1
+    }
     /// `(model, contract, dimensions)` the vector is computed under — the
     /// effective contract resolved from settings, never hardcoded constants.
     fn identity(&self) -> Result<(String, String, usize), String>;
@@ -1806,21 +1818,36 @@ impl EngineProfileEmbedder {
             }),
         }
     }
-}
 
-impl ProfileEmbedder for EngineProfileEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+    /// Resolves the engine for the current settings and releases the cache
+    /// lock before any network or model work starts.
+    fn engine(&self) -> Result<Arc<crate::nlp::embeddings::EmbeddingEngine>, String> {
         let conn = open_archive_connection(&self.db_path)?;
         let mut guard = self
             .cache
             .lock()
             .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
         let crate::processing::embedding::EngineCache { cached, last_error } = &mut *guard;
-        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error)
-            .ok_or_else(|| {
-                crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref())
-            })?
-            .embed_text(text)
+        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error).ok_or_else(
+            || crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref()),
+        )
+    }
+}
+
+impl ProfileEmbedder for EngineProfileEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.engine()?.embed_text(text)
+    }
+
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        self.engine()?.embed_batch(&refs)
+    }
+
+    fn batch_hint(&self) -> usize {
+        self.engine()
+            .map(|engine| engine.preferred_wave())
+            .unwrap_or(1)
     }
 
     fn identity(&self) -> Result<(String, String, usize), String> {
@@ -1836,11 +1863,23 @@ impl ProfileEmbedder for EngineProfileEmbedder {
 /// input.
 pub struct BibliographyProfileExecutor {
     embedder: Arc<dyn ProfileEmbedder>,
+    /// Chunk texts per embedding wave; `None` follows the embedder's hint.
+    embed_wave: Option<usize>,
 }
 
 impl BibliographyProfileExecutor {
     pub fn new(embedder: Arc<dyn ProfileEmbedder>) -> Self {
-        Self { embedder }
+        Self {
+            embedder,
+            embed_wave: None,
+        }
+    }
+
+    /// Pins the number of chunk texts embedded per wave (and checkpointed
+    /// together), overriding the embedder's hint.
+    pub fn with_embed_wave(mut self, wave: usize) -> Self {
+        self.embed_wave = Some(wave.max(1));
+        self
     }
 
     /// Stages one profile output or an honest verdict. Subject identity,
@@ -1962,7 +2001,7 @@ impl BibliographyProfileExecutor {
             code: "storage_unavailable".to_string(),
             message: format!("failed to serialize profile provenance: {error}"),
         })?;
-        let chunks = self.stage_chunks(ctx, task, stop, dimensions)?;
+        let chunks = self.stage_chunks(ctx, task, stop, &model, &contract, dimensions)?;
         let output = BibliographyProfileComputeOutput {
             item_id: task.subject_id.clone(),
             generation_id: generation.id.clone(),
@@ -2000,18 +2039,24 @@ impl BibliographyProfileExecutor {
 
 impl BibliographyProfileExecutor {
     /// Segments every chunkable page of the work's attachments and embeds
-    /// each chunk. Ordinals run globally per work across attachments, in
-    /// (attachment, page) order; chunk ids are deterministic per
-    /// (work, ordinal) so re-chunks replace instead of appending.
-    /// Checkpoint keys bind the chunk text hash: a page-text edit without
-    /// a metadata change still re-embeds instead of serving a stale
-    /// cached vector.
+    /// the chunks in waves. Ordinals run globally per work across
+    /// attachments, in (attachment, page) order; chunk ids are deterministic
+    /// per (work, ordinal) so re-chunks replace instead of appending.
+    ///
+    /// Chunks whose vector is already stored under the same text hash and
+    /// `(model, contract, dimensions)` are reused. The rest travel in waves
+    /// through [`ProfileEmbedder::embed_many`]; each wave is one checkpoint
+    /// whose key binds the ordered chunk hashes, so a retry resumes after the
+    /// waves that succeeded and a page-text edit never serves a stale vector.
+    /// A failing wave fails the whole run: nothing is staged for publish.
     #[allow(clippy::too_many_arguments)]
     fn stage_chunks(
         &self,
         ctx: &crate::processing::scheduler::ExecCtx,
         task: &crate::processing::scheduler::ClaimedTask,
         stop: &crate::processing::scheduler::StopFlag,
+        model: &str,
+        contract: &str,
         dimensions: usize,
     ) -> Result<Vec<StagedWorkChunk>, crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
@@ -2025,7 +2070,20 @@ impl BibliographyProfileExecutor {
                     code: "storage_unavailable".to_string(),
                     message: format!("{}: {}", error.code, error.message),
                 })?;
+        let mut reusable = crate::bibliography::repository::reusable_chunk_embeddings(
+            &conn,
+            &task.subject_id,
+            model,
+            contract,
+            dimensions,
+        )
+        .map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: format!("{}: {}", error.code, error.message),
+        })?;
         drop(conn);
+        // A stored blob that does not match the contract width is not reusable.
+        reusable.retain(|_, blob| blob.len() == dimensions * 4);
         // Group pages per attachment preserving order, then segment.
         let mut by_attachment: Vec<(String, Vec<crate::bibliography::chunks::PageInput>)> =
             Vec::new();
@@ -2045,52 +2103,16 @@ impl BibliographyProfileExecutor {
                 )),
             }
         }
-        let mut staged = Vec::new();
-        let mut ordinal: i64 = 0;
+        // Segment the whole work up front: ordinals, ids, and spans are
+        // fixed before any embedding starts.
+        let mut staged: Vec<StagedWorkChunk> = Vec::new();
         for (attachment_id, inputs) in &by_attachment {
             for chunk in crate::bibliography::chunks::segment_pages(inputs) {
-                if stop.stopped() {
-                    return Err(ExecOutput::Stopped);
-                }
-                let chunk_id = format!("{}:{:06}", task.subject_id, ordinal);
-                let vector = ctx
-                    .unit(
-                        task,
-                        &format!(
-                            "chunk-emb:{ordinal}:{}",
-                            &chunk.hash[..16.min(chunk.hash.len())]
-                        ),
-                        || {
-                            let vector = self.embedder.embed(&chunk.text)?;
-                            if vector.len() != dimensions
-                                || vector.iter().any(|value| !value.is_finite())
-                            {
-                                return Err(format!(
-                                "Chunk embedding does not satisfy {dimensions} finite dimensions"
-                            ));
-                            }
-                            Ok(vector)
-                        },
-                    )
-                    .map_err(|error| {
-                        match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
-                            ExecOutput::Fatal {
-                                code: _,
-                                message: _,
-                            } => ExecOutput::Fatal {
-                                code: "embedding_failed".to_string(),
-                                message: error,
-                            },
-                            // Lease/demand loss and retryable/blocked verdicts
-                            // pass through untouched: checkpoints stay Stopped,
-                            // provider states stay honest.
-                            other => other,
-                        }
-                    })?;
+                let ordinal = staged.len() as i64;
                 staged.push(StagedWorkChunk {
                     attachment_id: attachment_id.clone(),
                     ordinal,
-                    chunk_id,
+                    chunk_id: format!("{}:{:06}", task.subject_id, ordinal),
                     input_hash: chunk.hash.clone(),
                     spans: chunk
                         .spans
@@ -2104,9 +2126,78 @@ impl BibliographyProfileExecutor {
                         })
                         .collect(),
                     text_content: chunk.text,
-                    embedding: crate::nlp::embeddings::floats_to_blob(&vector),
+                    embedding: reusable.get(&chunk.hash).cloned().unwrap_or_default(),
                 });
-                ordinal += 1;
+            }
+        }
+        // Chunks still lacking a vector, in ordinal order.
+        let pending: Vec<usize> = staged
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.embedding.is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        let wave_size = self
+            .embed_wave
+            .unwrap_or_else(|| self.embedder.batch_hint())
+            .max(1);
+        for wave in pending.chunks(wave_size) {
+            if stop.stopped() {
+                return Err(ExecOutput::Stopped);
+            }
+            let texts: Vec<String> = wave
+                .iter()
+                .map(|&index| staged[index].text_content.clone())
+                .collect();
+            let wave_digest = {
+                let mut digest = Sha256::new();
+                for &index in wave {
+                    digest.update(staged[index].input_hash.as_bytes());
+                    digest.update([0_u8]);
+                }
+                format!("{:x}", digest.finalize())
+            };
+            let key = format!(
+                "chunk-wave:{}:{}",
+                staged[wave[0]].ordinal,
+                &wave_digest[..16]
+            );
+            let vectors = ctx
+                .unit(task, &key, || {
+                    let vectors = self.embedder.embed_many(&texts)?;
+                    if vectors.len() != texts.len() {
+                        return Err(format!(
+                            "Chunk embedding returned {} vectors for {} chunks",
+                            vectors.len(),
+                            texts.len()
+                        ));
+                    }
+                    if vectors.iter().any(|vector| {
+                        vector.len() != dimensions || vector.iter().any(|value| !value.is_finite())
+                    }) {
+                        return Err(format!(
+                            "Chunk embedding does not satisfy {dimensions} finite dimensions"
+                        ));
+                    }
+                    Ok(vectors)
+                })
+                .map_err(|error| {
+                    match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
+                        ExecOutput::Fatal {
+                            code: _,
+                            message: _,
+                        } => ExecOutput::Fatal {
+                            code: "embedding_failed".to_string(),
+                            message: error,
+                        },
+                        // Lease/demand loss and retryable/blocked verdicts
+                        // pass through untouched: checkpoints stay Stopped,
+                        // provider states stay honest.
+                        other => other,
+                    }
+                })?;
+            for (&index, vector) in wave.iter().zip(&vectors) {
+                staged[index].embedding = crate::nlp::embeddings::floats_to_blob(vector);
             }
         }
         Ok(staged)

@@ -8034,3 +8034,249 @@ fn a_manual_sync_re_admits_failed_extractions_that_still_have_no_text() {
     assert_eq!(live.len(), 1, "a new retry cycle for the failed attachment");
     assert_ne!(live[0], failed_task, "terminal history is never rewritten");
 }
+
+// ── Batched chunk embeddings: batches, skip-if-embedded, atomic failure ────
+
+/// Records every `embed_many` call so wave sizes, order, and skipped work are
+/// observable. The vector for a text is a pure function of the text, which
+/// makes the order mapping checkable on the published rows.
+struct RecordingEmbedder {
+    model: String,
+    singles: Mutex<Vec<String>>,
+    batches: Mutex<Vec<Vec<String>>>,
+    fail_batch_number: Option<usize>,
+}
+
+impl RecordingEmbedder {
+    fn new(model: &str, fail_batch_number: Option<usize>) -> Arc<Self> {
+        Arc::new(Self {
+            model: model.to_string(),
+            singles: Mutex::new(Vec::new()),
+            batches: Mutex::new(Vec::new()),
+            fail_batch_number,
+        })
+    }
+
+    fn vector_for(text: &str) -> Vec<f32> {
+        let seed = text.bytes().map(|byte| byte as u32).sum::<u32>() % 97 + 1;
+        vec![seed as f32, 0.25, 0.5, 0.75]
+    }
+
+    fn batch_sizes(&self) -> Vec<usize> {
+        self.batches
+            .lock()
+            .expect("batches")
+            .iter()
+            .map(Vec::len)
+            .collect()
+    }
+}
+
+impl ProfileEmbedder for RecordingEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.singles.lock().expect("singles").push(text.to_string());
+        Ok(Self::vector_for(text))
+    }
+
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let mut batches = self.batches.lock().expect("batches");
+        let number = batches.len();
+        batches.push(texts.to_vec());
+        if self.fail_batch_number == Some(number) {
+            return Err("OpenRouter embedding API error (503): upstream down".to_string());
+        }
+        Ok(texts.iter().map(|text| Self::vector_for(text)).collect())
+    }
+
+    fn identity(&self) -> Result<(String, String, usize), String> {
+        Ok((self.model.clone(), "fake-contract".to_string(), 4))
+    }
+}
+
+fn five_page_work(conn: &mut rusqlite::Connection, key: &str) -> String {
+    let item_id = seed_catalog(conn, key, "Obra extensa", "Resumen.");
+    let pages: Vec<String> = (1..=5)
+        .map(|n| format!("Pagina numero {n} con contenido distinto. ").repeat(14))
+        .collect();
+    let numbered: Vec<(i64, &str)> = pages
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (index as i64 + 1, text.as_str()))
+        .collect();
+    seed_attachment_with_pages(conn, &item_id, &format!("ATT-{key}"), &numbered);
+    item_id
+}
+
+fn run_profile_with(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    embedder: Arc<RecordingEmbedder>,
+    wave: usize,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(
+        BibliographyProfileExecutor::new(embedder).with_embed_wave(wave),
+    ));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run")
+}
+
+fn chunk_vectors(conn: &rusqlite::Connection, item_id: &str) -> Vec<(String, Vec<u8>)> {
+    conn.prepare(
+        "SELECT c.text_content, e.embedding FROM bibliographic_chunks c
+         JOIN bibliographic_chunk_embeddings e ON e.chunk_id = c.id
+         WHERE c.item_id = ?1 ORDER BY c.ordinal",
+    )
+    .expect("vectors query")
+    .query_map([item_id], |row| Ok((row.get(0)?, row.get(1)?)))
+    .expect("vectors map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("vectors collect")
+}
+
+/// N chunks travel in ceil(N / wave) batched calls, never one by one, and
+/// each published vector belongs to its own chunk text.
+#[test]
+fn profile_chunks_embed_in_batches_with_exact_order_mapping() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "BATCH001");
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 2);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(embedder.batch_sizes(), vec![2, 2, 1], "ceil(5 / 2) waves");
+    assert_eq!(
+        embedder.singles.lock().unwrap().len(),
+        1,
+        "only the profile text is embedded singly"
+    );
+    let flattened: Vec<String> = embedder
+        .batches
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let published = chunk_vectors(&conn, &item_id);
+    assert_eq!(published.len(), 5);
+    for (index, (text, blob)) in published.iter().enumerate() {
+        assert_eq!(&flattened[index], text, "waves keep chunk order");
+        let expected: Vec<u8> = RecordingEmbedder::vector_for(text)
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(blob, &expected, "vector {index} belongs to its own chunk");
+    }
+}
+
+/// A re-profile whose chunks are unchanged embeds none of them again; a
+/// different model is a different key and embeds all of them.
+#[test]
+fn already_embedded_chunks_are_skipped_per_text_hash_and_model() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "SKIP0001");
+    admit_profile_demand(&conn, &item_id);
+    let first = RecordingEmbedder::new("fake/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&first), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let before = chunk_vectors(&conn, &item_id);
+
+    admit_profile_demand(&conn, &item_id);
+    let second = RecordingEmbedder::new("fake/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&second), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert!(
+        second.batches.lock().unwrap().is_empty(),
+        "unchanged chunks must not be embedded again"
+    );
+    assert_eq!(
+        chunk_vectors(&conn, &item_id),
+        before,
+        "vectors republished intact"
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let other_model = RecordingEmbedder::new("other/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&other_model), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        other_model.batch_sizes(),
+        vec![2, 2, 1],
+        "a different model never reuses another model's vectors"
+    );
+}
+
+/// A failing wave leaves nothing half-published, and the retry resumes from
+/// the waves that already succeeded instead of paying for them again.
+#[test]
+fn a_failed_wave_publishes_nothing_and_the_retry_resumes_from_checkpoints() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "FAIL0001");
+    admit_profile_demand(&conn, &item_id);
+    let task = repository::claim_next(
+        &conn,
+        "profile-session",
+        &["bibliography_profile"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("claimable");
+
+    let failing = RecordingEmbedder::new("fake/model", Some(1));
+    let result = BibliographyProfileExecutor::new(Arc::clone(&failing) as Arc<dyn ProfileEmbedder>)
+        .with_embed_wave(2)
+        .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(
+        matches!(result.output, ExecOutput::Retryable { .. }),
+        "a 503 wave is a transient provider failure: {:?}",
+        result.output
+    );
+    assert!(result.engine_output.is_none(), "nothing staged for publish");
+    for table in [
+        "bibliographic_semantic_profiles",
+        "bibliographic_chunks",
+        "bibliographic_chunk_embeddings",
+        "bibliographic_item_embeddings",
+    ] {
+        let rows: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(rows, 0, "{table} must stay empty after a failed wave");
+    }
+
+    let healthy = RecordingEmbedder::new("fake/model", None);
+    let result = BibliographyProfileExecutor::new(Arc::clone(&healthy) as Arc<dyn ProfileEmbedder>)
+        .with_embed_wave(2)
+        .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(matches!(result.output, ExecOutput::Success { .. }));
+    assert_eq!(
+        healthy.batch_sizes(),
+        vec![2, 1],
+        "the first wave came back from its checkpoint"
+    );
+}

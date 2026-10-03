@@ -2564,6 +2564,46 @@ pub fn upsert_chunk_embedding_in_transaction(
     Ok(())
 }
 
+/// Vectors already stored for this work's current chunks under the same
+/// `(model, contract, dimensions)`, keyed by chunk text hash. A re-profile
+/// reuses them instead of paying the provider again; a different model or
+/// contract never matches, and neither does a chunk whose text moved (its
+/// hash no longer equals the stamp the vector was computed from).
+pub fn reusable_chunk_embeddings(
+    conn: &Connection,
+    item_id: &str,
+    model: &str,
+    contract: &str,
+    dimensions: usize,
+) -> BibliographyResult<std::collections::HashMap<String, Vec<u8>>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT e.input_hash, e.embedding
+               FROM bibliographic_chunk_embeddings e
+               JOIN bibliographic_chunks c ON c.id = e.chunk_id
+              WHERE c.item_id = ?1
+                AND e.input_hash = c.text_hash
+                AND e.embedding_model = ?2
+                AND e.embedding_contract = ?3
+                AND e.dimensions = ?4",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read reusable chunk vectors", error))?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![item_id, model, contract, dimensions as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read reusable chunk vectors", error))?;
+    let mut reusable = std::collections::HashMap::new();
+    for row in rows {
+        let (hash, blob) = row.map_err(|error| {
+            BibliographyError::sql("Failed to read a reusable chunk vector", error)
+        })?;
+        reusable.insert(hash, blob);
+    }
+    Ok(reusable)
+}
+
 // ── Page texts for chunking (E4c-WU2) ──────────────────────────────────────
 
 /// One page text preferred for chunking: the OCR row when one exists,
