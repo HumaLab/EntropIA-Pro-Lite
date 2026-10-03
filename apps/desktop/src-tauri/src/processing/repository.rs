@@ -892,6 +892,74 @@ fn admit_bibliography_item_profile_or_attach(
     })
 }
 
+/// Id of the one catalog connection that stands for the Zotero running on
+/// this machine (its local API).
+pub const LOCAL_ZOTERO_CONNECTION_ID: &str = "local-zotero";
+
+/// Registers the local Zotero connection and `(library_type, library_id)` in
+/// the catalog when no row owns that namespace yet, so a first sync request
+/// has a library to resolve.
+///
+/// Library ids are the ones the local API is addressed with and the sync
+/// executor reads: the personal library is `user/0` (the API's alias, the same
+/// `Library::personal()` identity the Zotero tab uses), groups their numeric
+/// id. Plain `INSERT ... DO NOTHING`, never `upsert_connection`: that bumps
+/// the connection revision, which is the reconciliation identity fence, and
+/// would retire an in-flight run on every click. A namespace that already has
+/// any row (even several, owned by different connections) is left to the
+/// caller's honest `ambiguous_library` / ordinary path.
+pub fn ensure_local_zotero_library(
+    conn: &Connection,
+    library_type: &str,
+    library_id: &str,
+) -> Result<(), String> {
+    if (library_type != "user" && library_type != "group") || library_id.trim().is_empty() {
+        // Left to admit_bibliography_sync_demand's own validation.
+        return Ok(());
+    }
+    let owned: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM zotero_libraries WHERE library_type = ?1 AND library_id = ?2",
+            rusqlite::params![library_type, library_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to look up Zotero library namespace: {error}"))?;
+    if owned > 0 {
+        return Ok(());
+    }
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO zotero_connections
+           (id, source_origin, source_instance_id, endpoint, capabilities_json,
+            created_at, updated_at)
+         VALUES (?1, 'local', NULL, 'http://127.0.0.1:23119', '{}', ?2, ?2)
+         ON CONFLICT(id) DO NOTHING",
+        rusqlite::params![LOCAL_ZOTERO_CONNECTION_ID, now],
+    )
+    .map_err(|error| format!("Failed to register the local Zotero connection: {error}"))?;
+    let name = if library_type == "user" && library_id == "0" {
+        "Mi biblioteca".to_string()
+    } else {
+        format!("Zotero {library_type} {library_id}")
+    };
+    conn.execute(
+        "INSERT INTO zotero_libraries
+           (id, connection_id, library_type, library_id, name, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+         ON CONFLICT(connection_id, library_type, library_id) DO NOTHING",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            LOCAL_ZOTERO_CONNECTION_ID,
+            library_type,
+            library_id,
+            name,
+            now
+        ],
+    )
+    .map_err(|error| format!("Failed to register the Zotero library: {error}"))?;
+    Ok(())
+}
+
 /// Resolves one external Zotero namespace and admits its manual sync demand
 /// into the long-lived bibliography system batch.
 ///

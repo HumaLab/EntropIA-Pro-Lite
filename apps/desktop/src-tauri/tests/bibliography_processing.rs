@@ -6580,6 +6580,75 @@ fn rerank_documents(
     Ok(scored.into_iter().map(|(index, _)| index).collect())
 }
 
+/// Regression: nothing in production ever created the connection/library
+/// rows, so the first "Sincronizar biblioteca" failed with `unknown_library`.
+/// A sync request now registers the local Zotero connection and the
+/// requested library itself, idempotently and without moving the fence.
+#[test]
+fn a_sync_request_registers_the_local_library_in_an_empty_catalog() {
+    let (_dir, conn) = migrated_db();
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).expect("count") };
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_libraries"), 0);
+
+    let first = apply_bibliography_sync_request(&conn, "req-1", "user", "0")
+        .expect("an empty catalog still admits the sync");
+    assert!(first.created);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_connections"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_libraries"), 1);
+    let (origin, name, ltype, lid): (String, String, String, String) = conn
+        .query_row(
+            "SELECT c.source_origin, l.name, l.library_type, l.library_id
+               FROM zotero_libraries l JOIN zotero_connections c ON c.id = l.connection_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("registered rows");
+    assert_eq!(
+        (origin.as_str(), name.as_str(), ltype.as_str(), lid.as_str()),
+        ("local", "Mi biblioteca", "user", "0")
+    );
+    let fence_before = count("SELECT revision FROM zotero_connections");
+
+    // A new request id for the same library attaches to the same live task
+    // and neither duplicates rows nor bumps the connection fence.
+    let again = apply_bibliography_sync_request(&conn, "req-2", "user", "0").expect("repeat");
+    assert_eq!(again.task_id, first.task_id);
+    assert!(!again.created);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_connections"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_libraries"), 1);
+    assert_eq!(
+        count("SELECT revision FROM zotero_connections"),
+        fence_before
+    );
+
+    // A group registers under the same connection with a neutral name.
+    let group = apply_bibliography_sync_request(&conn, "req-3", "group", "6238085")
+        .expect("group admitted");
+    assert_ne!(group.task_id, first.task_id);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_connections"), 1);
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_libraries"), 2);
+
+    // A namespace owned twice stays an honest ambiguity, never re-registered.
+    conn.execute(
+        "INSERT INTO zotero_connections
+           (id, source_origin, endpoint, capabilities_json, state, revision, created_at, updated_at)
+         VALUES ('conn-x', 'local', 'http://x.invalid', '{}', 'available', 0, 1, 1)",
+        [],
+    )
+    .expect("second connection");
+    conn.execute(
+        "INSERT INTO zotero_libraries (id, connection_id, library_type, library_id, name,
+                                        revision, created_at, updated_at)
+         VALUES ('lib-x', 'conn-x', 'user', '0', 'Other', 0, 1, 1)",
+        [],
+    )
+    .expect("duplicate namespace");
+    let ambiguous = apply_bibliography_sync_request(&conn, "req-4", "user", "0")
+        .expect_err("ambiguity must surface");
+    assert!(ambiguous.contains("ambiguous_library"), "{ambiguous}");
+    assert_eq!(count("SELECT COUNT(*) FROM zotero_libraries"), 3);
+}
+
 // ---------------------------------------------------------------------------
 // B1: the library sync catalogs each work's PDF attachments.
 // ---------------------------------------------------------------------------

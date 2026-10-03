@@ -303,6 +303,9 @@ pub fn apply_bibliography_sync_request(
             });
         }
 
+        // Nothing else creates catalog rows: register the local connection
+        // and this library first (same transaction, idempotent).
+        repository::ensure_local_zotero_library(conn, library_type, library_id)?;
         let outcome = repository::admit_bibliography_sync_demand(conn, library_type, library_id)?;
         let response = BibliographySyncResponse {
             batch_id: outcome.batch_id,
