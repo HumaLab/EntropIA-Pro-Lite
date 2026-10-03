@@ -20,9 +20,12 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
 
 ## Tasks (route: delegated writer per task; TDD strict, Vitest + cargo test)
 
-- [ ] B1 — Data layer: sync each work's PDF attachments into
-  `zotero_attachments` (local API children), detect the Zotero data directory
-  (and a setting to choose it), so extraction/chunks/embeddings run.
+- [x] B1 — Data layer: sync each work's PDF attachments into
+  `zotero_attachments` (local API attachment walk), so extraction/chunks/
+  embeddings run. Route: delegated writer. Commit d168ff2. No data-dir setting
+  was needed: Zotero's local API reports each attachment's file as
+  `links.enclosure.href` (a `file:` URL, also for `imported_url`), stored as
+  `native_path`, which the resolver already tries first.
 - [ ] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
   `search_works`, map library ids).
 - [ ] B3 — TopBar search includes bibliography works (new result kind).
@@ -49,3 +52,16 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
 ## Progress
 
 - 2026-10-02: plan opened; B1 started.
+- 2026-10-03: B1 done. Live local API: `GET /items?itemType=attachment`
+  (2065 attachments, paged 100) returns `data.parentItem`, `linkMode`,
+  `contentType`, `filename`, `md5`, `mtime` and `links.enclosure.href`
+  (`file:///C:/Users/.../storage/<key>/<name>`); `imported_url` PDFs have one
+  too. One paged walk after the items walk, inside the sync executor; rows a
+  complete walk no longer lists are deleted (cascade); an unreadable or
+  stopped walk deletes nothing. TDD: RED = compile failure of the new tests
+  (missing API), GREEN after implementation; 6 new tests in
+  `tests/bibliography_processing.rs` + 1 URL test in `connector.rs` (written
+  just after the builder, not before). Checks: lint, typecheck, format:check,
+  vitest, cargo fmt/clippy/test green except `web_capture_sync_two_device`
+  (4 tests; they fail on the base too: the test Cloud server lacks
+  `web-capture-v1`).
