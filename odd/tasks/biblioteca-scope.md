@@ -40,7 +40,7 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
 - [x] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
   `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
 - [x] B3 — TopBar search includes bibliography works (new result kind). Route:
-  delegated writer. Commit 96eb5c7.
+  delegated writer. Commit e9404ed.
 - [ ] B4 — Research chat scope: Corpus / Biblioteca / both (works level first,
   passages after B1). Product decisions pending.
 - [ ] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
