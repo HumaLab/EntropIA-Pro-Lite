@@ -1651,7 +1651,7 @@ fn final_publish_and_receipt_roll_back_together() {
     registry.register(Arc::new(executor(Arc::new(FakeSource::new(vec![
         ScriptStep::Page(page(vec![item("AAAA1111", 12)], Some(1))),
     ])))));
-    let error = run_one(
+    let outcome = run_one(
         &conn,
         &ctx_of(&dir),
         &registry,
@@ -1660,8 +1660,19 @@ fn final_publish_and_receipt_roll_back_together() {
         &|_, _| {},
         &|_, _, _, _| {},
     )
-    .expect_err("synthetic receipt write must abort success");
-    assert!(error.contains("synthetic receipt failure"), "{error}");
+    .expect("a failed publication ends the attempt, it does not error the tick");
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    let message: String = conn
+        .query_row(
+            "SELECT last_error_message FROM processing_tasks WHERE id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("recorded error");
+    assert!(message.contains("synthetic receipt failure"), "{message}");
 
     let (state, receipt): (String, Option<String>) = conn
         .query_row(
@@ -1670,7 +1681,10 @@ fn final_publish_and_receipt_roll_back_together() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("task after rollback");
-    assert_eq!(state, "running");
+    assert_eq!(
+        state, "retry_wait",
+        "never succeeded, never stranded running"
+    );
     assert_eq!(receipt, None);
     let run = get_run(&conn, "lib-1")
         .expect("read run")
@@ -1734,7 +1748,7 @@ fn bibliography_task_cannot_pass_through_the_corpus_publisher() {
     let mut registry = ExecutorRegistry::new();
     registry.register(Arc::new(WrongCorpusPublisher));
 
-    let error = run_one(
+    let outcome = run_one(
         &conn,
         &ctx_of(&dir),
         &registry,
@@ -1743,8 +1757,19 @@ fn bibliography_task_cannot_pass_through_the_corpus_publisher() {
         &|_, _| {},
         &|_, _, _, _| {},
     )
-    .expect_err("bibliography cannot route through OCR publication");
-    assert!(error.starts_with("unsupported_subject"), "{error}");
+    .expect("a refused publication ends the attempt");
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    let message: String = conn
+        .query_row(
+            "SELECT last_error_message FROM processing_tasks WHERE id=?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("recorded error");
+    assert!(message.starts_with("unsupported_subject"), "{message}");
     let (state, receipt): (String, Option<String>) = conn
         .query_row(
             "SELECT state, result_receipt_json FROM processing_tasks WHERE id=?1",
@@ -1752,7 +1777,7 @@ fn bibliography_task_cannot_pass_through_the_corpus_publisher() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("unpublished bibliography task");
-    assert_eq!(state, "running");
+    assert_eq!(state, "retry_wait");
     assert_eq!(receipt, None);
     assert_eq!(
         conn.query_row("SELECT COUNT(*) FROM extractions", [], |row| {
@@ -7076,4 +7101,149 @@ fn a_source_without_attachment_support_leaves_the_catalog_untouched() {
     )
     .expect("second sync");
     assert_eq!(attachment_keys(&conn), ["MANUAL01"]);
+}
+
+/// Scale: a real library (2812 works, ~737 PDFs over 2065 attachment rows)
+/// must settle, not hang after the last walk.
+#[test]
+fn a_library_sized_sync_settles_after_both_walks() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    admit_bibliography_task(&conn, "lib-1");
+    let works = 2812usize;
+    let item_pages: Vec<ScriptStep> = (0..works)
+        .step_by(100)
+        .map(|start| {
+            ScriptStep::Page(page(
+                (start..(start + 100).min(works))
+                    .map(|n| {
+                        custom_page_item(&format!("W{n:07}"), 1, &format!("Obra {n}"), "Resumen.")
+                    })
+                    .collect(),
+                Some(works as u64),
+            ))
+        })
+        .collect();
+    let rows = 2065usize;
+    let attachment_pages: Vec<AttachmentScript> = (0..rows)
+        .step_by(100)
+        .map(|start| {
+            Ok((
+                serde_json::Value::Array(
+                    (start..(start + 100).min(rows))
+                        .map(|n| {
+                            attachment_row(
+                                &format!("A{n:07}"),
+                                Some(&format!("W{:07}", n % works)),
+                                if n % 3 == 0 {
+                                    "application/pdf"
+                                } else {
+                                    "text/html"
+                                },
+                                "imported_url",
+                                "a.pdf",
+                                None,
+                            )
+                        })
+                        .collect(),
+                ),
+                Some(rows as u64),
+            ))
+        })
+        .collect();
+    let source = Arc::new(AttachmentSource::new(item_pages, attachment_pages));
+    let started = std::time::Instant::now();
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(BibliographySyncExecutor::new(source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("sync run");
+    eprintln!("SCALE outcome {outcome:?} after {:?}", started.elapsed());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+}
+
+fn untitled_page_item(key: &str) -> BibliographyPageItem {
+    // A real Zotero work can have no title (a note-like or scanned item).
+    let csl = serde_json::json!({ "id": key, "type": "article-newspaper" });
+    let native = serde_json::json!({ "key": key, "version": 1, "itemType": "newspaperArticle" });
+    BibliographyPageItem {
+        key: key.to_string(),
+        item_version: 1,
+        csl_json: csl.to_string(),
+        native_json_snapshot: native.to_string(),
+    }
+}
+
+/// Hang root cause (owner's real library): one work without a title made the
+/// chained profile admission fail ("Invalid column type Null ... title"), so
+/// the success publication errored.
+#[test]
+fn a_work_without_a_title_does_not_break_the_sync_publication() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    admit_bibliography_task(&conn, "lib-1");
+    let source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![untitled_page_item("NOTITLE1"), item("TITLED01", 1)],
+        Some(2),
+    ))]));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("sync run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+}
+
+/// Hang symptom: a publication error left the task `running` forever (alive
+/// lease, nothing to resume it). It must end the attempt visibly instead.
+#[test]
+fn a_failing_publication_ends_the_attempt_instead_of_stranding_it_running() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let task_id = admit_bibliography_task(&conn, "lib-1");
+    conn.execute_batch(
+        "CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         INSERT INTO app_settings(key, value) VALUES ('embedding_provider', 'bogus');",
+    )
+    .expect("unsupported provider makes the chained admission fail");
+    let source = Arc::new(FakeSource::new(vec![ScriptStep::Page(page(
+        vec![item("TITLED01", 1)],
+        Some(1),
+    ))]));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(source)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    );
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |r| r.get(0),
+        )
+        .expect("state");
+    assert_ne!(
+        state, "running",
+        "stranded running; run_one said {outcome:?}"
+    );
 }

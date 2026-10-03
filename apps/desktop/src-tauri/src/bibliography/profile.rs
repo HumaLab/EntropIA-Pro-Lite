@@ -211,7 +211,7 @@ pub fn profile_input_for_item(
     conn: &rusqlite::Connection,
     item_id: &str,
 ) -> BibliographyResult<Option<ProfileInput>> {
-    let row: Option<(String, Option<String>, String, String)> = conn
+    let row: Option<(String, Option<String>, String, Option<String>)> = conn
         .query_row(
             "SELECT csl_json_snapshot, creators_json, native_json_snapshot, title
              FROM bibliographic_items WHERE id = ?1",
@@ -241,7 +241,7 @@ pub fn profile_input_for_item(
     let title = {
         let csl_title = json_str(&csl, "title");
         if csl_title.is_empty() {
-            title
+            title.unwrap_or_default()
         } else {
             csl_title
         }

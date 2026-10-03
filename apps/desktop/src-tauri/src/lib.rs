@@ -989,6 +989,14 @@ pub fn run() {
             // follow-ups) run here: the receipt already committed, so observer
             // failures only log and never rewrite queue state.
             let scheduler_app = app.handle().clone();
+            {
+                let log_app = app.handle().clone();
+                processing::scheduler::set_log_sink(move |level, message| match level {
+                    "error" => app_logs::error(&log_app, "processing", message),
+                    "warn" => app_logs::warn(&log_app, "processing", message),
+                    _ => app_logs::info(&log_app, "processing", message),
+                });
+            }
             let scheduler_db_path = db_path.clone();
             let mut scheduler_registry = processing::scheduler::ExecutorRegistry::new();
             scheduler_registry.register(std::sync::Arc::new(processing::ocr::OcrExecutor::new(

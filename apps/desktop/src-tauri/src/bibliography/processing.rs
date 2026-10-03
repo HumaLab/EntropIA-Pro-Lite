@@ -475,6 +475,10 @@ struct PageCheckpoint {
     library_version: Option<u64>,
 }
 
+fn sync_log(level: &str, message: &str) {
+    crate::processing::scheduler::log_line(level, &format!("[bibliography] {message}"));
+}
+
 /// How the attachment walk ended.
 enum AttachmentPass {
     Done,
@@ -854,10 +858,19 @@ pub(crate) fn publish_bibliography_output(
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     // E3b-WU3: chained profile demand lands in the same success
     // transaction — a committed sync always carries its reindex follow-up.
-    let _ = processing_repository::admit_stale_profile_demands(conn, &output.library_row_id)?;
+    let profiles =
+        processing_repository::admit_stale_profile_demands(conn, &output.library_row_id)?;
     // E4a-WU3: chained extraction demand for readable files, same
     // transaction and same durability.
-    let _ = processing_repository::admit_stale_extraction_demands(conn, &output.library_row_id)?;
+    let extractions =
+        processing_repository::admit_stale_extraction_demands(conn, &output.library_row_id)?;
+    sync_log(
+        "info",
+        &format!(
+            "library sync published: {} works, {profiles} profile and {extractions} extraction tasks queued",
+            output.items_seen
+        ),
+    );
     if completed.cursor_start != output.items_seen
         || completed.remote_total != output.remote_total
         || completed.target_version != output.target_version
@@ -920,6 +933,16 @@ impl BibliographySyncExecutor {
         progress_total: Option<i64>,
         output: ExecOutput,
     ) -> ExecResult {
+        match &output {
+            ExecOutput::Retryable { code, message } | ExecOutput::Blocked { code, message } => {
+                sync_log("warn", &format!("library sync paused ({code}): {message}"))
+            }
+            ExecOutput::Fatal { code, message } => {
+                sync_log("error", &format!("library sync failed ({code}): {message}"))
+            }
+            ExecOutput::Stopped => sync_log("info", "library sync stopped before finishing"),
+            ExecOutput::Success { .. } => {}
+        }
         self.persist_verdict(ctx, run, checkpoints, progress_total, output, false)
     }
 
@@ -1213,6 +1236,13 @@ impl Executor for BibliographySyncExecutor {
                 )
             }
         };
+        sync_log(
+            "info",
+            &format!(
+                "library sync started (phase {:?}, cursor {}, total {:?})",
+                run.phase, run.cursor_start, run.remote_total
+            ),
+        );
         let mut checkpoints: Vec<NewCheckpoint> = Vec::new();
         let mut progress_total: Option<i64> = run.remote_total;
         loop {
@@ -1392,6 +1422,13 @@ impl Executor for BibliographySyncExecutor {
         }
         // Items are durable; now catalog the works' PDF attachments so the
         // success publication below can chain extraction for them.
+        sync_log(
+            "info",
+            &format!(
+                "items walk complete: {} works read; walking attachments",
+                run.cursor_start
+            ),
+        );
         match self.attachment_pass(ctx, &library, &run.library_id, page_limit, stop) {
             AttachmentPass::Done => {}
             AttachmentPass::Stopped => {
@@ -1418,6 +1455,10 @@ impl Executor for BibliographySyncExecutor {
                 ExecOutput::Stopped,
             );
         }
+        sync_log(
+            "info",
+            "attachments walk complete; publishing the sync result",
+        );
         let output = BibliographyComputeOutput {
             library_row_id: run.library_id.clone(),
             run_id: run.run_id.clone(),

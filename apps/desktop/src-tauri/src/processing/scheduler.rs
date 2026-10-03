@@ -230,6 +230,23 @@ pub enum RunOneOutcome {
 /// verdict lands durably, with (task, state, code, message) for the legacy
 /// error events. Both must be quick and infallible — queue state already
 /// committed, so observer failures only log.
+/// Sink for one-line progress/failure messages of queue work. The app wires it
+/// to its log file at startup; without it (tests, tools) lines go to stderr.
+type LogSink = Box<dyn Fn(&str, &str) + Send + Sync>;
+static LOG_SINK: std::sync::OnceLock<LogSink> = std::sync::OnceLock::new();
+
+pub fn set_log_sink(sink: impl Fn(&str, &str) + Send + Sync + 'static) {
+    let _ = LOG_SINK.set(Box::new(sink));
+}
+
+/// Records one line; `level` is "info", "warn" or "error".
+pub fn log_line(level: &str, message: &str) {
+    match LOG_SINK.get() {
+        Some(sink) => sink(level, message),
+        None => eprintln!("[processing] {message}"),
+    }
+}
+
 pub fn run_one(
     conn: &Connection,
     ctx: &ExecCtx,
@@ -383,7 +400,36 @@ pub fn run_one(
                 Err(error) if error.starts_with("lease_lost") => {
                     Ok(RunOneOutcome::Stopped { task_id })
                 }
-                Err(error) => Err(error),
+                Err(error) => {
+                    // A publication that cannot commit must end this attempt
+                    // visibly. Returning the bare error stranded the task
+                    // `running` under a live lease, with nothing to resume it.
+                    log_line(
+                        "error",
+                        &format!("task {task_id} ({}) could not publish: {error}", task.kind),
+                    );
+                    match fail_attempt(
+                        conn,
+                        &task_id,
+                        task.lease_epoch,
+                        task.attempt_number,
+                        "publish_failed",
+                        &error,
+                        true,
+                        None,
+                        now_ms,
+                    )? {
+                        repository::FailOutcome::RetryWait { .. } => {
+                            finalize_links(conn, &task_id)?;
+                            Ok(RunOneOutcome::Waiting { task_id })
+                        }
+                        repository::FailOutcome::Failed => {
+                            finalize_links(conn, &task_id)?;
+                            on_terminal(&task, "failed", "publish_failed", &error);
+                            Ok(RunOneOutcome::Failed { task_id })
+                        }
+                    }
+                }
             }
         }
         ExecOutput::Retryable { code, message } => {
