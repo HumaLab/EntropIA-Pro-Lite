@@ -115,3 +115,20 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   `ambiguous_library`. `recovery.rs` resume test (user/0) still passes. TDD: RED
   observed (`unknown_library` on an empty catalog), GREEN after the fix. Full
   cargo green except the 4 known `web_capture_sync_two_device`. B1 is done again.
+- 2026-10-03: B1 hang diagnosed and fixed (7266d88). Owner's real run walked
+  items (2812) and attachments (737 PDFs) and then sat `running` forever.
+  Root cause, found by replaying the publication steps over a copy of the
+  frozen dev DB: 43 works have no title, and `profile_input_for_item` read the
+  title column as non-NULL, so the chained profile admission inside the success
+  publication failed ("Invalid column type Null ... title"). `run_one` then
+  returned that error without ending the attempt, leaving the task `running`
+  under a live lease with nothing to resume it (0 CPU, no log). Fixes: title
+  optional; a publication that cannot commit now fails the attempt with
+  `publish_failed` (retry with backoff) instead of stranding it; one log line
+  per phase (start, items done, attachments done, published with task counts)
+  and per pause/failure goes to the app log through `set_log_sink`. TDD: RED
+  for both new tests (untitled work; stranded `running`), two old tests that
+  asserted the stranding were updated to the new contract. A scale test (2812
+  works, 2065 attachment rows) settles in ~6s. On the copy, profile admission
+  now succeeds (2657 tasks). Full cargo green except the 4 known
+  `web_capture_sync_two_device`.
