@@ -14,7 +14,9 @@ import {
   ragGetConversation,
   ragListConversations,
   type RagConversationSummary,
+  type RagLibraryRef,
   type RagMessage,
+  type RagScope,
   type RagSource,
 } from './rag'
 import { settingsDelete, settingsGet, settingsSet, SETTINGS_KEYS } from './settings'
@@ -23,6 +25,8 @@ export interface UiMessage {
   role: 'user' | 'assistant'
   content: string
   sources?: RagSource[]
+  /** Why the Biblioteca leg found nothing for this answer, when it did not run. */
+  bibliographyNotice?: string | null
 }
 
 export interface RagChatSnapshot {
@@ -34,6 +38,10 @@ export interface RagChatSnapshot {
   errorSource: RagChatErrorSource | null
   draft: string
   initialized: boolean
+  /** Where the next question looks. Kept for the whole session, not per conversation. */
+  scope: RagScope
+  /** Libraries to search; `null` is every synced one. */
+  libraries: RagLibraryRef[] | null
 }
 
 type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
@@ -66,6 +74,8 @@ export class RagChatStore {
   private _errorSource: RagChatErrorSource | null = null
   private _draft = ''
   private _initialized = false
+  private _scope: RagScope = 'corpus'
+  private _libraries: RagLibraryRef[] | null = null
   private _initPromise: Promise<void> | null = null
   private _conversationGeneration = 0
   private _conversationRefreshSequence = 0
@@ -94,6 +104,8 @@ export class RagChatStore {
       errorSource: this._errorSource,
       draft: this._draft,
       initialized: this._initialized,
+      scope: this._scope,
+      libraries: this._libraries ? [...this._libraries] : null,
     }
   }
 
@@ -215,7 +227,14 @@ export class RagChatStore {
     this.emit()
 
     try {
-      const response = await ragAsk(question, requestConversationId ?? undefined)
+      // Corpus is the backend's default: an untouched chat sends exactly the
+      // payload it always did.
+      const response = await ragAsk(
+        question,
+        requestConversationId ?? undefined,
+        undefined,
+        this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
+      )
       if (!this.isRequestCurrent(requestId, requestConversationId)) {
         // La respuesta llegó tarde para esta vista, pero la base SÍ cambió:
         // refrescamos el listado para no mostrar conversaciones fantasma.
@@ -230,7 +249,14 @@ export class RagChatStore {
       }
       this._messages = [
         ...this._messages,
-        { role: 'assistant', content: response.answer, sources: response.sources },
+        {
+          role: 'assistant',
+          content: response.answer,
+          sources: response.sources,
+          ...(response.bibliographyNotice
+            ? { bibliographyNotice: response.bibliographyNotice }
+            : {}),
+        },
       ]
       this.emit()
       if (response.conversationId) {
@@ -365,6 +391,23 @@ export class RagChatStore {
     this.emit()
   }
 
+  /**
+   * Chooses where the next question looks. The choice belongs to the session,
+   * not to a conversation (conversations persist no settings of their own),
+   * and starting a new conversation keeps it.
+   */
+  setScope(scope: RagScope): void {
+    if (scope === this._scope) return
+    this._scope = scope
+    this.emit()
+  }
+
+  /** `null` means every synced library. */
+  setLibraries(libraries: RagLibraryRef[] | null): void {
+    this._libraries = libraries && libraries.length > 0 ? [...libraries] : null
+    this.emit()
+  }
+
   /** Keeps the composer draft at module scope so it survives navigation. */
   setDraft(value: string): void {
     this._draft = value
@@ -389,6 +432,8 @@ export class RagChatStore {
     this._error = null
     this._errorSource = null
     this._draft = ''
+    this._scope = 'corpus'
+    this._libraries = null
     this._initialized = false
     this._initPromise = null
     this._autoTitlePromise = null

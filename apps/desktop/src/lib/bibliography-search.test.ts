@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { bibliographySearchWorks } from './bibliography-search'
+import {
+  bibliographyLibraryStatus,
+  bibliographyOpenPassage,
+  bibliographyPassageContext,
+  bibliographySearchWorks,
+} from './bibliography-search'
 
 const mockInvoke = vi.mocked(invoke)
 
@@ -71,5 +76,47 @@ describe('bibliographySearchWorks', () => {
   it('propagates backend errors without masking them', async () => {
     mockInvoke.mockRejectedValue(new Error('schema_not_ready'))
     await expect(bibliographySearchWorks('x')).rejects.toThrow('schema_not_ready')
+  })
+})
+
+describe('chat scope commands', () => {
+  it('reads the synced libraries and whether passage search can run', async () => {
+    const status = {
+      libraries: [
+        { libraryType: 'user', libraryId: '0', name: 'Mi biblioteca', works: 12, passages: 340 },
+      ],
+      vectorReady: true,
+    }
+    mockInvoke.mockResolvedValue(status)
+
+    await expect(bibliographyLibraryStatus()).resolves.toEqual(status)
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_library_status')
+  })
+
+  it('reads a passage with its page context without opening anything', async () => {
+    const context = {
+      chunkId: 'chunk-1',
+      itemId: 'item-1',
+      itemKey: 'ABCD1234',
+      title: 'Apología',
+      text: 'texto',
+      spans: [[3, 0, 5]],
+      pages: [{ pageNumber: 3, text: 'texto de la página', highlights: [[0, 5]] }],
+      openedPath: null,
+      openError: null,
+    }
+    mockInvoke.mockResolvedValue(context)
+
+    await expect(bibliographyPassageContext('chunk-1')).resolves.toEqual(context)
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_passage_context', {
+      chunkId: 'chunk-1',
+    })
+  })
+
+  it('opens the original through the OS viewer only by its own command', async () => {
+    mockInvoke.mockResolvedValue({ openedPath: 'C:/Zotero/storage/x.pdf', openError: null })
+
+    await bibliographyOpenPassage('chunk-1')
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_open_passage', { chunkId: 'chunk-1' })
   })
 })

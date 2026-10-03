@@ -22,6 +22,41 @@ export interface RagSource {
   startSeconds: number | null
   endSeconds: number | null
   provenance: RagSourceProvenance | null
+  /**
+   * Present only for a passage of a Zotero library (Biblioteca scope). Absent
+   * or null means a corpus source, which is also what every conversation
+   * persisted before Biblioteca existed reads as.
+   */
+  bibliography?: RagBibliographySource | null
+}
+
+/** `pages` for a PDF, `paragraphs` for an HTML snapshot (it has no real pages). */
+export interface RagBibliographyLocation {
+  kind: 'pages' | 'paragraphs'
+  from: number
+  to: number
+}
+
+export interface RagBibliographySource {
+  /** Reopens the passage on this device; the catalog is local-only. */
+  chunkId: string
+  itemKey: string
+  libraryName: string
+  libraryType: string
+  libraryNativeId: string
+  /** CSL family names, comma-separated; may be empty. */
+  authors: string
+  year: number | null
+  location: RagBibliographyLocation | null
+}
+
+/** Where a question looks. Corpus is what the chat always did. */
+export type RagScope = 'corpus' | 'biblioteca' | 'both'
+
+/** One Zotero library as the backend names it (`user`/`group` + native id). */
+export interface RagLibraryRef {
+  libraryType: string
+  libraryId: string
 }
 
 export interface RagAnswer {
@@ -34,6 +69,12 @@ export interface RagAnswer {
    * pero no hay id que adoptar.
    */
   conversationId: string | null
+  /**
+   * Why the Biblioteca leg contributed nothing (`no_library_synced`,
+   * `no_embeddings`, `embedding_unavailable`, `failed`). Absent when it ran
+   * normally or the scope did not ask for it.
+   */
+  bibliographyNotice?: string | null
 }
 
 export interface RagConversationSummary {
@@ -58,12 +99,25 @@ export interface RagConversation {
   messages: RagMessage[]
 }
 
+export interface RagAskOptions {
+  scope?: RagScope
+  /** Libraries to search; absent or empty means every synced one. */
+  libraries?: RagLibraryRef[] | null
+}
+
 export function ragAsk(
   question: string,
   conversationId?: string,
-  topK?: number
+  topK?: number,
+  options: RagAskOptions = {}
 ): Promise<RagAnswer> {
-  return invoke<RagAnswer>('rag_ask', { question, conversationId, topK })
+  return invoke<RagAnswer>('rag_ask', {
+    question,
+    conversationId,
+    topK,
+    scope: options.scope,
+    libraries: options.libraries ?? undefined,
+  })
 }
 
 /** List persisted conversations ordered by updatedAt DESC. */

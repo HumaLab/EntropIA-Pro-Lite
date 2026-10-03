@@ -81,6 +81,33 @@ describe('ragAsk', () => {
     })
   })
 
+  it('forwards the scope and the chosen libraries when given', async () => {
+    mockInvoke.mockResolvedValueOnce(sampleAnswer)
+
+    await ragAsk('pregunta', 'conv-1', undefined, {
+      scope: 'both',
+      libraries: [{ libraryType: 'group', libraryId: '77' }],
+    })
+
+    expect(mockInvoke).toHaveBeenCalledWith('rag_ask', {
+      question: 'pregunta',
+      conversationId: 'conv-1',
+      topK: undefined,
+      scope: 'both',
+      libraries: [{ libraryType: 'group', libraryId: '77' }],
+    })
+  })
+
+  it('sends no libraries when the choice is "all synced" (null)', async () => {
+    mockInvoke.mockResolvedValueOnce(sampleAnswer)
+
+    await ragAsk('pregunta', undefined, undefined, { scope: 'biblioteca', libraries: null })
+
+    const payload = mockInvoke.mock.calls[0]![1] as Record<string, unknown>
+    expect(payload.scope).toBe('biblioteca')
+    expect(payload.libraries).toBeUndefined()
+  })
+
   it('propagates backend rejections untouched', async () => {
     const backendError = 'Falta la API key de OpenRouter. Configurala en Configuración.'
     mockInvoke.mockRejectedValueOnce(backendError)

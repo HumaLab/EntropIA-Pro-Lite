@@ -44,6 +44,55 @@ export interface BibliographySearchResponse {
   librarySynced: boolean
 }
 
+/** One synced Zotero library, with how much of it can be queried. */
+export interface BibliographyLibraryStatusRow {
+  libraryType: string
+  libraryId: string
+  name: string
+  works: number
+  passages: number
+}
+
+export interface BibliographyLibraryStatus {
+  libraries: BibliographyLibraryStatusRow[]
+  /** An embedding generation is active: without it passages cannot be ranked. */
+  vectorReady: boolean
+}
+
+/** Which libraries are synced into EntropIA and whether passages are searchable. */
+export function bibliographyLibraryStatus(): Promise<BibliographyLibraryStatus> {
+  return invoke<BibliographyLibraryStatus>('bibliography_library_status')
+}
+
+export interface BibliographyPassageContext {
+  chunkId: string
+  itemId: string
+  itemKey: string
+  title: string
+  /** The chunk's own text. */
+  text: string
+  /** (page, start, end) in Unicode scalars of that page's text. */
+  spans: Array<[number, number, number]>
+  pages: Array<{
+    pageNumber: number
+    text: string
+    highlights: Array<[number, number]>
+  }>
+  openedPath: string | null
+  /** Why the original file would not open, when it would not. */
+  openError: string | null
+}
+
+/** A passage with its page text and cited ranges; opens nothing. */
+export function bibliographyPassageContext(chunkId: string): Promise<BibliographyPassageContext> {
+  return invoke<BibliographyPassageContext>('bibliography_passage_context', { chunkId })
+}
+
+/** Opens the passage's original file in the operating system's viewer. */
+export function bibliographyOpenPassage(chunkId: string): Promise<BibliographyPassageContext> {
+  return invoke<BibliographyPassageContext>('bibliography_open_passage', { chunkId })
+}
+
 export function bibliographySearchWorks(
   text: string,
   options: {

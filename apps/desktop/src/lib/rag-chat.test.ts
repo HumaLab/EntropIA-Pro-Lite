@@ -1025,3 +1025,112 @@ describe('RagChatStore persistence across unmounts', () => {
     expect(snapshotOf(store).draft).toBe('texto a medio escribir')
   })
 })
+
+describe('RagChatStore scope', () => {
+  const libraryA = { libraryType: 'user', libraryId: '0' }
+  const libraryB = { libraryType: 'group', libraryId: '77' }
+
+  it('starts on the corpus with every library, as the chat always did', () => {
+    setupBackend()
+    const snapshot = snapshotOf(new RagChatStore())
+
+    expect(snapshot.scope).toBe('corpus')
+    expect(snapshot.libraries).toBeNull()
+  })
+
+  it('sends the scope and the chosen libraries with the question', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setScope('both')
+    store.setLibraries([libraryB])
+
+    await store.send('¿Qué dice Bloch?')
+
+    expect(state.ask).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'both', libraries: [libraryB] })
+    )
+  })
+
+  it('sends the old payload on the corpus, even if libraries were picked', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setLibraries([libraryA])
+
+    await store.send('pregunta')
+
+    const payload = (state.ask as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(payload.scope).toBeUndefined()
+    expect(payload.libraries).toBeUndefined()
+  })
+
+  it('keeps the choice when a new conversation starts, for the whole session', async () => {
+    setupBackend({ ask: () => answer('conv-new') })
+    const store = new RagChatStore()
+    store.setScope('biblioteca')
+    store.setLibraries([libraryA])
+
+    store.startNew()
+
+    const snapshot = snapshotOf(store)
+    expect(snapshot.scope).toBe('biblioteca')
+    expect(snapshot.libraries).toEqual([libraryA])
+  })
+
+  it('shows the Biblioteca notice on the answer it belongs to', async () => {
+    setupBackend({
+      ask: () => ({ ...answer('conv-new', ''), bibliographyNotice: 'no_embeddings' }),
+    })
+    const store = new RagChatStore()
+    store.setScope('biblioteca')
+
+    await store.send('pregunta')
+
+    const assistant = snapshotOf(store).messages[1]
+    expect(assistant?.bibliographyNotice).toBe('no_embeddings')
+  })
+
+  it('reloads a persisted bibliography source untouched', async () => {
+    const stored = {
+      ...conversation('conv-1', 'Con biblioteca'),
+    }
+    stored.messages[1]!.sources = [
+      {
+        index: 1,
+        assetId: '',
+        itemId: 'item-1',
+        itemTitle: 'Apología',
+        collectionId: '',
+        collectionName: 'Mi biblioteca',
+        snippet: 'texto',
+        score: 0.8,
+        startSeconds: null,
+        endSeconds: null,
+        provenance: null,
+        bibliography: {
+          chunkId: 'chunk-1',
+          itemKey: 'ABCD1234',
+          libraryName: 'Mi biblioteca',
+          libraryType: 'user',
+          libraryNativeId: '0',
+          authors: 'Bloch',
+          year: 1949,
+          location: { kind: 'paragraphs', from: 2, to: 3 },
+        },
+      },
+    ]
+    setupBackend({
+      storedActiveId: 'conv-1',
+      summaries: [summary('conv-1', 'Con biblioteca', 1000)],
+      conversations: { 'conv-1': stored },
+    })
+    const store = new RagChatStore()
+
+    await store.initialize()
+
+    expect(snapshotOf(store).messages[1]?.sources?.[0]?.bibliography?.location).toEqual({
+      kind: 'paragraphs',
+      from: 2,
+      to: 3,
+    })
+  })
+})

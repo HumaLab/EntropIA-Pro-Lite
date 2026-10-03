@@ -1,14 +1,48 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
-  import { onDestroy, tick } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { locale, t, type Locale } from '$lib/i18n'
-  import { ragSearchConversations, type RagConversationSummary, type RagSource } from '$lib/rag'
+  import {
+    bibliographyLibraryStatus,
+    bibliographyOpenPassage,
+    bibliographyPassageContext,
+    type BibliographyLibraryStatus,
+    type BibliographyPassageContext,
+  } from '$lib/bibliography-search'
+  import {
+    ragSearchConversations,
+    type RagConversationSummary,
+    type RagLibraryRef,
+    type RagScope,
+    type RagSource,
+  } from '$lib/rag'
+  import {
+    bibliographyNoticeKey,
+    isBibliographySource,
+    libraryChoiceKey,
+    locationText,
+    passageWindow,
+    selectedLibrariesAfterToggle,
+    sourceScopeKey,
+    workLine,
+  } from '$lib/rag-scope'
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
   import { setResearchHandoff } from '$lib/research'
-  import { ActionIcon, Button, ConfirmDialog, IconButton, Panel, SearchBar } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    ConfirmDialog,
+    IconButton,
+    Panel,
+    SearchBar,
+    TabButton,
+    TabList,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -57,6 +91,211 @@
 
   const currentLocale = locale
   const canSend = $derived(!$ragChat.loading && $ragChat.draft.trim().length > 0)
+
+  // ── Scope: Corpus / Biblioteca / Ambos ───────────────────────────────────
+  const SCOPES: Array<{
+    id: RagScope
+    label: 'ragChat.scopeCorpus' | 'ragChat.scopeBiblioteca' | 'ragChat.scopeBoth'
+  }> = [
+    { id: 'corpus', label: 'ragChat.scopeCorpus' },
+    { id: 'biblioteca', label: 'ragChat.scopeBiblioteca' },
+    { id: 'both', label: 'ragChat.scopeBoth' },
+  ]
+  // A primitive derived value: the effect below reruns when the scope changes,
+  // not on every store emission (each keystroke of the draft emits one).
+  const scope = $derived($ragChat.scope)
+  let libraryStatus = $state<BibliographyLibraryStatus | null>(null)
+  let libraryStatusLoading = $state(false)
+  let libraryStatusFailed = $state(false)
+  let libraryMenuOpen = $state(false)
+  let libraryStatusRequest = 0
+
+  async function loadLibraryStatus() {
+    const request = ++libraryStatusRequest
+    libraryStatusLoading = true
+    libraryStatusFailed = false
+    try {
+      const status = await bibliographyLibraryStatus()
+      if (request !== libraryStatusRequest) return
+      libraryStatus = status
+    } catch {
+      if (request !== libraryStatusRequest) return
+      libraryStatus = null
+      libraryStatusFailed = true
+    } finally {
+      if (request === libraryStatusRequest) libraryStatusLoading = false
+    }
+  }
+
+  // The catalog is only consulted once the user leaves the Corpus: the default
+  // chat never touches it.
+  $effect(() => {
+    if (scope !== 'corpus') untrack(() => void loadLibraryStatus())
+  })
+
+  const libraryRefs = $derived<RagLibraryRef[]>(
+    (libraryStatus?.libraries ?? []).map((library) => ({
+      libraryType: library.libraryType,
+      libraryId: library.libraryId,
+    }))
+  )
+  const checkedLibraryKeys = $derived(
+    new Set(($ragChat.libraries ?? libraryRefs).map((ref) => libraryChoiceKey(ref)))
+  )
+  const librariesAllChecked = $derived(
+    libraryRefs.length > 0 &&
+      libraryRefs.every((ref) => checkedLibraryKeys.has(libraryChoiceKey(ref)))
+  )
+  const libraryTriggerLabel = $derived(
+    $currentLocale &&
+      (librariesAllChecked
+        ? t('ragChat.librariesAll')
+        : t('ragChat.librariesSome', {
+            count: libraryRefs.filter((ref) => checkedLibraryKeys.has(libraryChoiceKey(ref)))
+              .length,
+            total: libraryRefs.length,
+          }))
+  )
+  const libraryItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: 'all',
+      label: $currentLocale && t('ragChat.librariesAll'),
+      checked: librariesAllChecked,
+      onselect: () => keepLibraryMenuOpen(() => ragChat.setLibraries(null)),
+    },
+    ...(libraryStatus?.libraries ?? []).map((library) => {
+      const ref = { libraryType: library.libraryType, libraryId: library.libraryId }
+      return {
+        kind: 'checkbox' as const,
+        id: libraryChoiceKey(ref),
+        label:
+          $currentLocale &&
+          `${library.name} · ${t('ragChat.libraryCounts', {
+            works: library.works,
+            passages: library.passages,
+          })}`,
+        checked: checkedLibraryKeys.has(libraryChoiceKey(ref)),
+        onselect: () =>
+          keepLibraryMenuOpen(() =>
+            ragChat.setLibraries(selectedLibrariesAfterToggle($ragChat.libraries, libraryRefs, ref))
+          ),
+      }
+    }),
+  ])
+
+  // A library choice is several clicks: the menu closes itself on every
+  // selection, so it is reopened right after, until the user dismisses it.
+  function keepLibraryMenuOpen(apply: () => void) {
+    apply()
+    libraryMenuOpen = true
+  }
+
+  const libraryStatusMessage = $derived.by(() => {
+    if (scope === 'corpus') return null
+    if (libraryStatusLoading && !libraryStatus) return t('ragChat.libraryStatusLoading')
+    if (libraryStatusFailed) return t('ragChat.libraryStatusError')
+    if (!libraryStatus) return null
+    if (libraryStatus.libraries.length === 0) return t('ragChat.libraryStatusNone')
+    if (!libraryStatus.vectorReady) return t('ragChat.libraryStatusNoEmbeddings')
+    return null
+  })
+
+  function chooseScope(next: RagScope) {
+    ragChat.setScope(next)
+  }
+
+  function noticeText(message: UiMessage): string | null {
+    const key = bibliographyNoticeKey(message.bibliographyNotice)
+    return key ? t(key) : null
+  }
+
+  // ── Passage reader (Biblioteca sources) ──────────────────────────────────
+  // The original PDF/HTML lives in Zotero's storage, outside what the app's
+  // asset protocol is allowed to serve, so a bibliography source opens in this
+  // reader (the page text the catalog already holds, the cited range marked)
+  // and the original is one explicit click away, in the OS viewer.
+  const PASSAGE_CONTEXT_RADIUS = 600
+  type PassageReader = {
+    source: RagSource
+    status: 'loading' | 'ready' | 'missing' | 'failed'
+    context: BibliographyPassageContext | null
+    reason: string
+    opening: boolean
+    originalError: string | null
+  }
+  let passageReader = $state<PassageReader | null>(null)
+  let passageRequest = 0
+
+  function errorText(error: unknown): string {
+    if (typeof error === 'string') return error
+    if (error instanceof Error) return error.message
+    return ''
+  }
+
+  async function openPassage(source: RagSource) {
+    const chunkId = source.bibliography?.chunkId
+    if (!chunkId) return
+    const request = ++passageRequest
+    passageReader = {
+      source,
+      status: 'loading',
+      context: null,
+      reason: '',
+      opening: false,
+      originalError: null,
+    }
+    try {
+      const context = await bibliographyPassageContext(chunkId)
+      if (request !== passageRequest || !passageReader) return
+      passageReader = { ...passageReader, status: 'ready', context }
+    } catch (error) {
+      if (request !== passageRequest || !passageReader) return
+      const reason = errorText(error)
+      // The catalog is local-only: a conversation synced from another device
+      // names a chunk this one never had.
+      const missing = reason.includes('unknown_chunk') || reason.includes('unknown_attachment')
+      passageReader = { ...passageReader, status: missing ? 'missing' : 'failed', reason }
+    }
+  }
+
+  function closePassage() {
+    passageRequest += 1
+    passageReader = null
+  }
+
+  async function openOriginal() {
+    const reader = passageReader
+    const chunkId = reader?.source.bibliography?.chunkId
+    if (!reader || !chunkId || reader.opening) return
+    passageReader = { ...reader, opening: true, originalError: null }
+    try {
+      const result = await bibliographyOpenPassage(chunkId)
+      if (passageReader?.source !== reader.source) return
+      passageReader = {
+        ...passageReader,
+        opening: false,
+        originalError: result.openError
+          ? t('ragChat.passageOriginalError', { reason: result.openError })
+          : null,
+      }
+    } catch (error) {
+      if (passageReader?.source !== reader.source) return
+      passageReader = {
+        ...passageReader,
+        opening: false,
+        originalError: t('ragChat.passageOriginalError', { reason: errorText(error) }),
+      }
+    }
+  }
+
+  function passageHeading(reader: PassageReader): string {
+    const bibliography = reader.source.bibliography
+    if (!bibliography) return ''
+    return [workLine(bibliography), locationText(bibliography.location), bibliography.libraryName]
+      .filter(Boolean)
+      .join(' · ')
+  }
 
   $effect(() => {
     void ragChat.initialize()
@@ -138,6 +377,10 @@
   }
 
   function openSource(source: RagSource) {
+    if (isBibliographySource(source)) {
+      void openPassage(source)
+      return
+    }
     navigation.navigate({
       name: 'item',
       collectionId: source.collectionId,
@@ -441,6 +684,12 @@
                 <p class="rag-chat__content">{$currentLocale && messageContent(message)}</p>
               {/if}
 
+              {#if message.role === 'assistant' && noticeText(message)}
+                <p class="rag-chat__notice" role="status">
+                  {$currentLocale && noticeText(message)}
+                </p>
+              {/if}
+
               {#if message.sources && message.sources.length > 0}
                 <section
                   class="rag-chat__sources"
@@ -450,24 +699,47 @@
                   <ul class="rag-chat__sources-list">
                     {#each message.sources as source (`${source.index}-${source.assetId}`)}
                       {@const timestamp = sourceTimestamp(source)}
+                      {@const bibliography = source.bibliography}
+                      {@const openLabel = bibliography
+                        ? t('ragChat.openPassage')
+                        : t('ragChat.openSource')}
                       <li>
                         <button
                           type="button"
                           class="rag-chat__source"
                           onclick={() => openSource(source)}
                           aria-label={$currentLocale &&
-                            `${t('ragChat.openSource')}: [${source.index}] ${source.itemTitle}`}
-                          use:tooltip={$currentLocale && t('ragChat.openSource')}
+                            `${openLabel}: [${source.index}] ${source.itemTitle}`}
+                          use:tooltip={$currentLocale && openLabel}
                         >
                           <span class="rag-chat__source-heading">
                             <span class="rag-chat__source-ref">[{source.index}]</span>
-                            <span class="rag-chat__source-name"
-                              >{source.itemTitle} ({source.collectionName})</span
+                            <span class="rag-chat__source-scope"
+                              >{$currentLocale && t(sourceScopeKey(source))}</span
                             >
-                            {#if timestamp}
-                              <span class="rag-chat__source-time">{timestamp}</span>
+                            {#if bibliography}
+                              <span class="rag-chat__source-name">{source.itemTitle}</span>
+                              {#if bibliography.location}
+                                <span class="rag-chat__source-time"
+                                  >{$currentLocale && locationText(bibliography.location)}</span
+                                >
+                              {/if}
+                            {:else}
+                              <span class="rag-chat__source-name"
+                                >{source.itemTitle} ({source.collectionName})</span
+                              >
+                              {#if timestamp}
+                                <span class="rag-chat__source-time">{timestamp}</span>
+                              {/if}
                             {/if}
                           </span>
+                          {#if bibliography}
+                            <span class="rag-chat__source-work"
+                              >{[workLine(bibliography), bibliography.libraryName]
+                                .filter(Boolean)
+                                .join(' · ')}</span
+                            >
+                          {/if}
                           <span class="rag-chat__source-snippet">{source.snippet}</span>
                         </button>
                       </li>
@@ -515,35 +787,71 @@
         </div>
       {/if}
 
-      <form
-        class="rag-chat__composer"
-        onsubmit={(event) => {
-          event.preventDefault()
-          handleSend()
-        }}
-      >
-        <textarea
-          class="rag-chat__input"
-          rows="2"
-          maxlength="4000"
-          value={$ragChat.draft}
-          oninput={(event) => ragChat.setDraft(event.currentTarget.value)}
-          placeholder={$currentLocale && t('ragChat.placeholder')}
-          aria-label={$currentLocale && t('ragChat.placeholder')}
-          onkeydown={handleComposerKeydown}
-          disabled={$ragChat.loading}
-        ></textarea>
-        <Button
-          variant="primary"
-          iconOnly
-          type="submit"
-          aria-label={$currentLocale && t('ragChat.send')}
-          title={$currentLocale && t('ragChat.send')}
-          disabled={!canSend}
+      <div class="rag-chat__composer-area">
+        <div class="rag-chat__scope">
+          <span class="rag-chat__scope-label">{$currentLocale && t('ragChat.scopeLabel')}</span>
+          <TabList aria-label={$currentLocale && t('ragChat.scopeLabel')}>
+            {#each SCOPES as entry (entry.id)}
+              <TabButton active={scope === entry.id} onclick={() => chooseScope(entry.id)}>
+                {$currentLocale && t(entry.label)}
+              </TabButton>
+            {/each}
+          </TabList>
+          {#if scope !== 'corpus' && libraryStatus && libraryStatus.libraries.length > 0}
+            <ToolbarMenu
+              label={$currentLocale && t('ragChat.librariesMenu')}
+              items={libraryItems}
+              bind:open={libraryMenuOpen}
+            >
+              {#snippet trigger(props, { open })}
+                <button
+                  type="button"
+                  class="rag-chat__library-trigger"
+                  class:rag-chat__library-trigger--open={open}
+                  {...props}
+                >
+                  <span>{libraryTriggerLabel}</span>
+                  <ActionIcon name="chevron-down" size={12} />
+                </button>
+              {/snippet}
+            </ToolbarMenu>
+          {/if}
+        </div>
+        {#if libraryStatusMessage}
+          <p class="rag-chat__scope-note" role="status">
+            {$currentLocale && libraryStatusMessage}
+          </p>
+        {/if}
+        <form
+          class="rag-chat__composer"
+          onsubmit={(event) => {
+            event.preventDefault()
+            handleSend()
+          }}
         >
-          <ActionIcon name="send" size={20} />
-        </Button>
-      </form>
+          <textarea
+            class="rag-chat__input"
+            rows="2"
+            maxlength="4000"
+            value={$ragChat.draft}
+            oninput={(event) => ragChat.setDraft(event.currentTarget.value)}
+            placeholder={$currentLocale && t('ragChat.placeholder')}
+            aria-label={$currentLocale && t('ragChat.placeholder')}
+            onkeydown={handleComposerKeydown}
+            disabled={$ragChat.loading}
+          ></textarea>
+          <Button
+            variant="primary"
+            iconOnly
+            type="submit"
+            aria-label={$currentLocale && t('ragChat.send')}
+            title={$currentLocale && t('ragChat.send')}
+            disabled={!canSend}
+          >
+            <ActionIcon name="send" size={20} />
+          </Button>
+        </form>
+      </div>
     </div>
 
     <Panel variant="default" padding="none" class="rag-chat__sidebar">
@@ -698,6 +1006,60 @@
       {/if}
     </Panel>
   </div>
+
+  {#if passageReader}
+    {@const reader = passageReader}
+    <ConfirmDialog
+      title={reader.source.itemTitle}
+      titleId="rag-chat-passage-title"
+      message={passageHeading(reader)}
+      cancelLabel={$currentLocale && t('ragChat.passageClose')}
+      confirmLabel={$currentLocale && t('ragChat.passageOpenOriginal')}
+      confirming={reader.opening}
+      confirmDisabled={reader.status !== 'ready'}
+      error={reader.originalError}
+      oncancel={closePassage}
+      onconfirm={() => void openOriginal()}
+    >
+      {#if reader.status === 'loading'}
+        <p class="rag-chat__passage-note" role="status">
+          {$currentLocale && t('ragChat.passageLoading')}
+        </p>
+      {:else if reader.status === 'ready' && reader.context}
+        <div class="rag-chat__passage">
+          {#each reader.context.pages as page (page.pageNumber)}
+            {@const view = passageWindow(page.text, page.highlights, PASSAGE_CONTEXT_RADIUS)}
+            <p class="rag-chat__passage-page">
+              {#if view.truncatedBefore}<span>… </span>{/if}
+              {#each view.segments as segment, segmentIndex (segmentIndex)}
+                {#if segment.marked}
+                  <mark class="rag-chat__passage-hit">{segment.text}</mark>
+                {:else}
+                  <span>{segment.text}</span>
+                {/if}
+              {/each}
+              {#if view.truncatedAfter}<span> …</span>{/if}
+            </p>
+          {:else}
+            <p class="rag-chat__passage-page">{reader.context.text}</p>
+          {/each}
+        </div>
+        {#if reader.context.openError}
+          <p class="rag-chat__passage-note">
+            {$currentLocale && t('ragChat.passageOriginalUnavailable')}
+          </p>
+        {/if}
+      {:else}
+        <p class="rag-chat__passage-note" role="status">
+          {$currentLocale &&
+            (reader.status === 'missing'
+              ? t('ragChat.passageMissing')
+              : t('ragChat.passageError', { reason: reader.reason }))}
+        </p>
+        <p class="rag-chat__passage-page">{reader.source.snippet}</p>
+      {/if}
+    </ConfirmDialog>
+  {/if}
 
   {#if pendingDeleteId}
     <ConfirmDialog
@@ -1171,13 +1533,122 @@
     font-size: var(--font-size-xs);
   }
 
+  /* The scope row and the composer share one hairline: the row sits inside the
+     same band as the input it configures. */
+  .rag-chat__composer-area {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex-shrink: 0;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .rag-chat__scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .rag-chat__scope-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+  }
+
+  .rag-chat__scope-note,
+  .rag-chat__passage-note {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    overflow-wrap: anywhere;
+  }
+
+  /* The trigger of the library choice: a ToolbarMenu painted with the app's
+     own tokens, same recipe as the other menu triggers (never a native
+     <select>). */
+  .rag-chat__library-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base),
+      border-color var(--transition-base);
+  }
+
+  .rag-chat__library-trigger:hover,
+  .rag-chat__library-trigger--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .rag-chat__library-trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .rag-chat__library-trigger :global(svg) {
+    color: var(--color-text-muted);
+  }
+
+  .rag-chat__notice {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .rag-chat__source-scope {
+    padding: 0 var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .rag-chat__source-work {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    overflow-wrap: anywhere;
+  }
+
+  .rag-chat__passage {
+    max-height: 50vh;
+    overflow-y: auto;
+  }
+
+  .rag-chat__passage-page {
+    margin: 0 0 var(--space-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+  }
+
+  /* The cited range, marked the way a citation marks it in the item view. */
+  .rag-chat__passage-hit {
+    border-radius: var(--radius-xs);
+    background: var(--color-warning-soft);
+    box-shadow: inset 0 -2px 0 var(--color-warning);
+    color: inherit;
+  }
+
   .rag-chat__composer {
     display: flex;
     align-items: flex-end;
     gap: var(--space-2);
     flex-shrink: 0;
-    padding-top: var(--space-2);
-    border-top: 1px solid var(--border-subtle);
   }
 
   .rag-chat__input {
