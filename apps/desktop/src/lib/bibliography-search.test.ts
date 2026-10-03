@@ -4,6 +4,7 @@ import {
   bibliographyLibraryStatus,
   bibliographyOpenPassage,
   bibliographyPassageContext,
+  bibliographySearchPassages,
   bibliographySearchWorks,
 } from './bibliography-search'
 
@@ -118,5 +119,25 @@ describe('chat scope commands', () => {
 
     await bibliographyOpenPassage('chunk-1')
     expect(mockInvoke).toHaveBeenCalledWith('bibliography_open_passage', { chunkId: 'chunk-1' })
+  })
+})
+
+describe('bibliographySearchPassages', () => {
+  it('asks for passages with a default size and returns them with the notice', async () => {
+    const answer = { passages: [], notice: 'no_embeddings' }
+    mockInvoke.mockResolvedValue(answer)
+
+    await expect(bibliographySearchPassages('cabildo')).resolves.toEqual(answer)
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: { text: 'cabildo', topK: 12 },
+    })
+  })
+
+  it('forwards an explicit size', async () => {
+    mockInvoke.mockResolvedValue({ passages: [], notice: null })
+    await bibliographySearchPassages('cabildo', { topK: 5 })
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: { text: 'cabildo', topK: 5 },
+    })
   })
 })

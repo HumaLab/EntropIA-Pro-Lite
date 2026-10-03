@@ -32,6 +32,22 @@ export function locationText(location: RagBibliographyLocation | null | undefine
   return t(single ? 'ragChat.locationPage' : 'ragChat.locationPages', params)
 }
 
+/**
+ * The citation locator of a passage: a page range for a PDF, a paragraph range
+ * for an HTML snapshot, in the form the citation editor stores ("3", "3-4").
+ * No location, no locator: a citation never invents where it points.
+ */
+export function locatorOf(
+  location: RagBibliographyLocation | null | undefined
+): { locator: string; locatorType: 'page' | 'paragraph' } | null {
+  if (!location) return null
+  return {
+    locator:
+      location.from === location.to ? String(location.from) : `${location.from}-${location.to}`,
+    locatorType: location.kind === 'paragraphs' ? 'paragraph' : 'page',
+  }
+}
+
 /** "authors · year", skipping what is missing. */
 export function workLine(work: { authors: string; year: number | null }): string {
   return [work.authors.trim(), work.year === null ? '' : String(work.year)]
@@ -55,6 +71,24 @@ export function bibliographyNoticeKey(code: string | null | undefined): I18nKey 
       return 'ragChat.biblioNotice.embeddingUnavailable'
     default:
       return 'ragChat.biblioNotice.failed'
+  }
+}
+
+/**
+ * The same backend codes as {@link bibliographyNoticeKey}, worded for the
+ * Writing tab's passage search (which is not answering a question).
+ */
+export function passagesNoticeKey(code: string | null | undefined): I18nKey | null {
+  if (!code) return null
+  switch (code) {
+    case 'no_library_synced':
+      return 'bibliography.passagesNotice.noLibrarySynced'
+    case 'no_embeddings':
+      return 'bibliography.passagesNotice.noEmbeddings'
+    case 'embedding_unavailable':
+      return 'bibliography.passagesNotice.embeddingUnavailable'
+    default:
+      return 'bibliography.passagesNotice.failed'
   }
 }
 
@@ -141,4 +175,12 @@ export function passageWindow(
   }
   push(hi, false)
   return { segments, truncatedBefore: lo > 0, truncatedAfter: hi < chars.length }
+}
+
+/** The line over a passage: "authors · year · location · library". */
+export function passageHeading(
+  work: { authors: string; year: number | null; libraryName: string },
+  location: RagBibliographyLocation | null | undefined
+): string {
+  return [workLine(work), locationText(location), work.libraryName].filter(Boolean).join(' · ')
 }

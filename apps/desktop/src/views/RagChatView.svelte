@@ -5,11 +5,9 @@
   import { locale, t, type Locale } from '$lib/i18n'
   import {
     bibliographyLibraryStatus,
-    bibliographyOpenPassage,
-    bibliographyPassageContext,
     type BibliographyLibraryStatus,
-    type BibliographyPassageContext,
   } from '$lib/bibliography-search'
+  import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
   import {
     ragSearchConversations,
     type RagConversationSummary,
@@ -22,7 +20,7 @@
     isBibliographySource,
     libraryChoiceKey,
     locationText,
-    passageWindow,
+    passageHeading,
     selectedLibrariesAfterToggle,
     sourceScopeKey,
     workLine,
@@ -211,90 +209,13 @@
   }
 
   // ── Passage reader (Biblioteca sources) ──────────────────────────────────
-  // The original PDF/HTML lives in Zotero's storage, outside what the app's
-  // asset protocol is allowed to serve, so a bibliography source opens in this
-  // reader (the page text the catalog already holds, the cited range marked)
-  // and the original is one explicit click away, in the OS viewer.
-  const PASSAGE_CONTEXT_RADIUS = 600
-  type PassageReader = {
-    source: RagSource
-    status: 'loading' | 'ready' | 'missing' | 'failed'
-    context: BibliographyPassageContext | null
-    reason: string
-    opening: boolean
-    originalError: string | null
-  }
-  let passageReader = $state<PassageReader | null>(null)
-  let passageRequest = 0
+  // A bibliography source opens in the shared passage reader (see
+  // PassageReaderDialog), never the item viewer: Zotero's storage is outside
+  // the asset protocol's scope.
+  let openedPassage = $state<RagSource | null>(null)
 
-  function errorText(error: unknown): string {
-    if (typeof error === 'string') return error
-    if (error instanceof Error) return error.message
-    return ''
-  }
-
-  async function openPassage(source: RagSource) {
-    const chunkId = source.bibliography?.chunkId
-    if (!chunkId) return
-    const request = ++passageRequest
-    passageReader = {
-      source,
-      status: 'loading',
-      context: null,
-      reason: '',
-      opening: false,
-      originalError: null,
-    }
-    try {
-      const context = await bibliographyPassageContext(chunkId)
-      if (request !== passageRequest || !passageReader) return
-      passageReader = { ...passageReader, status: 'ready', context }
-    } catch (error) {
-      if (request !== passageRequest || !passageReader) return
-      const reason = errorText(error)
-      // The catalog is local-only: a conversation synced from another device
-      // names a chunk this one never had.
-      const missing = reason.includes('unknown_chunk') || reason.includes('unknown_attachment')
-      passageReader = { ...passageReader, status: missing ? 'missing' : 'failed', reason }
-    }
-  }
-
-  function closePassage() {
-    passageRequest += 1
-    passageReader = null
-  }
-
-  async function openOriginal() {
-    const reader = passageReader
-    const chunkId = reader?.source.bibliography?.chunkId
-    if (!reader || !chunkId || reader.opening) return
-    passageReader = { ...reader, opening: true, originalError: null }
-    try {
-      const result = await bibliographyOpenPassage(chunkId)
-      if (passageReader?.source !== reader.source) return
-      passageReader = {
-        ...passageReader,
-        opening: false,
-        originalError: result.openError
-          ? t('ragChat.passageOriginalError', { reason: result.openError })
-          : null,
-      }
-    } catch (error) {
-      if (passageReader?.source !== reader.source) return
-      passageReader = {
-        ...passageReader,
-        opening: false,
-        originalError: t('ragChat.passageOriginalError', { reason: errorText(error) }),
-      }
-    }
-  }
-
-  function passageHeading(reader: PassageReader): string {
-    const bibliography = reader.source.bibliography
-    if (!bibliography) return ''
-    return [workLine(bibliography), locationText(bibliography.location), bibliography.libraryName]
-      .filter(Boolean)
-      .join(' · ')
+  function openPassage(source: RagSource) {
+    if (source.bibliography?.chunkId) openedPassage = source
   }
 
   $effect(() => {
@@ -378,7 +299,7 @@
 
   function openSource(source: RagSource) {
     if (isBibliographySource(source)) {
-      void openPassage(source)
+      openPassage(source)
       return
     }
     navigation.navigate({
@@ -1007,58 +928,16 @@
     </Panel>
   </div>
 
-  {#if passageReader}
-    {@const reader = passageReader}
-    <ConfirmDialog
-      title={reader.source.itemTitle}
-      titleId="rag-chat-passage-title"
-      message={passageHeading(reader)}
-      cancelLabel={$currentLocale && t('ragChat.passageClose')}
-      confirmLabel={$currentLocale && t('ragChat.passageOpenOriginal')}
-      confirming={reader.opening}
-      confirmDisabled={reader.status !== 'ready'}
-      error={reader.originalError}
-      oncancel={closePassage}
-      onconfirm={() => void openOriginal()}
-    >
-      {#if reader.status === 'loading'}
-        <p class="rag-chat__passage-note" role="status">
-          {$currentLocale && t('ragChat.passageLoading')}
-        </p>
-      {:else if reader.status === 'ready' && reader.context}
-        <div class="rag-chat__passage">
-          {#each reader.context.pages as page (page.pageNumber)}
-            {@const view = passageWindow(page.text, page.highlights, PASSAGE_CONTEXT_RADIUS)}
-            <p class="rag-chat__passage-page">
-              {#if view.truncatedBefore}<span>… </span>{/if}
-              {#each view.segments as segment, segmentIndex (segmentIndex)}
-                {#if segment.marked}
-                  <mark class="rag-chat__passage-hit">{segment.text}</mark>
-                {:else}
-                  <span>{segment.text}</span>
-                {/if}
-              {/each}
-              {#if view.truncatedAfter}<span> …</span>{/if}
-            </p>
-          {:else}
-            <p class="rag-chat__passage-page">{reader.context.text}</p>
-          {/each}
-        </div>
-        {#if reader.context.openError}
-          <p class="rag-chat__passage-note">
-            {$currentLocale && t('ragChat.passageOriginalUnavailable')}
-          </p>
-        {/if}
-      {:else}
-        <p class="rag-chat__passage-note" role="status">
-          {$currentLocale &&
-            (reader.status === 'missing'
-              ? t('ragChat.passageMissing')
-              : t('ragChat.passageError', { reason: reader.reason }))}
-        </p>
-        <p class="rag-chat__passage-page">{reader.source.snippet}</p>
-      {/if}
-    </ConfirmDialog>
+  {#if openedPassage?.bibliography}
+    {#key openedPassage.bibliography.chunkId}
+      <PassageReaderDialog
+        chunkId={openedPassage.bibliography.chunkId}
+        title={openedPassage.itemTitle}
+        heading={passageHeading(openedPassage.bibliography, openedPassage.bibliography.location)}
+        fallbackSnippet={openedPassage.snippet}
+        onclose={() => (openedPassage = null)}
+      />
+    {/key}
   {/if}
 
   {#if pendingDeleteId}
@@ -1559,8 +1438,7 @@
     text-transform: uppercase;
   }
 
-  .rag-chat__scope-note,
-  .rag-chat__passage-note {
+  .rag-chat__scope-note {
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
@@ -1621,27 +1499,6 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     overflow-wrap: anywhere;
-  }
-
-  .rag-chat__passage {
-    max-height: 50vh;
-    overflow-y: auto;
-  }
-
-  .rag-chat__passage-page {
-    margin: 0 0 var(--space-2);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-  }
-
-  /* The cited range, marked the way a citation marks it in the item view. */
-  .rag-chat__passage-hit {
-    border-radius: var(--radius-xs);
-    background: var(--color-warning-soft);
-    box-shadow: inset 0 -2px 0 var(--color-warning);
-    color: inherit;
   }
 
   .rag-chat__composer {

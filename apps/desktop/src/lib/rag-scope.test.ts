@@ -6,6 +6,8 @@ import {
   isBibliographySource,
   libraryChoiceKey,
   locationText,
+  locatorOf,
+  passageHeading,
   passageWindow,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
@@ -186,5 +188,41 @@ describe('passageWindow', () => {
     expect(view.segments.filter((segment) => segment.marked)).toEqual([
       { text: 'bcdefgh', marked: true },
     ])
+  })
+})
+
+describe('locatorOf', () => {
+  it('cites a PDF by page and an HTML snapshot by paragraph', () => {
+    expect(locatorOf({ kind: 'pages', from: 3, to: 3 })).toEqual({
+      locator: '3',
+      locatorType: 'page',
+    })
+    expect(locatorOf({ kind: 'pages', from: 3, to: 4 })).toEqual({
+      locator: '3-4',
+      locatorType: 'page',
+    })
+    expect(locatorOf({ kind: 'paragraphs', from: 2, to: 3 })).toEqual({
+      locator: '2-3',
+      locatorType: 'paragraph',
+    })
+  })
+
+  it('adds no locator when the location is unknown', () => {
+    expect(locatorOf(null)).toBeNull()
+    expect(locatorOf(undefined)).toBeNull()
+  })
+})
+
+describe('passageHeading', () => {
+  it('names the work, where in it and the library, skipping what is missing', () => {
+    expect(
+      passageHeading(
+        { authors: 'Bloch', year: 1949, libraryName: 'Mi biblioteca' },
+        { kind: 'pages', from: 3, to: 4 }
+      )
+    ).toBe('Bloch · 1949 · pp. 3–4 · Mi biblioteca')
+    expect(passageHeading({ authors: '', year: null, libraryName: 'Mi biblioteca' }, null)).toBe(
+      'Mi biblioteca'
+    )
   })
 })

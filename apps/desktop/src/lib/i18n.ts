@@ -204,6 +204,17 @@ const es = {
   'bibliography.searchConsent':
     'La búsqueda envía tu consulta al motor de embeddings cuando hay un espacio vectorial activo. Buscar desde la selección envía exactamente el texto seleccionado, solo cuando lo pedís.',
   'bibliography.searchSelectionEmpty': 'No hay texto seleccionado en el manuscrito.',
+  'bibliography.passagesTitle': 'Pasajes',
+  'bibliography.passagesEmpty': 'Sin pasajes para esta consulta.',
+  'bibliography.passageOpen': 'Abrir pasaje',
+  'bibliography.passageCite': 'Citar pasaje',
+  'bibliography.passagesNotice.noLibrarySynced':
+    'No se buscaron pasajes: no hay ninguna biblioteca sincronizada en EntropIA.',
+  'bibliography.passagesNotice.noEmbeddings':
+    'No se buscaron pasajes: la Biblioteca todavía no tiene vectores para buscar por significado (el indexado no terminó).',
+  'bibliography.passagesNotice.embeddingUnavailable':
+    'No se buscaron pasajes: no se pudo calcular el vector de la consulta (revisá el proveedor de embeddings).',
+  'bibliography.passagesNotice.failed': 'La búsqueda de pasajes falló.',
   'batch.priority': 'Prioridad',
   'batch.priorityBackground': 'Fondo',
   'batch.priorityHigh': 'Alta',
@@ -3013,6 +3024,17 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.searchConsent':
     'Search sends your query to the embedding engine when an active vector space exists. Searching from the selection sends exactly the selected text, only when you ask.',
   'bibliography.searchSelectionEmpty': 'No text is selected in the manuscript.',
+  'bibliography.passagesTitle': 'Passages',
+  'bibliography.passagesEmpty': 'No passages for this query.',
+  'bibliography.passageOpen': 'Open passage',
+  'bibliography.passageCite': 'Cite passage',
+  'bibliography.passagesNotice.noLibrarySynced':
+    'Passages were not searched: no library is synced into EntropIA.',
+  'bibliography.passagesNotice.noEmbeddings':
+    'Passages were not searched: the Library has no vectors yet to search by meaning (indexing has not finished).',
+  'bibliography.passagesNotice.embeddingUnavailable':
+    'Passages were not searched: the query vector could not be computed (check the embeddings provider).',
+  'bibliography.passagesNotice.failed': 'The passage search failed.',
   'batch.priority': 'Priority',
   'batch.priorityBackground': 'Background',
   'batch.priorityHigh': 'High',

@@ -116,3 +116,37 @@ export function bibliographySearchWorks(
     },
   })
 }
+
+export interface BibliographyPassage {
+  chunkId: string
+  itemId: string
+  itemKey: string
+  title: string
+  authors: string
+  year: number | null
+  libraryName: string
+  libraryType: string
+  libraryNativeId: string
+  /** The catalog's CSL-JSON, what a citation snapshots. Empty if unreadable. */
+  cslJson: string
+  snippet: string
+  /** PDF = pages, HTML snapshot = paragraphs; null when the text is gone. */
+  location: { kind: 'pages' | 'paragraphs'; from: number; to: number } | null
+  score: number
+}
+
+export interface BibliographyPassagesResponse {
+  passages: BibliographyPassage[]
+  /** Why nothing was searched (same codes as the chat's notice), else null. */
+  notice: string | null
+}
+
+/** Passages of the synced libraries for a query (vector-only; says why if none). */
+export function bibliographySearchPassages(
+  text: string,
+  options: { topK?: number } = {}
+): Promise<BibliographyPassagesResponse> {
+  return invoke<BibliographyPassagesResponse>('bibliography_search_passages', {
+    request: { text, topK: options.topK ?? 12 },
+  })
+}

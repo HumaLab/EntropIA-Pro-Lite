@@ -45,6 +45,9 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   passages. Route: delegated writer (single writer on main). Commits b4e2fe6
   (backend) and 1dc2113 (UI). See the 2026-10-03 B4 progress entry.
 - [ ] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
+  - [x] B5a — Passages in Writing's "Obras" tab (route: delegated writer, single
+    writer on main).
+  - [ ] B5b — Top-level "Biblioteca" section (awaits the owner; NOT part of B5a).
 - [ ] B6 — Investigación can use the Biblioteca (cross-repo `entropia-agent`).
 
 ## Constraints
@@ -254,3 +257,44 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   (2222 passed, 0 failed). `--features local-ml` was not compiled (it pulls
   the MNN source build); the `local-ml` branches touched are the rerank guard
   and a `bibliography: None` in a test helper.
+- 2026-10-03: B5a done (route: delegated writer, single writer on main).
+  "Obras" now searches works AND passages for the same query (submit and
+  "Buscar desde la selección"), concurrently and independently: a failing
+  passage search never hides the works, nor the reverse. Layout decision:
+  passages are a separate "Pasajes" section BELOW the works (the works list
+  stays byte-for-byte as it was), each work's passages grouped under a small
+  work header (title, "authors · year · library"); rows follow the Zotero tab's
+  pattern (text left, eye + quote `IconButton`s right, no stray text nodes).
+  Nesting under each works hit was rejected: the passage search admits its own
+  candidate works, so passages rarely belong to the works listed above and a
+  nested layout would hide the ones that do not.
+  Backend: new command `bibliography_search_passages` (`build.rs`
+  `APP_COMMANDS`, `capabilities/default.json`, handler; no migration). It does
+  not reimplement anything: `rag::scope::passage_search` wraps the chat's own
+  `bibliography_leg` (same libraries rule, `rag_min_similarity` floor, snippet,
+  PDF "p." / HTML "párr." location, same notices) and adds the work's CSL-JSON
+  for citing. Passage search stays vector-only, so with no active generation
+  the tab says so (`no_embeddings`) instead of an empty list; wording family of
+  "Solo búsqueda léxica" (`bibliography.passagesNotice.*`).
+  Frontend: the passage reader was extracted from `RagChatView` into
+  `components/PassageReaderDialog.svelte` (same dialog, same look; the CSS moved
+  with it as `passage-reader__*`); the chat and the tab both use it.
+  The location text is the chat's `locationText`; new pure helpers
+  `locatorOf` (citation locator: "3", "3-4", type `page`/`paragraph`),
+  `passageHeading` and `passagesNoticeKey` live beside it in `rag-scope.ts`.
+  Cite: the tab takes `oncite` (WritingResearchPanel passes `oncitezotero`, the
+  Zotero tab's own path) and inserts the same citation payload with `locator` +
+  `locatorType` from the passage location: the citation model already supports
+  them. Gaps: (1) `itemVersion` is `null` (the catalog does not keep Zotero's
+  item version; the model accepts null). (2) `WritingView.citeZotero` opens the
+  citation editor on the Zotero tab after inserting, as for any Zotero cite, so
+  the user lands there with the locator prefilled. (3) `citeWork` ignores a work
+  already cited right beside the caret, so a second passage of the same work
+  cited back to back does not add its locator (existing behaviour, untouched).
+  (4) A passage whose work has no CSL-JSON in the catalog cannot be cited
+  (button disabled).
+  TDD: RED observed for 2 Rust tests (`passage_search` stub), 5 `rag-scope`/
+  wrapper tests (missing exports) and 14 tab tests; GREEN after implementation;
+  `RagChatView` tests (63) stayed green through the extraction. Existing tab
+  tests were re-pointed from a blanket mock to per-command routing (the tab now
+  calls two commands).
