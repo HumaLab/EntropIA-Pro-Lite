@@ -335,6 +335,21 @@ describe('E1c-2 adding a library by hand', () => {
  * offers a ficha yet, so the button query misses.
  */
 describe('E1c-3 opening the work details (ficha)', () => {
+  it('renders a row as the work and its actions only, with no stray text', async () => {
+    answerKnownLibraries([PERSONAL])
+    render(WritingZoteroTab, { props: {} })
+
+    const title = await screen.findByText('Los orígenes')
+    const row = title.closest('li') as HTMLElement
+    // A loose text node becomes a third flex item and pushes the actions
+    // away from the right edge by a different amount on every row.
+    const strayText = Array.from(row.childNodes)
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent?.trim())
+      .filter(Boolean)
+    expect(strayText).toEqual([])
+  })
+
   it('offers a ficha per row that opens without touching the selection', async () => {
     answerKnownLibraries([PERSONAL])
     mockInvoke.mockImplementation(((cmd: string) => {

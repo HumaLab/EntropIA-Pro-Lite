@@ -394,7 +394,7 @@
                 <Button variant="ghost" size="sm" disabled={!oncite} onclick={() => cite(entry)}>
                   {t('writing.zoteroCite')}
                 </Button>
-              </span>>
+              </span>
             </li>
           {/each}
         </ul>
@@ -539,6 +539,7 @@
   }
 
   .zotero__row-actions {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: var(--space-1);
@@ -546,6 +547,7 @@
   }
 
   .zotero__work {
+    flex: 1;
     display: flex;
     flex-direction: column;
     gap: 2px;
