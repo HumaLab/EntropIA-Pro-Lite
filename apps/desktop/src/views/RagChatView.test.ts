@@ -9,9 +9,17 @@ import type { RagAnswer, RagConversation, RagConversationSummary } from '$lib/ra
 import { ragChat } from '$lib/rag-chat'
 import RagChatView from './RagChatView.svelte'
 
-const { navigateMock, downloadRagConversationPdfMock } = vi.hoisted(() => ({
+const { navigateMock, downloadRagConversationPdfMock, storeMock } = vi.hoisted(() => ({
   navigateMock: vi.fn(),
   downloadRagConversationPdfMock: vi.fn(),
+  storeMock: {
+    extractions: { findByAsset: vi.fn() },
+    transcriptions: { findByAsset: vi.fn() },
+  },
+}))
+
+vi.mock('$lib/db', () => ({
+  getStore: () => storeMock,
 }))
 
 vi.mock('$lib/pane-context', () => ({
@@ -177,6 +185,8 @@ beforeEach(() => {
   locale.set('es')
   navigateMock.mockReset()
   downloadRagConversationPdfMock.mockReset()
+  storeMock.extractions.findByAsset.mockReset().mockResolvedValue(null)
+  storeMock.transcriptions.findByAsset.mockReset().mockResolvedValue(null)
   mockInvoke.mockReset()
   ragChat.reset()
 })
@@ -1083,14 +1093,119 @@ describe('RagChatView', () => {
     })
     await fireEvent.click(sourceButton)
 
-    expect(navigateMock).toHaveBeenCalledWith({
-      name: 'item',
-      collectionId: 'col-1',
-      collectionName: 'Historia oral',
-      itemId: 'item-1',
-      itemTitle: 'Entrevista 12',
-      assetId: 'asset-1',
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith({
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Historia oral',
+        itemId: 'item-1',
+        itemTitle: 'Entrevista 12',
+        assetId: 'asset-1',
+        citationRange: null,
+        citationSeconds: 65,
+      })
     })
+  })
+
+  it('opens the cited item at the cited fragment when the provenance still matches', async () => {
+    const text = 'Antes. la huelga comenzó cuando los obreros del SOIP... Después.'
+    const snippet = 'la huelga comenzó cuando los obreros del SOIP...'
+    const start = text.indexOf(snippet)
+    storeMock.extractions.findByAsset.mockResolvedValue({ id: 'ext-1', textContent: text })
+    setupBackend({
+      ask: () => ({
+        ...answerWithSources,
+        sources: [
+          {
+            ...answerWithSources.sources[0]!,
+            startSeconds: null,
+            endSeconds: null,
+            provenance: {
+              retrievalUnit: 'chunk',
+              sourceKind: 'extraction',
+              sourceId: 'ext-1',
+              chunkIds: ['c1'],
+              startChar: start,
+              endChar: start + snippet.length,
+            },
+          },
+        ],
+      }),
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Abrir fuente: [1] Entrevista 12' })
+    )
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith({
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Historia oral',
+        itemId: 'item-1',
+        itemTitle: 'Entrevista 12',
+        assetId: 'asset-1',
+        citationRange: { start, end: start + snippet.length, text: snippet },
+        citationSeconds: null,
+      })
+    })
+  })
+
+  it('carries the start second of an audio source and still opens when the text moved', async () => {
+    storeMock.transcriptions.findByAsset.mockResolvedValue({
+      id: 'tr-9',
+      textContent: 'otra transcripción sin esa frase',
+    })
+    setupBackend({
+      ask: () => ({
+        ...answerWithSources,
+        sources: [
+          {
+            ...answerWithSources.sources[0]!,
+            provenance: {
+              retrievalUnit: 'chunk',
+              sourceKind: 'transcription',
+              sourceId: 'tr-1',
+              chunkIds: ['c1'],
+              startChar: 0,
+              endChar: 10,
+            },
+          },
+        ],
+      }),
+    })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Abrir fuente: [1] Entrevista 12' })
+    )
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledTimes(1)
+    })
+    const view = navigateMock.mock.calls[0]![0]
+    expect(view.citationRange).toBeNull()
+    expect(view.citationSeconds).toBe(65)
+    expect(view.assetId).toBe('asset-1')
+  })
+
+  it('still opens the item when the text lookup fails', async () => {
+    storeMock.extractions.findByAsset.mockRejectedValue(new Error('db closed'))
+    setupBackend({ ask: () => answerWithSources })
+
+    render(RagChatView)
+    await sendQuestion('¿Cuándo comenzó la huelga?')
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Abrir fuente: [1] Entrevista 12' })
+    )
+
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledTimes(1)
+    })
+    expect(navigateMock.mock.calls[0]![0].citationRange).toBeNull()
   })
 
   it('omits the timestamp when startSeconds is null', async () => {

@@ -28,6 +28,8 @@
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
+  import { getStore } from '$lib/db'
+  import { resolveRagCitation, type RagCitationTarget } from '$lib/rag-citation'
   import { setResearchHandoff } from '$lib/research'
   import {
     ActionIcon,
@@ -297,10 +299,23 @@
     }
   }
 
-  function openSource(source: RagSource) {
+  // A corpus source opens its item at the cited fragment: the range is checked
+  // against the text as it is today (see `resolveRagCitation`) and the item is
+  // opened either way, so a re-extracted page or an old conversation without
+  // provenance still opens, just without the mark.
+  async function openSource(source: RagSource) {
     if (isBibliographySource(source)) {
       openPassage(source)
       return
+    }
+    let target: RagCitationTarget = {
+      citationRange: null,
+      citationSeconds: source.startSeconds ?? null,
+    }
+    try {
+      target = await resolveRagCitation(getStore(), source)
+    } catch {
+      // Without the store the item still opens, only unmarked.
     }
     navigation.navigate({
       name: 'item',
@@ -309,6 +324,8 @@
       itemId: source.itemId,
       itemTitle: source.itemTitle,
       assetId: source.assetId,
+      citationRange: target.citationRange,
+      citationSeconds: target.citationSeconds,
     })
   }
   function clearCopyFeedback() {

@@ -287,8 +287,10 @@ describe('RagChatView sources of both scopes', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: /Abrir fuente: \[1\]/ }))
 
-    expect(navigateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'item', assetId: 'asset-1' })
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'item', assetId: 'asset-1' })
+      )
     )
   })
 
