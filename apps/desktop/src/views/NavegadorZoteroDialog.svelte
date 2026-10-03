@@ -123,6 +123,9 @@
 
   const present = $derived(status ? describeStatus(status) : null)
   const isPresent = $derived(present?.present === true)
+  /* The item is there but lacks something the Web API key can fill in: the main
+     action completes it instead of only opening it. */
+  const completable = $derived(isPresent && present?.canComplete === true)
 
   function describeFailure(copy: ZoteroCopy): string {
     const code = copy.errorCode ?? 'unknown'
@@ -179,6 +182,7 @@
   })
   const notes = $derived(result ? describeCopy(result).notes : [])
   const completedKeys = $derived(result ? describeCopy(result).completedKeys : [])
+  const reasons = $derived(result ? describeCopy(result).reasons : [])
 
   async function openInZotero() {
     if (!chosen || !status?.itemKey) return
@@ -195,7 +199,7 @@
       onclose()
       return
     }
-    if (phase === 'choosing' && isPresent) {
+    if (phase === 'choosing' && isPresent && !completable) {
       void openInZotero()
       return
     }
@@ -207,9 +211,11 @@
       t(
         phase === 'done'
           ? 'navegador.zotero.ok'
-          : isPresent
-            ? 'navegador.zotero.open'
-            : 'navegador.zotero.confirm'
+          : completable
+            ? 'navegador.zotero.complete'
+            : isPresent
+              ? 'navegador.zotero.open'
+              : 'navegador.zotero.confirm'
       )
   )
 </script>
@@ -242,6 +248,11 @@
     {#each notes as note (note)}
       <p class="zotero-dialog__note">{$currentLocale && t(note)}</p>
     {/each}
+    {#if reasons.length > 0}
+      <p class="zotero-dialog__note">
+        {$currentLocale && t('navegador.zotero.note.web.reason', { reason: reasons.join(', ') })}
+      </p>
+    {/if}
     {#if completedKeys.length > 0}
       <p class="zotero-dialog__note">
         {$currentLocale &&
@@ -288,6 +299,16 @@
       <p class="zotero-dialog__note" role="status">
         {$currentLocale && t('navegador.zotero.checking')}
       </p>
+    {:else if status && present && present.pdfCapture !== undefined}
+      <p class="zotero-dialog__note">
+        {$currentLocale &&
+          (present.pdfCapture
+            ? t('navegador.zotero.pdf.goes', { date: present.pdfCapture.savedAt.slice(0, 10) })
+            : t('navegador.zotero.pdf.none'))}
+      </p>
+    {/if}
+    {#if checking}
+      <!-- the checking note above already speaks -->
     {:else if present?.present && status}
       <p class="zotero-dialog__status" role="status">
         {$currentLocale && t('navegador.zotero.present', { library: chosenLabel })}
@@ -304,6 +325,11 @@
             t('navegador.zotero.present.pending', {
               fields: present.pendingKeys.map((key) => t(key)).join(', '),
             })}
+        </p>
+      {/if}
+      {#if completable}
+        <p class="zotero-dialog__note">
+          {$currentLocale && t('navegador.zotero.present.completable')}
         </p>
       {/if}
       {#if present.keptKeys.length > 0}

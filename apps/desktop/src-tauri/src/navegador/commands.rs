@@ -530,16 +530,19 @@ pub async fn navegador_zotero_libraries() -> Result<LibraryList, String> {
 /// (`not_found`, `invalid_library`, `zotero_api_disabled`, `db_error`).
 #[tauri::command]
 pub async fn navegador_zotero_status(
+    app: AppHandle,
     db: State<'_, AppDbState>,
     source_id: String,
     capture_id: Option<String>,
     library: LibraryRef,
 ) -> Result<CopyStatus, String> {
     let db_path = db.db_path.clone();
+    let data_dir = crate::path_utils::data_dir(&app)?;
     tokio::task::spawn_blocking(move || {
         let conn = open_archive_connection(&db_path)?;
         zotero_run::check_status(
             &conn,
+            &data_dir,
             &ConnectorPort::local(),
             &source_id,
             capture_id.as_deref(),

@@ -190,6 +190,7 @@ describe('states', () => {
         'invalid_key',
         'other_account',
         'account_unknown',
+        'not_synced_yet',
       ] as const) {
         expect(linked({ state, completed: [] }).notes).toContain(
           `navegador.zotero.note.web.${state}`
@@ -244,6 +245,19 @@ describe('states', () => {
       })
     })
 
+    it('shows where a failure stopped, compactly', () => {
+      const view = linked({
+        state: 'failed',
+        completed: [],
+        reason: 'patch:500',
+        pdf: 'failed',
+        pdfReason: 'upload:500',
+      })
+      expect(view.reasons).toEqual(['patch:500', 'upload:500'])
+      expect(linked({ state: 'completed', completed: [] }).reasons).toEqual([])
+      expect(linked(undefined).reasons).toEqual([])
+    })
+
     it('reads a row from before the Web API existed', () => {
       expect(linked(undefined).completedKeys).toEqual([])
     })
@@ -257,6 +271,34 @@ describe('states', () => {
       })
     )
     expect(plain.notes).toEqual([])
+  })
+})
+
+describe('what the status says about the PDF and completing', () => {
+  const base = {
+    state: 'present' as const,
+    source: 'zotero' as const,
+    itemKey: 'K',
+    pdf: 'parent_exists' as const,
+    pendingFields: [],
+    keptFields: [],
+  }
+
+  it('names the PDF that would go along, or says none would', () => {
+    const named = describeStatus({
+      ...base,
+      pdfCapture: { id: 'c1', savedAt: '2026-10-02T09:30:00Z' },
+      canComplete: false,
+    })
+    expect(named.pdfCapture).toEqual({ id: 'c1', savedAt: '2026-10-02T09:30:00Z' })
+    expect(describeStatus({ ...base, pdfCapture: null, canComplete: false }).pdfCapture).toBeNull()
+  })
+
+  it('offers completing only when the backend says there is something to do', () => {
+    expect(describeStatus({ ...base, pdfCapture: null, canComplete: true }).canComplete).toBe(true)
+    expect(describeStatus({ ...base, pdfCapture: null, canComplete: false }).canComplete).toBe(
+      false
+    )
   })
 })
 

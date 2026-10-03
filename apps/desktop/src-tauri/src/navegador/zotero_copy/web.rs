@@ -38,6 +38,35 @@ pub enum WebError {
     Invalid(String),
 }
 
+/// Where a Web API step went wrong, short enough to show and free of anything
+/// secret: the phase, and the HTTP status or `network` / `invalid`. Never the
+/// key, a URL or a response body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub phase: &'static str,
+    pub cause: String,
+}
+
+impl Failure {
+    pub fn of(phase: &'static str, error: &WebError) -> Self {
+        let cause = match error {
+            WebError::Unreachable => "network".to_string(),
+            WebError::Rejected(status) => status.to_string(),
+            WebError::Invalid(_) => "invalid".to_string(),
+        };
+        Self { phase, cause }
+    }
+
+    /// `phase:cause`, e.g. `read_item:404`.
+    pub fn code(&self) -> String {
+        format!("{}:{}", self.phase, self.cause)
+    }
+
+    pub fn is_not_found(&self) -> bool {
+        self.cause == "404"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WebItem {
     pub version: u64,
@@ -174,6 +203,9 @@ impl WebPort for WebApiPort {
         let client = self.client()?;
         let response = self.send(client.get(format!("{}/keys/current", self.base)), key)?;
         let status = response.status().as_u16();
+        if !matches!(status, 200 | 403 | 404) {
+            return Err(WebError::Rejected(status));
+        }
         let body = response.text().map_err(|_| WebError::Unreachable)?;
         classify_key_response(status, &body).map_err(WebError::Invalid)
     }
@@ -411,14 +443,14 @@ pub fn md5_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PdfOutcome {
     Attached,
     /// An attachment with this file is already a child of the item.
     AlreadyThere,
     /// The person's Zotero storage is full (`413`).
     Quota,
-    Failed,
+    Failed(Failure),
 }
 
 fn already_a_child(children: &[Value], file: &PdfFile) -> bool {
@@ -456,7 +488,7 @@ pub fn attach_pdf_via_web(
     match web.children(key, library, parent) {
         Ok(children) if already_a_child(&children, file) => return PdfOutcome::AlreadyThere,
         Ok(_) => {}
-        Err(_) => return PdfOutcome::Failed,
+        Err(error) => return PdfOutcome::Failed(Failure::of("children", &error)),
     }
     let body = serde_json::json!([{
         "itemType": "attachment",
@@ -466,16 +498,21 @@ pub fn attach_pdf_via_web(
         "contentType": "application/pdf",
         "filename": file.filename,
     }]);
-    let Ok((attachment, version)) = web.create_attachment(key, library, &body, &write_token())
-    else {
-        return PdfOutcome::Failed;
+    let (attachment, version) = match web.create_attachment(key, library, &body, &write_token()) {
+        Ok(created) => created,
+        Err(error) => return PdfOutcome::Failed(Failure::of("create_attachment", &error)),
     };
-    let uploaded = (|| -> Result<(), WebError> {
-        match web.authorize_upload(key, library, &attachment, file)? {
+    let uploaded = (|| -> Result<(), Failure> {
+        let authorization = web
+            .authorize_upload(key, library, &attachment, file)
+            .map_err(|error| Failure::of("authorize", &error))?;
+        match authorization {
             Authorization::Exists => Ok(()),
             Authorization::Upload(ticket) => {
-                web.upload_file(&ticket, &file.bytes)?;
+                web.upload_file(&ticket, &file.bytes)
+                    .map_err(|error| Failure::of("upload", &error))?;
                 web.register_upload(key, library, &attachment, &ticket.upload_key)
+                    .map_err(|error| Failure::of("register", &error))
             }
         }
     })();
@@ -483,10 +520,10 @@ pub fn attach_pdf_via_web(
         Ok(()) => PdfOutcome::Attached,
         Err(error) => {
             let _ = web.delete_item(key, library, &attachment, version);
-            if error == WebError::Rejected(413) {
+            if error.cause == "413" {
                 PdfOutcome::Quota
             } else {
-                PdfOutcome::Failed
+                PdfOutcome::Failed(error)
             }
         }
     }
@@ -532,14 +569,19 @@ pub fn complete_item(
     library: &WebLibrary,
     item: &str,
     ours: &Owned,
-) -> Result<Completion, WebError> {
+) -> Result<Completion, Failure> {
     for attempt in 0..2 {
-        let current = web.get_item(key, library, item)?;
+        let current = web
+            .get_item(key, library, item)
+            .map_err(|error| Failure::of("read_item", &error))?;
         let fields = missing_fields(ours, &current.data);
         if fields.is_empty() {
             return Ok(Completion::NothingMissing);
         }
-        match web.patch_item(key, library, item, current.version, &patch_body(&fields))? {
+        let patched = web
+            .patch_item(key, library, item, current.version, &patch_body(&fields))
+            .map_err(|error| Failure::of("patch", &error))?;
+        match patched {
             Patched::Done => {
                 return Ok(Completion::Completed(
                     fields.iter().map(|(name, _)| *name).collect(),
@@ -680,7 +722,7 @@ mod tests {
         }
     }
 
-    fn complete(web: &FakeWeb) -> Result<Completion, WebError> {
+    fn complete(web: &FakeWeb) -> Result<Completion, Failure> {
         complete_item(web, KEY, &WebLibrary::User(7), "ITEM1234", &ours())
     }
 
@@ -754,7 +796,13 @@ mod tests {
             vec![web_item(4, json!({}))],
             vec![Err(WebError::Rejected(403))],
         );
-        assert_eq!(complete(&web).unwrap_err(), WebError::Rejected(403));
+        assert_eq!(
+            complete(&web).unwrap_err(),
+            Failure {
+                phase: "patch",
+                cause: "403".into()
+            }
+        );
         assert_eq!(web.calls().len(), 2);
     }
 
@@ -1067,24 +1115,66 @@ mod tests {
         for refusal in [412, 403, 500] {
             let mut web = FakeFiles::working();
             web.auth = Err(WebError::Rejected(refusal));
-            assert_eq!(attach(&web), PdfOutcome::Failed, "{refusal}");
+            assert_eq!(
+                attach(&web),
+                PdfOutcome::Failed(failure("authorize", &refusal.to_string())),
+                "{refusal}"
+            );
             assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
         }
         let mut web = FakeFiles::working();
         web.upload = Err(WebError::Rejected(500));
-        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert_eq!(attach(&web), PdfOutcome::Failed(failure("upload", "500")));
         assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
         let mut web = FakeFiles::working();
+        web.upload = Err(WebError::Unreachable);
+        assert_eq!(
+            attach(&web),
+            PdfOutcome::Failed(failure("upload", "network"))
+        );
+        let mut web = FakeFiles::working();
         web.register = Err(WebError::Rejected(412));
-        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert_eq!(attach(&web), PdfOutcome::Failed(failure("register", "412")));
         assert_eq!(web.calls().last().unwrap(), "delete ATTKEY12 v31");
+    }
+
+    fn failure(phase: &'static str, cause: &str) -> Failure {
+        Failure {
+            phase,
+            cause: cause.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_failure_reads_as_a_short_key_free_code() {
+        assert_eq!(failure("read_item", "404").code(), "read_item:404");
+        assert_eq!(
+            Failure::of("children", &WebError::Unreachable).code(),
+            "children:network"
+        );
+        assert_eq!(
+            Failure::of("key_info", &WebError::Invalid(KEY.into())).code(),
+            "key_info:invalid",
+            "an unreadable answer never lands in the code"
+        );
+    }
+
+    #[test]
+    fn an_item_missing_on_the_server_is_a_read_failure_with_404() {
+        let web = FakeWeb::new(vec![Err(WebError::Rejected(404))], vec![]);
+        let error = complete(&web).unwrap_err();
+        assert_eq!(error, failure("read_item", "404"));
+        assert!(error.is_not_found());
     }
 
     #[test]
     fn a_failure_to_create_the_attachment_has_nothing_to_clean() {
         let mut web = FakeFiles::working();
         web.create = Err(WebError::Rejected(400));
-        assert_eq!(attach(&web), PdfOutcome::Failed);
+        assert_eq!(
+            attach(&web),
+            PdfOutcome::Failed(failure("create_attachment", "400"))
+        );
         assert!(!web.calls().iter().any(|c| c.starts_with("delete")));
     }
 
@@ -1250,6 +1340,13 @@ mod tests {
                 .map(String::as_str),
             Some("31")
         );
+    }
+
+    #[test]
+    fn the_real_port_keeps_the_status_of_an_unexpected_key_answer() {
+        let server = serve(vec![canned("GET", "/keys/current", 500, "boom")]);
+        let error = WebApiPort::new(&server.base).key_info(KEY).unwrap_err();
+        assert_eq!(error, WebError::Rejected(500));
     }
 
     #[test]

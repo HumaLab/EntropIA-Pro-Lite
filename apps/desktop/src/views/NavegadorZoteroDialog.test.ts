@@ -46,6 +46,8 @@ const ABSENT = {
   pdf: 'none',
   pendingFields: [],
   keptFields: [],
+  pdfCapture: null,
+  canComplete: false,
 }
 const PRESENT = {
   state: 'present',
@@ -54,6 +56,8 @@ const PRESENT = {
   pdf: 'none',
   pendingFields: [],
   keptFields: [],
+  pdfCapture: null,
+  canComplete: false,
 }
 
 const onclose = vi.fn()
@@ -129,6 +133,61 @@ describe('live libraries', () => {
     open()
     expect(await screen.findByRole('radio', { name: 'prueba' })).toBeTruthy()
     expect(screen.getByText(/muestran las bibliotecas conocidas/)).toBeTruthy()
+  })
+})
+
+describe('which PDF goes along', () => {
+  it('says which saved PDF will be attached, by the day it was saved', async () => {
+    statusFor = () => ({
+      ...ABSENT,
+      pdfCapture: { id: 'c9', savedAt: '2026-10-02T09:30:00Z' },
+    })
+    open()
+    expect(await screen.findByText(/Se adjuntará el PDF guardado el 2026-10-02/)).toBeTruthy()
+  })
+
+  it('says when none will be attached', async () => {
+    open()
+    expect(await screen.findByText(/no tiene un PDF guardado/)).toBeTruthy()
+  })
+
+  it('says nothing about a PDF while it does not know', async () => {
+    statusFor = () => {
+      throw new Error('boom')
+    }
+    open()
+    await screen.findByRole('radio', { name: 'Mi biblioteca' })
+    expect(screen.queryByText(/PDF guardado/)).toBeNull()
+  })
+})
+
+describe('completing an item that is already there', () => {
+  it('offers to complete it instead of only opening it when there is something to do', async () => {
+    statusFor = () => ({
+      ...PRESENT,
+      pdf: 'parent_exists',
+      pdfCapture: { id: 'c9', savedAt: '2026-10-02T09:30:00Z' },
+      canComplete: true,
+    })
+    answers.run = () => ({
+      reachable: true,
+      copies: [row({ state: 'linked', itemKey: 'OLDKEY22' })],
+    })
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.queryByRole('button', { name: 'Abrir en Zotero' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Completar en Zotero' }))
+    await screen.findByText(/Ya estaba en «Mi biblioteca»/)
+    expect(requested).toHaveLength(1)
+    expect(opened).toHaveLength(0)
+  })
+
+  it('still just opens it when there is nothing to complete', async () => {
+    statusFor = () => PRESENT
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.getByRole('button', { name: 'Abrir en Zotero' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Completar en Zotero' })).toBeNull()
   })
 })
 
@@ -247,9 +306,13 @@ describe('NavegadorZoteroDialog', () => {
   })
 
   it('a PDF capture goes along with its page', async () => {
+    statusFor = () => ({
+      ...ABSENT,
+      pdfCapture: { id: 'c1', savedAt: '2026-10-02T09:30:00Z' },
+    })
     open({ capture: { id: 'c1', title: 'Informe' } })
     await screen.findByRole('radio', { name: 'Mi biblioteca' })
-    expect(screen.getByText(/PDF/)).toBeTruthy()
+    expect(screen.getByText(/con el PDF «Informe» adjunto/)).toBeTruthy()
     await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
     await waitFor(() => expect(requested).toHaveLength(1))
     expect(requested[0]).toMatchObject({ captureId: 'c1' })

@@ -26,10 +26,11 @@ use super::plan::{
 use super::port::{PortError, Targets, ZoteroPort};
 use super::store::{self, ZoteroCopy};
 use super::web::{
-    attach_pdf_via_web, complete_item, md5_hex, Completion, PdfFile, PdfOutcome, WebLibrary,
-    WebPort,
+    attach_pdf_via_web, complete_item, md5_hex, Completion, Failure, PdfFile, PdfOutcome, WebError,
+    WebLibrary, WebPort,
 };
 use crate::navegador::sources;
+use crate::settings::{get_setting, ZOTERO_API_KEY};
 use crate::writing::zotero::{Library, LibraryType};
 use crate::zotero_web::{stored_credentials, KeyCheck};
 
@@ -175,16 +176,9 @@ fn load_source(
     })
 }
 
-fn load(
-    conn: &Connection,
-    data_dir: &Path,
-    row: &ZoteroCopy,
-) -> Result<(SourceFacts, Option<Pdf>), Stop> {
-    let facts = load_source(conn, &row.source_id, row.capture_id.as_deref())?;
-    let Some(capture_id) = row.capture_id.as_deref() else {
-        return Ok((facts, None));
-    };
-
+/// Reads one saved PDF capture: its ticket (hashed again, so a file that is not
+/// the one that was saved is refused), then its bytes.
+fn read_pdf(conn: &Connection, data_dir: &Path, capture_id: &str) -> Result<Pdf, Stop> {
     let ticket = sources::copy_ticket(conn, data_dir, capture_id).map_err(from_source_error)?;
     if ticket.provenance.rendering.is_some() {
         return Err(fail("not_a_pdf", "only a saved PDF goes along"));
@@ -204,14 +198,53 @@ fn load(
     }
     let bytes = std::fs::read(&ticket.path)
         .map_err(|_| fail("file_missing", "the saved PDF is not on disk"))?;
-    Ok((
-        facts,
-        Some(Pdf {
-            sha256: ticket.provenance.sha256,
-            url: capture_url,
-            bytes,
-        }),
-    ))
+    Ok(Pdf {
+        sha256: ticket.provenance.sha256,
+        url: capture_url,
+        bytes,
+    })
+}
+
+/// The PDF a copy of the source itself takes along: its latest saved PDF capture
+/// that is still on disk, still matches its hash and fits. One that does not is
+/// skipped for the one before it: a page copy never fails for a PDF nobody asked
+/// for by name. Returns the capture's id and the time it was saved too.
+fn latest_pdf(
+    conn: &Connection,
+    data_dir: &Path,
+    source_id: &str,
+) -> Option<(String, String, Pdf)> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, accessed_at FROM web_captures
+             WHERE web_source_id = ?1 AND kind = 'pdf'
+             ORDER BY accessed_at DESC, created_at DESC, id DESC",
+        )
+        .ok()?;
+    let captures: Vec<(String, String)> = statement
+        .query_map([source_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .ok()?
+        .filter_map(Result::ok)
+        .collect();
+    captures.into_iter().find_map(|(id, saved_at)| {
+        let pdf = read_pdf(conn, data_dir, &id).ok()?;
+        Some((id, saved_at, pdf))
+    })
+}
+
+fn load(
+    conn: &Connection,
+    data_dir: &Path,
+    row: &ZoteroCopy,
+) -> Result<(SourceFacts, Option<Pdf>), Stop> {
+    let facts = load_source(conn, &row.source_id, row.capture_id.as_deref())?;
+    // A PDF capture named by the person must be right or the copy fails; for the
+    // source itself the latest saved PDF goes along when there is one.
+    let pdf = match row.capture_id.as_deref() {
+        Some(capture) => Some(read_pdf(conn, data_dir, capture)?),
+        None => latest_pdf(conn, data_dir, &row.source_id).map(|(_, _, pdf)| pdf),
+    };
+    Ok((facts, pdf))
 }
 
 fn library_of(row: &ZoteroCopy) -> Result<Library, Stop> {
@@ -316,12 +349,17 @@ fn names(fields: &[&'static str]) -> Value {
 /// What the Web API did for an existing item.
 struct WebOutcome {
     /// `completed`, `nothing_missing`, `conflict`, `no_key`, `invalid_key`,
-    /// `no_write`, `other_account`, `account_unknown` or `failed`.
+    /// `no_write`, `other_account`, `account_unknown`, `not_synced_yet` (the item
+    /// is only in the local Zotero so far) or `failed`.
     state: &'static str,
     completed: Vec<&'static str>,
     /// What became of the PDF: `attached`, `already_there`, `quota` or `failed`.
     /// `None` when there was none to attach or the access was not granted.
     pdf: Option<&'static str>,
+    /// Where a `failed` state stopped (`patch:500`), key-free.
+    reason: Option<String>,
+    /// Where a failed PDF stopped (`upload:500`).
+    pdf_reason: Option<String>,
 }
 
 impl WebOutcome {
@@ -330,6 +368,15 @@ impl WebOutcome {
             state,
             completed: Vec::new(),
             pdf: None,
+            reason: None,
+            pdf_reason: None,
+        }
+    }
+
+    fn failed(failure: &Failure) -> Self {
+        Self {
+            reason: Some(failure.code()),
+            ..Self::of("failed")
         }
     }
 }
@@ -367,7 +414,10 @@ fn complete_through_web(
     let info = match web.key_info(&credentials.key) {
         Ok(KeyCheck::Valid(info)) => info,
         Ok(KeyCheck::InvalidKey) => return WebOutcome::of("invalid_key"),
-        Ok(KeyCheck::Unreachable) | Err(_) => return WebOutcome::of("failed"),
+        Ok(KeyCheck::Unreachable) => {
+            return WebOutcome::failed(&Failure::of("key_info", &WebError::Unreachable))
+        }
+        Err(error) => return WebOutcome::failed(&Failure::of("key_info", &error)),
     };
     // The personal library is the account the key belongs to.
     let (library, writable) = if row.library_type == "group" {
@@ -396,11 +446,16 @@ fn complete_through_web(
         Ok(Completion::Completed(fields)) => WebOutcome {
             state: "completed",
             completed: fields,
-            pdf: None,
+            ..WebOutcome::of("completed")
         },
         Ok(Completion::NothingMissing) => WebOutcome::of("nothing_missing"),
         Ok(Completion::Conflict) => WebOutcome::of("conflict"),
-        Err(_) => WebOutcome::of("failed"),
+        // An item just created through the connector exists only in the local
+        // Zotero until it syncs: the server does not know it yet.
+        Err(failure) if failure.phase == "read_item" && failure.is_not_found() => {
+            return WebOutcome::of("not_synced_yet")
+        }
+        Err(failure) => WebOutcome::failed(&failure),
     };
     // Zotero's own children (read locally) already show this PDF: nothing to do.
     if let Some(pdf) = pdf.filter(|_| pdf_note != "already_there") {
@@ -421,7 +476,10 @@ fn complete_through_web(
                 PdfOutcome::Attached => "attached",
                 PdfOutcome::AlreadyThere => "already_there",
                 PdfOutcome::Quota => "quota",
-                PdfOutcome::Failed => "failed",
+                PdfOutcome::Failed(failure) => {
+                    outcome.pdf_reason = Some(failure.code());
+                    "failed"
+                }
             },
         );
     }
@@ -479,6 +537,12 @@ fn attempt(
                 "state": outcome.state,
                 "completed": names(&outcome.completed),
             });
+            if let Some(reason) = &outcome.reason {
+                detail["web"]["reason"] = json!(reason);
+            }
+            if let Some(reason) = &outcome.pdf_reason {
+                detail["web"]["pdfReason"] = json!(reason);
+            }
             if let Some(result) = outcome.pdf {
                 detail["web"]["pdf"] = json!(result);
                 // Attached, or found already there: the PDF is in Zotero now.
@@ -707,6 +771,20 @@ pub struct CopyStatus {
     pub pdf: String,
     pub pending_fields: Vec<String>,
     pub kept_fields: Vec<String>,
+    /// The saved PDF that goes along with this copy: the named capture, or the
+    /// source's latest one. `None`: no PDF goes along.
+    pub pdf_capture: Option<PdfCaptureInfo>,
+    /// The item is there, a Web API key is stored, and the item lacks something
+    /// a copy could fill in or attach.
+    pub can_complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCaptureInfo {
+    pub id: String,
+    /// When the PDF was saved (UTC, RFC 3339).
+    pub saved_at: String,
 }
 
 fn status(state: &str, source: &str) -> CopyStatus {
@@ -717,6 +795,8 @@ fn status(state: &str, source: &str) -> CopyStatus {
         pdf: "none".into(),
         pending_fields: Vec::new(),
         kept_fields: Vec::new(),
+        pdf_capture: None,
+        can_complete: false,
     }
 }
 
@@ -725,6 +805,7 @@ fn status(state: &str, source: &str) -> CopyStatus {
 /// of an item Zotero no longer has is dropped so the source can be copied again.
 pub fn check_status(
     conn: &Connection,
+    data_dir: &Path,
     port: &dyn ZoteroPort,
     source_id: &str,
     capture_id: Option<&str>,
@@ -744,10 +825,38 @@ pub fn check_status(
     };
     let facts = load_source(conn, source_id, capture_id).map_err(to_text)?;
     let recorded = store::recorded_item(conn, source_id, lib_type, lib_id)?;
+    // The PDF that would go along: the named capture, or the source's latest.
+    let picked: Option<(PdfCaptureInfo, String)> = match capture_id {
+        Some(capture) => conn
+            .query_row(
+                "SELECT accessed_at, sha256 FROM web_captures WHERE id = ?1",
+                [capture],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(|error| format!("db_error: {error}"))?
+            .map(|(saved_at, sha)| {
+                (
+                    PdfCaptureInfo {
+                        id: capture.to_string(),
+                        saved_at,
+                    },
+                    sha,
+                )
+            }),
+        None => latest_pdf(conn, data_dir, source_id)
+            .map(|(id, saved_at, pdf)| (PdfCaptureInfo { id, saved_at }, pdf.sha256)),
+    };
+    let sha: Option<String> = picked.as_ref().map(|(_, sha)| sha.clone());
+    let pdf_capture: Option<PdfCaptureInfo> = picked.map(|(info, _)| info);
+    let tagged = |mut got: CopyStatus| {
+        got.pdf_capture = pdf_capture.clone();
+        got
+    };
     let from_record = |recorded: Option<String>| match recorded {
         Some(key) => CopyStatus {
             item_key: Some(key),
-            pdf: if capture_id.is_some() {
+            pdf: if pdf_capture.is_some() {
                 "unknown"
             } else {
                 "none"
@@ -759,32 +868,21 @@ pub fn check_status(
     };
 
     if port.ping().is_err() {
-        return Ok(from_record(recorded));
+        return Ok(tagged(from_record(recorded)));
     }
     let urls = lookup_urls(&facts);
     let found = match find_existing(port, &zotero_library, &urls) {
         Ok(found) => found,
-        Err(Stop::Wait) => return Ok(from_record(recorded)),
+        Err(Stop::Wait) => return Ok(tagged(from_record(recorded))),
         Err(stop) => return Err(to_text(stop)),
     };
     let Some(existing) = found.into_iter().next() else {
         if recorded.is_some() {
             store::forget_result(conn, source_id, lib_type, lib_id)?;
         }
-        return Ok(status("absent", "none"));
+        return Ok(tagged(status("absent", "none")));
     };
     let ours = owned_from_zotero(&webpage_item(&facts, CONNECTOR_ID));
-    let sha: Option<String> = match capture_id {
-        None => None,
-        Some(capture) => conn
-            .query_row(
-                "SELECT sha256 FROM web_captures WHERE id = ?1",
-                [capture],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|error| format!("db_error: {error}"))?,
-    };
     let (pending, kept, pdf) = existing_report(
         conn,
         port,
@@ -795,13 +893,16 @@ pub fn check_status(
         (source_id, lib_type, lib_id),
     )
     .map_err(to_text)?;
-    Ok(CopyStatus {
+    let has_key = get_setting(conn, ZOTERO_API_KEY).is_some_and(|key| !key.trim().is_empty());
+    let can_complete = has_key && (!pending.is_empty() || pdf == "parent_exists");
+    Ok(tagged(CopyStatus {
         item_key: Some(existing.key),
         pdf: pdf.into(),
         pending_fields: pending.into_iter().map(String::from).collect(),
         kept_fields: kept.into_iter().map(String::from).collect(),
+        can_complete,
         ..status("present", "zotero")
-    })
+    }))
 }
 
 static DRAINING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1082,9 +1183,10 @@ mod tests {
         let done = go(&env, &port, &row.id);
         assert_eq!(done.state, store::STATE_COPIED);
         assert_eq!(done.item_key.as_deref(), Some("NEWKEY22"));
+        // The source's saved PDF goes along, attached before the read-back.
         assert_eq!(
             port.calls(),
-            vec!["ping", "targets", "find 0", "save", "move L1", "find 0"]
+            vec!["ping", "targets", "find 0", "save", "move L1", "attach", "find 0"]
         );
         let (session, uri, item) = port.saved.borrow()[0].clone();
         assert_eq!(uri, "https://a.test/x");
@@ -1094,7 +1196,7 @@ mod tests {
         assert_eq!(port.moved.borrow()[0], (session, "L1".to_string()));
         let detail = done.detail.unwrap();
         assert_eq!(detail["existing"], false);
-        assert_eq!(detail["pdf"], "none");
+        assert_eq!(detail["pdf"], "attached");
     }
 
     #[test]
@@ -1485,7 +1587,15 @@ mod tests {
     }
 
     fn status(env: &Env, port: &FakePort, capture: Option<&str>) -> CopyStatus {
-        check_status(&env.conn, port, "src1", capture, &personal()).unwrap()
+        check_status(
+            &env.conn,
+            env.data.path(),
+            port,
+            "src1",
+            capture,
+            &personal(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1511,7 +1621,8 @@ mod tests {
         assert_eq!(got.item_key.as_deref(), Some("OLDKEY22"));
         assert_eq!(got.kept_fields, vec!["title"]);
         assert_eq!(got.pending_fields, vec!["accessDate", "websiteTitle"]);
-        assert_eq!(got.pdf, "none");
+        // The source has a saved PDF that would go along; the item lacks it.
+        assert_eq!(got.pdf, "parent_exists");
     }
 
     #[test]
@@ -1591,7 +1702,8 @@ mod tests {
             status: 403,
             detail: String::new(),
         })]);
-        let error = check_status(&env.conn, &port, "src1", None, &personal()).unwrap_err();
+        let error =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap_err();
         assert!(error.starts_with("zotero_api_disabled"), "{error}");
     }
 
@@ -1599,14 +1711,16 @@ mod tests {
     fn the_status_of_a_missing_source_or_bad_library_is_refused() {
         let env = env();
         let port = FakePort::open();
-        let gone = check_status(&env.conn, &port, "nope", None, &personal()).unwrap_err();
+        let gone =
+            check_status(&env.conn, env.data.path(), &port, "nope", None, &personal()).unwrap_err();
         assert!(gone.starts_with("not_found"), "{gone}");
         let bad = LibraryRef {
             library_type: "team".into(),
             library_id: "1".into(),
             library_name: None,
         };
-        let error = check_status(&env.conn, &port, "src1", None, &bad).unwrap_err();
+        let error =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &bad).unwrap_err();
         assert!(error.starts_with("invalid_library"), "{error}");
     }
 
@@ -1895,6 +2009,8 @@ mod tests {
     #[test]
     fn nothing_missing_says_so_and_writes_nothing() {
         let env = env();
+        // No saved PDF: only the fields are in play.
+        env.conn.execute("DELETE FROM web_captures", []).unwrap();
         store_web_key(&env);
         let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
         let full = json!({"accessDate": "2020-01-01T00:00:00Z", "websiteTitle": "Mine"});
@@ -2095,6 +2211,7 @@ mod tests {
     #[test]
     fn a_source_without_a_pdf_never_asks_for_children() {
         let env = env();
+        env.conn.execute("DELETE FROM web_captures", []).unwrap();
         store_web_key(&env);
         let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
         let web = pdf_web();
@@ -2126,6 +2243,234 @@ mod tests {
         assert_eq!(detail["pdf"], "already_there");
         assert!(detail["web"].get("pdf").is_none());
         assert!(!web.log().iter().any(|c| c.starts_with("children")));
+    }
+
+    // --- Diagnostics, items not yet on the server, and the source-level PDF -----
+
+    /// A second PDF capture of `src1`. With no bytes the row exists but the file
+    /// does not.
+    fn add_pdf_capture(env: &Env, id: &str, accessed_at: &str, bytes: Option<&[u8]>) -> String {
+        let content = bytes.unwrap_or(b"%PDF-1.4 missing");
+        let sha = format!("{:x}", Sha256::digest(content));
+        let rel = format!("web-captures/src1/{id}.pdf");
+        if let Some(bytes) = bytes {
+            std::fs::write(env.data.path().join(&rel), bytes).unwrap();
+        }
+        env.conn
+            .execute(
+                "INSERT INTO web_captures (id, web_source_id, accessed_at, final_url, kind, mime_type, rel_path, sha256, hash_of, size_bytes, title, created_at)
+                 VALUES (?1, 'src1', ?2, 'https://a.test/other.pdf', 'pdf', 'application/pdf', ?3, ?4, 'pdf', ?5, NULL, 2)",
+                rusqlite::params![id, accessed_at, rel, sha, content.len() as i64],
+            )
+            .unwrap();
+        sha
+    }
+
+    #[test]
+    fn a_failure_records_where_it_happened_and_never_the_key() {
+        let cases: Vec<(Arc<FakeWeb>, &str)> = vec![
+            (
+                web_with(Err(WebError::Unreachable), vec![], vec![]),
+                "key_info:network",
+            ),
+            (
+                web_with(Err(WebError::Rejected(500)), vec![], vec![]),
+                "key_info:500",
+            ),
+            (
+                web_with(Ok(KeyCheck::Unreachable), vec![], vec![]),
+                "key_info:network",
+            ),
+            (
+                web_with(
+                    Ok(key_info(true, true)),
+                    vec![Err(WebError::Rejected(500))],
+                    vec![],
+                ),
+                "read_item:500",
+            ),
+            (
+                web_with(
+                    Ok(key_info(true, true)),
+                    vec![web_item(json!({}))],
+                    vec![Err(WebError::Rejected(400))],
+                ),
+                "patch:400",
+            ),
+        ];
+        for (web, expected) in cases {
+            let env = env();
+            store_web_key(&env);
+            let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+            let done = go_web(&env, &existing_port(), &row.id, &web);
+            let detail = done.detail.unwrap();
+            assert_eq!(detail["web"]["state"], "failed", "{expected}");
+            assert_eq!(detail["web"]["reason"], expected);
+            assert!(!detail.to_string().contains(WEB_KEY));
+        }
+    }
+
+    #[test]
+    fn a_pdf_failure_records_its_phase_too() {
+        let web = pdf_web();
+        web.script_upload(Err(WebError::Rejected(500)));
+        let (_env, done) = pdf_copy(&web, &existing_port());
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["pdf"], "failed");
+        assert_eq!(detail["web"]["pdfReason"], "upload:500");
+    }
+
+    #[test]
+    fn an_item_the_server_does_not_know_yet_is_not_synced_and_nothing_else_is_tried() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", Some("cap-pdf"), &personal()).unwrap();
+        let web = web_with(
+            Ok(key_info(true, true)),
+            vec![Err(WebError::Rejected(404))],
+            vec![],
+        );
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        assert_eq!(done.state, store::STATE_LINKED);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["state"], "not_synced_yet");
+        assert!(detail["web"].get("reason").is_none());
+        assert!(detail["web"].get("pdf").is_none(), "the PDF is not tried");
+        assert!(!web.log().iter().any(|c| c.starts_with("children")));
+    }
+
+    #[test]
+    fn copying_the_source_takes_its_saved_pdf_along_to_a_new_item() {
+        let env = env();
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let port = FakePort::open().creating("NEWKEY22");
+        let done = go(&env, &port, &row.id);
+        assert_eq!(done.state, store::STATE_COPIED);
+        assert_eq!(done.detail.unwrap()["pdf"], "attached");
+        assert_eq!(port.attached.borrow()[0].4, PDF);
+    }
+
+    #[test]
+    fn copying_the_source_attaches_its_pdf_to_an_existing_item_through_the_web_api() {
+        let env = env();
+        store_web_key(&env);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let web = pdf_web();
+        let done = go_web(&env, &existing_port(), &row.id, &web);
+        let detail = done.detail.unwrap();
+        assert_eq!(detail["web"]["pdf"], "attached");
+        assert!(web
+            .log()
+            .contains(&format!("authorize ATTKEY12 {}", md5_hex(PDF))));
+    }
+
+    #[test]
+    fn with_several_pdf_captures_the_latest_one_goes() {
+        let env = env();
+        let newer: &[u8] = b"%PDF-1.4 the newer one";
+        add_pdf_capture(&env, "cap-new", "2026-10-03T08:00:00Z", Some(newer));
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let port = FakePort::open().creating("NEWKEY22");
+        go(&env, &port, &row.id);
+        assert_eq!(port.attached.borrow()[0].4, newer);
+        assert_eq!(port.attached.borrow()[0].3, "https://a.test/other.pdf");
+    }
+
+    #[test]
+    fn a_newer_capture_whose_file_is_gone_falls_back_to_the_next_one() {
+        let env = env();
+        add_pdf_capture(&env, "cap-gone", "2026-10-03T08:00:00Z", None);
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let port = FakePort::open().creating("NEWKEY22");
+        let done = go(&env, &port, &row.id);
+        assert_eq!(
+            done.state,
+            store::STATE_COPIED,
+            "the page copy never fails for it"
+        );
+        assert_eq!(port.attached.borrow()[0].4, PDF);
+    }
+
+    #[test]
+    fn a_source_without_a_pdf_capture_copies_only_the_page() {
+        let env = env();
+        env.conn.execute("DELETE FROM web_captures", []).unwrap();
+        let row = store::request(&env.conn, "src1", None, &personal()).unwrap();
+        let port = FakePort::open().creating("NEWKEY22");
+        let done = go(&env, &port, &row.id);
+        assert_eq!(done.state, store::STATE_COPIED);
+        assert!(port.attached.borrow().is_empty());
+        assert_eq!(done.detail.unwrap()["pdf"], "none");
+    }
+
+    #[test]
+    fn the_status_says_which_pdf_would_go_along() {
+        let env = env();
+        let port = FakePort::open();
+        // From the source: the latest verified PDF capture.
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        let pdf = got.pdf_capture.unwrap();
+        assert_eq!(pdf.id, "cap-pdf");
+        assert_eq!(pdf.saved_at, "2026-10-02T09:30:00Z");
+        add_pdf_capture(
+            &env,
+            "cap-new",
+            "2026-10-03T08:00:00Z",
+            Some(b"%PDF-1.4 newer"),
+        );
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        assert_eq!(got.pdf_capture.unwrap().id, "cap-new");
+        // From a capture: that capture.
+        let got = check_status(
+            &env.conn,
+            env.data.path(),
+            &port,
+            "src1",
+            Some("cap-pdf"),
+            &personal(),
+        )
+        .unwrap();
+        assert_eq!(got.pdf_capture.unwrap().id, "cap-pdf");
+        // With none saved: none, in every answer.
+        env.conn.execute("DELETE FROM web_captures", []).unwrap();
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        assert!(got.pdf_capture.is_none());
+    }
+
+    #[test]
+    fn the_status_of_a_present_item_sees_the_source_level_pdf_as_missing_there() {
+        let env = env();
+        let port = existing_port();
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        assert_eq!(got.state, "present");
+        assert_eq!(got.pdf, "parent_exists");
+    }
+
+    #[test]
+    fn completing_is_offered_only_with_a_key_and_something_to_complete() {
+        let env = env();
+        let port = existing_port();
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        assert!(!got.can_complete, "no key stored");
+        store_web_key(&env);
+        let got =
+            check_status(&env.conn, env.data.path(), &port, "src1", None, &personal()).unwrap();
+        assert!(got.can_complete);
+        // Nothing left to fill and no PDF: nothing to complete.
+        env.conn.execute("DELETE FROM web_captures", []).unwrap();
+        let full = FakePort::open();
+        let mut data = hit("OLDKEY22", "webpage");
+        data["data"]["accessDate"] = json!("2026-10-01T10:00:00Z");
+        data["data"]["websiteTitle"] = json!("A site");
+        *full.finds.borrow_mut() = VecDeque::from([Ok(vec![data])]);
+        let got =
+            check_status(&env.conn, env.data.path(), &full, "src1", None, &personal()).unwrap();
+        assert!(!got.can_complete);
     }
 
     #[test]

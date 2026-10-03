@@ -499,6 +499,12 @@
               {#each view.notes as note (note)}
                 <span class="sources__muted">{$currentLocale && t(note)}</span>
               {/each}
+              {#if view.reasons.length > 0}
+                <span class="sources__muted">
+                  {$currentLocale &&
+                    t('navegador.zotero.note.web.reason', { reason: view.reasons.join(', ') })}
+                </span>
+              {/if}
               {#if view.completedKeys.length > 0}
                 <span class="sources__muted">
                   {$currentLocale &&

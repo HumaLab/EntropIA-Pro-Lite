@@ -165,6 +165,25 @@ pub fn pending(conn: &Connection) -> Result<Vec<ZoteroCopy>, String> {
     Ok(rows)
 }
 
+/// A finished copy whose Web API step stopped for a reason that may pass: the
+/// item was not on the server yet, a step failed or hit a conflict, or the PDF
+/// failed or found the storage full. Asking again runs that step once more; one
+/// that finished, or that cannot change by itself (no key, another account), is
+/// left alone.
+fn web_step_can_retry(row: &ZoteroCopy) -> bool {
+    if row.state != STATE_COPIED && row.state != STATE_LINKED {
+        return false;
+    }
+    let Some(web) = row.detail.as_ref().and_then(|detail| detail.get("web")) else {
+        return false;
+    };
+    let text = |name: &str| web.get(name).and_then(serde_json::Value::as_str);
+    matches!(
+        text("state"),
+        Some("not_synced_yet" | "failed" | "conflict")
+    ) || matches!(text("pdf"), Some("failed" | "quota"))
+}
+
 /// Asks for one copy. The same source, capture and library answer with the row
 /// that exists; a failed or cancelled one is queued again, a finished one is not.
 pub fn request(
@@ -234,7 +253,7 @@ pub fn request(
         .optional()
         .map_err(db_error)?;
     if let Some(row) = existing {
-        if row.state == STATE_FAILED || row.state == STATE_CANCELLED {
+        if row.state == STATE_FAILED || row.state == STATE_CANCELLED || web_step_can_retry(&row) {
             conn.execute(
                 "UPDATE navegador_zotero_copies
                  SET state = 'queued', error_code = NULL, error_message = NULL,
@@ -540,6 +559,50 @@ mod tests {
         assert_eq!(retried.id, other.id);
         assert_eq!(retried.state, STATE_QUEUED);
         assert_eq!(retried.error_code, None);
+    }
+
+    fn linked_with(conn: &Connection, detail: &str) -> ZoteroCopy {
+        conn.execute("DELETE FROM navegador_zotero_copies", []).ok();
+        let row = request(conn, "src1", None, &personal()).unwrap();
+        claim(conn, &row.id).unwrap();
+        finish(conn, &row.id, STATE_LINKED, Some("ABCD2345"), detail).unwrap();
+        row
+    }
+
+    #[test]
+    fn a_linked_copy_whose_web_step_can_be_retried_is_queued_again() {
+        let retryable = [
+            r#"{"existing":true,"web":{"state":"not_synced_yet","completed":[]}}"#,
+            r#"{"existing":true,"web":{"state":"failed","completed":[],"reason":"patch:500"}}"#,
+            r#"{"existing":true,"web":{"state":"conflict","completed":[]}}"#,
+            r#"{"existing":true,"web":{"state":"completed","completed":["title"],"pdf":"failed"}}"#,
+            r#"{"existing":true,"web":{"state":"nothing_missing","completed":[],"pdf":"quota"}}"#,
+        ];
+        for detail in retryable {
+            let conn = db();
+            let row = linked_with(&conn, detail);
+            let again = request(&conn, "src1", None, &personal()).unwrap();
+            assert_eq!(again.id, row.id, "{detail}");
+            assert_eq!(again.state, STATE_QUEUED, "{detail}");
+        }
+    }
+
+    #[test]
+    fn a_linked_copy_whose_web_step_is_settled_is_left_alone() {
+        let settled = [
+            r#"{"existing":true}"#,
+            r#"{"existing":true,"web":{"state":"no_key","completed":[]}}"#,
+            r#"{"existing":true,"web":{"state":"completed","completed":["title"],"pdf":"attached"}}"#,
+            r#"{"existing":true,"web":{"state":"nothing_missing","completed":[],"pdf":"already_there"}}"#,
+            r#"{"existing":true,"web":{"state":"other_account","completed":[]}}"#,
+            "not json",
+        ];
+        for detail in settled {
+            let conn = db();
+            linked_with(&conn, detail);
+            let again = request(&conn, "src1", None, &personal()).unwrap();
+            assert_eq!(again.state, STATE_LINKED, "{detail}");
+        }
     }
 
     #[test]

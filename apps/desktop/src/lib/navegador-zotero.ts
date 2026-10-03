@@ -29,7 +29,15 @@ export type ZoteroCopyDetail = {
   /** Fields the person edited in Zotero: never overwritten. */
   keptFields: string[]
   /** What the Web API did for an existing item; absent on rows from before it. */
-  web?: { state: ZoteroWebState; completed: string[]; pdf?: ZoteroWebPdf }
+  web?: {
+    state: ZoteroWebState
+    completed: string[]
+    pdf?: ZoteroWebPdf
+    /** Where a failed state stopped, e.g. `patch:500`. Never a secret. */
+    reason?: string
+    /** Where a failed PDF stopped, e.g. `upload:500`. */
+    pdfReason?: string
+  }
 }
 
 /** What the Web API did with the PDF of an existing item. */
@@ -44,6 +52,7 @@ export type ZoteroWebState =
   | 'no_write'
   | 'other_account'
   | 'account_unknown'
+  | 'not_synced_yet'
   | 'failed'
 
 /** The outcomes that earn a message; no key or no write access says nothing. */
@@ -54,6 +63,7 @@ const WEB_NOTE_STATES: readonly ZoteroWebState[] = [
   'invalid_key',
   'other_account',
   'account_unknown',
+  'not_synced_yet',
   'failed',
 ]
 
@@ -173,6 +183,10 @@ export function describeCopy(copy: ZoteroCopy) {
     notes,
     /** Labels of the fields the Web API completed. */
     completedKeys: fieldLabels(detail?.web?.state === 'completed' ? detail.web.completed : []),
+    /** Where the Web API steps stopped, compactly, for a technical line. */
+    reasons: [detail?.web?.reason, detail?.web?.pdfReason].filter((reason): reason is string =>
+      Boolean(reason)
+    ),
     canLaunch: copy.state === 'waiting',
     canCancel: copy.state === 'queued' || copy.state === 'waiting',
     canRetry: copy.state === 'failed' || copy.state === 'cancelled',
@@ -214,6 +228,10 @@ export type CopyStatus = {
   pdf: ZoteroCopyDetail['pdf'] | 'unknown'
   pendingFields: string[]
   keptFields: string[]
+  /** The saved PDF that goes along: the named capture or the source's latest. */
+  pdfCapture?: { id: string; savedAt: string } | null
+  /** The item is there, a Web API key is stored and something can be completed. */
+  canComplete?: boolean
 }
 
 /** The libraries Zotero itself offers for writing, personal first. */
@@ -254,6 +272,9 @@ export function describeStatus(status: CopyStatus) {
     fromRecord: status.source === 'record',
     pendingKeys: fieldLabels(status.pendingFields),
     keptKeys: fieldLabels(status.keptFields),
+    /** `undefined` while the backend has not said; `null` when no PDF goes along. */
+    pdfCapture: status.pdfCapture,
+    canComplete: status.canComplete === true,
     pdfKey:
       status.state === 'present' && status.pdf !== 'none' && status.pdf !== 'unknown'
         ? `navegador.zotero.note.pdf.${status.pdf}`

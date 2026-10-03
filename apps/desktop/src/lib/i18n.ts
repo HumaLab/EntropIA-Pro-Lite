@@ -2177,6 +2177,14 @@ const es = {
   'navegador.zotero.present.record':
     'Zotero no responde: esto sale del registro de EntropIA, no de Zotero.',
   'navegador.zotero.open': 'Abrir en Zotero',
+  'navegador.zotero.complete': 'Completar en Zotero',
+  'navegador.zotero.present.completable':
+    'Con tu API key de Zotero puedes completar los campos vacíos del elemento y adjuntarle el PDF.',
+  'navegador.zotero.pdf.goes': 'Se adjuntará el PDF guardado el {date}.',
+  'navegador.zotero.pdf.none': 'Esta fuente no tiene un PDF guardado: se copiará solo la página.',
+  'navegador.zotero.note.web.reason': 'Detalle técnico: {reason}.',
+  'navegador.zotero.note.web.not_synced_yet':
+    'El elemento todavía no está en el servidor de Zotero (se creó hace poco en tu Zotero local). Vuelve a copiar cuando Zotero termine de sincronizar.',
   'navegador.zotero.checking': 'Comprobando si ya está en Zotero…',
   'navegador.zotero.fallback':
     'Zotero no responde: se muestran las bibliotecas conocidas por EntropIA, que pueden estar incompletas.',
@@ -4476,6 +4484,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.present.record':
     'Zotero is not answering: this comes from the EntropIA record, not from Zotero.',
   'navegador.zotero.open': 'Open in Zotero',
+  'navegador.zotero.complete': 'Complete in Zotero',
+  'navegador.zotero.present.completable':
+    "With your Zotero API key you can fill in the entry's empty fields and attach the PDF.",
+  'navegador.zotero.pdf.goes': 'The PDF saved on {date} will be attached.',
+  'navegador.zotero.pdf.none': 'This source has no saved PDF: only the page will be copied.',
+  'navegador.zotero.note.web.reason': 'Technical detail: {reason}.',
+  'navegador.zotero.note.web.not_synced_yet':
+    'The entry is not on the Zotero server yet (it was just created in your local Zotero). Copy again once Zotero has finished syncing.',
   'navegador.zotero.checking': 'Checking whether it is already in Zotero…',
   'navegador.zotero.fallback':
     'Zotero is not answering: showing the libraries EntropIA knows, which may be incomplete.',
