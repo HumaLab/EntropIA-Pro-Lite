@@ -86,3 +86,21 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   tab test passed at RED (negative assertion). Checks: lint, typecheck,
   format:check, vitest green; cargo fmt/clippy green; cargo test green except the 4 known
   `web_capture_sync_two_device` (stale Cloud binary).
+- 2026-10-03: B1 reopened. Owner's first real run (dev profile `navegador`,
+  Lite): "Sincronizar biblioteca" failed with `unknown_library: no catalog row
+  for user/0`. Finding: no production code ever created `zotero_connections` /
+  `zotero_libraries` rows (every `upsert_connection`/`upsert_library` caller is
+  a test), so library sync could never start; pre-existing since the Zotero
+  merge. Fixed in 3dbf2f2: `apply_bibliography_sync_request` first calls
+  `ensure_local_zotero_library` (same transaction), which inserts the single
+  `local-zotero` connection (origin local, endpoint 127.0.0.1:23119) and the
+  library with `DO NOTHING` semantics. Not `upsert_connection`: it bumps the
+  connection revision, the reconciliation fence, which would retire a running
+  walk on every click. Identity: personal library is `user/0` (the local-API
+  alias the executor reads and `Library::personal()` uses everywhere); groups
+  keep their numeric id; name "Mi biblioteca" for user/0, "Zotero group <id>"
+  otherwise (no network call inside the request transaction). A namespace that
+  already has rows is untouched, so cross-connection duplicates still fail as
+  `ambiguous_library`. `recovery.rs` resume test (user/0) still passes. TDD: RED
+  observed (`unknown_library` on an empty catalog), GREEN after the fix. Full
+  cargo green except the 4 known `web_capture_sync_two_device`. B1 is done again.
