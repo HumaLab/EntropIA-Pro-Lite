@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { tooltip, ActionIcon, Button, IconButton, portal, SearchClearButton } from '@entropia/ui'
+  import { tooltip, ActionIcon, Button, IconButton, portal, SearchBar } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -323,8 +323,8 @@
   /** Filter-as-you-type: debounced so a fast typist does not fire one query
    *  per keystroke. Superseded input clears the pending timer, so only the
    *  last value in a burst is ever applied. */
-  function handleFilterInput(event: Event) {
-    searchDraft = (event.currentTarget as HTMLInputElement).value
+  function handleFilterInput(value: string) {
+    searchDraft = value
     clearFilterDebounce()
 
     const nextTerm = searchDraft.trim()
@@ -587,27 +587,17 @@
           <label for="db-browser-search"
             >{$currentLocale && translate('dbBrowser.searchLabel')}</label
           >
-          <div class="db-browser-toolbar__input-wrap">
-            <span class="search-field__icon" aria-hidden="true">
-              <ActionIcon name="search" size={16} />
-            </span>
-            <input
-              id="db-browser-search"
-              class="db-browser-toolbar__input"
-              type="search"
-              value={searchDraft}
-              oninput={handleFilterInput}
-              placeholder={$currentLocale && translate('dbBrowser.searchPlaceholder')}
-            />
-            {#if searchDraft || searchTerm}
-              <SearchClearButton
-                class="search-clear-button--overlay"
-                label={$currentLocale && translate('dbBrowser.searchClear')}
-                disabled={loadingTables || loadingRows}
-                onclick={clearSearch}
-              />
-            {/if}
-          </div>
+          <SearchBar
+            id="db-browser-search"
+            ariaLabel={$currentLocale && translate('dbBrowser.searchLabel')}
+            value={searchDraft}
+            placeholder={$currentLocale && translate('dbBrowser.searchPlaceholder')}
+            clearAriaLabel={$currentLocale && translate('dbBrowser.searchClear')}
+            clearDisabled={loadingTables || loadingRows}
+            emitSearch={false}
+            onvaluechange={handleFilterInput}
+            onclear={clearSearch}
+          />
         </div>
       </form>
     </div>
@@ -960,42 +950,6 @@
     letter-spacing: 0.075em;
     text-transform: uppercase;
     color: var(--color-text-secondary);
-  }
-
-  .db-browser-toolbar__input-wrap {
-    position: relative;
-    width: 100%;
-  }
-
-  .db-browser-toolbar__input {
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3) 0 var(--search-field-inset);
-    box-sizing: border-box;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth),
-      background-color var(--transition-smooth);
-  }
-
-  #db-browser-search {
-    width: 100%;
-    padding-right: calc(var(--space-3) + 24px + var(--space-2));
-  }
-
-  .db-browser-toolbar__input::-webkit-search-cancel-button {
-    display: none;
-  }
-
-  .db-browser-toolbar__input:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--color-surface);
   }
 
   .db-browser-card {

@@ -209,20 +209,12 @@ describe('DbBrowserView', () => {
     expect(dbBrowserViewSource).not.toContain('db-browser-toolbar__actions')
     expect(dbBrowserViewSource).not.toMatch(/dbBrowser\.searchSubmit\b/)
     expect(dbBrowserViewSource).not.toMatch(/dbBrowser\.refresh\b/)
-    expect(dbBrowserViewSource).toContain('SearchClearButton')
+    // The search field is the shared SearchBar: no bespoke input or clear button.
+    expect(dbBrowserViewSource).toContain('<SearchBar')
+    expect(dbBrowserViewSource).not.toContain('type="search"')
     expect(dbBrowserViewSource).toContain(
-      "label={$currentLocale && translate('dbBrowser.searchClear')}"
+      "clearAriaLabel={$currentLocale && translate('dbBrowser.searchClear')}"
     )
-    expect(dbBrowserViewSource).toContain(
-      '.db-browser-toolbar__input-wrap {\n    position: relative;\n    width: 100%;\n  }'
-    )
-    expect(dbBrowserViewSource).toContain(
-      '#db-browser-search {\n    width: 100%;\n    padding-right: calc(var(--space-3) + 24px + var(--space-2));\n  }'
-    )
-    // The leading inset is the app-wide one, so the gap between the magnifier
-    // and the text matches every other search field.
-    expect(dbBrowserViewSource).toContain('padding: 0 var(--space-3) 0 var(--search-field-inset);')
-    expect(dbBrowserViewSource).toContain('<span class="search-field__icon" aria-hidden="true">')
   })
 
   async function renderDbBrowserView(target?: HTMLElement) {

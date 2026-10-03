@@ -281,6 +281,29 @@ describe('desktop design tokens', () => {
     expect(owners).toEqual(['Checkbox.svelte'])
   })
 
+  it('leaves the search field to exactly one component', () => {
+    // A raw `input type="search"` shows the WebView2 native blue cancel "x" and
+    // drifts from every other search box. Every screen goes through SearchBar,
+    // which hides the native button and draws the shared clear button instead.
+    const owners = everyComponent()
+      .map((path) => [path, readFileSync(path, 'utf-8')] as const)
+      .filter(([, source]) => source.includes('type="search"'))
+      .map(([path]) => basename(path))
+      .sort()
+
+    expect(owners).toEqual(['SearchBar.svelte'])
+  })
+
+  it('hides the native search cancel button globally as a safety net', () => {
+    const appCss = readFileSync(resolve(import.meta.dirname, 'app.css'), 'utf-8')
+    expect(appCss).toMatch(
+      /input\[type=['"]search['"]\]::-webkit-search-cancel-button[^{]*\{[^}]*display:\s*none/
+    )
+    expect(appCss).toMatch(
+      /input\[type=['"]search['"]\]::-webkit-search-decoration[^{]*\{[^}]*display:\s*none/
+    )
+  })
+
   it('gives every search field a magnifier on its leading edge', () => {
     // Adjacency, not mere presence: a view can hold an unrelated search icon
     // elsewhere (the button that reveals a filter, say) and that must not

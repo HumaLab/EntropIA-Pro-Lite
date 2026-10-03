@@ -425,6 +425,9 @@ vi.mock('@entropia/ui', async () => {
   const ActualSearchClearButton = (
     await import('../../../../packages/ui/src/components/SearchClearButton/SearchClearButton.svelte')
   ).default
+  const ActualSearchBar = (
+    await import('../../../../packages/ui/src/components/SearchBar/SearchBar.svelte')
+  ).default
   const ActualTabButton = (
     await import('../../../../packages/ui/src/components/Tabs/TabButton.svelte')
   ).default
@@ -455,6 +458,7 @@ vi.mock('@entropia/ui', async () => {
     Panel: ActualPanel,
     StatusBadge: ActualStatusBadge,
     SearchClearButton: ActualSearchClearButton,
+    SearchBar: ActualSearchBar,
     TabButton: ActualTabButton,
     TabList: ActualTabList,
     TopicEditor: () => null,

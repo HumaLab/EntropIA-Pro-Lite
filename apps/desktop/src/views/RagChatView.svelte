@@ -8,14 +8,7 @@
   import { ragChat, type UiMessage } from '$lib/rag-chat'
   import { renderMarkdown } from '$lib/markdown'
   import { setResearchHandoff } from '$lib/research'
-  import {
-    ActionIcon,
-    Button,
-    ConfirmDialog,
-    IconButton,
-    Panel,
-    SearchClearButton,
-  } from '@entropia/ui'
+  import { ActionIcon, Button, ConfirmDialog, IconButton, Panel, SearchBar } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -569,17 +562,15 @@
         </div>
         {#if conversationSearchOpen}
           <div class="rag-chat__conversation-search-wrap">
-            <span class="search-field__icon" aria-hidden="true">
-              <ActionIcon name="search" size={16} />
-            </span>
-            <input
-              bind:this={conversationSearchInput}
-              class="rag-chat__conversation-search"
-              type="search"
+            <SearchBar
               value={conversationQuery}
               placeholder={$currentLocale && t('ragChat.searchConversationsPlaceholder')}
-              aria-label={$currentLocale && t('ragChat.searchConversations')}
-              oninput={(event) => scheduleConversationSearch(event.currentTarget.value)}
+              ariaLabel={$currentLocale && t('ragChat.searchConversations')}
+              clearAriaLabel={$currentLocale && t('ragChat.searchClear')}
+              emitSearch={false}
+              inputRef={(element) => (conversationSearchInput = element)}
+              onvaluechange={scheduleConversationSearch}
+              onclear={clearConversationSearch}
               onkeydown={(event) => {
                 if (event.key === 'Escape') {
                   event.preventDefault()
@@ -587,13 +578,6 @@
                 }
               }}
             />
-            {#if conversationQuery}
-              <SearchClearButton
-                class="search-clear-button--overlay"
-                label={$currentLocale && t('ragChat.searchClear')}
-                onclick={clearConversationSearch}
-              />
-            {/if}
           </div>
         {/if}
       </header>
@@ -779,30 +763,7 @@
   }
 
   .rag-chat__conversation-search-wrap {
-    position: relative;
     margin-top: var(--space-2);
-  }
-
-  .rag-chat__conversation-search {
-    width: 100%;
-    box-sizing: border-box;
-    padding: var(--space-2) calc(var(--space-3) + 24px + var(--space-2)) var(--space-2)
-      var(--search-field-inset);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font: inherit;
-  }
-
-  .rag-chat__conversation-search:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-  }
-
-  .rag-chat__conversation-search::-webkit-search-cancel-button {
-    display: none;
   }
 
   .rag-chat__sidebar-title {

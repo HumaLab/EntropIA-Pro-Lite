@@ -2,7 +2,7 @@
   import { getAssetUrl } from '$lib/file-import'
   import { getAssetDisplayPath, getAssetPathLabel, getAssetTypeLabel } from '$lib/item-metadata'
   import { splitHighlightedSegments } from '$lib/item-view-search'
-  import { ActionIcon, SearchClearButton } from '@entropia/ui'
+  import { SearchBar } from '@entropia/ui'
   import type { I18nKey, I18nParams } from '$lib/i18n'
   import type { SimilarAsset } from '$lib/nlp'
 
@@ -87,26 +87,15 @@
     <div class="analysis-panel analysis-panel--tabbed">
       <div class="fts-search-section">
         <h4>{translate('item.searchBySimilarText')}</h4>
-        <div class="fts-search-input-wrap">
-          <span class="search-field__icon" aria-hidden="true">
-            <ActionIcon name="search" size={16} />
-          </span>
-          <input
-            class="fts-search-input"
-            type="search"
-            placeholder={translate('item.ftsPlaceholder')}
-            value={ftsQuery}
-            oninput={onFtsInput}
-            onkeydown={onFtsKeydown}
-          />
-          {#if ftsQuery}
-            <SearchClearButton
-              class="search-clear-button--overlay"
-              label={translate('item.ftsClear')}
-              onclick={onFtsClear}
-            />
-          {/if}
-        </div>
+        <SearchBar
+          value={ftsQuery}
+          placeholder={translate('item.ftsPlaceholder')}
+          clearAriaLabel={translate('item.ftsClear')}
+          emitSearch={false}
+          oninput={onFtsInput}
+          onkeydown={onFtsKeydown}
+          onclear={onFtsClear}
+        />
         {#if ftsSearchError}
           <p class="ocr-error">{ftsSearchError}</p>
         {:else if ftsSearching}
@@ -307,36 +296,6 @@
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
-  }
-
-  .fts-search-input-wrap {
-    position: relative;
-  }
-  .fts-search-input {
-    width: 100%;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    padding: var(--space-2) var(--space-3);
-    padding-inline-start: var(--search-field-inset);
-    padding-inline-end: calc(24px + var(--space-2));
-    box-sizing: border-box;
-    outline: none;
-    font-family: var(--font-ui);
-    transition:
-      border-color var(--transition-smooth),
-      box-shadow var(--transition-smooth);
-  }
-
-  .fts-search-input:focus {
-    border-color: var(--border-focus);
-    box-shadow: var(--focus-ring);
-  }
-
-  .fts-search-input::-webkit-search-cancel-button {
-    display: none;
   }
 
   .readiness-callout {

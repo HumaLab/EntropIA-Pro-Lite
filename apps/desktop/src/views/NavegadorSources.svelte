@@ -22,7 +22,7 @@
    * source is open.
    */
   import { onDestroy, onMount, untrack } from 'svelte'
-  import { ActionIcon, Button, ConfirmDialog, IconButton } from '@entropia/ui'
+  import { ActionIcon, Button, ConfirmDialog, IconButton, SearchBar } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { navegadorStore } from '$lib/navegador-store'
   import NavegadorCopyDialog, { type CopiedTarget } from './NavegadorCopyDialog.svelte'
@@ -366,21 +366,23 @@
   {/if}
 
   {#if selectedId === null}
-    <div class="sources__search-wrap">
-      <span class="search-field__icon" aria-hidden="true">
-        <ActionIcon name="search" size={16} />
-      </span>
-      <input
-        class="sources__search"
-        type="search"
-        autocomplete="off"
-        spellcheck="false"
-        aria-label={$currentLocale && t('navegador.sources.search')}
-        placeholder={$currentLocale && t('navegador.sources.searchPlaceholder')}
-        bind:value={query}
-        oninput={searchChanged}
-      />
-    </div>
+    <SearchBar
+      value={query}
+      autocomplete="off"
+      spellcheck={false}
+      ariaLabel={$currentLocale && t('navegador.sources.search')}
+      placeholder={$currentLocale && t('navegador.sources.searchPlaceholder')}
+      clearAriaLabel={$currentLocale && t('topbar.searchClear')}
+      emitSearch={false}
+      onvaluechange={(next) => {
+        query = next
+        searchChanged()
+      }}
+      onclear={() => {
+        query = ''
+        searchChanged()
+      }}
+    />
 
     {#if listError}
       <p class="sources__problem" role="alert">{listError}</p>
@@ -701,29 +703,6 @@
     margin: 0;
     font-size: var(--font-size-sm);
     color: var(--color-text-primary);
-  }
-
-  .sources__search-wrap {
-    position: relative;
-  }
-
-  .sources__search {
-    width: 100%;
-    min-height: var(--control-height-md);
-    padding: 0 var(--space-3) 0 var(--search-field-inset);
-    box-sizing: border-box;
-    border: 1px solid var(--color-hairline);
-    border-radius: var(--radius-input);
-    background: var(--color-surface-sunken);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-  }
-
-  .sources__search:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: var(--focus-ring);
-    background: var(--color-surface);
   }
 
   .sources__notice,

@@ -132,4 +132,21 @@ describe('SearchBar', () => {
     expect(onsearch).toHaveBeenCalledOnce()
     expect(onsearch).toHaveBeenCalledWith('query')
   })
+
+  it('forwards id, disabled, autocomplete and spellcheck to the input', () => {
+    render(SearchBar, {
+      props: { id: 'q', disabled: true, autocomplete: 'off', spellcheck: false },
+    })
+    const input = screen.getByRole('searchbox')
+    expect(input).toHaveAttribute('id', 'q')
+    expect(input).toBeDisabled()
+    expect(input).toHaveAttribute('autocomplete', 'off')
+    expect(input).toHaveAttribute('spellcheck', 'false')
+  })
+
+  it('disables only the clear button with clearDisabled', () => {
+    render(SearchBar, { props: { value: 'abc', clearDisabled: true } })
+    expect(screen.getByRole('searchbox')).not.toBeDisabled()
+    expect(screen.getByTestId('search-clear')).toBeDisabled()
+  })
 })

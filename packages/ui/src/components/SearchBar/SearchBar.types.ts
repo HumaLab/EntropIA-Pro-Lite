@@ -1,5 +1,11 @@
 export interface SearchBarProps {
   value?: string
+  id?: string
+  disabled?: boolean
+  /** Disables only the clear button (e.g. while a request the clear would race is in flight). */
+  clearDisabled?: boolean
+  autocomplete?: 'on' | 'off'
+  spellcheck?: boolean
   placeholder?: string
   debounceMs?: number
   ariaLabel?: string

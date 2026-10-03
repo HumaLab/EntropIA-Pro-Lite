@@ -285,6 +285,16 @@ p {
   pointer-events: none;
 }
 
+/* Safety net: WebView2 draws a blue native "x" in every `type="search"` input.
+   Search fields go through SearchBar, which draws the shared clear button; this
+   keeps a future raw input from showing the native one. */
+input[type='search']::-webkit-search-cancel-button,
+input[type='search']::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 /* Placeholders are one grey everywhere. Fields that declare nothing used to
    inherit the browser's own derivation from `color`, which reads lighter than
    the token and made two search boxes on the same screen disagree. */

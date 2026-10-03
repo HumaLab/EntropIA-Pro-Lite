@@ -5,6 +5,11 @@
 
   let {
     value = '',
+    id,
+    disabled = false,
+    clearDisabled = false,
+    autocomplete,
+    spellcheck,
     placeholder = '',
     debounceMs = 300,
     ariaLabel = '',
@@ -87,6 +92,10 @@
       bind:this={inputEl}
       class="search-bar__input"
       type="search"
+      {id}
+      {disabled}
+      {autocomplete}
+      {spellcheck}
       {placeholder}
       aria-label={ariaLabel || placeholder || 'Search'}
       value={internalValue}
@@ -100,6 +109,7 @@
         class="search-clear-button--overlay"
         data-testid="search-clear"
         label={clearAriaLabel}
+        disabled={clearDisabled}
         onclick={handleClear}
       />
     {/if}

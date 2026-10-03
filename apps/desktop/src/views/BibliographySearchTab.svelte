@@ -5,7 +5,7 @@
     type BibliographySearchHit,
     type BibliographySearchResponse,
   } from '$lib/bibliography-search'
-  import { ActionIcon, Button, Card } from '@entropia/ui'
+  import { Button, Card, SearchBar } from '@entropia/ui'
 
   let query = $state('')
   let searching = $state(false)
@@ -78,16 +78,16 @@
       {t('bibliography.searchLabel')}
     </label>
     <div class="bib-search__field">
-      <span class="search-field__icon" aria-hidden="true">
-        <ActionIcon name="search" size={16} />
-      </span>
-      <input
+      <SearchBar
         id="bib-search-query"
-        class="bib-search__input"
-        type="search"
+        value={query}
         placeholder={t('bibliography.searchPlaceholder')}
+        ariaLabel={t('bibliography.searchLabel')}
+        clearAriaLabel={t('topbar.searchClear')}
         disabled={searching}
-        bind:value={query}
+        emitSearch={false}
+        onvaluechange={(next) => (query = next)}
+        onclear={() => (query = '')}
       />
     </div>
     <Button variant="secondary" size="sm" type="submit" loading={searching}>
@@ -154,22 +154,7 @@
   }
 
   .bib-search__field {
-    position: relative;
     flex: 1;
-  }
-
-  .bib-search__input {
-    width: 100%;
-    box-sizing: border-box;
-    border-radius: var(--radius-input);
-    background: var(--surface-input);
-    color: var(--color-text-primary);
-    font-size: var(--font-size-sm);
-    font-family: var(--font-ui);
-    padding: var(--space-2) var(--space-3);
-    padding-inline-start: var(--search-field-inset);
-    border: 1px solid var(--border-subtle);
-    outline: none;
   }
 
   .bib-search__error {
