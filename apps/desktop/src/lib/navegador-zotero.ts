@@ -183,6 +183,11 @@ export function describeCopy(copy: ZoteroCopy) {
     notes,
     /** Labels of the fields the Web API completed. */
     completedKeys: fieldLabels(detail?.web?.state === 'completed' ? detail.web.completed : []),
+    /** What the Web API really added to an item that was already there. */
+    added: {
+      fields: detail?.web?.state === 'completed' && detail.web.completed.length > 0,
+      pdf: detail?.web?.pdf === 'attached',
+    },
     /** Where the Web API steps stopped, compactly, for a technical line. */
     reasons: [detail?.web?.reason, detail?.web?.pdfReason].filter((reason): reason is string =>
       Boolean(reason)

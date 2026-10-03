@@ -15,8 +15,9 @@
    * own viewer (`onviewpdf`, by capture id), and a source made of PDFs opens its
    * page of origin rather than "the browser". A saved PDF can also be copied into
    * a collection (`NavegadorCopyDialog`): an explicit, independent copy that
-   * leaves the source as it is. The source (and a saved PDF) can also be copied
-   * to Zotero (`NavegadorZoteroDialog`); the copies of the open source are listed
+   * leaves the source as it is. The source can also be copied
+   * to Zotero (`NavegadorZoteroDialog`, from the source only; its latest PDF goes
+   * along); the copies of the open source are listed
    * with their state, and one that waits for Zotero is sent again while the
    * source is open.
    */
@@ -89,10 +90,7 @@
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
   let copying = $state<{ id: string; title: string; rendered: boolean } | null>(null)
-  let zoteroCopying = $state<{
-    source: { id: string; title: string }
-    capture: { id: string; title: string } | null
-  } | null>(null)
+  let zoteroCopying = $state<{ source: { id: string; title: string } } | null>(null)
   let zoteroCopies = $state<ZoteroCopy[]>([])
   let zoteroNotice = $state<string | null>(null)
 
@@ -455,7 +453,6 @@
           onclick={() =>
             (zoteroCopying = {
               source: { id: detail!.id, title: detail!.title?.trim() || detail!.finalUrl },
-              capture: null,
             })}
         >
           {$currentLocale && t('navegador.zotero.copy')}
@@ -616,26 +613,6 @@
                       {$currentLocale && t('navegador.sources.copyToCollection')}
                     </Button>
                   {/if}
-                  {#if capture.kind === 'pdf' && capture.file === 'present'}
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onclick={() =>
-                        (zoteroCopying = {
-                          source: {
-                            id: detail!.id,
-                            title: detail!.title?.trim() || detail!.finalUrl,
-                          },
-                          capture: {
-                            id: capture.id,
-                            title:
-                              capture.title?.trim() || detail!.title?.trim() || detail!.finalUrl,
-                          },
-                        })}
-                    >
-                      {$currentLocale && t('navegador.zotero.copy')}
-                    </Button>
-                  {/if}
                 </div>
               {/if}
               {#if capture.quote}
@@ -661,7 +638,6 @@
 {#if zoteroCopying}
   <NavegadorZoteroDialog
     source={zoteroCopying.source}
-    capture={zoteroCopying.capture}
     onclose={() => (zoteroCopying = null)}
     onchange={() => selectedId && void loadZoteroCopies(selectedId)}
   />

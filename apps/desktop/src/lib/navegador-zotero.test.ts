@@ -258,6 +258,23 @@ describe('states', () => {
       expect(linked(undefined).reasons).toEqual([])
     })
 
+    it('knows what was really added to the existing item', () => {
+      expect(linked({ state: 'completed', completed: ['title'] }).added).toEqual({
+        fields: true,
+        pdf: false,
+      })
+      expect(linked({ state: 'nothing_missing', completed: [], pdf: 'attached' }).added).toEqual({
+        fields: false,
+        pdf: true,
+      })
+      expect(linked({ state: 'failed', completed: [], pdf: 'already_there' }).added).toEqual({
+        fields: false,
+        pdf: false,
+      })
+      expect(linked({ state: 'completed', completed: [] }).added.fields).toBe(false)
+      expect(linked(undefined).added).toEqual({ fields: false, pdf: false })
+    })
+
     it('reads a row from before the Web API existed', () => {
       expect(linked(undefined).completedKeys).toEqual([])
     })

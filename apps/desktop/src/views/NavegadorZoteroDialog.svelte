@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * "Copiar a Zotero" for a saved web source, or for one of its PDF captures
-   * (the page is created in Zotero with that PDF attached).
+   * "Copiar a Zotero" for a saved web source. Its latest saved PDF goes along
+   * (the backend picks it; the dialog says which, or that none does).
    *
    * The person picks the library (their own is preselected); nothing is moved
    * and the saved source stays as it is. The copy is a durable row on the Rust
@@ -36,13 +36,10 @@
 
   let {
     source,
-    capture = null,
     onclose,
     onchange,
   }: {
     source: { id: string; title: string }
-    /** A saved PDF that goes along with the page. */
-    capture?: { id: string; title: string } | null
     onclose: () => void
     /** The queue changed: the caller refreshes what it shows. */
     onchange?: () => void
@@ -104,7 +101,7 @@
     const request = ++statusRequest
     status = null
     checking = true
-    navegadorZoteroStatus(source.id, capture?.id ?? null, {
+    navegadorZoteroStatus(source.id, null, {
       libraryType: library.libraryType,
       libraryId: library.libraryId,
       libraryName: library.name,
@@ -126,6 +123,21 @@
   /* The item is there but lacks something the Web API key can fill in: the main
      action completes it instead of only opening it. */
   const completable = $derived(isPresent && present?.canComplete === true)
+  /* Which PDF goes along, said only when an attach will really happen: a new
+     item takes it, an existing one only when it can be completed and does not
+     have it yet. Never for one that is already attached or cannot be. */
+  const pdfLine = $derived.by(() => {
+    if (!status || !present || present.pdfCapture === undefined) return null
+    if (!isPresent) {
+      return present.pdfCapture
+        ? t('navegador.zotero.pdf.goes', { date: present.pdfCapture.savedAt.slice(0, 10) })
+        : t('navegador.zotero.pdf.none')
+    }
+    if (completable && present.pdfCapture && status.pdf !== 'already_there') {
+      return t('navegador.zotero.pdf.goes', { date: present.pdfCapture.savedAt.slice(0, 10) })
+    }
+    return null
+  })
 
   function describeFailure(copy: ZoteroCopy): string {
     const code = copy.errorCode ?? 'unknown'
@@ -142,7 +154,7 @@
     problem = null
     let queued: ZoteroCopy
     try {
-      queued = await navegadorZoteroRequest(source.id, capture?.id ?? null, {
+      queued = await navegadorZoteroRequest(source.id, null, {
         libraryType: chosen.libraryType,
         libraryId: chosen.libraryId,
         libraryName: chosen.name ?? null,
@@ -170,8 +182,14 @@
     switch (result.state) {
       case 'copied':
         return t('navegador.zotero.done.copied', { library })
-      case 'linked':
-        return t('navegador.zotero.done.linked', { library })
+      case 'linked': {
+        // Only what really happened: data added, the PDF attached, or nothing.
+        const { fields, pdf } = describeCopy(result).added
+        const kind = fields && pdf ? 'both' : fields ? 'fields' : pdf ? 'pdf' : null
+        return t(kind ? `navegador.zotero.done.linked.${kind}` : 'navegador.zotero.done.linked', {
+          library,
+        })
+      }
       case 'failed':
         return t('navegador.zotero.done.failed', { message: describeFailure(result) })
       case 'cancelled':
@@ -263,10 +281,7 @@
     {/if}
   {:else}
     <p class="zotero-dialog__intro">
-      {$currentLocale &&
-        t(capture ? 'navegador.zotero.introPdf' : 'navegador.zotero.intro', {
-          title: capture?.title ?? source.title,
-        })}
+      {$currentLocale && t('navegador.zotero.intro', { title: source.title })}
     </p>
     <fieldset class="zotero-dialog__destination">
       <legend class="zotero-dialog__legend">
@@ -299,13 +314,8 @@
       <p class="zotero-dialog__note" role="status">
         {$currentLocale && t('navegador.zotero.checking')}
       </p>
-    {:else if status && present && present.pdfCapture !== undefined}
-      <p class="zotero-dialog__note">
-        {$currentLocale &&
-          (present.pdfCapture
-            ? t('navegador.zotero.pdf.goes', { date: present.pdfCapture.savedAt.slice(0, 10) })
-            : t('navegador.zotero.pdf.none'))}
-      </p>
+    {:else if pdfLine}
+      <p class="zotero-dialog__note">{$currentLocale && pdfLine}</p>
     {/if}
     {#if checking}
       <!-- the checking note above already speaks -->

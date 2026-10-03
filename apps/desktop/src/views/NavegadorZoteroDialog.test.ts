@@ -146,6 +146,31 @@ describe('which PDF goes along', () => {
     expect(await screen.findByText(/Se adjuntará el PDF guardado el 2026-10-02/)).toBeTruthy()
   })
 
+  it('does not announce an attach that already happened', async () => {
+    statusFor = () => ({
+      ...PRESENT,
+      pdf: 'already_there',
+      pdfCapture: { id: 'c9', savedAt: '2026-10-02T09:30:00Z' },
+      canComplete: false,
+    })
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.queryByText(/Se adjuntará/)).toBeNull()
+    expect(screen.getByText(/El PDF ya estaba adjunto/)).toBeTruthy()
+  })
+
+  it('does not announce an attach that cannot happen without a key', async () => {
+    statusFor = () => ({
+      ...PRESENT,
+      pdf: 'parent_exists',
+      pdfCapture: { id: 'c9', savedAt: '2026-10-02T09:30:00Z' },
+      canComplete: false,
+    })
+    open()
+    await screen.findByText(/Ya está en Zotero/)
+    expect(screen.queryByText(/Se adjuntará/)).toBeNull()
+  })
+
   it('says when none will be attached', async () => {
     open()
     expect(await screen.findByText(/no tiene un PDF guardado/)).toBeTruthy()
@@ -158,6 +183,63 @@ describe('which PDF goes along', () => {
     open()
     await screen.findByRole('radio', { name: 'Mi biblioteca' })
     expect(screen.queryByText(/PDF guardado/)).toBeNull()
+  })
+})
+
+describe('what the result says about an item that was already there', () => {
+  const linked = (web?: Record<string, unknown>) => ({
+    reachable: true,
+    copies: [
+      row({
+        state: 'linked',
+        itemKey: 'OLDKEY22',
+        detail: {
+          existing: true,
+          pdf: 'none',
+          pendingFields: [],
+          keptFields: [],
+          ...(web ? { web } : {}),
+        } as never,
+      }),
+    ],
+  })
+
+  async function copyIt() {
+    open()
+    await screen.findByRole('radio', { name: 'Mi biblioteca' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
+  }
+
+  it('keeps the plain line when nothing changed', async () => {
+    answers.run = () => linked()
+    await copyIt()
+    await screen.findByText(/no se duplicó ni se modificó el elemento existente/)
+  })
+
+  it('says missing data was added when the Web API completed fields', async () => {
+    answers.run = () => linked({ state: 'completed', completed: ['accessDate'] })
+    await copyIt()
+    await screen.findByText(/no se duplicó y se agregaron los datos que faltaban\./)
+    expect(screen.queryByText(/ni se modificó/)).toBeNull()
+  })
+
+  it('says the PDF was added when only the PDF was attached', async () => {
+    answers.run = () => linked({ state: 'nothing_missing', completed: [], pdf: 'attached' })
+    await copyIt()
+    await screen.findByText(/no se duplicó y se adjuntó el PDF\./)
+  })
+
+  it('says both when both happened', async () => {
+    answers.run = () => linked({ state: 'completed', completed: ['title'], pdf: 'attached' })
+    await copyIt()
+    await screen.findByText(/se agregaron los datos que faltaban y el PDF\./)
+  })
+
+  it('claims nothing when the Web API step failed or found the PDF already there', async () => {
+    answers.run = () =>
+      linked({ state: 'failed', completed: [], reason: 'patch:500', pdf: 'already_there' })
+    await copyIt()
+    await screen.findByText(/no se duplicó ni se modificó el elemento existente/)
   })
 })
 
@@ -193,12 +275,12 @@ describe('completing an item that is already there', () => {
 
 describe('already in Zotero', () => {
   it('checks the source in the chosen library by id as soon as the dialog opens', async () => {
-    open({ capture: { id: 'c1', title: 'Informe' } })
+    open()
     await screen.findByRole('radio', { name: 'Mi biblioteca' })
     await waitFor(() => expect(statusCalls).toHaveLength(1))
     expect(statusCalls[0]).toEqual({
       sourceId: 's1',
-      captureId: 'c1',
+      captureId: null,
       library: { libraryType: 'user', libraryId: '0', libraryName: null },
     })
   })
@@ -230,7 +312,7 @@ describe('already in Zotero', () => {
 
   it('says a PDF cannot join a page that already exists', async () => {
     statusFor = () => ({ ...PRESENT, pdf: 'parent_exists' })
-    open({ capture: { id: 'c1', title: 'Informe' } })
+    open()
     await screen.findByText(/Ya está en Zotero/)
     expect(screen.getByText(/El PDF no se adjuntó/)).toBeTruthy()
   })
@@ -305,17 +387,12 @@ describe('NavegadorZoteroDialog', () => {
     })
   })
 
-  it('a PDF capture goes along with its page', async () => {
-    statusFor = () => ({
-      ...ABSENT,
-      pdfCapture: { id: 'c1', savedAt: '2026-10-02T09:30:00Z' },
-    })
-    open({ capture: { id: 'c1', title: 'Informe' } })
+  it('copies the source itself: no capture is ever named, the backend picks the PDF', async () => {
+    open()
     await screen.findByRole('radio', { name: 'Mi biblioteca' })
-    expect(screen.getByText(/con el PDF «Informe» adjunto/)).toBeTruthy()
     await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
     await waitFor(() => expect(requested).toHaveLength(1))
-    expect(requested[0]).toMatchObject({ captureId: 'c1' })
+    expect(requested[0]).toMatchObject({ captureId: null })
   })
 
   it('a closed Zotero leaves the copy in the queue and says so', async () => {

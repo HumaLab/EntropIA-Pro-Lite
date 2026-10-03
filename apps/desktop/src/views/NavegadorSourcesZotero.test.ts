@@ -146,10 +146,11 @@ async function openBeta() {
 }
 
 describe('copy to Zotero from the drawer', () => {
-  it('offers it on the source and on a saved PDF, and asks by ids', async () => {
+  it('offers it on the source only, and asks by id', async () => {
     await openBeta()
+    // One button for the source; a saved PDF has none of its own.
     const buttons = within(drawer()).getAllByRole('button', { name: 'Copiar a Zotero' })
-    expect(buttons).toHaveLength(2)
+    expect(buttons).toHaveLength(1)
 
     await fireEvent.click(buttons[0]!)
     await screen.findByRole('radio', { name: 'Mi biblioteca' })
@@ -159,16 +160,6 @@ describe('copy to Zotero from the drawer', () => {
       sourceId: 'beta',
       captureId: null,
     })
-  })
-
-  it('a PDF capture rides along with its own id', async () => {
-    await openBeta()
-    const buttons = within(drawer()).getAllByRole('button', { name: 'Copiar a Zotero' })
-    await fireEvent.click(buttons[1]!)
-    await screen.findByRole('radio', { name: 'Mi biblioteca' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Copiar' }))
-    await waitFor(() => expect(calls('navegador_zotero_copy_request')).toHaveLength(1))
-    expect(calls('navegador_zotero_copy_request')[0]![1]).toMatchObject({ captureId: 'c3' })
   })
 
   it('shows no section when nothing was copied', async () => {

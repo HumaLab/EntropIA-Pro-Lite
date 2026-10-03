@@ -2083,8 +2083,6 @@ const es = {
   'navegador.zotero.title': 'Copiar a Zotero',
   'navegador.zotero.intro':
     'Se crea «{title}» en Zotero como una página web. La fuente guardada no cambia y no se mueve.',
-  'navegador.zotero.introPdf':
-    'Se crea la página de origen en Zotero con el PDF «{title}» adjunto. La fuente guardada no cambia y no se mueve.',
   'navegador.zotero.destination': 'Biblioteca de destino',
   'navegador.zotero.personal': 'Mi biblioteca',
   'navegador.zotero.loading': 'Leyendo las bibliotecas…',
@@ -2098,6 +2096,12 @@ const es = {
   'navegador.zotero.done.copied': 'Copiado a «{library}».',
   'navegador.zotero.done.linked':
     'Ya estaba en «{library}»: no se duplicó ni se modificó el elemento existente.',
+  'navegador.zotero.done.linked.fields':
+    'Ya estaba en «{library}»: no se duplicó y se agregaron los datos que faltaban.',
+  'navegador.zotero.done.linked.pdf':
+    'Ya estaba en «{library}»: no se duplicó y se adjuntó el PDF.',
+  'navegador.zotero.done.linked.both':
+    'Ya estaba en «{library}»: no se duplicó y se agregaron los datos que faltaban y el PDF.',
   'navegador.zotero.done.waiting':
     'Zotero no responde. La copia a «{library}» queda en cola y se enviará cuando Zotero esté abierto.',
   'navegador.zotero.done.failed': 'No se pudo copiar: {message}',
@@ -4390,8 +4394,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.title': 'Copy to Zotero',
   'navegador.zotero.intro':
     '"{title}" is created in Zotero as a web page. The saved source does not change and is not moved.',
-  'navegador.zotero.introPdf':
-    'The page of origin is created in Zotero with the PDF "{title}" attached. The saved source does not change and is not moved.',
   'navegador.zotero.destination': 'Destination library',
   'navegador.zotero.personal': 'My library',
   'navegador.zotero.loading': 'Reading the libraries…',
@@ -4405,6 +4407,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'navegador.zotero.done.copied': 'Copied to "{library}".',
   'navegador.zotero.done.linked':
     'It was already in "{library}": it was not duplicated and the existing entry was not modified.',
+  'navegador.zotero.done.linked.fields':
+    'It was already in "{library}": it was not duplicated and the missing data was added.',
+  'navegador.zotero.done.linked.pdf':
+    'It was already in "{library}": it was not duplicated and the PDF was attached.',
+  'navegador.zotero.done.linked.both':
+    'It was already in "{library}": it was not duplicated and the missing data and the PDF were added.',
   'navegador.zotero.done.waiting':
     'Zotero is not answering. The copy to "{library}" stays in the queue and is sent when Zotero is open.',
   'navegador.zotero.done.failed': 'Could not copy: {message}',
