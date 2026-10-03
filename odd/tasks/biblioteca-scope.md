@@ -26,6 +26,11 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   was needed: Zotero's local API reports each attachment's file as
   `links.enclosure.href` (a `file:` URL, also for `imported_url`), stored as
   `native_path`, which the resolver already tries first.
+- [ ] B1b — Index Zotero HTML snapshots too (owner, 2026-10-03). Live count of the
+  owner's library: 969 stored `text/html` snapshots vs 733 stored PDFs (plus 280
+  link-only web attachments with no file). Extraction is PDF-only today. Extract
+  readable text from the stored HTML, chunk and embed it like PDFs; passages
+  carry a character range instead of a page.
 - [x] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
   `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
 - [ ] B3 — TopBar search includes bibliography works (new result kind).
