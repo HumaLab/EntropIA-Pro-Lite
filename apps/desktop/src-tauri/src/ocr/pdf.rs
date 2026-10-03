@@ -398,12 +398,50 @@ fn dll_name_display() -> &'static str {
 /// corpus import, OCR fallback — receives an ordinary `Err`. Containment
 /// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
 pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
+    let bytes = open_with_empty_password(bytes)?;
+    let bytes: &[u8] = &bytes;
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(bytes)
     })) {
         Ok(result) => result.map_err(|e| format!("PDF text extraction failed: {e}")),
         Err(_) => Err(UNREADABLE_PDF_TEXT_MESSAGE.to_string()),
     }
+}
+
+/// Opens a PDF that is encrypted but readable with the EMPTY user password.
+///
+/// "Permissions only" protection (an owner password restricting printing or
+/// copying, no user password) is how most journal articles ship: any reader
+/// opens them, so refusing them as "password protected" is wrong. Returns the
+/// input untouched when it is not encrypted, the same document re-serialised
+/// without encryption when the empty password opens it — so every downstream
+/// parser (`pdf-extract`, per-page `lopdf`, pdfium) sees plain objects — and
+/// [`ENCRYPTED_PDF_MESSAGE`] only when a real user password is required.
+pub fn open_with_empty_password(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, String> {
+    use std::borrow::Cow;
+    if !bytes
+        .windows(b"/Encrypt".len())
+        .any(|window| window == b"/Encrypt")
+    {
+        return Ok(Cow::Borrowed(bytes));
+    }
+    // `load_lopdf_document` authenticates with the empty user password while
+    // loading and fails with the protected message when that does not open it.
+    let mut document = load_lopdf_document(bytes, "decryption")?;
+    if document.is_encrypted() {
+        // Still carries the Encrypt entry: authentication did not run.
+        document
+            .decrypt("")
+            .map_err(|_| ENCRYPTED_PDF_MESSAGE.to_string())?;
+    } else if !document.was_encrypted() {
+        // `/Encrypt` appeared only in content (a stream or a string).
+        return Ok(Cow::Borrowed(bytes));
+    }
+    let mut plain = Vec::with_capacity(bytes.len());
+    document
+        .save_to(&mut plain)
+        .map_err(|error| format!("Failed to rewrite PDF without encryption: {error}"))?;
+    Ok(Cow::Owned(plain))
 }
 
 /// What a user reads when the PDF text parser gives up on a file's structure.
@@ -1203,6 +1241,97 @@ mod tests {
         let error = extract_pdf_text(TYPE4_TINT_PDF).expect_err("the parser panics on this file");
 
         assert_eq!(error, UNREADABLE_PDF_TEXT_MESSAGE);
+    }
+
+    /// Text PDFs with an owner password and an EMPTY user password — the
+    /// "permissions only" protection journal articles ship with.
+    const RC4_EMPTY_USER_TEXT_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-rc4-128-empty-user-text.pdf");
+    const AES_EMPTY_USER_TEXT_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-aes128-empty-user-text.pdf");
+
+    #[test]
+    fn extract_pdf_text_reads_permissions_only_pdfs() {
+        for (name, pdf) in [
+            ("rc4", RC4_EMPTY_USER_TEXT_PDF),
+            ("aes", AES_EMPTY_USER_TEXT_PDF),
+        ] {
+            let text = extract_pdf_text(pdf).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(text.contains("Permissions only"), "{name}: {text:?}");
+        }
+    }
+
+    /// Dry run over real files: `ENTROPIA_PDF_SAMPLES_DIR=<dir> cargo test
+    /// dry_run_encrypted_samples -- --ignored --nocapture`. Prints, per file,
+    /// the decrypted whole-document text and the per-page lopdf text, plus how
+    /// many pages fall below the selective-OCR threshold.
+    #[test]
+    #[ignore = "reads PDFs from ENTROPIA_PDF_SAMPLES_DIR"]
+    fn dry_run_encrypted_samples() {
+        let dir = std::env::var("ENTROPIA_PDF_SAMPLES_DIR").expect("set ENTROPIA_PDF_SAMPLES_DIR");
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .expect("dir")
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "pdf"))
+            .collect();
+        files.sort();
+        for path in files {
+            let bytes = std::fs::read(&path).expect("read");
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let plain = match open_with_empty_password(&bytes) {
+                Ok(plain) => plain,
+                Err(error) => {
+                    println!("{name}: OPEN FAILED: {error}");
+                    continue;
+                }
+            };
+            let document = lopdf::Document::load_mem(&plain).expect("plain parses");
+            let pages: Vec<u32> = document.get_pages().keys().copied().collect();
+            let mut per_page_chars = 0usize;
+            let mut thin_pages = 0usize;
+            for page in &pages {
+                let text = document.extract_text(&[*page]).unwrap_or_default();
+                per_page_chars += text.chars().count();
+                if text.chars().filter(|c| c.is_alphanumeric()).count() < 50 {
+                    thin_pages += 1;
+                }
+            }
+            let whole = extract_pdf_text(&bytes);
+            println!(
+                "{name}: pages={} per_page_chars={per_page_chars} thin_pages={thin_pages} whole={}",
+                pages.len(),
+                match &whole {
+                    Ok(text) => format!("{} chars", text.chars().count()),
+                    Err(error) => format!("ERR {error}"),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn extract_pdf_text_keeps_the_protected_error_for_a_real_user_password() {
+        let error = extract_pdf_text(USER_PASSWORD_PDF).expect_err("locked");
+        assert_eq!(error, ENCRYPTED_PDF_MESSAGE);
+    }
+
+    #[test]
+    fn open_with_empty_password_hands_back_plain_bytes_for_permissions_only_pdfs() {
+        for pdf in [RC4_EMPTY_USER_TEXT_PDF, AES_EMPTY_USER_TEXT_PDF] {
+            let plain = open_with_empty_password(pdf).expect("opens");
+            assert!(
+                !plain.windows(b"/Encrypt".len()).any(|w| w == b"/Encrypt"),
+                "the handed-back bytes must carry no encryption"
+            );
+            let document = lopdf::Document::load_mem(&plain).expect("parses");
+            assert!(!document.is_encrypted());
+            assert_eq!(document.get_pages().len(), 1);
+        }
+        let borrowed = open_with_empty_password(TYPE4_TINT_PDF).expect("plain pdf");
+        assert!(matches!(borrowed, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(
+            open_with_empty_password(USER_PASSWORD_PDF).expect_err("locked"),
+            ENCRYPTED_PDF_MESSAGE
+        );
     }
 
     #[test]

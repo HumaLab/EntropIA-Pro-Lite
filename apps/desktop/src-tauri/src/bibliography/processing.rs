@@ -2697,28 +2697,25 @@ impl BibliographyExtractExecutor {
         bytes: &[u8],
     ) -> Result<ExtractedDocument, crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
-        // Locked files fail here with unlock guidance, not with a
-        // complaint about damage: re-importing an unlocked copy mints
-        // fresh demand through the file-identity gate, so terminal is
-        // correct — this task can never succeed.
+        // A PDF with `/Encrypt` is only locked when it needs a real user
+        // password. Permissions-only protection (owner password, empty user
+        // password) is common on journal articles and opens freely, so it is
+        // decrypted once here and every later step — per-page text, the
+        // whole-document parser, page rendering for OCR — reads plain bytes.
+        // A genuinely locked file fails with unlock guidance, not with a
+        // complaint about damage: re-importing an unlocked copy mints fresh
+        // demand through the file-identity gate, so terminal is correct.
+        let readable = crate::ocr::pdf::open_with_empty_password(bytes).map_err(|message| {
+            ExecOutput::Fatal {
+                code: "extraction_failed".to_string(),
+                message,
+            }
+        })?;
+        let bytes: &[u8] = &readable;
         let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
             code: "extraction_failed".to_string(),
             message: format!("Failed to parse PDF: {error}"),
         })?;
-        // lopdf clears the trailer Encrypt entry when the empty user
-        // password opens the structure, while the object streams stay
-        // undecryptable — so an absent entry proves nothing and the bytes
-        // get the last word.
-        let encrypted_trailer = document.is_encrypted();
-        let encrypted_bytes = bytes
-            .windows(b"/Encrypt".len())
-            .any(|window| window == b"/Encrypt");
-        if encrypted_trailer || encrypted_bytes {
-            return Err(ExecOutput::Fatal {
-                code: "extraction_failed".to_string(),
-                message: crate::ocr::pdf::ENCRYPTED_PDF_MESSAGE.to_string(),
-            });
-        }
         let page_count = document.get_pages().len() as i64;
         let pages = read_native_page_texts(bytes, page_count)?;
         // The whole-document parser is the primary text source. When it

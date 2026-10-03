@@ -5695,7 +5695,7 @@ impl PageOcrProvider for FailingNthOcrProvider {
     }
 }
 
-/// A password-locked PDF fails with unlock guidance, not with a complaint
+/// A PDF that needs a real user password fails with unlock guidance, not with a complaint
 /// about damage that is not there.
 #[test]
 fn encrypted_pdf_fails_with_unlock_guidance() {
@@ -5705,15 +5705,15 @@ fn encrypted_pdf_fails_with_unlock_guidance() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("pdf-aes128-owner-password.pdf");
-    assert!(fixture.is_file(), "the lockedince fixture must exist");
+        .join("pdf-aes128-user-password.pdf");
+    assert!(fixture.is_file(), "the locked fixture must exist");
     let attachment_id = seed_attachment(
         &mut conn,
         &item_id,
         "LOCKATT001",
         "linked_file",
         Some(&fixture.to_string_lossy()),
-        "pdf-aes128-owner-password.pdf",
+        "pdf-aes128-user-password.pdf",
         "application/pdf",
     );
     let task_id = admit_extract_demand(&conn, &attachment_id);
@@ -5743,6 +5743,86 @@ fn encrypted_pdf_fails_with_unlock_guidance() {
     assert!(
         message.contains("contrase") || message.contains("protegido"),
         "the error must name the lock and the way out, got: {message}"
+    );
+}
+
+/// A PDF with `/Encrypt` but an EMPTY user password is permissions-only
+/// protection (journal articles ship this way): anyone can open it, so the
+/// extractor must read it instead of reporting a lock.
+fn run_permissions_only_extraction(fixture_name: &str) -> (String, Vec<(i64, String)>) {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PERMWORK01", "Obra con permisos", "Resumen.");
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture_name);
+    assert!(fixture.is_file(), "the fixture must exist");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PERMATT001",
+        "linked_file",
+        Some(&fixture.to_string_lossy()),
+        fixture_name,
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a permissions-only PDF must be read, got {outcome:?}"
+    );
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("text read");
+    let pages = conn
+        .prepare(
+            "SELECT page_number, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    (text, pages)
+}
+
+#[test]
+fn rc4_permissions_only_pdf_is_extracted() {
+    let (text, pages) = run_permissions_only_extraction("pdf-rc4-128-empty-user-text.pdf");
+    assert!(text.contains("Permissions only"), "whole text: {text}");
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].1.contains("Permissions only"),
+        "page text: {:?}",
+        pages[0].1
+    );
+}
+
+#[test]
+fn aes_permissions_only_pdf_is_extracted() {
+    let (text, pages) = run_permissions_only_extraction("pdf-aes128-empty-user-text.pdf");
+    assert!(text.contains("Permissions only"), "whole text: {text}");
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].1.contains("Permissions only"),
+        "page text: {:?}",
+        pages[0].1
     );
 }
 
