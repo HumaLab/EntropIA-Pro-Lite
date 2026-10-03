@@ -27,6 +27,8 @@ const APP_COMMANDS: &[&str] = &[
     "processing_sync_bibliography_library",
     "bibliography_search_works",
     "bibliography_open_passage",
+    "bibliography_passage_context",
+    "bibliography_library_status",
     "processing_list_batches",
     "processing_get_batch",
     "processing_list_tasks",

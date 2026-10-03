@@ -24,6 +24,8 @@
     "allow-processing-sync-bibliography-library",
     "allow-bibliography-search-works",
     "allow-bibliography-open-passage",
+    "allow-bibliography-passage-context",
+    "allow-bibliography-library-status",
     "allow-processing-list-batches",
     "allow-processing-get-batch",
     "allow-processing-list-tasks",

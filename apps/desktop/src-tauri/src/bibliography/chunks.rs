@@ -75,6 +75,27 @@ struct Paragraph {
     text: String,
 }
 
+/// The 1-based paragraph numbers a character range of one page's text
+/// touches, counted with the same blank-line split the chunker used to build
+/// the range. This is how an HTML snapshot (one text, no real pages) is cited:
+/// by paragraph, never by page.
+pub fn paragraph_range(text: &str, start_char: usize, end_char: usize) -> Option<(usize, usize)> {
+    let paragraphs = page_paragraphs(0, text);
+    let extent = |paragraph: &Paragraph| {
+        (
+            paragraph.start_char,
+            paragraph.start_char + paragraph.text.chars().count(),
+        )
+    };
+    let first = paragraphs
+        .iter()
+        .position(|paragraph| extent(paragraph).1 > start_char)?;
+    let last = paragraphs
+        .iter()
+        .rposition(|paragraph| extent(paragraph).0 < end_char.max(start_char + 1))?;
+    Some((first + 1, last.max(first) + 1))
+}
+
 /// Splits one page into paragraphs on blank lines. Offsets are Unicode-scalar
 /// indices into the page text, exact by construction.
 fn page_paragraphs(page_number: i64, text: &str) -> Vec<Paragraph> {

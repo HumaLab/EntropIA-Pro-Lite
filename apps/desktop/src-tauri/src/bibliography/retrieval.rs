@@ -151,7 +151,7 @@ mod tests {
         conn
     }
 
-    fn contract_row() -> EmbeddingContractRow {
+    pub(crate) fn contract_row() -> EmbeddingContractRow {
         EmbeddingContractRow {
             contract_hash: CONTRACT.to_string(),
             provider: "api".to_string(),
@@ -1482,7 +1482,7 @@ pub fn search_passages(
 }
 
 #[cfg(test)]
-mod passage_tests {
+pub(crate) mod passage_tests {
     use super::super::generation::{
         begin_index_generation, complete_index_generation, note_generation_progress,
         register_embedding_contract, set_generation_manifest, EmbeddingContractRow,
@@ -1490,10 +1490,10 @@ mod passage_tests {
     use super::{search_passages, PassageHit, WorkFilters};
     use rusqlite::Connection;
 
-    const CONTRACT: &str = "contract-passages";
+    pub(crate) const CONTRACT: &str = "contract-passages";
     const FAKE_MODEL: &str = "fake/model";
 
-    fn passage_db() -> Connection {
+    pub(crate) fn passage_db() -> Connection {
         let conn = Connection::open_in_memory().expect("memory db");
         conn.execute_batch(include_str!(
             "../../../../../packages/store/src/migrations/0040_bibliography_catalog.sql"
@@ -1555,7 +1555,7 @@ mod passage_tests {
         }
     }
 
-    fn seed_item(
+    pub(crate) fn seed_item(
         conn: &mut Connection,
         connection_id: &str,
         library_suffix: &str,
@@ -1610,7 +1610,7 @@ mod passage_tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn seed_chunk(
+    pub(crate) fn seed_chunk(
         conn: &Connection,
         item_id: &str,
         ordinal: i64,
@@ -1666,7 +1666,7 @@ mod passage_tests {
         chunk_id
     }
 
-    fn activate_gen(conn: &mut Connection, generation_id: &str) -> String {
+    pub(crate) fn activate_gen(conn: &mut Connection, generation_id: &str) -> String {
         register_embedding_contract(conn, &contract_row(), 1).expect("register");
         let staging = begin_index_generation(conn, CONTRACT, generation_id, 10).expect("begin");
         // Attach semantics may return a previously opened staging row.
@@ -2554,5 +2554,114 @@ mod open_tests {
         let error = prepare_passage_open(&conn, "missing:000000", None)
             .expect_err("unknown chunks fail honestly");
         assert_eq!(error.code, "unknown_chunk");
+    }
+}
+
+/// One synced library as the chat's scope control lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryStatusRow {
+    pub library_type: String,
+    pub library_native_id: String,
+    pub name: String,
+    /// Live works (tombstoned ones are not counted).
+    pub works: i64,
+    /// Chunks cut from this library's attachments.
+    pub passages: i64,
+}
+
+/// Which libraries are synced and whether passage search can run at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryStatus {
+    pub libraries: Vec<LibraryStatusRow>,
+    /// An embedding generation is active for the effective contract. Without
+    /// it passages cannot be ranked, however many chunks exist.
+    pub vector_ready: bool,
+}
+
+/// Reads the catalog's synced libraries with their work and passage counts.
+pub fn library_status(conn: &Connection, contract_hash: &str) -> BibliographyResult<LibraryStatus> {
+    let mut statement = conn
+        .prepare(
+            "SELECT l.library_type, l.library_id, l.name,
+                    (SELECT COUNT(*) FROM bibliographic_items i
+                       LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
+                      WHERE i.library_id = l.id AND t.item_id IS NULL),
+                    (SELECT COUNT(*) FROM bibliographic_chunks c
+                       JOIN bibliographic_items i ON i.id = c.item_id
+                      WHERE i.library_id = l.id)
+               FROM zotero_libraries l
+              ORDER BY l.library_type, l.library_id",
+        )
+        .map_err(|error| err("Failed to prepare library status", error))?;
+    let libraries = statement
+        .query_map([], |row| {
+            Ok(LibraryStatusRow {
+                library_type: row.get(0)?,
+                library_native_id: row.get(1)?,
+                name: row.get(2)?,
+                works: row.get(3)?,
+                passages: row.get(4)?,
+            })
+        })
+        .map_err(|error| err("Failed to read library status", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to collect library status", error))?;
+    let vector_ready =
+        crate::bibliography::generation::active_generation(conn, contract_hash)?.is_some();
+    Ok(LibraryStatus {
+        libraries,
+        vector_ready,
+    })
+}
+
+#[cfg(test)]
+mod library_status_tests {
+    use super::library_status;
+    use super::passage_tests::{activate_gen, passage_db, seed_chunk, seed_item, CONTRACT};
+
+    #[test]
+    fn status_lists_synced_libraries_with_their_counts() {
+        let mut conn = passage_db();
+        let (_la, item_a) = seed_item(&mut conn, "pa", "a", "KA0001", "Obra A");
+        let (_lb, _item_b) = seed_item(&mut conn, "pb", "b", "KB0001", "Obra B");
+        let gen = activate_gen(&mut conn, "gen-status");
+        seed_chunk(
+            &conn,
+            &item_a,
+            0,
+            "Texto de la obra A.",
+            1,
+            &gen,
+            &[1.0, 0.0, 0.0, 0.0],
+            None,
+        );
+
+        let status = library_status(&conn, CONTRACT).expect("status");
+        assert!(status.vector_ready);
+        let rows: Vec<_> = status
+            .libraries
+            .iter()
+            .map(|row| {
+                (
+                    row.library_native_id.as_str(),
+                    row.name.as_str(),
+                    row.works,
+                    row.passages,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [("lib-a", "Personal a", 1, 1), ("lib-b", "Personal b", 1, 0)]
+        );
+        assert_eq!(status.libraries[0].library_type, "user");
+    }
+
+    #[test]
+    fn status_without_libraries_or_generation_says_so() {
+        let conn = passage_db();
+        let status = library_status(&conn, CONTRACT).expect("status");
+        assert!(status.libraries.is_empty());
+        assert!(!status.vector_ready);
     }
 }

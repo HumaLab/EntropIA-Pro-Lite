@@ -661,6 +661,7 @@ pub(crate) fn build_sources(
             start_seconds: timestamps.map(|(start, _)| start),
             end_seconds: timestamps.map(|(_, end)| end),
             provenance: None,
+            bibliography: None,
         });
     }
 
@@ -796,6 +797,7 @@ pub(crate) fn pack_sources(
                 start_char: final_start,
                 end_char: final_end,
             }),
+            bibliography: None,
         });
     }
 

@@ -143,50 +143,143 @@ pub async fn bibliography_open_passage(
     chunk_id: String,
     db: State<'_, AppDbState>,
 ) -> Result<OpenPassageResponse, String> {
-    use crate::bibliography::retrieval::prepare_passage_open;
     let db_path = db.db_path.clone();
     blocking(move || {
-        let conn = open_archive_connection(&db_path)?;
-        let data_dir = crate::settings::get_setting(
-            &conn,
-            crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
-        );
-        let plan = prepare_passage_open(&conn, &chunk_id, data_dir.as_deref())
-            .map_err(|error| format!("{}: {}", error.code, error.message))?;
-        let (opened_path, open_error) = match plan.path {
-            Some(path) => match crate::bibliography::attachment::open_attachment_file(&path) {
+        let (plan, _conn) = prepare_plan(&db_path, &chunk_id)?;
+        let (opened_path, open_error) = match &plan.path {
+            Some(path) => match crate::bibliography::attachment::open_attachment_file(path) {
                 Ok(()) => (Some(path.to_string_lossy().to_string()), None),
                 Err(error) => (None, Some(error)),
             },
-            None => (
-                None,
-                plan.reason
-                    .map(|(reason, detail)| format!("{reason}: {detail}")),
-            ),
+            None => (None, plan_reason(&plan)),
         };
-        Ok(OpenPassageResponse {
-            chunk_id: plan.expansion.chunk_id,
-            item_id: plan.expansion.item_id,
-            item_key: plan.expansion.item_key,
-            title: plan.expansion.title,
-            text: plan.expansion.text,
-            spans: plan.expansion.spans,
-            pages: plan
-                .expansion
-                .pages
+        Ok(passage_response(plan, opened_path, open_error))
+    })
+    .await
+}
+
+/// The same expansion without opening anything: what the in-app passage
+/// reader shows (page text with the cited range marked). `openError` says why
+/// the original file would not open, so the reader can say so before the user
+/// asks; it is `None` when the file resolves.
+#[tauri::command]
+pub async fn bibliography_passage_context(
+    chunk_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<OpenPassageResponse, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let (plan, _conn) = prepare_plan(&db_path, &chunk_id)?;
+        let open_error = plan_reason(&plan);
+        Ok(passage_response(plan, None, open_error))
+    })
+    .await
+}
+
+fn prepare_plan(
+    db_path: &std::path::Path,
+    chunk_id: &str,
+) -> Result<
+    (
+        crate::bibliography::retrieval::PassageOpenPlan,
+        rusqlite::Connection,
+    ),
+    String,
+> {
+    let conn = open_archive_connection(db_path)?;
+    let data_dir = crate::settings::get_setting(
+        &conn,
+        crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+    );
+    let plan =
+        crate::bibliography::retrieval::prepare_passage_open(&conn, chunk_id, data_dir.as_deref())
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    Ok((plan, conn))
+}
+
+fn plan_reason(plan: &crate::bibliography::retrieval::PassageOpenPlan) -> Option<String> {
+    plan.reason
+        .as_ref()
+        .map(|(reason, detail)| format!("{reason}: {detail}"))
+}
+
+fn passage_response(
+    plan: crate::bibliography::retrieval::PassageOpenPlan,
+    opened_path: Option<String>,
+    open_error: Option<String>,
+) -> OpenPassageResponse {
+    OpenPassageResponse {
+        chunk_id: plan.expansion.chunk_id,
+        item_id: plan.expansion.item_id,
+        item_key: plan.expansion.item_key,
+        title: plan.expansion.title,
+        text: plan.expansion.text,
+        spans: plan.expansion.spans,
+        pages: plan
+            .expansion
+            .pages
+            .into_iter()
+            .map(|page| OpenPassagePageDto {
+                page_number: page.page_number,
+                text: page.text,
+                highlights: page.highlights,
+            })
+            .collect(),
+        opened_path,
+        open_error,
+    }
+}
+
+/// The synced libraries the chat's scope control offers.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStatusDto {
+    pub library_type: String,
+    pub library_id: String,
+    pub name: String,
+    pub works: i64,
+    pub passages: i64,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStatusResponse {
+    pub libraries: Vec<LibraryStatusDto>,
+    pub vector_ready: bool,
+}
+
+/// Which Zotero libraries are synced into the catalog (with work and passage
+/// counts) and whether an embedding generation is active, so the chat can say
+/// honestly why a Biblioteca question would find nothing.
+#[tauri::command]
+pub async fn bibliography_library_status(
+    db: State<'_, AppDbState>,
+) -> Result<LibraryStatusResponse, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let effective =
+            crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?;
+        let status = crate::bibliography::retrieval::library_status(&conn, &effective.hash)
+            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        Ok(LibraryStatusResponse {
+            libraries: status
+                .libraries
                 .into_iter()
-                .map(|page| OpenPassagePageDto {
-                    page_number: page.page_number,
-                    text: page.text,
-                    highlights: page.highlights,
+                .map(|row| LibraryStatusDto {
+                    library_type: row.library_type,
+                    library_id: row.library_native_id,
+                    name: row.name,
+                    works: row.works,
+                    passages: row.passages,
                 })
                 .collect(),
-            opened_path,
-            open_error,
+            vector_ready: status.vector_ready,
         })
     })
     .await
 }
+
 fn answer_dto(conn: &rusqlite::Connection, answer: HybridAnswer) -> SearchWorksResponse {
     SearchWorksResponse {
         hits: answer

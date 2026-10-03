@@ -481,6 +481,7 @@ mod tests {
             start_seconds: Some(1.5),
             end_seconds: Some(4.0),
             provenance: None,
+            bibliography: None,
         }
     }
 
@@ -518,6 +519,47 @@ mod tests {
     }
 
     // ── Persist round-trip ───────────────────────────────────────────────────
+
+    #[test]
+    fn bibliography_source_survives_persist_and_reload_next_to_a_corpus_source() {
+        let mut conn = setup_conn();
+        let mut passage = source(2);
+        passage.asset_id = String::new();
+        passage.bibliography = Some(crate::rag::RagBibliographySource {
+            chunk_id: "chunk-7".into(),
+            item_key: "ABCD1234".into(),
+            library_name: "Mi biblioteca".into(),
+            library_type: "user".into(),
+            library_native_id: "0".into(),
+            authors: "Bloch, Febvre".into(),
+            year: Some(1949),
+            location: Some(crate::rag::RagBibliographyLocation {
+                kind: "paragraphs".into(),
+                from: 4,
+                to: 6,
+            }),
+        });
+        let id = persist_exchange(
+            &mut conn,
+            None,
+            "pregunta",
+            "respuesta [1][2]",
+            &[source(1), passage.clone()],
+            "modelo-x",
+            1_000,
+        )
+        .expect("persist");
+
+        let reloaded = get_conversation(&conn, &id).expect("load").messages[1]
+            .sources
+            .clone();
+        assert!(
+            reloaded[0].bibliography.is_none(),
+            "a corpus source stays a corpus source"
+        );
+        assert_eq!(reloaded[1].bibliography, passage.bibliography);
+        assert_eq!(reloaded[1].index, 2);
+    }
 
     #[test]
     fn persist_creates_conversation_with_truncated_title_and_roundtrips_sources() {

@@ -26,6 +26,7 @@ use tauri::Emitter;
 
 use super::intent::{format_history, IntentProvider, IntentRoute};
 use super::params::{rag_params_from_settings, RagParams, TOP_K_MAX, TOP_K_MIN};
+use super::scope::{self, RagLibraryRef, RagScope};
 use super::{retrieval, store};
 use super::{RagAnswer, RagChatTurn, RagConversation, RagConversationSummary, RagSource};
 
@@ -225,10 +226,15 @@ pub async fn rag_ask(
     question: String,
     conversation_id: Option<String>,
     top_k: Option<u8>,
+    scope: Option<String>,
+    libraries: Option<Vec<RagLibraryRef>>,
     app_handle: tauri::AppHandle,
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<RagAnswer, String> {
     let question = validate_question(&question)?;
+    // Corpus unless the UI says otherwise: an old caller keeps today's answer.
+    let scope = RagScope::parse(scope.as_deref())?;
+    let libraries = libraries.unwrap_or_default();
     let requested_top_k = top_k;
     let db_path = db.db_path.clone();
 
@@ -342,6 +348,7 @@ pub async fn rag_ask(
             sources: Vec::new(),
             model: phase.model,
             conversation_id,
+            bibliography_notice: None,
         });
     }
 
@@ -390,7 +397,11 @@ pub async fn rag_ask(
     let rewrite_for_retrieval = rewritten_question.clone();
     let retrieval_params = phase.params;
     let trace = phase.trace;
-    phase.candidates =
+    // Biblioteca-only questions skip the corpus leg entirely (no embedding, no
+    // rerank): it would only spend time on material the user did not ask for.
+    phase.candidates = if !scope.includes_corpus() {
+        Vec::new()
+    } else {
         tokio::task::spawn_blocking(move || -> Result<Vec<retrieval::RrfCandidate>, String> {
             let embed_started = std::time::Instant::now();
             let original_embedding = embed_query_local(&retrieval_db_path, &original_question);
@@ -448,8 +459,74 @@ pub async fn rag_ask(
             Ok(candidates)
         })
         .await
-        .map_err(|error| format!("RAG embedding/retrieval task panicked: {error}"))??;
+        .map_err(|error| format!("RAG embedding/retrieval task panicked: {error}"))??
+    };
     let retrieval_question = rewritten_question.unwrap_or_else(|| question.clone());
+
+    // Second leg, run on its own: the Zotero libraries' passages. Never fused
+    // with the corpus by score (different scales); `merge_scopes` interleaves
+    // by rank after both legs are packed.
+    let bibliography_started = std::time::Instant::now();
+    let bibliography_leg = if scope.includes_bibliography() {
+        let leg_db_path = db_path.clone();
+        let leg_query = retrieval_question.clone();
+        let leg_params = phase.params;
+        let leg_libraries = libraries.clone();
+        tokio::task::spawn_blocking(move || -> scope::BibliographyLeg {
+            // Its own connection: embedding the query may be a network call in
+            // Lite and must not hold the shared worker connection.
+            let prepared =
+                crate::db::open::open_archive_connection(&leg_db_path).and_then(|conn| {
+                    let contract =
+                        crate::processing::eligibility::resolve_effective_embedding_contract(
+                            &conn,
+                        )?;
+                    Ok((conn, contract.hash))
+                });
+            match prepared {
+                Ok((conn, contract_hash)) => {
+                    use crate::bibliography::processing::{EngineProfileEmbedder, ProfileEmbedder};
+                    let embedder = EngineProfileEmbedder::new(leg_db_path);
+                    scope::bibliography_leg(
+                        &conn,
+                        &contract_hash,
+                        &leg_query,
+                        &leg_libraries,
+                        &leg_params,
+                        &|text| embedder.embed(text),
+                    )
+                }
+                Err(error) => {
+                    eprintln!("[rag] Biblioteca no disponible: {error}");
+                    scope::BibliographyLeg {
+                        sources: Vec::new(),
+                        notice: Some(scope::BibliographyNotice::Failed),
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|error| format!("RAG bibliography task panicked: {error}"))?
+    } else {
+        scope::BibliographyLeg {
+            sources: Vec::new(),
+            notice: None,
+        }
+    };
+    trace_stage(
+        phase.trace,
+        "bibliography_leg",
+        bibliography_started.elapsed(),
+        &format!(
+            "scope_included={} passages={} notice={}",
+            scope.includes_bibliography(),
+            bibliography_leg.sources.len(),
+            bibliography_leg
+                .notice
+                .map(|notice| notice.code())
+                .unwrap_or("none")
+        ),
+    );
 
     // Profundidad de reranking IDÉNTICA en ambas variantes (`rag_rerank_depth`,
     // recortado a top_k..=fusion_candidate_limit): antes Lite mandaba `top_k`
@@ -463,7 +540,9 @@ pub async fn rag_ask(
     let rerank_started = std::time::Instant::now();
 
     #[cfg(not(feature = "local-ml"))]
-    let candidates = {
+    let candidates = if phase.candidates.is_empty() {
+        phase.candidates
+    } else {
         let RagAnswerMode::OpenRouter { api_key, .. } = &phase.mode;
         super::reranker::rerank_candidates(
             &retrieval_question,
@@ -475,7 +554,9 @@ pub async fn rag_ask(
         .await
     };
     #[cfg(feature = "local-ml")]
-    let candidates = {
+    let candidates = if phase.candidates.is_empty() {
+        phase.candidates
+    } else {
         let fallback = phase.candidates.clone();
         let rerank_question = retrieval_question.clone();
         let model_dir = super::reranker::resolve_local_reranker_model_dir(db_path.parent());
@@ -513,7 +594,7 @@ pub async fn rag_ask(
     let source_conn = db.worker_conn.clone();
     let source_question = retrieval_question;
     let source_params = phase.params;
-    let sources = tokio::task::spawn_blocking(move || -> Result<Vec<RagSource>, String> {
+    let corpus_sources = tokio::task::spawn_blocking(move || -> Result<Vec<RagSource>, String> {
         let conn = source_conn.lock().map_err(|error| error.to_string())?;
         retrieval::pack_sources(
             &conn,
@@ -527,6 +608,21 @@ pub async fn rag_ask(
     })
     .await
     .map_err(|error| format!("RAG source packing task panicked: {error}"))??;
+    let bibliography_notice = bibliography_leg
+        .notice
+        .map(|notice| notice.code().to_string());
+    // Corpus-only keeps its exact historic path; any scope that includes the
+    // Biblioteca merges by rank under the same top_k and context budget.
+    let sources = if scope == RagScope::Corpus {
+        corpus_sources
+    } else {
+        scope::merge_scopes(
+            corpus_sources,
+            bibliography_leg.sources,
+            phase.params.top_k,
+            phase.params.context_max_chars,
+        )
+    };
     trace_stage(
         trace,
         "pack_sources",
@@ -553,7 +649,9 @@ pub async fn rag_ask(
             phase.model.clone(),
         )
         .await;
-        return Ok(empty_answer(phase.model, conversation_id));
+        let mut answer = empty_answer(phase.model, conversation_id);
+        answer.bibliography_notice = bibliography_notice;
+        return Ok(answer);
     }
 
     let generation_started = std::time::Instant::now();
@@ -603,6 +701,7 @@ pub async fn rag_ask(
         sources,
         model: phase.model,
         conversation_id,
+        bibliography_notice,
     })
 }
 
@@ -1314,6 +1413,7 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
         sources: Vec::new(),
         model,
         conversation_id,
+        bibliography_notice: None,
     }
 }
 
@@ -1461,8 +1561,10 @@ fn format_fragments(sources: &[RagSource]) -> String {
         .iter()
         .map(|source| {
             format!(
-                "[{}] «{}» ({}):\n{}",
-                source.index, source.item_title, source.collection_name, source.snippet
+                "[{}] {}:\n{}",
+                source.index,
+                scope::fragment_header(source),
+                source.snippet
             )
         })
         .collect::<Vec<String>>()
@@ -1590,6 +1692,7 @@ mod tests {
             start_seconds: None,
             end_seconds: None,
             provenance: None,
+            bibliography: None,
         }
     }
 
@@ -2021,6 +2124,57 @@ mod tests {
     }
 
     #[test]
+    fn fragments_keep_the_corpus_header_and_name_work_and_location_for_bibliography() {
+        let corpus = RagSource {
+            index: 1,
+            asset_id: "a".into(),
+            item_id: "i".into(),
+            item_title: "Acta".into(),
+            collection_id: "c".into(),
+            collection_name: "Archivo".into(),
+            snippet: "texto del acta".into(),
+            score: 1.0,
+            start_seconds: None,
+            end_seconds: None,
+            provenance: None,
+            bibliography: None,
+        };
+        let mut bibliography = corpus.clone();
+        bibliography.index = 2;
+        bibliography.item_title = "Apología".into();
+        bibliography.snippet = "texto de la obra".into();
+        bibliography.bibliography = Some(crate::rag::RagBibliographySource {
+            chunk_id: "chunk".into(),
+            item_key: "K1".into(),
+            library_name: "Mi biblioteca".into(),
+            library_type: "user".into(),
+            library_native_id: "0".into(),
+            authors: "Bloch".into(),
+            year: Some(1949),
+            location: Some(crate::rag::RagBibliographyLocation {
+                kind: "paragraphs".into(),
+                from: 4,
+                to: 6,
+            }),
+        });
+        assert_eq!(
+            format_fragments(&[corpus, bibliography]),
+            "[1] «Acta» (Archivo):\ntexto del acta\n\n\
+             [2] «Apología» (Bloch · 1949 · párr. 4–6):\ntexto de la obra"
+        );
+    }
+
+    #[test]
+    fn answer_serializes_the_bibliography_notice() {
+        let mut answer = empty_answer("m".to_string(), None);
+        answer.bibliography_notice = Some("no_embeddings".to_string());
+        let json = serde_json::to_value(&answer).expect("serialize");
+        assert_eq!(json["bibliographyNotice"], "no_embeddings");
+        let plain = serde_json::to_value(empty_answer("m".to_string(), None)).unwrap();
+        assert!(plain["bibliographyNotice"].is_null());
+    }
+
+    #[test]
     fn empty_answer_carries_none_when_persistence_failed() {
         let answer = empty_answer("modelo-x".to_string(), None);
         assert!(answer.answer.is_empty());
@@ -2104,6 +2258,7 @@ mod tests {
             start_seconds: None,
             end_seconds: None,
             provenance: None,
+            bibliography: None,
         }
     }
 

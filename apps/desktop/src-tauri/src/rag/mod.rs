@@ -19,6 +19,7 @@ pub(crate) mod params;
 pub(crate) mod query_rewrite;
 pub(crate) mod reranker;
 pub(crate) mod retrieval;
+pub(crate) mod scope;
 pub(crate) mod store;
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,11 @@ pub struct RagAnswer {
     pub sources: Vec<RagSource>,
     pub model: String,
     pub conversation_id: Option<String>,
+    /// Why the Biblioteca leg contributed nothing (`no_library_synced`,
+    /// `no_embeddings`, `embedding_unavailable`, `failed`); `None` when the
+    /// scope did not ask for it or it ran normally. Not persisted: it describes
+    /// this answer's retrieval, not the conversation.
+    pub bibliography_notice: Option<String>,
 }
 
 /// Resumen de una conversación persistida para el listado del frontend.
@@ -106,6 +112,40 @@ pub struct RagSource {
     pub end_seconds: Option<f64>,
     #[serde(default)]
     pub provenance: Option<RagSourceProvenance>,
+    /// Present only for a passage of the Zotero library (Biblioteca scope).
+    /// Absent means a corpus source, which is also what every conversation
+    /// persisted before this field existed reads as. Optional and ignored by
+    /// older builds, so synced messages stay readable on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bibliography: Option<RagBibliographySource>,
+}
+
+/// Where a bibliography citation lives, stored with the source so the list
+/// renders (work, location, scope) without touching the local-only catalog.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagBibliographySource {
+    /// `bibliographic_chunks.id`: how the passage is reopened on this device.
+    pub chunk_id: String,
+    pub item_key: String,
+    pub library_name: String,
+    /// `user` or `group`, with the native id: the identity Zotero uses.
+    pub library_type: String,
+    pub library_native_id: String,
+    /// CSL family names, comma-separated (may be empty).
+    pub authors: String,
+    pub year: Option<i64>,
+    pub location: Option<RagBibliographyLocation>,
+}
+
+/// `pages` for a PDF (a page range) or `paragraphs` for an HTML snapshot
+/// (a paragraph range of its single text; a snapshot has no real pages).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagBibliographyLocation {
+    pub kind: String,
+    pub from: i64,
+    pub to: i64,
 }
 
 #[cfg(test)]
