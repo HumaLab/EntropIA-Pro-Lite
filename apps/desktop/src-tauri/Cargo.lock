@@ -1476,6 +1476,7 @@ dependencies = [
  "base64 0.22.1",
  "cap-fs-ext",
  "cap-std",
+ "dom_query",
  "ed25519-dalek",
  "encoding_rs",
  "entropia-agent",

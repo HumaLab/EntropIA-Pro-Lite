@@ -4237,6 +4237,178 @@ fn extract_registry() -> ExecutorRegistry {
     registry
 }
 
+fn run_extract(dir: &tempfile::TempDir, conn: &rusqlite::Connection, task_id: &str) {
+    let outcome = run_one(
+        conn,
+        &ctx_of(dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the extract task must succeed, got {other:?}"),
+    }
+}
+
+const SNAPSHOT_HTML: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Nota</title>
+<script>var tracking = 1;</script></head><body>
+<nav><a href="/">Inicio</a></nav>
+<h1>La  crisis
+   de 2001</h1>
+<p>Primer parrafo del articulo con texto
+   repartido en lineas de fuente.</p>
+<ul><li>Primer punto de la lista</li><li>Segundo punto</li></ul>
+<p>Linea uno<br>Linea dos</p>
+<footer>Todos los derechos reservados</footer></body></html>"#;
+
+/// A stored HTML snapshot extracts as one page of block-separated
+/// paragraphs through the same durable path, and the paragraph chunker
+/// turns it into chunks whose spans all point at page 1.
+#[test]
+fn extract_task_publishes_html_snapshot_as_one_page_of_paragraphs() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "HTMLWORK1", "Obra con captura", "Resumen.");
+    let path = dir.path().join("snapshot.html");
+    std::fs::write(&path, SNAPSHOT_HTML).expect("write snapshot");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT01",
+        "imported_url",
+        Some(&path.to_string_lossy()),
+        "snapshot.html",
+        "text/html",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let (page_count, method): (i64, String) = conn
+        .query_row(
+            "SELECT page_count, method FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(page_count, 1, "a whole HTML document is a single page");
+    assert_eq!(method, "native");
+    let pages: Vec<(i64, String)> = conn
+        .prepare(
+            "SELECT page_number, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages");
+    assert_eq!(
+        pages,
+        vec![(
+            1,
+            "La crisis de 2001\n\nPrimer parrafo del articulo con texto repartido en lineas de fuente.\n\nPrimer punto de la lista\n\nSegundo punto\n\nLinea uno\nLinea dos"
+                .to_string()
+        )],
+        "blocks split paragraphs; source line breaks and page furniture do not"
+    );
+    let chunkable =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(&conn, &item_id)
+            .expect("chunkable pages");
+    let chunks = entropia_desktop_lib::bibliography::chunks::segment_pages(
+        &chunkable
+            .iter()
+            .map(
+                |page| entropia_desktop_lib::bibliography::chunks::PageInput {
+                    page_number: page.page_number,
+                    text: page.text_content.clone(),
+                },
+            )
+            .collect::<Vec<_>>(),
+    );
+    assert!(!chunks.is_empty(), "the snapshot yields chunks");
+    assert!(chunks
+        .iter()
+        .flat_map(|chunk| chunk.spans.iter())
+        .all(|span| span.page_number == 1));
+}
+
+/// A page that is all furniture extracts to nothing: the task succeeds, the
+/// row says `empty`, and there is no page text to chunk.
+#[test]
+fn extract_task_html_snapshot_with_only_boilerplate_yields_no_chunks() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "HTMLWORK2", "Obra sin cuerpo", "Resumen.");
+    let path = dir.path().join("vacio.html");
+    std::fs::write(
+        &path,
+        "<html><body><nav>Menu</nav><script>x()</script><footer>Pie</footer></body></html>",
+    )
+    .expect("write snapshot");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT02",
+        "imported_url",
+        Some(&path.to_string_lossy()),
+        "vacio.html",
+        "text/html",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    assert_eq!(quality, "empty");
+    let chunkable =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(&conn, &item_id)
+            .expect("chunkable pages");
+    assert!(chunkable.is_empty(), "nothing to chunk");
+}
+
+/// Latin-1 bytes declared by the page's own meta decode correctly.
+#[test]
+fn extract_task_html_snapshot_honours_its_declared_charset() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "HTMLWORK3", "Obra latina", "Resumen.");
+    let path = dir.path().join("latin.html");
+    let mut bytes = b"<meta charset=\"iso-8859-1\"><p>La ca".to_vec();
+    bytes.push(0xF1);
+    bytes.extend_from_slice(b"ada del a");
+    bytes.push(0xF1);
+    bytes.extend_from_slice(b"o</p>");
+    std::fs::write(&path, bytes).expect("write snapshot");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT03",
+        "imported_file",
+        Some(&path.to_string_lossy()),
+        "latin.html",
+        "text/html",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert_eq!(text, "La cañada del año");
+}
+
 /// A stored PDF extracts its native text through the durable path with no
 /// OCR call and no corpus asset: the row carries page count, quality, and
 /// the source file identity it was read from.
@@ -6718,7 +6890,7 @@ fn attachment_row(
 }
 
 #[test]
-fn attachment_page_keeps_pdfs_with_a_parent_and_decodes_the_enclosure() {
+fn attachment_page_keeps_pdfs_and_stored_web_snapshots_with_a_parent_and_decodes_the_enclosure() {
     use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
     let mut linked = attachment_row(
         "LINKED01",
@@ -6755,16 +6927,45 @@ fn attachment_page_keeps_pdfs_with_a_parent_and_decodes_the_enclosure() {
             None,
         ),
         linked,
+        attachment_row(
+            "XHTMLAT1",
+            Some("WORK0003"),
+            "application/xhtml+xml",
+            "imported_file",
+            "pagina.xhtml",
+            Some("C:/Users/ana/Zotero/storage/XHTMLAT1/pagina.xhtml"),
+        ),
+        // A bare web link has no stored file: nothing to read, nothing to catalog.
+        attachment_row(
+            "WEBLINK1",
+            Some("WORK0001"),
+            "text/html",
+            "linked_url",
+            "",
+            None,
+        ),
+        attachment_row(
+            "PNGATT01",
+            Some("WORK0001"),
+            "image/png",
+            "imported_file",
+            "figura.png",
+            Some("C:/Users/ana/Zotero/storage/PNGATT01/figura.png"),
+        ),
     ]);
-    let page = attachment_page_from_json(&body, Some(4)).expect("page parses");
-    assert_eq!(page.rows_read, 4, "pagination counts every row read");
-    assert_eq!(page.total, Some(4));
+    let page = attachment_page_from_json(&body, Some(7)).expect("page parses");
+    assert_eq!(page.rows_read, 7, "pagination counts every row read");
+    assert_eq!(page.total, Some(7));
     let keys: Vec<&str> = page
         .attachments
         .iter()
         .map(|a| a.input.attachment_key.as_str())
         .collect();
-    assert_eq!(keys, ["PDFATT01", "LINKED01"], "PDF children only");
+    assert_eq!(
+        keys,
+        ["PDFATT01", "HTMLATT1", "LINKED01", "XHTMLAT1"],
+        "PDF and stored HTML snapshots with a parent; no orphans, bare links or images"
+    );
     let pdf = &page.attachments[0];
     assert_eq!(pdf.parent_key, "WORK0001");
     assert_eq!(
@@ -6776,7 +6977,14 @@ fn attachment_page_keeps_pdfs_with_a_parent_and_decodes_the_enclosure() {
     assert_eq!(pdf.input.filename.as_deref(), Some("mi adjunto.pdf"));
     assert_eq!(pdf.input.native_version, Some(11));
     assert_eq!(pdf.input.mtime, Some(1_790_984_898_525));
-    let linked = &page.attachments[1];
+    let snapshot = &page.attachments[1];
+    assert_eq!(snapshot.parent_key, "WORK0001");
+    assert_eq!(snapshot.input.content_type.as_deref(), Some("text/html"));
+    assert_eq!(
+        snapshot.input.native_path.as_deref(),
+        Some("C:/Users/ana/Zotero/storage/HTMLATT1/snap.html")
+    );
+    let linked = &page.attachments[2];
     assert_eq!(
         linked.input.native_path.as_deref(),
         Some("C:/Libros/externo.pdf"),
@@ -6968,8 +7176,8 @@ fn sync_catalogs_pdf_attachments_and_chains_extraction_for_the_readable_one() {
     );
     assert_eq!(
         attachment_keys(&conn),
-        ["PDFATT01"],
-        "only PDF children of cataloged works are stored"
+        ["HTMLATT1", "PDFATT01"],
+        "PDF and HTML snapshot children of cataloged works are stored"
     );
     let (attachment_id, native_path, parent): (String, String, String) = conn
         .query_row(
@@ -6996,10 +7204,20 @@ fn sync_catalogs_pdf_attachments_and_chains_extraction_for_the_readable_one() {
         .expect("live map")
         .collect::<Result<Vec<_>, _>>()
         .expect("live collect");
+    let html_id: String = conn
+        .query_row(
+            "SELECT id FROM zotero_attachments WHERE attachment_key = 'HTMLATT1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stored snapshot");
+    let mut expected = vec![attachment_id, html_id];
+    expected.sort();
+    let mut live = live;
+    live.sort();
     assert_eq!(
-        live,
-        vec![attachment_id],
-        "the sync's own success chains extraction for the stored PDF"
+        live, expected,
+        "the sync's own success chains extraction for the stored PDF and the snapshot"
     );
 }
 

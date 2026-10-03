@@ -26,7 +26,7 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   was needed: Zotero's local API reports each attachment's file as
   `links.enclosure.href` (a `file:` URL, also for `imported_url`), stored as
   `native_path`, which the resolver already tries first.
-- [ ] B1b — Index Zotero HTML snapshots too (owner, 2026-10-03). Live count of the
+- [x] B1b — Index Zotero HTML snapshots too (owner, 2026-10-03). Live count of the
   owner's library: 969 stored `text/html` snapshots vs 733 stored PDFs (plus 280
   link-only web attachments with no file). Extraction is PDF-only today. Extract
   readable text from the stored HTML, chunk and embed it like PDFs; passages
@@ -132,3 +132,29 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   works, 2065 attachment rows) settles in ~6s. On the copy, profile admission
   now succeeds (2657 tasks). Full cargo green except the 4 known
   `web_capture_sync_two_device`.
+- 2026-10-03: B1b done (route: delegated writer, single writer on main).
+  Catalog: `attachment_page_from_json` also keeps parented `text/html` and
+  `application/xhtml+xml` attachments unless `linkMode` is `linked_url` (a bare
+  web link has no file), so the 280 link-only attachments stay out. Extraction:
+  new `bibliography/html_text.rs` (`dom_query` 0.27, already compiled for
+  tauri-utils/wry, now declared directly so no new crate enters the build;
+  `encoding_rs` was already a direct dependency). Block elements (`p`, `h1-6`,
+  `li`, `blockquote`, `td/th`, `pre`, `figcaption`, `dd/dt` plus the container
+  blocks `div`, `section`, `table`...) each end a paragraph; `<br>` is one
+  newline inside it; source line breaks collapse; `head/script/style/noscript/
+  nav/header/footer/aside/form/template/svg/iframe` and hidden elements
+  (`hidden`, `aria-hidden=true`, inline `display:none`/`visibility:hidden`) are
+  dropped; the walk is iterative (no stack risk on deep pages) and output is
+  capped at the 4 MB page bound. Charset: BOM, then `<meta charset>`, then
+  UTF-8, then Windows-1252. The executor stores one page (page_number 1, method
+  `native`, quality `rich` or `empty`) so `chunks.rs`, profiles and embeddings run
+  unchanged; boilerplate-only pages yield an `empty` row and no chunks, no error.
+  `BIBLIOGRAPHY_EXTRACT_MAX_BYTES` still gates the read. No migration, no schema
+  change. Display marker: none needed yet (no UI shows bibliography page
+  numbers); B4/B5 must decide "p. N" from the attachment's `content_type`
+  (`text/html`/xhtml means "web snapshot, show paragraph range, no page").
+  TDD: RED observed (7 `html_text` unit tests against a stub, 6 failed; 3
+  extraction tests failed with `extraction_unsupported`); GREEN after the
+  implementation; two catalog tests updated to the new contract (HTML now
+  cataloged, linked_url/image still skipped).
+

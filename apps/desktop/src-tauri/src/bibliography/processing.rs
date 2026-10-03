@@ -233,9 +233,10 @@ fn file_url_to_path(href: &str) -> Option<String> {
 
 /// Parses one page of `/items?itemType=attachment&format=json` strictly: every
 /// row must carry its key, version and data object, or the whole page is
-/// [`ZoteroState::InvalidResponse`]. Only PDF children (a `parentItem`) are
-/// kept. The readable location is the enclosure Zotero reports for a file that
-/// exists on this machine, else an absolute `data.path` (linked files).
+/// [`ZoteroState::InvalidResponse`]. Only PDF and stored HTML snapshot children
+/// (a `parentItem`) are kept. The readable location is the enclosure Zotero
+/// reports for a file that exists on this machine, else an absolute
+/// `data.path` (linked files).
 pub fn attachment_page_from_json(
     body: &serde_json::Value,
     total: Option<u64>,
@@ -260,12 +261,21 @@ pub fn attachment_page_from_json(
             .get("data")
             .filter(|data| data.is_object())
             .ok_or_else(malformed)?;
-        let is_pdf = string_field(data, "contentType")
+        let content_type = string_field(data, "contentType");
+        let link_mode = string_field(data, "linkMode");
+        let is_pdf = content_type
+            .as_deref()
             .is_some_and(|kind| kind.eq_ignore_ascii_case("application/pdf"));
+        // A web snapshot is an HTML file Zotero stored; a bare web link
+        // (`linked_url`) has no file to read and stays out of the catalog.
+        let is_stored_snapshot = content_type.as_deref().is_some_and(|kind| {
+            kind.eq_ignore_ascii_case("text/html")
+                || kind.eq_ignore_ascii_case("application/xhtml+xml")
+        }) && link_mode.as_deref() != Some("linked_url");
         let Some(parent_key) = string_field(data, "parentItem") else {
             continue;
         };
-        if !is_pdf {
+        if !is_pdf && !is_stored_snapshot {
             continue;
         }
         let native_path = row
@@ -279,8 +289,8 @@ pub fn attachment_page_from_json(
             parent_key,
             input: AttachmentInput {
                 attachment_key: key,
-                content_type: string_field(data, "contentType"),
-                link_mode: string_field(data, "linkMode"),
+                content_type,
+                link_mode,
                 filename: string_field(data, "filename"),
                 native_path,
                 url: string_field(data, "url"),
@@ -2349,6 +2359,59 @@ fn is_pdf_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool
         .ends_with(".pdf")
 }
 
+/// A stored web page: Zotero's `text/html` snapshots (and XHTML). Checked
+/// after PDF, so a mislabeled `.pdf` never reads as markup.
+fn is_html_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    if content_type.contains("html") {
+        return true;
+    }
+    let filename = filename.unwrap_or_default().to_ascii_lowercase();
+    [".html", ".htm", ".xhtml"]
+        .iter()
+        .any(|extension| filename.ends_with(extension))
+}
+
+/// The page layer of one extraction, whatever the source format.
+struct ExtractedDocument {
+    page_count: i64,
+    text: String,
+    quality: &'static str,
+    pages: Vec<ExtractPageText>,
+    ocr_failed_pages: Vec<i64>,
+}
+
+/// An HTML snapshot is one "page": its block paragraphs, blank-line
+/// separated, so the paragraph chunker runs unchanged and citations point at
+/// paragraph ranges. The attachment's content type, not the page number,
+/// tells a reader this is a web page rather than page 1 of a paper. A page
+/// that is all furniture yields empty text, which nothing downstream chunks.
+fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
+    let text = crate::bibliography::html_text::html_to_paragraphs(
+        &crate::bibliography::html_text::decode_html_bytes(bytes),
+    );
+    let quality = if text.trim().is_empty() {
+        "empty"
+    } else {
+        "rich"
+    };
+    let page = ExtractPageText {
+        page_number: 1,
+        method: "native".to_string(),
+        text_hash: extraction_text_hash(&text),
+        text_chars: text.chars().count() as i64,
+        quality: quality.to_string(),
+        text_content: text.clone(),
+    };
+    ExtractedDocument {
+        page_count: 1,
+        text,
+        quality,
+        pages: vec![page],
+        ocr_failed_pages: Vec::new(),
+    }
+}
+
 /// The E4a-WU2 native extraction engine: resolve, read, extract the text
 /// layer, grade it. Every unresolvable state maps to an honest verdict —
 /// blocked when the user can fix it (missing file, unconfigured data dir),
@@ -2469,14 +2532,20 @@ impl BibliographyExtractExecutor {
                 });
             }
         };
-        if !is_pdf_attachment(
+        let is_pdf = is_pdf_attachment(
             attachment.content_type.as_deref(),
             attachment.filename.as_deref(),
-        ) {
+        );
+        if !is_pdf
+            && !is_html_attachment(
+                attachment.content_type.as_deref(),
+                attachment.filename.as_deref(),
+            )
+        {
             return Err(ExecOutput::Fatal {
                 code: "extraction_unsupported".to_string(),
                 message: format!(
-                    "attachment {} is not a PDF ({}); native text extraction covers PDFs only",
+                    "attachment {} is neither a PDF nor an HTML snapshot ({}); native text extraction covers those only",
                     task.subject_id,
                     attachment.content_type.as_deref().unwrap_or("unknown type"),
                 ),
@@ -2518,38 +2587,19 @@ impl BibliographyExtractExecutor {
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
-        // Locked files fail here with unlock guidance, not with a
-        // complaint about damage: re-importing an unlocked copy mints
-        // fresh demand through the file-identity gate, so terminal is
-        // correct — this task can never succeed.
-        let document = lopdf::Document::load_mem(&bytes).map_err(|error| ExecOutput::Fatal {
-            code: "extraction_failed".to_string(),
-            message: format!("Failed to parse PDF: {error}"),
-        })?;
-        // lopdf clears the trailer Encrypt entry when the empty user
-        // password opens the structure, while the object streams stay
-        // undecryptable — so an absent entry proves nothing and the bytes
-        // get the last word.
-        let encrypted_trailer = document.is_encrypted();
-        let encrypted_bytes = bytes
-            .windows(b"/Encrypt".len())
-            .any(|window| window == b"/Encrypt");
-        if encrypted_trailer || encrypted_bytes {
-            return Err(ExecOutput::Fatal {
-                code: "extraction_failed".to_string(),
-                message: crate::ocr::pdf::ENCRYPTED_PDF_MESSAGE.to_string(),
-            });
-        }
-        let page_count = document.get_pages().len() as i64;
-        let text =
-            crate::ocr::pdf::extract_pdf_text(&bytes).map_err(|error| ExecOutput::Fatal {
-                code: "extraction_failed".to_string(),
-                message: error,
-            })?;
-        let quality = extraction_quality(&text);
+        let document = if is_pdf {
+            self.extract_pdf_document(ctx, task, stop, &bytes)?
+        } else {
+            extract_html_document(&bytes)
+        };
+        let ExtractedDocument {
+            page_count,
+            text,
+            quality,
+            pages,
+            ocr_failed_pages,
+        } = document;
         let text_chars = text.chars().count() as i64;
-        let pages = read_native_page_texts(&bytes, page_count)?;
-        let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, &bytes, pages)?;
         let output = BibliographyExtractComputeOutput {
             attachment_id: task.subject_id.clone(),
             item_id,
@@ -2581,9 +2631,56 @@ impl BibliographyExtractExecutor {
             },
         })
     }
-}
 
-impl BibliographyExtractExecutor {
+    /// PDF branch: lopdf structure and text layer, per-page native text,
+    /// then the selective OCR pass over sparse pages.
+    fn extract_pdf_document(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+        bytes: &[u8],
+    ) -> Result<ExtractedDocument, crate::processing::scheduler::ExecOutput> {
+        use crate::processing::scheduler::ExecOutput;
+        // Locked files fail here with unlock guidance, not with a
+        // complaint about damage: re-importing an unlocked copy mints
+        // fresh demand through the file-identity gate, so terminal is
+        // correct — this task can never succeed.
+        let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
+            code: "extraction_failed".to_string(),
+            message: format!("Failed to parse PDF: {error}"),
+        })?;
+        // lopdf clears the trailer Encrypt entry when the empty user
+        // password opens the structure, while the object streams stay
+        // undecryptable — so an absent entry proves nothing and the bytes
+        // get the last word.
+        let encrypted_trailer = document.is_encrypted();
+        let encrypted_bytes = bytes
+            .windows(b"/Encrypt".len())
+            .any(|window| window == b"/Encrypt");
+        if encrypted_trailer || encrypted_bytes {
+            return Err(ExecOutput::Fatal {
+                code: "extraction_failed".to_string(),
+                message: crate::ocr::pdf::ENCRYPTED_PDF_MESSAGE.to_string(),
+            });
+        }
+        let page_count = document.get_pages().len() as i64;
+        let text = crate::ocr::pdf::extract_pdf_text(bytes).map_err(|error| ExecOutput::Fatal {
+            code: "extraction_failed".to_string(),
+            message: error,
+        })?;
+        let quality = extraction_quality(&text);
+        let pages = read_native_page_texts(bytes, page_count)?;
+        let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
+        Ok(ExtractedDocument {
+            page_count,
+            text,
+            quality,
+            pages,
+            ocr_failed_pages,
+        })
+    }
+
     /// Runs the selective OCR pass over pages whose native layer is
     /// sparse or empty. Rich and unreadable pages never reach a
     /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
