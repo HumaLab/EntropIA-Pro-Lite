@@ -100,8 +100,37 @@ that has write access to the library.
   matches, the stored file downloads byte-identical); second run
   `AlreadyThere`, still one child; attachment and parent deleted, parent then
   404.
-- [ ] Z4 — Owner's manual check in the app (Lite). Still open for the owner's
-  recheck.
+- [x] Z4 — Owner's manual check in the app (Lite). Passed on the owner's
+  machine after the fix below. Result: after re-saving the key, the
+  source-level copy of articulos/230 offered "Completar en Zotero" and attached
+  the PDF (server: JC4DPPR4 has child ZP42WAPB, `imported_file`,
+  `web-capture-0a41e561.pdf`; the local Zotero shows it too); a second copy
+  says "El PDF ya estaba adjunto" and offers only "Abrir en Zotero". Follow-up
+  UI fixes from that run, commit given below. Also from the run: a test deleted
+  the owner's real keyring entry through `persist_setting(ZOTERO_API_KEY, "")`;
+  fixed in `d83f3809` (tests must never touch the real credential store; use
+  `persist_setting_with` with stubs).
+  UI fixes after the owner's pass, commit `d1531d1f`:
+  - Only the SOURCE-level "Copiar a Zotero" button remains; the one inside each
+    PDF capture is gone, with the dialog's `capture` prop, the `introPdf`
+    strings and the tests that only served it. The backend keeps `capture_id`
+    (the rows and the picked PDF still use it); the dialog always asks with
+    `captureId: null` and the backend picks the latest PDF.
+  - The result line for an existing item no longer contradicts itself: it says
+    "no se duplicó y se agregaron los datos que faltaban" / "...y se adjuntó el
+    PDF" / both, only for what the Web API really did (`added.fields`,
+    `added.pdf`); with nothing changed, or a failed step, it keeps "no se
+    duplicó ni se modificó el elemento existente".
+  - "Se adjuntará el PDF guardado el ..." is shown only when an attach will
+    really happen: a new item, or an existing one that can be completed and
+    lacks the PDF. Hidden when the status says it is already attached, when it
+    cannot be attached without a key, and for an existing item with no PDF.
+    Spanish and English.
+  Evidence for these: `pnpm lint` 0 errors, `pnpm typecheck` 0 errors, `pnpm
+  format:check` clean, desktop `pnpm test` 230 files green (RED observed first
+  for the dialog and describeCopy tests), `cargo fmt --check`, `cargo clippy
+  --all-targets -- -D warnings` and `cargo test` (2170 lib tests + ACL guards)
+  clean and green with the coordinator's `d83f3809` included.
   First run (dev profile `navegador`): key card OK, completing fields OK, PDF
   NOT attached. Findings from the coordinator's read of the dev DB:
   1. The copy was started from the SOURCE's "Copiar a Zotero" button
@@ -151,3 +180,4 @@ that has write access to the library.
 - 2026-10-02: Z2 done (`9e28b7e1`), live-checked on group prueba.
 - 2026-10-02: account guard (`4e76872c`) and Z3 (`35d6eafd`) done; Z3 live-checked on group prueba.
 - 2026-10-02: owner's Z4 run found the PDF not attached; fixed in `a511baa0` (diagnostics, not_synced_yet, source-level PDF, copy again). Z4 stays open for the recheck.
+- 2026-10-02: Z4 passed on the owner's machine; UI fixes (single copy button, honest result and PDF lines) in `d1531d1f`.
