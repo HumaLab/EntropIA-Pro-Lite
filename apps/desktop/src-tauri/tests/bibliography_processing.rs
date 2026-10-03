@@ -4790,6 +4790,263 @@ fn sync_success_chains_extraction_demand_for_readable_pdfs_only() {
     let _ = att_b;
 }
 
+// ── Extraction demand is admitted once per source identity ─────────────────
+
+/// Seeds one readable PDF attachment under a catalog work and returns
+/// `(library_row_id, attachment_id, item_id, path)`.
+fn seed_readable_pdf(
+    dir: &tempfile::TempDir,
+    conn: &mut rusqlite::Connection,
+) -> (String, String, String, String) {
+    let item_id = seed_catalog(conn, "DEMANDW01", "Obra con demanda", "Resumen.");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Texto extraible del adjunto con longitud suficiente para calidad",
+    )]);
+    let path = write_temp_pdf(dir, "demanda.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        conn,
+        &item_id,
+        "DEMANDA01",
+        "linked_file",
+        Some(&path),
+        "demanda.pdf",
+        "application/pdf",
+    );
+    let library_row_id: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    (library_row_id, attachment_id, item_id, path)
+}
+
+fn extract_task_count(conn: &rusqlite::Connection, attachment_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM processing_tasks
+         WHERE domain = 'bibliography' AND subject_kind = 'attachment'
+           AND kind = 'bibliography_extract' AND subject_id = ?1",
+        [attachment_id],
+        |row| row.get(0),
+    )
+    .expect("extract task count")
+}
+
+/// Two consecutive syncs over the same unchanged attachment leave ONE task:
+/// the second attaches to the live one.
+#[test]
+fn two_syncs_over_an_unchanged_attachment_leave_one_extract_task() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, _item, _path) = seed_readable_pdf(&dir, &mut conn);
+
+    let first = repository::admit_stale_extraction_demands(&conn, &library).expect("first");
+    let second = repository::admit_stale_extraction_demands(&conn, &library).expect("second");
+
+    assert_eq!(first, 1, "the first sync admits the missing extraction");
+    assert_eq!(second, 0, "the second sync attaches to the live task");
+    assert_eq!(extract_task_count(&conn, &attachment_id), 1);
+}
+
+/// An attachment whose extraction already reflects the current file gets no
+/// new task on any later sync: the catalog identity (mtime/version) and the
+/// file's byte length are what the extraction pinned.
+#[test]
+fn an_attachment_with_a_current_extraction_gets_no_new_task() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, _item, _path) = seed_readable_pdf(&dir, &mut conn);
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+    assert_eq!(extract_task_count(&conn, &attachment_id), 1);
+
+    for sync in 1..=2 {
+        let created = repository::admit_stale_extraction_demands(&conn, &library)
+            .unwrap_or_else(|e| panic!("sync {sync}: {e}"));
+        assert_eq!(
+            created, 0,
+            "sync {sync} must not re-demand a current extraction"
+        );
+    }
+    assert_eq!(
+        extract_task_count(&conn, &attachment_id),
+        1,
+        "no task beyond the one that produced the extraction"
+    );
+}
+
+/// A file that really changed (new catalog mtime, or different bytes under
+/// the same catalog row) gets exactly one new task, however many syncs run.
+#[test]
+fn a_changed_file_gets_exactly_one_new_extract_task() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    // Zotero reports a newer mtime for the same attachment.
+    seed_attachment_with_mtime(&mut conn, &item_id, &path, 1_800_000_000);
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("mtime sync"),
+        1
+    );
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("repeat sync"),
+        0
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 2);
+
+    // Drain it, then replace the bytes on disk behind an unchanged catalog.
+    let task = conn
+        .query_row(
+            "SELECT id FROM processing_tasks WHERE subject_id = ?1 AND state = 'pending'",
+            [&attachment_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("pending task");
+    run_extract(&dir, &conn, &task);
+    let bigger = make_text_pdf(&[
+        (
+            50.0,
+            750.0,
+            "Texto extraible del adjunto con longitud suficiente para calidad",
+        ),
+        (
+            50.0,
+            730.0,
+            "Una segunda linea que cambia el tamano del archivo en disco",
+        ),
+    ]);
+    std::fs::write(&path, bigger).expect("replace file");
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("bytes sync"),
+        1
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 3);
+}
+
+fn seed_attachment_with_mtime(
+    conn: &mut rusqlite::Connection,
+    item_id: &str,
+    path: &str,
+    mtime: i64,
+) {
+    use entropia_desktop_lib::bibliography::repository::{upsert_attachment, AttachmentInput};
+    upsert_attachment(
+        conn,
+        item_id,
+        AttachmentInput {
+            attachment_key: "DEMANDA01".to_string(),
+            content_type: Some("application/pdf".to_string()),
+            link_mode: Some("linked_file".to_string()),
+            filename: Some("demanda.pdf".to_string()),
+            native_path: Some(path.to_string()),
+            url: None,
+            md5: None,
+            mtime: Some(mtime),
+            native_json_snapshot: serde_json::json!({
+                "key": "DEMANDA01", "itemType": "attachment",
+                "linkMode": "linked_file", "contentType": "application/pdf",
+            })
+            .to_string(),
+            native_version: Some(4),
+        },
+    )
+    .expect("update attachment");
+}
+
+/// Duplicates that were queued before the admission fix finish as
+/// succeeded without touching the extraction: no re-extraction, no page or
+/// chunk rewrite, no profile chain.
+#[test]
+fn a_queued_duplicate_for_a_current_extraction_finishes_without_re_extracting() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id, _item, _path) = seed_readable_pdf(&dir, &mut conn);
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+    let profile_tasks = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'bibliography_profile'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("profile count")
+    };
+    // The first extraction legitimately chained its profile.
+    let profiles_before = profile_tasks(&conn);
+    // A re-extraction would overwrite this sentinel with the file's text.
+    conn.execute(
+        "UPDATE bibliographic_extractions SET text_content = 'SENTINEL' WHERE attachment_id = ?1",
+        [&attachment_id],
+    )
+    .expect("tamper");
+    conn.execute(
+        "UPDATE bibliographic_page_texts SET text_content = 'SENTINEL' WHERE attachment_id = ?1",
+        [&attachment_id],
+    )
+    .expect("tamper pages");
+
+    let duplicate = admit_extract_demand(&conn, &attachment_id);
+    assert_ne!(duplicate, first, "the first task is terminal history");
+    run_extract(&dir, &conn, &duplicate);
+
+    let (text, page_text): (String, String) = conn
+        .query_row(
+            "SELECT e.text_content, p.text_content FROM bibliographic_extractions e
+             JOIN bibliographic_page_texts p ON p.attachment_id = e.attachment_id
+             WHERE e.attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("rows");
+    assert_eq!(text, "SENTINEL", "the extraction row was not rewritten");
+    assert_eq!(page_text, "SENTINEL", "the page rows were not rewritten");
+    assert_eq!(
+        profile_tasks(&conn),
+        profiles_before,
+        "a current extraction chains no profile demand"
+    );
+}
+
+/// The shortcut only fires for the same file identity: a queued task whose
+/// file changed since the extraction still extracts for real.
+#[test]
+fn a_queued_task_for_a_changed_file_still_re_extracts() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id, _item, path) = seed_readable_pdf(&dir, &mut conn);
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+    conn.execute(
+        "UPDATE bibliographic_extractions SET text_content = 'SENTINEL' WHERE attachment_id = ?1",
+        [&attachment_id],
+    )
+    .expect("tamper");
+    let bigger = make_text_pdf(&[
+        (
+            50.0,
+            750.0,
+            "Texto extraible del adjunto con longitud suficiente para calidad",
+        ),
+        (
+            50.0,
+            730.0,
+            "Una segunda linea que cambia el tamano del archivo en disco",
+        ),
+    ]);
+    std::fs::write(&path, bigger).expect("replace file");
+
+    let second = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &second);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("text");
+    assert!(text.contains("segunda linea"), "re-extracted: {text}");
+}
+
 /// A two-column native PDF reads in column order — left column before
 /// right — with no OCR call and no corpus asset anywhere in the loop.
 #[test]

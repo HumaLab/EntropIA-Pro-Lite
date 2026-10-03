@@ -1701,32 +1701,27 @@ pub fn admit_stale_extraction_demands(
             crate::bibliography::attachment::AttachmentResolution::File(path) => path,
             crate::bibliography::attachment::AttachmentResolution::Unavailable { .. } => continue,
         };
-        let (mtime, bytes) = match std::fs::metadata(&path) {
-            Ok(metadata) => (
-                metadata
-                    .modified()
-                    .ok()
-                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_secs() as i64),
-                metadata.len() as i64,
-            ),
+        let bytes = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata.len() as i64,
             Err(_) => continue,
         };
-        let fresh: Option<(Option<i64>, i64)> = conn
-            .query_row(
-                "SELECT source_mtime, source_bytes FROM bibliographic_extractions WHERE attachment_id = ?1",
-                [attachment_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+        // The extractor pins the CATALOG mtime of the attachment (Zotero's
+        // value, in ms) next to the file's byte length. Comparing against the
+        // file system's mtime (seconds) can never match, which re-demanded
+        // every extracted attachment on every sync.
+        if crate::bibliography::repository::extraction_matches_source(
+            conn,
+            attachment_id,
+            attachment.mtime,
+            bytes,
+        )
+        .map_err(|error| {
+            format!(
+                "Failed to read extraction of {attachment_id}: {}: {}",
+                error.code, error.message
             )
-            .map(Some)
-            .or_else(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(format!("Failed to read extraction of {attachment_id}: {other}")),
-            })?;
-        if let Some((stored_mtime, stored_bytes)) = fresh {
-            if stored_mtime == mtime && stored_bytes == bytes {
-                continue;
-            }
+        })? {
+            continue;
         }
         let outcome = admit_subject_or_attach(
             conn,

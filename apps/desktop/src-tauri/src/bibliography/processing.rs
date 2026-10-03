@@ -2332,6 +2332,10 @@ pub struct BibliographyExtractComputeOutput {
     /// One entry per document page, in page order. Pages no decoder
     /// could read carry `unreadable` with empty text.
     pub pages: Vec<ExtractPageText>,
+    /// The stored extraction already reflects this exact source identity
+    /// (a duplicate demand queued before admission learned to skip it): the
+    /// publisher re-proves that and writes nothing.
+    pub already_current: bool,
 }
 
 fn extraction_text_hash(text: &str) -> String {
@@ -2568,6 +2572,56 @@ impl BibliographyExtractExecutor {
                 ),
             });
         }
+        // A duplicate demand for a source the stored extraction already
+        // reflects finishes here: no read, no extraction, no OCR, no rewrite
+        // of the page rows and no profile re-chain.
+        {
+            let conn =
+                open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: error,
+                })?;
+            let current = crate::bibliography::repository::extraction_matches_source(
+                &conn,
+                &task.subject_id,
+                attachment.mtime,
+                metadata.len() as i64,
+            )
+            .map_err(|error| ExecOutput::Fatal {
+                code: "storage_unavailable".to_string(),
+                message: format!("{}: {}", error.code, error.message),
+            })?;
+            if current {
+                let output = BibliographyExtractComputeOutput {
+                    attachment_id: task.subject_id.clone(),
+                    item_id,
+                    page_count: 0,
+                    text_content: String::new(),
+                    text_hash: String::new(),
+                    text_chars: 0,
+                    quality: String::new(),
+                    source_mtime: attachment.mtime,
+                    source_bytes: metadata.len() as i64,
+                    pages: Vec::new(),
+                    already_current: true,
+                };
+                let receipt = serde_json::json!({
+                    "attachmentId": output.attachment_id,
+                    "itemId": output.item_id,
+                    "alreadyCurrent": true,
+                })
+                .to_string();
+                return Ok(ExecResult {
+                    checkpoints: Vec::new(),
+                    progress_total: Some(1),
+                    engine_output: Some(EngineOutput::BibliographyExtract(output)),
+                    output: ExecOutput::Success {
+                        outcome: "bibliography_extract_current".to_string(),
+                        receipt,
+                    },
+                });
+            }
+        }
         let bytes = ctx
             .unit(task, "extract", || {
                 std::fs::read(&path).map_err(|error| {
@@ -2611,6 +2665,7 @@ impl BibliographyExtractExecutor {
             pages,
             source_mtime: attachment.mtime,
             source_bytes: bytes.len() as i64,
+            already_current: false,
         };
         let receipt = serde_json::json!({
             "attachmentId": output.attachment_id,
@@ -2973,6 +3028,23 @@ pub fn publish_bibliography_extract_output(
             "unsupported_subject: task {} cannot publish an extraction for {}",
             task.task_id, output.attachment_id
         ));
+    }
+    if output.already_current {
+        // Nothing to write, but the claim still has to be true at commit.
+        let still_current = crate::bibliography::repository::extraction_matches_source(
+            conn,
+            &output.attachment_id,
+            output.source_mtime,
+            output.source_bytes,
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        if !still_current {
+            return Err(format!(
+                "source_changed: extraction of attachment {} moved mid-computation",
+                output.attachment_id
+            ));
+        }
+        return Ok(());
     }
     // E4c-WU3 invalidation: chain profile demand when the page layer
     // moved. The profile run re-segments and re-embeds chunks; an

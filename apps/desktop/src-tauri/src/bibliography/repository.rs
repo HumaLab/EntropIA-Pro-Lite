@@ -2169,6 +2169,29 @@ pub struct ExtractionRow {
     pub source_bytes: i64,
 }
 
+/// True when the stored extraction of `attachment_id` was read from the
+/// source identity given: the catalog mtime of the attachment row (what the
+/// extractor pins as `source_mtime`) and the byte length of the file read.
+/// Cheap by design: it never loads the text. Both the admission gate and the
+/// executor decide "current" through this one predicate, so they cannot drift.
+pub fn extraction_matches_source(
+    conn: &Connection,
+    attachment_id: &str,
+    catalog_mtime: Option<i64>,
+    file_bytes: i64,
+) -> BibliographyResult<bool> {
+    let stored: Option<(Option<i64>, i64)> = conn
+        .query_row(
+            "SELECT source_mtime, source_bytes FROM bibliographic_extractions
+             WHERE attachment_id = ?1",
+            [attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read extraction identity", error))?;
+    Ok(stored == Some((catalog_mtime, file_bytes)))
+}
+
 /// Reads the stored extraction for one attachment, if any.
 pub fn get_extraction(
     conn: &Connection,
