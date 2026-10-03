@@ -31,6 +31,12 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   link-only web attachments with no file). Extraction is PDF-only today. Extract
   readable text from the stored HTML, chunk and embed it like PDFs; passages
   carry a character range instead of a page.
+  Design (agreed with the owner): split on block elements (`<p>`, headings,
+  `<li>`, `<blockquote>`, `<td>`; `<br>` as a soft break), NOT on source line
+  breaks (HTML collapses whitespace). Drop `script`/`style`/`nav`/`header`/
+  `footer`/`aside`. Emit one paragraph per block, blank-line separated, and feed
+  the existing paragraph chunker (`chunks.rs`, ~800 chars, paragraph-aligned
+  overlap) as a single page; citations point at the paragraph(s), no page.
 - [x] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
   `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
 - [ ] B3 — TopBar search includes bibliography works (new result kind).
