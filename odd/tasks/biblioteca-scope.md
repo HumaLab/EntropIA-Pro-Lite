@@ -26,8 +26,8 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   was needed: Zotero's local API reports each attachment's file as
   `links.enclosure.href` (a `file:` URL, also for `imported_url`), stored as
   `native_path`, which the resolver already tries first.
-- [ ] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
-  `search_works`, map library ids).
+- [x] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
+  `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
 - [ ] B3 — TopBar search includes bibliography works (new result kind).
 - [ ] B4 — Research chat scope: Corpus / Biblioteca / both (works level first,
   passages after B1). Product decisions pending.
@@ -65,3 +65,24 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   vitest, cargo fmt/clippy/test green except `web_capture_sync_two_device`
   (4 tests; they fail on the base too: the test Cloud server lacks
   `web-capture-v1`).
+- 2026-10-03: B2 done. `bibliography_search_works` gained an optional
+  Zotero scope (`zoteroLibraryType` + `zoteroLibraryId`, as the tab names the
+  library); `retrieval::resolve_zotero_library_rows` maps it to the internal
+  `zotero_libraries.id` rows the filter and the hits use, and the response
+  carries `librarySynced` (false = library never synced into the catalog, so
+  nothing was searched). No new command, no ACL change, no migration.
+  `searchLibrary` in `writing-zotero.ts` now runs the Zotero search and
+  `bibliographySearchWorks` together (`allSettled`). Ranking rule (never
+  adds or compares the two score scales): text matches first (list, then
+  Zotero-only) in their own order, then works only the bibliography found,
+  in its ranked order, deduplicated by Zotero item key (the search is
+  already scoped to one library). Hits whose key is not in the library read
+  from Zotero are dropped (not citable). Entries from the vector leg carry
+  `semantic: true` and show a "Por significado" tag. The tab states
+  `not_synced`, `lexical_only` (no active generation / embed failure) and
+  `failed`; Zotero being unreachable no longer prevents the semantic leg.
+  TDD: RED observed for the Rust resolver test (compile failure), the 8
+  store tests (8 failed) and 4 of the 5 tab tests; the "stays silent when ok"
+  tab test passed at RED (negative assertion). Checks: lint, typecheck,
+  format:check, vitest green; cargo fmt/clippy green; cargo test green except the 4 known
+  `web_capture_sync_two_device` (stale Cloud binary).
