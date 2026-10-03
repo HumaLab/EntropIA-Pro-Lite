@@ -17,6 +17,7 @@ function deferred<T>() {
 }
 
 const {
+  invokeMock,
   navigateActiveMock,
   storeRef,
   minimizeMock,
@@ -26,6 +27,7 @@ const {
   splitRef,
 } = vi.hoisted(() => {
   return {
+    invokeMock: vi.fn(),
     navigateActiveMock: vi.fn(),
     storeRef: {
       current: {
@@ -72,6 +74,12 @@ vi.mock('$lib/workspace', () => ({
   },
 }))
 
+// The bibliography leg (`bibliography_search_works`) and the ficha
+// (`writing_zotero_item_detail`) both go through `invoke`.
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
+}))
+
 vi.mock('$lib/db', () => ({
   getStore: () => storeRef.current,
 }))
@@ -83,6 +91,53 @@ vi.mock('@tauri-apps/api/window', () => ({
     close: closeWindowMock,
   }),
 }))
+
+function bibHit(overrides: Record<string, unknown> = {}) {
+  return {
+    itemId: 'item-uuid-1',
+    itemKey: 'ABCD1234',
+    libraryId: 'lib-row-1',
+    title: 'Asociaciones obreras',
+    method: 'lexical',
+    lexicalScore: -2.5,
+    vectorScore: null,
+    fusedScore: 0.03,
+    contractHash: null,
+    generationId: null,
+    authors: 'Pérez, Gómez',
+    year: 2018,
+    libraryName: 'Mi biblioteca',
+    libraryType: 'user',
+    libraryNativeId: '0',
+    cslJson: '{"id":"ABCD1234","title":"Asociaciones obreras"}',
+    ...overrides,
+  }
+}
+
+function answer(hits: unknown[]) {
+  return {
+    hits,
+    vectorAvailable: true,
+    activeGenerationId: 'gen-1',
+    contractHash: 'hash',
+    librarySynced: true,
+  }
+}
+
+function bibliographyAnswers(hits: unknown[]) {
+  invokeMock.mockImplementation(async (command: string) => {
+    if (command === 'bibliography_search_works') return answer(hits)
+    if (command === 'writing_zotero_item_detail') return { status: 'not_in_catalog' }
+    return undefined
+  })
+}
+
+async function searchFor(text: string) {
+  const input = screen.getByRole('combobox', { name: 'Buscar documentos por nombre o texto' })
+  await fireEvent.input(input, { target: { value: text } })
+  await vi.advanceTimersByTimeAsync(300)
+  return input
+}
 
 describe('TopBar', () => {
   beforeEach(() => {
@@ -98,6 +153,11 @@ describe('TopBar', () => {
     splitRef.current = null
     storeRef.current.items.searchGlobal.mockReset()
     storeRef.current.collections.findById.mockReset()
+    invokeMock.mockReset()
+    // No synced library: the bibliography leg answers with nothing.
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'bibliography_search_works' ? answer([]) : undefined
+    )
   })
 
   afterEach(() => {
@@ -735,5 +795,252 @@ describe('TopBar', () => {
     ).not.toBeInTheDocument()
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleErrorSpy.mockRestore()
+  })
+
+  describe('bibliography group', () => {
+    function corpusHit() {
+      storeRef.current.items.searchGlobal.mockResolvedValue([
+        { id: 'item-1', title: 'Acta fundacional', collectionId: 'col-1' },
+      ])
+      storeRef.current.collections.findById.mockResolvedValue({ id: 'col-1', name: 'Archivo' })
+    }
+
+    it('shows no Biblioteca group when nothing is synced or found', async () => {
+      corpusHit()
+      render(TopBar)
+      await searchFor('acta')
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Acta fundacional/i })).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Biblioteca')).not.toBeInTheDocument()
+      expect(invokeMock).toHaveBeenCalledWith(
+        'bibliography_search_works',
+        expect.objectContaining({
+          request: expect.objectContaining({
+            text: 'acta',
+            zoteroLibraryType: null,
+            zoteroLibraryId: null,
+          }),
+        })
+      )
+    })
+
+    it('lists bibliography works in their own group after the corpus results', async () => {
+      corpusHit()
+      bibliographyAnswers([
+        bibHit(),
+        bibHit({
+          itemId: 'item-uuid-2',
+          itemKey: 'EFGH5678',
+          title: 'Sindicatos y política',
+          method: 'vector',
+          authors: '',
+          year: null,
+          libraryName: 'Grupo de estudio',
+        }),
+      ])
+      render(TopBar)
+      await searchFor('acta')
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+
+      const options = screen.getAllByRole('option')
+      const [corpusRow, firstWork, secondWork] = options as [HTMLElement, HTMLElement, HTMLElement]
+      expect(options.map((option) => option.textContent)).toEqual([
+        expect.stringContaining('Acta fundacional'),
+        expect.stringContaining('Asociaciones obreras'),
+        expect.stringContaining('Sindicatos y política'),
+      ])
+      const group = screen.getByRole('group', { name: 'Biblioteca' })
+      expect(group).toContainElement(firstWork)
+      expect(group).toContainElement(secondWork)
+      expect(group).not.toContainElement(corpusRow)
+
+      expect(firstWork).toHaveTextContent('Pérez, Gómez · 2018')
+      expect(firstWork).toHaveTextContent('Mi biblioteca')
+      expect(firstWork).not.toHaveTextContent('Por significado')
+      expect(secondWork).toHaveTextContent('Grupo de estudio')
+      expect(secondWork).toHaveTextContent('Por significado')
+      // Option ids stay one flat sequence across both groups.
+      expect(options.map((option) => option.id)).toEqual([
+        'topbar-global-search-listbox-option-0',
+        'topbar-global-search-listbox-option-1',
+        'topbar-global-search-listbox-option-2',
+      ])
+    })
+
+    it('shows the group alone when the corpus has no match', async () => {
+      storeRef.current.items.searchGlobal.mockResolvedValue([])
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      await searchFor('obreras')
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+      expect(screen.queryByText(/Sin resultados/)).not.toBeInTheDocument()
+    })
+
+    it('keeps corpus results when the bibliography leg fails', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      corpusHit()
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'bibliography_search_works') throw new Error('schema_not_ready')
+        return undefined
+      })
+      render(TopBar)
+      await searchFor('acta')
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Acta fundacional/i })).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Biblioteca')).not.toBeInTheDocument()
+      expect(
+        screen.queryByText('No se pudo completar la búsqueda. Probá de nuevo.')
+      ).not.toBeInTheDocument()
+      warn.mockRestore()
+    })
+
+    it('runs both searches concurrently and does not hold corpus results for the bibliography', async () => {
+      const corpus = deferred<Array<{ id: string; title: string; collectionId: string }>>()
+      const library = deferred<ReturnType<typeof answer>>()
+      storeRef.current.items.searchGlobal.mockReturnValueOnce(corpus.promise)
+      storeRef.current.collections.findById.mockResolvedValue({ id: 'col-1', name: 'Archivo' })
+      invokeMock.mockImplementation((command: string) =>
+        command === 'bibliography_search_works' ? library.promise : Promise.resolve(undefined)
+      )
+      render(TopBar)
+      await searchFor('acta')
+
+      // Both legs were started before either answered.
+      expect(storeRef.current.items.searchGlobal).toHaveBeenCalledTimes(1)
+      expect(invokeMock).toHaveBeenCalledWith('bibliography_search_works', expect.anything())
+
+      corpus.resolve([{ id: 'item-1', title: 'Acta fundacional', collectionId: 'col-1' }])
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Acta fundacional/i })).toBeInTheDocument()
+      })
+      expect(screen.queryByText('Biblioteca')).not.toBeInTheDocument()
+
+      library.resolve(answer([bibHit()]))
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+    })
+
+    it('drops a late bibliography answer from an older query', async () => {
+      const first = deferred<ReturnType<typeof answer>>()
+      storeRef.current.items.searchGlobal.mockResolvedValue([])
+      let calls = 0
+      invokeMock.mockImplementation((command: string) => {
+        if (command !== 'bibliography_search_works') return Promise.resolve(undefined)
+        calls += 1
+        return calls === 1
+          ? first.promise
+          : Promise.resolve(answer([bibHit({ title: 'Obra nueva' })]))
+      })
+      render(TopBar)
+      await searchFor('vieja')
+      await searchFor('nueva')
+
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Obra nueva/ })).toBeInTheDocument()
+      })
+      first.resolve(answer([bibHit({ title: 'Obra vieja' })]))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(screen.queryByRole('option', { name: /Obra vieja/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('option', { name: /Obra nueva/ })).toBeInTheDocument()
+    })
+
+    it('opens the work ficha in place instead of navigating', async () => {
+      storeRef.current.items.searchGlobal.mockResolvedValue([])
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      await searchFor('obreras')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+
+      await fireEvent.click(screen.getByRole('option', { name: /Asociaciones obreras/ }))
+
+      expect(invokeMock).toHaveBeenCalledWith('writing_zotero_item_detail', {
+        libraryType: 'user',
+        libraryId: '0',
+        itemKey: 'ABCD1234',
+      })
+      expect(navigateActiveMock).not.toHaveBeenCalled()
+      await waitFor(() => {
+        expect(screen.getByText('Ficha de la obra')).toBeInTheDocument()
+      })
+      // The held entry is shown while the catalog has nothing more to say.
+      expect(screen.getByText('Asociaciones obreras')).toBeInTheDocument()
+      expect(screen.getByText('Pérez, Gómez · 2018')).toBeInTheDocument()
+
+      await fireEvent.click(screen.getByRole('button', { name: /Volver a referencias/ }))
+      expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+    })
+
+    it('reaches a bibliography work with the arrow keys and Enter', async () => {
+      corpusHit()
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      const input = await searchFor('acta')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+
+      await fireEvent.keyDown(input, { key: 'ArrowDown' })
+      await fireEvent.keyDown(input, { key: 'ArrowDown' })
+      expect(input).toHaveAttribute(
+        'aria-activedescendant',
+        'topbar-global-search-listbox-option-1'
+      )
+      await fireEvent.keyDown(input, { key: 'Enter' })
+
+      expect(navigateActiveMock).not.toHaveBeenCalled()
+      await waitFor(() => {
+        expect(screen.getByText('Ficha de la obra')).toBeInTheDocument()
+      })
+    })
+
+    it('closes the ficha with the search', async () => {
+      storeRef.current.items.searchGlobal.mockResolvedValue([])
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      const input = await searchFor('obreras')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+      await fireEvent.click(screen.getByRole('option', { name: /Asociaciones obreras/ }))
+      await waitFor(() => {
+        expect(screen.getByText('Ficha de la obra')).toBeInTheDocument()
+      })
+
+      await fireEvent.keyDown(input, { key: 'Escape' })
+
+      expect(screen.queryByText('Ficha de la obra')).not.toBeInTheDocument()
+    })
+
+    it('labels the group in English', async () => {
+      locale.set('en')
+      storeRef.current.items.searchGlobal.mockResolvedValue([])
+      bibliographyAnswers([bibHit({ method: 'hybrid' })])
+      render(TopBar)
+      const input = screen.getByRole('combobox', { name: 'Search documents by name or text' })
+      await fireEvent.input(input, { target: { value: 'labor' } })
+      await vi.advanceTimersByTimeAsync(300)
+
+      await waitFor(() => {
+        expect(screen.getByRole('group', { name: 'Library' })).toBeInTheDocument()
+      })
+      expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toHaveTextContent(
+        'By meaning'
+      )
+    })
   })
 })

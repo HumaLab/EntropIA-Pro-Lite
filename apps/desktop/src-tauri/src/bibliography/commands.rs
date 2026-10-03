@@ -8,7 +8,8 @@ use tauri::State;
 
 use crate::bibliography::processing::{EngineProfileEmbedder, ProfileEmbedder};
 use crate::bibliography::retrieval::{
-    resolve_zotero_library_rows, search_works, HybridAnswer, HybridQuery, WorkFilters, WorkHit,
+    read_work_display, resolve_zotero_library_rows, search_works, HybridAnswer, HybridQuery,
+    WorkDisplay, WorkFilters, WorkHit,
 };
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -54,6 +55,15 @@ pub struct SearchWorkHitDto {
     pub fused_score: f64,
     pub contract_hash: Option<String>,
     pub generation_id: Option<String>,
+    /// Reading metadata and the native identity of the work's library, so a
+    /// result row can be shown and its ficha opened without a second call.
+    /// Empty/`None` only if the work vanished between the search and this read.
+    pub authors: String,
+    pub year: Option<i64>,
+    pub library_name: String,
+    pub library_type: String,
+    pub library_native_id: String,
+    pub csl_json: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -69,7 +79,15 @@ pub struct SearchWorksResponse {
     pub library_synced: bool,
 }
 
-fn hit_dto(hit: WorkHit) -> SearchWorkHitDto {
+fn hit_dto(hit: WorkHit, display: Option<WorkDisplay>) -> SearchWorkHitDto {
+    let display = display.unwrap_or(WorkDisplay {
+        authors: String::new(),
+        year: None,
+        library_name: String::new(),
+        library_type: String::new(),
+        library_native_id: String::new(),
+        csl_json: String::new(),
+    });
     SearchWorkHitDto {
         item_id: hit.item_id,
         item_key: hit.item_key,
@@ -81,6 +99,12 @@ fn hit_dto(hit: WorkHit) -> SearchWorkHitDto {
         fused_score: hit.fused_score,
         contract_hash: hit.contract_hash,
         generation_id: hit.generation_id,
+        authors: display.authors,
+        year: display.year,
+        library_name: display.library_name,
+        library_type: display.library_type,
+        library_native_id: display.library_native_id,
+        csl_json: display.csl_json,
     }
 }
 
@@ -163,9 +187,16 @@ pub async fn bibliography_open_passage(
     })
     .await
 }
-fn answer_dto(answer: HybridAnswer) -> SearchWorksResponse {
+fn answer_dto(conn: &rusqlite::Connection, answer: HybridAnswer) -> SearchWorksResponse {
     SearchWorksResponse {
-        hits: answer.hits.into_iter().map(hit_dto).collect(),
+        hits: answer
+            .hits
+            .into_iter()
+            .map(|hit| {
+                let display = read_work_display(conn, &hit.item_id).ok().flatten();
+                hit_dto(hit, display)
+            })
+            .collect(),
         vector_available: answer.vector_available,
         active_generation_id: answer.active_generation_id,
         contract_hash: answer.contract_hash,
@@ -218,7 +249,7 @@ pub async fn bibliography_search_works(
         let embedder = EngineProfileEmbedder::new(db_path);
         let answer = search_works(&conn, &effective.hash, &query, &|text| embedder.embed(text))
             .map_err(|error| format!("{}: {}", error.code, error.message))?;
-        Ok(answer_dto(answer))
+        Ok(answer_dto(&conn, answer))
     })
     .await
 }

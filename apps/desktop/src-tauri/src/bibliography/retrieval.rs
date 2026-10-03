@@ -247,6 +247,42 @@ mod tests {
             .is_empty());
     }
 
+    #[test]
+    fn work_display_names_authors_year_and_the_native_library() {
+        let mut conn = search_db();
+        let id = seed_work(&mut conn, "disp", "Obra", "x", 2021, "book", vec![]);
+        let display = read_work_display(&conn, &id)
+            .expect("read")
+            .expect("work exists");
+        assert_eq!(display.authors, "Pérez");
+        assert_eq!(display.year, Some(2021));
+        assert_eq!(display.library_name, "Personal disp");
+        // The native identity the ficha opens by, not the internal row id.
+        assert_eq!(display.library_type, "user");
+        assert_eq!(display.library_native_id, "lib-disp");
+        assert!(display.csl_json.contains("\"Obra\""));
+        assert!(read_work_display(&conn, "missing").expect("read").is_none());
+    }
+
+    #[test]
+    fn work_display_survives_csl_without_authors_or_date() {
+        let mut conn = search_db();
+        let id = seed_work(&mut conn, "bare", "Sin datos", "x", 2000, "book", vec![]);
+        conn.execute(
+            "UPDATE bibliographic_items SET csl_json_snapshot = ?1 WHERE id = ?2",
+            rusqlite::params![
+                r#"{"id":"bare","author":[{"literal":"Colectivo X"},{}]}"#,
+                id
+            ],
+        )
+        .expect("rewrite csl");
+        let display = read_work_display(&conn, &id)
+            .expect("read")
+            .expect("work exists");
+        assert_eq!(display.authors, "Colectivo X");
+        assert_eq!(display.year, None);
+    }
+
     fn profile_text(
         title: &str,
         abstract_text: &str,
@@ -967,6 +1003,75 @@ pub fn resolve_zotero_library_rows(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| err("Failed to read Zotero library rows", error))?;
     Ok(rows)
+}
+
+/// What a result row and the ficha need to show one catalog work: the
+/// reading metadata plus the native Zotero identity of its library (the
+/// internal `zotero_libraries.id` of a [`WorkHit`] names nothing the UI can
+/// open).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkDisplay {
+    /// CSL authors' family names (or literal names), comma-separated.
+    pub authors: String,
+    pub year: Option<i64>,
+    pub library_name: String,
+    /// `user` or `group`, with the native id: the identity Zotero uses.
+    pub library_type: String,
+    pub library_native_id: String,
+    /// The catalog's last CSL-JSON, what the ficha falls back to offline.
+    pub csl_json: String,
+}
+
+fn csl_authors(value: &serde_json::Value) -> String {
+    value
+        .get("author")
+        .and_then(|authors| authors.as_array())
+        .map(|authors| {
+            authors
+                .iter()
+                .filter_map(|author| {
+                    let name = author
+                        .get("family")
+                        .or_else(|| author.get("literal"))
+                        .and_then(|name| name.as_str())?
+                        .trim();
+                    (!name.is_empty()).then(|| name.to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+/// Reads the display data of one work by its internal item id. `None` when
+/// the work (or its library) is gone.
+pub fn read_work_display(
+    conn: &Connection,
+    item_id: &str,
+) -> BibliographyResult<Option<WorkDisplay>> {
+    let row: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT l.name, l.library_type, l.library_id, i.csl_json_snapshot
+               FROM bibliographic_items i
+               JOIN zotero_libraries l ON l.id = i.library_id
+              WHERE i.id = ?1",
+            [item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|error| err("Failed to read work display data", error))?;
+    let Some((library_name, library_type, library_native_id, csl_json)) = row else {
+        return Ok(None);
+    };
+    let csl: serde_json::Value = serde_json::from_str(&csl_json).unwrap_or(serde_json::Value::Null);
+    Ok(Some(WorkDisplay {
+        authors: csl_authors(&csl),
+        year: csl_year(&csl),
+        library_name,
+        library_type,
+        library_native_id,
+        csl_json,
+    }))
 }
 
 /// Full hybrid search: resolves the active generation of the query

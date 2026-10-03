@@ -12,6 +12,9 @@
   import appMark from '../assets/entropia-mark.png'
   import { ActionIcon, IconButton, SearchClearButton, StatusBadge } from '@entropia/ui'
   import type { Collection, Item } from '@entropia/store'
+  import { bibliographySearchWorks, type BibliographySearchHit } from '$lib/bibliography-search'
+  import type { LibraryEntry } from '$lib/writing-zotero'
+  import WritingZoteroDetails from '../views/WritingZoteroDetails.svelte'
   import TabStrip from './TabStrip.svelte'
 
   // Measured by AppShell (the split container's real width) and forwarded
@@ -30,8 +33,19 @@
     collection: Collection
   }
 
+  // How many bibliography works the dropdown offers. The corpus keeps its own
+  // 20: the two groups are separate lists with unrelated score scales.
+  const BIBLIOGRAPHY_LIMIT = 5
+
   let searchQuery = $state('')
   let searchResults = $state<SearchResult[]>([])
+  // Works of the synced Zotero libraries, as their own group. Never merged
+  // with `searchResults`: the corpus and the bibliography rank on scales that
+  // cannot be compared, so each keeps its order and the group sits below.
+  let bibliographyResults = $state<BibliographySearchHit[]>([])
+  let bibliographySearching = $state(false)
+  // The work whose ficha replaces the list in the dropdown, if any.
+  let detailsEntry = $state<LibraryEntry | null>(null)
   let searchError = $state('')
   let showResults = $state(false)
   let searching = $state(false)
@@ -65,7 +79,8 @@
   const splitAria = $derived(
     $currentLocale ? translate('topbar.splitAria') : 'Alternar vista dividida'
   )
-  const hasResultOptions = $derived(!searching && !searchError && searchResults.length > 0)
+  const optionCount = $derived(searchResults.length + bibliographyResults.length)
+  const hasResultOptions = $derived(!detailsEntry && !searching && !searchError && optionCount > 0)
   const activeOptionId = $derived(
     showResults && hasResultOptions && activeResultIndex >= 0
       ? `${searchListboxId}-option-${activeResultIndex}`
@@ -164,6 +179,43 @@
     unsubDeps()
   })
 
+  async function searchBibliography(query: string, requestId: number) {
+    const isCurrentRequest = () => requestId === searchRequestId
+    bibliographyResults = []
+    bibliographySearching = true
+    try {
+      const answer = await bibliographySearchWorks(query, { topK: BIBLIOGRAPHY_LIMIT })
+      if (!isCurrentRequest()) return
+      // A hit without a native library identity cannot open its ficha.
+      bibliographyResults = answer.hits.filter((hit) => hit.libraryType && hit.libraryNativeId)
+    } catch (e) {
+      // Never breaks the corpus results: this leg only ever adds a group.
+      if (!isCurrentRequest()) return
+      console.warn('[Search] bibliography error:', e)
+      bibliographyResults = []
+    } finally {
+      if (isCurrentRequest()) bibliographySearching = false
+    }
+  }
+
+  /** The held entry the ficha reads, built from the hit's own catalog data. */
+  function entryFromHit(hit: BibliographySearchHit): LibraryEntry {
+    return {
+      key: hit.itemKey,
+      itemVersion: 0,
+      libraryType: hit.libraryType,
+      libraryId: hit.libraryNativeId,
+      title: hit.title,
+      authors: hit.authors,
+      year: hit.year ? String(hit.year) : '',
+      csl_json: hit.cslJson,
+    }
+  }
+
+  function authorsAndYear(hit: BibliographySearchHit): string {
+    return [hit.authors, hit.year ? String(hit.year) : ''].filter(Boolean).join(' · ')
+  }
+
   async function performSearch(query: string, requestId: number) {
     const isCurrentRequest = () => requestId === searchRequestId
 
@@ -171,6 +223,7 @@
 
     if (!query.trim()) {
       searchResults = []
+      bibliographyResults = []
       searchError = ''
       showResults = false
       return
@@ -178,6 +231,9 @@
 
     searching = true
     searchError = ''
+    // Started before the corpus is awaited: the two run side by side, and a
+    // slow (embedding) bibliography leg never holds the corpus results back.
+    void searchBibliography(query, requestId)
     try {
       const store = getStore()
       const matchedItems = await store.items.searchGlobal(query, 20)
@@ -223,9 +279,11 @@
     searchQuery = query
     handleInput()
     const requestId = ++searchRequestId
+    detailsEntry = null
 
     if (!searchQuery.trim()) {
       searchResults = []
+      bibliographyResults = []
       searchError = ''
       activeResultIndex = -1
       showResults = false
@@ -241,10 +299,31 @@
     searchRequestId += 1
     searchQuery = ''
     searchResults = []
+    bibliographyResults = []
+    bibliographySearching = false
+    detailsEntry = null
     searchError = ''
     activeResultIndex = -1
     showResults = false
     if (debounceTimer) clearTimeout(debounceTimer)
+  }
+
+  // One flat sequence for the keyboard and the option ids: corpus rows first,
+  // then the bibliography group.
+  function handleOptionActivate(index: number) {
+    const corpusResult = searchResults[index]
+    if (corpusResult) {
+      handleResultClick(corpusResult)
+      return
+    }
+    const hit = bibliographyResults[index - searchResults.length]
+    if (hit) openBibliographyHit(hit)
+  }
+
+  function openBibliographyHit(hit: BibliographySearchHit) {
+    // The ficha opens where the search is: no navigation, no tab change.
+    detailsEntry = entryFromHit(hit)
+    activeResultIndex = -1
   }
 
   function handleResultClick(result: SearchResult) {
@@ -274,9 +353,9 @@
     }
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      if (!showResults || searchResults.length === 0) return
+      if (!showResults || detailsEntry || optionCount === 0) return
       e.preventDefault()
-      const lastIndex = searchResults.length - 1
+      const lastIndex = optionCount - 1
       if (e.key === 'ArrowDown') {
         activeResultIndex = activeResultIndex >= lastIndex ? 0 : activeResultIndex + 1
       } else {
@@ -287,11 +366,10 @@
 
     // keyCode 229 cubre WKWebView, donde isComposing puede no reportarse durante IME.
     if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
-      if (!showResults) return
-      const activeResult = searchResults[activeResultIndex]
-      if (!activeResult) return
+      if (!showResults || detailsEntry) return
+      if (activeResultIndex < 0 || activeResultIndex >= optionCount) return
       e.preventDefault()
-      handleResultClick(activeResult)
+      handleOptionActivate(activeResultIndex)
     }
   }
 
@@ -300,10 +378,11 @@
     if (nextFocused instanceof Node && searchContainerEl?.contains(nextFocused)) return
     showResults = false
     activeResultIndex = -1
+    detailsEntry = null
   }
 
   function handleFocus() {
-    if (searchResults.length > 0 || searchError) {
+    if (optionCount > 0 || searchError) {
       showResults = true
     }
   }
@@ -368,10 +447,18 @@
       <div
         class="global-search__dropdown"
         id={searchListboxId}
-        role={hasResultOptions ? 'listbox' : 'status'}
+        role={detailsEntry ? 'group' : hasResultOptions ? 'listbox' : 'status'}
         aria-label={$currentLocale && translate('topbar.searchAria')}
       >
-        {#if searching}
+        {#if detailsEntry}
+          <!-- The existing ficha, untouched. tabindex lets a click on its plain
+               text keep focus inside the container, so the dropdown stays open. -->
+          <div class="global-search__details" tabindex="-1">
+            {#key detailsEntry.key}
+              <WritingZoteroDetails entry={detailsEntry} onclose={() => (detailsEntry = null)} />
+            {/key}
+          </div>
+        {:else if searching || (bibliographySearching && optionCount === 0)}
           <div class="global-search__status">
             {$currentLocale && translate('topbar.searchSearching')}
           </div>
@@ -379,7 +466,7 @@
           <div class="global-search__status" class:error={Boolean(searchError)}>
             {searchError}
           </div>
-        {:else if searchResults.length === 0}
+        {:else if optionCount === 0}
           <div class="global-search__status">
             {$currentLocale && translate('topbar.searchNoResults', { query: searchQuery })}
           </div>
@@ -398,6 +485,42 @@
               <span class="global-search__result-collection">{result.collection.name}</span>
             </button>
           {/each}
+          {#if bibliographyResults.length > 0}
+            <div
+              class="global-search__group"
+              role="group"
+              aria-labelledby="{searchListboxId}-bibliography"
+            >
+              <p class="global-search__group-label" id="{searchListboxId}-bibliography">
+                {$currentLocale && translate('topbar.searchBibliographyGroup')}
+              </p>
+              {#each bibliographyResults as hit, hitIndex (hit.itemId)}
+                {@const index = searchResults.length + hitIndex}
+                <button
+                  class="global-search__result"
+                  class:global-search__result--active={index === activeResultIndex}
+                  type="button"
+                  role="option"
+                  id={`${searchListboxId}-option-${index}`}
+                  aria-selected={index === activeResultIndex}
+                  onclick={() => openBibliographyHit(hit)}
+                >
+                  <span class="global-search__result-title">{hit.title}</span>
+                  {#if authorsAndYear(hit)}
+                    <span class="global-search__result-collection">{authorsAndYear(hit)}</span>
+                  {/if}
+                  <span class="global-search__result-collection">
+                    {hit.libraryName}
+                    {#if hit.method !== 'lexical'}
+                      <span class="global-search__semantic">
+                        {translate('writing.zoteroSemanticTag')}
+                      </span>
+                    {/if}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -820,6 +943,46 @@
   .global-search__result-collection {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
+  }
+
+  /* The bibliography group: a label over rows that are the corpus rows. */
+  .global-search__group {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .global-search__group:first-child {
+    border-top: none;
+  }
+
+  .global-search__group-label {
+    margin: 0;
+    padding: var(--space-2) var(--space-3) 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-2xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .global-search__group-label + .global-search__result {
+    border-top: none;
+  }
+
+  .global-search__semantic {
+    margin-left: var(--space-1);
+    padding: 0 var(--space-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    color: var(--color-text-secondary);
+  }
+
+  .global-search__details {
+    padding: var(--space-3);
+    user-select: text;
+  }
+
+  .global-search__details:focus {
+    outline: none;
   }
 
   @media (max-width: 900px) {

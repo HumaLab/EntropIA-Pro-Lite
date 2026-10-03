@@ -39,7 +39,8 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   overlap) as a single page; citations point at the paragraph(s), no page.
 - [x] B2 — Writing's Zotero tab also searches by semantic similarity (reuse
   `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
-- [ ] B3 — TopBar search includes bibliography works (new result kind).
+- [x] B3 — TopBar search includes bibliography works (new result kind). Route:
+  delegated writer. Commit 96eb5c7.
 - [ ] B4 — Research chat scope: Corpus / Biblioteca / both (works level first,
   passages after B1). Product decisions pending.
 - [ ] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
@@ -157,4 +158,26 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   extraction tests failed with `extraction_unsupported`); GREEN after the
   implementation; two catalog tests updated to the new contract (HTML now
   cataloged, linked_url/image still skipped).
-
+- 2026-10-03: B3 done (route: delegated writer, single writer on main). The
+  TopBar dropdown gained a separate "Biblioteca" group below the corpus rows
+  (corpus rows, order and behaviour untouched; the two score scales are never
+  compared). `bibliography_search_works` hits now also carry `authors`, `year`,
+  `libraryName`, `libraryType`, `libraryNativeId` and `cslJson`
+  (`retrieval::read_work_display`, read per hit in the command; no change to
+  `search_works`, no new command, no ACL change, no migration). The TopBar calls
+  it unscoped (all synced libraries, top 5) concurrently with the corpus
+  search, same debounce and request-id guard; corpus results are shown as soon
+  as they are ready and the group appears when the bibliography answers. A
+  failing bibliography leg logs a warning and adds nothing. No synced library
+  means no hits and no group. A row shows title, "authors · year", library
+  name and the "Por significado" tag (B2's `writing.zoteroSemanticTag`) for
+  hits that came through the vector leg. Choosing a hit (click or Enter, one
+  flat arrow-key sequence across both groups) shows the existing
+  `WritingZoteroDetails` ficha inside the dropdown, in place of the list, with
+  its own back button; no navigation, no tab change, no manuscript needed (the
+  Zotero tab only exists with an open document, so routing to Writing would
+  have been the surprising path). Escape, typing or leaving the search closes
+  it. TDD: RED observed for 2 Rust tests (`read_work_display` stubbed) and 9
+  TopBar tests (timeouts waiting for the missing group); GREEN after the
+  implementation. Checks: lint, typecheck (Pro and Lite), format:check, vitest
+  (230 files) green; cargo fmt/clippy green; cargo test green (2197 passed, 0 failed).

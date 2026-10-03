@@ -19,6 +19,16 @@ export interface BibliographySearchHit {
   fusedScore: number
   contractHash: string | null
   generationId: string | null
+  /** CSL family names (or literal names), comma-separated; empty when none. */
+  authors: string
+  year: number | null
+  /** Display name of the Zotero library the work belongs to. */
+  libraryName: string
+  /** The library's native Zotero identity: what the ficha opens by. */
+  libraryType: string
+  libraryNativeId: string
+  /** The catalog's last CSL-JSON, the ficha's offline fallback. */
+  cslJson: string
 }
 
 export interface BibliographySearchResponse {
