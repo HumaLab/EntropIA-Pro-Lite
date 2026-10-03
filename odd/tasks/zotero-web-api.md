@@ -100,7 +100,49 @@ that has write access to the library.
   matches, the stored file downloads byte-identical); second run
   `AlreadyThere`, still one child; attachment and parent deleted, parent then
   404.
-- [ ] Z4 — Owner's manual check in the app (Lite).
+- [ ] Z4 — Owner's manual check in the app (Lite). Still open for the owner's
+  recheck.
+  First run (dev profile `navegador`): key card OK, completing fields OK, PDF
+  NOT attached. Findings from the coordinator's read of the dev DB:
+  1. The copy was started from the SOURCE's "Copiar a Zotero" button
+     (`capture_id` empty), and a source-level copy carried no PDF at all; the
+     sources drawer has two buttons and the source one was used.
+  2. `web.state = failed` hid the cause, so a 404 on an item that exists only
+     in the local Zotero (created through the connector minutes earlier, not
+     synced yet) read as a generic failure.
+  3. Not in the report, found while fixing: a finished (`copied`/`linked`) row is
+     never requeued by `request()`, so "copy again after sync" did nothing, and
+     the dialog only offered "Abrir en Zotero" for an item that was present.
+  Fix, commit `a511baa0`:
+  - Diagnostics: failures record `phase:cause` (`key_info`, `read_item`,
+    `patch`, `children`, `create_attachment`, `authorize`, `upload`,
+    `register`; cause is the HTTP status, `network` or `invalid`) in
+    `detail.web.reason` / `pdfReason`, never the key, a URL or a body. Shown as
+    "Detalle técnico: ..." in the dialog result and the sources list.
+  - A 404 on `read_item` is the distinct state `not_synced_yet` (no PDF
+    attempt), with a note to copy again after Zotero syncs. No retry machinery.
+  - A source-level copy takes its latest saved PDF capture (readable, hash
+    verified, within the size limit; an unusable newer one falls back to the
+    next, and a page copy never fails for it). Both the connector create path
+    and the existing-item Web API path attach it. The status says which PDF
+    goes along (the day it was saved) or that none does, and the dialog shows
+    it.
+  - "Copy again" works: `request()` requeues a finished row whose Web step can
+    still change (`not_synced_yet`, `failed`, `conflict`, PDF `failed` or
+    `quota`); a settled one (completed, no key, another account...) is left
+    alone. The dialog offers "Completar en Zotero" for a present item when a
+    key is stored and the item lacks fields or the PDF (`canComplete`, computed
+    in Rust), otherwise still "Abrir en Zotero".
+  Evidence (RED observed first; the Vitest additions were written with their
+  code in some places): `pnpm lint` 0 errors; `pnpm typecheck` 0 errors; `pnpm
+  format:check` clean; desktop `pnpm test` 230 files green; `cargo fmt --check`
+  and `cargo clippy --all-targets -- -D warnings` clean; `cargo test` 2170 lib
+  tests + ACL guards green. Live check (group "prueba" only; throwaway parent
+  with title and url, all deleted): a source-level copy in a test archive with
+  two PDF captures ran the existing-item path against the real Web API:
+  `web.state completed` (accessDate, websiteTitle), `web.pdf attached`, one
+  `imported_file` child with the newer capture's md5, title untouched; deleted,
+  then 404.
 
 ## Progress
 
@@ -108,3 +150,4 @@ that has write access to the library.
 - 2026-10-02: Z1 done (`7151ebc6`).
 - 2026-10-02: Z2 done (`9e28b7e1`), live-checked on group prueba.
 - 2026-10-02: account guard (`4e76872c`) and Z3 (`35d6eafd`) done; Z3 live-checked on group prueba.
+- 2026-10-02: owner's Z4 run found the PDF not attached; fixed in `a511baa0` (diagnostics, not_synced_yet, source-level PDF, copy again). Z4 stays open for the recheck.
