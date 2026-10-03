@@ -41,8 +41,9 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   `search_works`, map library ids). Route: delegated writer. Commit d7e9322.
 - [x] B3 — TopBar search includes bibliography works (new result kind). Route:
   delegated writer. Commit e9404ed.
-- [ ] B4 — Research chat scope: Corpus / Biblioteca / both (works level first,
-  passages after B1). Product decisions pending.
+- [x] B4 — Research chat scope: Corpus / Biblioteca / both, with cited Zotero
+  passages. Route: delegated writer (single writer on main). Commits b4e2fe6
+  (backend) and 1dc2113 (UI). See the 2026-10-03 B4 progress entry.
 - [ ] B5 — Passages in "Obras" and a top-level "Biblioteca" section.
 - [ ] B6 — Investigación can use the Biblioteca (cross-repo `entropia-agent`).
 
@@ -60,6 +61,17 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   corpus citations: inline `[n]`, each source is a passage (snippet, page,
   char range) that opens the document at that fragment, highlighted. This
   makes B1 (PDF attachments + full text) a prerequisite of B4.
+
+- 2026-10-03, coordinator (reversible, B4): ONE answer with ONE continuous `[n]`
+  numbering across both scopes; each source shows a scope label ("Corpus" /
+  "Biblioteca"); a bibliography source names the work (authors · year · title),
+  its library and its location: "p. N" / "pp. a–b" for PDFs, "párr. a–b" for
+  HTML snapshots (decided from the attachment `content_type`; an HTML snapshot
+  is a single stored page 1 and never shows "p. 1"). The scope choice is per
+  session (conversations persist no settings of their own), not per
+  conversation. Merge rule: the two legs are never compared or added by score;
+  they are interleaved by rank (corpus 1, biblioteca 1, corpus 2, ...) under
+  the existing `top_k` and `context_max_chars`.
 
 ## Progress
 
@@ -181,3 +193,64 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   TopBar tests (timeouts waiting for the missing group); GREEN after the
   implementation. Checks: lint, typecheck (Pro and Lite), format:check, vitest
   (230 files) green; cargo fmt/clippy green; cargo test green (2197 passed, 0 failed).
+- 2026-10-03: B4 done (route: delegated writer, single writer on main).
+  Backend (b4e2fe6): `rag_ask` takes `scope` (`corpus`|`biblioteca`|`both`,
+  default corpus: an old caller gets today's answer) and `libraries`
+  (`libraryType` + `libraryId`, empty = every synced one). New
+  `rag/scope.rs`: `bibliography_leg` runs `search_passages` on its own
+  connection (embedding may be a network call in Lite; the shared worker
+  connection is not held), applies `rag_min_similarity` to its own cosine
+  scale, snips like the corpus, and returns sources; `merge_scopes`
+  interleaves the two ranked lists by rank only under `top_k` and
+  `context_max_chars` and renumbers 1..n. Corpus-only keeps its exact old path
+  (no merge); Biblioteca-only skips corpus embedding and rerank. Stored source
+  shape: `RagSource.bibliography` (optional, `skip_serializing_if` none; chunk
+  id, item key, library name/type/native id, authors, year, location
+  `{kind: pages|paragraphs, from, to}`), so old conversations load and older
+  builds ignore the field. Chat conversations ARE part of the sync set
+  (`rag_conversations`, `rag_messages`), so a bibliography source can reach a
+  device whose local-only catalog lacks the chunk: the reader says so and shows
+  the stored snippet. Prompt header per fragment: corpus unchanged
+  (`«title» (collection)`), bibliography `«title» (authors · year · p. N)`.
+  `RagAnswer.bibliographyNotice` (`no_library_synced`, `no_embeddings`,
+  `embedding_unavailable`, `failed`; not persisted). Location: PDF = min/max
+  span page; HTML (attachment `content_type` contains "html") = paragraph range
+  computed with the chunker's own blank-line split (`chunks::paragraph_range`)
+  over the page text. New commands (ACL: `build.rs`, `capabilities`, handler):
+  `bibliography_library_status` (synced libraries with work/passage counts and
+  whether a generation is active) and `bibliography_passage_context` (the
+  expansion of `bibliography_open_passage` without opening anything).
+  UI (1dc2113): `RagChatView` has a Corpus / Biblioteca / Ambos `TabList`, a
+  `ToolbarMenu` of checkbox libraries (reopens after each toggle; default
+  "all" = no filter sent), honest notes (no library synced, no vectors, status
+  failed), a scope tag on every source, work line + location for passages, and
+  a passage reader (`ConfirmDialog`, page text window around the cited range
+  marked like `mark.citation-hit`; "Abrir original" calls
+  `bibliography_open_passage`). The scope choice is in the `ragChat` store
+  (session). An untouched chat sends the same `rag_ask` payload as before.
+  Viewer decision: not the item viewer. The Zotero storage folder is outside
+  the Tauri asset-protocol scope (`$DATA/com.entropia.shared/**`,
+  `$LOCALDATA/...`), so the in-app PDF/HTML viewer cannot render those files
+  without widening it; it was NOT widened. The in-app reader shows the page
+  text the catalog already holds (identical offsets to the cited span) and the
+  original opens in the OS viewer on request.
+  Findings: (1) corpus citations in the chat do not highlight today either:
+  `openSource` navigates to the item/asset without `citationRange`, so
+  `RagSource.provenance` offsets are unused by the UI. (2) `search_passages` is
+  vector-only; there is no lexical passage fallback, so with no active
+  generation the Biblioteca leg says so instead of falling back. (3) The
+  research handoff ("Profundizar") spreads bibliography sources (empty
+  `assetId`) into the Investigación context; that is B6's concern.
+  TDD: RED observed for 18 Rust tests (`rag/scope.rs` stubs: scope parsing,
+  merge by rank/budget/numbering, labels, library filter, notices, HTML
+  paragraph location, min similarity), 3 prompt/answer tests (compile failure
+  on the new field), 5 store tests, 14 view tests and the `rag-scope` helper
+  tests (module missing). Written alongside rather than strictly RED-first:
+  `library_status` (2 tests), `ragAsk` options and the three
+  `bibliography-search` wrappers (glue), and the persistence round-trip test
+  (it passed on first run because the shape existed by then; it still pins the
+  stored JSON). Checks: lint, typecheck (Pro and Lite), format:check, vitest
+  (232 files, 3218 passed) green; cargo fmt/clippy green; cargo test green
+  (2222 passed, 0 failed). `--features local-ml` was not compiled (it pulls
+  the MNN source build); the `local-ml` branches touched are the rerank guard
+  and a `bibliography: None` in a test helper.
