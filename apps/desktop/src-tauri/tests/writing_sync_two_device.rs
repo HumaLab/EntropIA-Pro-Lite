@@ -208,31 +208,52 @@ impl TestServer {
         }
         let bin = find_server_bin()?;
         let data_dir = tempfile::tempdir().expect("server data dir");
-        let port = free_port();
-        let bind = format!("127.0.0.1:{port}");
-        let child = Command::new(&bin)
-            .env("SYNC_BIND_ADDR", &bind)
-            .env("SYNC_DATA_DIR", data_dir.path())
-            .env("SYNC_REGISTRATION_OPEN", "true")
-            .env("SYNC_MIN_FREE_DISK_MB", "1")
-            .env("SYNC_MAX_ACCOUNTS", "100")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn entropia-sync-server");
-        let base_url = format!("http://{bind}");
-        let api = HttpSyncApi::new(&base_url).expect("server base url");
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            if api.health().await.is_ok() {
-                break;
+        // A port freed by `free_port` can still be refused to the server on
+        // Windows (another socket may hold it exclusively): the child then exits
+        // at once with "address in use". Retry on a fresh port instead of
+        // failing the whole suite on one busy port.
+        let mut attempt = 0;
+        let (child, base_url) = loop {
+            attempt += 1;
+            let bind = format!("127.0.0.1:{}", free_port());
+            let mut child = Command::new(&bin)
+                .env("SYNC_BIND_ADDR", &bind)
+                .env("SYNC_DATA_DIR", data_dir.path())
+                .env("SYNC_REGISTRATION_OPEN", "true")
+                .env("SYNC_MIN_FREE_DISK_MB", "1")
+                .env("SYNC_MAX_ACCOUNTS", "100")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn entropia-sync-server");
+            let base_url = format!("http://{bind}");
+            let api = HttpSyncApi::new(&base_url).expect("server base url");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let exited = loop {
+                if api.health().await.is_ok() {
+                    break false;
+                }
+                if child
+                    .try_wait()
+                    .expect("poll entropia-sync-server")
+                    .is_some()
+                {
+                    break true;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "entropia-sync-server did not answer /v1/health at {base_url} within 30s"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            };
+            if !exited {
+                break (child, base_url);
             }
             assert!(
-                Instant::now() < deadline,
-                "entropia-sync-server did not answer /v1/health at {base_url} within 30s"
+                attempt < 5,
+                "entropia-sync-server exited at start on 5 fresh ports"
             );
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+        };
         Some(TestServer {
             base_url,
             data_dir: Some(data_dir),
