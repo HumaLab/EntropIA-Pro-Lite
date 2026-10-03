@@ -258,6 +258,26 @@ fn processing_commit_observer(
                 },
             );
         }
+        processing::scheduler::EngineOutput::Ner(ner) => {
+            let _ = app_handle.emit(
+                "nlp:complete",
+                nlp::NlpCompletePayload {
+                    item_id: ner.item_id.clone(),
+                    asset_id: Some(task.asset_id.clone()),
+                    job: "ner".to_string(),
+                    entity_count: Some(ner.entities.len()),
+                },
+            );
+            // Same follow-up as the per-item button: new places get geocoded.
+            if !ner.entities.is_empty() {
+                if let Err(error) = geo::enqueue_geocoding_for_item(
+                    &app_handle.state::<geo::GeoQueue>(),
+                    &ner.item_id,
+                ) {
+                    eprintln!("[processing] NER follow-up geocoding failed: {error}");
+                }
+            }
+        }
         processing::scheduler::EngineOutput::Bibliography(_) => {
             // `processing:changed` above is the durable bibliography signal;
             // no corpus compatibility event or follow-up applies.
@@ -296,13 +316,13 @@ fn processing_terminal_observer(
                 .map_err(|e| e.to_string())
             })
             .unwrap_or_default();
-    if task.kind == "embedding" {
+    if task.kind == "embedding" || task.kind == "ner" {
         let _ = app_handle.emit(
             "nlp:error",
             nlp::NlpErrorPayload {
                 item_id,
                 asset_id: Some(task.asset_id.clone()),
-                job: "embed".to_string(),
+                job: if task.kind == "ner" { "ner" } else { "embed" }.to_string(),
                 error,
             },
         );
@@ -1007,6 +1027,10 @@ pub fn run() {
             scheduler_registry.register(std::sync::Arc::new(
                 processing::embedding::EmbeddingExecutor::new(scheduler_app.clone(), db_path.clone()),
             ));
+            scheduler_registry.register(std::sync::Arc::new(processing::ner::NerExecutor::new(
+                scheduler_app.clone(),
+                db_path.clone(),
+            )));
             scheduler_registry.register(std::sync::Arc::new(
                 bibliography::processing::BibliographySyncExecutor::production(),
             ));

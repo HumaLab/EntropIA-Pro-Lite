@@ -374,12 +374,12 @@ pub async fn processing_prepare(
     }
     let mut ops: Vec<String> = operations
         .into_iter()
-        .filter(|op| op == "ocr" || op == "embeddings")
+        .filter(|op| op == "ocr" || op == "embeddings" || op == "ner")
         .collect();
     ops.sort();
     ops.dedup();
     if ops.is_empty() {
-        return Err("invalid_selection: select OCR, embeddings, or both".to_string());
+        return Err("invalid_selection: select OCR, embeddings or entities".to_string());
     }
     let mut scope = collection_ids.clone();
     scope.sort();

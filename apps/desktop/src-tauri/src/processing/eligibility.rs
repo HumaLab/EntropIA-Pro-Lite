@@ -431,6 +431,54 @@ fn repair_marked(conn: &Connection, asset_id: &str) -> Result<bool, String> {
     .map_err(|e| format!("Failed to read repair state of {asset_id}: {e}"))
 }
 
+/// Verdict for one asset under the batch entity (NER) rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NerDecision {
+    /// Text exists and no automatic entities were extracted from it yet.
+    Eligible,
+    /// The asset already carries automatic entities.
+    AlreadyDone,
+    /// No usable text in any extraction/transcription.
+    NoSourceText,
+}
+
+/// Applies the batch NER rule to one asset. A batch never re-runs NER over an
+/// asset that already has automatic entities: the per-item button stays the
+/// way to refresh them.
+// ponytail: "done" means "has automatic entities", not "entities match the
+// current text"; stamp the source revision on success if re-OCR'd text must
+// re-admit.
+pub fn ner_decision(conn: &Connection, asset_id: &str) -> Result<NerDecision, String> {
+    if text_sources(conn, asset_id)?.is_empty() {
+        return Ok(NerDecision::NoSourceText);
+    }
+    let done = conn
+        .query_row(
+            // Item-level runs store asset_id NULL and cover every asset of the
+            // item: running per asset on top would duplicate them.
+            "SELECT COUNT(*) FROM entities
+              WHERE (asset_id = ?1
+                     OR (asset_id IS NULL AND item_id = (SELECT item_id FROM assets WHERE id = ?1)))
+                AND COALESCE(source, '') NOT IN ('manual', 'manual_deleted')",
+            [asset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .or_else(|e| {
+            // Archives that never ran NER may lack the table or its asset column.
+            if e.to_string().contains("no such") {
+                Ok(false)
+            } else {
+                Err(format!("Failed to read entities of {asset_id}: {e}"))
+            }
+        })?;
+    Ok(if done {
+        NerDecision::AlreadyDone
+    } else {
+        NerDecision::Eligible
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

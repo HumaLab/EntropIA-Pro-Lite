@@ -153,11 +153,12 @@ pub fn read_summary(conn: &Connection) -> Result<QueueSummary, String> {
 pub const TERMINAL_TASK_STATES: &[&str] = &["succeeded", "failed", "skipped", "cancelled"];
 
 /// Operations a batch asked for, parsed from `processing_batches.operations`
-/// (JSON array of `"ocr"` / `"embeddings"`).
+/// (JSON array of `"ocr"` / `"embeddings"` / `"ner"`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BatchOperations {
     pub ocr: bool,
     pub embeddings: bool,
+    pub ner: bool,
 }
 pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperations, String> {
     let raw: String = conn
@@ -173,6 +174,7 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
             match entry.as_str() {
                 "ocr" => ops.ocr = true,
                 "embeddings" => ops.embeddings = true,
+                "ner" => ops.ner = true,
                 _ => {}
             }
         }
@@ -421,9 +423,9 @@ pub fn admit_subject_or_attach(
         );
     }
     subject.check_admittable()?;
-    if kind != "ocr" && kind != "embedding" {
+    if kind != "ocr" && kind != "embedding" && kind != "ner" {
         return Err(format!(
-            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding only)",
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner only)",
             subject.domain, subject.subject_kind
         ));
     }
@@ -2890,7 +2892,7 @@ pub fn list_tasks(
         }
     }
     if let Some(kind) = kind_filter {
-        if kind != "ocr" && kind != "embedding" {
+        if kind != "ocr" && kind != "embedding" && kind != "ner" {
             return Err(format!("invalid_selection: unknown task kind {kind}"));
         }
     }
@@ -3308,6 +3310,7 @@ pub fn claim_next(
     for kind in kinds {
         if *kind != "ocr"
             && *kind != "embedding"
+            && *kind != "ner"
             && *kind != "bibliography_sync"
             && *kind != "bibliography_profile"
             && *kind != "bibliography_extract"
@@ -4079,7 +4082,7 @@ pub fn commit_success_with(
         };
         let corpus_route = domain == "corpus"
             && subject_kind == "asset"
-            && matches!(stored_kind.as_str(), "ocr" | "embedding");
+            && matches!(stored_kind.as_str(), "ocr" | "embedding" | "ner");
         let bibliography_route = domain == "bibliography"
             && subject_kind == "library"
             && stored_kind == "bibliography_sync";
@@ -4354,6 +4357,8 @@ struct MemberWork {
     reason: String,
     ocr_task: Option<(String, String, String)>,
     emb_task: Option<(String, String, Option<String>)>,
+    /// `Some(wait_for_ocr)` when the member gets a NER task.
+    ner_task: Option<bool>,
 }
 
 /// Progress of one classification page.
@@ -4481,6 +4486,28 @@ pub fn classify_batch_page(
                     admitted += 1;
                 }
             }
+            if let Some(wait_for_ocr) = work.ner_task {
+                let revision = source_revision(conn, &work.asset_id)?;
+                // NER pins only the source revision: the commit gate rejects
+                // entities computed from text that changed mid-run.
+                let out = admit_subject_or_attach(
+                    conn,
+                    batch_id,
+                    "ner",
+                    &TaskSubject::corpus_asset(&work.asset_id),
+                    revision,
+                    "",
+                    super::ner::NER_TASK_CONTRACT,
+                    if wait_for_ocr {
+                        ocr_id.as_deref()
+                    } else {
+                        None
+                    },
+                )?;
+                if out.created {
+                    admitted += 1;
+                }
+            }
             conn.execute(
                 "UPDATE processing_batch_members SET classification = ?1, reason = ?2
                  WHERE batch_id = ?3 AND ordinal = ?4",
@@ -4572,7 +4599,27 @@ fn plan_member(
             }
         }
     }
-    let classification = if ocr_task.is_some() || emb_task.is_some() {
+    let mut ner_task = None;
+    if ops.ner {
+        match super::eligibility::ner_decision(conn, asset_id)? {
+            super::eligibility::NerDecision::Eligible => {
+                ner_task = Some(false);
+                notes.push("ner:admit".to_string());
+            }
+            super::eligibility::NerDecision::AlreadyDone => {
+                notes.push("ner:already_done".to_string());
+            }
+            super::eligibility::NerDecision::NoSourceText => {
+                if ocr_open.is_some() {
+                    ner_task = Some(true);
+                    notes.push("ner:wait_for_ocr".to_string());
+                } else {
+                    notes.push("ner:no_source_text".to_string());
+                }
+            }
+        }
+    }
+    let classification = if ocr_task.is_some() || emb_task.is_some() || ner_task.is_some() {
         "admitted"
     } else if notes.iter().any(|n| n.starts_with("ocr:unsupported")) {
         "unsupported_type"
@@ -4580,7 +4627,7 @@ fn plan_member(
         "parent_has_pages"
     } else if notes
         .iter()
-        .any(|n| n.starts_with("embeddings:no_source_text"))
+        .any(|n| n.starts_with("embeddings:no_source_text") || n.starts_with("ner:no_source_text"))
     {
         "no_source_text"
     } else {
@@ -4593,6 +4640,7 @@ fn plan_member(
         reason: notes.join("; "),
         ocr_task,
         emb_task,
+        ner_task,
     })
 }
 
@@ -4685,6 +4733,10 @@ mod tests {
         "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
     );
     const MIGRATION_0055_NAME: &str = "0055_bibliographic_chunk_embeddings";
+    // Batch NER kind CHECK widening: same rebuild shape as 0052.
+    const MIGRATION_0058_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0058_processing_ner_tasks.sql");
+    const MIGRATION_0058_NAME: &str = "0058_processing_ner_tasks";
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let (dir, conn) = legacy_db();
@@ -4787,6 +4839,13 @@ mod tests {
             [MIGRATION_0055_NAME],
         )
         .expect("track 0055");
+        conn.execute_batch(MIGRATION_0058_SQL)
+            .expect("apply 0058 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0058_NAME],
+        )
+        .expect("track 0058");
         (dir, conn)
     }
 
@@ -6837,6 +6896,52 @@ mod tests {
         .expect("beyond");
         assert!(beyond.is_empty());
         assert!(next.is_none());
+    }
+
+    #[test]
+    fn ner_batch_admits_text_waits_on_ocr_and_skips_done_assets() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE entities (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, asset_id TEXT,
+               entity_type TEXT NOT NULL, value TEXT NOT NULL, source TEXT);
+             INSERT INTO entities (id, item_id, asset_id, entity_type, value, source)
+               VALUES ('n1', 'i1', 'a4', 'person', 'Artigas', 'spacy'),
+                      ('n2', 'i1', 'a7', 'person', 'Rivera', 'manual'),
+                      ('n3', 'i2', NULL, 'place', 'Montevideo', 'spacy');",
+        )
+        .expect("entities");
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "ner"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string(), "c2".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let ner = |asset: &str| live_task(&conn, "corpus", "asset", asset, "ner").unwrap();
+        // Text already there: admitted and runnable right away.
+        assert!(ner("a2").is_some());
+        // Only manual entities do not count as done.
+        assert!(ner("a7").is_some());
+        // Automatic entities already extracted: left alone.
+        assert!(ner("a4").is_none());
+        assert!(member_class(&conn, "b1", "a4")
+            .1
+            .contains("ner:already_done"));
+        // An item-level run (asset_id NULL) covers every asset of its item.
+        assert!(ner("a6").is_none());
+        // Image without text: NER waits for its OCR task.
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let ner_a1 = ner("a1").expect("ner waits for ocr");
+        let (state, dependency): (String, Option<String>) = conn
+            .query_row(
+                "SELECT t.state, l.dependency_task_id FROM processing_tasks t
+                   JOIN processing_batch_tasks l ON l.task_id = t.id WHERE t.id = ?1",
+                [&ner_a1],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("ner task");
+        assert_eq!((state.as_str(), dependency), ("blocked", Some(ocr_id)));
+        // Audio has no OCR and no text: nothing to run.
+        assert!(ner("a3").is_none());
     }
 
     #[test]

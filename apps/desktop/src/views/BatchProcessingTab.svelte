@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { getStore } from '$lib/db'
+  import { LOCAL_ML } from '$lib/capabilities'
   import {
     batchProgress,
     batchStore,
@@ -65,6 +66,8 @@
   let selected = $state<Record<string, true>>({})
   let runOcr = $state(true)
   let runEmbeddings = $state(true)
+  // Off by default: under Lite every document is a paid OpenRouter call.
+  let runNer = $state(false)
 
   // Draft
   let draftId = $state<string | null>(null)
@@ -346,11 +349,15 @@
   }
 
   async function handleAnalyze(): Promise<void> {
-    if (selectedCount === 0 || (!runOcr && !runEmbeddings)) return
+    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer)) return
     analyzing = true
     feedback = null
     try {
-      const operations = [...(runOcr ? ['ocr'] : []), ...(runEmbeddings ? ['embeddings'] : [])]
+      const operations = [
+        ...(runOcr ? ['ocr'] : []),
+        ...(runEmbeddings ? ['embeddings'] : []),
+        ...(runNer ? ['ner'] : []),
+      ]
       const key = JSON.stringify([Object.keys(selected).sort(), operations])
       if (prepareRequest?.key !== key) prepareRequest = { key, id: newBatchRequestId() }
       const response = await processingPrepare(prepareRequest.id, Object.keys(selected), operations)
@@ -1181,11 +1188,14 @@
               >{t('batch.opEmbeddings')}</Checkbox
             >
           </span>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opNerHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
+          </span>
           <Button
             class="batch-ops__action"
             variant="secondary"
             size="sm"
-            disabled={selectedCount === 0 || (!runOcr && !runEmbeddings) || analyzing}
+            disabled={selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer) || analyzing}
             onclick={handleAnalyze}
           >
             {t('batch.analyze')}
@@ -1194,6 +1204,13 @@
         {#if draft && draftId}
           <div class="batch-tab__draft">
             <p>{t('batch.preparing')} {draft.membersClassified}/{draft.membersTotal}</p>
+            {#if draft.planningDone && draft.operations.includes('ner')}
+              {@const nerCount = draft.tasksByKind.find((kind) => kind.name === 'ner')?.count ?? 0}
+              <p>
+                {t('batch.nerCount', { count: nerCount })}
+                {#if !LOCAL_ML && nerCount > 0}{t('batch.nerPaidNotice')}{/if}
+              </p>
+            {/if}
             <div class="batch-tab__actions">
               <Button variant="secondary" size="sm" onclick={handleDiscardDraft}>
                 {t('batch.discard')}

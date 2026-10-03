@@ -85,6 +85,7 @@ pub enum ExecOutput {
 pub enum EngineOutput {
     Ocr(super::ocr::OcrComputeOutput),
     Embedding(super::embedding::EmbeddingComputeOutput),
+    Ner(super::ner::NerComputeOutput),
     Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
     BibliographyProfile(crate::bibliography::processing::BibliographyProfileComputeOutput),
     BibliographyExtract(crate::bibliography::processing::BibliographyExtractComputeOutput),
@@ -502,6 +503,9 @@ fn publish_engine_output(
         }
         ("corpus", "asset", "embedding", EngineOutput::Embedding(embedding)) => {
             super::embedding::publish_embedding_output(conn, &task.asset_id, embedding)
+        }
+        ("corpus", "asset", "ner", EngineOutput::Ner(ner)) => {
+            super::ner::publish_ner_output(conn, &task.asset_id, ner)
         }
         (
             "bibliography",
