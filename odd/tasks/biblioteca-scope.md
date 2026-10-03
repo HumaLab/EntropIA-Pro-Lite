@@ -50,6 +50,16 @@ metadata profiles (`search_works`) are searchable today. `zotero_data_dir`
   - [ ] B5b — Top-level "Biblioteca" section (awaits the owner; NOT part of B5a).
 - [ ] B6 — Investigación can use the Biblioteca (cross-repo `entropia-agent`).
 
+- [ ] B7 — First sync of a large library must be usable early and show its progress (owner,
+  2026-10-03). Measured: profile embeddings were 80 of 82 busy minutes, one request at a
+  time. B7a (running, branch perf/bibliography-embeddings): batched embedding requests +
+  3-4 bounded concurrent requests with 429/Retry-After backoff; skip already-embedded chunks.
+  B7b (after B7a is measured): order work so every work's metadata profile is done first
+  (works search by meaning usable early), then passages, recent/opened works first.
+  B7c: progress and time estimate in the Zotero tab instead of 'processing in background'.
+  Not pursued: several OpenRouter keys/accounts to raise throughput (limits are per account;
+  extra accounts would breach their terms).
+
 ## Constraints
 
 - Lite and Pro share code; embeddings follow the user's provider setting (API
