@@ -180,6 +180,19 @@ pub fn entries_url(library: &Library, page: Page) -> String {
     )
 }
 
+/// The URL for a page of every attachment item of the library (children and
+/// standalone). One paged walk replaces a request per work; each row names
+/// its parent (`data.parentItem`) and, when the file exists on this machine,
+/// its location (`links.enclosure.href`).
+pub fn attachments_url(library: &Library, page: Page) -> String {
+    format!(
+        "{}/items?itemType=attachment&format=json&limit={}&start={}",
+        prefix(library),
+        page.limit(),
+        page.start()
+    )
+}
+
 /// The URL for specific works, with their key and version beside the CSL.
 pub fn entries_by_key_url(library: &Library, keys: &[String]) -> String {
     works_url(library, keys)
@@ -341,6 +354,20 @@ pub async fn read_entries_page(
     page: Page,
 ) -> Result<EntriesPageAnswer, ZoteroState> {
     let answer = ask(client, &entries_url(library, page)).await?;
+    Ok(EntriesPageAnswer {
+        body: answer.body,
+        library_version: answer.version,
+        total: answer.total,
+    })
+}
+
+/// Reads exactly one bounded page of a library's attachment items.
+pub async fn read_attachments_page(
+    client: &reqwest::Client,
+    library: &Library,
+    page: Page,
+) -> Result<EntriesPageAnswer, ZoteroState> {
+    let answer = ask(client, &attachments_url(library, page)).await?;
     Ok(EntriesPageAnswer {
         body: answer.body,
         library_version: answer.version,
@@ -753,6 +780,20 @@ mod tests {
             assert!(url.contains("/api/groups/6680944/"), "{url}");
             assert!(!url.contains("/api/users/"), "{url}");
         }
+    }
+
+    /// Attachments are read from `/items?itemType=attachment`, group-aware.
+    #[test]
+    fn attachments_url_filters_attachment_items_per_library() {
+        let page = Page::new(200, 100);
+        let user = attachments_url(&super::super::Library::personal(), page);
+        assert!(
+            user.contains("/api/users/0/items?itemType=attachment&format=json"),
+            "{user}"
+        );
+        assert!(user.contains("limit=100&start=200"), "{user}");
+        let group = attachments_url(&super::super::Library::group("6680944"), page);
+        assert!(group.contains("/api/groups/6680944/items?"), "{group}");
     }
 
     /// E1c-1 RED: an unknown kind must not silently become the user path.

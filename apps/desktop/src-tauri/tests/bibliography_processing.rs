@@ -6579,3 +6579,432 @@ fn rerank_documents(
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     Ok(scored.into_iter().map(|(index, _)| index).collect())
 }
+
+// ---------------------------------------------------------------------------
+// B1: the library sync catalogs each work's PDF attachments.
+// ---------------------------------------------------------------------------
+
+/// A native attachment row as `/items?itemType=attachment&format=json`
+/// answers it: parent in `data.parentItem`, file location in
+/// `links.enclosure.href` (a percent-encoded `file:` URL).
+fn attachment_row(
+    key: &str,
+    parent: Option<&str>,
+    content_type: &str,
+    link_mode: &str,
+    filename: &str,
+    enclosure_path: Option<&str>,
+) -> serde_json::Value {
+    let mut data = serde_json::json!({
+        "key": key,
+        "version": 11,
+        "itemType": "attachment",
+        "title": filename,
+        "linkMode": link_mode,
+        "contentType": content_type,
+        "filename": filename,
+        "md5": "ce907ea9fd7c7b4fadb6735e6949ede1",
+        "mtime": 1_790_984_898_525_i64,
+        "url": "https://example.invalid/descargar",
+    });
+    if let Some(parent) = parent {
+        data["parentItem"] = serde_json::json!(parent);
+    }
+    let mut row = serde_json::json!({ "key": key, "version": 11, "links": {}, "data": data });
+    if let Some(path) = enclosure_path {
+        let normalized = path.replace('\\', "/").replace(' ', "%20");
+        let href = if normalized.starts_with('/') {
+            format!("file://{normalized}")
+        } else {
+            format!("file:///{normalized}")
+        };
+        row["links"]["enclosure"] = serde_json::json!({ "href": href, "type": content_type });
+    }
+    row
+}
+
+#[test]
+fn attachment_page_keeps_pdfs_with_a_parent_and_decodes_the_enclosure() {
+    use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
+    let mut linked = attachment_row(
+        "LINKED01",
+        Some("WORK0002"),
+        "application/pdf",
+        "linked_file",
+        "externo.pdf",
+        None,
+    );
+    linked["data"]["path"] = serde_json::json!("C:/Libros/externo.pdf");
+    let body = serde_json::json!([
+        attachment_row(
+            "PDFATT01",
+            Some("WORK0001"),
+            "application/pdf",
+            "imported_url",
+            "mi adjunto.pdf",
+            Some("C:/Users/ana/Zotero/storage/PDFATT01/mi adjunto.pdf"),
+        ),
+        attachment_row(
+            "HTMLATT1",
+            Some("WORK0001"),
+            "text/html",
+            "imported_url",
+            "snap.html",
+            Some("C:/Users/ana/Zotero/storage/HTMLATT1/snap.html"),
+        ),
+        attachment_row(
+            "ORPHAN01",
+            None,
+            "application/pdf",
+            "imported_file",
+            "solo.pdf",
+            None,
+        ),
+        linked,
+    ]);
+    let page = attachment_page_from_json(&body, Some(4)).expect("page parses");
+    assert_eq!(page.rows_read, 4, "pagination counts every row read");
+    assert_eq!(page.total, Some(4));
+    let keys: Vec<&str> = page
+        .attachments
+        .iter()
+        .map(|a| a.input.attachment_key.as_str())
+        .collect();
+    assert_eq!(keys, ["PDFATT01", "LINKED01"], "PDF children only");
+    let pdf = &page.attachments[0];
+    assert_eq!(pdf.parent_key, "WORK0001");
+    assert_eq!(
+        pdf.input.native_path.as_deref(),
+        Some("C:/Users/ana/Zotero/storage/PDFATT01/mi adjunto.pdf"),
+        "the enclosure is percent-decoded to a local path"
+    );
+    assert_eq!(pdf.input.link_mode.as_deref(), Some("imported_url"));
+    assert_eq!(pdf.input.filename.as_deref(), Some("mi adjunto.pdf"));
+    assert_eq!(pdf.input.native_version, Some(11));
+    assert_eq!(pdf.input.mtime, Some(1_790_984_898_525));
+    let linked = &page.attachments[1];
+    assert_eq!(
+        linked.input.native_path.as_deref(),
+        Some("C:/Libros/externo.pdf"),
+        "an absolute data.path backs a linked file without an enclosure"
+    );
+}
+
+#[test]
+fn attachment_enclosures_resolve_for_unix_paths_and_ignore_remote_urls() {
+    use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
+    let mut unix = attachment_row(
+        "UNIXATT1",
+        Some("W1"),
+        "application/pdf",
+        "imported_file",
+        "a.pdf",
+        None,
+    );
+    unix["links"]["enclosure"] =
+        serde_json::json!({ "href": "file:///home/ana/Zotero/storage/UNIXATT1/a%20b.pdf" });
+    let mut remote = attachment_row(
+        "WEBATT01",
+        Some("W1"),
+        "application/pdf",
+        "linked_url",
+        "a.pdf",
+        None,
+    );
+    remote["links"]["enclosure"] = serde_json::json!({ "href": "https://example.invalid/a.pdf" });
+    let page = attachment_page_from_json(&serde_json::json!([unix, remote]), None).expect("parses");
+    assert_eq!(
+        page.attachments[0].input.native_path.as_deref(),
+        Some("/home/ana/Zotero/storage/UNIXATT1/a b.pdf")
+    );
+    assert_eq!(page.attachments[1].input.native_path, None);
+}
+
+#[test]
+fn attachment_page_with_an_unreadable_row_is_an_invalid_response() {
+    use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
+    let not_a_list = attachment_page_from_json(&serde_json::json!({}), None);
+    assert!(matches!(
+        not_a_list,
+        Err(ZoteroState::InvalidResponse { .. })
+    ));
+    let keyless =
+        serde_json::json!([{ "version": 3, "data": { "contentType": "application/pdf" } }]);
+    assert!(matches!(
+        attachment_page_from_json(&keyless, None),
+        Err(ZoteroState::InvalidResponse { .. })
+    ));
+}
+
+type AttachmentScript = Result<(serde_json::Value, Option<u64>), ZoteroState>;
+
+/// Items come from a script; attachment pages are native JSON bodies parsed
+/// through the production parser, so the fake cannot drift from the shape.
+struct AttachmentSource {
+    items: FakeSource,
+    attachments: Mutex<VecDeque<AttachmentScript>>,
+    attachment_requests: Mutex<Vec<(u32, u32)>>,
+}
+
+impl AttachmentSource {
+    fn new(items: Vec<ScriptStep>, attachments: Vec<AttachmentScript>) -> Self {
+        Self {
+            items: FakeSource::new(items),
+            attachments: Mutex::new(attachments.into_iter().collect()),
+            attachment_requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl ZoteroPageSource for AttachmentSource {
+    fn fetch_page(&self, library: &Library, query: BibliographyPageQuery) -> PageFuture {
+        self.items.fetch_page(library, query)
+    }
+
+    fn fetch_attachment_page(
+        &self,
+        _library: &Library,
+        query: BibliographyPageQuery,
+    ) -> Option<entropia_desktop_lib::bibliography::processing::AttachmentPageFuture> {
+        self.attachment_requests
+            .lock()
+            .expect("attachment requests")
+            .push((query.start(), query.limit()));
+        let step = self
+            .attachments
+            .lock()
+            .expect("attachments")
+            .pop_front()
+            .unwrap_or_else(|| Ok((serde_json::json!([]), Some(0))));
+        Some(Box::pin(async move {
+            let (body, total) = step?;
+            entropia_desktop_lib::bibliography::processing::attachment_page_from_json(&body, total)
+        }))
+    }
+}
+
+fn run_sync_with(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    source: Arc<AttachmentSource>,
+) -> RunOneOutcome {
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry_with(BibliographySyncExecutor::new(source).with_page_limit(2)),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("sync run")
+}
+
+fn two_works() -> Vec<ScriptStep> {
+    vec![ScriptStep::Page(page(
+        vec![
+            custom_page_item("PDFWORK01", 1, "Obra con PDF", "Resumen."),
+            custom_page_item("URLWORK01", 1, "Obra con enlace", "Resumen."),
+        ],
+        Some(2),
+    ))]
+}
+
+fn attachment_keys(conn: &rusqlite::Connection) -> Vec<String> {
+    conn.prepare("SELECT attachment_key FROM zotero_attachments ORDER BY attachment_key")
+        .expect("attachment keys query")
+        .query_map([], |row| row.get(0))
+        .expect("attachment keys map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("attachment keys")
+}
+
+#[test]
+fn sync_catalogs_pdf_attachments_and_chains_extraction_for_the_readable_one() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let sync_task = admit_bibliography_task(&conn, "lib-1");
+    let pdf = make_text_pdf(&[(
+        50.0,
+        750.0,
+        "Texto extraible del adjunto con longitud suficiente para calidad",
+    )]);
+    let path = write_temp_pdf(&dir, "mi adjunto.pdf", &pdf);
+    // Three rows over two pages of two: PDF, HTML snapshot, then an orphan
+    // whose parent is not in the catalog.
+    let first = serde_json::json!([
+        attachment_row(
+            "PDFATT01",
+            Some("PDFWORK01"),
+            "application/pdf",
+            "imported_url",
+            "mi adjunto.pdf",
+            Some(&path),
+        ),
+        attachment_row(
+            "HTMLATT1",
+            Some("URLWORK01"),
+            "text/html",
+            "imported_url",
+            "snap.html",
+            Some(&path),
+        ),
+    ]);
+    let second = serde_json::json!([attachment_row(
+        "GHOSTATT",
+        Some("NOTSYNCED"),
+        "application/pdf",
+        "imported_file",
+        "fantasma.pdf",
+        Some(&path),
+    )]);
+    let source = Arc::new(AttachmentSource::new(
+        two_works(),
+        vec![Ok((first, Some(3))), Ok((second, Some(3)))],
+    ));
+    let outcome = run_sync_with(&dir, &conn, Arc::clone(&source));
+    assert!(
+        matches!(&outcome, RunOneOutcome::Succeeded { task_id } if task_id == &sync_task),
+        "sync must succeed, got {outcome:?}"
+    );
+    assert_eq!(
+        *source.attachment_requests.lock().expect("requests"),
+        vec![(0, 2), (2, 2)],
+        "attachments are walked in bounded pages, not one request per work"
+    );
+    assert_eq!(
+        attachment_keys(&conn),
+        ["PDFATT01"],
+        "only PDF children of cataloged works are stored"
+    );
+    let (attachment_id, native_path, parent): (String, String, String) = conn
+        .query_row(
+            "SELECT id, native_path, item_id FROM zotero_attachments
+              WHERE attachment_key = 'PDFATT01'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("stored attachment");
+    assert_eq!(parent, items_by_key(&conn, "PDFWORK01"));
+    assert_eq!(
+        std::path::Path::new(&native_path),
+        std::path::Path::new(&path),
+        "the decoded enclosure is the readable location"
+    );
+    let live: Vec<String> = conn
+        .prepare(
+            "SELECT subject_id FROM processing_tasks
+              WHERE domain = 'bibliography' AND subject_kind = 'attachment'
+                AND kind = 'bibliography_extract' AND state = 'pending'",
+        )
+        .expect("live query")
+        .query_map([], |row| row.get(0))
+        .expect("live map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("live collect");
+    assert_eq!(
+        live,
+        vec![attachment_id],
+        "the sync's own success chains extraction for the stored PDF"
+    );
+}
+
+#[test]
+fn sync_removes_attachments_that_disappeared_and_keeps_them_on_a_failed_read() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    admit_bibliography_task(&conn, "lib-1");
+    let rows = |keys: &[&str]| {
+        serde_json::Value::Array(
+            keys.iter()
+                .map(|key| {
+                    attachment_row(
+                        key,
+                        Some("PDFWORK01"),
+                        "application/pdf",
+                        "imported_file",
+                        "a.pdf",
+                        None,
+                    )
+                })
+                .collect(),
+        )
+    };
+    let first = Arc::new(AttachmentSource::new(
+        two_works(),
+        vec![Ok((rows(&["ATTKEEP1", "ATTGONE1"]), Some(2)))],
+    ));
+    run_sync_with(&dir, &conn, first);
+    assert_eq!(attachment_keys(&conn), ["ATTGONE1", "ATTKEEP1"]);
+
+    // An unreadable attachments answer must not read as "all were removed".
+    admit_bibliography_task(&conn, "lib-1");
+    let failing = Arc::new(AttachmentSource::new(
+        two_works(),
+        vec![Err(ZoteroState::Timeout)],
+    ));
+    let outcome = run_sync_with(&dir, &conn, failing);
+    assert!(
+        !matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a failed attachments read is not a completed sync, got {outcome:?}"
+    );
+    assert_eq!(attachment_keys(&conn), ["ATTGONE1", "ATTKEEP1"]);
+
+    // A complete walk that no longer lists one attachment removes its row.
+    let retry_id = admit_bibliography_task(&conn, "lib-1");
+    conn.execute(
+        "UPDATE processing_tasks SET next_retry_at=0 WHERE id=?1",
+        [&retry_id],
+    )
+    .expect("make retry due");
+    let third = Arc::new(AttachmentSource::new(
+        // The retry resumes at the committed cursor: items are already read.
+        vec![ScriptStep::Page(page(Vec::new(), Some(2)))],
+        vec![Ok((rows(&["ATTKEEP1"]), Some(1)))],
+    ));
+    let outcome = run_sync_with(&dir, &conn, third);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "got {outcome:?}"
+    );
+    assert_eq!(attachment_keys(&conn), ["ATTKEEP1"]);
+}
+
+#[test]
+fn a_source_without_attachment_support_leaves_the_catalog_untouched() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    admit_bibliography_task(&conn, "lib-1");
+    run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(Arc::new(FakeSource::new(two_works())))),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("first sync");
+    let item_id = items_by_key(&conn, "PDFWORK01");
+    seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANUAL01",
+        "imported_file",
+        None,
+        "a.pdf",
+        "application/pdf",
+    );
+    admit_bibliography_task(&conn, "lib-1");
+    run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry_with(executor(Arc::new(FakeSource::new(two_works())))),
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("second sync");
+    assert_eq!(attachment_keys(&conn), ["MANUAL01"]);
+}

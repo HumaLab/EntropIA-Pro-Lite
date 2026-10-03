@@ -51,7 +51,7 @@ use super::reconciliation::{
     self, BeginReconciliationInput, ReconciliationEntityKind, ReconciliationErrorInput,
     ReconciliationPageInput, ReconciliationRun, ReconciliationRunRef, ReconciliationSeenInput,
 };
-use super::repository::{self as catalog_repository, BibliographicItemInput};
+use super::repository::{self as catalog_repository, AttachmentInput, BibliographicItemInput};
 use crate::db::open::open_archive_connection;
 use crate::processing::repository::{self as processing_repository, BIBLIOGRAPHY_SYNC_CONTRACT};
 use crate::processing::scheduler::{
@@ -189,12 +189,133 @@ fn malformed_row() -> ZoteroState {
 pub type PageFuture =
     Pin<Box<dyn std::future::Future<Output = Result<BibliographyPage, ZoteroState>> + Send>>;
 
+/// One PDF attachment of a work as its page carries it: the work it belongs
+/// to (`parent_key`, the work's Zotero key) and the catalog input to store.
+#[derive(Debug, Clone)]
+pub struct BibliographyAttachment {
+    pub parent_key: String,
+    pub input: AttachmentInput,
+}
+
+/// One answered page of a library's attachment items. `rows_read` counts
+/// every row the page held (PDF or not, with a parent or not): pagination
+/// advances by what was read, while `attachments` keeps only the PDF children
+/// the catalog stores.
+#[derive(Debug, Clone)]
+pub struct BibliographyAttachmentPage {
+    pub attachments: Vec<BibliographyAttachment>,
+    pub rows_read: usize,
+    pub total: Option<u64>,
+}
+
+pub type AttachmentPageFuture = Pin<
+    Box<dyn std::future::Future<Output = Result<BibliographyAttachmentPage, ZoteroState>> + Send>,
+>;
+
+/// Converts a Zotero `file:` URL (`links.enclosure.href`) to a local path.
+/// `file:///C:/a%20b.pdf` becomes `C:/a b.pdf`; `file:///home/a.pdf` keeps its
+/// leading slash. Anything that is not a `file:` URL is not a local file.
+fn file_url_to_path(href: &str) -> Option<String> {
+    let rest = href.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let decoded = urlencoding::decode(rest).ok()?.into_owned();
+    let bytes = decoded.as_bytes();
+    let drive_letter = bytes.len() >= 3 && bytes[2] == b':' && bytes[1].is_ascii_alphabetic();
+    Some(if drive_letter {
+        decoded[1..].to_string()
+    } else {
+        decoded
+    })
+}
+
+/// Parses one page of `/items?itemType=attachment&format=json` strictly: every
+/// row must carry its key, version and data object, or the whole page is
+/// [`ZoteroState::InvalidResponse`]. Only PDF children (a `parentItem`) are
+/// kept. The readable location is the enclosure Zotero reports for a file that
+/// exists on this machine, else an absolute `data.path` (linked files).
+pub fn attachment_page_from_json(
+    body: &serde_json::Value,
+    total: Option<u64>,
+) -> Result<BibliographyAttachmentPage, ZoteroState> {
+    let rows = body
+        .as_array()
+        .ok_or_else(|| ZoteroState::InvalidResponse {
+            detail: "the library's answer was not a list of attachments".into(),
+        })?;
+    let malformed = || ZoteroState::InvalidResponse {
+        detail: "an attachment of the page had no key, version or data".into(),
+    };
+    let mut attachments = Vec::new();
+    for row in rows {
+        let key = string_field(row, "key").ok_or_else(malformed)?;
+        let version = row
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|version| i64::try_from(version).ok())
+            .ok_or_else(malformed)?;
+        let data = row
+            .get("data")
+            .filter(|data| data.is_object())
+            .ok_or_else(malformed)?;
+        let is_pdf = string_field(data, "contentType")
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("application/pdf"));
+        let Some(parent_key) = string_field(data, "parentItem") else {
+            continue;
+        };
+        if !is_pdf {
+            continue;
+        }
+        let native_path = row
+            .pointer("/links/enclosure/href")
+            .and_then(serde_json::Value::as_str)
+            .and_then(file_url_to_path)
+            .or_else(|| {
+                string_field(data, "path").filter(|path| std::path::Path::new(path).is_absolute())
+            });
+        attachments.push(BibliographyAttachment {
+            parent_key,
+            input: AttachmentInput {
+                attachment_key: key,
+                content_type: string_field(data, "contentType"),
+                link_mode: string_field(data, "linkMode"),
+                filename: string_field(data, "filename"),
+                native_path,
+                url: string_field(data, "url"),
+                md5: string_field(data, "md5"),
+                mtime: data.get("mtime").and_then(serde_json::Value::as_i64),
+                native_json_snapshot: row.to_string(),
+                native_version: Some(version),
+            },
+        });
+    }
+    Ok(BibliographyAttachmentPage {
+        attachments,
+        rows_read: rows.len(),
+        total,
+    })
+}
+
 /// Narrow client seam for one library's pages: the executor asks for one
-/// bounded page at a time and owns pacing and stopping. Anything wider
-/// (collections, tags, attachments, deletions) is out of scope for the sync
-/// contract by design; E2b-3 reconciles works only.
+/// bounded page at a time and owns pacing and stopping. Collections, tags and
+/// deletions stay out of the sync contract; works are reconciled, and PDF
+/// attachments are cataloged by a second bounded walk
+/// ([`ZoteroPageSource::fetch_attachment_page`]).
 pub trait ZoteroPageSource: Send + Sync {
     fn fetch_page(&self, library: &Library, query: BibliographyPageQuery) -> PageFuture;
+
+    /// One bounded page of the library's attachment items, or `None` when the
+    /// source does not read attachments (the sync then leaves the attachment
+    /// catalog exactly as it is, never treating "unsupported" as "empty").
+    fn fetch_attachment_page(
+        &self,
+        _library: &Library,
+        _query: BibliographyPageQuery,
+    ) -> Option<AttachmentPageFuture> {
+        None
+    }
 }
 
 /// Production page source: Zotero's local API through the writing
@@ -236,6 +357,24 @@ impl ZoteroPageSource for LocalZoteroPageSource {
                 library_version: answer.library_version,
             })
         })
+    }
+
+    fn fetch_attachment_page(
+        &self,
+        library: &Library,
+        query: BibliographyPageQuery,
+    ) -> Option<AttachmentPageFuture> {
+        let client = self.client.clone();
+        let library = library.clone();
+        Some(Box::pin(async move {
+            let answer = connector::read_attachments_page(
+                &client,
+                &library,
+                ConnectorPage::new(query.start(), query.limit()),
+            )
+            .await?;
+            attachment_page_from_json(&answer.body, answer.total)
+        }))
     }
 }
 
@@ -334,6 +473,46 @@ struct PageCheckpoint {
     terminal: bool,
     items: Vec<BibliographyPageItem>,
     library_version: Option<u64>,
+}
+
+/// How the attachment walk ended.
+enum AttachmentPass {
+    Done,
+    Stopped,
+    Failed(ExecOutput),
+}
+
+/// Removes every attachment row of the library that a completed walk did not
+/// see, in one transaction.
+fn remove_unseen_attachments(
+    conn: &mut rusqlite::Connection,
+    library_row_id: &str,
+    seen_ids: &HashSet<String>,
+) -> Result<(), String> {
+    let stored: Vec<String> = conn
+        .prepare(
+            "SELECT a.id FROM zotero_attachments a
+               JOIN bibliographic_items i ON i.id = a.item_id
+              WHERE i.library_id = ?1",
+        )
+        .map_err(|error| format!("Failed to list stored attachments: {error}"))?
+        .query_map([library_row_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to list stored attachments: {error}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|error| format!("Failed to list stored attachments: {error}"))?;
+    let gone: Vec<&String> = stored.iter().filter(|id| !seen_ids.contains(*id)).collect();
+    if gone.is_empty() {
+        return Ok(());
+    }
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to begin attachment removal: {error}"))?;
+    for id in gone {
+        tx.execute("DELETE FROM zotero_attachments WHERE id = ?1", [id])
+            .map_err(|error| format!("Failed to remove attachment {id}: {error}"))?;
+    }
+    tx.commit()
+        .map_err(|error| format!("Failed to commit attachment removal: {error}"))
 }
 
 /// Explicit bibliography product routed by the scheduler. Page rows are
@@ -842,6 +1021,105 @@ impl BibliographySyncExecutor {
         }
     }
 
+    /// Catalogs the library's PDF attachments with a second bounded walk
+    /// (one request per page of `page_limit` attachment items, never one per
+    /// work). Each stored row is upserted under its already-cataloged parent;
+    /// rows the completed walk no longer lists are removed (their extractions,
+    /// chunks and embeddings cascade). Nothing is removed unless the walk
+    /// finished and every page read cleanly: a failed or stopped read keeps
+    /// the catalog as it was.
+    fn attachment_pass(
+        &self,
+        ctx: &ExecCtx,
+        library: &Library,
+        library_row_id: &str,
+        page_limit: u32,
+        stop: &StopFlag,
+    ) -> AttachmentPass {
+        let storage = |message: String| {
+            AttachmentPass::Failed(ExecOutput::Fatal {
+                code: "storage_unavailable".to_string(),
+                message,
+            })
+        };
+        let invalid = |message: String| {
+            AttachmentPass::Failed(ExecOutput::Retryable {
+                code: "zotero_invalid_response".to_string(),
+                message,
+            })
+        };
+        let mut conn = match open_archive_connection(&ctx.db_path) {
+            Ok(conn) => conn,
+            Err(error) => return storage(error),
+        };
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let mut start = 0u32;
+        loop {
+            if stop.stopped() {
+                return AttachmentPass::Stopped;
+            }
+            let query = BibliographyPageQuery::new(start, page_limit);
+            let Some(request) = self.source.fetch_attachment_page(library, query) else {
+                // The source does not read attachments: leave the catalog be.
+                return AttachmentPass::Done;
+            };
+            let page = match tauri::async_runtime::block_on(request) {
+                Ok(page) => page,
+                Err(state) => return AttachmentPass::Failed(endpoint_verdict(&state)),
+            };
+            if empty_while_total_remains(page.rows_read, start, page.total) {
+                return invalid(format!(
+                    "the library's attachment page at start {start} answered no rows while its total says more remain"
+                ));
+            }
+            let page_end = u64::from(start).saturating_add(page.rows_read as u64);
+            if page.rows_read > page_limit as usize
+                || page.total.is_some_and(|total| page_end > total)
+            {
+                return invalid(format!(
+                    "the library's attachment page at start {start} answered {} rows, outside what was asked for or reported",
+                    page.rows_read
+                ));
+            }
+            for attachment in &page.attachments {
+                let parent_id: Option<String> = match conn
+                    .query_row(
+                        "SELECT id FROM bibliographic_items WHERE library_id = ?1 AND item_key = ?2",
+                        rusqlite::params![library_row_id, &attachment.parent_key],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                {
+                    Ok(parent_id) => parent_id,
+                    Err(error) => {
+                        return storage(format!("Failed to resolve attachment parent: {error}"))
+                    }
+                };
+                // A child of a work the catalog does not hold has nothing to
+                // hang from; it is not an error and not seen.
+                let Some(parent_id) = parent_id else { continue };
+                match catalog_repository::upsert_attachment(
+                    &mut conn,
+                    &parent_id,
+                    attachment.input.clone(),
+                ) {
+                    Ok(stored) => {
+                        seen_ids.insert(stored.id);
+                    }
+                    Err(error) => return storage(error.message),
+                }
+            }
+            match pagination_next(start, page.rows_read, page_limit, page.total) {
+                Some(next) => start = next,
+                None => break,
+            }
+        }
+        match remove_unseen_attachments(&mut conn, library_row_id, &seen_ids) {
+            Ok(()) => AttachmentPass::Done,
+            Err(error) => storage(error),
+        }
+    }
+
     fn converge_reconciliation(
         &self,
         ctx: &ExecCtx,
@@ -1111,6 +1389,23 @@ impl Executor for BibliographySyncExecutor {
                 break;
             }
             start = next_page.expect("non-terminal page has a next cursor");
+        }
+        // Items are durable; now catalog the works' PDF attachments so the
+        // success publication below can chain extraction for them.
+        match self.attachment_pass(ctx, &library, &run.library_id, page_limit, stop) {
+            AttachmentPass::Done => {}
+            AttachmentPass::Stopped => {
+                return self.durable_verdict(
+                    ctx,
+                    &run,
+                    checkpoints,
+                    progress_total,
+                    ExecOutput::Stopped,
+                );
+            }
+            AttachmentPass::Failed(output) => {
+                return self.durable_verdict(ctx, &run, checkpoints, progress_total, output);
+            }
         }
         // Observed after the last page too: a run whose demand vanished at
         // the end reports Stopped, not a completion verdict.
