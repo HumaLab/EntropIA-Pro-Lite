@@ -1244,6 +1244,80 @@ describe('ItemView multi-asset navigation', () => {
     expect(highlightCitationRangeMock).not.toHaveBeenCalled()
   })
 
+  it('seeks the audio viewer to the second of a chat citation', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-audio-1',
+          itemId: 'item-1',
+          path: 'docs/audio.mp3',
+          type: 'audio',
+          createdAt: 1,
+        },
+      ],
+    })
+    workspace.activeNavigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Entrevista',
+        assetId: 'asset-audio-1',
+        citationRange: null,
+        citationSeconds: 65,
+      },
+    ])
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-audio-start-at')).toHaveTextContent('65')
+    })
+  })
+
+  it('does not seek an asset other than the one the citation names', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-audio-1',
+          itemId: 'item-1',
+          path: 'docs/audio.mp3',
+          type: 'audio',
+          createdAt: 1,
+        },
+      ],
+    })
+    workspace.activeNavigation.resetToPath([
+      { name: 'collections' },
+      { name: 'collection', id: 'col-1', collectionName: 'Colección 1' },
+      {
+        name: 'item',
+        collectionId: 'col-1',
+        collectionName: 'Colección 1',
+        itemId: 'item-1',
+        itemTitle: 'Entrevista',
+        assetId: 'asset-audio-1',
+        citationSeconds: 65,
+      },
+    ])
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+
+    if (workspace.activeNavigation.current.name !== 'item')
+      throw new Error('Expected item navigation')
+    workspace.activeNavigation.replace({
+      ...workspace.activeNavigation.current,
+      assetId: 'another-asset',
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-audio-start-at')).toHaveTextContent('none')
+    })
+  })
+
   it('reapplies the marker when a second citation targets the selected asset', async () => {
     storeRef.current = createStore({
       extractionsByAsset: {

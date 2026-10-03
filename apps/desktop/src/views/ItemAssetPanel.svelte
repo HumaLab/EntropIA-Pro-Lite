@@ -60,6 +60,7 @@
     ocrState,
     ocrEditedText,
     citationRange = null,
+    citationSeconds = null,
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels,
@@ -110,6 +111,8 @@
     ocrEditedText: string
     /** The raw citation range to mark when navigation arrives from a citation. */
     citationRange?: { start: number; end: number; text: string } | null
+    /** Audio only: the second a chat citation of the transcript starts at. */
+    citationSeconds?: number | null
     transcriptionState: AssetTranscriptionState | null
     transcriptionEditedText: string
     documentViewerLabels: DocumentViewerProps['labels']
@@ -149,6 +152,8 @@
   let renderedOcr = $state.raw<{ container: HTMLDivElement; rawText: string } | null>(null)
   let citationSourceText = $state<string | null>(null)
   let citationMarkGeneration = 0
+  let transcriptMarkGeneration = 0
+  let transcriptEl = $state<HTMLElement | undefined>()
 
   $effect(() => {
     const nextAssetId = selectedAsset?.id ?? null
@@ -169,7 +174,8 @@
     }
 
     if (citationArrived) {
-      citationSourceText = ocrEditedText.trim() ? ocrEditedText : null
+      const arrivedText = selectedAsset?.type === 'audio' ? transcriptionEditedText : ocrEditedText
+      citationSourceText = arrivedText.trim() ? arrivedText : null
     } else if (!citationRange) {
       citationSourceText = null
     }
@@ -205,6 +211,37 @@
         start: range.start,
         end: range.end,
       })
+    })
+  })
+
+  // The same mark for a transcript: it is plain text, so what is rendered is
+  // the raw string the offsets were computed over. Like the OCR pane, the range
+  // is bound to the text present when the citation arrived — a transcript that
+  // changed afterwards no longer says what was cited, so it is left unmarked.
+  $effect(() => {
+    const container = transcriptEl
+    const range = citationRange
+    const text = transcriptionEditedText
+    if (selectedAsset?.type !== 'audio' || range === null || !text.trim()) return
+    if (citationSourceText === null) {
+      citationSourceText = text
+      return
+    }
+    const sourceText = citationSourceText
+    const shouldMark = leftPanelTab === 'text' && container !== undefined && text === sourceText
+    const generation = ++transcriptMarkGeneration
+    if (!shouldMark) return
+
+    void tick().then(() => {
+      if (
+        generation !== transcriptMarkGeneration ||
+        leftPanelTab !== 'text' ||
+        citationRange !== range ||
+        transcriptionEditedText !== sourceText
+      ) {
+        return
+      }
+      highlightCitationRange(container, sourceText, { start: range.start, end: range.end })
     })
   })
 
@@ -402,6 +439,7 @@
         {onPageChange}
         {onDimensionsChange}
         audioFallbackBlobLoader={loadAudioFallbackBlob}
+        audioStartAtSeconds={citationSeconds}
         labels={documentViewerLabels}
         {annotationToolbarLabels}
       />
@@ -592,7 +630,11 @@
                 </span>
               </div>
               <div class="left-text-panel-body left-text-panel-body--plain">
-                {transcriptionEditedText}
+                <!-- Keyed so a text change replaces the node: a mark splits the
+                     text node, and Svelte must not patch a node it no longer owns. -->
+                {#key transcriptionEditedText}<span bind:this={transcriptEl}
+                    >{transcriptionEditedText}</span
+                  >{/key}
               </div>
             {:else}
               <p class="empty-text">{translate('item.noExtractedText')}</p>

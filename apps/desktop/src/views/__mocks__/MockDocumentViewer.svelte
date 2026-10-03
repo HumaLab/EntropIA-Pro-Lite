@@ -32,6 +32,7 @@
     annotationToolbarLabels = {} as { duplicateAsset?: string },
     canUndo = false,
     canRedo = false,
+    audioStartAtSeconds = null,
   } = $props()
 
   function createDraftAnnotation() {
@@ -68,6 +69,7 @@
   <p data-testid="viewer-annotation-tool">{annotationTool}</p>
   <p data-testid="viewer-annotation-color">{annotationColor}</p>
   <p data-testid="viewer-edit-tool">{editTool}</p>
+  <p data-testid="viewer-audio-start-at">{audioStartAtSeconds ?? 'none'}</p>
 
   {#if !readOnly}
     <button

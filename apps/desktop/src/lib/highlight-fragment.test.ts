@@ -55,6 +55,18 @@ describe('highlightCitationRange', () => {
     expect(scrollIntoView.mock.instances[0]).toBe(marks[0])
   })
 
+  it('marks a range of plain transcript text, whose rendered and raw text are the same', () => {
+    const spoken = 'buenas tardes, la huelga empezó en junio.\nGracias.'
+    const container = render(`<span>${spoken}</span>`)
+    const start = spoken.indexOf('la huelga')
+
+    expect(highlightCitationRange(container, spoken, { start, end: start + 9 })).toBe(true)
+
+    expect(
+      [...container.querySelectorAll('mark.citation-hit')].map((mark) => mark.textContent)
+    ).toEqual(['la huelga'])
+  })
+
   it('selects repeated wording by its raw offsets', () => {
     const repeatedRaw = 'molino primero.\n\nmolino segundo.'
     const container = render('<p>molino primero.</p><p>molino segundo.</p>')

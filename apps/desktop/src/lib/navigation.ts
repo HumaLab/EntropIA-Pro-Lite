@@ -33,6 +33,12 @@ export type View =
        */
       citationRange?: { start: number; end: number; text: string } | null
       /**
+       * Where to seek an audio asset when the view was opened from a chat
+       * citation of a transcript (`RagSource.startSeconds`). Ignored by assets
+       * that are not audio.
+       */
+      citationSeconds?: number | null
+      /**
        * A note to open, when the view was reached by following a note link
        * (§13). The manuscript keeps its snapshot either way; this is only about
        * showing the writer the note it came from.

@@ -42,6 +42,7 @@
     onPageChange = () => {},
     onDimensionsChange = () => {},
     audioFallbackBlobLoader,
+    audioStartAtSeconds = null,
     labels: labelsProp = {},
     annotationToolbarLabels = {},
   }: DocumentViewerProps = $props()
@@ -1299,6 +1300,7 @@
     <AudioPlayer
       src={assetUrl}
       fallbackBlobLoader={audioPlayerFallbackBlobLoader}
+      startAtSeconds={audioStartAtSeconds}
       labels={{
         skipBack: labels.audioSkipBack,
         play: labels.audioPlay,

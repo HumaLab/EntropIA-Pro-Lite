@@ -78,6 +78,8 @@ export interface DocumentViewerProps {
   onPageChange?: (page: number, totalPages: number) => void
   onDimensionsChange?: (dimensions: { width: number; height: number }) => void
   audioFallbackBlobLoader?: (nativePath: string) => Promise<Blob>
+  /** Audio only: second to position the recording at (a citation of a transcript). */
+  audioStartAtSeconds?: number | null
   labels?: Partial<DocumentViewerLabels>
   annotationToolbarLabels?: Record<string, unknown>
 }

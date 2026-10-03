@@ -126,4 +126,38 @@ describe('AudioPlayer', () => {
     await fireEvent.loadedMetadata(audio)
     expect(screen.getByTestId('audio-duration')).toHaveTextContent('1:05')
   })
+
+  it('seeks to startAtSeconds once the metadata is known', async () => {
+    render(AudioPlayer, { props: { src: '/audio/interview.wav', startAtSeconds: 65 } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 120 })
+
+    await fireEvent.loadedMetadata(audio)
+
+    expect(audio.currentTime).toBe(65)
+    await fireEvent.timeUpdate(audio)
+    expect(screen.getByTestId('audio-current-time')).toHaveTextContent('1:05')
+  })
+
+  it('keeps a startAtSeconds beyond the duration inside the recording', async () => {
+    render(AudioPlayer, { props: { src: '/audio/interview.wav', startAtSeconds: 500 } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 120 })
+
+    await fireEvent.loadedMetadata(audio)
+
+    expect(audio.currentTime).toBe(120)
+  })
+
+  it('does not seek again when the metadata reloads for the same request', async () => {
+    render(AudioPlayer, { props: { src: '/audio/interview.wav', startAtSeconds: 30 } })
+    const audio = screen.getByTestId('audio-player').querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(audio, 'duration', { configurable: true, value: 120 })
+    await fireEvent.loadedMetadata(audio)
+    audio.currentTime = 90
+
+    await fireEvent.loadedMetadata(audio)
+
+    expect(audio.currentTime).toBe(90)
+  })
 })

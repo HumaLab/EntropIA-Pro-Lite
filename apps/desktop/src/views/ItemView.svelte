@@ -2100,6 +2100,14 @@
       : null
   )
 
+  /** The second to seek an audio asset to, from a chat citation of a transcript. */
+  const citationSeconds = $derived(
+    $navigation.current.name === 'item' &&
+      (!$navigation.current.assetId || $navigation.current.assetId === selectedAsset?.id)
+      ? ($navigation.current.citationSeconds ?? null)
+      : null
+  )
+
   const ftsSearchController = new FtsSearchController({
     getQuery: () => ftsQuery,
     setQuery: (value) => {
@@ -2498,6 +2506,7 @@
       const nextNavigation = { ...navigation.current }
       if (navigation.current.assetId && navigation.current.assetId !== nextAssetId) {
         delete nextNavigation.citationRange
+        delete nextNavigation.citationSeconds
       }
       // Same document, only the selected page (asset) changes: replace so
       // paging through pages doesn't add a Back stop per page.
@@ -2861,6 +2870,7 @@
         ocrState={textPanelOcrState}
         ocrEditedText={textPanelOcrEditedText}
         {citationRange}
+        {citationSeconds}
         transcriptionState={textPanelTranscriptionState}
         transcriptionEditedText={textPanelTranscriptionEditedText}
         canRestoreOriginalOcr={selectedAsset ? ocrRestorableAssets.has(selectedAsset.id) : false}

@@ -14,10 +14,13 @@
   let {
     src,
     fallbackBlobLoader,
+    startAtSeconds = null,
     labels: labelsProp = {},
   }: {
     src: string
     fallbackBlobLoader?: () => Promise<Blob>
+    /** Where to position the recording once its length is known (a citation). */
+    startAtSeconds?: number | null
     labels?: Partial<AudioPlayerLabels>
   } = $props()
 
@@ -45,6 +48,20 @@
   let activeBlobUrl: string | null = null
   let lastSrc: string | null = null
   let fallbackAttempt = 0
+  let lastSeekKey: string | null = null
+
+  // Positions the recording at the requested second once, and again only when
+  // a different second is requested: a metadata reload (the blob fallback) must
+  // not drag the listener back after they have moved.
+  $effect(() => {
+    const target = startAtSeconds
+    if (target === null || !Number.isFinite(target) || !audioEl || duration <= 0) return
+    const key = `${src}|${target}`
+    if (key === lastSeekKey) return
+    lastSeekKey = key
+    audioEl.currentTime = Math.min(Math.max(0, target), duration)
+    currentTime = audioEl.currentTime
+  })
 
   $effect(() => {
     if (src === lastSrc) return

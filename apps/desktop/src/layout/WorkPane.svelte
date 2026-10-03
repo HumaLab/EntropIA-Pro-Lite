@@ -343,6 +343,7 @@
     if (nextAsset) {
       const nextView = { ...view }
       delete nextView.citationRange
+      delete nextView.citationSeconds
       nav.replace({
         ...nextView,
         assetId: nextAsset.id,

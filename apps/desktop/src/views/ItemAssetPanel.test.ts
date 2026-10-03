@@ -48,6 +48,7 @@ type MakePropsOptions = {
   layoutReferenceHeight?: number
   ocrEditedText?: string
   citationRange?: { start: number; end: number; text: string } | null
+  citationSeconds?: number | null
   ocrState?: AssetOcrState
   transcriptionState?: AssetTranscriptionState | null
   transcriptionEditedText?: string
@@ -64,6 +65,7 @@ function makeProps({
   layoutReferenceHeight = 100,
   ocrEditedText = source,
   citationRange = null,
+  citationSeconds = null,
   ocrState = { status: 'done', progress: 100, method: 'glm_ocr' },
   transcriptionState = null,
   transcriptionEditedText = '',
@@ -103,6 +105,7 @@ function makeProps({
     ocrState,
     ocrEditedText,
     citationRange,
+    citationSeconds,
     transcriptionState,
     transcriptionEditedText,
     documentViewerLabels: {} as never,
@@ -267,6 +270,89 @@ describe('ItemAssetPanel', () => {
         { start: 0, end: 7 }
       )
     })
+  })
+
+  it('marks the cited range in an audio transcript and opens the text tab', async () => {
+    const transcript = 'buenas tardes, la huelga empezó en junio'
+    const start = transcript.indexOf('la huelga')
+    render(
+      ItemAssetPanel,
+      makeProps({
+        selectedAsset: { id: 'asset-audio-1', type: 'audio', path: 'C:/assets/interview.mp3' },
+        viewerType: 'audio',
+        transcriptionState: { status: 'done', progress: 100, language: 'es', durationMs: 93000 },
+        transcriptionEditedText: transcript,
+        citationRange: { start, end: start + 9, text: 'la huelga' },
+      })
+    )
+
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(expect.anything(), transcript, {
+        start,
+        end: start + 9,
+      })
+    })
+    expect(screen.getByRole('tab', { name: 'item.extractedTextTab' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    const container = highlightCitationRangeMock.mock.calls[0]![0] as HTMLElement
+    expect(container).toHaveTextContent(transcript)
+  })
+
+  it('marks a transcript that loads after the citation arrives', async () => {
+    const props = makeProps({
+      selectedAsset: { id: 'asset-audio-1', type: 'audio', path: 'C:/assets/interview.mp3' },
+      viewerType: 'audio',
+      transcriptionEditedText: '',
+      citationRange: { start: 0, end: 6, text: 'buenas' },
+    })
+    const { rerender } = render(ItemAssetPanel, props)
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
+
+    await rerender({ ...props, transcriptionEditedText: 'buenas tardes' })
+
+    await waitFor(() => {
+      expect(highlightCitationRangeMock).toHaveBeenCalledWith(expect.anything(), 'buenas tardes', {
+        start: 0,
+        end: 6,
+      })
+    })
+  })
+
+  it('does not mark a transcript that changed after the citation was bound', async () => {
+    const props = makeProps({
+      selectedAsset: { id: 'asset-audio-1', type: 'audio', path: 'C:/assets/interview.mp3' },
+      viewerType: 'audio',
+      transcriptionEditedText: 'buenas tardes',
+      citationRange: { start: 0, end: 6, text: 'buenas' },
+    })
+    const { rerender } = render(ItemAssetPanel, props)
+    await waitFor(() => expect(highlightCitationRangeMock).toHaveBeenCalledTimes(1))
+    highlightCitationRangeMock.mockClear()
+
+    await rerender({ ...props, transcriptionEditedText: 'Prefijo buenas tardes' })
+    await tick()
+    await tick()
+
+    expect(highlightCitationRangeMock).not.toHaveBeenCalled()
+  })
+
+  it('hands the citation second to the audio viewer', async () => {
+    render(
+      ItemAssetPanel,
+      makeProps({
+        selectedAsset: { id: 'asset-audio-1', type: 'audio', path: 'C:/assets/interview.mp3' },
+        viewerType: 'audio',
+        transcriptionEditedText: 'buenas tardes',
+        citationSeconds: 65,
+      })
+    )
+
+    expect(screen.getByTestId('mock-item-asset-panel-document-viewer')).toHaveAttribute(
+      'data-start-at',
+      '65'
+    )
   })
 
   it('defaults a normal asset change to document', async () => {
