@@ -1546,6 +1546,51 @@ fn endpoint_verdict(state: &ZoteroState) -> ExecOutput {
 mod tests {
     use super::*;
 
+    fn native_page(number: i64, quality: &str, text: &str) -> ExtractPageText {
+        ExtractPageText {
+            page_number: number,
+            method: "native".to_string(),
+            text_content: text.to_string(),
+            text_hash: extraction_text_hash(text),
+            text_chars: text.chars().count() as i64,
+            quality: quality.to_string(),
+        }
+    }
+
+    /// Sparse and empty pages always go to OCR; an unreadable page only when
+    /// the document has no native text at all, so an all-unreadable file does
+    /// not settle as `empty` without one recognition attempt.
+    #[test]
+    fn unreadable_pages_reach_ocr_only_when_the_document_has_no_native_text() {
+        let pages = [
+            native_page(1, "unreadable", ""),
+            native_page(2, "empty", ""),
+            native_page(3, "sparse", "ok"),
+            native_page(4, "rich", &"palabra ".repeat(20)),
+        ];
+        assert_eq!(ocr_candidate_pages(&pages, false), vec![2, 3]);
+        assert_eq!(ocr_candidate_pages(&pages, true), vec![1, 2, 3]);
+        let all_unreadable = [
+            native_page(1, "unreadable", ""),
+            native_page(2, "unreadable", ""),
+        ];
+        assert_eq!(ocr_candidate_pages(&all_unreadable, true), vec![1, 2]);
+        assert!(ocr_candidate_pages(&all_unreadable, false).is_empty());
+    }
+
+    /// The page layer replaces a blank or poorer whole-document text, and
+    /// never a rich one.
+    #[test]
+    fn the_richer_native_text_wins_unless_the_whole_document_is_rich() {
+        let body = "palabra ".repeat(20);
+        let pages = [native_page(1, "rich", &body)];
+        assert_eq!(richer_native_text(String::new(), &pages), body.trim());
+        assert_eq!(richer_native_text("2".to_string(), &pages), body.trim());
+        let rich_whole = "otro texto ".repeat(20);
+        assert_eq!(richer_native_text(rich_whole.clone(), &pages), rich_whole);
+        assert_eq!(richer_native_text(String::new(), &[]), "");
+    }
+
     fn row(key: &str, version: u64, csl: &str) -> serde_json::Value {
         serde_json::json!({ "key": key, "version": version, "csljson": csl })
     }
@@ -2843,10 +2888,14 @@ impl BibliographyExtractExecutor {
                 joined
             }
         };
+        // The whole-document parser can also return less than the page layer
+        // holds (an inline image ahead of the text drops everything after
+        // it). When it is not already rich, the richer of the two wins.
+        let text = richer_native_text(text, &pages);
         let mut quality = extraction_quality(&text);
         let mut text = text;
         let (pages, ocr_failed_pages, ocr_attempted) =
-            self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
+            self.maybe_ocr_pages(ctx, task, stop, bytes, pages, quality == "empty")?;
         // A scan has no native text, so the whole-document verdict above is
         // `empty` however well OCR reads it. When recognition replaced pages
         // and the native layer was not already rich, the document text and
@@ -2886,6 +2935,7 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
+        native_blank: bool,
     ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool), crate::processing::scheduler::ExecOutput>
     {
         use crate::processing::scheduler::ExecOutput;
@@ -2901,11 +2951,7 @@ impl BibliographyExtractExecutor {
         // the document is mostly scan: one request per window of pages, no
         // page rendering. A window the provider rejects (not a rate limit or
         // a credential problem) drops back to the per-page path below.
-        let needing: Vec<i64> = pages
-            .iter()
-            .filter(|page| page.quality == "sparse" || page.quality == "empty")
-            .map(|page| page.page_number)
-            .collect();
+        let needing = ocr_candidate_pages(&pages, native_blank);
         let mut windowed: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
         if let Some(per_request) = provider.pdf_pages_per_request() {
             if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
@@ -2956,7 +3002,7 @@ impl BibliographyExtractExecutor {
         let mut out: Vec<ExtractPageText> = Vec::with_capacity(pages.len());
         let mut ocr_failed_pages: Vec<i64> = Vec::new();
         for page in pages {
-            if page.quality != "sparse" && page.quality != "empty" {
+            if !needing.contains(&page.page_number) {
                 out.push(page);
                 continue;
             }
@@ -3188,6 +3234,48 @@ impl crate::processing::scheduler::Executor for BibliographyExtractExecutor {
                 output,
             },
         }
+    }
+}
+
+/// Pages the OCR pass must read: sparse and empty ones always. A page the
+/// native decoder could not read is `unreadable`; it stays out of OCR while
+/// the document as a whole has native text, but when the document has none at
+/// all (`native_blank`) there is nothing native left to protect, so it goes
+/// to OCR too instead of the file settling as `empty` without a single
+/// recognition attempt.
+fn ocr_candidate_pages(pages: &[ExtractPageText], native_blank: bool) -> Vec<i64> {
+    pages
+        .iter()
+        .filter(|page| match page.quality.as_str() {
+            "sparse" | "empty" => true,
+            "unreadable" => native_blank,
+            _ => false,
+        })
+        .map(|page| page.page_number)
+        .collect()
+}
+
+/// Keeps the whole-document text unless it is not rich and the per-page layer
+/// holds clearly more (by alphanumeric characters).
+fn richer_native_text(text: String, pages: &[ExtractPageText]) -> String {
+    if extraction_quality(&text) == "rich" {
+        return text;
+    }
+    let joined = pages
+        .iter()
+        .map(|page| page.text_content.trim())
+        .filter(|page_text| !page_text.is_empty())
+        .collect::<Vec<_>>()
+        .join(
+            "
+
+",
+        );
+    let alphanumeric = |value: &str| value.chars().filter(|c| c.is_alphanumeric()).count();
+    if alphanumeric(&joined) > alphanumeric(&text) {
+        joined
+    } else {
+        text
     }
 }
 

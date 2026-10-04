@@ -4647,6 +4647,48 @@ fn extract_task_reads_text_when_the_whole_document_parser_panics() {
     );
 }
 
+/// A permissions-only encrypted PDF whose whole-document parse comes back
+/// empty (inline image before the text) still publishes its text: the
+/// extraction is `rich`, not the `empty` that used to trigger a pointless
+/// re-demand on every sync.
+#[test]
+fn extract_task_reads_text_the_whole_document_parser_silently_drops() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFEMPTY1", "Informe cifrado", "Resumen.");
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf-rc4-40-inline-image-text.pdf"
+    ))
+    .expect("fixture");
+    let path = write_temp_pdf(&dir, "informe.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT003",
+        "linked_file",
+        Some(&path),
+        "informe.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    run_extract(&dir, &conn, &task_id);
+
+    let (quality, text): (String, String) = conn
+        .query_row(
+            "SELECT quality, text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(quality, "rich", "{text}");
+    assert!(
+        text.contains("Informe sociolaboral del Partido de General Pueyrredon"),
+        "{text}"
+    );
+}
+
 /// An attachment with no resolvable file parks blocked with the resolver
 /// reason — never failed, never retried blindly.
 #[test]
@@ -8579,6 +8621,50 @@ fn a_scanned_pdf_is_recognized_with_one_whole_document_request() {
         "{receipt}"
     );
     assert_eq!(receipt["ocrFailedPages"], serde_json::json!([]));
+}
+
+/// Text the whole-document parser dropped is found natively, so a configured
+/// OCR provider is not called for a page that already has its text.
+#[test]
+fn a_page_whose_text_the_parser_dropped_is_not_sent_to_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFEMPTY2", "Informe cifrado", "Resumen.");
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf-rc4-40-inline-image-text.pdf"
+    ))
+    .expect("fixture");
+    let path = write_temp_pdf(&dir, "informe.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT004",
+        "linked_file",
+        Some(&path),
+        "informe.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(provider.pdf_calls.lock().unwrap().is_empty());
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0);
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(quality, "rich");
 }
 
 /// More than 100 pages split into consecutive windows of at most 100.

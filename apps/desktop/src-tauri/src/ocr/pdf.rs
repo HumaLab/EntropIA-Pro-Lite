@@ -403,12 +403,47 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     // header line as UTF-8 and wants `%PDF-` at byte 0.
     let normalized = normalize_pdf_header(&bytes);
     let bytes: &[u8] = normalized.as_deref().unwrap_or(&bytes);
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let parsed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(bytes)
     })) {
         Ok(result) => result.map_err(|e| format!("PDF text extraction failed: {e}")),
         Err(_) => Err(UNREADABLE_PDF_TEXT_MESSAGE.to_string()),
+    };
+    match parsed {
+        // `pdf-extract` also fails silently: a page with an inline image
+        // ahead of its text comes back as `Ok("")`. That is not "no text
+        // layer", so ask the page layer before any caller treats the file as
+        // a scan. An honest blank stays the original answer.
+        Ok(text) if text.trim().is_empty() => Ok(page_layer_text(bytes).unwrap_or(text)),
+        other => other,
     }
+}
+
+/// Text of every page through lopdf's per-page decoder, joined in page order.
+/// `None` when the file does not load or no page holds any text.
+fn page_layer_text(bytes: &[u8]) -> Option<String> {
+    let document = load_lopdf_document(bytes, "page text").ok()?;
+    let mut pages: Vec<String> = Vec::new();
+    for number in document.get_pages().keys() {
+        let text: String = document
+            .extract_text_chunks_with_limit(
+                &[*number],
+                crate::bibliography::processing::BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES,
+            )
+            .into_iter()
+            .filter_map(Result::ok)
+            .collect();
+        if !text.trim().is_empty() {
+            pages.push(text);
+        }
+    }
+    (!pages.is_empty()).then(|| {
+        pages.join(
+            "
+
+",
+        )
+    })
 }
 
 /// How far into the file the spec lets `%PDF-` sit.
@@ -1394,6 +1429,31 @@ mod tests {
         let error = extract_pdf_text(b"<html>not a pdf at all</html>").expect_err("not a pdf");
 
         assert!(error.contains("PDF"), "{error}");
+    }
+
+    /// RC4-40 permissions-only PDF whose text sits after an inline image
+    /// (`BI ... ID <binary> EI`), in a subset TrueType font with a
+    /// `Differences` encoding — the shape of a scanned-then-OCR'd report.
+    const RC4_40_INLINE_IMAGE_TEXT_PDF: &[u8] =
+        include_bytes!("../../tests/fixtures/pdf-rc4-40-inline-image-text.pdf");
+
+    /// `pdf-extract` answers `Ok("")` for a page with an inline image before
+    /// its text: no error, no panic, no text. The fixture only guards the fix
+    /// while that stays true.
+    #[test]
+    fn the_inline_image_fixture_still_defeats_the_whole_document_parser() {
+        let plain = open_with_empty_password(RC4_40_INLINE_IMAGE_TEXT_PDF).expect("opens");
+        let text = pdf_extract::extract_text_from_mem(&plain).expect("no error");
+        assert!(text.trim().is_empty(), "pdf-extract read {text:?}");
+    }
+
+    #[test]
+    fn extract_pdf_text_falls_back_to_the_page_layer_when_the_parser_returns_nothing() {
+        let text = extract_pdf_text(RC4_40_INLINE_IMAGE_TEXT_PDF).expect("reads");
+        assert!(
+            text.contains("Informe sociolaboral del Partido de General Pueyrredon"),
+            "{text:?}"
+        );
     }
 
     #[test]
