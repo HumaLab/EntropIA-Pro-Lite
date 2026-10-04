@@ -214,6 +214,33 @@ describe('App startup', () => {
   })
 })
 
+describe('App archive compaction notice', () => {
+  it('covers the window while the archive is compacted and clears afterwards', async () => {
+    const { listen } = await import('@tauri-apps/api/event')
+    vi.mocked(listen).mockClear()
+    render(App)
+    await waitForStartupToFinish()
+    const compacting = vi
+      .mocked(listen)
+      .mock.calls.find(([event]) => event === 'app:compacting')?.[1] as unknown as (event: {
+      payload: boolean
+    }) => void
+    expect(typeof compacting).toBe('function')
+    expect(screen.queryByText('Optimizando el archivo…')).not.toBeInTheDocument()
+
+    compacting({ payload: true })
+    const notice = await screen.findByText('Optimizando el archivo…')
+    expect(notice.closest('[role="status"]')).toHaveTextContent('No apagues el equipo')
+    // Not instead of the app: nothing is unmounted under the notice.
+    expect(screen.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument()
+
+    compacting({ payload: false })
+    await vi.waitFor(() =>
+      expect(screen.queryByText('Optimizando el archivo…')).not.toBeInTheDocument()
+    )
+  })
+})
+
 describe('App lazy routes', () => {
   it('shows a pending state and completes item navigation with the required props', async () => {
     let resolveRoute: ((module: { default: typeof LazyRouteStub }) => void) | undefined
