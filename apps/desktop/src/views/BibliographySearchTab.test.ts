@@ -70,7 +70,8 @@ const readableContext = {
   text: 'El oficio',
   spans: [[3, 7, 16]],
   pages: [{ pageNumber: 3, text: 'Antes. El oficio. Después.', highlights: [[7, 16]] }],
-  openedPath: null,
+  originalKind: null,
+  originalPath: null,
   openError: null,
 }
 

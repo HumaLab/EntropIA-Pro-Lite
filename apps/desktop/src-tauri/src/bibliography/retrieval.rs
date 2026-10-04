@@ -2109,22 +2109,35 @@ pub fn expand_passage(
     }))
 }
 
+pub use crate::bibliography::attachment::OriginalKind;
+
+/// The original behind a passage, validated for in-app viewing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewableOriginal {
+    pub kind: OriginalKind,
+    /// The canonical file to grant to the viewer: set for a PDF, `None` for
+    /// an HTML snapshot, which is shown from the catalog's stored text.
+    pub path: Option<std::path::PathBuf>,
+}
+
 /// A passage ready to open: the expansion for the highlight surface plus
-/// the resolved file (or the reason there is none). The command opens
-/// the file; the UI renders the expansion regardless.
+/// the original validated for in-app viewing (or the reason there is none).
+/// Nothing here launches an external program; the command grants the one
+/// validated file to the webview and the UI renders the expansion regardless.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageOpenPlan {
     pub expansion: PassageExpansion,
-    pub path: Option<std::path::PathBuf>,
-    /// `(reason, detail)` when no file resolves — the same stable strings
-    /// the resolver reports.
+    pub original: Option<ViewableOriginal>,
+    /// `(reason, detail)` when no original is viewable: the resolver's or
+    /// the validator's stable strings.
     pub reason: Option<(String, String)>,
 }
 
 /// Prepares a passage opening without spawning anything: expands the
-/// chunk, reads its attachment, resolves the file. Unknown chunks fail
-/// with `unknown_chunk`; unresolvable files travel as `reason`, never as
-/// an error, so the highlight surface still renders.
+/// chunk, reads its registered attachment, resolves and validates the file.
+/// Unknown chunks fail with `unknown_chunk`; an unviewable original travels
+/// as `reason`, never as an error, so the highlight surface still renders.
+/// The only path ever produced comes from a registered attachment row.
 pub fn prepare_passage_open(
     conn: &Connection,
     chunk_id: &str,
@@ -2144,7 +2157,7 @@ pub fn prepare_passage_open(
                     format!("Failed to read passage attachment: {error}"),
                 )
             })?;
-    let (path, reason) = match attachment {
+    let (original, reason) = match attachment {
         None => (
             None,
             Some((
@@ -2152,13 +2165,32 @@ pub fn prepare_passage_open(
                 "the passage attachment left the catalog".to_string(),
             )),
         ),
+        Some(attachment) if crate::bibliography::attachment::is_html_snapshot(&attachment) => (
+            Some(ViewableOriginal {
+                kind: OriginalKind::Html,
+                path: None,
+            }),
+            None,
+        ),
         Some(attachment) => {
             match crate::bibliography::attachment::resolve_attachment_file(
                 &attachment,
                 zotero_data_dir,
             ) {
                 crate::bibliography::attachment::AttachmentResolution::File(path) => {
-                    (Some(path), None)
+                    match crate::bibliography::attachment::validate_pdf_original(
+                        &path,
+                        attachment.content_type.as_deref(),
+                    ) {
+                        Ok(canonical) => (
+                            Some(ViewableOriginal {
+                                kind: OriginalKind::Pdf,
+                                path: Some(canonical),
+                            }),
+                            None,
+                        ),
+                        Err(reason) => (None, Some(reason)),
+                    }
                 }
                 crate::bibliography::attachment::AttachmentResolution::Unavailable {
                     reason,
@@ -2169,7 +2201,7 @@ pub fn prepare_passage_open(
     };
     Ok(PassageOpenPlan {
         expansion,
-        path,
+        original,
         reason,
     })
 }
@@ -2422,7 +2454,8 @@ mod expansion_tests {
 
 #[cfg(test)]
 mod open_tests {
-    use super::super::retrieval::prepare_passage_open;
+    use super::super::attachment::plain_canonical;
+    use super::super::retrieval::{prepare_passage_open, OriginalKind};
 
     fn open_db() -> rusqlite::Connection {
         // Reuses the expansion fixture shape: catalog, relations, profiles,
@@ -2538,8 +2571,23 @@ mod open_tests {
         chunk_id
     }
 
+    fn seed_typed(
+        conn: &mut rusqlite::Connection,
+        native_path: Option<&str>,
+        content_type: &str,
+        filename: &str,
+    ) -> String {
+        let chunk_id = seed_chunk_with_attachment(conn, native_path);
+        conn.execute(
+            "UPDATE zotero_attachments SET content_type = ?1, filename = ?2",
+            rusqlite::params![content_type, filename],
+        )
+        .expect("retype attachment");
+        chunk_id
+    }
+
     #[test]
-    fn open_plan_resolves_a_readable_file_beside_the_expansion() {
+    fn open_plan_resolves_a_readable_pdf_beside_the_expansion() {
         let mut conn = open_db();
         let dir = tempfile::tempdir().expect("tempdir");
         let pdf = dir.path().join("abrible.pdf");
@@ -2549,8 +2597,37 @@ mod open_tests {
         let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
         assert_eq!(plan.expansion.chunk_id, chunk_id);
         assert_eq!(plan.expansion.spans, vec![(2, 10, 40)]);
-        assert_eq!(plan.path.as_deref(), Some(pdf.as_path()));
+        let original = plan.original.expect("a readable PDF is viewable");
+        assert_eq!(original.kind, OriginalKind::Pdf);
+        assert_eq!(
+            original.path.as_deref(),
+            Some(plain_canonical(&pdf).expect("canonical").as_path())
+        );
         assert!(plan.reason.is_none(), "a resolved file carries no reason");
+    }
+
+    /// The owner's bug: Zotero stores `native_path` with forward slashes
+    /// (`C:/Users/...`), and `explorer.exe C:/...` answers by opening the
+    /// Documents folder. The path that leaves the plan is canonical and plain:
+    /// no forward slashes on Windows, never the `\?\` verbatim form.
+    #[test]
+    fn open_plan_hands_out_a_canonical_native_path_not_the_stored_spelling() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("abrible, con coma.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 fake").expect("write pdf");
+        let forward = pdf.to_string_lossy().replace('\\', "/");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&forward));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        let path = plan
+            .original
+            .and_then(|original| original.path)
+            .expect("the forward-slash path still resolves");
+        let text = path.to_string_lossy().to_string();
+        assert!(!text.starts_with(r"\\?\"), "verbatim prefix leaked: {text}");
+        #[cfg(windows)]
+        assert!(!text.contains('/'), "forward slashes survived: {text}");
     }
 
     #[test]
@@ -2560,9 +2637,82 @@ mod open_tests {
 
         let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
         assert_eq!(plan.expansion.chunk_id, chunk_id);
-        assert!(plan.path.is_none(), "nothing to open");
+        assert!(plan.original.is_none(), "nothing to open");
         let (reason, _detail) = plan.reason.expect("the reason travels with the context");
         assert_eq!(reason, "linked_file_missing");
+    }
+
+    #[test]
+    fn open_plan_refuses_a_directory_as_the_original() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&dir.path().to_string_lossy()));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none(), "a directory is never an original");
+        assert!(plan.reason.is_some(), "the refusal is explained");
+    }
+
+    #[test]
+    fn open_plan_refuses_a_file_that_is_not_a_pdf() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("trampa.pdf");
+        std::fs::write(&fake, b"MZ not a pdf at all").expect("write file");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&fake.to_string_lossy()));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none(), "the PDF signature is checked");
+        assert_eq!(plan.reason.expect("reason").0, "not_a_pdf");
+
+        let docx = dir.path().join("notas.docx");
+        std::fs::write(&docx, b"%PDF-1.4 but typed as word").expect("write docx");
+        let mut other = open_db();
+        let chunk = seed_typed(
+            &mut other,
+            Some(&docx.to_string_lossy()),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "notas.docx",
+        );
+        let plan = prepare_passage_open(&other, &chunk, None).expect("prepare");
+        assert!(plan.original.is_none(), "the content type decides first");
+        assert_eq!(plan.reason.expect("reason").0, "not_a_pdf");
+    }
+
+    /// Only a path derived from a registered attachment row is ever viewable:
+    /// the command takes a chunk id, never a path, and a chunk whose
+    /// attachment left the catalog yields nothing.
+    #[test]
+    fn open_plan_refuses_a_path_without_a_registered_attachment() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("abrible.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 fake").expect("write pdf");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&pdf.to_string_lossy()));
+        // Foreign keys off: the chunk outlives its attachment row, the shape a
+        // half-synced catalog can leave behind.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .expect("foreign keys off");
+        conn.execute("DELETE FROM zotero_attachments", [])
+            .expect("unregister the attachment");
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none());
+        assert_eq!(plan.reason.expect("reason").0, "unknown_attachment");
+    }
+
+    /// An HTML snapshot opens from the catalog's stored text: no file is
+    /// needed and none is ever granted.
+    #[test]
+    fn open_plan_views_an_html_snapshot_without_a_file() {
+        let mut conn = open_db();
+        let chunk_id = seed_typed(&mut conn, None, "text/html", "captura.html");
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        let original = plan.original.expect("a snapshot is viewable in app");
+        assert_eq!(original.kind, OriginalKind::Html);
+        assert!(original.path.is_none(), "no file is granted for HTML");
+        assert!(plan.reason.is_none());
     }
 
     #[test]

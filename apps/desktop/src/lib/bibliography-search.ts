@@ -78,8 +78,14 @@ export interface BibliographyPassageContext {
     text: string
     highlights: Array<[number, number]>
   }>
-  openedPath: string | null
-  /** Why the original file would not open, when it would not. */
+  /** What the app can show of the original: a PDF file or an HTML snapshot's stored text. */
+  originalKind: 'pdf' | 'html' | null
+  /**
+   * The PDF the viewer was just granted (one file, at runtime). Only set by
+   * `bibliographyOpenPassage`; HTML snapshots and the plain context carry none.
+   */
+  originalPath: string | null
+  /** Why the original cannot be shown, when it cannot. */
   openError: string | null
 }
 
@@ -88,7 +94,11 @@ export function bibliographyPassageContext(chunkId: string): Promise<Bibliograph
   return invoke<BibliographyPassageContext>('bibliography_passage_context', { chunkId })
 }
 
-/** Opens the passage's original file in the operating system's viewer. */
+/**
+ * Prepares the passage's original for the in-app viewer: the backend resolves
+ * the registered attachment, validates the PDF and allows that one file on the
+ * asset protocol. Nothing opens outside the app.
+ */
 export function bibliographyOpenPassage(chunkId: string): Promise<BibliographyPassageContext> {
   return invoke<BibliographyPassageContext>('bibliography_open_passage', { chunkId })
 }

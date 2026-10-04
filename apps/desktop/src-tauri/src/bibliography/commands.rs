@@ -109,8 +109,8 @@ fn hit_dto(hit: WorkHit, display: Option<WorkDisplay>) -> SearchWorkHitDto {
 }
 
 /// One passage opening: the expansion for the highlight surface, the
-/// opened path when a file resolved, and the resolver reason otherwise.
-/// The highlight renders in both cases — opening is a courtesy, never a
+/// original the in-app viewer may show, and the reason when there is none.
+/// The highlight renders in both cases: the original is a courtesy, never a
 /// gate.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,7 +122,11 @@ pub struct OpenPassageResponse {
     pub text: String,
     pub spans: Vec<(i64, i64, i64)>,
     pub pages: Vec<OpenPassagePageDto>,
-    pub opened_path: Option<String>,
+    /// `"pdf"` or `"html"` when the original can be shown inside the app.
+    pub original_kind: Option<String>,
+    /// The canonical PDF path the viewer was just granted (and only that
+    /// one file). `None` for HTML snapshots and for the no-grant context.
+    pub original_path: Option<String>,
     pub open_error: Option<String>,
 }
 
@@ -134,34 +138,49 @@ pub struct OpenPassagePageDto {
     pub highlights: Vec<(i64, i64)>,
 }
 
-/// Opens one passage's original PDF through the attachment resolver and
-/// the validated OS file opener, answering the expansion for the
-/// highlight surface either way: `openedPath` names the file the OS took,
-/// `openError` carries the resolver or opener reason when none did.
+/// Prepares one passage's original for viewing inside EntropIA. The
+/// frontend names a chunk, never a path: the file comes from the chunk's
+/// registered attachment, is canonicalized and validated as an existing
+/// regular PDF, and only then is that single file allowed on the asset
+/// protocol at runtime (the static scope is untouched). Nothing is launched
+/// outside the app and a directory is never opened.
 #[tauri::command]
 pub async fn bibliography_open_passage(
     chunk_id: String,
+    app: tauri::AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<OpenPassageResponse, String> {
+    use tauri::Manager;
     let db_path = db.db_path.clone();
     blocking(move || {
         let (plan, _conn) = prepare_plan(&db_path, &chunk_id)?;
-        let (opened_path, open_error) = match &plan.path {
-            Some(path) => match crate::bibliography::attachment::open_attachment_file(path) {
-                Ok(()) => (Some(path.to_string_lossy().to_string()), None),
-                Err(error) => (None, Some(error)),
-            },
-            None => (None, plan_reason(&plan)),
-        };
-        Ok(passage_response(plan, opened_path, open_error))
+        let mut open_error = plan_reason(&plan);
+        let mut granted = None;
+        if let Some(path) = plan
+            .original
+            .as_ref()
+            .and_then(|original| original.path.as_ref())
+        {
+            match app.asset_protocol_scope().allow_file(path) {
+                Ok(()) => granted = Some(path.to_string_lossy().to_string()),
+                Err(error) => {
+                    open_error = Some(format!("scope_grant_failed: {error}"));
+                }
+            }
+        }
+        let mut response = passage_response(plan, granted.clone(), open_error);
+        if granted.is_none() && response.original_kind.as_deref() == Some("pdf") {
+            response.original_kind = None;
+        }
+        Ok(response)
     })
     .await
 }
 
-/// The same expansion without opening anything: what the in-app passage
+/// The same expansion without granting anything: what the in-app passage
 /// reader shows (page text with the cited range marked). `openError` says why
-/// the original file would not open, so the reader can say so before the user
-/// asks; it is `None` when the file resolves.
+/// the original would not open, so the reader can say so before the user
+/// asks; it is `None` when an original is viewable.
 #[tauri::command]
 pub async fn bibliography_passage_context(
     chunk_id: String,
@@ -205,9 +224,13 @@ fn plan_reason(plan: &crate::bibliography::retrieval::PassageOpenPlan) -> Option
 
 fn passage_response(
     plan: crate::bibliography::retrieval::PassageOpenPlan,
-    opened_path: Option<String>,
+    original_path: Option<String>,
     open_error: Option<String>,
 ) -> OpenPassageResponse {
+    let original_kind = plan.original.as_ref().map(|original| match original.kind {
+        crate::bibliography::retrieval::OriginalKind::Pdf => "pdf".to_string(),
+        crate::bibliography::retrieval::OriginalKind::Html => "html".to_string(),
+    });
     OpenPassageResponse {
         chunk_id: plan.expansion.chunk_id,
         item_id: plan.expansion.item_id,
@@ -225,7 +248,8 @@ fn passage_response(
                 highlights: page.highlights,
             })
             .collect(),
-        opened_path,
+        original_kind,
+        original_path,
         open_error,
     }
 }

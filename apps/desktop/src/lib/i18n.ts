@@ -702,6 +702,14 @@ const es = {
     'Este pasaje no está en la biblioteca de este equipo (la conversación viene de otro dispositivo o la obra ya no está). Se muestra el fragmento guardado.',
   'ragChat.passageOriginalUnavailable': 'El archivo original no está disponible en este equipo.',
   'ragChat.passageOriginalError': 'No se pudo abrir el original: {reason}',
+  'ragChat.passageOriginalEyebrow': 'Original',
+  'ragChat.passageOriginalClose': 'Cerrar original',
+  'ragChat.passageOriginalText': 'Texto de la página {page}',
+  'ragChat.passageOriginalSnapshot': 'Texto de la captura',
+  'ragChat.passageOriginalNote':
+    'El PDF se abre en la página citada; el pasaje queda marcado en el texto de al lado.',
+  'ragChat.passageOriginalSnapshotNote':
+    'Captura web guardada: se muestra su texto, con el pasaje citado marcado.',
   'ragChat.passageError': 'No se pudo leer el pasaje: {reason}',
   'ragChat.conversations': 'Conversaciones',
   'ragChat.noConversations': 'Sin conversaciones todavía',
@@ -3518,6 +3526,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'This passage is not in this device’s library (the conversation comes from another device or the work is gone). The saved fragment is shown.',
   'ragChat.passageOriginalUnavailable': 'The original file is not available on this device.',
   'ragChat.passageOriginalError': 'The original could not be opened: {reason}',
+  'ragChat.passageOriginalEyebrow': 'Original',
+  'ragChat.passageOriginalClose': 'Close original',
+  'ragChat.passageOriginalText': 'Text of page {page}',
+  'ragChat.passageOriginalSnapshot': 'Text of the capture',
+  'ragChat.passageOriginalNote':
+    'The PDF opens on the cited page; the passage is marked in the text beside it.',
+  'ragChat.passageOriginalSnapshotNote':
+    'Saved web capture: its text is shown, with the cited passage marked.',
   'ragChat.passageError': 'The passage could not be read: {reason}',
   'ragChat.conversations': 'Conversations',
   'ragChat.noConversations': 'No conversations yet',

@@ -4,10 +4,12 @@ import type { RagSource } from './rag'
 import {
   bibliographyNoticeKey,
   isBibliographySource,
+  citedPageNumber,
   libraryChoiceKey,
   locationText,
   locatorOf,
   passageHeading,
+  passageMarks,
   passageWindow,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
@@ -245,5 +247,51 @@ describe('passageHeading', () => {
     expect(passageHeading({ authors: '', year: null, libraryName: 'Mi biblioteca' }, null)).toBe(
       'Mi biblioteca'
     )
+  })
+})
+
+describe('passageMarks', () => {
+  const page = (pageNumber: number, text: string, highlights: Array<[number, number]> = []) => ({
+    pageNumber,
+    text,
+    highlights,
+  })
+
+  it('keeps the stored ranges as the only marks when the catalog has them', () => {
+    const pages = [page(2, 'alfa beta gamma', [[5, 9]]), page(3, 'beta aparece aqui tambien')]
+    expect(passageMarks(pages, 'beta')).toEqual([[[5, 9]], []])
+  })
+
+  it('falls back to an exact search of the passage on the page when no range is stored', () => {
+    // The emoji is two UTF-16 units and one scalar: offsets count scalars.
+    const pages = [page(4, '😀 antes. EL TEXTO CITADO. despues')]
+    expect(passageMarks(pages, 'EL TEXTO CITADO.')).toEqual([[[9, 25]]])
+  })
+
+  it('never marks text it cannot find exactly', () => {
+    const pages = [page(4, 'una pagina sin la frase')]
+    expect(passageMarks(pages, 'texto que no esta')).toEqual([[]])
+    expect(passageMarks(pages, '   ')).toEqual([[]])
+  })
+
+  it('does not search the fallback when any page carries stored ranges', () => {
+    const pages = [page(1, 'cita aqui', [[0, 4]]), page(2, 'cita aqui')]
+    expect(passageMarks(pages, 'cita')).toEqual([[[0, 4]], []])
+  })
+})
+
+describe('citedPageNumber', () => {
+  it('is the first page that carries the cited range', () => {
+    expect(
+      citedPageNumber([
+        { pageNumber: 4, text: 'a', highlights: [] },
+        { pageNumber: 5, text: 'b', highlights: [[0, 1]] },
+      ])
+    ).toBe(5)
+  })
+
+  it('falls back to the first page, then to page 1', () => {
+    expect(citedPageNumber([{ pageNumber: 7, text: 'a', highlights: [] }])).toBe(7)
+    expect(citedPageNumber([])).toBe(1)
   })
 })
