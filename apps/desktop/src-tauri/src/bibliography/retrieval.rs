@@ -917,7 +917,10 @@ struct WorkMeta {
 }
 
 fn read_work_meta(conn: &Connection, item_id: &str) -> BibliographyResult<Option<WorkMeta>> {
-    let row: Option<(String, String, String, String, String)> = conn
+    // `title` is nullable in the catalog (Zotero keeps untitled chapters and
+    // books): reading it as a plain String failed the whole search on the
+    // first such work.
+    let row: Option<(String, String, Option<String>, String, String)> = conn
         .query_row(
             "SELECT i.item_key, i.library_id, i.title, i.csl_json_snapshot, i.native_json_snapshot
              FROM bibliographic_items i
@@ -938,6 +941,10 @@ fn read_work_meta(conn: &Connection, item_id: &str) -> BibliographyResult<Option
         .map_err(|error| err("Failed to read work metadata", error))?;
     let Some((item_key, library_id, title, csl_json, native_json)) = row else {
         return Ok(None);
+    };
+    let title = match title.filter(|title| !title.trim().is_empty()) {
+        Some(title) => title,
+        None => format!("Sin título ({item_key})"),
     };
     let csl: serde_json::Value = serde_json::from_str(&csl_json).unwrap_or(serde_json::Value::Null);
     let native: serde_json::Value =
@@ -1309,7 +1316,17 @@ pub fn search_passages(
     let Some(active) = active else {
         return Ok(Vec::new());
     };
-    let query_vector = embed_query(query_text).map_err(|error| {
+    // The work-level search below embeds the same text again: embedding may
+    // be a network call, so the vector is computed once and shared.
+    let embedded: std::cell::RefCell<Option<Result<Vec<f32>, String>>> =
+        std::cell::RefCell::new(None);
+    let embed_once = |text: &str| -> Result<Vec<f32>, String> {
+        embedded
+            .borrow_mut()
+            .get_or_insert_with(|| embed_query(text))
+            .clone()
+    };
+    let query_vector = embed_once(query_text).map_err(|error| {
         crate::bibliography::repository::BibliographyError::new(
             "search_unavailable",
             format!("Failed to embed passage query: {error}"),
@@ -1328,7 +1345,7 @@ pub fn search_passages(
             top_k: top_works.max(1),
             filters: filters.clone(),
         },
-        embed_query,
+        &embed_once,
     )?;
     if works.hits.is_empty() {
         return Ok(Vec::new());

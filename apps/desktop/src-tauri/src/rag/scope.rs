@@ -80,6 +80,22 @@ impl BibliographyNotice {
 pub(crate) struct BibliographyLeg {
     pub sources: Vec<RagSource>,
     pub notice: Option<BibliographyNotice>,
+    /// Short, secret-free cause behind a [`BibliographyNotice::Failed`] or
+    /// [`BibliographyNotice::EmbeddingUnavailable`] notice: what the user (and
+    /// the app log) need to tell a SQL fault from a provider fault. `None`
+    /// for the notices that need no explanation.
+    pub detail: Option<String>,
+}
+
+/// Longest cause carried to the UI and the log: enough for an error message,
+/// never a dump.
+const DETAIL_MAX_CHARS: usize = 220;
+
+/// A cause made safe to show and to log: one line, bounded, credentials
+/// redacted by the same rules the app log applies to everything it writes.
+pub(crate) fn short_cause(error: &str) -> String {
+    let one_line = error.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::app_logs::sanitize_field(one_line, DETAIL_MAX_CHARS)
 }
 
 /// "p. 3", "pp. 3–4", "párr. 2" or "párr. 2–3". The label the prompt shows
@@ -177,12 +193,7 @@ pub(crate) fn bibliography_leg(
 ) -> BibliographyLeg {
     match run_bibliography_leg(conn, contract_hash, query, libraries, params, embed) {
         Ok(leg) => leg,
-        Err(error) => {
-            eprintln!(
-                "[rag] La pierna de Biblioteca falló (el resto de la respuesta sigue): {error}"
-            );
-            nothing(BibliographyNotice::Failed)
-        }
+        Err(error) => failed(BibliographyNotice::Failed, &error),
     }
 }
 
@@ -190,6 +201,17 @@ fn nothing(notice: BibliographyNotice) -> BibliographyLeg {
     BibliographyLeg {
         sources: Vec::new(),
         notice: Some(notice),
+        detail: None,
+    }
+}
+
+/// An empty leg that says why: the notice for the UI plus the short cause the
+/// caller also writes to the app log.
+pub(crate) fn failed(notice: BibliographyNotice, error: &str) -> BibliographyLeg {
+    BibliographyLeg {
+        sources: Vec::new(),
+        notice: Some(notice),
+        detail: Some(short_cause(error)),
     }
 }
 
@@ -261,7 +283,10 @@ fn run_bibliography_leg(
     ) {
         Ok(hits) => hits,
         Err(error) if error.code == "search_unavailable" => {
-            return Ok(nothing(BibliographyNotice::EmbeddingUnavailable));
+            return Ok(failed(
+                BibliographyNotice::EmbeddingUnavailable,
+                &error.message,
+            ));
         }
         Err(error) => return Err(describe(error)),
     };
@@ -307,6 +332,7 @@ fn run_bibliography_leg(
     Ok(BibliographyLeg {
         sources,
         notice: None,
+        detail: None,
     })
 }
 
@@ -378,6 +404,8 @@ pub struct PassageResult {
 pub(crate) struct PassageSearch {
     pub passages: Vec<PassageResult>,
     pub notice: Option<BibliographyNotice>,
+    /// See [`BibliographyLeg::detail`].
+    pub detail: Option<String>,
 }
 
 /// Passage search for the Writing tab: the same leg the chat uses (same
@@ -423,6 +451,7 @@ pub(crate) fn passage_search(
     PassageSearch {
         passages,
         notice: leg.notice,
+        detail: leg.detail,
     }
 }
 
@@ -721,6 +750,89 @@ mod tests {
         assert!(first.asset_id.is_empty(), "no corpus asset behind it");
     }
 
+    /// Zotero keeps chapters and books with no title (43 of the owner's 2812
+    /// works): `bibliographic_items.title` is NULLABLE. Such a work used to
+    /// make the whole leg fail with "Invalid column type Null ... title".
+    fn blank_the_title_of(conn: &Connection, item_key: &str) {
+        conn.execute(
+            "UPDATE bibliographic_items SET title = NULL WHERE item_key = ?1",
+            [item_key],
+        )
+        .expect("blank the title");
+    }
+
+    #[test]
+    fn leg_survives_a_work_without_a_title_and_still_cites_it() {
+        let (conn, chunk_a, _) = two_library_catalog();
+        blank_the_title_of(&conn, "KA0001");
+        let leg = bibliography_leg(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        assert_eq!(leg.notice, None, "a titleless work is not a failure");
+        assert_eq!(leg.detail, None);
+        assert_eq!(leg.sources.len(), 2, "its sibling work is still found");
+        let untitled = leg
+            .sources
+            .iter()
+            .find(|s| s.bibliography.as_ref().unwrap().chunk_id == chunk_a)
+            .expect("the titleless work's passage");
+        assert!(
+            untitled.item_title.contains("KA0001"),
+            "the citation names the work by its key instead of showing nothing: {:?}",
+            untitled.item_title
+        );
+    }
+
+    #[test]
+    fn work_search_survives_a_work_without_a_title() {
+        let (conn, _, _) = two_library_catalog();
+        blank_the_title_of(&conn, "KA0001");
+        let answer = crate::bibliography::retrieval::search_works(
+            &conn,
+            CONTRACT,
+            &crate::bibliography::retrieval::HybridQuery {
+                text: "compartido".into(),
+                top_k: 10,
+                filters: WorkFilters::default(),
+            },
+            &embed_ok,
+        )
+        .expect("a titleless work must not fail the search");
+        assert_eq!(answer.hits.len(), 2);
+    }
+
+    #[test]
+    fn the_query_is_embedded_once_per_search() {
+        let (conn, _, _) = two_library_catalog();
+        let calls = std::cell::Cell::new(0u32);
+        let leg = bibliography_leg(&conn, CONTRACT, "compartido", &[], &params(), &|text| {
+            calls.set(calls.get() + 1);
+            embed_ok(text)
+        });
+        assert_eq!(leg.notice, None);
+        assert_eq!(calls.get(), 1, "one network call, not one per search stage");
+    }
+
+    #[test]
+    fn a_failed_leg_says_what_failed_without_secrets() {
+        let (conn, _, _) = two_library_catalog();
+        conn.execute_batch("DROP TABLE bibliographic_chunk_spans")
+            .unwrap();
+        let leg = bibliography_leg(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        assert_eq!(leg.notice, Some(BibliographyNotice::Failed));
+        let detail = leg.detail.expect("the failure carries its cause");
+        assert!(detail.contains("bibliographic_chunk_spans"), "{detail}");
+        assert!(detail.chars().count() <= 240, "short: {detail}");
+    }
+
+    #[test]
+    fn passage_search_carries_the_failure_detail_too() {
+        let (conn, _, _) = two_library_catalog();
+        conn.execute_batch("DROP TABLE bibliographic_chunk_spans")
+            .unwrap();
+        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        assert_eq!(found.notice, Some(BibliographyNotice::Failed));
+        assert!(found.detail.is_some());
+    }
+
     #[test]
     fn leg_filters_by_library() {
         let (conn, _, chunk_b) = two_library_catalog();
@@ -878,5 +990,97 @@ mod tests {
             panic!("the embedder must not run without an active generation")
         });
         assert_eq!(found.notice, Some(BibliographyNotice::NoEmbeddings));
+    }
+
+    /// Harness against a COPY of a real archive (never the live file):
+    /// `ENTROPIA_CHAT_DB=<copy.sqlite> cargo test owner_db_copy -- --ignored --nocapture`.
+    /// The query embedder is a deterministic fake of the contract's width, so
+    /// no network and no key are involved: what it exercises is every SQL and
+    /// shape assumption of the three bibliography entry points.
+    #[test]
+    #[ignore = "needs ENTROPIA_CHAT_DB pointing at a copy of an archive"]
+    fn owner_db_copy_bibliography_search_harness() {
+        let path = std::env::var("ENTROPIA_CHAT_DB").expect("ENTROPIA_CHAT_DB");
+        let conn = crate::db::open::open_archive_connection(std::path::Path::new(&path))
+            .expect("open the copy");
+        let contract = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective contract");
+        println!(
+            "query contract: provider={} model={} dims={} hash={}",
+            contract.provider, contract.model, contract.dimensions, contract.hash
+        );
+        let stored: Vec<(String, String)> = conn
+            .prepare("SELECT contract_hash, status FROM bibliographic_index_generations")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        println!("stored generations: {stored:?}");
+
+        let dims = contract.dimensions;
+        let fake = move |text: &str| -> Result<Vec<f32>, String> {
+            let seed = text
+                .bytes()
+                .fold(7u32, |acc, b| acc.wrapping_mul(31) ^ b as u32);
+            Ok((0..dims)
+                .map(|i| {
+                    (((seed.wrapping_add((i as u32).wrapping_mul(2654435761))) % 2000) as f32
+                        - 1000.0)
+                        / 1000.0
+                })
+                .collect())
+        };
+        let question = "Necesito información sobre sindicalismo en Mar del Plata";
+        let params = RagParams::default();
+
+        let started = std::time::Instant::now();
+        let leg = run_bibliography_leg(&conn, &contract.hash, question, &[], &params, &fake);
+        println!(
+            "run_bibliography_leg(all synced): {:?} in {:?}",
+            leg.as_ref()
+                .map(|leg| (leg.sources.len(), leg.notice))
+                .map_err(|e| e.clone()),
+            started.elapsed()
+        );
+        let one = [RagLibraryRef {
+            library_type: "user".into(),
+            library_id: "0".into(),
+        }];
+        let started = std::time::Instant::now();
+        let leg = run_bibliography_leg(&conn, &contract.hash, question, &one, &params, &fake);
+        println!(
+            "run_bibliography_leg(user/0): {:?} in {:?}",
+            leg.as_ref()
+                .map(|leg| (leg.sources.len(), leg.notice))
+                .map_err(|e| e.clone()),
+            started.elapsed()
+        );
+        let works = crate::bibliography::retrieval::search_works(
+            &conn,
+            &contract.hash,
+            &crate::bibliography::retrieval::HybridQuery {
+                text: question.to_string(),
+                top_k: 20,
+                filters: WorkFilters::default(),
+            },
+            &fake,
+        );
+        println!(
+            "search_works: {:?}",
+            works
+                .as_ref()
+                .map(|a| (a.hits.len(), a.vector_available))
+                .map_err(|e| format!("{}: {}", e.code, e.message))
+        );
+        let found = passage_search(&conn, &contract.hash, question, &[], &params, &fake);
+        println!(
+            "passage_search: passages={} notice={:?}",
+            found.passages.len(),
+            found.notice
+        );
+        for passage in found.passages.iter().take(3) {
+            println!("  {} | {}", passage.title, passage.score);
+        }
     }
 }

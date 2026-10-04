@@ -349,6 +349,7 @@ pub async fn rag_ask(
             model: phase.model,
             conversation_id,
             bibliography_notice: None,
+            bibliography_notice_detail: None,
         });
     }
 
@@ -496,13 +497,7 @@ pub async fn rag_ask(
                         &|text| embedder.embed(text),
                     )
                 }
-                Err(error) => {
-                    eprintln!("[rag] Biblioteca no disponible: {error}");
-                    scope::BibliographyLeg {
-                        sources: Vec::new(),
-                        notice: Some(scope::BibliographyNotice::Failed),
-                    }
-                }
+                Err(error) => scope::failed(scope::BibliographyNotice::Failed, &error),
             }
         })
         .await
@@ -511,8 +506,21 @@ pub async fn rag_ask(
         scope::BibliographyLeg {
             sources: Vec::new(),
             notice: None,
+            detail: None,
         }
     };
+    // The leg never fails the answer, so its cause must not vanish with the
+    // notice: it goes to the app log (already redacted) and, short, to the UI.
+    if let (Some(notice), Some(detail)) = (bibliography_leg.notice, &bibliography_leg.detail) {
+        crate::app_logs::warn(
+            &app_handle,
+            "rag/biblioteca",
+            format!(
+                "La búsqueda en la Biblioteca no aportó ({}): {detail}",
+                notice.code()
+            ),
+        );
+    }
     trace_stage(
         phase.trace,
         "bibliography_leg",
@@ -611,6 +619,7 @@ pub async fn rag_ask(
     let bibliography_notice = bibliography_leg
         .notice
         .map(|notice| notice.code().to_string());
+    let bibliography_notice_detail = bibliography_leg.detail.clone();
     // Corpus-only keeps its exact historic path; any scope that includes the
     // Biblioteca merges by rank under the same top_k and context budget.
     let sources = if scope == RagScope::Corpus {
@@ -651,6 +660,7 @@ pub async fn rag_ask(
         .await;
         let mut answer = empty_answer(phase.model, conversation_id);
         answer.bibliography_notice = bibliography_notice;
+        answer.bibliography_notice_detail = bibliography_notice_detail;
         return Ok(answer);
     }
 
@@ -702,6 +712,7 @@ pub async fn rag_ask(
         model: phase.model,
         conversation_id,
         bibliography_notice,
+        bibliography_notice_detail,
     })
 }
 
@@ -1414,6 +1425,7 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
         model,
         conversation_id,
         bibliography_notice: None,
+        bibliography_notice_detail: None,
     }
 }
 
@@ -2172,6 +2184,16 @@ mod tests {
         assert_eq!(json["bibliographyNotice"], "no_embeddings");
         let plain = serde_json::to_value(empty_answer("m".to_string(), None)).unwrap();
         assert!(plain["bibliographyNotice"].is_null());
+        assert!(plain["bibliographyNoticeDetail"].is_null());
+    }
+
+    #[test]
+    fn answer_serializes_the_notice_detail() {
+        let mut answer = empty_answer("m".to_string(), None);
+        answer.bibliography_notice = Some("failed".to_string());
+        answer.bibliography_notice_detail = Some("sql_error: algo".to_string());
+        let json = serde_json::to_value(&answer).expect("serialize");
+        assert_eq!(json["bibliographyNoticeDetail"], "sql_error: algo");
     }
 
     #[test]

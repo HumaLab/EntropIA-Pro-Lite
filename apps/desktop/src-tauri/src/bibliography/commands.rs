@@ -305,6 +305,7 @@ fn answer_dto(conn: &rusqlite::Connection, answer: HybridAnswer) -> SearchWorksR
 pub async fn bibliography_search_works(
     request: SearchWorksRequest,
     db: State<'_, AppDbState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<SearchWorksResponse, String> {
     let db_path = db.db_path.clone();
     blocking(move || {
@@ -341,7 +342,18 @@ pub async fn bibliography_search_works(
         };
         let embedder = EngineProfileEmbedder::new(db_path);
         let answer = search_works(&conn, &effective.hash, &query, &|text| embedder.embed(text))
-            .map_err(|error| format!("{}: {}", error.code, error.message))?;
+            .map_err(|error| {
+                let cause = format!("{}: {}", error.code, error.message);
+                crate::app_logs::error(
+                    &app_handle,
+                    "bibliografia/obras",
+                    format!(
+                        "La búsqueda de obras falló: {}",
+                        crate::rag::scope::short_cause(&cause)
+                    ),
+                );
+                cause
+            })?;
         Ok(answer_dto(&conn, answer))
     })
     .await
@@ -363,6 +375,8 @@ pub struct SearchPassagesResponse {
     /// `no_library_synced`, `no_embeddings`, `embedding_unavailable`,
     /// `failed`); `None` when the search ran.
     pub notice: Option<String>,
+    /// Short, secret-free cause behind `failed` / `embedding_unavailable`.
+    pub notice_detail: Option<String>,
 }
 
 /// Passages of the synced Zotero libraries for a query, ranked by similarity
@@ -372,6 +386,7 @@ pub struct SearchPassagesResponse {
 pub async fn bibliography_search_passages(
     request: SearchPassagesRequest,
     db: State<'_, AppDbState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<SearchPassagesResponse, String> {
     let db_path = db.db_path.clone();
     blocking(move || {
@@ -389,9 +404,20 @@ pub async fn bibliography_search_passages(
             &params,
             &|text| embedder.embed(text),
         );
+        if let (Some(notice), Some(detail)) = (found.notice, &found.detail) {
+            crate::app_logs::warn(
+                &app_handle,
+                "bibliografia/pasajes",
+                format!(
+                    "La búsqueda de pasajes no aportó ({}): {detail}",
+                    notice.code()
+                ),
+            );
+        }
         Ok(SearchPassagesResponse {
             passages: found.passages,
             notice: found.notice.map(|notice| notice.code().to_string()),
+            notice_detail: found.detail,
         })
     })
     .await
