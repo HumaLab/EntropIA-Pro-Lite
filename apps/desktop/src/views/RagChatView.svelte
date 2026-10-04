@@ -23,6 +23,7 @@
     passageHeading,
     selectedLibrariesAfterToggle,
     sourceScopeKey,
+    withNoticeDetail,
     workLine,
   } from '$lib/rag-scope'
   import { downloadRagConversationPdf } from '$lib/rag-chat-export'
@@ -207,7 +208,9 @@
 
   function noticeText(message: UiMessage): string | null {
     const key = bibliographyNoticeKey(message.bibliographyNotice)
-    return key ? t(key) : null
+    return key
+      ? withNoticeDetail(t(key), message.bibliographyNotice, message.bibliographyNoticeDetail)
+      : null
   }
 
   // ── Passage reader (Biblioteca sources) ──────────────────────────────────

@@ -1089,6 +1089,23 @@ describe('RagChatStore scope', () => {
     expect(assistant?.bibliographyNotice).toBe('no_embeddings')
   })
 
+  it('keeps the cause of a failed Biblioteca leg next to its notice', async () => {
+    setupBackend({
+      ask: () => ({
+        ...answer('conv-new', ''),
+        bibliographyNotice: 'failed',
+        bibliographyNoticeDetail: 'sql_error: Invalid column type Null',
+      }),
+    })
+    const store = new RagChatStore()
+    store.setScope('biblioteca')
+
+    await store.send('pregunta')
+
+    const assistant = snapshotOf(store).messages[1]
+    expect(assistant?.bibliographyNoticeDetail).toBe('sql_error: Invalid column type Null')
+  })
+
   it('reloads a persisted bibliography source untouched', async () => {
     const stored = {
       ...conversation('conv-1', 'Con biblioteca'),

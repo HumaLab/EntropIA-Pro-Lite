@@ -11,6 +11,7 @@ import {
   passageWindow,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
+  withNoticeDetail,
   workLine,
 } from './rag-scope'
 
@@ -110,6 +111,26 @@ describe('bibliographyNoticeKey', () => {
     expect(bibliographyNoticeKey('whatever')).toBe('ragChat.biblioNotice.failed')
     expect(bibliographyNoticeKey(null)).toBeNull()
     expect(bibliographyNoticeKey(undefined)).toBeNull()
+  })
+})
+
+describe('withNoticeDetail', () => {
+  it('appends the cause only where something broke', () => {
+    expect(withNoticeDetail('Falló.', 'failed', 'sql_error: tabla')).toBe(
+      'Falló. (sql_error: tabla)'
+    )
+    expect(withNoticeDetail('Sin vector.', 'embedding_unavailable', ' sin clave ')).toBe(
+      'Sin vector. (sin clave)'
+    )
+    expect(withNoticeDetail('Falló.', 'whatever', 'x')).toBe('Falló. (x)')
+  })
+
+  it('leaves self-explanatory notices and empty details as worded', () => {
+    expect(withNoticeDetail('A.', 'no_embeddings', 'x')).toBe('A.')
+    expect(withNoticeDetail('B.', 'no_library_synced', 'x')).toBe('B.')
+    expect(withNoticeDetail('C.', 'failed', null)).toBe('C.')
+    expect(withNoticeDetail('D.', 'failed', '  ')).toBe('D.')
+    expect(withNoticeDetail('E.', null, 'x')).toBe('E.')
   })
 })
 

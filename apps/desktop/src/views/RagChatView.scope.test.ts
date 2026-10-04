@@ -315,6 +315,31 @@ describe('RagChatView sources of both scopes', () => {
   })
 })
 
+describe('RagChatView Biblioteca failure', () => {
+  it('names the cause under the failed notice instead of only saying it failed', async () => {
+    setupBackend({
+      ask: () => ({
+        answer: '',
+        sources: [],
+        model: 'm',
+        conversationId: 'c',
+        bibliographyNotice: 'failed',
+        bibliographyNoticeDetail: 'sql_error: Invalid column type Null at index: 2, name: title',
+      }),
+    })
+    render(RagChatView)
+    await ask('¿Qué pasó?')
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /La búsqueda en la Biblioteca falló.*sql_error: Invalid column type Null at index: 2, name: title/
+        )
+      ).toBeVisible()
+    )
+  })
+})
+
 describe('RagChatView passage reader', () => {
   const pageText = 'Antes del pasaje. LO CITADO AQUÍ. Después del pasaje.'
   const start = pageText.indexOf('LO CITADO')

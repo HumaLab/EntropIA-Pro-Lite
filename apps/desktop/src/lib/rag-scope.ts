@@ -75,6 +75,22 @@ export function bibliographyNoticeKey(code: string | null | undefined): I18nKey 
 }
 
 /**
+ * A notice with its cause: the backend's short, key-free detail is appended
+ * only for the codes that mean something broke (`failed`, an unknown code,
+ * `embedding_unavailable`); the self-explanatory ones stay as worded.
+ */
+export function withNoticeDetail(
+  text: string,
+  code: string | null | undefined,
+  detail: string | null | undefined
+): string {
+  const cause = detail?.trim()
+  if (!code || !cause) return text
+  if (code === 'no_library_synced' || code === 'no_embeddings') return text
+  return `${text} (${cause})`
+}
+
+/**
  * The same backend codes as {@link bibliographyNoticeKey}, worded for the
  * Writing tab's passage search (which is not answering a question).
  */

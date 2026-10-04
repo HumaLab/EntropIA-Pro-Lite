@@ -8,7 +8,13 @@
     type BibliographySearchHit,
     type BibliographySearchResponse,
   } from '$lib/bibliography-search'
-  import { locationText, locatorOf, passageHeading, passagesNoticeKey } from '$lib/rag-scope'
+  import {
+    locationText,
+    locatorOf,
+    passageHeading,
+    passagesNoticeKey,
+    withNoticeDetail,
+  } from '$lib/rag-scope'
   import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
   import { ActionIcon, Button, Card, IconButton, SearchBar } from '@entropia/ui'
 
@@ -47,6 +53,12 @@
   let passagesNotice = $derived(
     passagesFailed ? passagesNoticeKey('failed') : passagesNoticeKey(passageAnswer?.notice)
   )
+  function passagesNoticeText(): string {
+    if (!passagesNotice) return ''
+    const text = t(passagesNotice)
+    if (passagesFailed) return text
+    return withNoticeDetail(text, passageAnswer?.notice, passageAnswer?.noticeDetail)
+  }
 
   function methodLabel(hit: BibliographySearchHit): string {
     switch (hit.method) {
@@ -199,7 +211,7 @@
   {#if passageAnswer || passagesFailed}
     <h4 class="bib-search__section">{t('bibliography.passagesTitle')}</h4>
     {#if passagesNotice}
-      <p class="bib-search__notice" role="status">{t(passagesNotice)}</p>
+      <p class="bib-search__notice" role="status">{passagesNoticeText()}</p>
     {:else if passageGroups.length === 0}
       <p>{t('bibliography.passagesEmpty')}</p>
     {:else}

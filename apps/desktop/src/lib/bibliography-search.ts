@@ -139,6 +139,8 @@ export interface BibliographyPassagesResponse {
   passages: BibliographyPassage[]
   /** Why nothing was searched (same codes as the chat's notice), else null. */
   notice: string | null
+  /** Short, key-free cause behind `failed` / `embedding_unavailable`. */
+  noticeDetail?: string | null
 }
 
 /** Passages of the synced libraries for a query (vector-only; says why if none). */

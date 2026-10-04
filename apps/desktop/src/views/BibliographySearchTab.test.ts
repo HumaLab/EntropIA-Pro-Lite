@@ -331,6 +331,18 @@ describe('BibliographySearchTab passages', () => {
     expect(screen.getByText('Obra A')).toBeInTheDocument()
   })
 
+  it('names the cause when the backend says why the passage search failed', async () => {
+    backend({
+      passages: { passages: [], notice: 'failed', noticeDetail: 'sql_error: sin tabla' },
+    })
+    render(BibliographySearchTab)
+    await search()
+
+    expect(
+      await screen.findByText(/La búsqueda de pasajes falló.*sql_error: sin tabla/)
+    ).toBeInTheDocument()
+  })
+
   it('says plainly when the search ran and found no passages', async () => {
     backend({ passages: passagesResponse([]) })
     render(BibliographySearchTab)

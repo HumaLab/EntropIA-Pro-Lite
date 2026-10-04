@@ -27,6 +27,8 @@ export interface UiMessage {
   sources?: RagSource[]
   /** Why the Biblioteca leg found nothing for this answer, when it did not run. */
   bibliographyNotice?: string | null
+  /** The short cause behind a `failed` / `embedding_unavailable` notice. */
+  bibliographyNoticeDetail?: string | null
 }
 
 export interface RagChatSnapshot {
@@ -255,6 +257,9 @@ export class RagChatStore {
           sources: response.sources,
           ...(response.bibliographyNotice
             ? { bibliographyNotice: response.bibliographyNotice }
+            : {}),
+          ...(response.bibliographyNoticeDetail
+            ? { bibliographyNoticeDetail: response.bibliographyNoticeDetail }
             : {}),
         },
       ]

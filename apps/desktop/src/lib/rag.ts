@@ -75,6 +75,8 @@ export interface RagAnswer {
    * normally or the scope did not ask for it.
    */
   bibliographyNotice?: string | null
+  /** Short, key-free cause behind `failed` / `embedding_unavailable`. */
+  bibliographyNoticeDetail?: string | null
 }
 
 export interface RagConversationSummary {
