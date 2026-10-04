@@ -89,9 +89,6 @@ pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>,
 const CLEANUP_TASKS_PER_BATCH: usize = 25;
 /// Pause between cleanup transactions so other writers get the lock.
 const CLEANUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
-/// Pages one startup returns to the OS at most (1 GB at 4 KB pages).
-const CLEANUP_MAX_RECLAIM_PAGES: i64 = 262_144;
-
 /// Frees the checkpoints of tasks that already ended (builds before the
 /// retention fix kept them forever, GBs per bibliography sync). Runs on its
 /// own thread and connection in bounded batches, so startup never waits for
@@ -112,19 +109,27 @@ fn spawn_checkpoint_cleanup(db_path: std::path::PathBuf) {
     }
 }
 
-/// One cleanup pass. `None` when there was nothing to free.
+/// One cleanup pass: purge finished tasks' checkpoints, then hand free pages
+/// back in a bounded step. The second part runs even when nothing was purged,
+/// so the space an archive freed earlier keeps returning over successive starts
+/// once the close-time compaction made it `auto_vacuum = INCREMENTAL`.
+/// `None` when there was nothing to do.
 pub fn run_checkpoint_cleanup(db_path: &Path) -> Result<Option<String>, String> {
     let conn = open_archive_connection(db_path)?;
     let purge =
         repository::purge_terminal_checkpoints(&conn, CLEANUP_TASKS_PER_BATCH, CLEANUP_PAUSE)?;
-    if purge.rows == 0 {
+    let reclaimed = repository::reclaim_free_pages(
+        &conn,
+        crate::db::compact::RECLAIM_MAX_PAGES,
+        crate::db::compact::RECLAIM_PAUSE,
+    )?;
+    let released = reclaimed.unwrap_or(0);
+    if purge.rows == 0 && released == 0 {
         return Ok(None);
     }
-    let reclaimed =
-        repository::reclaim_free_pages(&conn, CLEANUP_MAX_RECLAIM_PAGES, CLEANUP_PAUSE)?;
     let space = match reclaimed {
         Some(pages) => format!("returned {pages} pages to the OS"),
-        None => "kept as reusable free pages (auto_vacuum is off; a VACUUM would shrink the file)"
+        None => "kept as reusable free pages (auto_vacuum is off; the close-time compaction will shrink the file)"
             .to_string(),
     };
     Ok(Some(format!(
@@ -1075,5 +1080,54 @@ mod tests {
         let again = recover_session(&conn, "", 60_000).unwrap();
         assert_eq!(again.tasks_interrupted, 0);
         assert_eq!(again.cancellations_finished, 0);
+    }
+
+    #[test]
+    fn startup_cleanup_returns_free_pages_gradually_even_with_nothing_to_purge() {
+        let (dir, conn) = recovery_db();
+        conn.execute_batch("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB)")
+            .unwrap();
+        for _ in 0..256 {
+            conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                .unwrap();
+        }
+        conn.execute("DELETE FROM blobs", []).unwrap();
+        drop(conn);
+        let db_path = dir.path().join("entropia.sqlite");
+        let free = |path: &Path| -> i64 {
+            open_archive_connection(path)
+                .unwrap()
+                .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+                .unwrap()
+        };
+        let free_before = free(&db_path);
+        assert!(free_before > 1_000);
+
+        // auto_vacuum NONE: nothing to purge and nothing is vacuumed.
+        assert_eq!(run_checkpoint_cleanup(&db_path).unwrap(), None);
+        assert_eq!(free(&db_path), free_before);
+
+        // After the close-time compaction the same startup hook reclaims.
+        let policy = crate::db::compact::Policy {
+            min_free_bytes: 256 * 1024,
+            disk_margin_bytes: 0,
+            ..Default::default()
+        };
+        crate::db::compact::compact_archive(&db_path, &policy, &|_| Some(u64::MAX / 2)).unwrap();
+        // Free pages again, after the compaction.
+        let conn = open_archive_connection(&db_path).unwrap();
+        for _ in 0..64 {
+            conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                .unwrap();
+        }
+        conn.execute("DELETE FROM blobs", []).unwrap();
+        drop(conn);
+        assert!(free(&db_path) > 0);
+
+        let line = run_checkpoint_cleanup(&db_path)
+            .unwrap()
+            .expect("free pages were returned without any checkpoint to purge");
+        assert!(line.contains("returned"), "{line}");
+        assert_eq!(free(&db_path), 0);
     }
 }
