@@ -22,6 +22,9 @@ struct Mock {
     /// Parsed `input` arrays, in arrival order.
     requests: Arc<Mutex<Vec<Vec<String>>>>,
     max_in_flight: Arc<AtomicUsize>,
+    /// Peak concurrency among requests numbered 3 and later: what is left
+    /// once the first wave of throttles has been answered.
+    late_peak: Arc<AtomicUsize>,
 }
 
 /// Every text is `"t-<n>"`; its vector is one-hot at `n`, so after the
@@ -81,15 +84,21 @@ fn start_mock(delay: Duration, script: impl Fn(usize) -> Reply + Send + Sync + '
     let requests = Arc::new(Mutex::new(Vec::new()));
     let in_flight = Arc::new(AtomicUsize::new(0));
     let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let late_peak = Arc::new(AtomicUsize::new(0));
     let counter = Arc::new(AtomicUsize::new(0));
     let script = Arc::new(script);
-    let (requests_out, max_out) = (Arc::clone(&requests), Arc::clone(&max_in_flight));
+    let (requests_out, max_out, late_out) = (
+        Arc::clone(&requests),
+        Arc::clone(&max_in_flight),
+        Arc::clone(&late_peak),
+    );
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { return };
             let requests = Arc::clone(&requests);
             let in_flight = Arc::clone(&in_flight);
             let max_in_flight = Arc::clone(&max_in_flight);
+            let late_peak = Arc::clone(&late_peak);
             let counter = Arc::clone(&counter);
             let script = Arc::clone(&script);
             thread::spawn(move || {
@@ -108,6 +117,9 @@ fn start_mock(delay: Duration, script: impl Fn(usize) -> Reply + Send + Sync + '
                     };
                     requests.lock().expect("requests").push(inputs.clone());
                     let number = counter.fetch_add(1, Ordering::SeqCst);
+                    if number >= 3 {
+                        late_peak.fetch_max(now, Ordering::SeqCst);
+                    }
                     thread::sleep(delay);
                     let response = match script(number) {
                         Reply::Vectors => {
@@ -155,6 +167,7 @@ fn start_mock(delay: Duration, script: impl Fn(usize) -> Reply + Send + Sync + '
         endpoint,
         requests: requests_out,
         max_in_flight: max_out,
+        late_peak: late_out,
     }
 }
 
@@ -377,4 +390,57 @@ fn bench_400_chunks_at_300ms_per_request() {
     );
     assert_eq!(new_path.len(), 400);
     assert!(after < before / 4);
+}
+
+#[test]
+fn a_429_shrinks_the_concurrency_for_the_rest_of_the_call() {
+    // The first wave of three requests is throttled; every later request
+    // succeeds. The retries sit well after the replies, so what overlaps from
+    // request 3 on reflects the concurrency the call settled on.
+    let mock = start_mock(Duration::from_millis(20), |number| {
+        if number < 3 {
+            Reply::Status(429, None)
+        } else {
+            Reply::Vectors
+        }
+    });
+    let mut adaptive = policy(1, 3);
+    adaptive.base_backoff = Duration::from_millis(150);
+    adaptive.max_backoff = Duration::from_millis(600);
+    let engine = engine_for(&mock, adaptive);
+    let items = texts(12);
+
+    let vectors = engine.embed_batch(&refs(&items)).expect("recovers");
+
+    for (n, vector) in vectors.iter().enumerate() {
+        assert_eq!(argmax(vector), n, "order survives the shrink");
+    }
+    assert!(
+        mock.max_in_flight.load(Ordering::SeqCst) >= 2,
+        "the call starts at full concurrency"
+    );
+    let late = mock.late_peak.load(Ordering::SeqCst);
+    assert_eq!(late, 1, "after a 429 only one request flies, saw {late}");
+}
+
+#[test]
+fn backoff_without_retry_after_grows_and_is_jittered_within_bounds() {
+    let base = Duration::from_millis(100);
+    let cap = Duration::from_millis(1_000);
+    for attempt in 1..=6_usize {
+        let nominal = base.saturating_mul(1_u32 << (attempt - 1)).min(cap);
+        let low = nominal.mul_f64(0.74);
+        let high = nominal.mul_f64(1.26).min(cap.mul_f64(1.26));
+        for _ in 0..50 {
+            let delay = jittered_backoff(base, cap, attempt);
+            assert!(
+                delay >= low && delay <= high,
+                "attempt {attempt}: {delay:?}"
+            );
+        }
+    }
+    let samples: std::collections::HashSet<_> = (0..50)
+        .map(|_| jittered_backoff(base, cap, 3).as_micros())
+        .collect();
+    assert!(samples.len() > 1, "jitter must vary the delay");
 }

@@ -3596,6 +3596,123 @@ fn profile_task_blocks_on_embedder_configuration_errors() {
     assert_eq!(profiles, 0, "a blocked run publishes nothing");
 }
 
+/// A provider throttle (429) never ends a profile task as failed: however
+/// many times it repeats, the task parks in `retry_wait` and is claimed again
+/// once its delay has passed.
+#[test]
+fn profile_task_stays_in_retry_wait_through_repeated_rate_limits() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0004", "Obra limitada", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let embedder = FakeProfileEmbedder::ok(4);
+    let registry = profile_registry(Arc::clone(&embedder));
+    let mut now = repository::now_ms();
+    for round in 0..6_i64 {
+        embedder
+            .failures
+            .lock()
+            .expect("failures")
+            .push_back("OpenRouter embedding API error (429 Too Many Requests): {}".to_string());
+        let outcome = run_one(
+            &conn,
+            &ctx_of(&dir),
+            &registry,
+            "profile-session",
+            now,
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("profile run");
+        match outcome {
+            RunOneOutcome::Waiting { task_id: waiting } => assert_eq!(waiting, task_id),
+            other => panic!("round {round}: a rate limit must wait, got {other:?}"),
+        }
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .expect("state read");
+        assert_eq!(state, "retry_wait", "round {round}");
+        now += 3_600_000;
+    }
+}
+
+/// A malformed request is the caller's bug: it fails the task, honestly.
+#[test]
+fn profile_task_fails_on_a_bad_request_not_a_rate_limit() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0005", "Obra mal pedida", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let registry = profile_registry(FakeProfileEmbedder::failing(
+        "OpenRouter embedding API error (400 Bad Request): invalid input",
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    match outcome {
+        RunOneOutcome::Failed { task_id: failed } => assert_eq!(failed, task_id),
+        other => panic!("a 400 must fail, got {other:?}"),
+    }
+}
+
+/// A work whose profile task ended `failed` and that has no published
+/// profile is picked up again by the profile demand a successful library sync
+/// chains (the manual "Sincronizar biblioteca"): terminal history stays, and
+/// a fresh task is minted.
+#[test]
+fn a_sync_re_admits_a_work_whose_profile_task_failed() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0006", "Obra fallida", "Resumen.");
+    let failed_id = admit_profile_demand(&conn, &item_id);
+    let registry = profile_registry(FakeProfileEmbedder::failing(
+        "OpenRouter embedding API error (400 Bad Request): invalid input",
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Failed { .. }),
+        "{outcome:?}"
+    );
+
+    let created =
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync-chained admission");
+
+    assert_eq!(created, 1, "the failed work is demanded again");
+    let live: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND subject_id = ?1
+               AND state IN ('pending', 'retry_wait', 'running')",
+        )
+        .expect("live query")
+        .query_map([&item_id], |row| row.get(0))
+        .expect("live map")
+        .collect::<Result<_, _>>()
+        .expect("live rows");
+    assert_eq!(live.len(), 1);
+    assert_ne!(live[0], failed_id, "terminal history is never reopened");
+}
+
 /// A metadata edit between claim and commit refuses source_changed: the
 /// staged vector describes text the catalog no longer holds.
 #[test]

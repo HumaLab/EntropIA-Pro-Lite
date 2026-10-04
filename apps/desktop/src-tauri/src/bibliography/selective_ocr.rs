@@ -203,6 +203,12 @@ pub trait PageOcrProvider: Send + Sync {
 pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutput {
     use crate::processing::scheduler::ExecOutput;
     let lower = error.to_lowercase();
+    if lower.contains("429") || lower.contains("rate limit") {
+        return ExecOutput::Retryable {
+            code: crate::processing::repository::RATE_LIMITED_CODE.to_string(),
+            message: error.to_string(),
+        };
+    }
     for signal in [
         "timeout",
         "timed out",
@@ -245,6 +251,24 @@ pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutp
 mod trait_tests {
     use super::map_page_ocr_error;
     use crate::processing::scheduler::ExecOutput;
+
+    #[test]
+    fn a_rate_limit_keeps_its_never_terminal_code_through_the_chunk_wave_mapper() {
+        match map_page_ocr_error("OpenRouter embedding API error (429 Too Many Requests): {}") {
+            ExecOutput::Retryable { code, .. } => {
+                assert_eq!(code, crate::processing::repository::RATE_LIMITED_CODE)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            map_page_ocr_error("OpenRouter embedding API error (401 Unauthorized): bad key"),
+            ExecOutput::Blocked { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("OpenRouter embedding API error (400 Bad Request): bad input"),
+            ExecOutput::Fatal { .. }
+        ));
+    }
 
     #[test]
     fn ocr_errors_map_to_retry_block_or_fatal() {

@@ -198,6 +198,12 @@ fn validate_vector(vector: &[f32]) -> Result<(), String> {
 /// settings, then resumes); anything else fails the unit with its cause.
 pub(crate) fn map_embedding_error(error: &str) -> ExecOutput {
     let lower = error.to_lowercase();
+    if lower.contains("429") || lower.contains("rate limit") {
+        return ExecOutput::Retryable {
+            code: crate::processing::repository::RATE_LIMITED_CODE.to_string(),
+            message: error.to_string(),
+        };
+    }
     for signal in [
         "timeout",
         "timed out",
@@ -721,6 +727,38 @@ mod tests {
                 "No BGE-M3 embedding engine configured. Set OpenRouter API credentials"
             ),
             ExecOutput::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn a_rate_limit_is_retryable_under_its_own_never_terminal_code() {
+        for message in [
+            "OpenRouter embedding API error (429 Too Many Requests): {}",
+            "provider said: rate limit exceeded [retry_after_ms=120000]",
+        ] {
+            match map_embedding_error(message) {
+                ExecOutput::Retryable { code, .. } => {
+                    assert_eq!(code, crate::processing::repository::RATE_LIMITED_CODE)
+                }
+                other => panic!("{message}: {other:?}"),
+            }
+        }
+        // A plain outage keeps the capped transient code.
+        match map_embedding_error("OpenRouter embedding API error (503 Service Unavailable)") {
+            ExecOutput::Retryable { code, .. } => assert_eq!(code, "provider_transient"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn credential_and_request_errors_stay_terminal_or_blocked() {
+        assert!(matches!(
+            map_embedding_error("OpenRouter embedding API error (401 Unauthorized): bad key"),
+            ExecOutput::Blocked { .. }
+        ));
+        assert!(matches!(
+            map_embedding_error("OpenRouter embedding API error (400 Bad Request): bad input"),
+            ExecOutput::Fatal { .. }
         ));
         assert!(matches!(
             map_embedding_error("some programming bug"),

@@ -3173,6 +3173,14 @@ pub fn retry_delay_ms(retry_count_in_cycle: i64) -> i64 {
 }
 
 fn retry_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i64) -> i64 {
+    jitter_ms(task_id, attempt_number, retry_delay_ms(retry_count))
+}
+
+fn rate_limited_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i64) -> i64 {
+    jitter_ms(task_id, attempt_number, rate_limited_delay_ms(retry_count))
+}
+
+fn jitter_ms(task_id: &str, attempt_number: i64, base: i64) -> i64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in task_id
         .as_bytes()
@@ -3184,7 +3192,6 @@ fn retry_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i
         hash = hash.wrapping_mul(0x100000001b3);
     }
     let permille = (hash % 401) as i64 - 200;
-    let base = retry_delay_ms(retry_count);
     base + (base * permille / 1_000)
 }
 
@@ -3196,6 +3203,21 @@ fn provider_retry_after_ms(message: &str) -> Option<i64> {
 
 /// Maximum attempts per retry cycle before a task goes terminally failed.
 pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
+
+/// Error code of a provider throttle (HTTP 429). It is the one retryable
+/// failure that never exhausts the cycle: a rate limit says "later", not
+/// "no", so the task keeps parking in `retry_wait` with a growing delay until
+/// the provider lets it through. Credential and request errors stay terminal
+/// or blocked, and plain outages (5xx, timeouts) keep the cycle cap.
+pub const RATE_LIMITED_CODE: &str = "provider_rate_limited";
+
+/// Delay before the next try of a throttled task: 15 s doubling per retry up
+/// to 10 minutes, so a sustained limit is probed gently instead of hammered.
+pub fn rate_limited_delay_ms(retry_count: i64) -> i64 {
+    const FIRST_MS: i64 = 15_000;
+    const CEILING_MS: i64 = 600_000;
+    (FIRST_MS << retry_count.clamp(0, 6)).min(CEILING_MS)
+}
 
 /// A task under exclusive ownership of one supervisor thread.
 /// E2a-3 carries the subject identity read at claim time: corpus/asset
@@ -4319,8 +4341,13 @@ pub fn fail_attempt(
         ],
     )
     .map_err(|e| format!("Failed to record failure of {task_id}: {e}"))?;
-    if retryable && retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE {
-        let local_delay = retry_delay_with_jitter_ms(task_id, attempt_number, retry_count);
+    let rate_limited = error_code == RATE_LIMITED_CODE;
+    if retryable && (rate_limited || retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE) {
+        let local_delay = if rate_limited {
+            rate_limited_delay_with_jitter_ms(task_id, attempt_number, retry_count)
+        } else {
+            retry_delay_with_jitter_ms(task_id, attempt_number, retry_count)
+        };
         let delay = provider_retry_after_ms(error_message)
             .map(|provider| provider.max(local_delay))
             .unwrap_or(local_delay);
@@ -7338,6 +7365,75 @@ mod tests {
             state,
             ("blocked".to_string(), "source_unstable".to_string(), 3)
         );
+    }
+
+    /// Parks `kind`/`a1` and fails its attempt `rounds` times with `code`,
+    /// returning every outcome. Each round claims at a clock past the
+    /// previous retry time.
+    fn fail_repeatedly(code: &str, message: &str, rounds: usize) -> Vec<FailOutcome> {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let mut now = 1_000_i64;
+        let mut outcomes = Vec::new();
+        for _ in 0..rounds {
+            let task = claim_next(&conn, "worker", &["ocr"], now)
+                .unwrap()
+                .expect("claimable once its retry time has passed");
+            let outcome = fail_attempt(
+                &conn,
+                &task.task_id,
+                task.lease_epoch,
+                task.attempt_number,
+                code,
+                message,
+                true,
+                None,
+                now,
+            )
+            .unwrap();
+            if let FailOutcome::RetryWait { next_retry_at } = outcome {
+                now = next_retry_at + 1;
+            }
+            outcomes.push(outcome);
+        }
+        outcomes
+    }
+
+    #[test]
+    fn a_rate_limit_never_exhausts_the_retry_cycle() {
+        let outcomes = fail_repeatedly(RATE_LIMITED_CODE, "429 Too Many Requests", 8);
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| matches!(outcome, FailOutcome::RetryWait { .. })),
+            "{outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_backs_off_further_each_time_up_to_a_ceiling() {
+        let delays: Vec<i64> = (0..10).map(rate_limited_delay_ms).collect();
+        assert!(
+            delays.windows(2).all(|pair| pair[1] >= pair[0]),
+            "{delays:?}"
+        );
+        assert!(delays[3] > delays[0], "{delays:?}");
+        assert_eq!(delays[8], delays[9], "capped: {delays:?}");
+        assert!(delays[9] <= 900_000, "{delays:?}");
+    }
+
+    #[test]
+    fn a_plain_transient_failure_still_ends_after_the_cycle_cap() {
+        let outcomes = fail_repeatedly("provider_transient", "503 Service Unavailable", 3);
+        assert!(matches!(outcomes[0], FailOutcome::RetryWait { .. }));
+        assert!(matches!(outcomes[1], FailOutcome::RetryWait { .. }));
+        assert_eq!(outcomes[2], FailOutcome::Failed);
     }
 
     #[test]

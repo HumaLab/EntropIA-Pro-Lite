@@ -55,6 +55,8 @@ const EMBEDDING_REQUEST_MAX_CHARS: usize = 64_000;
 const EMBEDDING_REQUEST_MAX_IN_FLIGHT: usize = 3;
 /// Attempts per request when the provider throttles (429) or hiccups (5xx).
 const EMBEDDING_REQUEST_MAX_ATTEMPTS: usize = 4;
+/// Reported for a request that stood down because a sibling already failed.
+const EMBEDDING_REQUEST_SKIPPED: &str = "Embedding request was skipped after a failure";
 const EMBEDDING_REQUEST_BASE_BACKOFF: Duration = Duration::from_secs(1);
 /// Longest wait absorbed in-process. A larger `Retry-After` is handed to the
 /// task scheduler through the `[retry_after_ms=..]` suffix instead.
@@ -710,11 +712,91 @@ pub(crate) fn config_cache_key(config: &EmbeddingConfig) -> String {
 /// Outcome of one request batch: its vectors in input order, or the error.
 type BatchResult = Result<Vec<Vec<f32>>, String>;
 
+/// Exponential backoff for attempt `attempt` (1-based) with +-25% jitter, so
+/// concurrent workers that were throttled together do not retry in lockstep.
+/// The nominal delay is capped at `cap`; jitter may stretch it a quarter past.
+fn jittered_backoff(base: Duration, cap: Duration, attempt: usize) -> Duration {
+    use std::sync::atomic::AtomicU64;
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nominal = base
+        .saturating_mul(1_u32 << attempt.saturating_sub(1).min(16))
+        .min(cap);
+    // splitmix64 over the clock and a sequence number: no dependency, and
+    // two calls in the same nanosecond still differ.
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0)
+        .wrapping_add(SEQUENCE.fetch_add(0x9E37_79B9_7F4A_7C15, AtomicOrdering::Relaxed));
+    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    state ^= state >> 31;
+    let factor = 0.75 + (state % 10_001) as f64 / 20_000.0;
+    nominal.mul_f64(factor)
+}
+
+/// Caps the requests in flight during one batched call, and lets a throttle
+/// lower the cap while the call runs.
+struct ConcurrencyGate {
+    /// `(in flight, allowed)`.
+    state: Mutex<(usize, usize)>,
+    released: std::sync::Condvar,
+}
+
+/// A held slot; dropping it frees the slot.
+struct GateSlot<'a>(&'a ConcurrencyGate);
+
+impl Drop for GateSlot<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.0 = state.0.saturating_sub(1);
+        }
+        self.0.released.notify_all();
+    }
+}
+
+impl ConcurrencyGate {
+    fn new(allowed: usize) -> Self {
+        Self {
+            state: Mutex::new((0, allowed.max(1))),
+            released: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Waits for a free slot; `None` when the call was aborted meanwhile.
+    fn acquire(&self, abort: &AtomicBool) -> Option<GateSlot<'_>> {
+        let mut state = self.state.lock().ok()?;
+        loop {
+            if abort.load(AtomicOrdering::SeqCst) {
+                return None;
+            }
+            if state.0 < state.1 {
+                state.0 += 1;
+                return Some(GateSlot(self));
+            }
+            state = self
+                .released
+                .wait_timeout(state, Duration::from_millis(50))
+                .ok()?
+                .0;
+        }
+    }
+
+    /// Halves the allowance, never below one.
+    fn halve(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.1 = (state.1 / 2).max(1);
+        }
+    }
+}
+
 /// One failed HTTP attempt, classified for the retry loop.
 struct RequestFailure {
     message: String,
     retryable: bool,
     retry_after_ms: Option<i64>,
+    /// The provider answered 429: the caller should ease off.
+    throttled: bool,
 }
 
 impl OpenRouterEmbeddingClient {
@@ -746,15 +828,20 @@ impl OpenRouterEmbeddingClient {
             return Ok(Vec::new());
         }
         let batches = plan_request_batches(inputs, &self.policy);
-        let client = Self::http_client()?;
+        let client = &Self::http_client()?;
         let workers = self.policy.max_in_flight.max(1).min(batches.len());
         let abort = AtomicBool::new(false);
         let next = AtomicUsize::new(0);
+        // Requests allowed in flight. A 429 halves it for the rest of this
+        // call (never below one), so a throttled key is not hit by the same
+        // burst again.
+        let gate = ConcurrencyGate::new(workers);
         let slots: Mutex<Vec<Option<BatchResult>>> =
             Mutex::new(batches.iter().map(|_| None).collect());
         std::thread::scope(|scope| {
             for _ in 0..workers {
-                scope.spawn(|| loop {
+                let (batches, slots, abort, next, gate) = (&batches, &slots, &abort, &next, &gate);
+                scope.spawn(move || loop {
                     if abort.load(AtomicOrdering::SeqCst) {
                         break;
                     }
@@ -762,7 +849,8 @@ impl OpenRouterEmbeddingClient {
                     let Some(range) = batches.get(index) else {
                         break;
                     };
-                    let result = self.request_with_retry(&client, &inputs[range.clone()], &abort);
+                    let result =
+                        self.request_with_retry(client, &inputs[range.clone()], abort, gate);
                     if result.is_err() {
                         abort.store(true, AtomicOrdering::SeqCst);
                     }
@@ -775,13 +863,26 @@ impl OpenRouterEmbeddingClient {
         let slots = slots
             .into_inner()
             .map_err(|_| "Embedding request results lock poisoned".to_string())?;
+        // The error to report is the real failure, not a sibling that merely
+        // stood down because of it, wherever it sits in request order.
+        let mut skipped = false;
+        let mut first_error: Option<String> = None;
         let mut vectors = Vec::with_capacity(inputs.len());
         for slot in slots {
             match slot {
                 Some(Ok(batch)) => vectors.extend(batch),
-                Some(Err(error)) => return Err(error),
-                None => return Err("Embedding request was skipped after a failure".to_string()),
+                Some(Err(error)) if error == EMBEDDING_REQUEST_SKIPPED => skipped = true,
+                Some(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                None => skipped = true,
             }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        if skipped {
+            return Err(EMBEDDING_REQUEST_SKIPPED.to_string());
         }
         Ok(vectors)
     }
@@ -791,14 +892,25 @@ impl OpenRouterEmbeddingClient {
         client: &reqwest::blocking::Client,
         inputs: &[&str],
         abort: &AtomicBool,
+        gate: &ConcurrencyGate,
     ) -> Result<Vec<Vec<f32>>, String> {
         let mut attempt = 0_usize;
         loop {
             attempt += 1;
-            let failure = match self.request_once(client, inputs) {
+            // Every attempt, first or retry, takes a slot: after a throttle
+            // the surplus workers wait here instead of retrying alongside.
+            let Some(slot) = gate.acquire(abort) else {
+                return Err(EMBEDDING_REQUEST_SKIPPED.to_string());
+            };
+            let outcome = self.request_once(client, inputs);
+            drop(slot);
+            let failure = match outcome {
                 Ok(vectors) => return Ok(vectors),
                 Err(failure) => failure,
             };
+            if failure.throttled {
+                gate.halve();
+            }
             if !failure.retryable || attempt >= self.policy.max_attempts.max(1) {
                 return Err(failure.message);
             }
@@ -812,11 +924,9 @@ impl OpenRouterEmbeddingClient {
                     }
                     delay
                 }
-                None => self
-                    .policy
-                    .base_backoff
-                    .saturating_mul(1_u32 << (attempt - 1).min(16))
-                    .min(self.policy.max_backoff),
+                None => {
+                    jittered_backoff(self.policy.base_backoff, self.policy.max_backoff, attempt)
+                }
             };
             std::thread::sleep(delay);
             if abort.load(AtomicOrdering::SeqCst) {
@@ -834,6 +944,7 @@ impl OpenRouterEmbeddingClient {
             message,
             retryable: false,
             retry_after_ms: None,
+            throttled: false,
         };
         let input = match inputs {
             [single] => EmbeddingInput::One(single),
@@ -855,6 +966,7 @@ impl OpenRouterEmbeddingClient {
                 message: format!("OpenRouter embedding request failed: {e}"),
                 retryable: true,
                 retry_after_ms: None,
+                throttled: false,
             })?;
 
         let status = response.status();
@@ -874,6 +986,7 @@ impl OpenRouterEmbeddingClient {
                 message: format!("OpenRouter embedding API error ({status}): {body}{retry_suffix}"),
                 retryable: matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504),
                 retry_after_ms,
+                throttled: status.as_u16() == 429,
             });
         }
 
