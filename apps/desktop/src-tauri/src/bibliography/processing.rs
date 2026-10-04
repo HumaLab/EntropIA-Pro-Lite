@@ -2412,6 +2412,20 @@ pub fn publish_bibliography_profile_output(
         distinct,
     )
     .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    // The publish that lands the last owed work makes the generation
+    // queryable in this same commit. Activation runs in its own savepoint and
+    // is idempotent, so a failure here never costs the profile that just
+    // landed: the next publish, sync or restart retries it.
+    if let Err(error) = crate::bibliography::generation::activate_if_complete(
+        conn,
+        &output.generation_id,
+        processing_repository::now_ms(),
+    ) {
+        eprintln!(
+            "[bibliography] generation {} activation deferred: {}: {}",
+            output.generation_id, error.code, error.message
+        );
+    }
     Ok(())
 }
 

@@ -4064,7 +4064,7 @@ use entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_c
 fn staging_generation_of(conn: &rusqlite::Connection, contract_hash: &str) -> Option<String> {
     conn.query_row(
         "SELECT id FROM bibliographic_index_generations
-         WHERE contract_hash = ?1 AND status = 'staging'",
+         WHERE contract_hash = ?1 AND status IN ('staging', 'active')",
         [contract_hash],
         |row| row.get(0),
     )
@@ -4140,7 +4140,8 @@ fn profile_publish_stamps_staging_generation_and_tracks_manifest() {
     let (status, expected, completed, contract) = generation_state(&conn, &staging);
     assert_eq!(
         (status.as_str(), contract.as_str()),
-        ("staging", effective.hash.as_str())
+        ("active", effective.hash.as_str()),
+        "the last publish activated the complete generation"
     );
     assert_eq!(expected, 2, "the manifest covers the eligible set");
     assert_eq!(completed, 2, "progress counts distinct new works");
@@ -6147,11 +6148,11 @@ fn profile_run_publishes_chunks_and_vectors_atomically() {
     let staging: String = conn
         .query_row(
             "SELECT id FROM bibliographic_index_generations
-             WHERE contract_hash = ?1 AND status = 'staging'",
+             WHERE contract_hash = ?1 AND status IN ('staging', 'active')",
             [&effective.hash],
             |row| row.get(0),
         )
-        .expect("staging generation");
+        .expect("generation of the run");
     let vectors: Vec<(String, String, String)> = conn
         .prepare(
             "SELECT chunk_id, generation_id, input_hash FROM bibliographic_chunk_embeddings ORDER BY chunk_id",
@@ -6165,7 +6166,7 @@ fn profile_run_publishes_chunks_and_vectors_atomically() {
     for (chunk_id, generation_id, input_hash) in &vectors {
         assert_eq!(
             generation_id, &staging,
-            "vectors stamp the staging generation"
+            "vectors stamp the run's generation (activated by its last publish)"
         );
         let chunk_hash: String = conn
             .query_row(
@@ -8894,4 +8895,320 @@ fn a_blank_document_that_went_through_ocr_is_not_requeued() {
         repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
         0
     );
+}
+
+// ── Generation activation: a complete staging generation becomes queryable ──
+
+fn run_profile_task(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    embedder: Arc<FakeProfileEmbedder>,
+) -> RunOneOutcome {
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &profile_registry(embedder),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run")
+}
+
+fn generation_statuses(conn: &rusqlite::Connection) -> Vec<String> {
+    conn.prepare("SELECT status FROM bibliographic_index_generations ORDER BY created_at, id")
+        .expect("statuses query")
+        .query_map([], |row| row.get(0))
+        .expect("statuses map")
+        .collect::<Result<_, _>>()
+        .expect("statuses collect")
+}
+
+fn embedding_generation_of(conn: &rusqlite::Connection, item_id: &str) -> Vec<String> {
+    conn.prepare("SELECT generation_id FROM bibliographic_item_embeddings WHERE item_id = ?1")
+        .expect("generation query")
+        .query_map([item_id], |row| row.get(0))
+        .expect("generation map")
+        .collect::<Result<_, _>>()
+        .expect("generation collect")
+}
+
+/// Two works are queued: the generation must stay staging after the first
+/// publish and turn active with the last one, in the same commit.
+#[test]
+fn the_last_profile_publish_activates_the_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "ACTA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "ACTB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        generation_statuses(&conn),
+        vec!["staging"],
+        "one work still owes its vector: the generation is partial"
+    );
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        generation_statuses(&conn),
+        vec!["active"],
+        "the publish that completes the manifest activates the generation"
+    );
+    let activated: Option<i64> = conn
+        .query_row(
+            "SELECT activated_at FROM bibliographic_index_generations",
+            [],
+            |row| row.get(0),
+        )
+        .expect("activation stamp");
+    assert!(activated.is_some());
+}
+
+/// A live work whose profile failed is genuinely missing: the generation
+/// never activates as if it were complete.
+#[test]
+fn a_live_work_without_a_vector_keeps_the_generation_partial() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "PARA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "PARB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let failed = run_profile_task(
+        &dir,
+        &conn,
+        FakeProfileEmbedder::failing("OpenRouter embedding API error (400 Bad Request): bad"),
+    );
+    assert!(matches!(failed, RunOneOutcome::Failed { .. }), "{failed:?}");
+
+    assert_eq!(generation_statuses(&conn), vec!["staging"]);
+    let activated =
+        entropia_desktop_lib::bibliography::generation::activate_complete_staging_generations(
+            &conn,
+            repository::now_ms(),
+        )
+        .expect("repair pass");
+    assert_eq!(activated, 0, "a partial generation is never activated");
+    assert_eq!(generation_statuses(&conn), vec!["staging"]);
+}
+
+/// A work deleted mid-run (tombstoned) stops being owed: the generation is
+/// not stranded by a manifest that can no longer be met.
+#[test]
+fn a_deleted_work_does_not_strand_the_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "DELA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "DELB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let pending: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND state = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the work that still owes its vector");
+    assert_eq!(generation_statuses(&conn), vec!["staging"]);
+
+    conn.execute(
+        "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason)
+         VALUES (?1, 1, 'deleted upstream')",
+        [&pending],
+    )
+    .expect("tombstone the pending work");
+    let activated =
+        entropia_desktop_lib::bibliography::generation::activate_complete_staging_generations(
+            &conn,
+            repository::now_ms(),
+        )
+        .expect("repair pass");
+
+    assert_eq!(activated, 1);
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+    let generation_id: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations",
+            [],
+            |row| row.get(0),
+        )
+        .expect("generation id");
+    let (_, expected, completed, _) = generation_state(&conn, &generation_id);
+    assert_eq!(
+        (expected, completed),
+        (1, 1),
+        "the manifest is re-derived from live works"
+    );
+}
+
+/// The owner's archive: every vector landed but nothing ever activated the
+/// generation. Startup recovery and the next sync publication both repair it.
+#[test]
+fn a_complete_staging_generation_is_activated_by_recovery_and_by_sync() {
+    for repair in ["recovery", "sync"] {
+        let (dir, mut conn) = migrated_db();
+        seed_library(&conn, "lib-1", Some(7));
+        let a = seed_catalog(&mut conn, "OWNA0001", "Obra A", "Resumen A.");
+        admit_profile_demand(&conn, &a);
+        assert!(matches!(
+            run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+            RunOneOutcome::Succeeded { .. }
+        ));
+        // Rewind to what the old build left behind: staging, never activated.
+        conn.execute(
+            "UPDATE bibliographic_index_generations
+             SET status = 'staging', activated_at = NULL",
+            [],
+        )
+        .expect("rewind to the stranded state");
+        assert_eq!(generation_statuses(&conn), vec!["staging"], "{repair}");
+
+        match repair {
+            "recovery" => {
+                entropia_desktop_lib::processing::recovery::recover_session(
+                    &conn,
+                    "",
+                    repository::now_ms(),
+                )
+                .expect("recovery");
+            }
+            _ => {
+                repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission");
+            }
+        }
+
+        assert_eq!(
+            generation_statuses(&conn).first().map(String::as_str),
+            Some("active"),
+            "{repair}: the stranded generation is the active one"
+        );
+    }
+}
+
+/// An incremental sync re-embeds only the work that changed. Its staging
+/// generation must fold into the active one, never replace it: unchanged
+/// works keep their vectors and exactly one generation stays active.
+#[test]
+fn an_incremental_sync_folds_into_the_active_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "INCA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "INCB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+    for _ in 0..2 {
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    }
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active generation");
+
+    conn.execute(
+        "UPDATE bibliographic_items
+         SET csl_json_snapshot = json_set(csl_json_snapshot, '$.title', 'Obra A corregida')
+         WHERE id = ?1",
+        [&a],
+    )
+    .expect("edit one work");
+    assert_eq!(
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission"),
+        1,
+        "only the changed work is demanded again"
+    );
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+
+    assert_eq!(generation_statuses(&conn), vec!["active", "retired"]);
+    assert_eq!(embedding_generation_of(&conn, &a), vec![active.clone()]);
+    assert_eq!(
+        embedding_generation_of(&conn, &b),
+        vec![active.clone()],
+        "the unchanged work keeps its vector in the active generation"
+    );
+    let a_hash: String = conn
+        .query_row(
+            "SELECT input_hash FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&a],
+            |row| row.get(0),
+        )
+        .expect("a vector");
+    let profile = entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &a)
+        .expect("profile")
+        .expect("stored");
+    assert_eq!(
+        a_hash, profile.input_hash,
+        "the folded vector is the fresh one"
+    );
+}
+
+/// Profile publication -> activation -> passage search returns a vector hit
+/// from the stored chunk embeddings, under the contract the query side
+/// resolves from settings.
+#[test]
+fn a_published_work_is_found_by_passage_search_once_active() {
+    use entropia_desktop_lib::bibliography::retrieval::{search_passages, WorkFilters};
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "E2E00001");
+    admit_profile_demand(&conn, &item_id);
+    let effective = resolve_effective_embedding_contract(&conn).expect("effective contract");
+    let embed = |text: &str| Ok(RecordingEmbedder::vector_for(text));
+    let question = "Pagina numero 3 con contenido distinto.";
+
+    let first = run_profile_with(&dir, &conn, RecordingEmbedder::new("fake/model", None), 2);
+    assert!(
+        matches!(first, RunOneOutcome::Succeeded { .. }),
+        "{first:?}"
+    );
+
+    let hits = search_passages(
+        &conn,
+        &effective.hash,
+        question,
+        5,
+        3,
+        5,
+        &WorkFilters::default(),
+        &embed,
+    )
+    .expect("passage search");
+    assert!(!hits.is_empty(), "the active generation must answer");
+    assert_eq!(hits[0].item_id, item_id);
+    assert_eq!(hits[0].contract_hash, effective.hash);
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active generation");
+    assert_eq!(hits[0].generation_id, active);
 }

@@ -1578,6 +1578,18 @@ pub fn admit_stale_profile_demands(
     library_row_id: &str,
 ) -> Result<usize, String> {
     let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // Repair first: a generation that completed before any build activated
+    // it (or whose last work was deleted) turns active here, so this call's
+    // fresh chain starts a new staging generation instead of attaching its
+    // manifest to a finished one.
+    if let Err(error) =
+        crate::bibliography::generation::activate_complete_staging_generations(conn, now_ms())
+    {
+        eprintln!(
+            "[bibliography] generation repair skipped: {}: {}",
+            error.code, error.message
+        );
+    }
     // The demand chains into the staging generation of the effective
     // contract; the manifest grows monotonically by the fresh chains of
     // this call over the distinct works already published.

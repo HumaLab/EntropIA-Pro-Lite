@@ -146,6 +146,19 @@ pub fn recover_session(
         repository::settle_blocked_dependents(conn)?;
         // Work only system batches own has nobody to resume it: requeue it.
         repository::requeue_interrupted_system_tasks(conn, None)?;
+        // A generation whose vectors all landed but that no build ever
+        // activated (or whose last owed work was deleted) becomes queryable
+        // now; a partial one is left alone. Best effort: it never blocks
+        // recovery, and the next publish or sync retries it.
+        if let Err(error) = crate::bibliography::generation::activate_complete_staging_generations(
+            conn,
+            repository::now_ms(),
+        ) {
+            eprintln!(
+                "[recovery] generation repair skipped: {}: {}",
+                error.code, error.message
+            );
+        }
         // Batches: running work waits for resume; confirmed intents converge.
         // `user` only. A `repair`/`manual`/`bibliography` batch is a long-lived
         // container that is always running with an empty complete snapshot —
