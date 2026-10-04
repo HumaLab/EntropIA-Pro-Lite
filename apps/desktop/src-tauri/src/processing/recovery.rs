@@ -80,8 +80,57 @@ pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>,
     }
     let summary = recover_session(&conn, "", repository::now_ms())?;
     *owner = Some(lock);
+    spawn_checkpoint_cleanup(db_path.to_path_buf());
     super::scheduler::READY.store(true, std::sync::atomic::Ordering::Release);
     Ok(Some(summary))
+}
+
+/// Tasks whose checkpoints one cleanup transaction deletes.
+const CLEANUP_TASKS_PER_BATCH: usize = 25;
+/// Pause between cleanup transactions so other writers get the lock.
+const CLEANUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
+/// Pages one startup returns to the OS at most (1 GB at 4 KB pages).
+const CLEANUP_MAX_RECLAIM_PAGES: i64 = 262_144;
+
+/// Frees the checkpoints of tasks that already ended (builds before the
+/// retention fix kept them forever, GBs per bibliography sync). Runs on its
+/// own thread and connection in bounded batches, so startup never waits for
+/// it; one summary line goes to the app log.
+fn spawn_checkpoint_cleanup(db_path: std::path::PathBuf) {
+    let spawned = std::thread::Builder::new()
+        .name("entropia-checkpoint-cleanup".to_string())
+        .spawn(move || match run_checkpoint_cleanup(&db_path) {
+            Ok(line) => {
+                if let Some(line) = line {
+                    eprintln!("{line}");
+                }
+            }
+            Err(error) => eprintln!("[processing] checkpoint cleanup skipped: {error}"),
+        });
+    if let Err(error) = spawned {
+        eprintln!("[processing] checkpoint cleanup not started: {error}");
+    }
+}
+
+/// One cleanup pass. `None` when there was nothing to free.
+pub fn run_checkpoint_cleanup(db_path: &Path) -> Result<Option<String>, String> {
+    let conn = open_archive_connection(db_path)?;
+    let purge =
+        repository::purge_terminal_checkpoints(&conn, CLEANUP_TASKS_PER_BATCH, CLEANUP_PAUSE)?;
+    if purge.rows == 0 {
+        return Ok(None);
+    }
+    let reclaimed =
+        repository::reclaim_free_pages(&conn, CLEANUP_MAX_RECLAIM_PAGES, CLEANUP_PAUSE)?;
+    let space = match reclaimed {
+        Some(pages) => format!("returned {pages} pages to the OS"),
+        None => "kept as reusable free pages (auto_vacuum is off; a VACUUM would shrink the file)"
+            .to_string(),
+    };
+    Ok(Some(format!(
+        "[processing] checkpoint cleanup: deleted {} checkpoints ({} bytes) of finished tasks in {} batches; {space}",
+        purge.rows, purge.bytes, purge.batches
+    )))
 }
 
 fn lock_is_contended(error: &std::io::Error) -> bool {

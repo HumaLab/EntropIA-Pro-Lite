@@ -1077,7 +1077,10 @@ fn complete_run_publishes_catalog_finalization_and_receipt_together() {
         serde_json::from_str(&receipt.expect("durable receipt")).expect("receipt JSON");
     assert_eq!(receipt["libraryRowId"].as_str(), Some("lib-1"));
     assert_eq!(receipt["itemsSeen"].as_u64(), Some(1));
-    assert_eq!(checkpoint_count, 1, "the confirmed page survives durably");
+    assert_eq!(
+        checkpoint_count, 0,
+        "a succeeded task keeps no checkpoints: the receipt and catalog rows are the durable result"
+    );
     let batch_id: String = conn
         .query_row(
             "SELECT batch_id FROM processing_batch_tasks WHERE task_id=?1",
@@ -2922,7 +2925,8 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
             |row| row.get::<_, i64>(0),
         )
         .expect("final corpus checkpoint count"),
-        1
+        0,
+        "a succeeded task keeps no checkpoints"
     );
     assert_eq!(
         conn.query_row(
@@ -2931,8 +2935,8 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
             |row| row.get::<_, i64>(0),
         )
         .expect("final bibliography checkpoint count"),
-        2,
-        "the resumed page adds one checkpoint without replaying page zero"
+        0,
+        "the finished task released its page checkpoints; the seen keys above prove no replay"
     );
 
     let (ocr_state, ocr_receipt): (String, Option<String>) = conn
@@ -4443,6 +4447,17 @@ fn extract_task_publishes_html_snapshot_as_one_page_of_paragraphs() {
     );
     let task_id = admit_extract_demand(&conn, &attachment_id);
     run_extract(&dir, &conn, &task_id);
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("checkpoint count");
+    assert_eq!(
+        kept, 0,
+        "a finished extraction keeps no checkpoint (file bytes were never one either)"
+    );
 
     let (page_count, method): (i64, String) = conn
         .query_row(

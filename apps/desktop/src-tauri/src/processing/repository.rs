@@ -2047,17 +2047,36 @@ pub fn open_batches(conn: &Connection) -> Result<Vec<String>, String> {
 /// for the supervisor, which revokes them at a checkpoint boundary — yanking
 /// a lease mid-inference would orphan provider-side work and lie about it.
 pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
-    let changed = conn
-        .execute(
-            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
-               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+    let orphans: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
              WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
                AND NOT EXISTS (
                  SELECT 1 FROM processing_batch_tasks l
                  WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
-            [],
         )
-        .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?;
+    let changed = in_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+                   next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+                 WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM processing_batch_tasks l
+                     WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
+                [],
+            )
+            .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
+        for id in &orphans {
+            delete_task_checkpoints(conn, id)?;
+        }
+        Ok(changed)
+    })?;
     conn.execute(
         "UPDATE processing_attempts SET outcome = 'cancelled',
            finished_at = strftime('%s', 'now') * 1000
@@ -2070,21 +2089,27 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
 }
 
 /// Cancels a running unit the supervisor no longer owns the demand for
-/// (commit-time `demand_lost`). Checkpoints survive for whoever resumes the
-/// unit; the attempt closes as cancelled, never as failed.
+/// (commit-time `demand_lost`). The task is terminal, so its checkpoints go
+/// with it; the attempt closes as cancelled, never as failed.
 pub fn cancel_running_task(
     conn: &Connection,
     task_id: &str,
     lease_epoch: i64,
 ) -> Result<(), String> {
-    let changed = conn
-        .execute(
-            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
-               updated_at = strftime('%s', 'now') * 1000
-             WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
-            rusqlite::params![task_id, lease_epoch],
-        )
-        .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
+    let changed = in_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+                   updated_at = strftime('%s', 'now') * 1000
+                 WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+                rusqlite::params![task_id, lease_epoch],
+            )
+            .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
+        if changed > 0 {
+            delete_task_checkpoints(conn, task_id)?;
+        }
+        Ok(changed)
+    })?;
     if changed == 0 {
         return Err(format!(
             "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
@@ -3904,14 +3929,17 @@ fn validate_corpus_claim_input(
 }
 
 fn mark_skipped(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
-    conn.execute(
-        "UPDATE processing_tasks SET state = 'skipped', outcome = ?1, owner_session = NULL,
-           next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
-         WHERE id = ?2",
-        rusqlite::params![outcome, task_id],
-    )
-    .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
-    Ok(())
+    in_savepoint(conn, || {
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = ?1, owner_session = NULL,
+               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?2",
+            rusqlite::params![outcome, task_id],
+        )
+        .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
+        delete_task_checkpoints(conn, task_id)?;
+        Ok(())
+    })
 }
 
 fn mark_blocked(
@@ -4043,6 +4071,186 @@ pub fn save_checkpoint(
             Err(error)
         }
     }
+}
+
+/// States after which a task never resumes: its checkpoints have no reader.
+const TERMINAL_STATES_SQL: &str = "'succeeded', 'failed', 'cancelled', 'skipped'";
+
+/// Result of one retention sweep over terminal tasks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckpointPurge {
+    pub rows: usize,
+    pub bytes: i64,
+    pub batches: usize,
+}
+
+/// Drops the checkpoints of one task that just reached a terminal state.
+/// Must run in the same transaction (or savepoint) as the state change.
+pub fn delete_task_checkpoints(conn: &Connection, task_id: &str) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM processing_checkpoints WHERE task_id = ?1",
+        [task_id],
+    )
+    .map_err(|e| format!("Failed to delete checkpoints of {task_id}: {e}"))
+}
+
+/// Runs `body` under a savepoint so a state change and the checkpoint
+/// deletion that goes with it commit together or not at all, whether or not
+/// the caller already holds a transaction.
+fn in_savepoint<T>(
+    conn: &Connection,
+    body: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    conn.execute_batch("SAVEPOINT processing_terminal")
+        .map_err(|e| format!("Failed to open savepoint: {e}"))?;
+    match body() {
+        Ok(value) => {
+            conn.execute_batch("RELEASE processing_terminal")
+                .map_err(|e| format!("Failed to release savepoint: {e}"))?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ =
+                conn.execute_batch("ROLLBACK TO processing_terminal; RELEASE processing_terminal");
+            Err(error)
+        }
+    }
+}
+
+/// Deletes checkpoints of terminal or vanished tasks in bounded batches.
+///
+/// Each batch is one short write transaction over at most `tasks_per_batch`
+/// tasks, followed by `pause`, so a multi-GB backlog never holds the writer
+/// lock for long. Only terminal tasks (`succeeded`, `failed`, `cancelled`,
+/// `skipped`) and checkpoints whose task row no longer exists are touched:
+/// everything a resume can still read stays.
+pub fn purge_terminal_checkpoints(
+    conn: &Connection,
+    tasks_per_batch: usize,
+    pause: std::time::Duration,
+) -> Result<CheckpointPurge, String> {
+    let limit = tasks_per_batch.max(1) as i64;
+    let mut total = CheckpointPurge::default();
+    loop {
+        let ids: Vec<String> = conn
+            .prepare(&format!(
+                "SELECT DISTINCT c.task_id
+                 FROM processing_checkpoints c
+                 LEFT JOIN processing_tasks t ON t.id = c.task_id
+                 WHERE t.id IS NULL OR t.state IN ({TERMINAL_STATES_SQL})
+                 LIMIT ?1"
+            ))
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?
+            .query_map([limit], |row| row.get(0))
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?;
+        if ids.is_empty() {
+            return Ok(total);
+        }
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| format!("Failed to begin checkpoint purge: {e}"))?;
+        let batch = (|| -> Result<(usize, i64), String> {
+            let mut rows = 0;
+            let mut bytes = 0_i64;
+            for id in &ids {
+                // Re-check under the write lock: the task may have been
+                // reopened (retry) between the scan and now.
+                let still_dead: bool = conn
+                    .query_row(
+                        &format!(
+                            "SELECT NOT EXISTS (SELECT 1 FROM processing_tasks
+                                                WHERE id = ?1 AND state NOT IN ({TERMINAL_STATES_SQL}))"
+                        ),
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Failed to confirm terminal state of {id}: {e}"))?;
+                if !still_dead {
+                    continue;
+                }
+                bytes += conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0)
+                         FROM processing_checkpoints WHERE task_id = ?1",
+                        [id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|e| format!("Failed to measure checkpoints of {id}: {e}"))?;
+                rows += delete_task_checkpoints(conn, id)?;
+            }
+            Ok((rows, bytes))
+        })();
+        match batch {
+            Ok((rows, bytes)) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|e| format!("Failed to commit checkpoint purge: {e}"))?;
+                total.rows += rows;
+                total.bytes += bytes;
+                total.batches += 1;
+                if rows == 0 {
+                    // Nothing in this page was deletable (all reopened):
+                    // stop instead of rescanning the same ids forever.
+                    return Ok(total);
+                }
+            }
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+}
+
+/// Pages one `incremental_vacuum` step releases (8 MB at 4 KB pages).
+const VACUUM_STEP_PAGES: i64 = 2_048;
+
+/// Returns free pages to the OS in bounded steps, but only when the archive
+/// was created with `auto_vacuum = INCREMENTAL`. Any other mode ignores the
+/// pragma, and a blocking `VACUUM` of a multi-GB file does not belong at
+/// startup, so those archives report `None` and keep the space for reuse.
+/// Returns the pages released.
+pub fn reclaim_free_pages(
+    conn: &Connection,
+    max_pages: i64,
+    pause: std::time::Duration,
+) -> Result<Option<i64>, String> {
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to read auto_vacuum: {e}"))?;
+    if mode != 2 {
+        return Ok(None);
+    }
+    let mut released = 0_i64;
+    while released < max_pages {
+        let free: i64 = conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to read freelist_count: {e}"))?;
+        if free == 0 {
+            break;
+        }
+        let step = free.min(VACUUM_STEP_PAGES).min(max_pages - released);
+        // incremental_vacuum returns one row per freed page; drain them.
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA incremental_vacuum({step})"))
+            .map_err(|e| format!("Failed to prepare incremental_vacuum: {e}"))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("Failed to run incremental_vacuum: {e}"))?;
+        while rows
+            .next()
+            .map_err(|e| format!("Failed to run incremental_vacuum: {e}"))?
+            .is_some()
+        {}
+        released += step;
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    Ok(Some(released))
 }
 
 /// Declares how many units the task holds in total (pages, chunks). Called
@@ -4321,6 +4529,8 @@ pub fn commit_success_with(
             rusqlite::params![outcome, receipt_json, task_id],
         )
         .map_err(|e| format!("Failed to mark {task_id} succeeded: {e}"))?;
+        // The result is published; the staged units have no reader left.
+        delete_task_checkpoints(conn, task_id)?;
         if kind == "embedding" {
             conn.execute(
                 "UPDATE processing_asset_revisions SET embedding_completed_revision = ?1 WHERE asset_id = ?2",
@@ -4430,13 +4640,17 @@ pub fn fail_attempt(
         .map_err(|e| format!("Failed to park {task_id} in retry_wait: {e}"))?;
         return Ok(FailOutcome::RetryWait { next_retry_at });
     }
-    conn.execute(
-        "UPDATE processing_tasks SET state = 'failed', last_error_code = ?1, last_error_message = ?2,
-           owner_session = NULL, next_retry_at = NULL, updated_at = ?3
-         WHERE id = ?4",
-        rusqlite::params![error_code, error_message, now_ms, task_id],
-    )
-    .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
+    in_savepoint(conn, || {
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'failed', last_error_code = ?1, last_error_message = ?2,
+               owner_session = NULL, next_retry_at = NULL, updated_at = ?3
+             WHERE id = ?4",
+            rusqlite::params![error_code, error_message, now_ms, task_id],
+        )
+        .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
+        delete_task_checkpoints(conn, task_id)?;
+        Ok(())
+    })?;
     Ok(FailOutcome::Failed)
 }
 
@@ -8467,5 +8681,266 @@ mod tests {
             )
             .unwrap();
         assert_eq!(attempts, 0, "a skipped task opens no attempt");
+    }
+    // ---- checkpoint retention: a terminal task keeps no checkpoints ----
+
+    fn checkpoint_count(conn: &Connection, task_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("count checkpoints")
+    }
+
+    /// Admits and claims one OCR unit and leaves one confirmed checkpoint on it.
+    fn running_with_checkpoint(conn: &Connection, batch: &str, asset: &str) -> ClaimedTask {
+        insert_batch(conn, batch, &format!("req-{batch}"), r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+            [batch],
+        )
+        .unwrap();
+        admit_or_attach(conn, batch, "ocr", asset, 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(conn, "worker", &["ocr"], now_ms())
+            .unwrap()
+            .expect("unit must be claimable");
+        save_checkpoint(
+            conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:1".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":1}"#.to_string(),
+                payload_checksum: "sum".to_string(),
+            },
+            now_ms(),
+        )
+        .expect("checkpoint");
+        assert_eq!(checkpoint_count(conn, &claimed.task_id), 1);
+        claimed
+    }
+
+    #[test]
+    fn success_deletes_the_checkpoints_in_the_commit() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        commit_success_with(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |conn| {
+                assert_eq!(
+                    checkpoint_count(conn, &task.task_id),
+                    1,
+                    "publish still reads them"
+                );
+                Ok(())
+            },
+        )
+        .expect("commit");
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn a_failed_publish_keeps_the_checkpoints_for_the_retry() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        commit_success_with(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| Err("publish_failed".to_string()),
+        )
+        .expect_err("publish fails");
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 1);
+    }
+
+    #[test]
+    fn terminal_failure_deletes_but_retry_wait_keeps_the_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        let outcome = fail_attempt(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            task.attempt_number,
+            "provider_failure",
+            "offline",
+            true,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, FailOutcome::RetryWait { .. }));
+        assert_eq!(
+            checkpoint_count(&conn, &task.task_id),
+            1,
+            "a retry resumes from them"
+        );
+
+        let other = running_with_checkpoint(&conn, "b2", "a5p1");
+        let outcome = fail_attempt(
+            &conn,
+            &other.task_id,
+            other.lease_epoch,
+            other.attempt_number,
+            "corrupt_pdf",
+            "locked",
+            false,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, FailOutcome::Failed));
+        assert_eq!(checkpoint_count(&conn, &other.task_id), 0);
+    }
+
+    #[test]
+    fn interrupt_and_requeue_keep_the_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        interrupt_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 1);
+        let other = running_with_checkpoint(&conn, "b2", "a5p1");
+        requeue_task(&conn, &other.task_id, other.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &other.task_id), 1);
+    }
+
+    #[test]
+    fn cancelling_a_running_task_deletes_its_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        cancel_running_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn cancelling_orphaned_tasks_deletes_their_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        interrupt_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state = 'cancelled' WHERE task_id = ?1",
+            [&task.task_id],
+        )
+        .unwrap();
+        assert_eq!(cancel_orphaned_tasks(&conn).unwrap(), 1);
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn skipping_a_task_deletes_its_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        mark_skipped(&conn, &task.task_id, "source_deleted").unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    fn seed_checkpoint(conn: &Connection, task_id: &str, payload_len: usize) {
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+             VALUES (?1, 'u', 'f', 'c', ?2, 'x', 1)",
+            rusqlite::params![task_id, "x".repeat(payload_len)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn startup_purge_deletes_terminal_and_orphan_checkpoints_in_batches() {
+        let (_dir, conn) = batch_db();
+        for (index, state) in [
+            "succeeded",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "skipped",
+            "pending",
+            "running",
+            "retry_wait",
+            "interrupted",
+            "blocked",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let id = format!("seed-{index}");
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, subject_id, state, created_at, updated_at)
+                 VALUES (?1, 'ocr', ?1, ?1, ?2, 1, 1)",
+                rusqlite::params![id, state],
+            )
+            .unwrap();
+            seed_checkpoint(&conn, &id, 1_000);
+        }
+        // A checkpoint whose task row is gone (written with FKs off, as an
+        // older build or a restore could leave it).
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        seed_checkpoint(&conn, "ghost", 1_000);
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let purge = purge_terminal_checkpoints(&conn, 2, std::time::Duration::ZERO).unwrap();
+        assert_eq!(purge.rows, 6, "5 terminal + 1 orphan");
+        assert_eq!(purge.bytes, 6_000);
+        assert!(purge.batches >= 3, "bounded batches of 2 tasks");
+        let left: Vec<String> = conn
+            .prepare("SELECT task_id FROM processing_checkpoints ORDER BY task_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec!["seed-5", "seed-6", "seed-7", "seed-8", "seed-9"]);
+        let again = purge_terminal_checkpoints(&conn, 2, std::time::Duration::ZERO).unwrap();
+        assert_eq!(again, CheckpointPurge::default());
+    }
+    #[test]
+    fn free_pages_return_to_the_os_only_with_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let build = |name: &str, mode: i64| {
+            let path = dir.path().join(name);
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(&format!(
+                "PRAGMA auto_vacuum = {mode};
+                 CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB);"
+            ))
+            .unwrap();
+            for _ in 0..64 {
+                conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                    .unwrap();
+            }
+            conn.execute("DELETE FROM blobs", []).unwrap();
+            conn
+        };
+        let pages = |conn: &Connection| -> i64 {
+            conn.query_row("PRAGMA page_count", [], |row| row.get(0))
+                .unwrap()
+        };
+
+        let incremental = build("inc.sqlite", 2);
+        let before = pages(&incremental);
+        let released = reclaim_free_pages(&incremental, 10_000, std::time::Duration::ZERO)
+            .unwrap()
+            .expect("incremental archives are reclaimed");
+        assert!(released > 0);
+        assert!(pages(&incremental) < before / 2, "the file shrinks");
+
+        let none = build("none.sqlite", 0);
+        let before = pages(&none);
+        assert_eq!(
+            reclaim_free_pages(&none, 10_000, std::time::Duration::ZERO).unwrap(),
+            None,
+            "no blocking VACUUM and no pretend reclaim"
+        );
+        assert_eq!(pages(&none), before);
     }
 }
