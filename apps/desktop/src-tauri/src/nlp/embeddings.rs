@@ -790,6 +790,23 @@ impl ConcurrencyGate {
     }
 }
 
+/// `Display` of an error followed by every `source()` below it. reqwest's own
+/// message for a transport failure is just "error sending request for url";
+/// the cause (DNS, connect, TLS, timeout) only lives in the chain.
+pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
+}
+
 /// One failed HTTP attempt, classified for the retry loop.
 struct RequestFailure {
     message: String,
@@ -963,7 +980,7 @@ impl OpenRouterEmbeddingClient {
             .json(&request)
             .send()
             .map_err(|e| RequestFailure {
-                message: format!("OpenRouter embedding request failed: {e}"),
+                message: format!("OpenRouter embedding request failed: {}", error_chain(&e)),
                 retryable: true,
                 retry_after_ms: None,
                 throttled: false,
@@ -2990,6 +3007,56 @@ mod tests {
         assert_eq!(result[0], 0.0);
         assert!((result[OPENROUTER_EMBEDDING_DIMENSIONS - 1] - expected_last).abs() < 0.000_001);
         assert!((vector_norm(&result) - 1.0).abs() < 0.000_001);
+    }
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as _)
+        }
+    }
+
+    #[test]
+    fn error_chain_appends_every_source_once() {
+        let error = Layer(
+            "error sending request",
+            Some(Box::new(Layer(
+                "client error (Connect)",
+                Some(Box::new(Layer("connection refused", None))),
+            ))),
+        );
+        assert_eq!(
+            error_chain(&error),
+            "error sending request: client error (Connect): connection refused"
+        );
+    }
+
+    #[test]
+    fn embed_text_transport_failure_reports_its_cause() {
+        // Port 1 on loopback: nothing listens, so the send fails at connect.
+        let engine = EmbeddingEngine::init_with_endpoint(
+            EmbeddingConfig::openrouter(
+                "sk-test".to_string(),
+                DEFAULT_OPENROUTER_EMBEDDING_MODEL.to_string(),
+            ),
+            "http://127.0.0.1:1".to_string(),
+        )
+        .expect("engine should init");
+        let message = engine.embed_text("hola").expect_err("nothing listens");
+        let detail = message
+            .strip_prefix("OpenRouter embedding request failed: ")
+            .expect("transport prefix");
+        assert!(
+            detail.matches(": ").count() >= 1,
+            "cause chain missing: {message}"
+        );
+        assert!(!message.contains("sk-test"));
     }
 
     fn local_openrouter_embedding_server(vector: Vec<f32>) -> String {
