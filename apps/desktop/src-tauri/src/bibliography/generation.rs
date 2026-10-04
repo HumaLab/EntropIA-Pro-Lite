@@ -316,10 +316,14 @@ fn live_published_inputs(conn: &Connection, generation_id: &str) -> Bibliography
     })
 }
 
-/// Live works that still owe this generation a vector: a profile task of the
-/// generation's contract exists for them, none of those tasks succeeded, and
-/// no vector landed yet. A deleted (tombstoned) work owes nothing; a work
-/// whose profile failed, was cancelled or is still queued does.
+/// Live works that still owe this generation a vector and will deliver it: a
+/// profile task of the generation's contract is pending, running, waiting to
+/// retry or interrupted (a restart parks it for requeue), and no vector landed
+/// yet. A deleted (tombstoned) work owes nothing. Neither does a work whose
+/// profile ended `failed` or `cancelled` (or is `blocked` on configuration):
+/// it will not finish by itself, so it must not hold the whole library's
+/// search off. A later sync re-admits it and its vector folds into the active
+/// generation.
 fn outstanding_inputs(
     conn: &Connection,
     generation_id: &str,
@@ -333,15 +337,11 @@ fn outstanding_inputs(
           WHERE t.kind = 'bibliography_profile'
             AND t.domain = 'bibliography' AND t.subject_kind = 'item'
             AND t.contract_hash = ?2
-            AND t.state NOT IN ('succeeded', 'skipped')
+            AND t.state IN ('pending', 'running', 'retry_wait', 'interrupted')
             AND z.item_id IS NULL
             AND NOT EXISTS (
                   SELECT 1 FROM bibliographic_item_embeddings e
-                   WHERE e.generation_id = ?1 AND e.item_id = t.subject_id)
-            AND NOT EXISTS (
-                  SELECT 1 FROM processing_tasks s
-                   WHERE s.kind = 'bibliography_profile' AND s.subject_id = t.subject_id
-                     AND s.contract_hash = ?2 AND s.state = 'succeeded')",
+                   WHERE e.generation_id = ?1 AND e.item_id = t.subject_id)",
         rusqlite::params![generation_id, contract_hash],
         |row| row.get(0),
     )
@@ -381,9 +381,10 @@ fn in_savepoint<T>(
 /// The manifest is re-derived from live data instead of trusting the stored
 /// counters: `completed` is the number of live works that carry a vector in
 /// this generation, `expected` is that plus the live works whose profile is
-/// still queued, failed or cancelled. A deleted work therefore stops being
-/// owed (it can never strand the generation), while a live work that is
-/// missing keeps it partial — `Ok(None)`, still staging. Healed counters are
+/// still in flight (pending, running, retry_wait, interrupted). Deleted works
+/// and works whose profile failed or was cancelled are not owed, so neither
+/// can strand the generation; work still in flight keeps it partial —
+/// `Ok(None)`, still staging. Healed counters are
 /// written back so the stored manifest never drifts from reality.
 ///
 /// When the same contract already has an active generation, the staged

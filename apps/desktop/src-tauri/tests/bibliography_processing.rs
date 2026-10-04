@@ -8974,16 +8974,19 @@ fn the_last_profile_publish_activates_the_generation() {
     assert!(activated.is_some());
 }
 
-/// A live work whose profile failed is genuinely missing: the generation
-/// never activates as if it were complete.
+/// Work still in flight keeps the generation partial; a work whose profile
+/// failed permanently does not hold the library's search off, and a later sync
+/// folds its vector into the active generation.
 #[test]
-fn a_live_work_without_a_vector_keeps_the_generation_partial() {
+fn in_flight_work_keeps_the_generation_partial_but_a_failed_work_does_not() {
     let (dir, mut conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let a = seed_catalog(&mut conn, "PARA0001", "Obra A", "Resumen A.");
     let b = seed_catalog(&mut conn, "PARB0001", "Obra B", "Resumen B.");
+    let c = seed_catalog(&mut conn, "PARC0001", "Obra C", "Resumen C.");
     admit_profile_demand(&conn, &a);
     admit_profile_demand(&conn, &b);
+    admit_profile_demand(&conn, &c);
 
     assert!(matches!(
         run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
@@ -8996,15 +8999,43 @@ fn a_live_work_without_a_vector_keeps_the_generation_partial() {
     );
     assert!(matches!(failed, RunOneOutcome::Failed { .. }), "{failed:?}");
 
-    assert_eq!(generation_statuses(&conn), vec!["staging"]);
-    let activated =
+    // One work landed, one failed, one is still pending: in flight.
+    let repair = |conn: &rusqlite::Connection| {
         entropia_desktop_lib::bibliography::generation::activate_complete_staging_generations(
-            &conn,
+            conn,
             repository::now_ms(),
         )
-        .expect("repair pass");
-    assert_eq!(activated, 0, "a partial generation is never activated");
+        .expect("repair pass")
+    };
+    assert_eq!(repair(&conn), 0, "in-flight work keeps it partial");
     assert_eq!(generation_statuses(&conn), vec!["staging"]);
+
+    // The last in-flight work lands: the failed one no longer blocks.
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+
+    // A later sync re-admits the failed work and folds it in.
+    assert_eq!(
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission"),
+        1
+    );
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("one active generation");
+    for item in [&a, &b, &c] {
+        assert_eq!(embedding_generation_of(&conn, item), vec![active.clone()]);
+    }
 }
 
 /// A work deleted mid-run (tombstoned) stops being owed: the generation is
