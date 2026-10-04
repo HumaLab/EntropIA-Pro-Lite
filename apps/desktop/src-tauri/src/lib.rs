@@ -1,4 +1,5 @@
 mod app_logs;
+mod archive_close;
 mod asset_integrity;
 mod asset_sweep;
 mod audio_preview;
@@ -524,6 +525,11 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
         },
     );
 
+    // Phase 2b - one-time archive compaction, only when worthwhile and safe
+    // (`archive_close`). The window stays open with a notice; every skip or
+    // failure is a log line and the close goes on.
+    archive_close::run(app_handle, matches!(sync, BoundedOutcome::Done)).await;
+
     // Phase 3 — always close. `destroy()` emits no events, so the handler above
     // cannot re-enter; `RunEvent::Exit` then shuts the sync engine down cleanly.
     app_logs::info(
@@ -1047,14 +1053,21 @@ pub fn run() {
                     processing_terminal_observer(&terminal_app, &task, &state, &code, &message);
                 },
             );
-            processing::scheduler::start_scheduler(
+            // Kept so the close-time compaction can stop the supervisor and be
+            // sure no task is running while the archive is rewritten.
+            let scheduler_stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let scheduler_thread = processing::scheduler::start_scheduler(
                 db_path.clone(),
                 uuid::Uuid::new_v4().to_string(),
                 std::sync::Arc::new(scheduler_registry),
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                std::sync::Arc::clone(&scheduler_stop),
                 scheduler_on_commit,
                 scheduler_on_terminal,
             );
+            app.manage(archive_close::SchedulerControl::new(
+                scheduler_stop,
+                scheduler_thread,
+            ));
             // LLM queue: shared correction/summarization/extraction pipeline. Pro can
             // use the local engine; Lite routes through the configured remote provider.
             let (llm_queue, llm_receiver) = LlmQueue::new(db_path.clone());
