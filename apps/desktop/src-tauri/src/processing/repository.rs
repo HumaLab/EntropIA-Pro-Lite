@@ -449,6 +449,8 @@ pub fn admit_subject_or_attach(
     }
     if let Some(task_id) = live_task(conn, "corpus", "asset", asset_id, kind)? {
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -492,6 +494,7 @@ pub fn admit_subject_or_attach(
                 asset_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -577,6 +580,7 @@ fn admit_bibliography_library_or_attach(
             library_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -617,6 +621,7 @@ fn admit_bibliography_library_or_attach(
                 library_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -686,6 +691,7 @@ fn admit_bibliography_attachment_extract_or_attach(
             attachment_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -726,6 +732,7 @@ fn admit_bibliography_attachment_extract_or_attach(
                 attachment_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -834,6 +841,7 @@ fn admit_bibliography_item_profile_or_attach(
             item_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -866,6 +874,7 @@ fn admit_bibliography_item_profile_or_attach(
                 item_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -1073,6 +1082,16 @@ pub fn admit_bibliography_sync_demand(
             }
         }
 
+        let was_interrupted = match &live {
+            Some(id) => conn
+                .query_row(
+                    "SELECT state = 'interrupted' FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| format!("Failed to inspect live bibliography task: {error}"))?,
+            None => false,
+        };
         let admitted = admit_subject_or_attach(
             conn,
             &batch_id,
@@ -1083,23 +1102,25 @@ pub fn admit_bibliography_sync_demand(
             "",
             None,
         )?;
+        // Attaching already resumes an interrupted system task.
         let requeued = !admitted.created
-            && conn
-                .execute(
-                    "UPDATE processing_tasks SET state = 'pending', outcome = '',
+            && (was_interrupted
+                || conn
+                    .execute(
+                        "UPDATE processing_tasks SET state = 'pending', outcome = '',
                        owner_session = NULL, next_retry_at = NULL,
                        last_error_code = NULL, last_error_message = NULL,
                        updated_at = strftime('%s', 'now') * 1000
                      WHERE id = ?1 AND state IN ('interrupted', 'blocked')",
-                    [&admitted.task_id],
-                )
-                .map_err(|error| {
-                    format!(
-                        "Failed to requeue interrupted bibliography task {}: {error}",
-                        admitted.task_id
+                        [&admitted.task_id],
                     )
-                })?
-                == 1;
+                    .map_err(|error| {
+                        format!(
+                            "Failed to requeue interrupted bibliography task {}: {error}",
+                            admitted.task_id
+                        )
+                    })?
+                    == 1);
         Ok(BibliographyDemandOutcome {
             batch_id,
             task_id: admitted.task_id,
@@ -1892,6 +1913,41 @@ pub fn record_request(
     .map_err(|e| format!("Failed to record request {request_id}: {e}"))?;
     Ok(())
 }
+/// Puts `interrupted` units that only system batches want back to `pending`.
+///
+/// A user batch parks its units on a restart and waits for the person to press
+/// "Reanudar". A system batch (`manual`, `repair`, `bibliography`) has no such
+/// button: it is a long-lived container nobody can resume, so a unit left
+/// `interrupted` there stays live forever and, being live, also swallows every
+/// later demand for the same subject (single-flight attaches to it). The rule
+/// is therefore ownership-based: a unit is requeued when it has at least one
+/// non-cancelled link and none of them belongs to a `user` batch. A unit shared
+/// with a user batch keeps waiting for that user. Only the state flips: the
+/// attempt was already closed as `interrupted`, so nothing is charged to the
+/// retry budget, and checkpoints stay for the next claim to replay from.
+/// `only` limits the sweep to one task (a demand attaching to it).
+pub fn requeue_interrupted_system_tasks(
+    conn: &Connection,
+    only: Option<&str>,
+) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', owner_session = NULL,
+           next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'interrupted'
+           AND (?1 IS NULL OR id = ?1)
+           AND EXISTS (
+             SELECT 1 FROM processing_batch_tasks l
+             WHERE l.task_id = processing_tasks.id AND l.request_state != 'cancelled')
+           AND NOT EXISTS (
+             SELECT 1 FROM processing_batch_tasks l
+             JOIN processing_batches b ON b.id = l.batch_id
+             WHERE l.task_id = processing_tasks.id AND l.request_state != 'cancelled'
+               AND b.origin = 'user')",
+        [only],
+    )
+    .map_err(|e| format!("Failed to requeue interrupted system units: {e}"))
+}
+
 /// Interrupts a running unit without recording a provider failure: the
 /// attempt closes as interrupted and every confirmed checkpoint survives.
 /// Recovery, pause, and cooperative stop all funnel through here.

@@ -2689,12 +2689,22 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM processing_tasks
-              WHERE id IN (?1, ?2) AND state='interrupted'",
-            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+              WHERE id = ?1 AND state='interrupted'",
+            rusqlite::params![&ocr_task_id],
             |row| row.get::<_, i64>(0),
         )
-        .expect("recovered task states"),
-        2
+        .expect("recovered user task state"),
+        1
+    );
+    // System-owned bibliography work has no resume button: recovery requeues it.
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&bibliography_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("recovered system task state"),
+        "pending"
     );
     assert_eq!(
         conn.query_row(
@@ -2752,7 +2762,6 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
         .expect("explicitly resume bibliography demand");
     assert_eq!(resumed_bibliography.task_id, bibliography_task_id);
     assert!(!resumed_bibliography.created);
-    assert!(resumed_bibliography.requeued);
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM processing_tasks
@@ -3711,6 +3720,36 @@ fn a_sync_re_admits_a_work_whose_profile_task_failed() {
         .expect("live rows");
     assert_eq!(live.len(), 1);
     assert_ne!(live[0], failed_id, "terminal history is never reopened");
+}
+
+/// A work whose profile task was parked `interrupted` by a restart is not
+/// stranded: the profile demand a library sync chains attaches to that same
+/// task AND puts it back to `pending`, because the bibliography system batch
+/// has no UI to resume it.
+#[test]
+fn a_sync_resumes_a_work_whose_profile_task_is_interrupted() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0007", "Obra interrumpida", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'interrupted' WHERE id = ?1",
+        [&task_id],
+    )
+    .expect("park the task as a restart does");
+
+    let created =
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync-chained admission");
+
+    assert_eq!(created, 0, "the interrupted task is reused, not duplicated");
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("task state");
+    assert_eq!(state, "pending", "the demand puts it back in the queue");
 }
 
 /// A metadata edit between claim and commit refuses source_changed: the

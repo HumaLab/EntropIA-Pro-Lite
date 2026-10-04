@@ -144,6 +144,8 @@ pub fn recover_session(
         // The 0038 trigger settles dependents as their dependency ends; this
         // one scan repairs units a pre-0038 build left blocked.
         repository::settle_blocked_dependents(conn)?;
+        // Work only system batches own has nobody to resume it: requeue it.
+        repository::requeue_interrupted_system_tasks(conn, None)?;
         // Batches: running work waits for resume; confirmed intents converge.
         // `user` only. A `repair`/`manual`/`bibliography` batch is a long-lived
         // container that is always running with an empty complete snapshot —
@@ -566,7 +568,8 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("bibliography task state");
-        assert_eq!(bibliography_task_state, "interrupted");
+        // System-owned work resumes by itself: no human has a button for it.
+        assert_eq!(bibliography_task_state, "pending");
         let (run_state, cursor): (String, i64) = conn
             .query_row(
                 "SELECT state, cursor_start FROM zotero_reconciliation_runs
@@ -632,6 +635,11 @@ mod tests {
         // E2b-4 RED: a fresh manual demand is the explicit resume for the
         // long-lived system batch. It requeues this same physical task while
         // leaving the committed page cursor, seen-set and checkpoint intact.
+        conn.execute(
+            "UPDATE processing_tasks SET state='interrupted' WHERE id='bib-task'",
+            [],
+        )
+        .expect("park it again as an older build would have left it");
         let resumed = repository::admit_bibliography_sync_demand(&conn, "user", "0")
             .expect("manual demand after recovery");
         assert_eq!(resumed.task_id, "bib-task");
@@ -723,6 +731,75 @@ mod tests {
             )
             .expect("system batch row");
         assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+    }
+
+    /// Inserts one unit of `kind` in `state`, linked to `batch_id`.
+    fn linked_task(conn: &Connection, id: &str, batch_id: &str, state: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES (?1, 'ocr', ?1, 'corpus', 'asset', ?1, ?2, 'old-session', 3, 1, 1)",
+            rusqlite::params![id, state],
+        )
+        .expect("task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES (?1, ?2, 'ocr', ?2, 'corpus', 'asset', ?2, 'active')",
+            rusqlite::params![batch_id, id],
+        )
+        .expect("link");
+    }
+
+    fn task_state(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("task state")
+    }
+
+    #[test]
+    fn recovery_requeues_work_owned_only_by_system_batches() {
+        let (_dir, conn) = recovery_db();
+        let system = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+        conn.execute(
+            r#"INSERT INTO processing_batches
+               (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('user-batch', 'user-request', 'user', 'running', 'run', '["ocr"]', 1, 1, 1)"#,
+            [],
+        )
+        .expect("user batch");
+        // Running at the crash, and already parked by an earlier restart.
+        linked_task(&conn, "sys-running", &system, "running");
+        linked_task(&conn, "sys-parked", &system, "interrupted");
+        // Shared with a user batch, and purely user-owned: stay parked.
+        linked_task(&conn, "shared", &system, "running");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('user-batch', 'shared', 'ocr', 'shared', 'corpus', 'asset', 'shared', 'active')",
+            [],
+        )
+        .expect("share with user batch");
+        linked_task(&conn, "user-only", "user-batch", "running");
+
+        recover_session(&conn, "", 0).expect("recover");
+
+        assert_eq!(task_state(&conn, "sys-running"), "pending");
+        assert_eq!(task_state(&conn, "sys-parked"), "pending");
+        assert_eq!(task_state(&conn, "shared"), "interrupted");
+        assert_eq!(task_state(&conn, "user-only"), "interrupted");
+        // The interrupted attempt is closed as interrupted, not as a failure.
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owner_session FROM processing_tasks WHERE id = 'sys-running'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("owner");
+        assert!(owner.is_none());
     }
 
     #[test]
