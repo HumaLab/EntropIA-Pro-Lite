@@ -399,13 +399,51 @@ fn dll_name_display() -> &'static str {
 /// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
 pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
     let bytes = open_with_empty_password(bytes)?;
-    let bytes: &[u8] = &bytes;
+    // `pdf-extract` parses the file with its own, stricter lopdf: it reads the
+    // header line as UTF-8 and wants `%PDF-` at byte 0.
+    let normalized = normalize_pdf_header(&bytes);
+    let bytes: &[u8] = normalized.as_deref().unwrap_or(&bytes);
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(bytes)
     })) {
         Ok(result) => result.map_err(|e| format!("PDF text extraction failed: {e}")),
         Err(_) => Err(UNREADABLE_PDF_TEXT_MESSAGE.to_string()),
     }
+}
+
+/// How far into the file the spec lets `%PDF-` sit.
+const PDF_HEADER_SEARCH_WINDOW: usize = 1024;
+
+/// Tolerates the header shapes real producers emit and strict parsers refuse:
+/// junk before `%PDF-` (the spec allows it within the first 1024 bytes) and
+/// binary bytes on the header line itself (`%PDF-1.4` + two high bytes + EOL).
+///
+/// Leading junk is dropped, because xref offsets count from `%PDF-`. Bad bytes
+/// on the header line are blanked in place, so the length and every offset
+/// after it stay put. Returns `None` when the header is already clean or no
+/// `%PDF-` marker exists in the window, leaving the parser's own error honest.
+pub(crate) fn normalize_pdf_header(bytes: &[u8]) -> Option<Vec<u8>> {
+    const MARKER: &[u8] = b"%PDF-";
+    let window = &bytes[..bytes.len().min(PDF_HEADER_SEARCH_WINDOW)];
+    let start = window
+        .windows(MARKER.len())
+        .position(|candidate| candidate == MARKER)?;
+    let body = &bytes[start..];
+    let line_len = body
+        .iter()
+        .position(|byte| matches!(byte, b'\r' | b'\n'))
+        .unwrap_or(body.len());
+    let is_clean = |byte: &u8| byte.is_ascii() && !byte.is_ascii_control();
+    if start == 0 && body[..line_len].iter().all(is_clean) {
+        return None;
+    }
+    let mut repaired = body.to_vec();
+    for byte in &mut repaired[..line_len] {
+        if !is_clean(byte) {
+            *byte = b' ';
+        }
+    }
+    Some(repaired)
 }
 
 /// Opens a PDF that is encrypted but readable with the EMPTY user password.
@@ -1306,6 +1344,56 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// A readable text PDF whose header line carries two binary bytes before
+    /// the line break, the shape some producers emit. Same length as the
+    /// original, so every xref offset stays valid.
+    fn pdf_with_binary_header_line() -> Vec<u8> {
+        let plain = open_with_empty_password(AES_EMPTY_USER_TEXT_PDF)
+            .expect("opens")
+            .into_owned();
+        assert!(plain.starts_with(b"%PDF-1.3\n%"), "fixture header shape");
+        let mut bytes = plain;
+        bytes[8] = 0xbe;
+        bytes[9] = 0xad;
+        bytes
+    }
+
+    #[test]
+    fn extract_pdf_text_reads_a_pdf_whose_header_line_has_binary_bytes() {
+        let bytes = pdf_with_binary_header_line();
+
+        let text = extract_pdf_text(&bytes).expect("a binary header line is tolerated");
+
+        assert!(text.contains("Permissions only"), "{text:?}");
+    }
+
+    #[test]
+    fn extract_pdf_text_reads_a_pdf_with_junk_before_the_header() {
+        let mut bytes = b"junk\r\n".to_vec();
+        bytes.extend_from_slice(&pdf_with_binary_header_line());
+
+        // Offsets are relative to `%PDF-`, so the junk is stripped, not kept.
+        let text = extract_pdf_text(&bytes).expect("leading junk is tolerated");
+
+        assert!(text.contains("Permissions only"), "{text:?}");
+    }
+
+    #[test]
+    fn load_lopdf_document_opens_a_pdf_whose_header_line_has_binary_bytes() {
+        let bytes = pdf_with_binary_header_line();
+
+        let document = load_lopdf_document(&bytes, "page count").expect("opens");
+
+        assert_eq!(document.get_pages().len(), 1);
+    }
+
+    #[test]
+    fn extract_pdf_text_keeps_an_honest_error_for_a_file_that_is_not_a_pdf() {
+        let error = extract_pdf_text(b"<html>not a pdf at all</html>").expect_err("not a pdf");
+
+        assert!(error.contains("PDF"), "{error}");
     }
 
     #[test]
