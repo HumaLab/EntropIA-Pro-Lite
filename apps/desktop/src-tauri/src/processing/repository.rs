@@ -1709,7 +1709,7 @@ pub fn admit_stale_extraction_demands(
         // value, in ms) next to the file's byte length. Comparing against the
         // file system's mtime (seconds) can never match, which re-demanded
         // every extracted attachment on every sync.
-        if crate::bibliography::repository::extraction_matches_source(
+        if crate::bibliography::repository::extraction_is_settled(
             conn,
             attachment_id,
             attachment.mtime,

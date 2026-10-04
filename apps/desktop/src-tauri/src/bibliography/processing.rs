@@ -2474,6 +2474,10 @@ struct ExtractedDocument {
     quality: &'static str,
     pages: Vec<ExtractPageText>,
     ocr_failed_pages: Vec<i64>,
+    /// A provider answered at least once (even with no text): the document
+    /// went through a real OCR pass, so an `empty` verdict is final and the
+    /// sync must not demand the same pass again.
+    ocr_attempted: bool,
 }
 
 /// An HTML snapshot is one "page": its block paragraphs, blank-line
@@ -2504,6 +2508,7 @@ fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
         quality,
         pages: vec![page],
         ocr_failed_pages: Vec::new(),
+        ocr_attempted: false,
     }
 }
 
@@ -2672,7 +2677,7 @@ impl BibliographyExtractExecutor {
                     code: "storage_unavailable".to_string(),
                     message: error,
                 })?;
-            let current = crate::bibliography::repository::extraction_matches_source(
+            let current = crate::bibliography::repository::extraction_is_settled(
                 &conn,
                 &task.subject_id,
                 attachment.mtime,
@@ -2743,6 +2748,7 @@ impl BibliographyExtractExecutor {
             quality,
             pages,
             ocr_failed_pages,
+            ocr_attempted,
         } = document;
         let text_chars = text.chars().count() as i64;
         let output = BibliographyExtractComputeOutput {
@@ -2765,6 +2771,7 @@ impl BibliographyExtractExecutor {
             "pageCount": output.page_count,
             "textHash": output.text_hash,
             "ocrFailedPages": ocr_failed_pages,
+            "ocrAttempted": ocr_attempted,
         })
         .to_string();
         Ok(ExecResult {
@@ -2836,14 +2843,31 @@ impl BibliographyExtractExecutor {
                 joined
             }
         };
-        let quality = extraction_quality(&text);
-        let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
+        let mut quality = extraction_quality(&text);
+        let mut text = text;
+        let (pages, ocr_failed_pages, ocr_attempted) =
+            self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
+        // A scan has no native text, so the whole-document verdict above is
+        // `empty` however well OCR reads it. When recognition replaced pages
+        // and the native layer was not already rich, the document text and
+        // its quality come from the pages now published, or every scanned
+        // PDF would stay `empty` after its text exists.
+        if quality != "rich" && pages.iter().any(|page| page.method == "ocr") {
+            text = pages
+                .iter()
+                .map(|page| page.text_content.trim())
+                .filter(|page_text| !page_text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            quality = extraction_quality(&text);
+        }
         Ok(ExtractedDocument {
             page_count,
             text,
             quality,
             pages,
             ocr_failed_pages,
+            ocr_attempted,
         })
     }
 
@@ -2862,15 +2886,73 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
-    ) -> Result<(Vec<ExtractPageText>, Vec<i64>), crate::processing::scheduler::ExecOutput> {
+    ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool), crate::processing::scheduler::ExecOutput>
+    {
         use crate::processing::scheduler::ExecOutput;
         let Some((renderer, provider)) = &self.selective_ocr else {
-            return Ok((pages, Vec::new()));
+            return Ok((pages, Vec::new(), false));
         };
         let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
             true,
             Some(provider.name()),
         );
+        let mut ocr_attempted = false;
+        // Whole-document recognition first, when the provider offers it and
+        // the document is mostly scan: one request per window of pages, no
+        // page rendering. A window the provider rejects (not a rate limit or
+        // a credential problem) drops back to the per-page path below.
+        let needing: Vec<i64> = pages
+            .iter()
+            .filter(|page| page.quality == "sparse" || page.quality == "empty")
+            .map(|page| page.page_number)
+            .collect();
+        let mut windowed: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+        if let Some(per_request) = provider.pdf_pages_per_request() {
+            if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
+                for (first, last) in crate::bibliography::selective_ocr::plan_pdf_windows(
+                    &needing,
+                    pages.len(),
+                    per_request,
+                ) {
+                    if stop.stopped() {
+                        return Err(ExecOutput::Stopped);
+                    }
+                    let unit_key = format!("ocr-range:{first}-{last}");
+                    let result: Result<Vec<String>, String> = ctx.unit(task, &unit_key, || {
+                        let texts = provider.recognize_pdf_pages(bytes, first, last)?;
+                        let expected = (last - first + 1) as usize;
+                        if texts.len() != expected {
+                            return Err(format!(
+                                "provider_error: whole-document OCR returned {} pages for a range of {expected}",
+                                texts.len()
+                            ));
+                        }
+                        Ok(texts)
+                    });
+                    match result {
+                        Ok(texts) => {
+                            ocr_attempted = true;
+                            for (offset, text) in texts.into_iter().enumerate() {
+                                windowed.insert(i64::from(first) + offset as i64, text);
+                            }
+                        }
+                        Err(error) => {
+                            if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                                return Err(ExecOutput::Stopped);
+                            }
+                            match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
+                                ExecOutput::Fatal { .. } => {
+                                    eprintln!(
+                                        "[bibliography] whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
+                                    );
+                                }
+                                other => return Err(other),
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut out: Vec<ExtractPageText> = Vec::with_capacity(pages.len());
         let mut ocr_failed_pages: Vec<i64> = Vec::new();
         for page in pages {
@@ -2878,41 +2960,52 @@ impl BibliographyExtractExecutor {
                 out.push(page);
                 continue;
             }
-            if stop.stopped() {
-                return Err(ExecOutput::Stopped);
-            }
-            let unit_key = format!("ocr-page:{}", page.page_number);
-            let text = match ctx.unit(task, &unit_key, || {
-                let image = renderer
-                    .render_page(bytes, page.page_number as u32)
-                    .map_err(|error| format!("render failed: {error}"))?;
-                provider.recognize_page(&image)
-            }) {
-                Ok(text) => text,
-                Err(error) => {
-                    if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                        return Err(ExecOutput::Stopped);
+            let text = if let Some(text) = windowed.remove(&page.page_number) {
+                text
+            } else {
+                if stop.stopped() {
+                    return Err(ExecOutput::Stopped);
+                }
+                let unit_key = format!("ocr-page:{}", page.page_number);
+                match ctx.unit(task, &unit_key, || {
+                    let image = renderer
+                        .render_page(bytes, page.page_number as u32)
+                        .map_err(|error| format!("render failed: {error}"))?;
+                    provider.recognize_page(&image)
+                }) {
+                    Ok(text) => {
+                        ocr_attempted = true;
+                        text
                     }
-                    let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
-                        ExecOutput::Fatal {
-                            code: "extraction_failed".to_string(),
-                            message: detail.to_string(),
+                    Err(error) => {
+                        if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                            return Err(ExecOutput::Stopped);
                         }
-                    } else {
-                        crate::bibliography::selective_ocr::map_page_ocr_error(&error)
-                    };
-                    match verdict {
-                        // E4b-WU4 incomplete handling: a page whose OCR
-                        // hard-failed keeps its native row and is named in
-                        // the receipt. Transient and configuration verdicts
-                        // stay whole-task: backoff and user fixes must not
-                        // masquerade as partial success.
-                        ExecOutput::Fatal { .. } => {
-                            ocr_failed_pages.push(page.page_number);
-                            out.push(page);
-                            continue;
+                        let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
+                            ExecOutput::Fatal {
+                                code: "extraction_failed".to_string(),
+                                message: detail.to_string(),
+                            }
+                        } else {
+                            crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                        };
+                        match verdict {
+                            // E4b-WU4 incomplete handling: a page whose OCR
+                            // hard-failed keeps its native row and is named in
+                            // the receipt. Transient and configuration verdicts
+                            // stay whole-task: backoff and user fixes must not
+                            // masquerade as partial success.
+                            ExecOutput::Fatal { message, .. } => {
+                                eprintln!(
+                                    "[bibliography] OCR of page {} failed: {message}",
+                                    page.page_number
+                                );
+                                ocr_failed_pages.push(page.page_number);
+                                out.push(page);
+                                continue;
+                            }
+                            other => return Err(other),
                         }
-                        other => return Err(other),
                     }
                 }
             };
@@ -2930,7 +3023,7 @@ impl BibliographyExtractExecutor {
                 text_content: text,
             });
         }
-        Ok((out, ocr_failed_pages))
+        Ok((out, ocr_failed_pages, ocr_attempted))
     }
 }
 
@@ -2983,6 +3076,10 @@ impl ProductionSelectiveOcr {
 
 impl crate::bibliography::selective_ocr::PageRenderer for ProductionSelectiveOcr {
     fn render_page(&self, pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+        // pdfium resolves its library from a path cached at startup of the
+        // first OCR command; the queue worker never runs one, so without this
+        // every page failed to render and a scan ended up with no text.
+        crate::ocr::pdf::init_pdfium_path(&self.app);
         crate::ocr::pdf::render_pdf_page_to_image(pdf_bytes, page_number.saturating_sub(1) as usize)
     }
 
@@ -3013,6 +3110,44 @@ impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelective
                     "glm_ocr",
                 ))?;
             Ok(output.ocr.text)
+        }
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        // Local Paddle recognizes page images; only the remote GLM provider
+        // reads a whole PDF.
+        #[cfg(feature = "paddle-ocr")]
+        {
+            None
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            Some(crate::ocr::MAX_GLM_PDF_PAGE_COUNT)
+        }
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        #[cfg(feature = "paddle-ocr")]
+        {
+            let _ = (pdf_bytes, first_page, last_page);
+            Err("pdf_mode_unsupported: the local engine reads page images only".to_string())
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            let conn = open_archive_connection(&self.db_path)?;
+            let api_key = crate::ocr::get_glm_ocr_api_key(&conn);
+            if api_key.is_empty() {
+                return Err("configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key antes de usar OCR.".to_string());
+            }
+            let client = crate::ocr::glm_ocr::GlmOcrClient::new(api_key);
+            tauri::async_runtime::block_on(crate::ocr::glm_recognize_pdf_pages(
+                &client, pdf_bytes, first_page, last_page,
+            ))
         }
     }
 

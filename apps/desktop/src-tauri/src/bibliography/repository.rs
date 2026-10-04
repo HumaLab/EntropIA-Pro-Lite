@@ -2192,6 +2192,40 @@ pub fn extraction_matches_source(
     Ok(stored == Some((catalog_mtime, file_bytes)))
 }
 
+/// True when the stored extraction needs nothing more for this source: it
+/// matches the source identity AND is not an `empty` verdict that never went
+/// through a real OCR pass. A scan stored as `empty` by a build that could not
+/// read it (or while no OCR provider answered) is demanded again; once a
+/// provider has answered for it, even with no text, the verdict is final, so
+/// blank documents do not cost an OCR request on every sync. Rich and sparse
+/// extractions are never re-demanded. Admission and the executor both decide
+/// through this predicate.
+pub fn extraction_is_settled(
+    conn: &Connection,
+    attachment_id: &str,
+    catalog_mtime: Option<i64>,
+    file_bytes: i64,
+) -> BibliographyResult<bool> {
+    if !extraction_matches_source(conn, attachment_id, catalog_mtime, file_bytes)? {
+        return Ok(false);
+    }
+    let unresolved_empty: bool = conn
+        .query_row(
+            "SELECT e.quality = 'empty'
+                AND NOT EXISTS (
+                    SELECT 1 FROM processing_tasks t
+                    WHERE t.kind = 'bibliography_extract'
+                      AND t.subject_id = e.attachment_id
+                      AND t.state = 'succeeded'
+                      AND t.result_receipt_json LIKE '%\"ocrAttempted\":true%')
+             FROM bibliographic_extractions e WHERE e.attachment_id = ?1",
+            [attachment_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read extraction quality", error))?;
+    Ok(!unresolved_empty)
+}
+
 /// Reads the stored extraction for one attachment, if any.
 pub fn get_extraction(
     conn: &Connection,

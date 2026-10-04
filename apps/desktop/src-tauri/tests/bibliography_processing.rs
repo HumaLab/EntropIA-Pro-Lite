@@ -8397,3 +8397,376 @@ fn a_failed_wave_publishes_nothing_and_the_retry_resumes_from_checkpoints() {
         "the first wave came back from its checkpoint"
     );
 }
+
+// ── Scanned PDFs: whole-document OCR and re-admission of empty extractions ──
+
+/// A provider that reads whole PDFs. `pdf_failure` makes every whole-document
+/// request fail; the per-page path stays available as the fallback, with its
+/// own call log.
+struct PdfModeProvider {
+    pdf_calls: Mutex<Vec<(u32, u32)>>,
+    page_calls: Mutex<usize>,
+    pdf_failure: Option<String>,
+}
+
+impl PdfModeProvider {
+    fn new(pdf_failure: Option<&str>) -> Arc<Self> {
+        Arc::new(Self {
+            pdf_calls: Mutex::new(Vec::new()),
+            page_calls: Mutex::new(0),
+            pdf_failure: pdf_failure.map(str::to_string),
+        })
+    }
+}
+
+impl PageOcrProvider for PdfModeProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        *self.page_calls.lock().expect("page calls") += 1;
+        Ok("Texto reconocido por pagina de respaldo con longitud suficiente para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        Some(100)
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.pdf_calls
+            .lock()
+            .expect("pdf calls")
+            .push((first_page, last_page));
+        if let Some(message) = &self.pdf_failure {
+            return Err(message.clone());
+        }
+        Ok((first_page..=last_page)
+            .map(|page| format!("Contenido reconocido de la pagina {page} del documento escaneado"))
+            .collect())
+    }
+
+    fn name(&self) -> &str {
+        "pdf-mode"
+    }
+}
+
+fn seed_scanned_pdf(
+    dir: &tempfile::TempDir,
+    conn: &mut rusqlite::Connection,
+    pages: usize,
+) -> (String, String) {
+    seed_library(conn, "lib-1", Some(7));
+    let item_id = seed_catalog(conn, "SCANWORK01", "Obra escaneada", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&vec![blank; pages]);
+    let path = write_temp_pdf(dir, "escaneado.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        conn,
+        &item_id,
+        "SCANATT001",
+        "linked_file",
+        Some(&path),
+        "escaneado.pdf",
+        "application/pdf",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    (library, attachment_id)
+}
+
+fn run_extract_with_provider(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    renderer: &Arc<FakeRenderer>,
+    provider: Arc<dyn PageOcrProvider>,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    let renderer: Arc<dyn PageRenderer> = renderer.clone();
+    registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
+        renderer, provider,
+    )));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run")
+}
+
+fn fresh_renderer() -> Arc<FakeRenderer> {
+    Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    })
+}
+
+/// A fully scanned PDF is read with ONE whole-document request: no page is
+/// rendered, every page keeps its own number, and the extraction stops
+/// reporting `empty` now that it holds recognized text.
+#[test]
+fn a_scanned_pdf_is_recognized_with_one_whole_document_request() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 3);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().as_slice(), &[(1, 3)]);
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0, "no per-page call");
+    assert!(
+        renderer.rendered_pages.lock().unwrap().is_empty(),
+        "whole-document mode renders nothing"
+    );
+    let pages: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT page_number, method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .unwrap()
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(pages.len(), 3);
+    for (index, (number, method, text)) in pages.iter().enumerate() {
+        assert_eq!(*number, index as i64 + 1);
+        assert_eq!(method, "ocr");
+        assert!(
+            text.contains(&format!("pagina {number} ")),
+            "page {number} must carry its own text, got {text:?}"
+        );
+    }
+    let (quality, chars): (String, i64) = conn
+        .query_row(
+            "SELECT quality, text_chars FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        quality, "rich",
+        "recognized text lifts the extraction out of empty"
+    );
+    assert!(chars > 0);
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks
+             WHERE kind = 'bibliography_extract' AND subject_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(
+        receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "{receipt}"
+    );
+    assert_eq!(receipt["ocrFailedPages"], serde_json::json!([]));
+}
+
+/// More than 100 pages split into consecutive windows of at most 100.
+#[test]
+fn a_scanned_pdf_over_the_page_limit_is_split_into_windows() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 205);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.pdf_calls.lock().unwrap().as_slice(),
+        &[(1, 100), (101, 200), (201, 205)]
+    );
+    let page_205: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 205",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(page_205.contains("pagina 205 "), "{page_205}");
+}
+
+/// A whole-document request the provider rejects falls back to the
+/// per-page path, so a scan is never lost to a document-mode quirk.
+#[test]
+fn a_rejected_whole_document_request_falls_back_to_per_page_ocr() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(Some("provider_error: GLM-OCR API error (400): bad range"));
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().len(), 1);
+    assert_eq!(*provider.page_calls.lock().unwrap(), 2);
+    assert_eq!(renderer.rendered_pages.lock().unwrap().as_slice(), &[1, 2]);
+}
+
+/// Rate limits and credential problems are not document-mode quirks: they
+/// keep their queue verdict and never fan out into per-page requests.
+#[test]
+fn a_rate_limited_whole_document_request_waits_instead_of_falling_back() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(Some("rate_limited: GLM-OCR API error (429): slow down"));
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0);
+    assert!(renderer.rendered_pages.lock().unwrap().is_empty());
+}
+
+/// A mostly-native document keeps page-level OCR: native pages are never
+/// re-recognized by a whole-document request.
+#[test]
+fn a_mostly_native_pdf_stays_on_page_level_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NATIVEMIX1", "Obra nativa", "Resumen.");
+    let rich: &[(f32, f32, &str)] = &[(
+        50.0,
+        750.0,
+        "Pagina con contenido nativo suficiente para superar el umbral de calidad del extractor",
+    )];
+    let sparse: &[(f32, f32, &str)] = &[(50.0, 750.0, "ok")];
+    let pdf = make_text_pdf_pages(&[rich, rich, rich, sparse]);
+    let path = write_temp_pdf(&dir, "nativo.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "NATIVEATT1",
+        "linked_file",
+        Some(&path),
+        "nativo.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(provider.pdf_calls.lock().unwrap().is_empty());
+    assert_eq!(*provider.page_calls.lock().unwrap(), 1);
+    assert_eq!(renderer.rendered_pages.lock().unwrap().as_slice(), &[4]);
+}
+
+/// An extraction stored as `empty` before OCR could read it is demanded
+/// again by the next sync, exactly once: after an OCR pass that really ran
+/// it is settled.
+#[test]
+fn an_empty_extraction_is_readmitted_once_for_ocr() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    // The extraction as the old build left it: a plain native run, no OCR.
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(quality, "empty");
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 1"),
+        1,
+        "an empty extraction that never went through OCR is demanded again"
+    );
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().len(), 1);
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 2"),
+        0,
+        "recognized text settles the extraction"
+    );
+}
+
+/// A scan whose OCR ran and found nothing is settled too: the sync must not
+/// pay for the same blank pages on every run.
+#[test]
+fn a_blank_document_that_went_through_ocr_is_not_requeued() {
+    struct BlankProvider;
+    impl PageOcrProvider for BlankProvider {
+        fn recognize_page(&self, _: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn pdf_pages_per_request(&self) -> Option<usize> {
+            Some(100)
+        }
+        fn recognize_pdf_pages(
+            &self,
+            _: &[u8],
+            first: u32,
+            last: u32,
+        ) -> Result<Vec<String>, String> {
+            Ok(vec![String::new(); (last - first + 1) as usize])
+        }
+        fn name(&self) -> &str {
+            "blank"
+        }
+    }
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome =
+        run_extract_with_provider(&dir, &conn, &fresh_renderer(), Arc::new(BlankProvider));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
+        0
+    );
+}

@@ -58,8 +58,12 @@ pub(crate) const OCRH_MODE_GLM_OCR: &str = "glm_ocr";
 pub(crate) const OCRH_MODE_AUTO: &str = "auto";
 pub(crate) const OCRH_SETTING_MODE: &str = "ocrh_mode";
 pub(crate) const OCRH_SETTING_GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
-#[cfg(test)]
-const MAX_GLM_PDF_PAGE_COUNT: usize = 100;
+/// Pages one GLM-OCR request may carry (docs.z.ai GLM-OCR guide: PDF up to
+/// 100 pages and 50 MB).
+#[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
+pub(crate) const MAX_GLM_PDF_PAGE_COUNT: usize = 100;
+#[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
+const MAX_GLM_PDF_REQUEST_BYTES: usize = 50 * 1024 * 1024;
 
 #[cfg(feature = "paddle-ocr")]
 fn managed_runtime_root_for_ocr(
@@ -759,6 +763,104 @@ pub(crate) async fn process_with_glm_ocr_provider(
 
     emit_progress(app_handle, asset_id, 92, "parsing_glm_ocr");
     glm_response_to_processed_output(&response, method)
+}
+
+/// One text per page of a GLM-OCR layout response, in page order. A page
+/// with no recognizable text maps to an empty string; a response whose page
+/// count disagrees with the requested range is an error, because guessing
+/// page boundaries would put passages under the wrong "p. N".
+#[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
+fn glm_response_to_page_texts(
+    response: &GlmOcrResponse,
+    expected_pages: usize,
+) -> Result<Vec<String>, String> {
+    if response.layout_details.len() != expected_pages {
+        return Err(format!(
+            "provider_error: GLM-OCR returned {} layout pages for a range of {expected_pages}",
+            response.layout_details.len()
+        ));
+    }
+    if let Some(num_pages) = response.data_info.as_ref().and_then(|info| info.num_pages) {
+        if usize::try_from(num_pages).ok() != Some(expected_pages) {
+            return Err(format!(
+                "provider_error: GLM-OCR reported {num_pages} pages for a range of {expected_pages}"
+            ));
+        }
+    }
+    Ok(response
+        .layout_details
+        .iter()
+        .map(|details| {
+            let mut ordered: Vec<(i32, String)> = details
+                .iter()
+                .enumerate()
+                .filter_map(|(position, detail)| {
+                    let content = detail.content.as_deref().unwrap_or_default();
+                    let trimmed = content.trim();
+                    let raw_label = detail.label.as_deref().unwrap_or("text");
+                    let label = if raw_label == "text" && trimmed.starts_with('#') {
+                        "title"
+                    } else {
+                        raw_label
+                    };
+                    let category = glm_label_to_layout_category(label)?;
+                    // A markdown heading already carries its `#`; the title
+                    // formatting adds its own marker.
+                    let content = if label == "title" {
+                        trimmed.trim_start_matches('#').trim()
+                    } else {
+                        content
+                    };
+                    let text = format_region_text(&category, content)?;
+                    Some((detail.index.unwrap_or(position as i32), text))
+                })
+                .collect();
+            ordered.sort_by_key(|(order, _)| *order);
+            ordered
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        })
+        .collect())
+}
+
+/// Recognizes pages `first_page..=last_page` of a PDF in ONE GLM-OCR request
+/// and maps the answer to one text per page. The whole file goes up as is
+/// (no page rendering); a window that is not the whole document is selected
+/// with the API's page-range fields.
+#[cfg_attr(feature = "paddle-ocr", allow(dead_code))]
+pub(crate) async fn glm_recognize_pdf_pages(
+    client: &glm_ocr::GlmOcrClient,
+    pdf_bytes: &[u8],
+    first_page: u32,
+    last_page: u32,
+) -> Result<Vec<String>, String> {
+    if first_page == 0 || last_page < first_page {
+        return Err(format!(
+            "provider_error: invalid GLM-OCR page range {first_page}-{last_page}"
+        ));
+    }
+    let expected = (last_page - first_page + 1) as usize;
+    if expected > MAX_GLM_PDF_PAGE_COUNT {
+        return Err(format!(
+            "provider_error: a GLM-OCR request carries at most {MAX_GLM_PDF_PAGE_COUNT} pages; asked for {expected}"
+        ));
+    }
+    if pdf_bytes.len() > MAX_GLM_PDF_REQUEST_BYTES {
+        return Err("provider_error: PDF is over the GLM-OCR 50 MB request limit".to_string());
+    }
+    let total_pages = lopdf::Document::load_mem(pdf_bytes)
+        .map(|document| document.get_pages().len())
+        .map_err(|error| format!("provider_error: cannot count PDF pages: {error}"))?;
+    let range = if first_page == 1 && last_page as usize == total_pages {
+        None
+    } else {
+        Some((first_page, last_page))
+    };
+    let payload = encode_bytes_for_glm_ocr(pdf_bytes)?;
+    let response = client.parse_file_pages(&payload, range).await?;
+    glm_response_to_page_texts(&response, expected)
 }
 
 #[cfg(any(feature = "paddle-ocr", test))]
@@ -2629,6 +2731,42 @@ mod tests {
             }),
             request_id: None,
         }
+    }
+
+    #[test]
+    fn glm_page_texts_map_one_text_per_page_in_order() {
+        let mut response = glm_pdf_page_response(&["first page", "second page"]);
+        response.layout_details[0].push(GlmOcrLayoutDetail {
+            index: Some(0),
+            label: Some("text".to_string()),
+            bbox_2d: Vec::new(),
+            content: Some("# Heading".to_string()),
+            height: None,
+            width: None,
+        });
+        // A page with only a figure has no text but still occupies its slot.
+        response.layout_details.push(vec![GlmOcrLayoutDetail {
+            index: Some(1),
+            label: Some("image".to_string()),
+            bbox_2d: Vec::new(),
+            content: Some("![](page=2)".to_string()),
+            height: None,
+            width: None,
+        }]);
+        response.data_info = None;
+
+        let texts = glm_response_to_page_texts(&response, 3).expect("page texts");
+
+        assert_eq!(texts, vec!["## Heading\n\nfirst page", "second page", ""]);
+    }
+
+    #[test]
+    fn glm_page_texts_refuse_a_range_that_disagrees_with_the_response() {
+        let response = glm_pdf_page_response(&["only page"]);
+        assert!(glm_response_to_page_texts(&response, 2).is_err());
+        let mut lying = glm_pdf_page_response(&["a", "b"]);
+        lying.data_info.as_mut().unwrap().num_pages = Some(5);
+        assert!(glm_response_to_page_texts(&lying, 2).is_err());
     }
 
     #[test]
