@@ -43,6 +43,7 @@ use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::processing::compact::CompactVec;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2013,12 +2014,13 @@ impl BibliographyProfileExecutor {
                         "Profile embedding does not satisfy {dimensions} finite dimensions"
                     ));
                 }
-                Ok(vector)
+                Ok(CompactVec(vector))
             })
             .map_err(|error| match map_embedding_error(&error) {
                 ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
                 other => other,
-            })?;
+            })?
+            .0;
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
@@ -2224,7 +2226,7 @@ impl BibliographyProfileExecutor {
                             "Chunk embedding does not satisfy {dimensions} finite dimensions"
                         ));
                     }
-                    Ok(vectors)
+                    Ok(vectors.into_iter().map(CompactVec).collect::<Vec<_>>())
                 })
                 .map_err(|error| {
                     match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
@@ -2242,7 +2244,7 @@ impl BibliographyProfileExecutor {
                     }
                 })?;
             for (&index, vector) in wave.iter().zip(&vectors) {
-                staged[index].embedding = crate::nlp::embeddings::floats_to_blob(vector);
+                staged[index].embedding = crate::nlp::embeddings::floats_to_blob(&vector.0);
             }
         }
         Ok(staged)
@@ -2777,22 +2779,14 @@ impl BibliographyExtractExecutor {
                 });
             }
         }
-        let bytes = ctx
-            .unit(task, "extract", || {
-                std::fs::read(&path).map_err(|error| {
-                    format!("Failed to read attachment file {}: {error}", path.display())
-                })
-            })
-            .map_err(|error| {
-                if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                    ExecOutput::Stopped
-                } else {
-                    ExecOutput::Retryable {
-                        code: "extraction_io".to_string(),
-                        message: error,
-                    }
-                }
-            })?;
+        // The file is read straight from disk, never checkpointed: a unit
+        // for it serialised every byte of the PDF as a JSON number array
+        // (about 3.5x the file, 451 MB for one large book) and bought nothing,
+        // since re-reading a local file costs less than decoding that row.
+        let bytes = std::fs::read(&path).map_err(|error| ExecOutput::Retryable {
+            code: "extraction_io".to_string(),
+            message: format!("Failed to read attachment file {}: {error}", path.display()),
+        })?;
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }

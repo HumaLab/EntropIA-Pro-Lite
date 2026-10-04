@@ -15,6 +15,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use super::compact::CompactVec;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -407,9 +408,9 @@ impl Executor for EmbeddingExecutor {
                 match ctx.unit(task, &key, || {
                     let vector = self.engine()?.embed_text(&chunk.text_content)?;
                     validate_vector(&vector)?;
-                    Ok(vector)
+                    Ok(CompactVec(vector))
                 }) {
-                    Ok(vector) => {
+                    Ok(CompactVec(vector)) => {
                         if let Err(error) = validate_vector(&vector) {
                             return fatal("embedding_failed", error);
                         }
@@ -438,9 +439,9 @@ impl Executor for EmbeddingExecutor {
             let engine = self.engine()?;
             let vector = engine.embed_text(&full_text)?;
             validate_vector(&vector)?;
-            Ok((vector, engine.provider_name().to_string()))
+            Ok((CompactVec(vector), engine.provider_name().to_string()))
         }) {
-            Ok(vector) => vector,
+            Ok((CompactVec(vector), provider)) => (vector, provider),
             Err(error) => return failed(map_embedding_error(&error)),
         };
         if let Err(error) = validate_vector(&aggregate) {
