@@ -389,6 +389,13 @@ pub async fn bibliography_search_works(
 pub struct SearchPassagesRequest {
     pub text: String,
     pub top_k: Option<usize>,
+    /// Also match close variants of the words. `None` follows the shared
+    /// search preference (the Corpus tab's switch).
+    pub fuzzy: Option<bool>,
+    /// Restrict the search to one Zotero library (type + native id), as the
+    /// Writing -> Zotero tab names it; both or neither.
+    pub zotero_library_type: Option<String>,
+    pub zotero_library_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -403,9 +410,10 @@ pub struct SearchPassagesResponse {
     pub notice_detail: Option<String>,
 }
 
-/// Passages of the synced Zotero libraries for a query, ranked by similarity
-/// (vector-only: with no active generation the answer is empty and says
-/// `no_embeddings`). Same leg, floor and location rules as the research chat.
+/// Passages of the synced Zotero libraries for a query: the ones whose text
+/// carries the words (exact, or close variants) and the ones whose vector is
+/// near, fused by rank (with no active generation the answer is empty and
+/// says `no_embeddings`). Same leg, floor and location rules as the chat.
 #[tauri::command]
 pub async fn bibliography_search_passages(
     request: SearchPassagesRequest,
@@ -420,12 +428,23 @@ pub async fn bibliography_search_passages(
         let mut params = crate::rag::params::rag_params_from_settings(&conn);
         params.top_k = request.top_k.unwrap_or(12).clamp(1, 50);
         let embedder = EngineProfileEmbedder::new(db_path);
+        let libraries = match (&request.zotero_library_type, &request.zotero_library_id) {
+            (Some(library_type), Some(library_id)) => vec![crate::rag::scope::RagLibraryRef {
+                library_type: library_type.clone(),
+                library_id: library_id.clone(),
+            }],
+            _ => Vec::new(),
+        };
+        let fuzzy = request
+            .fuzzy
+            .unwrap_or_else(|| crate::nlp::fuzzy::fuzzy_enabled(&conn));
         let found = crate::rag::scope::passage_search(
             &conn,
             &effective.hash,
             &request.text,
-            &[],
+            &libraries,
             &params,
+            fuzzy,
             &|text| embedder.embed(text),
         );
         if let (Some(notice), Some(detail)) = (found.notice, &found.detail) {

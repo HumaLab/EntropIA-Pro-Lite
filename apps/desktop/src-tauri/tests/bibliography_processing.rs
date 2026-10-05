@@ -9241,10 +9241,10 @@ fn a_published_work_is_found_by_passage_search_once_active() {
         &conn,
         &effective.hash,
         question,
-        5,
         3,
         5,
         &WorkFilters::default(),
+        true,
         &embed,
     )
     .expect("passage search");

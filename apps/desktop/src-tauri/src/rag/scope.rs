@@ -6,6 +6,8 @@
 //! those scales say nothing about each other, so the merge below looks only at
 //! RANK. See [`merge_scopes`] for the exact rule.
 
+use std::collections::HashMap;
+
 use rusqlite::Connection;
 use serde::Deserialize;
 
@@ -191,7 +193,46 @@ pub(crate) fn bibliography_leg(
     params: &RagParams,
     embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
 ) -> BibliographyLeg {
-    match run_bibliography_leg(conn, contract_hash, query, libraries, params, embed) {
+    let fuzzy = crate::nlp::fuzzy::fuzzy_enabled(conn);
+    bibliography_leg_with_matches(
+        conn,
+        contract_hash,
+        query,
+        libraries,
+        params,
+        fuzzy,
+        embed,
+        &mut HashMap::new(),
+    )
+}
+
+/// How each chunk of a leg matched the query: `(kind, words)` by chunk id,
+/// the kind being `exact`, `approximate` or `meaning`.
+type ChunkMatches = HashMap<String, (String, Vec<String>)>;
+
+/// [`bibliography_leg`] that also reports why each source is there, which a
+/// [`RagSource`] has no place for.
+#[allow(clippy::too_many_arguments)]
+fn bibliography_leg_with_matches(
+    conn: &Connection,
+    contract_hash: &str,
+    query: &str,
+    libraries: &[RagLibraryRef],
+    params: &RagParams,
+    fuzzy: bool,
+    embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
+    matches: &mut ChunkMatches,
+) -> BibliographyLeg {
+    match run_bibliography_leg(
+        conn,
+        contract_hash,
+        query,
+        libraries,
+        params,
+        fuzzy,
+        embed,
+        matches,
+    ) {
         Ok(leg) => leg,
         Err(error) => failed(BibliographyNotice::Failed, &error),
     }
@@ -219,13 +260,16 @@ pub(crate) fn failed(notice: BibliographyNotice, error: &str) -> BibliographyLeg
 /// rest of the library.
 const PASSAGES_PER_WORK: usize = 2;
 
+#[allow(clippy::too_many_arguments)]
 fn run_bibliography_leg(
     conn: &Connection,
     contract_hash: &str,
     query: &str,
     libraries: &[RagLibraryRef],
     params: &RagParams,
+    fuzzy: bool,
     embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
+    matches: &mut ChunkMatches,
 ) -> Result<BibliographyLeg, String> {
     use crate::bibliography::{generation, retrieval as bib};
 
@@ -257,8 +301,8 @@ fn run_bibliography_leg(
         }
     }
 
-    // Passage search is vector-only: no active generation means no passages,
-    // and the embedder must not even run.
+    // No active generation means nothing is indexed: no passages, and the
+    // embedder must not even run.
     if generation::active_generation(conn, contract_hash)
         .map_err(describe)?
         .is_none()
@@ -275,10 +319,10 @@ fn run_bibliography_leg(
         conn,
         contract_hash,
         query,
-        (top_k * 3).max(10),
         PASSAGES_PER_WORK,
         top_k,
         &filters,
+        fuzzy,
         embed,
     ) {
         Ok(hits) => hits,
@@ -296,13 +340,22 @@ fn run_bibliography_leg(
     for hit in hits {
         // The similarity floor is the bibliography's own: cosine against
         // cosine, never against the corpus legs.
-        if params.min_similarity > 0.0 && hit.vector_score < params.min_similarity {
+        // A passage whose text carries the query is not a similarity guess,
+        // so the floor only judges what the vector leg alone brought in.
+        if params.min_similarity > 0.0
+            && hit.match_kind == bib::PassageMatchKind::Meaning
+            && hit.vector_score < params.min_similarity
+        {
             continue;
         }
         let Some(display) = bib::read_work_display(conn, &hit.item_id).map_err(describe)? else {
             continue;
         };
         let location = passage_location(conn, &hit);
+        matches.insert(
+            hit.chunk_id.clone(),
+            (hit.match_kind.as_str().to_string(), hit.match_terms.clone()),
+        );
         let (snippet, _) =
             super::retrieval::snippet_window(&hit.text, &terms, params.snippet_max_chars);
         sources.push(RagSource {
@@ -399,6 +452,10 @@ pub struct PassageResult {
     pub snippet: String,
     pub location: Option<RagBibliographyLocation>,
     pub score: f64,
+    /// `exact`, `approximate` or `meaning`: why the passage is listed.
+    pub match_kind: String,
+    /// The words behind an exact or approximate match; empty for `meaning`.
+    pub match_terms: Vec<String>,
 }
 
 pub(crate) struct PassageSearch {
@@ -418,9 +475,20 @@ pub(crate) fn passage_search(
     query: &str,
     libraries: &[RagLibraryRef],
     params: &RagParams,
+    fuzzy: bool,
     embed: &dyn Fn(&str) -> Result<Vec<f32>, String>,
 ) -> PassageSearch {
-    let leg = bibliography_leg(conn, contract_hash, query, libraries, params, embed);
+    let mut matches = ChunkMatches::new();
+    let leg = bibliography_leg_with_matches(
+        conn,
+        contract_hash,
+        query,
+        libraries,
+        params,
+        fuzzy,
+        embed,
+        &mut matches,
+    );
     let passages = leg
         .sources
         .into_iter()
@@ -431,6 +499,10 @@ pub(crate) fn passage_search(
                 .flatten()
                 .map(|display| display.csl_json)
                 .unwrap_or_default();
+            let (match_kind, match_terms) = matches
+                .get(&meta.chunk_id)
+                .cloned()
+                .unwrap_or_else(|| ("meaning".to_string(), Vec::new()));
             Some(PassageResult {
                 chunk_id: meta.chunk_id,
                 item_id: source.item_id,
@@ -445,6 +517,8 @@ pub(crate) fn passage_search(
                 snippet: source.snippet,
                 location: meta.location,
                 score: source.score,
+                match_kind,
+                match_terms,
             })
         })
         .collect();
@@ -828,7 +902,15 @@ mod tests {
         let (conn, _, _) = two_library_catalog();
         conn.execute_batch("DROP TABLE bibliographic_chunk_spans")
             .unwrap();
-        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        let found = passage_search(
+            &conn,
+            CONTRACT,
+            "compartido",
+            &[],
+            &params(),
+            true,
+            &embed_ok,
+        );
         assert_eq!(found.notice, Some(BibliographyNotice::Failed));
         assert!(found.detail.is_some());
     }
@@ -957,7 +1039,15 @@ mod tests {
     #[test]
     fn passage_search_lists_cards_with_csl_snippet_and_location() {
         let (conn, chunk_a, _) = two_library_catalog();
-        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        let found = passage_search(
+            &conn,
+            CONTRACT,
+            "compartido",
+            &[],
+            &params(),
+            true,
+            &embed_ok,
+        );
         assert_eq!(found.notice, None);
         assert_eq!(found.passages.len(), 2);
         let first = &found.passages[0];
@@ -980,16 +1070,166 @@ mod tests {
     #[test]
     fn passage_search_says_why_it_found_nothing() {
         let empty = passage_db();
-        let found = passage_search(&empty, CONTRACT, "compartido", &[], &params(), &embed_ok);
+        let found = passage_search(
+            &empty,
+            CONTRACT,
+            "compartido",
+            &[],
+            &params(),
+            true,
+            &embed_ok,
+        );
         assert_eq!(found.notice, Some(BibliographyNotice::NoLibrarySynced));
         assert!(found.passages.is_empty());
 
         let mut conn = passage_db();
         let (_l, _item) = seed_item(&mut conn, "pa", "a", "KA0001", "Obra A");
-        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), &|_| {
+        let found = passage_search(&conn, CONTRACT, "compartido", &[], &params(), true, &|_| {
             panic!("the embedder must not run without an active generation")
         });
         assert_eq!(found.notice, Some(BibliographyNotice::NoEmbeddings));
+    }
+
+    #[test]
+    fn a_passage_carrying_the_query_text_survives_the_similarity_floor() {
+        let mut conn = passage_db();
+        let (_lib, item) = seed_item(&mut conn, "pl", "l", "KL0001", "Obra sin perfil afín");
+        let gen = activate_gen(&mut conn, "gen-floor");
+        let chunk = seed_chunk(
+            &conn,
+            &item,
+            0,
+            "Aquí aparece el Plan Federal y Programa Dignidad textualmente.",
+            2,
+            &gen,
+            &[0.0, 0.0, 1.0, 0.0],
+            None,
+        );
+        let mut floored = params();
+        floored.min_similarity = 0.5;
+        let found = passage_search(
+            &conn,
+            CONTRACT,
+            "Plan Federal y Programa Dignidad",
+            &[],
+            &floored,
+            true,
+            &embed_ok,
+        );
+        assert_eq!(found.notice, None);
+        assert_eq!(
+            found
+                .passages
+                .iter()
+                .map(|p| p.chunk_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![chunk.as_str()],
+            "the cosine floor must not drop a literal match"
+        );
+        assert_eq!(found.passages[0].match_kind, "exact");
+        assert_eq!(
+            found.passages[0].match_terms,
+            vec!["plan", "federal", "programa", "dignidad"]
+        );
+    }
+
+    /// Content-search harness against a COPY of a real archive:
+    /// `ENTROPIA_CHAT_DB=<copy.sqlite> cargo test owner_db_copy_content -- --ignored --nocapture`.
+    /// The query vector is deterministic and unrelated to the text, so the
+    /// phrase can only be found by the lexical leg.
+    #[test]
+    #[ignore = "needs ENTROPIA_CHAT_DB pointing at a copy of an archive"]
+    fn owner_db_copy_content_search_harness() {
+        let path = std::env::var("ENTROPIA_CHAT_DB").expect("ENTROPIA_CHAT_DB");
+        let conn = crate::db::open::open_archive_connection(std::path::Path::new(&path))
+            .expect("open the copy");
+        let contract = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective contract");
+        let dims = contract.dimensions;
+        let fake = move |text: &str| -> Result<Vec<f32>, String> {
+            let seed = text
+                .bytes()
+                .fold(7u32, |acc, b| acc.wrapping_mul(31) ^ b as u32);
+            Ok((0..dims)
+                .map(|i| {
+                    (((seed.wrapping_add((i as u32).wrapping_mul(2654435761))) % 2000) as f32
+                        - 1000.0)
+                        / 1000.0
+                })
+                .collect())
+        };
+        let params = RagParams::default();
+        let query = "Plan Federal y Programa Dignidad";
+        let mut found = None;
+        for run in 0..3 {
+            let started = std::time::Instant::now();
+            let result = passage_search(&conn, &contract.hash, query, &[], &params, true, &fake);
+            println!(
+                "run {run}: passages={} notice={:?} in {:?}",
+                result.passages.len(),
+                result.notice,
+                started.elapsed()
+            );
+            found = Some(result);
+        }
+        let found = found.expect("one run");
+        for (rank, passage) in found.passages.iter().enumerate() {
+            println!(
+                "  #{rank} {} ({}) location={:?} score={:.4}",
+                passage.title, passage.item_key, passage.location, passage.score
+            );
+        }
+        let nunez = found
+            .passages
+            .iter()
+            .position(|passage| passage.title.starts_with("La producción del espacio"))
+            .expect("Núñez 2016 must be among the passages");
+        println!("Núñez 2016 rank: #{nunez}");
+        assert!(nunez < 3, "Núñez 2016 must be in the top results");
+        let location = found.passages[nunez].location.clone().expect("location");
+        println!("Núñez 2016 location: {location:?}");
+        assert_eq!(location.kind, "pages");
+        assert_eq!(location.from, 2, "PDF page 2 (printed page 114)");
+
+        // Approximate matching, same rule as the corpus: print only (the
+        // vocabulary of this archive decides what a variant is).
+        for typo in ["Croitto", "Dignidd Plan Fedral"] {
+            for fuzzy in [false, true] {
+                let started = std::time::Instant::now();
+                let result =
+                    passage_search(&conn, &contract.hash, typo, &[], &params, fuzzy, &fake);
+                println!(
+                    "typo {typo:?} fuzzy={fuzzy}: {:?} in {:?}",
+                    result
+                        .passages
+                        .iter()
+                        .take(3)
+                        .map(|p| (
+                            p.match_kind.as_str(),
+                            p.match_terms.clone(),
+                            p.title.chars().take(24).collect::<String>()
+                        ))
+                        .collect::<Vec<_>>(),
+                    started.elapsed()
+                );
+            }
+        }
+
+        // The same query with the embedder down: the lexical leg alone.
+        let started = std::time::Instant::now();
+        let offline = passage_search(&conn, &contract.hash, query, &[], &params, true, &|_| {
+            Err("offline".to_string())
+        });
+        println!(
+            "lexical only: passages={} notice={:?} in {:?}",
+            offline.passages.len(),
+            offline.notice,
+            started.elapsed()
+        );
+        assert!(offline
+            .passages
+            .iter()
+            .any(|passage| passage.title.starts_with("La producción del espacio")));
     }
 
     /// Harness against a COPY of a real archive (never the live file):
@@ -1035,7 +1275,16 @@ mod tests {
         let params = RagParams::default();
 
         let started = std::time::Instant::now();
-        let leg = run_bibliography_leg(&conn, &contract.hash, question, &[], &params, &fake);
+        let leg = run_bibliography_leg(
+            &conn,
+            &contract.hash,
+            question,
+            &[],
+            &params,
+            true,
+            &fake,
+            &mut ChunkMatches::new(),
+        );
         println!(
             "run_bibliography_leg(all synced): {:?} in {:?}",
             leg.as_ref()
@@ -1048,7 +1297,16 @@ mod tests {
             library_id: "0".into(),
         }];
         let started = std::time::Instant::now();
-        let leg = run_bibliography_leg(&conn, &contract.hash, question, &one, &params, &fake);
+        let leg = run_bibliography_leg(
+            &conn,
+            &contract.hash,
+            question,
+            &one,
+            &params,
+            true,
+            &fake,
+            &mut ChunkMatches::new(),
+        );
         println!(
             "run_bibliography_leg(user/0): {:?} in {:?}",
             leg.as_ref()
@@ -1073,7 +1331,7 @@ mod tests {
                 .map(|a| (a.hits.len(), a.vector_available))
                 .map_err(|e| format!("{}: {}", e.code, e.message))
         );
-        let found = passage_search(&conn, &contract.hash, question, &[], &params, &fake);
+        let found = passage_search(&conn, &contract.hash, question, &[], &params, true, &fake);
         println!(
             "passage_search: passages={} notice={:?}",
             found.passages.len(),
