@@ -3440,7 +3440,9 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
         .map_err(|e| format!("Failed to scan blocked dependents: {e}"))?;
     let mut settled = 0;
     for (task_id, dep_id, dep_state) in rows {
-        if dep_state == "succeeded" {
+        // A skipped dependency is satisfied: the unit behind it revalidates its
+        // own input at claim and skips itself if the source is gone.
+        if dep_state == "succeeded" || dep_state == "skipped" {
             conn.execute(
                 "UPDATE processing_tasks SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
                  WHERE id = ?1 AND state = 'blocked'",
@@ -3464,6 +3466,26 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
         }
     }
     Ok(settled)
+}
+
+/// Requeues the units parked `configuration_required` by the embedding engine
+/// (corpus embeddings and bibliography profiles) once that engine can
+/// initialize from the current settings. Returns how many were requeued; with
+/// the configuration still invalid it touches nothing, so callers may invoke
+/// it on every settings change and at startup without spinning.
+pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize, String> {
+    if crate::nlp::embeddings::config_from_settings(conn).is_err() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'blocked' AND last_error_code = 'configuration_required'
+           AND kind IN ('embedding', 'bibliography_profile')",
+        [],
+    )
+    .map_err(|e| format!("Failed to resume configuration-blocked units: {e}"))
 }
 
 fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
@@ -3538,7 +3560,7 @@ pub fn claim_next(
          AND NOT EXISTS (
                SELECT 1 FROM processing_batch_tasks l2
                WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
-                 AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')"
+                 AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) NOT IN ('succeeded', 'skipped'))"
     );
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin claim: {e}"))?;
@@ -4018,6 +4040,15 @@ fn mark_skipped(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), S
         )
         .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
         delete_task_checkpoints(conn, task_id)?;
+        // The 0038 trigger ignores `skipped`, so release the dependents here.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'pending', stage = '',
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE state = 'blocked'
+               AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = ?1)",
+            [task_id],
+        )
+        .map_err(|e| format!("Failed to release dependents of {task_id}: {e}"))?;
         Ok(())
     })
 }
@@ -9022,5 +9053,134 @@ mod tests {
             "no blocking VACUUM and no pretend reclaim"
         );
         assert_eq!(pages(&none), before);
+    }
+
+    /// Plans a one-asset batch (ocr -> embedding on `a1`) and returns the two
+    /// task ids, the embedding still blocked behind its OCR dependency.
+    fn plan_ocr_then_embedding(conn: &Connection) -> (String, String) {
+        insert_batch(conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(conn, "b1", 10, 200).expect("plan");
+        let ocr = live_task(conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let embedding = live_task(conn, "corpus", "asset", "a1", "embedding")
+            .unwrap()
+            .unwrap();
+        (ocr, embedding)
+    }
+
+    fn task_state(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("task state")
+    }
+
+    #[test]
+    fn a_skipped_dependency_does_not_strand_its_pending_dependent() {
+        // Field shape: the OCR unit ended `skipped/already_satisfied` (the
+        // trigger of 0038 only settles succeeded/failed/cancelled), and the
+        // embedding behind it ended up `pending` with its dependency link.
+        // The claim used to demand `succeeded`, so it waited forever.
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, created_at)
+             VALUES ('ex-a1', 'a1', 'texto suficiente para producir al menos un fragmento', 'ocr', 1)",
+            [],
+        )
+        .expect("source text");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = 'already_satisfied' WHERE id = ?1",
+            [&ocr],
+        )
+        .expect("skip ocr");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'pending' WHERE id = ?1",
+            [&embedding],
+        )
+        .expect("embedding pending");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE kind = 'embedding' AND id != ?1",
+            [&embedding],
+        )
+        .expect("settle the other embeddings so only the dependent is runnable");
+        let claimed = claim_next(&conn, "s", &["embedding"], 1_000)
+            .expect("claim")
+            .expect("the dependent must be claimable once its dependency is skipped");
+        assert_eq!(claimed.task_id, embedding);
+    }
+
+    #[test]
+    fn skipping_a_unit_releases_the_units_blocked_behind_it() {
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        assert_eq!(task_state(&conn, &embedding), "blocked");
+        mark_skipped(&conn, &ocr, "already_satisfied").expect("skip");
+        assert_eq!(task_state(&conn, &embedding), "pending");
+    }
+
+    #[test]
+    fn the_recovery_scan_releases_dependents_of_a_skipped_dependency() {
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = 'already_satisfied' WHERE id = ?1",
+            [&ocr],
+        )
+        .expect("skip ocr without the helper");
+        assert_eq!(task_state(&conn, &embedding), "blocked");
+        assert_eq!(settle_blocked_dependents(&conn).expect("settle"), 1);
+        assert_eq!(task_state(&conn, &embedding), "pending");
+    }
+
+    fn insert_blocked_embedding(conn: &Connection, id: &str, code: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, last_error_message, created_at, updated_at)
+             VALUES (?1, 'embedding', ?1, 'corpus', 'asset', ?1, 'blocked', ?2, ?2, 'no engine', 1, 1)",
+            rusqlite::params![id, code],
+        )
+        .expect("blocked task");
+    }
+
+    #[test]
+    fn configuration_blocked_embeddings_resume_only_once_the_engine_can_initialize() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .expect("settings table");
+        insert_blocked_embedding(&conn, "t-config", "configuration_required");
+        insert_blocked_embedding(&conn, "t-contract", "configuration_changed");
+        // No OpenRouter key yet: nothing to resume, and no spinning.
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
+        assert_eq!(task_state(&conn, "t-config"), "blocked");
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test')",
+            [],
+        )
+        .expect("key");
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 1);
+        assert_eq!(task_state(&conn, "t-config"), "pending");
+        let (code, outcome): (Option<String>, String) = conn
+            .query_row(
+                "SELECT last_error_code, outcome FROM processing_tasks WHERE id = 't-config'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((code, outcome.as_str()), (None, ""));
+        assert_eq!(
+            task_state(&conn, "t-contract"),
+            "blocked",
+            "other block reasons keep their own resume path"
+        );
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
     }
 }
