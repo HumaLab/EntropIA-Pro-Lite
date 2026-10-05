@@ -96,16 +96,45 @@ const CLEANUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
 fn spawn_checkpoint_cleanup(db_path: std::path::PathBuf) {
     let spawned = std::thread::Builder::new()
         .name("entropia-checkpoint-cleanup".to_string())
-        .spawn(move || match run_checkpoint_cleanup(&db_path) {
-            Ok(line) => {
-                if let Some(line) = line {
-                    eprintln!("{line}");
+        .spawn(move || {
+            match run_checkpoint_cleanup(&db_path) {
+                Ok(line) => {
+                    if let Some(line) = line {
+                        eprintln!("{line}");
+                    }
                 }
+                Err(error) => eprintln!("[processing] checkpoint cleanup skipped: {error}"),
             }
-            Err(error) => eprintln!("[processing] checkpoint cleanup skipped: {error}"),
+            // Same background thread: build the bibliography vector index now,
+            // so the first passage search of the session does not pay for it.
+            warm_bibliography_vector_index(&db_path);
         });
     if let Err(error) = spawned {
         eprintln!("[processing] checkpoint cleanup not started: {error}");
+    }
+}
+
+/// Builds the in-memory vector index of the active bibliography generation, if
+/// there is one. Best effort: a failure only means the first search builds it.
+fn warm_bibliography_vector_index(db_path: &Path) {
+    let Ok(conn) = open_archive_connection(db_path) else {
+        return;
+    };
+    let generation: Option<String> = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations
+             WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(generation_id) = generation {
+        if let Err(error) = crate::bibliography::vector_index::warm(&conn, &generation_id) {
+            eprintln!(
+                "[bibliography] vector index warm-up skipped: {}: {}",
+                error.code, error.message
+            );
+        }
     }
 }
 
