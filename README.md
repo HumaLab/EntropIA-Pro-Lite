@@ -36,7 +36,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 ### Requisitos
 
 - Node.js 22+, pnpm 9
-- Rust 1.88.0 (fijado en `rust-toolchain.toml`) / toolchain MSVC en Windows
+- Rust 1.90.0 (fijado en `rust-toolchain.toml`) / toolchain MSVC en Windows
 
 ### Instalación
 

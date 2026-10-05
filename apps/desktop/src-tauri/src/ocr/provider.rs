@@ -77,6 +77,7 @@ pub struct LayoutRegion {
 
 /// Output from the layout detection engine.
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct LayoutOutput {
     pub regions: Vec<LayoutRegion>,
     pub image_width: u32,

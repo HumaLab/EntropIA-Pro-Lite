@@ -385,18 +385,17 @@ fn group_ocr_columns(items: &[OcrItem], img_w: f32) -> Vec<OcrColumn> {
             }
         }
 
-        if best_idx.is_none() {
-            columns.push(OcrColumn {
-                anchor: it.x1,
-                items: vec![(*it).clone()],
-            });
-        } else {
-            let ci = best_idx.unwrap();
+        if let Some(ci) = best_idx {
             columns[ci].items.push((*it).clone());
             // Update anchor to median of all x1s in column
             let mut x1s: Vec<f32> = columns[ci].items.iter().map(|i| i.x1).collect();
             x1s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             columns[ci].anchor = x1s[x1s.len() / 2];
+        } else {
+            columns.push(OcrColumn {
+                anchor: it.x1,
+                items: vec![(*it).clone()],
+            });
         }
     }
 

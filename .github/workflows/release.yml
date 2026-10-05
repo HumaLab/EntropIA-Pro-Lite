@@ -75,7 +75,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.88.0
+          toolchain: 1.90.0
 
       - name: Install Rust target (macOS cross-compilation)
         if: matrix.rust_target != ''
@@ -134,7 +134,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.88.0
+          toolchain: 1.90.0
 
       - name: Restore canonical lockfile
         run: git checkout -- pnpm-lock.yaml

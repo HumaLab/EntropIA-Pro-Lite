@@ -247,6 +247,7 @@ pub struct LocalEmbeddingModelInfo {
 }
 
 #[derive(Clone, serde::Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct EmbeddingDownloadProgressPayload {
     pub pct: u8,
     pub downloaded_bytes: u64,
@@ -255,6 +256,7 @@ pub struct EmbeddingDownloadProgressPayload {
 }
 
 #[derive(Clone, serde::Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct EmbeddingDownloadCompletePayload {
     pub path: String,
 }

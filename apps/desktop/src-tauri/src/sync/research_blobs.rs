@@ -641,8 +641,7 @@ fn read_bounded_file(path: &Path, size: u64) -> io::Result<Vec<u8>> {
             .try_into()
             .unwrap_or(INITIAL_DOWNLOAD_CAPACITY),
     );
-    file.take(size.checked_add(1).unwrap_or(u64::MAX))
-        .read_to_end(&mut bytes)?;
+    file.take(size.saturating_add(1)).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
 

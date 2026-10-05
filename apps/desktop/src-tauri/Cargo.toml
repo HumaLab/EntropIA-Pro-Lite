@@ -2,7 +2,7 @@
 name = "entropia-pro-desktop"
 version = "1.0.20"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 resolver = "3"
 
 [lib]

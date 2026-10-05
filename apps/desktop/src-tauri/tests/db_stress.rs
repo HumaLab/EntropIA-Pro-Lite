@@ -448,7 +448,7 @@ fn stress_2_ui_and_workers_share_the_archive() {
     let mut n = 0u64;
     while Instant::now() < deadline {
         let t = Instant::now();
-        let result = if n % 2 == 0 {
+        let result = if n.is_multiple_of(2) {
             ui_deferred_edit(&mut ui, n)
         } else {
             ui.execute(
@@ -464,7 +464,7 @@ fn stress_2_ui_and_workers_share_the_archive() {
         match result {
             Ok(()) => {
                 ui_lat.push(t.elapsed());
-                if n % 2 == 0 {
+                if n.is_multiple_of(2) {
                     ui_tx_lat.push(t.elapsed())
                 } else {
                     ui_single_lat.push(t.elapsed())

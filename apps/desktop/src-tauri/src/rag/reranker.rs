@@ -146,6 +146,7 @@ pub struct LocalRerankerModelInfo {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct RerankerDownloadProgressPayload {
     pub pct: u8,
     pub downloaded_bytes: u64,
@@ -154,6 +155,7 @@ pub struct RerankerDownloadProgressPayload {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct RerankerDownloadCompletePayload {
     pub path: String,
 }

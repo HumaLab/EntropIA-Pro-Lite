@@ -2,7 +2,7 @@
 name = "vecscan"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 publish = false
 description = "Quantized in-memory cosine scan used by the bibliography passage search."
 

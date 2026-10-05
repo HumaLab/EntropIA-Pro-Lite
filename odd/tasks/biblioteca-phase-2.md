@@ -62,6 +62,20 @@ feature slice.
   `tao` (tao#1215, merged 2026-06-10). Check every Tauri plugin version, the
   app ACL manifest guards, both variants' builds and the Windows release build
   (`build.rs` runtime-bootstrap guard, VC runtime staging).
+  Branch `build/tauri-2.12`, worktree `EntropIA-Pro-Lite-worktrees/tauri-2.12`.
+  - [x] P4.1 Rust 1.88 -> 1.90: `rust-toolchain.toml`, `rust-version` in
+    `apps/desktop/src-tauri/Cargo.toml` and `crates/vecscan/Cargo.toml`,
+    workflow toolchains (`lite-preview.yml`, `release.yml`), READMEs; clippy
+    `-D warnings` clean on 1.90.
+  - [ ] P4.2 Tauri 2.12.x: `tauri`/`tauri-build`/plugins (dialog, fs) in
+    Cargo, `@tauri-apps/api`/`cli`/plugins in `package.json`; lockfiles;
+    `entropia-agent` pin unchanged; `app_acl` rejection strings re-checked
+    against 2.12 sources.
+  - [ ] P4.3 Drop `vendor/tao` and the `[patch.crates-io]` entry; the
+    resolved `tao` is >= 0.36 and contains tao#1215.
+  - [ ] P4.4 Verify: cargo check lean + `local-ml`, `cargo test
+    -- --test-threads=1`, frontend lint/typecheck/test, CI green incl. Pro,
+    owner's typing check in the dev app (no keyboard freeze).
 
 ## Acceptance
 

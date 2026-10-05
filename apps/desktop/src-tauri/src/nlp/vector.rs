@@ -5,7 +5,7 @@
 
 /// Decode an embedding blob (f32 little-endian) into a vector.
 pub(crate) fn decode_embedding_blob(blob: &[u8]) -> Result<Vec<f32>, String> {
-    if blob.len() % 4 != 0 {
+    if !blob.len().is_multiple_of(4) {
         return Err(format!(
             "Embedding blob has invalid size: {} bytes (not divisible by 4)",
             blob.len()

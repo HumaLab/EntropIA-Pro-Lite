@@ -639,6 +639,7 @@ pub struct LlmErrorPayload {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct LlmDownloadProgressPayload {
     pub pct: u8,
     pub downloaded_bytes: u64,
@@ -646,11 +647,13 @@ pub struct LlmDownloadProgressPayload {
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct LlmDownloadCompletePayload {
     pub path: String,
 }
 
 #[derive(Clone, Serialize)]
+#[cfg_attr(not(feature = "local-ml"), allow(dead_code))]
 pub struct LlmDownloadErrorPayload {
     pub error: String,
 }
