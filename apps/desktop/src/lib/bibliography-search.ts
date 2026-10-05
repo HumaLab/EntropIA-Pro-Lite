@@ -143,7 +143,17 @@ export interface BibliographyPassage {
   /** PDF = pages, HTML snapshot = paragraphs; null when the text is gone. */
   location: { kind: 'pages' | 'paragraphs'; from: number; to: number } | null
   score: number
+  /**
+   * How the passage was found: its text carries the words as typed (`exact`),
+   * a close variant of them (`approximate`, `matchTerms` are the variants it
+   * holds), or only its vector was near (`meaning`).
+   */
+  matchKind: PassageMatchKind
+  /** The words behind an `exact` or `approximate` match; empty for `meaning`. */
+  matchTerms: string[]
 }
+
+export type PassageMatchKind = 'exact' | 'approximate' | 'meaning'
 
 export interface BibliographyPassagesResponse {
   passages: BibliographyPassage[]
@@ -153,12 +163,30 @@ export interface BibliographyPassagesResponse {
   noticeDetail?: string | null
 }
 
-/** Passages of the synced libraries for a query (vector-only; says why if none). */
+/** Passages of the synced libraries for a query (text and meaning; says why if none). */
 export function bibliographySearchPassages(
   text: string,
-  options: { topK?: number } = {}
+  options: {
+    topK?: number
+    /** Also match close variants of the words (the shared search preference). */
+    fuzzy?: boolean
+    /** One Zotero library as the Writing tab names it; resolved by the backend. */
+    zoteroLibrary?: { libraryType: 'user' | 'group'; libraryId: string }
+  } = {}
 ): Promise<BibliographyPassagesResponse> {
   return invoke<BibliographyPassagesResponse>('bibliography_search_passages', {
-    request: { text, topK: options.topK ?? 12 },
+    request: {
+      text,
+      topK: options.topK ?? 12,
+      // Left out when not given: the backend then follows the saved preference
+      // and searches every synced library.
+      ...(options.fuzzy === undefined ? {} : { fuzzy: options.fuzzy }),
+      ...(options.zoteroLibrary
+        ? {
+            zoteroLibraryType: options.zoteroLibrary.libraryType,
+            zoteroLibraryId: options.zoteroLibrary.libraryId,
+          }
+        : {}),
+    },
   })
 }

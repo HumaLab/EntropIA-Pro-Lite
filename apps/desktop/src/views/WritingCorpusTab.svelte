@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { ActionIcon, Button, Checkbox, SearchBar } from '@entropia/ui'
+  import { ActionIcon, Button, SearchBar } from '@entropia/ui'
+  import SearchFuzzyToggle from '../components/SearchFuzzyToggle.svelte'
+  import SearchMatchLine from '../components/SearchMatchLine.svelte'
   import { t } from '$lib/i18n'
   import { FtsSearchController } from '$lib/item-view-search'
   import { corpusPageLabel, writingCorpus } from '$lib/writing-corpus'
@@ -208,13 +210,10 @@
   />
 
   <!-- One switch for every search in the app (search-preferences.ts). -->
-  <Checkbox
-    class="corpus__fuzzy"
+  <SearchFuzzyToggle
     checked={snapshot.fuzzy}
     onchange={(checked) => void store.setFuzzy(checked)}
-  >
-    {t('writing.corpusFuzzy')}
-  </Checkbox>
+  />
 
   {#if snapshot.error}
     <p class="corpus__error" role="alert">{snapshot.error}</p>
@@ -317,9 +316,7 @@
             {#if hit.foundAs}
               <!-- Says why a document without the searched word is here: the
                    variant it holds instead, usually an OCR misreading. -->
-              <span class="corpus__row-found">
-                {t('writing.corpusFoundAs', { words: hit.foundAs.join(', ') })}
-              </span>
+              <SearchMatchLine kind="approximate" terms={hit.foundAs} />
             {/if}
           </button>
         </li>
@@ -338,12 +335,6 @@
     flex-direction: column;
     gap: var(--space-2);
     min-height: 0;
-  }
-
-  .corpus :global(.corpus__fuzzy) {
-    padding: 0 var(--space-1);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
   }
 
   .corpus__open {
@@ -406,17 +397,10 @@
       color var(--transition-base);
   }
 
-  .corpus__row-title,
-  .corpus__row-found {
+  .corpus__row-title {
     display: block;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .corpus__row-found {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-2xs);
-    font-style: italic;
   }
 
   .corpus__row:hover {

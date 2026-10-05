@@ -1,9 +1,14 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
+  bibliographySearchPassages,
   bibliographySearchWorks,
+  type BibliographyPassage,
+  type BibliographyPassagesResponse,
   type BibliographySearchHit,
   type BibliographySearchResponse,
+  type PassageMatchKind,
 } from './bibliography-search'
+import { SearchPreferences, searchPreferences } from './search-preferences'
 import {
   newBatchRequestId,
   processingSyncBibliographyLibrary,
@@ -85,6 +90,11 @@ export interface LibraryEntry {
   csl_json: string
   /** Set only on works found by meaning (not by any text match) in the last search. */
   semantic?: true
+  /**
+   * Set only on works found by what their passages say (not by title, author
+   * or profile) in the last search: how the words matched and which ones.
+   */
+  content?: { kind: Exclude<PassageMatchKind, 'meaning'>; terms: string[] }
 }
 
 /**
@@ -160,6 +170,8 @@ export interface ZoteroSnapshot {
   /** What the requested sync is really doing; null before any request. */
   bibliographyProgress: BibliographySyncProgress | null
   semanticStatus: SemanticSearchStatus
+  /** Whether close variants of the words are searched too (the shared preference). */
+  fuzzy: boolean
 }
 
 const EMPTY_BIBLIOGRAPHY_SYNC: BibliographySyncRequestState = {
@@ -181,7 +193,11 @@ const EMPTY: ZoteroSnapshot = {
   bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
   bibliographyProgress: null,
   semanticStatus: 'idle',
+  fuzzy: true,
 }
+
+/** Passages asked for the content leg; works are made of however many of them rank. */
+const CONTENT_PASSAGES = 30
 
 /** How many rows the list shows. Filtering happens over the whole library. */
 const VISIBLE = 200
@@ -207,6 +223,54 @@ function entryFromHit(hit: BibliographySearchHit): LibraryEntry {
     year: hit.year ? String(hit.year) : '',
     csl_json: hit.cslJson,
   }
+}
+
+/** A passage's work as a list entry, for works the held list does not have. */
+function entryFromPassage(passage: BibliographyPassage): LibraryEntry {
+  return {
+    key: passage.itemKey,
+    itemVersion: 0,
+    libraryType: passage.libraryType,
+    libraryId: passage.libraryNativeId,
+    title: passage.title,
+    authors: passage.authors,
+    year: passage.year ? String(passage.year) : '',
+    csl_json: passage.cslJson,
+  }
+}
+
+type ContentMatch = {
+  passage: BibliographyPassage
+  content: NonNullable<LibraryEntry['content']>
+}
+
+/**
+ * The works whose passages carry the words, in the order their best passage
+ * ranked, each with how it matched. Passages found only by meaning say
+ * nothing about the words and are left to the meaning leg.
+ */
+function contentMatches(answer: BibliographyPassagesResponse): ContentMatch[] {
+  const byWork = new Map<string, ContentMatch>()
+  for (const passage of answer.passages ?? []) {
+    if (passage.matchKind === 'meaning') continue
+    const found = byWork.get(passage.itemKey)
+    if (!found) {
+      byWork.set(passage.itemKey, {
+        passage,
+        content: { kind: passage.matchKind, terms: [...passage.matchTerms] },
+      })
+      continue
+    }
+    // An exact passage outranks an approximate one as the work's reason.
+    if (found.content.kind === 'approximate' && passage.matchKind === 'exact') {
+      found.content = { kind: 'exact', terms: [...passage.matchTerms] }
+    } else if (found.content.kind === passage.matchKind) {
+      for (const term of passage.matchTerms) {
+        if (!found.content.terms.includes(term)) found.content.terms.push(term)
+      }
+    }
+  }
+  return [...byWork.values()]
 }
 
 /** Reads the few fields a list needs, without disturbing the CSL-JSON itself. */
@@ -259,6 +323,32 @@ export class WritingZoteroStore {
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
+  #prefs: SearchPreferences
+  /** Read once, on the first search: after that the state is the truth. */
+  #prefsLoaded: Promise<void> | null = null
+
+  constructor(prefs: SearchPreferences = searchPreferences) {
+    this.#prefs = prefs
+  }
+
+  /** Reads the saved switch, once, so the panel shows it before any search. */
+  loadPreferences(): Promise<void> {
+    this.#prefsLoaded ??= this.#prefs.fuzzyEnabled().then((fuzzy) => this.#set({ fuzzy }))
+    return this.#prefsLoaded
+  }
+
+  /** Turns approximate search on or off, remembers it, and searches again. */
+  async setFuzzy(fuzzy: boolean): Promise<void> {
+    await this.loadPreferences()
+    this.#set({ fuzzy })
+    try {
+      await this.#prefs.setFuzzyEnabled(fuzzy)
+    } catch (error) {
+      // The switch still applies to this session; only remembering it failed.
+      this.#set({ error: message(error) })
+    }
+    if (this.#state.query.trim()) await this.searchLibrary(this.#state.query)
+  }
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -517,13 +607,14 @@ export class WritingZoteroStore {
     // holds the meaning-based hits back, and the other way round.
     let zotero: PromiseSettledResult<LibraryPage> | null = null
     let meaning: PromiseSettledResult<BibliographySearchResponse> | null = null
+    let content: PromiseSettledResult<BibliographyPassagesResponse> | null = null
     const stale = () =>
       epoch !== this.#epoch || !this.#sameSelection(selection) || this.#state.query !== query
     const show = () => {
       // The box moved on while they were answering, or the library did:
       // a late answer of another query or another selection changes nothing.
       if (stale()) return
-      this.#set(this.#searchPatch(zotero, meaning))
+      this.#set(this.#searchPatch(zotero, meaning, content))
     }
     const settle = <T>(
       promise: Promise<T>,
@@ -549,13 +640,26 @@ export class WritingZoteroStore {
         bibliographySearchWorks(needle, { zoteroLibrary: selection }),
         (result) => (meaning = result)
       ),
+      // The saved switch is read before this leg only: the other two never
+      // wait for it.
+      settle(
+        this.loadPreferences().then(() =>
+          bibliographySearchPassages(needle, {
+            topK: CONTENT_PASSAGES,
+            fuzzy: this.#state.fuzzy,
+            zoteroLibrary: selection,
+          })
+        ),
+        (result) => (content = result)
+      ),
     ])
   }
 
   /** What the box shows given whichever of the two searches has answered. */
   #searchPatch(
     zotero: PromiseSettledResult<LibraryPage> | null,
-    meaning: PromiseSettledResult<BibliographySearchResponse> | null
+    meaning: PromiseSettledResult<BibliographySearchResponse> | null,
+    content: PromiseSettledResult<BibliographyPassagesResponse> | null = null
   ): Partial<ZoteroSnapshot> {
     const matched = this.#filtered()
     const shown = new Set(matched.map((entry) => entry.csl_json))
@@ -586,6 +690,20 @@ export class WritingZoteroStore {
         const entry = library.get(hit.itemKey) ?? entryFromHit(hit)
         keys.add(entry.key)
         entries.push(hit.method === 'lexical' ? entry : { ...entry, semantic: true })
+      }
+    }
+
+    // Last of all: works whose passages carry the words. A work already listed
+    // (by text or by meaning) is not listed twice; one the held list lacks is
+    // listed from the catalog's own copy, like a meaning hit.
+    if (content?.status === 'fulfilled') {
+      const keys = new Set(entries.map((entry) => entry.key))
+      const library = new Map(this.#all.map((entry) => [entry.key, entry]))
+      for (const { passage, content: found } of contentMatches(content.value)) {
+        if (keys.has(passage.itemKey)) continue
+        const entry = library.get(passage.itemKey) ?? entryFromPassage(passage)
+        keys.add(entry.key)
+        entries.push({ ...entry, content: found })
       }
     }
 

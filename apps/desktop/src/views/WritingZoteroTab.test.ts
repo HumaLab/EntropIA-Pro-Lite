@@ -32,6 +32,7 @@ const { zoteroStore } = vi.hoisted(() => {
     total: 1,
     error: null,
     selection: { libraryType: 'user', libraryId: '0' },
+    fuzzy: true,
     bibliographyProgress: null as unknown,
     bibliographySync: {
       loading: false,
@@ -57,6 +58,7 @@ const { zoteroStore } = vi.hoisted(() => {
       requestBibliographySync: vi.fn(async () => {}),
       search: vi.fn(),
       searchLibrary: vi.fn(async () => {}),
+      setFuzzy: vi.fn(async () => {}),
       select: vi.fn((libraryType: string, libraryId: string) => {
         snapshot.selection = { libraryType, libraryId } as typeof snapshot.selection
       }),
@@ -487,7 +489,10 @@ describe('E1c-3 opening the work details (ficha)', () => {
 })
 
 describe('B2 search by meaning in the Zotero tab', () => {
-  type Entry = (typeof zoteroStore.snapshot.entries)[number] & { semantic?: true }
+  type Entry = (typeof zoteroStore.snapshot.entries)[number] & {
+    semantic?: true
+    content?: { kind: 'exact' | 'approximate'; terms: string[] }
+  }
   type Snapshot = Omit<typeof zoteroStore.snapshot, 'entries'> & {
     semanticStatus: string
     entries: Entry[]
@@ -565,6 +570,51 @@ describe('B2 search by meaning in the Zotero tab', () => {
     expect(await screen.findByText('Otra obra')).toBeInTheDocument()
     expect(screen.getAllByText('Por significado')).toHaveLength(1)
   })
+  it('tags works found by what their passages say, with how the words matched', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'plan federal'
+    snapshot.semanticStatus = 'ok'
+    snapshot.entries = [
+      original,
+      {
+        ...original,
+        key: 'CON1',
+        title: 'La producción del espacio',
+        csl_json: JSON.stringify({ id: 'con1', title: 'La producción del espacio' }),
+        content: { kind: 'exact', terms: ['plan', 'federal'] },
+      },
+      {
+        ...original,
+        key: 'CON2',
+        title: 'Otra obra',
+        csl_json: JSON.stringify({ id: 'con2', title: 'Otra obra' }),
+        content: { kind: 'approximate', terms: ['crocitto'] },
+      },
+    ]
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText('La producción del espacio')).toBeInTheDocument()
+    expect(screen.getAllByText('Por contenido')).toHaveLength(2)
+    expect(screen.getByText('Exacto: plan, federal')).toBeInTheDocument()
+    expect(screen.getByText('Aproximado: crocitto')).toBeInTheDocument()
+  })
+
+  it('offers the shared approximate-matching switch and hands the choice to the store', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = ''
+    snapshot.entries = [original]
+
+    render(WritingZoteroTab, { props: {} })
+
+    const toggle = await screen.findByRole('checkbox', {
+      name: 'Incluir coincidencias aproximadas',
+    })
+    expect(toggle).toBeChecked()
+    await fireEvent.click(toggle)
+    expect(zoteroStore.setFuzzy).toHaveBeenCalledWith(false)
+  })
+
   it('cannot cite a catalog-only work that has no CSL to snapshot', async () => {
     answerKnownLibraries([PERSONAL])
     snapshot.query = 'dignidad'

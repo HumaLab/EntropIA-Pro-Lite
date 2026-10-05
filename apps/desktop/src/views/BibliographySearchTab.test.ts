@@ -54,6 +54,8 @@ function passage(over: Record<string, unknown> = {}) {
     snippet: 'El oficio de historiador es duro.',
     location: { kind: 'pages', from: 3, to: 3 },
     score: 0.9,
+    matchKind: 'exact',
+    matchTerms: ['oficio'],
     ...over,
   }
 }
@@ -167,7 +169,8 @@ describe('BibliographySearchTab', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar desde la selección' }))
 
-    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(callsFor('bibliography_search_works')).toEqual([])
+    expect(callsFor('bibliography_search_passages')).toEqual([])
     expect(
       await screen.findByText('No hay texto seleccionado en el manuscrito.')
     ).toBeInTheDocument()
@@ -196,7 +199,7 @@ describe('BibliographySearchTab passages', () => {
 
     const snippet = await screen.findByText('El oficio de historiador es duro.')
     expect(callsFor('bibliography_search_passages')).toEqual([
-      ['bibliography_search_passages', { request: { text: 'oficio', topK: 12 } }],
+      ['bibliography_search_passages', { request: { text: 'oficio', topK: 12, fuzzy: true } }],
     ])
     const works = screen.getByText('Obra B')
     expect(
@@ -365,6 +368,49 @@ describe('BibliographySearchTab passages', () => {
     expect(await screen.findByText(/La búsqueda de pasajes falló/)).toBeInTheDocument()
   })
 
+  it('says why each passage is listed, in the corpus wording', async () => {
+    backend({
+      passages: passagesResponse([
+        passage({ chunkId: 'c-exact', snippet: 'Texto exacto.' }),
+        passage({
+          chunkId: 'c-approx',
+          snippet: 'Texto aproximado.',
+          matchKind: 'approximate',
+          matchTerms: ['crocitto'],
+        }),
+        passage({
+          chunkId: 'c-meaning',
+          snippet: 'Texto cercano.',
+          matchKind: 'meaning',
+          matchTerms: [],
+        }),
+      ]),
+    })
+    render(BibliographySearchTab)
+
+    await search('oficio')
+
+    expect(await screen.findByText('Exacto: oficio')).toBeInTheDocument()
+    expect(screen.getByText('Aproximado: crocitto')).toBeInTheDocument()
+    expect(screen.getByText('Por significado')).toBeInTheDocument()
+  })
+
+  it('searches again without the variants when the approximate switch is turned off', async () => {
+    backend()
+    render(BibliographySearchTab)
+    await search('oficio')
+    await screen.findByText('El oficio de historiador es duro.')
+
+    await fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Incluir coincidencias aproximadas' })
+    )
+
+    await waitFor(() => {
+      const calls = callsFor('bibliography_search_passages')
+      expect(calls.at(-1)![1]).toEqual({ request: { text: 'oficio', topK: 12, fuzzy: false } })
+    })
+  })
+
   it('searches passages from the manuscript selection too', async () => {
     backend()
     render(BibliographySearchTab, { props: { getSelection: () => ' oficio de historiador ' } })
@@ -372,7 +418,7 @@ describe('BibliographySearchTab passages', () => {
 
     await screen.findByText('El oficio de historiador es duro.')
     expect(callsFor('bibliography_search_passages')[0]![1]).toEqual({
-      request: { text: 'oficio de historiador', topK: 12 },
+      request: { text: 'oficio de historiador', topK: 12, fuzzy: true },
     })
   })
 })

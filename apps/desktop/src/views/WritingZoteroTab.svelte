@@ -14,6 +14,8 @@
     type CitationEditSession,
   } from './WritingCitationEditor.svelte'
   import WritingZoteroDetails from './WritingZoteroDetails.svelte'
+  import SearchFuzzyToggle from '../components/SearchFuzzyToggle.svelte'
+  import SearchMatchLine from '../components/SearchMatchLine.svelte'
 
   /**
    * The Zotero tab of the research panel (plan-editor.md §6.3, §11).
@@ -435,6 +437,11 @@
           onsearch={(query) => void store.searchLibrary(query)}
           emitSearch={true}
         />
+        <!-- One switch for every search in the app (search-preferences.ts). -->
+        <SearchFuzzyToggle
+          checked={snapshot.fuzzy}
+          onchange={(checked) => void store.setFuzzy(checked)}
+        />
       {/if}
 
       {#if snapshot.query.trim() && snapshot.semanticStatus !== 'idle' && snapshot.semanticStatus !== 'ok'}
@@ -463,7 +470,13 @@
                   {#if entry.semantic}
                     <span class="zotero__semantic">{t('writing.zoteroSemanticTag')}</span>
                   {/if}
+                  {#if entry.content}
+                    <span class="zotero__semantic">{t('writing.zoteroContentTag')}</span>
+                  {/if}
                 </span>
+                {#if entry.content}
+                  <SearchMatchLine kind={entry.content.kind} terms={entry.content.terms} />
+                {/if}
               </span>
               <span class="zotero__row-actions">
                 <IconButton

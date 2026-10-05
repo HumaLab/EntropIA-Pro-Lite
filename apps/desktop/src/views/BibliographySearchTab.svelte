@@ -15,7 +15,10 @@
     passagesNoticeKey,
     withNoticeDetail,
   } from '$lib/rag-scope'
+  import { searchPreferences } from '$lib/search-preferences'
   import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
+  import SearchFuzzyToggle from '../components/SearchFuzzyToggle.svelte'
+  import SearchMatchLine from '../components/SearchMatchLine.svelte'
   import { ActionIcon, Button, Card, IconButton, SearchBar } from '@entropia/ui'
 
   let query = $state('')
@@ -27,6 +30,19 @@
   let passagesFailed = $state(false)
   let openedPassage = $state<BibliographyPassage | null>(null)
   let cited = $state(false)
+  /** Whether close variants of the words are searched too (the shared preference). */
+  let fuzzy = $state(true)
+  void searchPreferences.fuzzyEnabled().then((enabled) => (fuzzy = enabled))
+
+  async function setFuzzy(enabled: boolean): Promise<void> {
+    fuzzy = enabled
+    try {
+      await searchPreferences.setFuzzyEnabled(enabled)
+    } catch {
+      // The switch still applies to this session; only remembering it failed.
+    }
+    if (query.trim()) await runSearch(query.trim())
+  }
 
   interface Props {
     /** Reads the manuscript selection for anchored search (E6a). */
@@ -91,7 +107,7 @@
     // the works, nor the other way around.
     const [works, passages] = await Promise.allSettled([
       bibliographySearchWorks(text),
-      bibliographySearchPassages(text),
+      bibliographySearchPassages(text, { fuzzy }),
     ])
     if (works.status === 'fulfilled') {
       answer = works.value
@@ -174,6 +190,8 @@
       </Button>
     {/if}
   </form>
+  <!-- One switch for every search in the app (search-preferences.ts). -->
+  <SearchFuzzyToggle checked={fuzzy} onchange={(checked) => void setFuzzy(checked)} />
   <p class="bib-search__consent">{t('bibliography.searchConsent')}</p>
   {#if selectionEmpty}
     <p class="bib-search__error" role="alert">{t('bibliography.searchSelectionEmpty')}</p>
@@ -239,6 +257,7 @@
                     {#if passage.location}
                       <span class="bib-search__meta">{locationText(passage.location)}</span>
                     {/if}
+                    <SearchMatchLine kind={passage.matchKind} terms={passage.matchTerms} />
                   </span>
                   <span class="bib-search__row-actions">
                     <IconButton

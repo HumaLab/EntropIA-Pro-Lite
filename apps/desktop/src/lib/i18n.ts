@@ -964,6 +964,9 @@ const es = {
   'writing.zoteroLoaded': '{count} referencia(s) leída(s).',
   'writing.zoteroEmpty': 'Ninguna referencia coincide con esa búsqueda.',
   'writing.zoteroSemanticTag': 'Por significado',
+  'writing.zoteroContentTag': 'Por contenido',
+  'writing.searchFoundExact': 'Exacto: {words}',
+  'writing.searchFoundMeaning': 'Por significado',
   'writing.zoteroSemanticNotSynced':
     'Esta biblioteca todavía no está sincronizada en EntropIA: solo se muestran coincidencias de texto. «Sincronizar biblioteca» habilita también la búsqueda por significado.',
   'writing.zoteroSemanticLexicalOnly':
@@ -2702,6 +2705,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroLoaded': '{count} reference(s) read.',
   'writing.zoteroEmpty': 'No reference matches that search.',
   'writing.zoteroSemanticTag': 'By meaning',
+  'writing.zoteroContentTag': 'By content',
+  'writing.searchFoundExact': 'Exact: {words}',
+  'writing.searchFoundMeaning': 'By meaning',
   'writing.zoteroSemanticNotSynced':
     'This library is not synced into EntropIA yet: only text matches are shown. “Synchronize library” also enables search by meaning.',
   'writing.zoteroSemanticLexicalOnly':

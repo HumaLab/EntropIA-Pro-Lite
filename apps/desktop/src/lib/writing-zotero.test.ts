@@ -935,6 +935,180 @@ describe('searching by meaning', () => {
  * E1c-1 (TS half): explicit selection with library-keyed stale-response
  * isolation. RED first: none of this exists yet on the store.
  */
+describe('searching by content', () => {
+  const item = (key: string, csl: string) => ({
+    key,
+    itemVersion: 1,
+    libraryType: 'user',
+    libraryId: '0',
+    cslJson: csl,
+  })
+  const noWorks = {
+    hits: [],
+    vectorAvailable: true,
+    activeGenerationId: 'gen-1',
+    contractHash: 'contract',
+    librarySynced: true,
+  }
+  const passage = (itemKey: string, matchKind: string, matchTerms: string[], extra = {}) => ({
+    chunkId: `${itemKey}:${matchKind}:${matchTerms.join('-')}`,
+    itemId: `row-${itemKey}`,
+    itemKey,
+    title: `Obra ${itemKey}`,
+    authors: 'Núñez',
+    year: 2016,
+    libraryName: 'Mi biblioteca',
+    libraryType: 'user',
+    libraryNativeId: '0',
+    cslJson: JSON.stringify({ id: itemKey, title: `Obra ${itemKey}` }),
+    snippet: '…',
+    location: { kind: 'pages', from: 2, to: 2 },
+    score: 0.1,
+    matchKind,
+    matchTerms,
+    ...extra,
+  })
+  const passages = (list: unknown[]) => ({ passages: list, notice: null })
+
+  async function loaded(answers: { works?: unknown; passages?: unknown }, prefs?: never) {
+    answer({
+      writing_zotero_cached: {
+        items: [item('GIN1', GINZBURG), item('DAR1', DARNTON), item('MOO1', MOORE)],
+        version: 1,
+      },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: [], total: 0 },
+      bibliography_search_works: answers.works ?? noWorks,
+      bibliography_search_passages: answers.passages ?? passages([]),
+    })
+    const store = new WritingZoteroStore(prefs)
+    await store.connect()
+    mockInvoke.mockClear()
+    return store
+  }
+
+  it('lists a work found only by what its passage says, tagged and after the other matches', async () => {
+    const store = await loaded({
+      works: {
+        ...noWorks,
+        hits: [
+          {
+            itemId: 'row-DAR1',
+            itemKey: 'DAR1',
+            libraryId: 'row-library',
+            title: 'DAR1',
+            method: 'vector',
+            lexicalScore: null,
+            vectorScore: 0.9,
+            fusedScore: 0.03,
+            contractHash: null,
+            generationId: null,
+          },
+        ],
+      },
+      passages: passages([passage('MOO1', 'exact', ['plan', 'federal'])]),
+    })
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1', 'MOO1'])
+    expect(store.snapshot.entries[2]?.content).toEqual({
+      kind: 'exact',
+      terms: ['plan', 'federal'],
+    })
+    expect(store.snapshot.entries[2]?.semantic).toBeUndefined()
+  })
+
+  it('asks for the passages of the selected library with the approximate switch', async () => {
+    const store = await loaded({})
+    store.select('group', '6680944')
+
+    await store.searchLibrary('plan federal')
+
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: expect.objectContaining({
+        text: 'plan federal',
+        fuzzy: true,
+        zoteroLibraryType: 'group',
+        zoteroLibraryId: '6680944',
+      }),
+    })
+  })
+
+  it('lists a work once however many passages and legs found it', async () => {
+    const store = await loaded({
+      passages: passages([
+        passage('MOO1', 'approximate', ['crocitto']),
+        passage('MOO1', 'exact', ['croitto']),
+        passage('MOO1', 'exact', ['croitto', 'otro']),
+        passage('GIN1', 'exact', ['formaggio']),
+      ]),
+    })
+
+    await store.searchLibrary('formaggio')
+
+    // GIN1 is a text match already: not listed twice, not re-tagged.
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.content])).toEqual([
+      ['GIN1', undefined],
+      ['MOO1', { kind: 'exact', terms: ['croitto', 'otro'] }],
+    ])
+  })
+
+  it('leaves out passages found only by meaning: the meaning leg owns those', async () => {
+    const store = await loaded({ passages: passages([passage('MOO1', 'meaning', [])]) })
+
+    await store.searchLibrary('revoluciones')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).not.toContain('MOO1')
+  })
+
+  it('lists a work the held list lacks from the passage itself', async () => {
+    const store = await loaded({ passages: passages([passage('NEW1', 'exact', ['dignidad'])]) })
+
+    await store.searchLibrary('dignidad')
+
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.title])).toEqual([
+      ['NEW1', 'Obra NEW1'],
+    ])
+  })
+
+  it('keeps the other matches when the passage search fails', async () => {
+    const store = await loaded({ passages: passages([]) })
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'bibliography_search_passages'
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve(
+            cmd === 'bibliography_search_works' ? noWorks : { items: [], total: 0 }
+          )) as never)
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
+  })
+
+  it('turns the approximate switch off, remembers it and searches again', async () => {
+    const saved: Record<string, string> = {}
+    const prefs = {
+      fuzzyEnabled: async () => saved.fuzzy !== 'off',
+      setFuzzyEnabled: async (enabled: boolean) => {
+        saved.fuzzy = enabled ? 'on' : 'off'
+      },
+    } as never
+    const store = await loaded({ passages: passages([]) }, prefs)
+    await store.searchLibrary('croitto')
+    expect(store.snapshot.fuzzy).toBe(true)
+    mockInvoke.mockClear()
+
+    await store.setFuzzy(false)
+
+    expect(saved.fuzzy).toBe('off')
+    expect(store.snapshot.fuzzy).toBe(false)
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: expect.objectContaining({ text: 'croitto', fuzzy: false }),
+    })
+  })
+})
+
 describe('E1c-1 library selection', () => {
   it('defaults to the personal library user/0', async () => {
     const store = new WritingZoteroStore()

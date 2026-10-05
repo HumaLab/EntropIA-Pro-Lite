@@ -138,6 +138,23 @@ describe('bibliographySearchPassages', () => {
     })
   })
 
+  it('forwards the approximate switch and the library when given', async () => {
+    mockInvoke.mockResolvedValue({ passages: [], notice: null })
+    await bibliographySearchPassages('cabildo', {
+      fuzzy: false,
+      zoteroLibrary: { libraryType: 'group', libraryId: '99' },
+    })
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: {
+        text: 'cabildo',
+        topK: 12,
+        fuzzy: false,
+        zoteroLibraryType: 'group',
+        zoteroLibraryId: '99',
+      },
+    })
+  })
+
   it('forwards an explicit size', async () => {
     mockInvoke.mockResolvedValue({ passages: [], notice: null })
     await bibliographySearchPassages('cabildo', { topK: 5 })
