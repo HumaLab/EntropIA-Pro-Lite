@@ -1167,6 +1167,86 @@ pub fn admit_bibliography_sync_demand(
     }
 }
 
+/// Durable status of one `bibliography_sync` task, for the manual button.
+///
+/// Derived work counts are tasks queued after the sync task's row was written
+/// (task timestamps are whole seconds, row order is not); they are only meaningful once the task has succeeded, so they
+/// are zero before that.
+pub fn bibliography_sync_status(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<super::commands::BibliographySyncStatus, String> {
+    use rusqlite::OptionalExtension as _;
+
+    type Row = (
+        String,
+        Option<String>,
+        Option<String>,
+        i64,
+        Option<i64>,
+        Option<String>,
+        i64,
+    );
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT state, last_error_code, last_error_message, progress_done,
+                    progress_total, result_receipt_json, rowid
+               FROM processing_tasks
+              WHERE id = ?1 AND kind = 'bibliography_sync'",
+            [task_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read bibliography sync status: {error}"))?;
+    let Some((state, error_code, error_message, progress_done, progress_total, receipt, anchor)) =
+        row
+    else {
+        return Err(format!("unknown_task: no bibliography sync task {task_id}"));
+    };
+
+    let receipt: Option<serde_json::Value> =
+        receipt.and_then(|json| serde_json::from_str(&json).ok());
+    let receipt_number = |name: &str| {
+        receipt
+            .as_ref()
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_i64)
+    };
+    let derived = |kind: &str| -> Result<i64, String> {
+        if state != "succeeded" {
+            return Ok(0);
+        }
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+              WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
+            rusqlite::params![kind, anchor],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
+    };
+    Ok(super::commands::BibliographySyncStatus {
+        new_profiles: derived("bibliography_profile")?,
+        new_extractions: derived("bibliography_extract")?,
+        items_seen: receipt_number("itemsSeen"),
+        remote_total: receipt_number("remoteTotal"),
+        state,
+        error_code,
+        error_message,
+        progress_done,
+        progress_total,
+    })
+}
+
 /// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
 ///
 /// External callers (lib/nlp/ocr/transcription) stay on this signature: it

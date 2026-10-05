@@ -23,7 +23,9 @@ use entropia_desktop_lib::bibliography::reconciliation::{
     ReconciliationState,
 };
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
-use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
+use entropia_desktop_lib::processing::commands::{
+    apply_bibliography_sync_request, bibliography_sync_status,
+};
 use entropia_desktop_lib::processing::ocr::OcrComputeOutput;
 use entropia_desktop_lib::processing::repository::{self, BatchAction, NewCheckpoint, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
@@ -9257,4 +9259,100 @@ fn a_published_work_is_found_by_passage_search_once_active() {
         )
         .expect("active generation");
     assert_eq!(hits[0].generation_id, active);
+}
+
+/// The manual sync button reports what the scheduler really did: the status
+/// of the admitted task, read from durable state, never an assumption.
+fn run_bibliography_once(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    steps: Vec<ScriptStep>,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(steps)))));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("run one bibliography unit")
+}
+
+#[test]
+fn sync_status_reports_pending_then_the_real_result_of_a_finished_sync() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "status-1", "user", "0").expect("request");
+
+    let queued = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(queued.state, "pending");
+    assert_eq!(queued.items_seen, None);
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+
+    let done = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(done.state, "succeeded");
+    assert_eq!(done.items_seen, Some(2));
+    assert_eq!(done.remote_total, Some(2));
+    assert_eq!(
+        done.new_profiles, 2,
+        "both works are new to the catalog, so both queue a profile"
+    );
+    assert_eq!(done.new_extractions, 0, "neither work has an attachment");
+    assert_eq!(done.error_code, None);
+
+    // A second sync that finds nothing new reports no new derived work.
+    let again = apply_bibliography_sync_request(&conn, "status-2", "user", "0").expect("again");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let unchanged = bibliography_sync_status(&conn, &again.task_id).expect("status");
+    assert_eq!(unchanged.state, "succeeded");
+    assert_eq!(unchanged.new_profiles, 0);
+    assert_eq!(unchanged.new_extractions, 0);
+}
+
+#[test]
+fn sync_status_names_why_a_sync_is_waiting_when_zotero_does_not_answer() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "status-3", "user", "0").expect("request");
+
+    run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Fail(ZoteroState::EndpointUnavailable)],
+    );
+
+    let waiting = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(waiting.state, "retry_wait");
+    assert_eq!(waiting.error_code.as_deref(), Some("zotero_unreachable"));
+    assert!(waiting.error_message.is_some());
+}
+
+#[test]
+fn sync_status_refuses_a_task_that_is_not_a_bibliography_sync() {
+    let (_dir, conn) = migrated_db();
+    let error = bibliography_sync_status(&conn, "no-such-task").expect_err("unknown task");
+    assert!(error.starts_with("unknown_task"), "{error}");
 }

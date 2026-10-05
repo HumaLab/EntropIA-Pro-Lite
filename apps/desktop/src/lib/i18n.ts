@@ -855,8 +855,24 @@ const es = {
   'writing.zoteroBibliographySyncHelp':
     'Solicita la sincronización del catálogo bibliográfico seleccionado en segundo plano. «Actualizar» solo renueva esta lista desde Zotero.',
   'writing.zoteroBibliographySyncRequesting': 'Solicitando la sincronización…',
-  'writing.zoteroBibliographySyncRequested':
-    'Sincronización solicitada. El procesamiento continúa en segundo plano.',
+  'writing.zoteroBibliographySyncRequested': 'Solicitud aceptada. Consultando el estado…',
+  'writing.zoteroBibliographySyncNeedsZotero':
+    'Para sincronizar, Zotero tiene que estar respondiendo en el puerto local.',
+  'writing.zoteroBibliographySyncQueued': 'Sincronización en cola…',
+  'writing.zoteroBibliographySyncRunning': 'Sincronizando…',
+  'writing.zoteroBibliographySyncRunningOf': 'Sincronizando… {done} de {total} obras',
+  'writing.zoteroBibliographySyncWaiting':
+    'En pausa: Zotero no responde. Se reintenta solo cuando conteste.',
+  'writing.zoteroBibliographySyncApiDisabled':
+    'En pausa: la API local de Zotero está apagada. Activala en Zotero y volvé a sincronizar.',
+  'writing.zoteroBibliographySyncPaused': 'En pausa: {detail}',
+  'writing.zoteroBibliographySyncUpToDate': 'Biblioteca al día',
+  'writing.zoteroBibliographySyncDone':
+    'Sincronizada. Obras nuevas o actualizadas: {works}. Adjuntos nuevos: {attachments}.',
+  'writing.zoteroBibliographySyncCancelled': 'La sincronización se canceló.',
+  'writing.zoteroBibliographySyncFailed': 'La sincronización falló: {detail}',
+  'writing.zoteroBibliographySyncUnreadable':
+    'No se pudo leer el estado de la sincronización: {detail}',
   'writing.zoteroBibliographySyncError': 'No se pudo solicitar la sincronización: {detail}',
   'writing.editor.label': 'Manuscrito',
   'writing.toolbar.label': 'Formato',
@@ -2578,8 +2594,23 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroBibliographySyncHelp':
     'Requests synchronization of the selected bibliography catalog in the background. “Refresh” only updates this list from Zotero.',
   'writing.zoteroBibliographySyncRequesting': 'Requesting synchronization…',
-  'writing.zoteroBibliographySyncRequested':
-    'Synchronization requested. Processing continues in the background.',
+  'writing.zoteroBibliographySyncRequested': 'Request accepted. Checking its status…',
+  'writing.zoteroBibliographySyncNeedsZotero':
+    'To synchronize, Zotero has to be answering on the local port.',
+  'writing.zoteroBibliographySyncQueued': 'Synchronization queued…',
+  'writing.zoteroBibliographySyncRunning': 'Synchronizing…',
+  'writing.zoteroBibliographySyncRunningOf': 'Synchronizing… {done} of {total} works',
+  'writing.zoteroBibliographySyncWaiting':
+    'Paused: Zotero is not answering. It retries on its own once it does.',
+  'writing.zoteroBibliographySyncApiDisabled':
+    "Paused: Zotero's local API is off. Turn it on in Zotero and synchronize again.",
+  'writing.zoteroBibliographySyncPaused': 'Paused: {detail}',
+  'writing.zoteroBibliographySyncUpToDate': 'Library up to date',
+  'writing.zoteroBibliographySyncDone':
+    'Synchronized. New or updated works: {works}. New attachments: {attachments}.',
+  'writing.zoteroBibliographySyncCancelled': 'The synchronization was cancelled.',
+  'writing.zoteroBibliographySyncFailed': 'The synchronization failed: {detail}',
+  'writing.zoteroBibliographySyncUnreadable': 'Could not read the synchronization status: {detail}',
   'writing.zoteroBibliographySyncError': 'Could not request synchronization: {detail}',
   'writing.editor.label': 'Manuscript',
   'writing.toolbar.label': 'Formatting',

@@ -136,6 +136,121 @@ describe('E2b-4 bibliography synchronization request state', () => {
     })
   })
 
+  const status = (overrides: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    errorCode: null,
+    errorMessage: null,
+    progressDone: 0,
+    progressTotal: null,
+    itemsSeen: null,
+    remoteTotal: null,
+    newProfiles: 0,
+    newExtractions: 0,
+    ...overrides,
+  })
+
+  /** Answers the request, then each status poll with the next scripted status. */
+  function scheduler(statuses: unknown[]) {
+    const polled: unknown[] = [...statuses]
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'processing_sync_bibliography_library') return Promise.resolve(requested)
+      if (cmd === 'processing_bibliography_sync_status') {
+        return Promise.resolve(polled.length > 1 ? polled.shift() : polled[0])
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+  }
+
+  it('follows the scheduler task until it finishes and reports its real result', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({ state: 'running', progressDone: 10, progressTotal: 40 }),
+        status({ state: 'succeeded', itemsSeen: 40, newProfiles: 3, newExtractions: 2 }),
+      ])
+      const store = new WritingZoteroStore()
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('processing_bibliography_sync_status')[0]?.[1]).toEqual({
+        taskId: 'task-bibliography',
+      })
+      expect(store.snapshot.bibliographyProgress?.status?.state).toBe('running')
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        state: 'succeeded',
+        newProfiles: 3,
+        newExtractions: 2,
+      })
+
+      // A finished task is never polled again.
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps following a sync that waits for Zotero and surfaces why', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({ state: 'retry_wait', errorCode: 'zotero_unreachable', errorMessage: 'nothing' }),
+        status({ state: 'running' }),
+      ])
+      const store = new WritingZoteroStore()
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        state: 'retry_wait',
+        errorCode: 'zotero_unreachable',
+      })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status?.state).toBe('running')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('says the status could not be read instead of inventing one', async () => {
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'processing_sync_bibliography_library'
+        ? Promise.resolve(requested)
+        : Promise.reject(new Error('db busy'))) as never)
+    const store = new WritingZoteroStore()
+
+    await store.requestBibliographySync()
+    await vi.waitFor(() => {
+      expect(store.snapshot.bibliographyProgress).toEqual({
+        status: null,
+        unreadable: 'db busy',
+      })
+    })
+  })
+
+  it('stops following when the selected library changes', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([status({ state: 'running' })])
+      const store = new WritingZoteroStore()
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+
+      store.select('group', '7')
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
+      expect(store.snapshot.bibliographyProgress).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('invalidates a late request result after the selection changes', async () => {
     const releases = new Map<string, (value: unknown) => void>()
     mockInvoke.mockImplementation(((cmd: string, args: Record<string, unknown>) => {

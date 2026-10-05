@@ -1219,6 +1219,7 @@ pub fn run() {
             processing::commands::processing_set_priority,
             processing::commands::processing_retry,
             processing::commands::processing_sync_bibliography_library,
+            processing::commands::processing_bibliography_sync_status,
             bibliography::commands::bibliography_search_works,
             bibliography::commands::bibliography_open_passage,
             bibliography::commands::bibliography_passage_context,

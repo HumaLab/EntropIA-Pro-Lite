@@ -108,6 +108,36 @@ export interface BibliographySyncRequestState {
   requested: BibliographySyncResponse | null
 }
 
+/**
+ * What the scheduler's task for a requested sync is doing, exactly as
+ * `processing_bibliography_sync_status` reads it. `state` is the task's own
+ * vocabulary: `pending`, `running`, `retry_wait`, `blocked`, `interrupted`,
+ * `succeeded`, `failed` or `cancelled`.
+ */
+export interface BibliographySyncStatus {
+  state: string
+  errorCode: string | null
+  errorMessage: string | null
+  progressDone: number
+  progressTotal: number | null
+  itemsSeen: number | null
+  remoteTotal: number | null
+  /** Works new or changed since the last sync (zero with `succeeded`: up to date). */
+  newProfiles: number
+  /** Attachments new since the last sync. */
+  newExtractions: number
+}
+
+/** The last thing known about the sync, or why it could not be read. */
+export interface BibliographySyncProgress {
+  status: BibliographySyncStatus | null
+  unreadable: string | null
+}
+
+/** Task states that will still change by themselves while the app runs. */
+const SYNC_FOLLOWED_STATES = new Set(['pending', 'running', 'retry_wait', 'interrupted'])
+const SYNC_POLL_MS = 1500
+
 /** The personal default: exactly user/0, unchanged by E1c-1. */
 const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
 
@@ -127,6 +157,8 @@ export interface ZoteroSnapshot {
   selection: ZoteroLibrarySelection
   /** Manual scheduler admission for this selection, not worker completion. */
   bibliographySync: BibliographySyncRequestState
+  /** What the requested sync is really doing; null before any request. */
+  bibliographyProgress: BibliographySyncProgress | null
   semanticStatus: SemanticSearchStatus
 }
 
@@ -147,6 +179,7 @@ const EMPTY: ZoteroSnapshot = {
   error: null,
   selection: { ...PERSONAL },
   bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+  bibliographyProgress: null,
   semanticStatus: 'idle',
 }
 
@@ -221,6 +254,8 @@ export class WritingZoteroStore {
   #restoring: Promise<void> | null = null
   #syncing: Promise<void> | null = null
   #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
+  /** Bumped to retire the status follower of an older request or selection. */
+  #followToken = 0
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
@@ -262,6 +297,7 @@ export class WritingZoteroStore {
     this.#restoring = null
     this.#syncing = null
     this.#bibliographySyncing = null
+    this.#followToken += 1
     this.#all = []
     this.#set({
       selection: { ...this.#selection },
@@ -272,6 +308,7 @@ export class WritingZoteroStore {
       loading: false,
       error: null,
       bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+      bibliographyProgress: null,
       semanticStatus: 'idle',
     })
   }
@@ -356,6 +393,7 @@ export class WritingZoteroStore {
   async #requestBibliographySync(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     this.#set({
       bibliographySync: { loading: true, error: null, requested: null },
+      bibliographyProgress: null,
     })
     try {
       const requested = await processingSyncBibliographyLibrary(
@@ -367,11 +405,37 @@ export class WritingZoteroStore {
       this.#set({
         bibliographySync: { loading: false, error: null, requested },
       })
+      void this.#followBibliographySync(requested.taskId, ++this.#followToken)
     } catch (error) {
       if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
       this.#set({
         bibliographySync: { loading: false, error: message(error), requested: null },
       })
+    }
+  }
+
+  /**
+   * Reads the scheduler's own task until it settles, so the screen says what
+   * the sync is doing instead of what was asked for. Stops when the task
+   * reaches a state that will not change by itself, when another request or
+   * another library replaces it, or when the status cannot be read.
+   */
+  async #followBibliographySync(taskId: string, token: number): Promise<void> {
+    while (token === this.#followToken) {
+      let progress: BibliographySyncProgress
+      try {
+        const status = await invoke<BibliographySyncStatus>('processing_bibliography_sync_status', {
+          taskId,
+        })
+        if (typeof status?.state !== 'string') throw new Error('unreadable sync status')
+        progress = { status, unreadable: null }
+      } catch (error) {
+        progress = { status: null, unreadable: message(error) }
+      }
+      if (token !== this.#followToken) return
+      this.#set({ bibliographyProgress: progress })
+      if (!progress.status || !SYNC_FOLLOWED_STATES.has(progress.status.state)) return
+      await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
     }
   }
 
