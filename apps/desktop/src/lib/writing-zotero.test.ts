@@ -136,6 +136,121 @@ describe('E2b-4 bibliography synchronization request state', () => {
     })
   })
 
+  const status = (overrides: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    errorCode: null,
+    errorMessage: null,
+    progressDone: 0,
+    progressTotal: null,
+    itemsSeen: null,
+    remoteTotal: null,
+    newProfiles: 0,
+    newExtractions: 0,
+    ...overrides,
+  })
+
+  /** Answers the request, then each status poll with the next scripted status. */
+  function scheduler(statuses: unknown[]) {
+    const polled: unknown[] = [...statuses]
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'processing_sync_bibliography_library') return Promise.resolve(requested)
+      if (cmd === 'processing_bibliography_sync_status') {
+        return Promise.resolve(polled.length > 1 ? polled.shift() : polled[0])
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+  }
+
+  it('follows the scheduler task until it finishes and reports its real result', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({ state: 'running', progressDone: 10, progressTotal: 40 }),
+        status({ state: 'succeeded', itemsSeen: 40, newProfiles: 3, newExtractions: 2 }),
+      ])
+      const store = new WritingZoteroStore()
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('processing_bibliography_sync_status')[0]?.[1]).toEqual({
+        taskId: 'task-bibliography',
+      })
+      expect(store.snapshot.bibliographyProgress?.status?.state).toBe('running')
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        state: 'succeeded',
+        newProfiles: 3,
+        newExtractions: 2,
+      })
+
+      // A finished task is never polled again.
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps following a sync that waits for Zotero and surfaces why', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({ state: 'retry_wait', errorCode: 'zotero_unreachable', errorMessage: 'nothing' }),
+        status({ state: 'running' }),
+      ])
+      const store = new WritingZoteroStore()
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        state: 'retry_wait',
+        errorCode: 'zotero_unreachable',
+      })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status?.state).toBe('running')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('says the status could not be read instead of inventing one', async () => {
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'processing_sync_bibliography_library'
+        ? Promise.resolve(requested)
+        : Promise.reject(new Error('db busy'))) as never)
+    const store = new WritingZoteroStore()
+
+    await store.requestBibliographySync()
+    await vi.waitFor(() => {
+      expect(store.snapshot.bibliographyProgress).toEqual({
+        status: null,
+        unreadable: 'db busy',
+      })
+    })
+  })
+
+  it('stops following when the selected library changes', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([status({ state: 'running' })])
+      const store = new WritingZoteroStore()
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+
+      store.select('group', '7')
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10000)
+
+      expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
+      expect(store.snapshot.bibliographyProgress).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('invalidates a late request result after the selection changes', async () => {
     const releases = new Map<string, (value: unknown) => void>()
     mockInvoke.mockImplementation(((cmd: string, args: Record<string, unknown>) => {
@@ -452,6 +567,46 @@ describe('searching what was read', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
+  describe('accents and typos', () => {
+    const work = (id: string, title: string) =>
+      JSON.stringify({ id, title, author: [{ family: 'Núñez' }] })
+    const spatial = [work('a', 'La producción del espacio'), work('b', 'Another work')]
+    async function spatialStore(fuzzy: boolean) {
+      answer({
+        writing_zotero_cached: { items: spatial, version: 1 },
+        writing_zotero_probe: { state: 'endpoint_unavailable' },
+      })
+      const prefs = {
+        fuzzyEnabled: async () => fuzzy,
+        setFuzzyEnabled: async () => {},
+      } as never
+      const store = new WritingZoteroStore(prefs)
+      await store.connect()
+      await store.loadPreferences()
+      return store
+    }
+
+    it('folds accents with approximate matching off', async () => {
+      const store = await spatialStore(false)
+      store.search('La produccion del espacio')
+      expect(store.snapshot.entries.map((e) => e.title)).toEqual(['La producción del espacio'])
+      store.search('nunez')
+      expect(store.snapshot.entries).toHaveLength(2)
+    })
+
+    it('does not tolerate typos with the box off', async () => {
+      const store = await spatialStore(false)
+      store.search('La produción del espasio')
+      expect(store.snapshot.entries).toHaveLength(0)
+    })
+
+    it('tolerates typos with the box on', async () => {
+      const store = await spatialStore(true)
+      store.search('La produción del espasio')
+      expect(store.snapshot.entries.map((e) => e.title)).toEqual(['La producción del espacio'])
+    })
+  })
+
   it('shows everything again when the search is cleared', async () => {
     const store = await loaded()
     store.search('formaggio')
@@ -657,11 +812,70 @@ describe('searching by meaning', () => {
     expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
   })
 
-  it('skips a hit that is not in the library read from Zotero, which cannot be cited', async () => {
-    const store = await loaded(semantic([hit('GONE', 'vector'), hit('DAR1', 'vector')]))
+  it('lists a hit the held list lacks from the catalog, citable through its own CSL', async () => {
+    const store = await loaded(
+      semantic([
+        {
+          ...hit('GONE', 'vector'),
+          title: 'Plan Federal de Viviendas',
+          authors: 'Pérez',
+          year: 2010,
+          libraryType: 'user',
+          libraryNativeId: '0',
+          cslJson: '{"id":"GONE","title":"Plan Federal de Viviendas"}',
+        },
+        hit('DAR1', 'vector'),
+      ])
+    )
 
     await store.searchLibrary('formaggio')
 
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'GONE', 'DAR1'])
+    const fromCatalog = store.snapshot.entries[1]
+    expect(fromCatalog).toMatchObject({
+      title: 'Plan Federal de Viviendas',
+      authors: 'Pérez',
+      year: '2010',
+      libraryType: 'user',
+      libraryId: '0',
+      semantic: true,
+      csl_json: '{"id":"GONE","title":"Plan Federal de Viviendas"}',
+    })
+  })
+
+  it('shows meaning hits from the mirror-backed list while Zotero is closed and says nothing false', async () => {
+    const store = await loaded(semantic([hit('DAR1', 'vector')]))
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? Promise.reject(new Error('Nada responde en el puerto local'))
+        : Promise.resolve(semantic([hit('DAR1', 'vector')]))) as never)
+
+    await store.searchLibrary('programa dignidad')
+
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.semantic])).toEqual([
+      ['DAR1', true],
+    ])
+    expect(store.snapshot.semanticStatus).toBe('ok')
+  })
+
+  it('does not hold the meaning hits back while Zotero is still answering', async () => {
+    const store = await loaded(semantic([hit('DAR1', 'vector')]))
+    let zoteroReply: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? new Promise((resolve) => {
+            zoteroReply = resolve
+          })
+        : Promise.resolve(semantic([hit('DAR1', 'vector')]))) as never)
+
+    const searching = store.searchLibrary('formaggio')
+    await vi.waitFor(() => {
+      expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
+    })
+    expect(store.snapshot.semanticStatus).toBe('ok')
+
+    zoteroReply({ items: [], total: 0 })
+    await searching
     expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
   })
 
@@ -761,6 +975,180 @@ describe('searching by meaning', () => {
  * E1c-1 (TS half): explicit selection with library-keyed stale-response
  * isolation. RED first: none of this exists yet on the store.
  */
+describe('searching by content', () => {
+  const item = (key: string, csl: string) => ({
+    key,
+    itemVersion: 1,
+    libraryType: 'user',
+    libraryId: '0',
+    cslJson: csl,
+  })
+  const noWorks = {
+    hits: [],
+    vectorAvailable: true,
+    activeGenerationId: 'gen-1',
+    contractHash: 'contract',
+    librarySynced: true,
+  }
+  const passage = (itemKey: string, matchKind: string, matchTerms: string[], extra = {}) => ({
+    chunkId: `${itemKey}:${matchKind}:${matchTerms.join('-')}`,
+    itemId: `row-${itemKey}`,
+    itemKey,
+    title: `Obra ${itemKey}`,
+    authors: 'Núñez',
+    year: 2016,
+    libraryName: 'Mi biblioteca',
+    libraryType: 'user',
+    libraryNativeId: '0',
+    cslJson: JSON.stringify({ id: itemKey, title: `Obra ${itemKey}` }),
+    snippet: '…',
+    location: { kind: 'pages', from: 2, to: 2 },
+    score: 0.1,
+    matchKind,
+    matchTerms,
+    ...extra,
+  })
+  const passages = (list: unknown[]) => ({ passages: list, notice: null })
+
+  async function loaded(answers: { works?: unknown; passages?: unknown }, prefs?: never) {
+    answer({
+      writing_zotero_cached: {
+        items: [item('GIN1', GINZBURG), item('DAR1', DARNTON), item('MOO1', MOORE)],
+        version: 1,
+      },
+      writing_zotero_probe: { state: 'endpoint_unavailable' },
+      writing_zotero_search: { items: [], total: 0 },
+      bibliography_search_works: answers.works ?? noWorks,
+      bibliography_search_passages: answers.passages ?? passages([]),
+    })
+    const store = new WritingZoteroStore(prefs)
+    await store.connect()
+    mockInvoke.mockClear()
+    return store
+  }
+
+  it('lists a work found only by what its passage says, tagged and after the other matches', async () => {
+    const store = await loaded({
+      works: {
+        ...noWorks,
+        hits: [
+          {
+            itemId: 'row-DAR1',
+            itemKey: 'DAR1',
+            libraryId: 'row-library',
+            title: 'DAR1',
+            method: 'vector',
+            lexicalScore: null,
+            vectorScore: 0.9,
+            fusedScore: 0.03,
+            contractHash: null,
+            generationId: null,
+          },
+        ],
+      },
+      passages: passages([passage('MOO1', 'exact', ['plan', 'federal'])]),
+    })
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1', 'MOO1'])
+    expect(store.snapshot.entries[2]?.content).toEqual({
+      kind: 'exact',
+      terms: ['plan', 'federal'],
+    })
+    expect(store.snapshot.entries[2]?.semantic).toBeUndefined()
+  })
+
+  it('asks for the passages of the selected library with the approximate switch', async () => {
+    const store = await loaded({})
+    store.select('group', '6680944')
+
+    await store.searchLibrary('plan federal')
+
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: expect.objectContaining({
+        text: 'plan federal',
+        fuzzy: true,
+        zoteroLibraryType: 'group',
+        zoteroLibraryId: '6680944',
+      }),
+    })
+  })
+
+  it('lists a work once however many passages and legs found it', async () => {
+    const store = await loaded({
+      passages: passages([
+        passage('MOO1', 'approximate', ['crocitto']),
+        passage('MOO1', 'exact', ['croitto']),
+        passage('MOO1', 'exact', ['croitto', 'otro']),
+        passage('GIN1', 'exact', ['formaggio']),
+      ]),
+    })
+
+    await store.searchLibrary('formaggio')
+
+    // GIN1 is a text match already: not listed twice, not re-tagged.
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.content])).toEqual([
+      ['GIN1', undefined],
+      ['MOO1', { kind: 'exact', terms: ['croitto', 'otro'] }],
+    ])
+  })
+
+  it('leaves out passages found only by meaning: the meaning leg owns those', async () => {
+    const store = await loaded({ passages: passages([passage('MOO1', 'meaning', [])]) })
+
+    await store.searchLibrary('revoluciones')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).not.toContain('MOO1')
+  })
+
+  it('lists a work the held list lacks from the passage itself', async () => {
+    const store = await loaded({ passages: passages([passage('NEW1', 'exact', ['dignidad'])]) })
+
+    await store.searchLibrary('dignidad')
+
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.title])).toEqual([
+      ['NEW1', 'Obra NEW1'],
+    ])
+  })
+
+  it('keeps the other matches when the passage search fails', async () => {
+    const store = await loaded({ passages: passages([]) })
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'bibliography_search_passages'
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve(
+            cmd === 'bibliography_search_works' ? noWorks : { items: [], total: 0 }
+          )) as never)
+
+    await store.searchLibrary('formaggio')
+
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
+  })
+
+  it('turns the approximate switch off, remembers it and searches again', async () => {
+    const saved: Record<string, string> = {}
+    const prefs = {
+      fuzzyEnabled: async () => saved.fuzzy !== 'off',
+      setFuzzyEnabled: async (enabled: boolean) => {
+        saved.fuzzy = enabled ? 'on' : 'off'
+      },
+    } as never
+    const store = await loaded({ passages: passages([]) }, prefs)
+    await store.searchLibrary('croitto')
+    expect(store.snapshot.fuzzy).toBe(true)
+    mockInvoke.mockClear()
+
+    await store.setFuzzy(false)
+
+    expect(saved.fuzzy).toBe('off')
+    expect(store.snapshot.fuzzy).toBe(false)
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: expect.objectContaining({ text: 'croitto', fuzzy: false }),
+    })
+  })
+})
+
 describe('E1c-1 library selection', () => {
   it('defaults to the personal library user/0', async () => {
     const store = new WritingZoteroStore()

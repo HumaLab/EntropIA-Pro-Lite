@@ -49,6 +49,9 @@ pub struct RagAnswer {
     /// scope did not ask for it or it ran normally. Not persisted: it describes
     /// this answer's retrieval, not the conversation.
     pub bibliography_notice: Option<String>,
+    /// Short, secret-free cause behind `failed` / `embedding_unavailable`, so
+    /// the notice says what broke instead of only that something did.
+    pub bibliography_notice_detail: Option<String>,
 }
 
 /// Resumen de una conversación persistida para el listado del frontend.

@@ -80,8 +80,91 @@ pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>,
     }
     let summary = recover_session(&conn, "", repository::now_ms())?;
     *owner = Some(lock);
+    spawn_checkpoint_cleanup(db_path.to_path_buf());
     super::scheduler::READY.store(true, std::sync::atomic::Ordering::Release);
     Ok(Some(summary))
+}
+
+/// Tasks whose checkpoints one cleanup transaction deletes.
+const CLEANUP_TASKS_PER_BATCH: usize = 25;
+/// Pause between cleanup transactions so other writers get the lock.
+const CLEANUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(50);
+/// Frees the checkpoints of tasks that already ended (builds before the
+/// retention fix kept them forever, GBs per bibliography sync). Runs on its
+/// own thread and connection in bounded batches, so startup never waits for
+/// it; one summary line goes to the app log.
+fn spawn_checkpoint_cleanup(db_path: std::path::PathBuf) {
+    let spawned = std::thread::Builder::new()
+        .name("entropia-checkpoint-cleanup".to_string())
+        .spawn(move || {
+            match run_checkpoint_cleanup(&db_path) {
+                Ok(line) => {
+                    if let Some(line) = line {
+                        eprintln!("{line}");
+                    }
+                }
+                Err(error) => eprintln!("[processing] checkpoint cleanup skipped: {error}"),
+            }
+            // Same background thread: build the bibliography vector index now,
+            // so the first passage search of the session does not pay for it.
+            warm_bibliography_vector_index(&db_path);
+        });
+    if let Err(error) = spawned {
+        eprintln!("[processing] checkpoint cleanup not started: {error}");
+    }
+}
+
+/// Builds the in-memory vector index of the active bibliography generation, if
+/// there is one. Best effort: a failure only means the first search builds it.
+fn warm_bibliography_vector_index(db_path: &Path) {
+    let Ok(conn) = open_archive_connection(db_path) else {
+        return;
+    };
+    let generation: Option<String> = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations
+             WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(generation_id) = generation {
+        if let Err(error) = crate::bibliography::vector_index::warm(&conn, &generation_id) {
+            eprintln!(
+                "[bibliography] vector index warm-up skipped: {}: {}",
+                error.code, error.message
+            );
+        }
+    }
+}
+
+/// One cleanup pass: purge finished tasks' checkpoints, then hand free pages
+/// back in a bounded step. The second part runs even when nothing was purged,
+/// so the space an archive freed earlier keeps returning over successive starts
+/// once the close-time compaction made it `auto_vacuum = INCREMENTAL`.
+/// `None` when there was nothing to do.
+pub fn run_checkpoint_cleanup(db_path: &Path) -> Result<Option<String>, String> {
+    let conn = open_archive_connection(db_path)?;
+    let purge =
+        repository::purge_terminal_checkpoints(&conn, CLEANUP_TASKS_PER_BATCH, CLEANUP_PAUSE)?;
+    let reclaimed = repository::reclaim_free_pages(
+        &conn,
+        crate::db::compact::RECLAIM_MAX_PAGES,
+        crate::db::compact::RECLAIM_PAUSE,
+    )?;
+    let released = reclaimed.unwrap_or(0);
+    if purge.rows == 0 && released == 0 {
+        return Ok(None);
+    }
+    let space = match reclaimed {
+        Some(pages) => format!("returned {pages} pages to the OS"),
+        None => "kept as reusable free pages (auto_vacuum is off; the close-time compaction will shrink the file)"
+            .to_string(),
+    };
+    Ok(Some(format!(
+        "[processing] checkpoint cleanup: deleted {} checkpoints ({} bytes) of finished tasks in {} batches; {space}",
+        purge.rows, purge.bytes, purge.batches
+    )))
 }
 
 fn lock_is_contended(error: &std::io::Error) -> bool {
@@ -144,6 +227,24 @@ pub fn recover_session(
         // The 0038 trigger settles dependents as their dependency ends; this
         // one scan repairs units a pre-0038 build left blocked.
         repository::settle_blocked_dependents(conn)?;
+        // A unit parked for a missing embedding configuration that is valid
+        // now (the key was saved while no scheduler watched) resumes at start.
+        repository::resume_embedding_configuration_blocked(conn)?;
+        // Work only system batches own has nobody to resume it: requeue it.
+        repository::requeue_interrupted_system_tasks(conn, None)?;
+        // A generation whose vectors all landed but that no build ever
+        // activated (or whose last owed work was deleted) becomes queryable
+        // now; a partial one is left alone. Best effort: it never blocks
+        // recovery, and the next publish or sync retries it.
+        if let Err(error) = crate::bibliography::generation::activate_complete_staging_generations(
+            conn,
+            repository::now_ms(),
+        ) {
+            eprintln!(
+                "[recovery] generation repair skipped: {}: {}",
+                error.code, error.message
+            );
+        }
         // Batches: running work waits for resume; confirmed intents converge.
         // `user` only. A `repair`/`manual`/`bibliography` batch is a long-lived
         // container that is always running with an empty complete snapshot —
@@ -566,7 +667,8 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("bibliography task state");
-        assert_eq!(bibliography_task_state, "interrupted");
+        // System-owned work resumes by itself: no human has a button for it.
+        assert_eq!(bibliography_task_state, "pending");
         let (run_state, cursor): (String, i64) = conn
             .query_row(
                 "SELECT state, cursor_start FROM zotero_reconciliation_runs
@@ -632,6 +734,11 @@ mod tests {
         // E2b-4 RED: a fresh manual demand is the explicit resume for the
         // long-lived system batch. It requeues this same physical task while
         // leaving the committed page cursor, seen-set and checkpoint intact.
+        conn.execute(
+            "UPDATE processing_tasks SET state='interrupted' WHERE id='bib-task'",
+            [],
+        )
+        .expect("park it again as an older build would have left it");
         let resumed = repository::admit_bibliography_sync_demand(&conn, "user", "0")
             .expect("manual demand after recovery");
         assert_eq!(resumed.task_id, "bib-task");
@@ -723,6 +830,75 @@ mod tests {
             )
             .expect("system batch row");
         assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+    }
+
+    /// Inserts one unit of `kind` in `state`, linked to `batch_id`.
+    fn linked_task(conn: &Connection, id: &str, batch_id: &str, state: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES (?1, 'ocr', ?1, 'corpus', 'asset', ?1, ?2, 'old-session', 3, 1, 1)",
+            rusqlite::params![id, state],
+        )
+        .expect("task");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES (?1, ?2, 'ocr', ?2, 'corpus', 'asset', ?2, 'active')",
+            rusqlite::params![batch_id, id],
+        )
+        .expect("link");
+    }
+
+    fn task_state(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("task state")
+    }
+
+    #[test]
+    fn recovery_requeues_work_owned_only_by_system_batches() {
+        let (_dir, conn) = recovery_db();
+        let system = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+        conn.execute(
+            r#"INSERT INTO processing_batches
+               (id, request_id, origin, state, desired_state, operations, planning_done, created_at, updated_at)
+             VALUES ('user-batch', 'user-request', 'user', 'running', 'run', '["ocr"]', 1, 1, 1)"#,
+            [],
+        )
+        .expect("user batch");
+        // Running at the crash, and already parked by an earlier restart.
+        linked_task(&conn, "sys-running", &system, "running");
+        linked_task(&conn, "sys-parked", &system, "interrupted");
+        // Shared with a user batch, and purely user-owned: stay parked.
+        linked_task(&conn, "shared", &system, "running");
+        conn.execute(
+            "INSERT INTO processing_batch_tasks
+               (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('user-batch', 'shared', 'ocr', 'shared', 'corpus', 'asset', 'shared', 'active')",
+            [],
+        )
+        .expect("share with user batch");
+        linked_task(&conn, "user-only", "user-batch", "running");
+
+        recover_session(&conn, "", 0).expect("recover");
+
+        assert_eq!(task_state(&conn, "sys-running"), "pending");
+        assert_eq!(task_state(&conn, "sys-parked"), "pending");
+        assert_eq!(task_state(&conn, "shared"), "interrupted");
+        assert_eq!(task_state(&conn, "user-only"), "interrupted");
+        // The interrupted attempt is closed as interrupted, not as a failure.
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT owner_session FROM processing_tasks WHERE id = 'sys-running'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("owner");
+        assert!(owner.is_none());
     }
 
     #[test]
@@ -936,5 +1112,78 @@ mod tests {
         let again = recover_session(&conn, "", 60_000).unwrap();
         assert_eq!(again.tasks_interrupted, 0);
         assert_eq!(again.cancellations_finished, 0);
+    }
+
+    #[test]
+    fn startup_cleanup_returns_free_pages_gradually_even_with_nothing_to_purge() {
+        let (dir, conn) = recovery_db();
+        conn.execute_batch("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB)")
+            .unwrap();
+        for _ in 0..256 {
+            conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                .unwrap();
+        }
+        conn.execute("DELETE FROM blobs", []).unwrap();
+        drop(conn);
+        let db_path = dir.path().join("entropia.sqlite");
+        let free = |path: &Path| -> i64 {
+            open_archive_connection(path)
+                .unwrap()
+                .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+                .unwrap()
+        };
+        let free_before = free(&db_path);
+        assert!(free_before > 1_000);
+
+        // auto_vacuum NONE: nothing to purge and nothing is vacuumed.
+        assert_eq!(run_checkpoint_cleanup(&db_path).unwrap(), None);
+        assert_eq!(free(&db_path), free_before);
+
+        // After the close-time compaction the same startup hook reclaims.
+        let policy = crate::db::compact::Policy {
+            min_free_bytes: 256 * 1024,
+            disk_margin_bytes: 0,
+            ..Default::default()
+        };
+        crate::db::compact::compact_archive(&db_path, &policy, &|_| Some(u64::MAX / 2)).unwrap();
+        // Free pages again, after the compaction.
+        let conn = open_archive_connection(&db_path).unwrap();
+        for _ in 0..64 {
+            conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                .unwrap();
+        }
+        conn.execute("DELETE FROM blobs", []).unwrap();
+        drop(conn);
+        assert!(free(&db_path) > 0);
+
+        let line = run_checkpoint_cleanup(&db_path)
+            .unwrap()
+            .expect("free pages were returned without any checkpoint to purge");
+        assert!(line.contains("returned"), "{line}");
+        assert_eq!(free(&db_path), 0);
+    }
+
+    #[test]
+    fn startup_recovery_resumes_units_parked_for_a_configuration_that_is_valid_now() {
+        let (_dir, conn) = recovery_db();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO app_settings (key, value) VALUES ('openrouter_api_key', 'sk-test');
+             INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, created_at, updated_at)
+             VALUES ('t-config', 'embedding', 'a1', 'corpus', 'asset', 'a1', 'blocked',
+                     'configuration_required', 'configuration_required', 1, 1);",
+        )
+        .expect("blocked unit with a valid configuration");
+        recover_session(&conn, "", 60_000).expect("recover");
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-config'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("state");
+        assert_eq!(state, "pending");
     }
 }

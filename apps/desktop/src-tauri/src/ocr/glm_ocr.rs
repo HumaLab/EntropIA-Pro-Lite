@@ -20,6 +20,12 @@ struct GlmOcrApiError {
 struct LayoutParsingRequest<'a> {
     model: &'static str,
     file: &'a str,
+    /// First page to parse when `file` is a PDF (z.ai `start_page_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_page_id: Option<u32>,
+    /// Last page to parse when `file` is a PDF (z.ai `end_page_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_page_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -67,6 +73,7 @@ pub struct GlmOcrPageInfo {
 pub struct GlmOcrClient {
     client: reqwest::Client,
     api_key: String,
+    endpoint: String,
 }
 
 /// Per-attempt budgets for one layout_parsing call (plan-lote.md §7):
@@ -94,7 +101,18 @@ impl GlmOcrClient {
             .build()
             .expect("Failed to build reqwest client");
 
-        Self { client, api_key }
+        Self {
+            client,
+            api_key,
+            endpoint: GLM_OCR_API_URL.to_string(),
+        }
+    }
+
+    /// Points the client at another layout_parsing endpoint (tests only).
+    #[cfg(test)]
+    pub(crate) fn with_endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = endpoint;
+        self
     }
 
     pub async fn test_connection(&self) -> Result<(), String> {
@@ -106,6 +124,8 @@ impl GlmOcrClient {
             .json(&LayoutParsingRequest {
                 model: "glm-ocr",
                 file: GLM_OCR_TEST_IMAGE_URL,
+                start_page_id: None,
+                end_page_id: None,
             })
             .send()
             .await
@@ -115,14 +135,27 @@ impl GlmOcrClient {
     }
 
     pub async fn parse_file(&self, file: &str) -> Result<GlmOcrResponse, String> {
+        self.parse_file_pages(file, None).await
+    }
+
+    /// Parses a PDF data URL restricted to `pages` (1-based, inclusive), or
+    /// the whole file when `None`. The response carries one `layout_details`
+    /// entry per page of the parsed range.
+    pub async fn parse_file_pages(
+        &self,
+        file: &str,
+        pages: Option<(u32, u32)>,
+    ) -> Result<GlmOcrResponse, String> {
         let response = self
             .client
-            .post(GLM_OCR_API_URL)
+            .post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&LayoutParsingRequest {
                 model: "glm-ocr",
                 file,
+                start_page_id: pages.map(|(first, _)| first),
+                end_page_id: pages.map(|(_, last)| last),
             })
             .send()
             .await
@@ -205,6 +238,83 @@ fn classify_glm_transport_error(error: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One-shot HTTP server: answers the first request with `reply` and
+    /// hands back the raw request it received.
+    fn serve_once(reply: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let endpoint = format!("http://{}/layout_parsing", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut raw = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let read = stream.read(&mut chunk).expect("read");
+                raw.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(split) = text.find("\r\n\r\n") {
+                    let length: usize = text[..split]
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|value| value.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if raw.len() >= split + 4 + length {
+                        break;
+                    }
+                }
+                if read == 0 {
+                    break;
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+            String::from_utf8_lossy(&raw).to_string()
+        });
+        (endpoint, handle)
+    }
+
+    #[test]
+    fn a_pdf_range_request_carries_the_file_and_the_page_fields() {
+        let reply = r#"{"md_results":"x","layout_details":[[{"index":1,"label":"text","content":"uno"}],[{"index":1,"label":"text","content":"dos"}]],"data_info":{"num_pages":2}}"#;
+        let (endpoint, server) = serve_once(reply);
+        let client = GlmOcrClient::new("test-key".to_string()).with_endpoint(endpoint);
+
+        let response = tauri::async_runtime::block_on(
+            client.parse_file_pages("data:application/pdf;base64,AAAA", Some((3, 4))),
+        )
+        .expect("response");
+
+        assert_eq!(response.layout_details.len(), 2);
+        let raw = server.join().expect("server");
+        let body = raw.split("\r\n\r\n").nth(1).expect("body");
+        let json: serde_json::Value = serde_json::from_str(body).expect("json body");
+        assert_eq!(json["model"], "glm-ocr");
+        assert_eq!(json["file"], "data:application/pdf;base64,AAAA");
+        assert_eq!(json["start_page_id"], 3);
+        assert_eq!(json["end_page_id"], 4);
+    }
+
+    #[test]
+    fn a_whole_file_request_sends_no_page_fields() {
+        let reply = r#"{"md_results":"x","layout_details":[]}"#;
+        let (endpoint, server) = serve_once(reply);
+        let client = GlmOcrClient::new("test-key".to_string()).with_endpoint(endpoint);
+
+        tauri::async_runtime::block_on(client.parse_file("data:application/pdf;base64,AAAA"))
+            .expect("response");
+
+        let raw = server.join().expect("server");
+        let body = raw.split("\r\n\r\n").nth(1).expect("body");
+        let json: serde_json::Value = serde_json::from_str(body).expect("json body");
+        assert!(json.get("start_page_id").is_none() && json.get("end_page_id").is_none());
+    }
 
     #[test]
     fn retry_after_supports_seconds_and_http_dates() {

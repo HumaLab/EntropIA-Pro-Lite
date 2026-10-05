@@ -78,8 +78,14 @@ export interface BibliographyPassageContext {
     text: string
     highlights: Array<[number, number]>
   }>
-  openedPath: string | null
-  /** Why the original file would not open, when it would not. */
+  /** What the app can show of the original: a PDF file or an HTML snapshot's stored text. */
+  originalKind: 'pdf' | 'html' | null
+  /**
+   * The PDF the viewer was just granted (one file, at runtime). Only set by
+   * `bibliographyOpenPassage`; HTML snapshots and the plain context carry none.
+   */
+  originalPath: string | null
+  /** Why the original cannot be shown, when it cannot. */
   openError: string | null
 }
 
@@ -88,7 +94,11 @@ export function bibliographyPassageContext(chunkId: string): Promise<Bibliograph
   return invoke<BibliographyPassageContext>('bibliography_passage_context', { chunkId })
 }
 
-/** Opens the passage's original file in the operating system's viewer. */
+/**
+ * Prepares the passage's original for the in-app viewer: the backend resolves
+ * the registered attachment, validates the PDF and allows that one file on the
+ * asset protocol. Nothing opens outside the app.
+ */
 export function bibliographyOpenPassage(chunkId: string): Promise<BibliographyPassageContext> {
   return invoke<BibliographyPassageContext>('bibliography_open_passage', { chunkId })
 }
@@ -133,20 +143,90 @@ export interface BibliographyPassage {
   /** PDF = pages, HTML snapshot = paragraphs; null when the text is gone. */
   location: { kind: 'pages' | 'paragraphs'; from: number; to: number } | null
   score: number
+  /**
+   * How the passage was found: its text carries the words as typed (`exact`),
+   * a close variant of them (`approximate`, `matchTerms` are the variants it
+   * holds), or only its vector was near (`meaning`).
+   */
+  matchKind: PassageMatchKind
+  /** The words behind an `exact` or `approximate` match; empty for `meaning`. */
+  matchTerms: string[]
 }
+
+export type PassageMatchKind = 'exact' | 'approximate' | 'meaning'
 
 export interface BibliographyPassagesResponse {
   passages: BibliographyPassage[]
   /** Why nothing was searched (same codes as the chat's notice), else null. */
   notice: string | null
+  /** Short, key-free cause behind `failed` / `embedding_unavailable`. */
+  noticeDetail?: string | null
 }
 
-/** Passages of the synced libraries for a query (vector-only; says why if none). */
+/** Passages of the synced libraries for a query (text and meaning; says why if none). */
 export function bibliographySearchPassages(
   text: string,
-  options: { topK?: number } = {}
+  options: {
+    topK?: number
+    /** Also match close variants of the words (the shared search preference). */
+    fuzzy?: boolean
+    /** One Zotero library as the Writing tab names it; resolved by the backend. */
+    zoteroLibrary?: { libraryType: 'user' | 'group'; libraryId: string }
+  } = {}
 ): Promise<BibliographyPassagesResponse> {
   return invoke<BibliographyPassagesResponse>('bibliography_search_passages', {
-    request: { text, topK: options.topK ?? 12 },
+    request: {
+      text,
+      topK: options.topK ?? 12,
+      // Left out when not given: the backend then follows the saved preference
+      // and searches every synced library.
+      ...(options.fuzzy === undefined ? {} : { fuzzy: options.fuzzy }),
+      ...(options.zoteroLibrary
+        ? {
+            zoteroLibraryType: options.zoteroLibrary.libraryType,
+            zoteroLibraryId: options.zoteroLibrary.libraryId,
+          }
+        : {}),
+    },
   })
 }
+
+/**
+ * What the Writing "Obras" tab shows, kept outside the component so it
+ * outlives it: switching to another research tab unmounts the tab, and coming
+ * back must find the same query, results and scroll position. Only the clear
+ * button (or a new search) replaces it.
+ */
+export interface BibliographyTabState {
+  query: string
+  passageAnswer: BibliographyPassagesResponse | null
+  passagesFailed: boolean
+  /** Scroll offset of the panel the tab lives in. */
+  scrollTop: number
+}
+
+const EMPTY_TAB: BibliographyTabState = {
+  query: '',
+  passageAnswer: null,
+  passagesFailed: false,
+  scrollTop: 0,
+}
+
+export class BibliographyTabStore {
+  #state: BibliographyTabState = { ...EMPTY_TAB }
+
+  get state(): BibliographyTabState {
+    return this.#state
+  }
+
+  patch(patch: Partial<BibliographyTabState>): void {
+    this.#state = { ...this.#state, ...patch }
+  }
+
+  /** Back to an untouched tab: what the clear button does. */
+  reset(): void {
+    this.#state = { ...EMPTY_TAB }
+  }
+}
+
+export const bibliographyTab = new BibliographyTabStore()

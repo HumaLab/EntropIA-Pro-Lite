@@ -14,6 +14,8 @@
     type CitationEditSession,
   } from './WritingCitationEditor.svelte'
   import WritingZoteroDetails from './WritingZoteroDetails.svelte'
+  import SearchFuzzyToggle from '../components/SearchFuzzyToggle.svelte'
+  import SearchMatchLine from '../components/SearchMatchLine.svelte'
 
   /**
    * The Zotero tab of the research panel (plan-editor.md §6.3, §11).
@@ -155,6 +157,79 @@
     }
   }
 
+  /**
+   * What the requested sync is really doing, in the scheduler's own terms.
+   * Null when nothing was requested yet. Never claims background work that
+   * is not happening: a paused or failed task says so, with its reason.
+   */
+  function syncReport(
+    progress: typeof snapshot.bibliographyProgress
+  ): { text: string; error: boolean } | null {
+    if (!progress) return null
+    if (!progress.status) {
+      return {
+        text: t('writing.zoteroBibliographySyncUnreadable', {
+          detail: progress.unreadable ?? '',
+        }),
+        error: true,
+      }
+    }
+    const status = progress.status
+    const detail = status.errorMessage ?? status.errorCode ?? ''
+    switch (status.state) {
+      case 'pending':
+        return { text: t('writing.zoteroBibliographySyncQueued'), error: false }
+      case 'running':
+        return {
+          text: status.progressTotal
+            ? t('writing.zoteroBibliographySyncRunningOf', {
+                done: String(status.progressDone),
+                total: String(status.progressTotal),
+              })
+            : t('writing.zoteroBibliographySyncRunning'),
+          error: false,
+        }
+      case 'retry_wait':
+      case 'interrupted':
+        return {
+          text:
+            status.errorCode === 'zotero_unreachable' || status.errorCode === 'zotero_timeout'
+              ? t('writing.zoteroBibliographySyncWaiting')
+              : t('writing.zoteroBibliographySyncPaused', { detail }),
+          error: false,
+        }
+      case 'blocked':
+        return {
+          text:
+            status.errorCode === 'zotero_api_disabled'
+              ? t('writing.zoteroBibliographySyncApiDisabled')
+              : t('writing.zoteroBibliographySyncPaused', { detail }),
+          error: true,
+        }
+      case 'succeeded':
+        return {
+          text:
+            status.newProfiles + status.newExtractions === 0
+              ? t('writing.zoteroBibliographySyncUpToDate')
+              : t('writing.zoteroBibliographySyncDone', {
+                  works: String(status.newProfiles),
+                  attachments: String(status.newExtractions),
+                }),
+          error: false,
+        }
+      case 'cancelled':
+        return { text: t('writing.zoteroBibliographySyncCancelled'), error: false }
+      default:
+        return { text: t('writing.zoteroBibliographySyncFailed', { detail }), error: true }
+    }
+  }
+
+  const syncProgress = $derived(syncReport(snapshot.bibliographyProgress ?? null))
+  const syncActive = $derived(
+    ['pending', 'running'].includes(snapshot.bibliographyProgress?.status?.state ?? '')
+  )
+  const zoteroReachable = $derived(snapshot.status?.state === 'available')
+
   function cite(entry: (typeof snapshot.entries)[number]) {
     if (!oncite) return
     cited =
@@ -278,6 +353,7 @@
           variant="primary"
           size="sm"
           loading={snapshot.bibliographySync.loading}
+          disabled={!zoteroReachable || syncActive}
           onclick={() => void store.requestBibliographySync()}
         >
           {t('writing.zoteroBibliographySync')}
@@ -292,10 +368,18 @@
               detail: snapshot.bibliographySync.error,
             })}
           </p>
+        {:else if syncProgress}
+          {#if syncProgress.error}
+            <p class="zotero__error" role="alert">{syncProgress.text}</p>
+          {:else}
+            <p class="zotero__notice" role="status">{syncProgress.text}</p>
+          {/if}
         {:else if snapshot.bibliographySync.requested}
           <p class="zotero__notice" role="status">
             {t('writing.zoteroBibliographySyncRequested')}
           </p>
+        {:else if !zoteroReachable}
+          <p class="zotero__notice">{t('writing.zoteroBibliographySyncNeedsZotero')}</p>
         {/if}
       </div>
     </div>
@@ -353,6 +437,11 @@
           onsearch={(query) => void store.searchLibrary(query)}
           emitSearch={true}
         />
+        <!-- One switch for every search in the app (search-preferences.ts). -->
+        <SearchFuzzyToggle
+          checked={snapshot.fuzzy}
+          onchange={(checked) => void store.setFuzzy(checked)}
+        />
       {/if}
 
       {#if snapshot.query.trim() && snapshot.semanticStatus !== 'idle' && snapshot.semanticStatus !== 'ok'}
@@ -381,7 +470,13 @@
                   {#if entry.semantic}
                     <span class="zotero__semantic">{t('writing.zoteroSemanticTag')}</span>
                   {/if}
+                  {#if entry.content}
+                    <span class="zotero__semantic">{t('writing.zoteroContentTag')}</span>
+                  {/if}
                 </span>
+                {#if entry.content}
+                  <SearchMatchLine kind={entry.content.kind} terms={entry.content.terms} />
+                {/if}
               </span>
               <span class="zotero__row-actions">
                 <IconButton
@@ -394,7 +489,7 @@
                 <IconButton
                   size="sm"
                   label={t('writing.zoteroCite')}
-                  disabled={!oncite}
+                  disabled={!oncite || !entry.csl_json.trim()}
                   onclick={() => cite(entry)}
                 >
                   <ActionIcon name="text-quote" size={14} />

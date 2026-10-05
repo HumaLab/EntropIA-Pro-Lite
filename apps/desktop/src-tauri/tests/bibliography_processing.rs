@@ -23,7 +23,9 @@ use entropia_desktop_lib::bibliography::reconciliation::{
     ReconciliationState,
 };
 use entropia_desktop_lib::bibliography::repository::{upsert_item, BibliographicItemInput};
-use entropia_desktop_lib::processing::commands::apply_bibliography_sync_request;
+use entropia_desktop_lib::processing::commands::{
+    apply_bibliography_sync_request, bibliography_sync_status,
+};
 use entropia_desktop_lib::processing::ocr::OcrComputeOutput;
 use entropia_desktop_lib::processing::repository::{self, BatchAction, NewCheckpoint, TaskSubject};
 use entropia_desktop_lib::processing::scheduler::{
@@ -1077,7 +1079,10 @@ fn complete_run_publishes_catalog_finalization_and_receipt_together() {
         serde_json::from_str(&receipt.expect("durable receipt")).expect("receipt JSON");
     assert_eq!(receipt["libraryRowId"].as_str(), Some("lib-1"));
     assert_eq!(receipt["itemsSeen"].as_u64(), Some(1));
-    assert_eq!(checkpoint_count, 1, "the confirmed page survives durably");
+    assert_eq!(
+        checkpoint_count, 0,
+        "a succeeded task keeps no checkpoints: the receipt and catalog rows are the durable result"
+    );
     let batch_id: String = conn
         .query_row(
             "SELECT batch_id FROM processing_batch_tasks WHERE task_id=?1",
@@ -2690,12 +2695,22 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM processing_tasks
-              WHERE id IN (?1, ?2) AND state='interrupted'",
-            rusqlite::params![&ocr_task_id, &bibliography_task_id],
+              WHERE id = ?1 AND state='interrupted'",
+            rusqlite::params![&ocr_task_id],
             |row| row.get::<_, i64>(0),
         )
-        .expect("recovered task states"),
-        2
+        .expect("recovered user task state"),
+        1
+    );
+    // System-owned bibliography work has no resume button: recovery requeues it.
+    assert_eq!(
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&bibliography_task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("recovered system task state"),
+        "pending"
     );
     assert_eq!(
         conn.query_row(
@@ -2753,7 +2768,6 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
         .expect("explicitly resume bibliography demand");
     assert_eq!(resumed_bibliography.task_id, bibliography_task_id);
     assert!(!resumed_bibliography.created);
-    assert!(resumed_bibliography.requeued);
     assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM processing_tasks
@@ -2914,7 +2928,8 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
             |row| row.get::<_, i64>(0),
         )
         .expect("final corpus checkpoint count"),
-        1
+        0,
+        "a succeeded task keeps no checkpoints"
     );
     assert_eq!(
         conn.query_row(
@@ -2923,8 +2938,8 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
             |row| row.get::<_, i64>(0),
         )
         .expect("final bibliography checkpoint count"),
-        2,
-        "the resumed page adds one checkpoint without replaying page zero"
+        0,
+        "the finished task released its page checkpoints; the seen keys above prove no replay"
     );
 
     let (ocr_state, ocr_receipt): (String, Option<String>) = conn
@@ -3597,6 +3612,153 @@ fn profile_task_blocks_on_embedder_configuration_errors() {
     assert_eq!(profiles, 0, "a blocked run publishes nothing");
 }
 
+/// A provider throttle (429) never ends a profile task as failed: however
+/// many times it repeats, the task parks in `retry_wait` and is claimed again
+/// once its delay has passed.
+#[test]
+fn profile_task_stays_in_retry_wait_through_repeated_rate_limits() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0004", "Obra limitada", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let embedder = FakeProfileEmbedder::ok(4);
+    let registry = profile_registry(Arc::clone(&embedder));
+    let mut now = repository::now_ms();
+    for round in 0..6_i64 {
+        embedder
+            .failures
+            .lock()
+            .expect("failures")
+            .push_back("OpenRouter embedding API error (429 Too Many Requests): {}".to_string());
+        let outcome = run_one(
+            &conn,
+            &ctx_of(&dir),
+            &registry,
+            "profile-session",
+            now,
+            &|_, _| {},
+            &|_, _, _, _| {},
+        )
+        .expect("profile run");
+        match outcome {
+            RunOneOutcome::Waiting { task_id: waiting } => assert_eq!(waiting, task_id),
+            other => panic!("round {round}: a rate limit must wait, got {other:?}"),
+        }
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .expect("state read");
+        assert_eq!(state, "retry_wait", "round {round}");
+        now += 3_600_000;
+    }
+}
+
+/// A malformed request is the caller's bug: it fails the task, honestly.
+#[test]
+fn profile_task_fails_on_a_bad_request_not_a_rate_limit() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0005", "Obra mal pedida", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    let registry = profile_registry(FakeProfileEmbedder::failing(
+        "OpenRouter embedding API error (400 Bad Request): invalid input",
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    match outcome {
+        RunOneOutcome::Failed { task_id: failed } => assert_eq!(failed, task_id),
+        other => panic!("a 400 must fail, got {other:?}"),
+    }
+}
+
+/// A work whose profile task ended `failed` and that has no published
+/// profile is picked up again by the profile demand a successful library sync
+/// chains (the manual "Sincronizar biblioteca"): terminal history stays, and
+/// a fresh task is minted.
+#[test]
+fn a_sync_re_admits_a_work_whose_profile_task_failed() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0006", "Obra fallida", "Resumen.");
+    let failed_id = admit_profile_demand(&conn, &item_id);
+    let registry = profile_registry(FakeProfileEmbedder::failing(
+        "OpenRouter embedding API error (400 Bad Request): invalid input",
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Failed { .. }),
+        "{outcome:?}"
+    );
+
+    let created =
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync-chained admission");
+
+    assert_eq!(created, 1, "the failed work is demanded again");
+    let live: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND subject_id = ?1
+               AND state IN ('pending', 'retry_wait', 'running')",
+        )
+        .expect("live query")
+        .query_map([&item_id], |row| row.get(0))
+        .expect("live map")
+        .collect::<Result<_, _>>()
+        .expect("live rows");
+    assert_eq!(live.len(), 1);
+    assert_ne!(live[0], failed_id, "terminal history is never reopened");
+}
+
+/// A work whose profile task was parked `interrupted` by a restart is not
+/// stranded: the profile demand a library sync chains attaches to that same
+/// task AND puts it back to `pending`, because the bibliography system batch
+/// has no UI to resume it.
+#[test]
+fn a_sync_resumes_a_work_whose_profile_task_is_interrupted() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOPDF0007", "Obra interrumpida", "Resumen.");
+    let task_id = admit_profile_demand(&conn, &item_id);
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'interrupted' WHERE id = ?1",
+        [&task_id],
+    )
+    .expect("park the task as a restart does");
+
+    let created =
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync-chained admission");
+
+    assert_eq!(created, 0, "the interrupted task is reused, not duplicated");
+    let state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("task state");
+    assert_eq!(state, "pending", "the demand puts it back in the queue");
+}
+
 /// A metadata edit between claim and commit refuses source_changed: the
 /// staged vector describes text the catalog no longer holds.
 #[test]
@@ -3909,7 +4071,7 @@ use entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_c
 fn staging_generation_of(conn: &rusqlite::Connection, contract_hash: &str) -> Option<String> {
     conn.query_row(
         "SELECT id FROM bibliographic_index_generations
-         WHERE contract_hash = ?1 AND status = 'staging'",
+         WHERE contract_hash = ?1 AND status IN ('staging', 'active')",
         [contract_hash],
         |row| row.get(0),
     )
@@ -3985,7 +4147,8 @@ fn profile_publish_stamps_staging_generation_and_tracks_manifest() {
     let (status, expected, completed, contract) = generation_state(&conn, &staging);
     assert_eq!(
         (status.as_str(), contract.as_str()),
-        ("staging", effective.hash.as_str())
+        ("active", effective.hash.as_str()),
+        "the last publish activated the complete generation"
     );
     assert_eq!(expected, 2, "the manifest covers the eligible set");
     assert_eq!(completed, 2, "progress counts distinct new works");
@@ -4287,6 +4450,17 @@ fn extract_task_publishes_html_snapshot_as_one_page_of_paragraphs() {
     );
     let task_id = admit_extract_demand(&conn, &attachment_id);
     run_extract(&dir, &conn, &task_id);
+    let kept: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("checkpoint count");
+    assert_eq!(
+        kept, 0,
+        "a finished extraction keeps no checkpoint (file bytes were never one either)"
+    );
 
     let (page_count, method): (i64, String) = conn
         .query_row(
@@ -4528,6 +4702,48 @@ fn extract_task_reads_text_when_the_whole_document_parser_panics() {
     assert!(
         text.contains("Texto nativo legible"),
         "the text came through the per-page layer: {text}"
+    );
+}
+
+/// A permissions-only encrypted PDF whose whole-document parse comes back
+/// empty (inline image before the text) still publishes its text: the
+/// extraction is `rich`, not the `empty` that used to trigger a pointless
+/// re-demand on every sync.
+#[test]
+fn extract_task_reads_text_the_whole_document_parser_silently_drops() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFEMPTY1", "Informe cifrado", "Resumen.");
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf-rc4-40-inline-image-text.pdf"
+    ))
+    .expect("fixture");
+    let path = write_temp_pdf(&dir, "informe.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT003",
+        "linked_file",
+        Some(&path),
+        "informe.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    run_extract(&dir, &conn, &task_id);
+
+    let (quality, text): (String, String) = conn
+        .query_row(
+            "SELECT quality, text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(quality, "rich", "{text}");
+    assert!(
+        text.contains("Informe sociolaboral del Partido de General Pueyrredon"),
+        "{text}"
     );
 }
 
@@ -5696,7 +5912,7 @@ impl PageOcrProvider for FailingNthOcrProvider {
     }
 }
 
-/// A password-locked PDF fails with unlock guidance, not with a complaint
+/// A PDF that needs a real user password fails with unlock guidance, not with a complaint
 /// about damage that is not there.
 #[test]
 fn encrypted_pdf_fails_with_unlock_guidance() {
@@ -5706,15 +5922,15 @@ fn encrypted_pdf_fails_with_unlock_guidance() {
     let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("pdf-aes128-owner-password.pdf");
-    assert!(fixture.is_file(), "the lockedince fixture must exist");
+        .join("pdf-aes128-user-password.pdf");
+    assert!(fixture.is_file(), "the locked fixture must exist");
     let attachment_id = seed_attachment(
         &mut conn,
         &item_id,
         "LOCKATT001",
         "linked_file",
         Some(&fixture.to_string_lossy()),
-        "pdf-aes128-owner-password.pdf",
+        "pdf-aes128-user-password.pdf",
         "application/pdf",
     );
     let task_id = admit_extract_demand(&conn, &attachment_id);
@@ -5744,6 +5960,86 @@ fn encrypted_pdf_fails_with_unlock_guidance() {
     assert!(
         message.contains("contrase") || message.contains("protegido"),
         "the error must name the lock and the way out, got: {message}"
+    );
+}
+
+/// A PDF with `/Encrypt` but an EMPTY user password is permissions-only
+/// protection (journal articles ship this way): anyone can open it, so the
+/// extractor must read it instead of reporting a lock.
+fn run_permissions_only_extraction(fixture_name: &str) -> (String, Vec<(i64, String)>) {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PERMWORK01", "Obra con permisos", "Resumen.");
+    let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture_name);
+    assert!(fixture.is_file(), "the fixture must exist");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PERMATT001",
+        "linked_file",
+        Some(&fixture.to_string_lossy()),
+        fixture_name,
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &extract_registry(),
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a permissions-only PDF must be read, got {outcome:?}"
+    );
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("text read");
+    let pages = conn
+        .prepare(
+            "SELECT page_number, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages collect");
+    (text, pages)
+}
+
+#[test]
+fn rc4_permissions_only_pdf_is_extracted() {
+    let (text, pages) = run_permissions_only_extraction("pdf-rc4-128-empty-user-text.pdf");
+    assert!(text.contains("Permissions only"), "whole text: {text}");
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].1.contains("Permissions only"),
+        "page text: {:?}",
+        pages[0].1
+    );
+}
+
+#[test]
+fn aes_permissions_only_pdf_is_extracted() {
+    let (text, pages) = run_permissions_only_extraction("pdf-aes128-empty-user-text.pdf");
+    assert!(text.contains("Permissions only"), "whole text: {text}");
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].1.contains("Permissions only"),
+        "page text: {:?}",
+        pages[0].1
     );
 }
 
@@ -5870,11 +6166,11 @@ fn profile_run_publishes_chunks_and_vectors_atomically() {
     let staging: String = conn
         .query_row(
             "SELECT id FROM bibliographic_index_generations
-             WHERE contract_hash = ?1 AND status = 'staging'",
+             WHERE contract_hash = ?1 AND status IN ('staging', 'active')",
             [&effective.hash],
             |row| row.get(0),
         )
-        .expect("staging generation");
+        .expect("generation of the run");
     let vectors: Vec<(String, String, String)> = conn
         .prepare(
             "SELECT chunk_id, generation_id, input_hash FROM bibliographic_chunk_embeddings ORDER BY chunk_id",
@@ -5888,7 +6184,7 @@ fn profile_run_publishes_chunks_and_vectors_atomically() {
     for (chunk_id, generation_id, input_hash) in &vectors {
         assert_eq!(
             generation_id, &staging,
-            "vectors stamp the staging generation"
+            "vectors stamp the run's generation (activated by its last publish)"
         );
         let chunk_hash: String = conn
             .query_row(
@@ -7954,4 +8250,1110 @@ fn a_manual_sync_re_admits_failed_extractions_that_still_have_no_text() {
         .expect("live collect");
     assert_eq!(live.len(), 1, "a new retry cycle for the failed attachment");
     assert_ne!(live[0], failed_task, "terminal history is never rewritten");
+}
+
+// ── Batched chunk embeddings: batches, skip-if-embedded, atomic failure ────
+
+/// Records every `embed_many` call so wave sizes, order, and skipped work are
+/// observable. The vector for a text is a pure function of the text, which
+/// makes the order mapping checkable on the published rows.
+struct RecordingEmbedder {
+    model: String,
+    singles: Mutex<Vec<String>>,
+    batches: Mutex<Vec<Vec<String>>>,
+    fail_batch_number: Option<usize>,
+}
+
+impl RecordingEmbedder {
+    fn new(model: &str, fail_batch_number: Option<usize>) -> Arc<Self> {
+        Arc::new(Self {
+            model: model.to_string(),
+            singles: Mutex::new(Vec::new()),
+            batches: Mutex::new(Vec::new()),
+            fail_batch_number,
+        })
+    }
+
+    fn vector_for(text: &str) -> Vec<f32> {
+        let seed = text.bytes().map(|byte| byte as u32).sum::<u32>() % 97 + 1;
+        vec![seed as f32, 0.25, 0.5, 0.75]
+    }
+
+    fn batch_sizes(&self) -> Vec<usize> {
+        self.batches
+            .lock()
+            .expect("batches")
+            .iter()
+            .map(Vec::len)
+            .collect()
+    }
+}
+
+impl ProfileEmbedder for RecordingEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.singles.lock().expect("singles").push(text.to_string());
+        Ok(Self::vector_for(text))
+    }
+
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let mut batches = self.batches.lock().expect("batches");
+        let number = batches.len();
+        batches.push(texts.to_vec());
+        if self.fail_batch_number == Some(number) {
+            return Err("OpenRouter embedding API error (503): upstream down".to_string());
+        }
+        Ok(texts.iter().map(|text| Self::vector_for(text)).collect())
+    }
+
+    fn identity(&self) -> Result<(String, String, usize), String> {
+        Ok((self.model.clone(), "fake-contract".to_string(), 4))
+    }
+}
+
+fn five_page_work(conn: &mut rusqlite::Connection, key: &str) -> String {
+    let item_id = seed_catalog(conn, key, "Obra extensa", "Resumen.");
+    let pages: Vec<String> = (1..=5)
+        .map(|n| format!("Pagina numero {n} con contenido distinto. ").repeat(14))
+        .collect();
+    let numbered: Vec<(i64, &str)> = pages
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (index as i64 + 1, text.as_str()))
+        .collect();
+    seed_attachment_with_pages(conn, &item_id, &format!("ATT-{key}"), &numbered);
+    item_id
+}
+
+fn run_profile_with(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    embedder: Arc<RecordingEmbedder>,
+    wave: usize,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(
+        BibliographyProfileExecutor::new(embedder).with_embed_wave(wave),
+    ));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run")
+}
+
+fn chunk_vectors(conn: &rusqlite::Connection, item_id: &str) -> Vec<(String, Vec<u8>)> {
+    conn.prepare(
+        "SELECT c.text_content, e.embedding FROM bibliographic_chunks c
+         JOIN bibliographic_chunk_embeddings e ON e.chunk_id = c.id
+         WHERE c.item_id = ?1 ORDER BY c.ordinal",
+    )
+    .expect("vectors query")
+    .query_map([item_id], |row| Ok((row.get(0)?, row.get(1)?)))
+    .expect("vectors map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("vectors collect")
+}
+
+/// N chunks travel in ceil(N / wave) batched calls, never one by one, and
+/// each published vector belongs to its own chunk text.
+#[test]
+fn profile_chunks_embed_in_batches_with_exact_order_mapping() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "BATCH001");
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 2);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(embedder.batch_sizes(), vec![2, 2, 1], "ceil(5 / 2) waves");
+    assert_eq!(
+        embedder.singles.lock().unwrap().len(),
+        1,
+        "only the profile text is embedded singly"
+    );
+    let flattened: Vec<String> = embedder
+        .batches
+        .lock()
+        .unwrap()
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let published = chunk_vectors(&conn, &item_id);
+    assert_eq!(published.len(), 5);
+    for (index, (text, blob)) in published.iter().enumerate() {
+        assert_eq!(&flattened[index], text, "waves keep chunk order");
+        let expected: Vec<u8> = RecordingEmbedder::vector_for(text)
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        assert_eq!(blob, &expected, "vector {index} belongs to its own chunk");
+    }
+}
+
+/// A re-profile whose chunks are unchanged embeds none of them again; a
+/// different model is a different key and embeds all of them.
+#[test]
+fn already_embedded_chunks_are_skipped_per_text_hash_and_model() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "SKIP0001");
+    admit_profile_demand(&conn, &item_id);
+    let first = RecordingEmbedder::new("fake/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&first), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let before = chunk_vectors(&conn, &item_id);
+
+    admit_profile_demand(&conn, &item_id);
+    let second = RecordingEmbedder::new("fake/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&second), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert!(
+        second.batches.lock().unwrap().is_empty(),
+        "unchanged chunks must not be embedded again"
+    );
+    assert_eq!(
+        chunk_vectors(&conn, &item_id),
+        before,
+        "vectors republished intact"
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let other_model = RecordingEmbedder::new("other/model", None);
+    assert!(matches!(
+        run_profile_with(&dir, &conn, Arc::clone(&other_model), 2),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        other_model.batch_sizes(),
+        vec![2, 2, 1],
+        "a different model never reuses another model's vectors"
+    );
+}
+
+/// A failing wave leaves nothing half-published, and the retry resumes from
+/// the waves that already succeeded instead of paying for them again.
+#[test]
+fn a_failed_wave_publishes_nothing_and_the_retry_resumes_from_checkpoints() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "FAIL0001");
+    admit_profile_demand(&conn, &item_id);
+    let task = repository::claim_next(
+        &conn,
+        "profile-session",
+        &["bibliography_profile"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("claimable");
+
+    let failing = RecordingEmbedder::new("fake/model", Some(1));
+    let result = BibliographyProfileExecutor::new(Arc::clone(&failing) as Arc<dyn ProfileEmbedder>)
+        .with_embed_wave(2)
+        .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(
+        matches!(result.output, ExecOutput::Retryable { .. }),
+        "a 503 wave is a transient provider failure: {:?}",
+        result.output
+    );
+    assert!(result.engine_output.is_none(), "nothing staged for publish");
+    for table in [
+        "bibliographic_semantic_profiles",
+        "bibliographic_chunks",
+        "bibliographic_chunk_embeddings",
+        "bibliographic_item_embeddings",
+    ] {
+        let rows: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(rows, 0, "{table} must stay empty after a failed wave");
+    }
+
+    let healthy = RecordingEmbedder::new("fake/model", None);
+    let result = BibliographyProfileExecutor::new(Arc::clone(&healthy) as Arc<dyn ProfileEmbedder>)
+        .with_embed_wave(2)
+        .run(&ctx_of(&dir), &task, &StopFlag::new());
+    assert!(matches!(result.output, ExecOutput::Success { .. }));
+    assert_eq!(
+        healthy.batch_sizes(),
+        vec![2, 1],
+        "the first wave came back from its checkpoint"
+    );
+}
+
+// ── Scanned PDFs: whole-document OCR and re-admission of empty extractions ──
+
+/// A provider that reads whole PDFs. `pdf_failure` makes every whole-document
+/// request fail; the per-page path stays available as the fallback, with its
+/// own call log.
+struct PdfModeProvider {
+    pdf_calls: Mutex<Vec<(u32, u32)>>,
+    page_calls: Mutex<usize>,
+    pdf_failure: Option<String>,
+}
+
+impl PdfModeProvider {
+    fn new(pdf_failure: Option<&str>) -> Arc<Self> {
+        Arc::new(Self {
+            pdf_calls: Mutex::new(Vec::new()),
+            page_calls: Mutex::new(0),
+            pdf_failure: pdf_failure.map(str::to_string),
+        })
+    }
+}
+
+impl PageOcrProvider for PdfModeProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        *self.page_calls.lock().expect("page calls") += 1;
+        Ok("Texto reconocido por pagina de respaldo con longitud suficiente para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        Some(100)
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.pdf_calls
+            .lock()
+            .expect("pdf calls")
+            .push((first_page, last_page));
+        if let Some(message) = &self.pdf_failure {
+            return Err(message.clone());
+        }
+        Ok((first_page..=last_page)
+            .map(|page| format!("Contenido reconocido de la pagina {page} del documento escaneado"))
+            .collect())
+    }
+
+    fn name(&self) -> &str {
+        "pdf-mode"
+    }
+}
+
+fn seed_scanned_pdf(
+    dir: &tempfile::TempDir,
+    conn: &mut rusqlite::Connection,
+    pages: usize,
+) -> (String, String) {
+    seed_library(conn, "lib-1", Some(7));
+    let item_id = seed_catalog(conn, "SCANWORK01", "Obra escaneada", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&vec![blank; pages]);
+    let path = write_temp_pdf(dir, "escaneado.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        conn,
+        &item_id,
+        "SCANATT001",
+        "linked_file",
+        Some(&path),
+        "escaneado.pdf",
+        "application/pdf",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    (library, attachment_id)
+}
+
+fn run_extract_with_provider(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    renderer: &Arc<FakeRenderer>,
+    provider: Arc<dyn PageOcrProvider>,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    let renderer: Arc<dyn PageRenderer> = renderer.clone();
+    registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
+        renderer, provider,
+    )));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run")
+}
+
+fn fresh_renderer() -> Arc<FakeRenderer> {
+    Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    })
+}
+
+/// A fully scanned PDF is read with ONE whole-document request: no page is
+/// rendered, every page keeps its own number, and the extraction stops
+/// reporting `empty` now that it holds recognized text.
+#[test]
+fn a_scanned_pdf_is_recognized_with_one_whole_document_request() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 3);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().as_slice(), &[(1, 3)]);
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0, "no per-page call");
+    assert!(
+        renderer.rendered_pages.lock().unwrap().is_empty(),
+        "whole-document mode renders nothing"
+    );
+    let pages: Vec<(i64, String, String)> = conn
+        .prepare(
+            "SELECT page_number, method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .unwrap()
+        .query_map([&attachment_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(pages.len(), 3);
+    for (index, (number, method, text)) in pages.iter().enumerate() {
+        assert_eq!(*number, index as i64 + 1);
+        assert_eq!(method, "ocr");
+        assert!(
+            text.contains(&format!("pagina {number} ")),
+            "page {number} must carry its own text, got {text:?}"
+        );
+    }
+    let (quality, chars): (String, i64) = conn
+        .query_row(
+            "SELECT quality, text_chars FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        quality, "rich",
+        "recognized text lifts the extraction out of empty"
+    );
+    assert!(chars > 0);
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks
+             WHERE kind = 'bibliography_extract' AND subject_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(
+        receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "{receipt}"
+    );
+    assert_eq!(receipt["ocrFailedPages"], serde_json::json!([]));
+}
+
+/// Text the whole-document parser dropped is found natively, so a configured
+/// OCR provider is not called for a page that already has its text.
+#[test]
+fn a_page_whose_text_the_parser_dropped_is_not_sent_to_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PDFEMPTY2", "Informe cifrado", "Resumen.");
+    let pdf = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/pdf-rc4-40-inline-image-text.pdf"
+    ))
+    .expect("fixture");
+    let path = write_temp_pdf(&dir, "informe.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PDFATT004",
+        "linked_file",
+        Some(&path),
+        "informe.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(provider.pdf_calls.lock().unwrap().is_empty());
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0);
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(quality, "rich");
+}
+
+/// More than 100 pages split into consecutive windows of at most 100.
+#[test]
+fn a_scanned_pdf_over_the_page_limit_is_split_into_windows() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 205);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.pdf_calls.lock().unwrap().as_slice(),
+        &[(1, 100), (101, 200), (201, 205)]
+    );
+    let page_205: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 205",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(page_205.contains("pagina 205 "), "{page_205}");
+}
+
+/// A whole-document request the provider rejects falls back to the
+/// per-page path, so a scan is never lost to a document-mode quirk.
+#[test]
+fn a_rejected_whole_document_request_falls_back_to_per_page_ocr() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(Some("provider_error: GLM-OCR API error (400): bad range"));
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().len(), 1);
+    assert_eq!(*provider.page_calls.lock().unwrap(), 2);
+    assert_eq!(renderer.rendered_pages.lock().unwrap().as_slice(), &[1, 2]);
+}
+
+/// Rate limits and credential problems are not document-mode quirks: they
+/// keep their queue verdict and never fan out into per-page requests.
+#[test]
+fn a_rate_limited_whole_document_request_waits_instead_of_falling_back() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(Some("rate_limited: GLM-OCR API error (429): slow down"));
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(*provider.page_calls.lock().unwrap(), 0);
+    assert!(renderer.rendered_pages.lock().unwrap().is_empty());
+}
+
+/// A mostly-native document keeps page-level OCR: native pages are never
+/// re-recognized by a whole-document request.
+#[test]
+fn a_mostly_native_pdf_stays_on_page_level_ocr() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NATIVEMIX1", "Obra nativa", "Resumen.");
+    let rich: &[(f32, f32, &str)] = &[(
+        50.0,
+        750.0,
+        "Pagina con contenido nativo suficiente para superar el umbral de calidad del extractor",
+    )];
+    let sparse: &[(f32, f32, &str)] = &[(50.0, 750.0, "ok")];
+    let pdf = make_text_pdf_pages(&[rich, rich, rich, sparse]);
+    let path = write_temp_pdf(&dir, "nativo.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "NATIVEATT1",
+        "linked_file",
+        Some(&path),
+        "nativo.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(provider.pdf_calls.lock().unwrap().is_empty());
+    assert_eq!(*provider.page_calls.lock().unwrap(), 1);
+    assert_eq!(renderer.rendered_pages.lock().unwrap().as_slice(), &[4]);
+}
+
+/// An extraction stored as `empty` before OCR could read it is demanded
+/// again by the next sync, exactly once: after an OCR pass that really ran
+/// it is settled.
+#[test]
+fn an_empty_extraction_is_readmitted_once_for_ocr() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    // The extraction as the old build left it: a plain native run, no OCR.
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+    let quality: String = conn
+        .query_row(
+            "SELECT quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(quality, "empty");
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 1"),
+        1,
+        "an empty extraction that never went through OCR is demanded again"
+    );
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.pdf_calls.lock().unwrap().len(), 1);
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 2"),
+        0,
+        "recognized text settles the extraction"
+    );
+}
+
+/// A scan whose OCR ran and found nothing is settled too: the sync must not
+/// pay for the same blank pages on every run.
+#[test]
+fn a_blank_document_that_went_through_ocr_is_not_requeued() {
+    struct BlankProvider;
+    impl PageOcrProvider for BlankProvider {
+        fn recognize_page(&self, _: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn pdf_pages_per_request(&self) -> Option<usize> {
+            Some(100)
+        }
+        fn recognize_pdf_pages(
+            &self,
+            _: &[u8],
+            first: u32,
+            last: u32,
+        ) -> Result<Vec<String>, String> {
+            Ok(vec![String::new(); (last - first + 1) as usize])
+        }
+        fn name(&self) -> &str {
+            "blank"
+        }
+    }
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome =
+        run_extract_with_provider(&dir, &conn, &fresh_renderer(), Arc::new(BlankProvider));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
+        0
+    );
+}
+
+// ── Generation activation: a complete staging generation becomes queryable ──
+
+fn run_profile_task(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    embedder: Arc<FakeProfileEmbedder>,
+) -> RunOneOutcome {
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &profile_registry(embedder),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run")
+}
+
+fn generation_statuses(conn: &rusqlite::Connection) -> Vec<String> {
+    conn.prepare("SELECT status FROM bibliographic_index_generations ORDER BY created_at, id")
+        .expect("statuses query")
+        .query_map([], |row| row.get(0))
+        .expect("statuses map")
+        .collect::<Result<_, _>>()
+        .expect("statuses collect")
+}
+
+fn embedding_generation_of(conn: &rusqlite::Connection, item_id: &str) -> Vec<String> {
+    conn.prepare("SELECT generation_id FROM bibliographic_item_embeddings WHERE item_id = ?1")
+        .expect("generation query")
+        .query_map([item_id], |row| row.get(0))
+        .expect("generation map")
+        .collect::<Result<_, _>>()
+        .expect("generation collect")
+}
+
+/// Two works are queued: the generation must stay staging after the first
+/// publish and turn active with the last one, in the same commit.
+#[test]
+fn the_last_profile_publish_activates_the_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "ACTA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "ACTB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        generation_statuses(&conn),
+        vec!["staging"],
+        "one work still owes its vector: the generation is partial"
+    );
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(
+        generation_statuses(&conn),
+        vec!["active"],
+        "the publish that completes the manifest activates the generation"
+    );
+    let activated: Option<i64> = conn
+        .query_row(
+            "SELECT activated_at FROM bibliographic_index_generations",
+            [],
+            |row| row.get(0),
+        )
+        .expect("activation stamp");
+    assert!(activated.is_some());
+}
+
+/// Work still in flight keeps the generation partial; a work whose profile
+/// failed permanently does not hold the library's search off, and a later sync
+/// folds its vector into the active generation.
+#[test]
+fn in_flight_work_keeps_the_generation_partial_but_a_failed_work_does_not() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "PARA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "PARB0001", "Obra B", "Resumen B.");
+    let c = seed_catalog(&mut conn, "PARC0001", "Obra C", "Resumen C.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+    admit_profile_demand(&conn, &c);
+
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let failed = run_profile_task(
+        &dir,
+        &conn,
+        FakeProfileEmbedder::failing("OpenRouter embedding API error (400 Bad Request): bad"),
+    );
+    assert!(matches!(failed, RunOneOutcome::Failed { .. }), "{failed:?}");
+
+    // One work landed, one failed, one is still pending: in flight.
+    let repair = |conn: &rusqlite::Connection| {
+        entropia_desktop_lib::bibliography::generation::activate_complete_staging_generations(
+            conn,
+            repository::now_ms(),
+        )
+        .expect("repair pass")
+    };
+    assert_eq!(repair(&conn), 0, "in-flight work keeps it partial");
+    assert_eq!(generation_statuses(&conn), vec!["staging"]);
+
+    // The last in-flight work lands: the failed one no longer blocks.
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+
+    // A later sync re-admits the failed work and folds it in.
+    assert_eq!(
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission"),
+        1
+    );
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("one active generation");
+    for item in [&a, &b, &c] {
+        assert_eq!(embedding_generation_of(&conn, item), vec![active.clone()]);
+    }
+}
+
+/// A work deleted mid-run (tombstoned) stops being owed: the generation is
+/// not stranded by a manifest that can no longer be met.
+#[test]
+fn a_deleted_work_does_not_strand_the_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "DELA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "DELB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+    let pending: String = conn
+        .query_row(
+            "SELECT subject_id FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND state = 'pending'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("the work that still owes its vector");
+    assert_eq!(generation_statuses(&conn), vec!["staging"]);
+
+    conn.execute(
+        "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason)
+         VALUES (?1, 1, 'deleted upstream')",
+        [&pending],
+    )
+    .expect("tombstone the pending work");
+    let activated =
+        entropia_desktop_lib::bibliography::generation::activate_complete_staging_generations(
+            &conn,
+            repository::now_ms(),
+        )
+        .expect("repair pass");
+
+    assert_eq!(activated, 1);
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+    let generation_id: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations",
+            [],
+            |row| row.get(0),
+        )
+        .expect("generation id");
+    let (_, expected, completed, _) = generation_state(&conn, &generation_id);
+    assert_eq!(
+        (expected, completed),
+        (1, 1),
+        "the manifest is re-derived from live works"
+    );
+}
+
+/// The owner's archive: every vector landed but nothing ever activated the
+/// generation. Startup recovery and the next sync publication both repair it.
+#[test]
+fn a_complete_staging_generation_is_activated_by_recovery_and_by_sync() {
+    for repair in ["recovery", "sync"] {
+        let (dir, mut conn) = migrated_db();
+        seed_library(&conn, "lib-1", Some(7));
+        let a = seed_catalog(&mut conn, "OWNA0001", "Obra A", "Resumen A.");
+        admit_profile_demand(&conn, &a);
+        assert!(matches!(
+            run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+            RunOneOutcome::Succeeded { .. }
+        ));
+        // Rewind to what the old build left behind: staging, never activated.
+        conn.execute(
+            "UPDATE bibliographic_index_generations
+             SET status = 'staging', activated_at = NULL",
+            [],
+        )
+        .expect("rewind to the stranded state");
+        assert_eq!(generation_statuses(&conn), vec!["staging"], "{repair}");
+
+        match repair {
+            "recovery" => {
+                entropia_desktop_lib::processing::recovery::recover_session(
+                    &conn,
+                    "",
+                    repository::now_ms(),
+                )
+                .expect("recovery");
+            }
+            _ => {
+                repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission");
+            }
+        }
+
+        assert_eq!(
+            generation_statuses(&conn).first().map(String::as_str),
+            Some("active"),
+            "{repair}: the stranded generation is the active one"
+        );
+    }
+}
+
+/// An incremental sync re-embeds only the work that changed. Its staging
+/// generation must fold into the active one, never replace it: unchanged
+/// works keep their vectors and exactly one generation stays active.
+#[test]
+fn an_incremental_sync_folds_into_the_active_generation() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let a = seed_catalog(&mut conn, "INCA0001", "Obra A", "Resumen A.");
+    let b = seed_catalog(&mut conn, "INCB0001", "Obra B", "Resumen B.");
+    admit_profile_demand(&conn, &a);
+    admit_profile_demand(&conn, &b);
+    for _ in 0..2 {
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    }
+    assert_eq!(generation_statuses(&conn), vec!["active"]);
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active generation");
+
+    conn.execute(
+        "UPDATE bibliographic_items
+         SET csl_json_snapshot = json_set(csl_json_snapshot, '$.title', 'Obra A corregida')
+         WHERE id = ?1",
+        [&a],
+    )
+    .expect("edit one work");
+    assert_eq!(
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission"),
+        1,
+        "only the changed work is demanded again"
+    );
+    assert!(matches!(
+        run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4)),
+        RunOneOutcome::Succeeded { .. }
+    ));
+
+    assert_eq!(generation_statuses(&conn), vec!["active", "retired"]);
+    assert_eq!(embedding_generation_of(&conn, &a), vec![active.clone()]);
+    assert_eq!(
+        embedding_generation_of(&conn, &b),
+        vec![active.clone()],
+        "the unchanged work keeps its vector in the active generation"
+    );
+    let a_hash: String = conn
+        .query_row(
+            "SELECT input_hash FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&a],
+            |row| row.get(0),
+        )
+        .expect("a vector");
+    let profile = entropia_desktop_lib::bibliography::repository::get_semantic_profile(&conn, &a)
+        .expect("profile")
+        .expect("stored");
+    assert_eq!(
+        a_hash, profile.input_hash,
+        "the folded vector is the fresh one"
+    );
+}
+
+/// Profile publication -> activation -> passage search returns a vector hit
+/// from the stored chunk embeddings, under the contract the query side
+/// resolves from settings.
+#[test]
+fn a_published_work_is_found_by_passage_search_once_active() {
+    use entropia_desktop_lib::bibliography::retrieval::{search_passages, WorkFilters};
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = five_page_work(&mut conn, "E2E00001");
+    admit_profile_demand(&conn, &item_id);
+    let effective = resolve_effective_embedding_contract(&conn).expect("effective contract");
+    let embed = |text: &str| Ok(RecordingEmbedder::vector_for(text));
+    let question = "Pagina numero 3 con contenido distinto.";
+
+    let first = run_profile_with(&dir, &conn, RecordingEmbedder::new("fake/model", None), 2);
+    assert!(
+        matches!(first, RunOneOutcome::Succeeded { .. }),
+        "{first:?}"
+    );
+
+    let hits = search_passages(
+        &conn,
+        &effective.hash,
+        question,
+        3,
+        5,
+        &WorkFilters::default(),
+        true,
+        &embed,
+    )
+    .expect("passage search");
+    assert!(!hits.is_empty(), "the active generation must answer");
+    assert_eq!(hits[0].item_id, item_id);
+    assert_eq!(hits[0].contract_hash, effective.hash);
+    let active: String = conn
+        .query_row(
+            "SELECT id FROM bibliographic_index_generations WHERE status = 'active'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active generation");
+    assert_eq!(hits[0].generation_id, active);
+}
+
+/// The manual sync button reports what the scheduler really did: the status
+/// of the admitted task, read from durable state, never an assumption.
+fn run_bibliography_once(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    steps: Vec<ScriptStep>,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(executor(Arc::new(FakeSource::new(steps)))));
+    run_one(
+        conn,
+        &ctx_of(dir),
+        &registry,
+        "bib-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("run one bibliography unit")
+}
+
+#[test]
+fn sync_status_reports_pending_then_the_real_result_of_a_finished_sync() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "status-1", "user", "0").expect("request");
+
+    let queued = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(queued.state, "pending");
+    assert_eq!(queued.items_seen, None);
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+
+    let done = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(done.state, "succeeded");
+    assert_eq!(done.items_seen, Some(2));
+    assert_eq!(done.remote_total, Some(2));
+    assert_eq!(
+        done.new_profiles, 2,
+        "both works are new to the catalog, so both queue a profile"
+    );
+    assert_eq!(done.new_extractions, 0, "neither work has an attachment");
+    assert_eq!(done.error_code, None);
+
+    // A second sync that finds nothing new reports no new derived work.
+    let again = apply_bibliography_sync_request(&conn, "status-2", "user", "0").expect("again");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("AAAA1111", 12), item("BBBB2222", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let unchanged = bibliography_sync_status(&conn, &again.task_id).expect("status");
+    assert_eq!(unchanged.state, "succeeded");
+    assert_eq!(unchanged.new_profiles, 0);
+    assert_eq!(unchanged.new_extractions, 0);
+}
+
+#[test]
+fn sync_status_names_why_a_sync_is_waiting_when_zotero_does_not_answer() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "status-3", "user", "0").expect("request");
+
+    run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Fail(ZoteroState::EndpointUnavailable)],
+    );
+
+    let waiting = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(waiting.state, "retry_wait");
+    assert_eq!(waiting.error_code.as_deref(), Some("zotero_unreachable"));
+    assert!(waiting.error_message.is_some());
+}
+
+#[test]
+fn sync_status_refuses_a_task_that_is_not_a_bibliography_sync() {
+    let (_dir, conn) = migrated_db();
+    let error = bibliography_sync_status(&conn, "no-such-task").expect_err("unknown task");
+    assert!(error.starts_with("unknown_task"), "{error}");
 }

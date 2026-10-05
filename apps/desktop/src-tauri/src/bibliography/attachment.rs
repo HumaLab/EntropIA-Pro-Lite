@@ -150,41 +150,96 @@ pub fn attachment_ref_for(
     })
 }
 
-/// Opens one resolved attachment file with the OS opener (E4d-WU3).
-///
-/// Shell-free `explorer` / `open` / `xdg-open`, mirroring the log-directory
-/// opener. The path must already be a readable file — anything else fails
-/// closed before spawning, so a future caller cannot turn this into a
-/// generic launcher.
-pub fn open_attachment_file(path: &std::path::Path) -> Result<(), String> {
-    if !path.is_file() {
-        return Err(format!(
-            "refusing to open a non-file attachment path: {}",
-            path.display()
+/// Canonical, plain spelling of an existing path. Zotero stores
+/// `native_path` with forward slashes (`C:/Users/...`); canonicalizing gives
+/// the OS spelling, and the Windows verbatim prefix is dropped because the
+/// asset URL and every viewer expect the ordinary form.
+pub fn plain_canonical(path: &std::path::Path) -> std::io::Result<PathBuf> {
+    let canonical = std::fs::canonicalize(path)?;
+    let text = canonical.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Ok(PathBuf::from(format!(r"\\{rest}")));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(canonical)
+}
+
+/// What the in-app viewer can show for one original.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginalKind {
+    /// A PDF file, served to the webview through a one-file asset grant.
+    Pdf,
+    /// An HTML snapshot, shown from the text the catalog stores: no file.
+    Html,
+}
+
+/// Whether the attachment is an HTML snapshot, by its catalog metadata alone.
+pub fn is_html_snapshot(attachment: &AttachmentRef) -> bool {
+    let typed = attachment
+        .content_type
+        .as_deref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    if let Some(value) = typed {
+        return value.starts_with("text/html") || value.starts_with("application/xhtml");
+    }
+    attachment
+        .filename
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| name.ends_with(".html") || name.ends_with(".htm"))
+}
+
+/// Validates a resolved file before the app serves it: an existing regular
+/// file, a PDF by catalog content type (or extension when untyped) and by its
+/// `%PDF-` signature. Returns the canonical plain path to grant, or a
+/// `(reason, detail)` pair the reader shows verbatim. Never opens a directory
+/// and never launches anything.
+pub fn validate_pdf_original(
+    path: &std::path::Path,
+    content_type: Option<&str>,
+) -> Result<PathBuf, (String, String)> {
+    let canonical = plain_canonical(path).map_err(|error| {
+        (
+            "original_unreadable".to_string(),
+            format!("{}: {error}", path.display()),
+        )
+    })?;
+    if !canonical.is_file() {
+        return Err((
+            "not_a_file".to_string(),
+            format!("not a regular file: {}", canonical.display()),
         ));
     }
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut cmd = std::process::Command::new("explorer");
-        cmd.arg(path);
-        cmd
+    let typed = content_type
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let pdf_by_type = match typed.as_deref() {
+        Some(value) => value == "application/pdf",
+        None => canonical
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")),
     };
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut cmd = std::process::Command::new("open");
-        cmd.arg(path);
-        cmd
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut cmd = std::process::Command::new("xdg-open");
-        cmd.arg(path);
-        cmd
-    };
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("could not open attachment file: {error}"))
+    if !pdf_by_type {
+        return Err((
+            "not_a_pdf".to_string(),
+            format!("not a PDF by content type: {}", canonical.display()),
+        ));
+    }
+    let mut head = [0u8; 5];
+    let signature_ok = std::fs::File::open(&canonical)
+        .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut head))
+        .is_ok()
+        && &head == b"%PDF-";
+    if !signature_ok {
+        return Err((
+            "not_a_pdf".to_string(),
+            format!("no PDF signature: {}", canonical.display()),
+        ));
+    }
+    Ok(canonical)
 }
 
 #[cfg(test)]
@@ -302,17 +357,12 @@ mod tests {
     }
 
     #[test]
-    fn open_attachment_file_refuses_non_files_before_spawning() {
+    fn validate_pdf_original_refuses_directories_and_missing_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let missing = dir.path().join("gone.pdf");
-        assert!(
-            open_attachment_file(&missing).is_err(),
-            "a missing path never reaches the OS opener"
-        );
-        assert!(
-            open_attachment_file(dir.path()).is_err(),
-            "a directory is not an openable attachment file"
-        );
+        assert!(validate_pdf_original(&dir.path().join("gone.pdf"), None).is_err());
+        let error = validate_pdf_original(dir.path(), Some("application/pdf"))
+            .expect_err("a directory is not an original");
+        assert_eq!(error.0, "not_a_file");
     }
 
     #[test]

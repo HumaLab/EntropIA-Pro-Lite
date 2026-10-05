@@ -8,12 +8,13 @@
   } from '$lib/bibliography-search'
   import { passageWindow } from '$lib/rag-scope'
   import { ConfirmDialog } from '@entropia/ui'
+  import PassageOriginalViewer from './PassageOriginalViewer.svelte'
 
   /**
    * Reads one Zotero passage in the app: the page text the catalog holds with
    * the cited range marked. The original PDF/HTML lives in Zotero's storage,
    * outside what the app's asset protocol may serve, so the original is one
-   * explicit click away, in the OS viewer. Shared by the research chat and the
+   * explicit click away, inside the app (PassageOriginalViewer). Shared by the research chat and the
    * Writing "Obras" tab: one reader, one look.
    */
   interface Props {
@@ -36,6 +37,8 @@
   let reason = $state('')
   let opening = $state(false)
   let originalError = $state<string | null>(null)
+  /** The original prepared by the backend, once opened. */
+  let original = $state<BibliographyPassageContext | null>(null)
   let alive = true
 
   function errorText(error: unknown): string {
@@ -73,9 +76,15 @@
     try {
       const result = await bibliographyOpenPassage(chunkId)
       if (!alive) return
-      originalError = result.openError
-        ? t('ragChat.passageOriginalError', { reason: result.openError })
-        : null
+      const viewable =
+        (result.originalKind === 'pdf' && !!result.originalPath) || result.originalKind === 'html'
+      if (viewable) {
+        original = result
+      } else {
+        originalError = t('ragChat.passageOriginalError', {
+          reason: result.openError ?? t('ragChat.passageOriginalUnavailable'),
+        })
+      }
     } catch (error) {
       if (!alive) return
       originalError = t('ragChat.passageOriginalError', { reason: errorText(error) })
@@ -85,56 +94,60 @@
   }
 </script>
 
-<ConfirmDialog
-  {title}
-  titleId="passage-reader-title"
-  message={heading}
-  cancelLabel={$currentLocale && t('ragChat.passageClose')}
-  confirmLabel={$currentLocale && t('ragChat.passageOpenOriginal')}
-  confirming={opening}
-  confirmDisabled={status !== 'ready'}
-  error={originalError}
-  oncancel={onclose}
-  onconfirm={() => void openOriginal()}
->
-  {#if status === 'loading'}
-    <p class="passage-reader__note" role="status">
-      {$currentLocale && t('ragChat.passageLoading')}
-    </p>
-  {:else if status === 'ready' && context}
-    <div class="passage-reader">
-      {#each context.pages as page (page.pageNumber)}
-        {@const view = passageWindow(page.text, page.highlights, PASSAGE_CONTEXT_RADIUS)}
-        <p class="passage-reader__page">
-          {#if view.truncatedBefore}<span>… </span>{/if}
-          {#each view.segments as segment, segmentIndex (segmentIndex)}
-            {#if segment.marked}
-              <mark class="passage-reader__hit">{segment.text}</mark>
-            {:else}
-              <span>{segment.text}</span>
-            {/if}
-          {/each}
-          {#if view.truncatedAfter}<span> …</span>{/if}
-        </p>
-      {:else}
-        <p class="passage-reader__page">{context.text}</p>
-      {/each}
-    </div>
-    {#if context.openError}
-      <p class="passage-reader__note">
-        {$currentLocale && t('ragChat.passageOriginalUnavailable')}
+{#if original}
+  <PassageOriginalViewer context={original} {title} {heading} onclose={() => (original = null)} />
+{:else}
+  <ConfirmDialog
+    {title}
+    titleId="passage-reader-title"
+    message={heading}
+    cancelLabel={$currentLocale && t('ragChat.passageClose')}
+    confirmLabel={$currentLocale && t('ragChat.passageOpenOriginal')}
+    confirming={opening}
+    confirmDisabled={status !== 'ready'}
+    error={originalError}
+    oncancel={onclose}
+    onconfirm={() => void openOriginal()}
+  >
+    {#if status === 'loading'}
+      <p class="passage-reader__note" role="status">
+        {$currentLocale && t('ragChat.passageLoading')}
       </p>
+    {:else if status === 'ready' && context}
+      <div class="passage-reader">
+        {#each context.pages as page (page.pageNumber)}
+          {@const view = passageWindow(page.text, page.highlights, PASSAGE_CONTEXT_RADIUS)}
+          <p class="passage-reader__page">
+            {#if view.truncatedBefore}<span>… </span>{/if}
+            {#each view.segments as segment, segmentIndex (segmentIndex)}
+              {#if segment.marked}
+                <mark class="passage-reader__hit">{segment.text}</mark>
+              {:else}
+                <span>{segment.text}</span>
+              {/if}
+            {/each}
+            {#if view.truncatedAfter}<span> …</span>{/if}
+          </p>
+        {:else}
+          <p class="passage-reader__page">{context.text}</p>
+        {/each}
+      </div>
+      {#if context.openError}
+        <p class="passage-reader__note">
+          {$currentLocale && t('ragChat.passageOriginalUnavailable')}
+        </p>
+      {/if}
+    {:else}
+      <p class="passage-reader__note" role="status">
+        {$currentLocale &&
+          (status === 'missing'
+            ? t('ragChat.passageMissing')
+            : t('ragChat.passageError', { reason }))}
+      </p>
+      <p class="passage-reader__page">{fallbackSnippet}</p>
     {/if}
-  {:else}
-    <p class="passage-reader__note" role="status">
-      {$currentLocale &&
-        (status === 'missing'
-          ? t('ragChat.passageMissing')
-          : t('ragChat.passageError', { reason }))}
-    </p>
-    <p class="passage-reader__page">{fallbackSnippet}</p>
-  {/if}
-</ConfirmDialog>
+  </ConfirmDialog>
+{/if}
 
 <style>
   .passage-reader__note {

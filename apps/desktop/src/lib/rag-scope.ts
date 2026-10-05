@@ -75,6 +75,22 @@ export function bibliographyNoticeKey(code: string | null | undefined): I18nKey 
 }
 
 /**
+ * A notice with its cause: the backend's short, key-free detail is appended
+ * only for the codes that mean something broke (`failed`, an unknown code,
+ * `embedding_unavailable`); the self-explanatory ones stay as worded.
+ */
+export function withNoticeDetail(
+  text: string,
+  code: string | null | undefined,
+  detail: string | null | undefined
+): string {
+  const cause = detail?.trim()
+  if (!code || !cause) return text
+  if (code === 'no_library_synced' || code === 'no_embeddings') return text
+  return `${text} (${cause})`
+}
+
+/**
  * The same backend codes as {@link bibliographyNoticeKey}, worded for the
  * Writing tab's passage search (which is not answering a question).
  */
@@ -175,6 +191,43 @@ export function passageWindow(
   }
   push(hi, false)
   return { segments, truncatedBefore: lo > 0, truncatedAfter: hi < chars.length }
+}
+
+interface PassagePage {
+  pageNumber: number
+  text: string
+  highlights: Array<[number, number]>
+}
+
+/**
+ * The ranges to mark on each page of a passage, aligned with `pages`. The
+ * catalog's stored ranges are the only truth when it has any; only when no
+ * page carries one is the passage searched for, as the exact text, on its
+ * pages. Text that is not found exactly is left unmarked: marking a guess
+ * would point at the wrong words. Offsets are Unicode scalars.
+ */
+export function passageMarks(
+  pages: PassagePage[],
+  passageText: string
+): Array<Array<[number, number]>> {
+  if (pages.some((page) => page.highlights.length > 0)) {
+    return pages.map((page) => page.highlights)
+  }
+  const needle = Array.from(passageText.trim())
+  if (needle.length === 0) return pages.map(() => [])
+  return pages.map((page) => {
+    const haystack = page.text
+    const unit = haystack.indexOf(needle.join(''))
+    if (unit < 0) return []
+    const start = Array.from(haystack.slice(0, unit)).length
+    return [[start, start + needle.length]]
+  })
+}
+
+/** The page the original opens on: the first one carrying the cited range. */
+export function citedPageNumber(pages: PassagePage[]): number {
+  const cited = pages.find((page) => page.highlights.length > 0) ?? pages[0]
+  return cited?.pageNumber ?? 1
 }
 
 /** The line over a passage: "authors · year · location · library". */

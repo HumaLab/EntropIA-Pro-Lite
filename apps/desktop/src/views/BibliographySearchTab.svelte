@@ -1,26 +1,46 @@
 <script lang="ts">
   import { t } from '$lib/i18n'
+  import { onMount } from 'svelte'
   import {
     bibliographySearchPassages,
-    bibliographySearchWorks,
+    bibliographyTab,
     type BibliographyPassage,
-    type BibliographyPassagesResponse,
-    type BibliographySearchHit,
-    type BibliographySearchResponse,
   } from '$lib/bibliography-search'
-  import { locationText, locatorOf, passageHeading, passagesNoticeKey } from '$lib/rag-scope'
+  import {
+    locationText,
+    locatorOf,
+    passageHeading,
+    passagesNoticeKey,
+    withNoticeDetail,
+  } from '$lib/rag-scope'
+  import { searchPreferences } from '$lib/search-preferences'
   import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
+  import SearchFuzzyToggle from '../components/SearchFuzzyToggle.svelte'
+  import SearchMatchLine from '../components/SearchMatchLine.svelte'
   import { ActionIcon, Button, Card, IconButton, SearchBar } from '@entropia/ui'
 
-  let query = $state('')
+  // The tab's state lives in a store so it survives leaving the tab.
+  const kept = bibliographyTab.state
+  let query = $state(kept.query)
   let searching = $state(false)
-  let answer = $state<BibliographySearchResponse | null>(null)
-  let error = $state<string | null>(null)
   let selectionEmpty = $state(false)
-  let passageAnswer = $state<BibliographyPassagesResponse | null>(null)
-  let passagesFailed = $state(false)
+  let passageAnswer = $state(kept.passageAnswer)
+  let passagesFailed = $state(kept.passagesFailed)
   let openedPassage = $state<BibliographyPassage | null>(null)
   let cited = $state(false)
+  /** Whether close variants of the words are searched too (the shared preference). */
+  let fuzzy = $state(true)
+  void searchPreferences.fuzzyEnabled().then((enabled) => (fuzzy = enabled))
+
+  async function setFuzzy(enabled: boolean): Promise<void> {
+    fuzzy = enabled
+    try {
+      await searchPreferences.setFuzzyEnabled(enabled)
+    } catch {
+      // The switch still applies to this session; only remembering it failed.
+    }
+    if (query.trim()) await runSearch(query.trim())
+  }
 
   interface Props {
     /** Reads the manuscript selection for anchored search (E6a). */
@@ -30,6 +50,28 @@
   }
 
   let { getSelection, oncite }: Props = $props()
+
+  let root: HTMLElement | undefined = $state()
+
+  // The scroll box is the research panel around the tab. Its offset is kept
+  // while the tab is open and put back when the tab returns.
+  onMount(() => {
+    const panel = root?.closest<HTMLElement>('[role="tabpanel"]')
+    if (!panel) return
+    const top = bibliographyTab.state.scrollTop
+    if (top > 0) requestAnimationFrame(() => (panel.scrollTop = top))
+    const keep = () => bibliographyTab.patch({ scrollTop: panel.scrollTop })
+    panel.addEventListener('scroll', keep, { passive: true })
+    return () => panel.removeEventListener('scroll', keep)
+  })
+
+  function clearSearch(): void {
+    query = ''
+    passageAnswer = null
+    passagesFailed = false
+    cited = false
+    bibliographyTab.reset()
+  }
 
   /** Passages grouped under their work, in the order each work first appears. */
   let passageGroups = $derived.by(() => {
@@ -47,21 +89,11 @@
   let passagesNotice = $derived(
     passagesFailed ? passagesNoticeKey('failed') : passagesNoticeKey(passageAnswer?.notice)
   )
-
-  function methodLabel(hit: BibliographySearchHit): string {
-    switch (hit.method) {
-      case 'hybrid':
-        return t('bibliography.searchMethodHybrid')
-      case 'vector':
-        return t('bibliography.searchMethodVector')
-      default:
-        return t('bibliography.searchMethodLexical')
-    }
-  }
-
-  function shortHash(hash: string | null): string {
-    if (!hash) return '—'
-    return hash.length > 12 ? `${hash.slice(0, 12)}…` : hash
+  function passagesNoticeText(): string {
+    if (!passagesNotice) return ''
+    const text = t(passagesNotice)
+    if (passagesFailed) return text
+    return withNoticeDetail(text, passageAnswer?.notice, passageAnswer?.noticeDetail)
   }
 
   async function handleSearch(event?: Event): Promise<void> {
@@ -72,27 +104,15 @@
   async function runSearch(text: string): Promise<void> {
     if (!text || searching) return
     searching = true
-    error = null
     cited = false
     passagesFailed = false
-    // The two searches are independent: a failing passage search never hides
-    // the works, nor the other way around.
-    const [works, passages] = await Promise.allSettled([
-      bibliographySearchWorks(text),
-      bibliographySearchPassages(text),
-    ])
-    if (works.status === 'fulfilled') {
-      answer = works.value
-    } else {
-      answer = null
-      error = works.reason instanceof Error ? works.reason.message : String(works.reason)
-    }
-    if (passages.status === 'fulfilled') {
-      passageAnswer = passages.value
-    } else {
+    try {
+      passageAnswer = await bibliographySearchPassages(text, { fuzzy })
+    } catch {
       passageAnswer = null
       passagesFailed = true
     }
+    bibliographyTab.patch({ query: text, passageAnswer, passagesFailed })
     searching = false
   }
 
@@ -127,140 +147,119 @@
   }
 </script>
 
-<Card>
-  <h3>{t('bibliography.searchTitle')}</h3>
-  <p>{t('bibliography.searchHint')}</p>
-  <form class="bib-search__form" onsubmit={handleSearch}>
-    <label class="bib-search__label" for="bib-search-query">
-      {t('bibliography.searchLabel')}
-    </label>
-    <div class="bib-search__field">
-      <SearchBar
-        id="bib-search-query"
-        value={query}
-        placeholder={t('bibliography.searchPlaceholder')}
-        ariaLabel={t('bibliography.searchLabel')}
-        clearAriaLabel={t('topbar.searchClear')}
-        disabled={searching}
-        emitSearch={false}
-        onvaluechange={(next) => (query = next)}
-        onclear={() => (query = '')}
-      />
-    </div>
-    <Button variant="secondary" size="sm" type="submit" loading={searching}>
-      {t('bibliography.searchAction')}
-    </Button>
-    {#if getSelection}
-      <Button
-        variant="ghost"
-        size="sm"
-        type="button"
-        disabled={searching}
-        onclick={handleSearchSelection}
-      >
-        {t('bibliography.searchFromSelection')}
-      </Button>
-    {/if}
-  </form>
-  <p class="bib-search__consent">{t('bibliography.searchConsent')}</p>
-  {#if selectionEmpty}
-    <p class="bib-search__error" role="alert">{t('bibliography.searchSelectionEmpty')}</p>
-  {/if}
-
-  {#if error}
-    <p class="bib-search__error" role="alert">{error}</p>
-  {/if}
-
-  {#if answer}
-    {#if !answer.vectorAvailable}
-      <p class="bib-search__notice">{t('bibliography.searchLexicalOnly')}</p>
-    {/if}
-    {#if answer.hits.length === 0}
-      <p>{t('bibliography.searchEmpty')}</p>
-    {:else}
-      <ul class="bib-search__results">
-        {#each answer.hits as hit (hit.itemId)}
-          <li class="bib-search__hit">
-            <div class="bib-search__hit-head">
-              <span class="bib-search__title">{hit.title}</span>
-              <span class="bib-search__method">{methodLabel(hit)}</span>
-            </div>
-            <p class="bib-search__meta">
-              {hit.itemKey} · {t('bibliography.searchSimilarity', {
-                score: hit.vectorScore ?? hit.fusedScore,
-              })} · {shortHash(hit.contractHash)}
-            </p>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  {/if}
-
-  {#if passageAnswer || passagesFailed}
-    <h4 class="bib-search__section">{t('bibliography.passagesTitle')}</h4>
-    {#if passagesNotice}
-      <p class="bib-search__notice" role="status">{t(passagesNotice)}</p>
-    {:else if passageGroups.length === 0}
-      <p>{t('bibliography.passagesEmpty')}</p>
-    {:else}
-      <div class="bib-search__groups">
-        {#each passageGroups as group (group.first.itemId)}
-          <div class="bib-search__group" role="group" aria-label={group.first.title}>
-            <div class="bib-search__group-head">
-              <span class="bib-search__group-title">{group.first.title}</span>
-              <span class="bib-search__meta">
-                {passageHeading(
-                  {
-                    authors: group.first.authors,
-                    year: group.first.year,
-                    libraryName: group.first.libraryName,
-                  },
-                  null
-                )}
-              </span>
-            </div>
-            <ul class="bib-search__passages">
-              {#each group.passages as passage (passage.chunkId)}
-                <li class="bib-search__passage">
-                  <span class="bib-search__passage-body">
-                    <span class="bib-search__snippet">{passage.snippet}</span>
-                    {#if passage.location}
-                      <span class="bib-search__meta">{locationText(passage.location)}</span>
-                    {/if}
-                  </span>
-                  <span class="bib-search__row-actions">
-                    <IconButton
-                      size="sm"
-                      label={t('bibliography.passageOpen')}
-                      onclick={() => (openedPassage = passage)}
-                    >
-                      <ActionIcon name="eye" size={14} />
-                    </IconButton>
-                    <IconButton
-                      size="sm"
-                      label={t('bibliography.passageCite')}
-                      disabled={!oncite || !passage.cslJson}
-                      onclick={() => citePassage(passage)}
-                    >
-                      <ActionIcon name="text-quote" size={14} />
-                    </IconButton>
-                  </span>
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/each}
+<div bind:this={root}>
+  <Card>
+    <h3>{t('bibliography.searchTitle')}</h3>
+    <p>{t('bibliography.searchHint')}</p>
+    <form class="bib-search__form" onsubmit={handleSearch}>
+      <label class="bib-search__label" for="bib-search-query">
+        {t('bibliography.searchLabel')}
+      </label>
+      <div class="bib-search__field">
+        <SearchBar
+          id="bib-search-query"
+          value={query}
+          placeholder={t('bibliography.searchPlaceholder')}
+          ariaLabel={t('bibliography.searchLabel')}
+          clearAriaLabel={t('topbar.searchClear')}
+          disabled={searching}
+          emitSearch={false}
+          onvaluechange={(next) => {
+            query = next
+            bibliographyTab.patch({ query: next })
+          }}
+          onclear={clearSearch}
+        />
       </div>
-      <p class="bib-search__notice" role="status">
-        {#if cited}
-          {t('writing.zoteroCited')}
-        {:else if !oncite}
-          {t('writing.zoteroNoDocument')}
-        {/if}
-      </p>
+      <Button variant="secondary" size="sm" type="submit" loading={searching}>
+        {t('bibliography.searchAction')}
+      </Button>
+      {#if getSelection}
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          disabled={searching}
+          onclick={handleSearchSelection}
+        >
+          {t('bibliography.searchFromSelection')}
+        </Button>
+      {/if}
+    </form>
+    <!-- One switch for every search in the app (search-preferences.ts). -->
+    <SearchFuzzyToggle checked={fuzzy} onchange={(checked) => void setFuzzy(checked)} />
+    <p class="bib-search__consent">{t('bibliography.searchConsent')}</p>
+    {#if selectionEmpty}
+      <p class="bib-search__error" role="alert">{t('bibliography.searchSelectionEmpty')}</p>
     {/if}
-  {/if}
-</Card>
+
+    {#if passageAnswer || passagesFailed}
+      <h4 class="bib-search__section">{t('bibliography.passagesTitle')}</h4>
+      {#if passagesNotice}
+        <p class="bib-search__notice" role="status">{passagesNoticeText()}</p>
+      {:else if passageGroups.length === 0}
+        <p>{t('bibliography.passagesEmpty')}</p>
+      {:else}
+        <div class="bib-search__groups">
+          {#each passageGroups as group (group.first.itemId)}
+            <div class="bib-search__group" role="group" aria-label={group.first.title}>
+              <div class="bib-search__group-head">
+                <span class="bib-search__group-title">{group.first.title}</span>
+                <span class="bib-search__meta">
+                  {passageHeading(
+                    {
+                      authors: group.first.authors,
+                      year: group.first.year,
+                      libraryName: group.first.libraryName,
+                    },
+                    null
+                  )}
+                </span>
+              </div>
+              <ul class="bib-search__passages">
+                {#each group.passages as passage (passage.chunkId)}
+                  <li class="bib-search__passage">
+                    <span class="bib-search__passage-body">
+                      <span class="bib-search__snippet">{passage.snippet}</span>
+                      {#if passage.location}
+                        <span class="bib-search__meta">{locationText(passage.location)}</span>
+                      {/if}
+                      <SearchMatchLine kind={passage.matchKind} terms={passage.matchTerms} />
+                    </span>
+                    <span class="bib-search__row-actions">
+                      <IconButton
+                        size="sm"
+                        label={t('bibliography.passageOpen')}
+                        onclick={() => (openedPassage = passage)}
+                      >
+                        <ActionIcon name="eye" size={14} />
+                      </IconButton>
+                      <IconButton
+                        size="sm"
+                        label={t('bibliography.passageCite')}
+                        disabled={!oncite || !passage.cslJson}
+                        onclick={() => citePassage(passage)}
+                      >
+                        <ActionIcon name="text-quote" size={14} />
+                      </IconButton>
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/each}
+        </div>
+        <p class="bib-search__notice" role="status">
+          {#if cited}
+            {t('writing.zoteroCited')}
+          {:else if !oncite}
+            {t('writing.zoteroNoDocument')}
+          {/if}
+        </p>
+      {/if}
+    {/if}
+  </Card>
+</div>
 
 {#if openedPassage}
   {#key openedPassage.chunkId}
@@ -297,21 +296,6 @@
 
   .bib-search__notice {
     margin-bottom: var(--space-2);
-  }
-
-  .bib-search__results {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .bib-search__hit-head {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-2);
   }
 
   .bib-search__meta {

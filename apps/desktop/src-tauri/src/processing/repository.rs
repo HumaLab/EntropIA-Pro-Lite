@@ -451,6 +451,8 @@ pub fn admit_subject_or_attach(
     }
     if let Some(task_id) = live_task(conn, "corpus", "asset", asset_id, kind)? {
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -494,6 +496,7 @@ pub fn admit_subject_or_attach(
                 asset_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -579,6 +582,7 @@ fn admit_bibliography_library_or_attach(
             library_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -619,6 +623,7 @@ fn admit_bibliography_library_or_attach(
                 library_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -688,6 +693,7 @@ fn admit_bibliography_attachment_extract_or_attach(
             attachment_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -728,6 +734,7 @@ fn admit_bibliography_attachment_extract_or_attach(
                 attachment_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -836,6 +843,7 @@ fn admit_bibliography_item_profile_or_attach(
             item_id,
             dependency_task_id,
         )?;
+        requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         return Ok(AdmitOutcome {
             task_id,
             created: false,
@@ -868,6 +876,7 @@ fn admit_bibliography_item_profile_or_attach(
                 item_id,
                 dependency_task_id,
             )?;
+            requeue_interrupted_system_tasks(conn, Some(&existing))?;
             return Ok(AdmitOutcome {
                 task_id: existing,
                 created: false,
@@ -1075,6 +1084,16 @@ pub fn admit_bibliography_sync_demand(
             }
         }
 
+        let was_interrupted = match &live {
+            Some(id) => conn
+                .query_row(
+                    "SELECT state = 'interrupted' FROM processing_tasks WHERE id = ?1",
+                    [id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| format!("Failed to inspect live bibliography task: {error}"))?,
+            None => false,
+        };
         let admitted = admit_subject_or_attach(
             conn,
             &batch_id,
@@ -1085,23 +1104,25 @@ pub fn admit_bibliography_sync_demand(
             "",
             None,
         )?;
+        // Attaching already resumes an interrupted system task.
         let requeued = !admitted.created
-            && conn
-                .execute(
-                    "UPDATE processing_tasks SET state = 'pending', outcome = '',
+            && (was_interrupted
+                || conn
+                    .execute(
+                        "UPDATE processing_tasks SET state = 'pending', outcome = '',
                        owner_session = NULL, next_retry_at = NULL,
                        last_error_code = NULL, last_error_message = NULL,
                        updated_at = strftime('%s', 'now') * 1000
                      WHERE id = ?1 AND state IN ('interrupted', 'blocked')",
-                    [&admitted.task_id],
-                )
-                .map_err(|error| {
-                    format!(
-                        "Failed to requeue interrupted bibliography task {}: {error}",
-                        admitted.task_id
+                        [&admitted.task_id],
                     )
-                })?
-                == 1;
+                    .map_err(|error| {
+                        format!(
+                            "Failed to requeue interrupted bibliography task {}: {error}",
+                            admitted.task_id
+                        )
+                    })?
+                    == 1);
         Ok(BibliographyDemandOutcome {
             batch_id,
             task_id: admitted.task_id,
@@ -1146,6 +1167,86 @@ pub fn admit_bibliography_sync_demand(
             Err(error)
         }
     }
+}
+
+/// Durable status of one `bibliography_sync` task, for the manual button.
+///
+/// Derived work counts are tasks queued after the sync task's row was written
+/// (task timestamps are whole seconds, row order is not); they are only meaningful once the task has succeeded, so they
+/// are zero before that.
+pub fn bibliography_sync_status(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<super::commands::BibliographySyncStatus, String> {
+    use rusqlite::OptionalExtension as _;
+
+    type Row = (
+        String,
+        Option<String>,
+        Option<String>,
+        i64,
+        Option<i64>,
+        Option<String>,
+        i64,
+    );
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT state, last_error_code, last_error_message, progress_done,
+                    progress_total, result_receipt_json, rowid
+               FROM processing_tasks
+              WHERE id = ?1 AND kind = 'bibliography_sync'",
+            [task_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read bibliography sync status: {error}"))?;
+    let Some((state, error_code, error_message, progress_done, progress_total, receipt, anchor)) =
+        row
+    else {
+        return Err(format!("unknown_task: no bibliography sync task {task_id}"));
+    };
+
+    let receipt: Option<serde_json::Value> =
+        receipt.and_then(|json| serde_json::from_str(&json).ok());
+    let receipt_number = |name: &str| {
+        receipt
+            .as_ref()
+            .and_then(|value| value.get(name))
+            .and_then(serde_json::Value::as_i64)
+    };
+    let derived = |kind: &str| -> Result<i64, String> {
+        if state != "succeeded" {
+            return Ok(0);
+        }
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+              WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
+            rusqlite::params![kind, anchor],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
+    };
+    Ok(super::commands::BibliographySyncStatus {
+        new_profiles: derived("bibliography_profile")?,
+        new_extractions: derived("bibliography_extract")?,
+        items_seen: receipt_number("itemsSeen"),
+        remote_total: receipt_number("remoteTotal"),
+        state,
+        error_code,
+        error_message,
+        progress_done,
+        progress_total,
+    })
 }
 
 /// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
@@ -1559,6 +1660,18 @@ pub fn admit_stale_profile_demands(
     library_row_id: &str,
 ) -> Result<usize, String> {
     let batch_id = ensure_system_batch(conn, "bibliography")?;
+    // Repair first: a generation that completed before any build activated
+    // it (or whose last work was deleted) turns active here, so this call's
+    // fresh chain starts a new staging generation instead of attaching its
+    // manifest to a finished one.
+    if let Err(error) =
+        crate::bibliography::generation::activate_complete_staging_generations(conn, now_ms())
+    {
+        eprintln!(
+            "[bibliography] generation repair skipped: {}: {}",
+            error.code, error.message
+        );
+    }
     // The demand chains into the staging generation of the effective
     // contract; the manifest grows monotonically by the fresh chains of
     // this call over the distinct works already published.
@@ -1711,7 +1824,7 @@ pub fn admit_stale_extraction_demands(
         // value, in ms) next to the file's byte length. Comparing against the
         // file system's mtime (seconds) can never match, which re-demanded
         // every extracted attachment on every sync.
-        if crate::bibliography::repository::extraction_matches_source(
+        if crate::bibliography::repository::extraction_is_settled(
             conn,
             attachment_id,
             attachment.mtime,
@@ -1894,6 +2007,41 @@ pub fn record_request(
     .map_err(|e| format!("Failed to record request {request_id}: {e}"))?;
     Ok(())
 }
+/// Puts `interrupted` units that only system batches want back to `pending`.
+///
+/// A user batch parks its units on a restart and waits for the person to press
+/// "Reanudar". A system batch (`manual`, `repair`, `bibliography`) has no such
+/// button: it is a long-lived container nobody can resume, so a unit left
+/// `interrupted` there stays live forever and, being live, also swallows every
+/// later demand for the same subject (single-flight attaches to it). The rule
+/// is therefore ownership-based: a unit is requeued when it has at least one
+/// non-cancelled link and none of them belongs to a `user` batch. A unit shared
+/// with a user batch keeps waiting for that user. Only the state flips: the
+/// attempt was already closed as `interrupted`, so nothing is charged to the
+/// retry budget, and checkpoints stay for the next claim to replay from.
+/// `only` limits the sweep to one task (a demand attaching to it).
+pub fn requeue_interrupted_system_tasks(
+    conn: &Connection,
+    only: Option<&str>,
+) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', owner_session = NULL,
+           next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'interrupted'
+           AND (?1 IS NULL OR id = ?1)
+           AND EXISTS (
+             SELECT 1 FROM processing_batch_tasks l
+             WHERE l.task_id = processing_tasks.id AND l.request_state != 'cancelled')
+           AND NOT EXISTS (
+             SELECT 1 FROM processing_batch_tasks l
+             JOIN processing_batches b ON b.id = l.batch_id
+             WHERE l.task_id = processing_tasks.id AND l.request_state != 'cancelled'
+               AND b.origin = 'user')",
+        [only],
+    )
+    .map_err(|e| format!("Failed to requeue interrupted system units: {e}"))
+}
+
 /// Interrupts a running unit without recording a provider failure: the
 /// attempt closes as interrupted and every confirmed checkpoint survives.
 /// Recovery, pause, and cooperative stop all funnel through here.
@@ -1981,17 +2129,36 @@ pub fn open_batches(conn: &Connection) -> Result<Vec<String>, String> {
 /// for the supervisor, which revokes them at a checkpoint boundary — yanking
 /// a lease mid-inference would orphan provider-side work and lie about it.
 pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
-    let changed = conn
-        .execute(
-            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
-               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+    let orphans: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
              WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
                AND NOT EXISTS (
                  SELECT 1 FROM processing_batch_tasks l
                  WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
-            [],
         )
-        .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
+        .query_map([], |row| row.get(0))
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?;
+    let changed = in_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+                   next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+                 WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM processing_batch_tasks l
+                     WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
+                [],
+            )
+            .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
+        for id in &orphans {
+            delete_task_checkpoints(conn, id)?;
+        }
+        Ok(changed)
+    })?;
     conn.execute(
         "UPDATE processing_attempts SET outcome = 'cancelled',
            finished_at = strftime('%s', 'now') * 1000
@@ -2004,21 +2171,27 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
 }
 
 /// Cancels a running unit the supervisor no longer owns the demand for
-/// (commit-time `demand_lost`). Checkpoints survive for whoever resumes the
-/// unit; the attempt closes as cancelled, never as failed.
+/// (commit-time `demand_lost`). The task is terminal, so its checkpoints go
+/// with it; the attempt closes as cancelled, never as failed.
 pub fn cancel_running_task(
     conn: &Connection,
     task_id: &str,
     lease_epoch: i64,
 ) -> Result<(), String> {
-    let changed = conn
-        .execute(
-            "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
-               updated_at = strftime('%s', 'now') * 1000
-             WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
-            rusqlite::params![task_id, lease_epoch],
-        )
-        .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
+    let changed = in_savepoint(conn, || {
+        let changed = conn
+            .execute(
+                "UPDATE processing_tasks SET state = 'cancelled', owner_session = NULL,
+                   updated_at = strftime('%s', 'now') * 1000
+                 WHERE id = ?1 AND state = 'running' AND lease_epoch = ?2",
+                rusqlite::params![task_id, lease_epoch],
+            )
+            .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
+        if changed > 0 {
+            delete_task_checkpoints(conn, task_id)?;
+        }
+        Ok(changed)
+    })?;
     if changed == 0 {
         return Err(format!(
             "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
@@ -3175,6 +3348,14 @@ pub fn retry_delay_ms(retry_count_in_cycle: i64) -> i64 {
 }
 
 fn retry_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i64) -> i64 {
+    jitter_ms(task_id, attempt_number, retry_delay_ms(retry_count))
+}
+
+fn rate_limited_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i64) -> i64 {
+    jitter_ms(task_id, attempt_number, rate_limited_delay_ms(retry_count))
+}
+
+fn jitter_ms(task_id: &str, attempt_number: i64, base: i64) -> i64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in task_id
         .as_bytes()
@@ -3186,7 +3367,6 @@ fn retry_delay_with_jitter_ms(task_id: &str, attempt_number: i64, retry_count: i
         hash = hash.wrapping_mul(0x100000001b3);
     }
     let permille = (hash % 401) as i64 - 200;
-    let base = retry_delay_ms(retry_count);
     base + (base * permille / 1_000)
 }
 
@@ -3198,6 +3378,21 @@ fn provider_retry_after_ms(message: &str) -> Option<i64> {
 
 /// Maximum attempts per retry cycle before a task goes terminally failed.
 pub const MAX_ATTEMPTS_PER_CYCLE: i64 = 3;
+
+/// Error code of a provider throttle (HTTP 429). It is the one retryable
+/// failure that never exhausts the cycle: a rate limit says "later", not
+/// "no", so the task keeps parking in `retry_wait` with a growing delay until
+/// the provider lets it through. Credential and request errors stay terminal
+/// or blocked, and plain outages (5xx, timeouts) keep the cycle cap.
+pub const RATE_LIMITED_CODE: &str = "provider_rate_limited";
+
+/// Delay before the next try of a throttled task: 15 s doubling per retry up
+/// to 10 minutes, so a sustained limit is probed gently instead of hammered.
+pub fn rate_limited_delay_ms(retry_count: i64) -> i64 {
+    const FIRST_MS: i64 = 15_000;
+    const CEILING_MS: i64 = 600_000;
+    (FIRST_MS << retry_count.clamp(0, 6)).min(CEILING_MS)
+}
 
 /// A task under exclusive ownership of one supervisor thread.
 /// E2a-3 carries the subject identity read at claim time: corpus/asset
@@ -3247,7 +3442,9 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
         .map_err(|e| format!("Failed to scan blocked dependents: {e}"))?;
     let mut settled = 0;
     for (task_id, dep_id, dep_state) in rows {
-        if dep_state == "succeeded" {
+        // A skipped dependency is satisfied: the unit behind it revalidates its
+        // own input at claim and skips itself if the source is gone.
+        if dep_state == "succeeded" || dep_state == "skipped" {
             conn.execute(
                 "UPDATE processing_tasks SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000
                  WHERE id = ?1 AND state = 'blocked'",
@@ -3271,6 +3468,26 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
         }
     }
     Ok(settled)
+}
+
+/// Requeues the units parked `configuration_required` by the embedding engine
+/// (corpus embeddings and bibliography profiles) once that engine can
+/// initialize from the current settings. Returns how many were requeued; with
+/// the configuration still invalid it touches nothing, so callers may invoke
+/// it on every settings change and at startup without spinning.
+pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize, String> {
+    if crate::nlp::embeddings::config_from_settings(conn).is_err() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'blocked' AND last_error_code = 'configuration_required'
+           AND kind IN ('embedding', 'bibliography_profile')",
+        [],
+    )
+    .map_err(|e| format!("Failed to resume configuration-blocked units: {e}"))
 }
 
 fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
@@ -3346,7 +3563,7 @@ pub fn claim_next(
          AND NOT EXISTS (
                SELECT 1 FROM processing_batch_tasks l2
                WHERE l2.task_id = t.id AND l2.dependency_task_id IS NOT NULL
-                 AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) != 'succeeded')"
+                 AND (SELECT state FROM processing_tasks d WHERE d.id = l2.dependency_task_id) NOT IN ('succeeded', 'skipped'))"
     );
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("Failed to begin claim: {e}"))?;
@@ -3817,14 +4034,26 @@ fn validate_corpus_claim_input(
 }
 
 fn mark_skipped(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
-    conn.execute(
-        "UPDATE processing_tasks SET state = 'skipped', outcome = ?1, owner_session = NULL,
-           next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
-         WHERE id = ?2",
-        rusqlite::params![outcome, task_id],
-    )
-    .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
-    Ok(())
+    in_savepoint(conn, || {
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = ?1, owner_session = NULL,
+               next_retry_at = NULL, updated_at = strftime('%s', 'now') * 1000
+             WHERE id = ?2",
+            rusqlite::params![outcome, task_id],
+        )
+        .map_err(|e| format!("Failed to skip {task_id}: {e}"))?;
+        delete_task_checkpoints(conn, task_id)?;
+        // The 0038 trigger ignores `skipped`, so release the dependents here.
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'pending', stage = '',
+               updated_at = strftime('%s', 'now') * 1000
+             WHERE state = 'blocked'
+               AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = ?1)",
+            [task_id],
+        )
+        .map_err(|e| format!("Failed to release dependents of {task_id}: {e}"))?;
+        Ok(())
+    })
 }
 
 fn mark_blocked(
@@ -3956,6 +4185,186 @@ pub fn save_checkpoint(
             Err(error)
         }
     }
+}
+
+/// States after which a task never resumes: its checkpoints have no reader.
+const TERMINAL_STATES_SQL: &str = "'succeeded', 'failed', 'cancelled', 'skipped'";
+
+/// Result of one retention sweep over terminal tasks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CheckpointPurge {
+    pub rows: usize,
+    pub bytes: i64,
+    pub batches: usize,
+}
+
+/// Drops the checkpoints of one task that just reached a terminal state.
+/// Must run in the same transaction (or savepoint) as the state change.
+pub fn delete_task_checkpoints(conn: &Connection, task_id: &str) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM processing_checkpoints WHERE task_id = ?1",
+        [task_id],
+    )
+    .map_err(|e| format!("Failed to delete checkpoints of {task_id}: {e}"))
+}
+
+/// Runs `body` under a savepoint so a state change and the checkpoint
+/// deletion that goes with it commit together or not at all, whether or not
+/// the caller already holds a transaction.
+fn in_savepoint<T>(
+    conn: &Connection,
+    body: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    conn.execute_batch("SAVEPOINT processing_terminal")
+        .map_err(|e| format!("Failed to open savepoint: {e}"))?;
+    match body() {
+        Ok(value) => {
+            conn.execute_batch("RELEASE processing_terminal")
+                .map_err(|e| format!("Failed to release savepoint: {e}"))?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ =
+                conn.execute_batch("ROLLBACK TO processing_terminal; RELEASE processing_terminal");
+            Err(error)
+        }
+    }
+}
+
+/// Deletes checkpoints of terminal or vanished tasks in bounded batches.
+///
+/// Each batch is one short write transaction over at most `tasks_per_batch`
+/// tasks, followed by `pause`, so a multi-GB backlog never holds the writer
+/// lock for long. Only terminal tasks (`succeeded`, `failed`, `cancelled`,
+/// `skipped`) and checkpoints whose task row no longer exists are touched:
+/// everything a resume can still read stays.
+pub fn purge_terminal_checkpoints(
+    conn: &Connection,
+    tasks_per_batch: usize,
+    pause: std::time::Duration,
+) -> Result<CheckpointPurge, String> {
+    let limit = tasks_per_batch.max(1) as i64;
+    let mut total = CheckpointPurge::default();
+    loop {
+        let ids: Vec<String> = conn
+            .prepare(&format!(
+                "SELECT DISTINCT c.task_id
+                 FROM processing_checkpoints c
+                 LEFT JOIN processing_tasks t ON t.id = c.task_id
+                 WHERE t.id IS NULL OR t.state IN ({TERMINAL_STATES_SQL})
+                 LIMIT ?1"
+            ))
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?
+            .query_map([limit], |row| row.get(0))
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?;
+        if ids.is_empty() {
+            return Ok(total);
+        }
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| format!("Failed to begin checkpoint purge: {e}"))?;
+        let batch = (|| -> Result<(usize, i64), String> {
+            let mut rows = 0;
+            let mut bytes = 0_i64;
+            for id in &ids {
+                // Re-check under the write lock: the task may have been
+                // reopened (retry) between the scan and now.
+                let still_dead: bool = conn
+                    .query_row(
+                        &format!(
+                            "SELECT NOT EXISTS (SELECT 1 FROM processing_tasks
+                                                WHERE id = ?1 AND state NOT IN ({TERMINAL_STATES_SQL}))"
+                        ),
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Failed to confirm terminal state of {id}: {e}"))?;
+                if !still_dead {
+                    continue;
+                }
+                bytes += conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(LENGTH(CAST(payload AS BLOB))), 0)
+                         FROM processing_checkpoints WHERE task_id = ?1",
+                        [id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map_err(|e| format!("Failed to measure checkpoints of {id}: {e}"))?;
+                rows += delete_task_checkpoints(conn, id)?;
+            }
+            Ok((rows, bytes))
+        })();
+        match batch {
+            Ok((rows, bytes)) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|e| format!("Failed to commit checkpoint purge: {e}"))?;
+                total.rows += rows;
+                total.bytes += bytes;
+                total.batches += 1;
+                if rows == 0 {
+                    // Nothing in this page was deletable (all reopened):
+                    // stop instead of rescanning the same ids forever.
+                    return Ok(total);
+                }
+            }
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+}
+
+/// Pages one `incremental_vacuum` step releases (8 MB at 4 KB pages).
+const VACUUM_STEP_PAGES: i64 = 2_048;
+
+/// Returns free pages to the OS in bounded steps, but only when the archive
+/// was created with `auto_vacuum = INCREMENTAL`. Any other mode ignores the
+/// pragma, and a blocking `VACUUM` of a multi-GB file does not belong at
+/// startup, so those archives report `None` and keep the space for reuse.
+/// Returns the pages released.
+pub fn reclaim_free_pages(
+    conn: &Connection,
+    max_pages: i64,
+    pause: std::time::Duration,
+) -> Result<Option<i64>, String> {
+    let mode: i64 = conn
+        .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to read auto_vacuum: {e}"))?;
+    if mode != 2 {
+        return Ok(None);
+    }
+    let mut released = 0_i64;
+    while released < max_pages {
+        let free: i64 = conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to read freelist_count: {e}"))?;
+        if free == 0 {
+            break;
+        }
+        let step = free.min(VACUUM_STEP_PAGES).min(max_pages - released);
+        // incremental_vacuum returns one row per freed page; drain them.
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA incremental_vacuum({step})"))
+            .map_err(|e| format!("Failed to prepare incremental_vacuum: {e}"))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| format!("Failed to run incremental_vacuum: {e}"))?;
+        while rows
+            .next()
+            .map_err(|e| format!("Failed to run incremental_vacuum: {e}"))?
+            .is_some()
+        {}
+        released += step;
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    Ok(Some(released))
 }
 
 /// Declares how many units the task holds in total (pages, chunks). Called
@@ -4234,6 +4643,8 @@ pub fn commit_success_with(
             rusqlite::params![outcome, receipt_json, task_id],
         )
         .map_err(|e| format!("Failed to mark {task_id} succeeded: {e}"))?;
+        // The result is published; the staged units have no reader left.
+        delete_task_checkpoints(conn, task_id)?;
         if kind == "embedding" {
             conn.execute(
                 "UPDATE processing_asset_revisions SET embedding_completed_revision = ?1 WHERE asset_id = ?2",
@@ -4322,8 +4733,13 @@ pub fn fail_attempt(
         ],
     )
     .map_err(|e| format!("Failed to record failure of {task_id}: {e}"))?;
-    if retryable && retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE {
-        let local_delay = retry_delay_with_jitter_ms(task_id, attempt_number, retry_count);
+    let rate_limited = error_code == RATE_LIMITED_CODE;
+    if retryable && (rate_limited || retry_count + 1 < MAX_ATTEMPTS_PER_CYCLE) {
+        let local_delay = if rate_limited {
+            rate_limited_delay_with_jitter_ms(task_id, attempt_number, retry_count)
+        } else {
+            retry_delay_with_jitter_ms(task_id, attempt_number, retry_count)
+        };
         let delay = provider_retry_after_ms(error_message)
             .map(|provider| provider.max(local_delay))
             .unwrap_or(local_delay);
@@ -4338,13 +4754,17 @@ pub fn fail_attempt(
         .map_err(|e| format!("Failed to park {task_id} in retry_wait: {e}"))?;
         return Ok(FailOutcome::RetryWait { next_retry_at });
     }
-    conn.execute(
-        "UPDATE processing_tasks SET state = 'failed', last_error_code = ?1, last_error_message = ?2,
-           owner_session = NULL, next_retry_at = NULL, updated_at = ?3
-         WHERE id = ?4",
-        rusqlite::params![error_code, error_message, now_ms, task_id],
-    )
-    .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
+    in_savepoint(conn, || {
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'failed', last_error_code = ?1, last_error_message = ?2,
+               owner_session = NULL, next_retry_at = NULL, updated_at = ?3
+             WHERE id = ?4",
+            rusqlite::params![error_code, error_message, now_ms, task_id],
+        )
+        .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
+        delete_task_checkpoints(conn, task_id)?;
+        Ok(())
+    })?;
     Ok(FailOutcome::Failed)
 }
 
@@ -7445,6 +7865,75 @@ mod tests {
         );
     }
 
+    /// Parks `kind`/`a1` and fails its attempt `rounds` times with `code`,
+    /// returning every outcome. Each round claims at a clock past the
+    /// previous retry time.
+    fn fail_repeatedly(code: &str, message: &str, rounds: usize) -> Vec<FailOutcome> {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b", "req", r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b'",
+            [],
+        )
+        .unwrap();
+        admit_or_attach(&conn, "b", "ocr", "a1", 0, "", "ocr:light", None).unwrap();
+        let mut now = 1_000_i64;
+        let mut outcomes = Vec::new();
+        for _ in 0..rounds {
+            let task = claim_next(&conn, "worker", &["ocr"], now)
+                .unwrap()
+                .expect("claimable once its retry time has passed");
+            let outcome = fail_attempt(
+                &conn,
+                &task.task_id,
+                task.lease_epoch,
+                task.attempt_number,
+                code,
+                message,
+                true,
+                None,
+                now,
+            )
+            .unwrap();
+            if let FailOutcome::RetryWait { next_retry_at } = outcome {
+                now = next_retry_at + 1;
+            }
+            outcomes.push(outcome);
+        }
+        outcomes
+    }
+
+    #[test]
+    fn a_rate_limit_never_exhausts_the_retry_cycle() {
+        let outcomes = fail_repeatedly(RATE_LIMITED_CODE, "429 Too Many Requests", 8);
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| matches!(outcome, FailOutcome::RetryWait { .. })),
+            "{outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_backs_off_further_each_time_up_to_a_ceiling() {
+        let delays: Vec<i64> = (0..10).map(rate_limited_delay_ms).collect();
+        assert!(
+            delays.windows(2).all(|pair| pair[1] >= pair[0]),
+            "{delays:?}"
+        );
+        assert!(delays[3] > delays[0], "{delays:?}");
+        assert_eq!(delays[8], delays[9], "capped: {delays:?}");
+        assert!(delays[9] <= 900_000, "{delays:?}");
+    }
+
+    #[test]
+    fn a_plain_transient_failure_still_ends_after_the_cycle_cap() {
+        let outcomes = fail_repeatedly("provider_transient", "503 Service Unavailable", 3);
+        assert!(matches!(outcomes[0], FailOutcome::RetryWait { .. }));
+        assert!(matches!(outcomes[1], FailOutcome::RetryWait { .. }));
+        assert_eq!(outcomes[2], FailOutcome::Failed);
+    }
+
     #[test]
     fn retry_delay_is_jittered_and_respects_longer_provider_delay() {
         let first = retry_delay_with_jitter_ms("task-a", 1, 0);
@@ -8408,5 +8897,402 @@ mod tests {
             )
             .unwrap();
         assert_eq!(attempts, 0, "a skipped task opens no attempt");
+    }
+    // ---- checkpoint retention: a terminal task keeps no checkpoints ----
+
+    fn checkpoint_count(conn: &Connection, task_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("count checkpoints")
+    }
+
+    /// Admits and claims one OCR unit and leaves one confirmed checkpoint on it.
+    fn running_with_checkpoint(conn: &Connection, batch: &str, asset: &str) -> ClaimedTask {
+        insert_batch(conn, batch, &format!("req-{batch}"), r#"["ocr"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id=?1",
+            [batch],
+        )
+        .unwrap();
+        admit_or_attach(conn, batch, "ocr", asset, 0, "", "ocr:light", None).unwrap();
+        let claimed = claim_next(conn, "worker", &["ocr"], now_ms())
+            .unwrap()
+            .expect("unit must be claimable");
+        save_checkpoint(
+            conn,
+            &claimed.task_id,
+            claimed.lease_epoch,
+            &NewCheckpoint {
+                unit_key: "page:1".to_string(),
+                input_fingerprint: claimed.input_fingerprint.clone(),
+                contract_hash: claimed.contract_hash.clone(),
+                payload: r#"{"page":1}"#.to_string(),
+                payload_checksum: "sum".to_string(),
+            },
+            now_ms(),
+        )
+        .expect("checkpoint");
+        assert_eq!(checkpoint_count(conn, &claimed.task_id), 1);
+        claimed
+    }
+
+    #[test]
+    fn success_deletes_the_checkpoints_in_the_commit() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        commit_success_with(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |conn| {
+                assert_eq!(
+                    checkpoint_count(conn, &task.task_id),
+                    1,
+                    "publish still reads them"
+                );
+                Ok(())
+            },
+        )
+        .expect("commit");
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn a_failed_publish_keeps_the_checkpoints_for_the_retry() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        commit_success_with(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            "ocr",
+            "text",
+            "{}",
+            |_| Err("publish_failed".to_string()),
+        )
+        .expect_err("publish fails");
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 1);
+    }
+
+    #[test]
+    fn terminal_failure_deletes_but_retry_wait_keeps_the_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        let outcome = fail_attempt(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            task.attempt_number,
+            "provider_failure",
+            "offline",
+            true,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, FailOutcome::RetryWait { .. }));
+        assert_eq!(
+            checkpoint_count(&conn, &task.task_id),
+            1,
+            "a retry resumes from them"
+        );
+
+        let other = running_with_checkpoint(&conn, "b2", "a5p1");
+        let outcome = fail_attempt(
+            &conn,
+            &other.task_id,
+            other.lease_epoch,
+            other.attempt_number,
+            "corrupt_pdf",
+            "locked",
+            false,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, FailOutcome::Failed));
+        assert_eq!(checkpoint_count(&conn, &other.task_id), 0);
+    }
+
+    #[test]
+    fn interrupt_and_requeue_keep_the_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        interrupt_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 1);
+        let other = running_with_checkpoint(&conn, "b2", "a5p1");
+        requeue_task(&conn, &other.task_id, other.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &other.task_id), 1);
+    }
+
+    #[test]
+    fn cancelling_a_running_task_deletes_its_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        cancel_running_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn cancelling_orphaned_tasks_deletes_their_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        interrupt_task(&conn, &task.task_id, task.lease_epoch).unwrap();
+        conn.execute(
+            "UPDATE processing_batch_tasks SET request_state = 'cancelled' WHERE task_id = ?1",
+            [&task.task_id],
+        )
+        .unwrap();
+        assert_eq!(cancel_orphaned_tasks(&conn).unwrap(), 1);
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    #[test]
+    fn skipping_a_task_deletes_its_checkpoints() {
+        let (_dir, conn) = batch_db();
+        let task = running_with_checkpoint(&conn, "b1", "a1");
+        mark_skipped(&conn, &task.task_id, "source_deleted").unwrap();
+        assert_eq!(checkpoint_count(&conn, &task.task_id), 0);
+    }
+
+    fn seed_checkpoint(conn: &Connection, task_id: &str, payload_len: usize) {
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+             VALUES (?1, 'u', 'f', 'c', ?2, 'x', 1)",
+            rusqlite::params![task_id, "x".repeat(payload_len)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn startup_purge_deletes_terminal_and_orphan_checkpoints_in_batches() {
+        let (_dir, conn) = batch_db();
+        for (index, state) in [
+            "succeeded",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "skipped",
+            "pending",
+            "running",
+            "retry_wait",
+            "interrupted",
+            "blocked",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let id = format!("seed-{index}");
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, subject_id, state, created_at, updated_at)
+                 VALUES (?1, 'ocr', ?1, ?1, ?2, 1, 1)",
+                rusqlite::params![id, state],
+            )
+            .unwrap();
+            seed_checkpoint(&conn, &id, 1_000);
+        }
+        // A checkpoint whose task row is gone (written with FKs off, as an
+        // older build or a restore could leave it).
+        conn.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        seed_checkpoint(&conn, "ghost", 1_000);
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+
+        let purge = purge_terminal_checkpoints(&conn, 2, std::time::Duration::ZERO).unwrap();
+        assert_eq!(purge.rows, 6, "5 terminal + 1 orphan");
+        assert_eq!(purge.bytes, 6_000);
+        assert!(purge.batches >= 3, "bounded batches of 2 tasks");
+        let left: Vec<String> = conn
+            .prepare("SELECT task_id FROM processing_checkpoints ORDER BY task_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec!["seed-5", "seed-6", "seed-7", "seed-8", "seed-9"]);
+        let again = purge_terminal_checkpoints(&conn, 2, std::time::Duration::ZERO).unwrap();
+        assert_eq!(again, CheckpointPurge::default());
+    }
+    #[test]
+    fn free_pages_return_to_the_os_only_with_incremental_auto_vacuum() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let build = |name: &str, mode: i64| {
+            let path = dir.path().join(name);
+            let conn = Connection::open(&path).expect("open");
+            conn.execute_batch(&format!(
+                "PRAGMA auto_vacuum = {mode};
+                 CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB);"
+            ))
+            .unwrap();
+            for _ in 0..64 {
+                conn.execute("INSERT INTO blobs (payload) VALUES (zeroblob(65536))", [])
+                    .unwrap();
+            }
+            conn.execute("DELETE FROM blobs", []).unwrap();
+            conn
+        };
+        let pages = |conn: &Connection| -> i64 {
+            conn.query_row("PRAGMA page_count", [], |row| row.get(0))
+                .unwrap()
+        };
+
+        let incremental = build("inc.sqlite", 2);
+        let before = pages(&incremental);
+        let released = reclaim_free_pages(&incremental, 10_000, std::time::Duration::ZERO)
+            .unwrap()
+            .expect("incremental archives are reclaimed");
+        assert!(released > 0);
+        assert!(pages(&incremental) < before / 2, "the file shrinks");
+
+        let none = build("none.sqlite", 0);
+        let before = pages(&none);
+        assert_eq!(
+            reclaim_free_pages(&none, 10_000, std::time::Duration::ZERO).unwrap(),
+            None,
+            "no blocking VACUUM and no pretend reclaim"
+        );
+        assert_eq!(pages(&none), before);
+    }
+
+    /// Plans a one-asset batch (ocr -> embedding on `a1`) and returns the two
+    /// task ids, the embedding still blocked behind its OCR dependency.
+    fn plan_ocr_then_embedding(conn: &Connection) -> (String, String) {
+        insert_batch(conn, "b1", "req-1", r#"["ocr", "embeddings"]"#);
+        prepare_membership(conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(conn, "b1", 10, 200).expect("plan");
+        let ocr = live_task(conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let embedding = live_task(conn, "corpus", "asset", "a1", "embedding")
+            .unwrap()
+            .unwrap();
+        (ocr, embedding)
+    }
+
+    fn task_state(conn: &Connection, id: &str) -> String {
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("task state")
+    }
+
+    #[test]
+    fn a_skipped_dependency_does_not_strand_its_pending_dependent() {
+        // Field shape: the OCR unit ended `skipped/already_satisfied` (the
+        // trigger of 0038 only settles succeeded/failed/cancelled), and the
+        // embedding behind it ended up `pending` with its dependency link.
+        // The claim used to demand `succeeded`, so it waited forever.
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, created_at)
+             VALUES ('ex-a1', 'a1', 'texto suficiente para producir al menos un fragmento', 'ocr', 1)",
+            [],
+        )
+        .expect("source text");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = 'already_satisfied' WHERE id = ?1",
+            [&ocr],
+        )
+        .expect("skip ocr");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'pending' WHERE id = ?1",
+            [&embedding],
+        )
+        .expect("embedding pending");
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE kind = 'embedding' AND id != ?1",
+            [&embedding],
+        )
+        .expect("settle the other embeddings so only the dependent is runnable");
+        let claimed = claim_next(&conn, "s", &["embedding"], 1_000)
+            .expect("claim")
+            .expect("the dependent must be claimable once its dependency is skipped");
+        assert_eq!(claimed.task_id, embedding);
+    }
+
+    #[test]
+    fn skipping_a_unit_releases_the_units_blocked_behind_it() {
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        assert_eq!(task_state(&conn, &embedding), "blocked");
+        mark_skipped(&conn, &ocr, "already_satisfied").expect("skip");
+        assert_eq!(task_state(&conn, &embedding), "pending");
+    }
+
+    #[test]
+    fn the_recovery_scan_releases_dependents_of_a_skipped_dependency() {
+        let (_dir, conn) = batch_db();
+        let (ocr, embedding) = plan_ocr_then_embedding(&conn);
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'skipped', outcome = 'already_satisfied' WHERE id = ?1",
+            [&ocr],
+        )
+        .expect("skip ocr without the helper");
+        assert_eq!(task_state(&conn, &embedding), "blocked");
+        assert_eq!(settle_blocked_dependents(&conn).expect("settle"), 1);
+        assert_eq!(task_state(&conn, &embedding), "pending");
+    }
+
+    fn insert_blocked_embedding(conn: &Connection, id: &str, code: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, last_error_message, created_at, updated_at)
+             VALUES (?1, 'embedding', ?1, 'corpus', 'asset', ?1, 'blocked', ?2, ?2, 'no engine', 1, 1)",
+            rusqlite::params![id, code],
+        )
+        .expect("blocked task");
+    }
+
+    #[test]
+    fn configuration_blocked_embeddings_resume_only_once_the_engine_can_initialize() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .expect("settings table");
+        insert_blocked_embedding(&conn, "t-config", "configuration_required");
+        insert_blocked_embedding(&conn, "t-contract", "configuration_changed");
+        // Pin the remote provider: Pro defaults to the local engine, which
+        // needs no OpenRouter key and would make the "no key" phase valid.
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('embedding_provider', 'api')",
+            [],
+        )
+        .expect("provider");
+        // No OpenRouter key yet: nothing to resume, and no spinning.
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
+        assert_eq!(task_state(&conn, "t-config"), "blocked");
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test')",
+            [],
+        )
+        .expect("key");
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 1);
+        assert_eq!(task_state(&conn, "t-config"), "pending");
+        let (code, outcome): (Option<String>, String) = conn
+            .query_row(
+                "SELECT last_error_code, outcome FROM processing_tasks WHERE id = 't-config'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((code, outcome.as_str()), (None, ""));
+        assert_eq!(
+            task_state(&conn, "t-contract"),
+            "blocked",
+            "other block reasons keep their own resume path"
+        );
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
     }
 }

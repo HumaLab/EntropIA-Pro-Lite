@@ -72,6 +72,8 @@ const es = {
   'app.initializing': 'Inicializando...',
   'app.initError': 'No se pudo inicializar la base de datos',
   'app.retryInit': 'Reintentar',
+  'app.compactingTitle': 'Optimizando el archivo…',
+  'app.compactingBody': 'No apagues el equipo. La ventana se cierra sola al terminar.',
   'storeUpdate.title': 'Actualización disponible',
   'storeUpdate.body': 'Hay una actualización de EntropIA Lite disponible en Microsoft Store.',
   'storeUpdate.view': 'Ver actualización',
@@ -199,12 +201,6 @@ const es = {
   'bibliography.searchLabel': 'Consulta',
   'bibliography.searchPlaceholder': 'Tema, autor u obra…',
   'bibliography.searchAction': 'Buscar',
-  'bibliography.searchEmpty': 'Sin resultados para esta consulta.',
-  'bibliography.searchLexicalOnly': 'Solo búsqueda léxica: sin espacio vectorial activo.',
-  'bibliography.searchMethodHybrid': 'Híbrido',
-  'bibliography.searchMethodVector': 'Vector',
-  'bibliography.searchMethodLexical': 'Léxico',
-  'bibliography.searchSimilarity': 'similitud {score}',
   'bibliography.searchFromSelection': 'Buscar desde la selección',
   'bibliography.searchConsent':
     'La búsqueda envía tu consulta al motor de embeddings cuando hay un espacio vectorial activo. Buscar desde la selección envía exactamente el texto seleccionado, solo cuando lo pedís.',
@@ -707,6 +703,14 @@ const es = {
     'Este pasaje no está en la biblioteca de este equipo (la conversación viene de otro dispositivo o la obra ya no está). Se muestra el fragmento guardado.',
   'ragChat.passageOriginalUnavailable': 'El archivo original no está disponible en este equipo.',
   'ragChat.passageOriginalError': 'No se pudo abrir el original: {reason}',
+  'ragChat.passageOriginalEyebrow': 'Original',
+  'ragChat.passageOriginalClose': 'Cerrar original',
+  'ragChat.passageOriginalText': 'Texto de la página {page}',
+  'ragChat.passageOriginalSnapshot': 'Texto de la captura',
+  'ragChat.passageOriginalNote':
+    'El PDF se abre en la página citada; el pasaje queda marcado en el texto de al lado.',
+  'ragChat.passageOriginalSnapshotNote':
+    'Captura web guardada: se muestra su texto, con el pasaje citado marcado.',
   'ragChat.passageError': 'No se pudo leer el pasaje: {reason}',
   'ragChat.conversations': 'Conversaciones',
   'ragChat.noConversations': 'Sin conversaciones todavía',
@@ -850,8 +854,24 @@ const es = {
   'writing.zoteroBibliographySyncHelp':
     'Solicita la sincronización del catálogo bibliográfico seleccionado en segundo plano. «Actualizar» solo renueva esta lista desde Zotero.',
   'writing.zoteroBibliographySyncRequesting': 'Solicitando la sincronización…',
-  'writing.zoteroBibliographySyncRequested':
-    'Sincronización solicitada. El procesamiento continúa en segundo plano.',
+  'writing.zoteroBibliographySyncRequested': 'Solicitud aceptada. Consultando el estado…',
+  'writing.zoteroBibliographySyncNeedsZotero':
+    'Para sincronizar, Zotero tiene que estar respondiendo en el puerto local.',
+  'writing.zoteroBibliographySyncQueued': 'Sincronización en cola…',
+  'writing.zoteroBibliographySyncRunning': 'Sincronizando…',
+  'writing.zoteroBibliographySyncRunningOf': 'Sincronizando… {done} de {total} obras',
+  'writing.zoteroBibliographySyncWaiting':
+    'En pausa: Zotero no responde. Se reintenta solo cuando conteste.',
+  'writing.zoteroBibliographySyncApiDisabled':
+    'En pausa: la API local de Zotero está apagada. Activala en Zotero y volvé a sincronizar.',
+  'writing.zoteroBibliographySyncPaused': 'En pausa: {detail}',
+  'writing.zoteroBibliographySyncUpToDate': 'Biblioteca al día',
+  'writing.zoteroBibliographySyncDone':
+    'Sincronizada. Obras nuevas o actualizadas: {works}. Adjuntos nuevos: {attachments}.',
+  'writing.zoteroBibliographySyncCancelled': 'La sincronización se canceló.',
+  'writing.zoteroBibliographySyncFailed': 'La sincronización falló: {detail}',
+  'writing.zoteroBibliographySyncUnreadable':
+    'No se pudo leer el estado de la sincronización: {detail}',
   'writing.zoteroBibliographySyncError': 'No se pudo solicitar la sincronización: {detail}',
   'writing.editor.label': 'Manuscrito',
   'writing.toolbar.label': 'Formato',
@@ -943,6 +963,9 @@ const es = {
   'writing.zoteroLoaded': '{count} referencia(s) leída(s).',
   'writing.zoteroEmpty': 'Ninguna referencia coincide con esa búsqueda.',
   'writing.zoteroSemanticTag': 'Por significado',
+  'writing.zoteroContentTag': 'Por contenido',
+  'writing.searchFoundExact': 'Exacto: {words}',
+  'writing.searchFoundMeaning': 'Por significado',
   'writing.zoteroSemanticNotSynced':
     'Esta biblioteca todavía no está sincronizada en EntropIA: solo se muestran coincidencias de texto. «Sincronizar biblioteca» habilita también la búsqueda por significado.',
   'writing.zoteroSemanticLexicalOnly':
@@ -2573,8 +2596,23 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroBibliographySyncHelp':
     'Requests synchronization of the selected bibliography catalog in the background. “Refresh” only updates this list from Zotero.',
   'writing.zoteroBibliographySyncRequesting': 'Requesting synchronization…',
-  'writing.zoteroBibliographySyncRequested':
-    'Synchronization requested. Processing continues in the background.',
+  'writing.zoteroBibliographySyncRequested': 'Request accepted. Checking its status…',
+  'writing.zoteroBibliographySyncNeedsZotero':
+    'To synchronize, Zotero has to be answering on the local port.',
+  'writing.zoteroBibliographySyncQueued': 'Synchronization queued…',
+  'writing.zoteroBibliographySyncRunning': 'Synchronizing…',
+  'writing.zoteroBibliographySyncRunningOf': 'Synchronizing… {done} of {total} works',
+  'writing.zoteroBibliographySyncWaiting':
+    'Paused: Zotero is not answering. It retries on its own once it does.',
+  'writing.zoteroBibliographySyncApiDisabled':
+    "Paused: Zotero's local API is off. Turn it on in Zotero and synchronize again.",
+  'writing.zoteroBibliographySyncPaused': 'Paused: {detail}',
+  'writing.zoteroBibliographySyncUpToDate': 'Library up to date',
+  'writing.zoteroBibliographySyncDone':
+    'Synchronized. New or updated works: {works}. New attachments: {attachments}.',
+  'writing.zoteroBibliographySyncCancelled': 'The synchronization was cancelled.',
+  'writing.zoteroBibliographySyncFailed': 'The synchronization failed: {detail}',
+  'writing.zoteroBibliographySyncUnreadable': 'Could not read the synchronization status: {detail}',
   'writing.zoteroBibliographySyncError': 'Could not request synchronization: {detail}',
   'writing.editor.label': 'Manuscript',
   'writing.toolbar.label': 'Formatting',
@@ -2666,6 +2704,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroLoaded': '{count} reference(s) read.',
   'writing.zoteroEmpty': 'No reference matches that search.',
   'writing.zoteroSemanticTag': 'By meaning',
+  'writing.zoteroContentTag': 'By content',
+  'writing.searchFoundExact': 'Exact: {words}',
+  'writing.searchFoundMeaning': 'By meaning',
   'writing.zoteroSemanticNotSynced':
     'This library is not synced into EntropIA yet: only text matches are shown. “Synchronize library” also enables search by meaning.',
   'writing.zoteroSemanticLexicalOnly':
@@ -2900,6 +2941,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'app.initializing': 'Initializing...',
   'app.initError': 'Failed to initialize database',
   'app.retryInit': 'Retry',
+  'app.compactingTitle': 'Optimizing the archive…',
+  'app.compactingBody': 'Do not turn off the computer. The window closes by itself when done.',
   'storeUpdate.title': 'Update available',
   'storeUpdate.body': 'An update for EntropIA Lite is available in Microsoft Store.',
   'storeUpdate.view': 'View update',
@@ -3024,12 +3067,6 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.searchLabel': 'Query',
   'bibliography.searchPlaceholder': 'Topic, author, or work…',
   'bibliography.searchAction': 'Search',
-  'bibliography.searchEmpty': 'No results for this query.',
-  'bibliography.searchLexicalOnly': 'Lexical-only search: no active vector space.',
-  'bibliography.searchMethodHybrid': 'Hybrid',
-  'bibliography.searchMethodVector': 'Vector',
-  'bibliography.searchMethodLexical': 'Lexical',
-  'bibliography.searchSimilarity': 'similarity {score}',
   'bibliography.searchFromSelection': 'Search from selection',
   'bibliography.searchConsent':
     'Search sends your query to the embedding engine when an active vector space exists. Searching from the selection sends exactly the selected text, only when you ask.',
@@ -3528,6 +3565,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'This passage is not in this device’s library (the conversation comes from another device or the work is gone). The saved fragment is shown.',
   'ragChat.passageOriginalUnavailable': 'The original file is not available on this device.',
   'ragChat.passageOriginalError': 'The original could not be opened: {reason}',
+  'ragChat.passageOriginalEyebrow': 'Original',
+  'ragChat.passageOriginalClose': 'Close original',
+  'ragChat.passageOriginalText': 'Text of page {page}',
+  'ragChat.passageOriginalSnapshot': 'Text of the capture',
+  'ragChat.passageOriginalNote':
+    'The PDF opens on the cited page; the passage is marked in the text beside it.',
+  'ragChat.passageOriginalSnapshotNote':
+    'Saved web capture: its text is shown, with the cited passage marked.',
   'ragChat.passageError': 'The passage could not be read: {reason}',
   'ragChat.conversations': 'Conversations',
   'ragChat.noConversations': 'No conversations yet',

@@ -1,5 +1,15 @@
 import { invoke } from '@tauri-apps/api/core'
-import { bibliographySearchWorks } from './bibliography-search'
+import {
+  bibliographySearchPassages,
+  bibliographySearchWorks,
+  type BibliographyPassage,
+  type BibliographyPassagesResponse,
+  type BibliographySearchHit,
+  type BibliographySearchResponse,
+  type PassageMatchKind,
+} from './bibliography-search'
+import { SearchPreferences, searchPreferences } from './search-preferences'
+import { matchesQuery } from './text-fold'
 import {
   newBatchRequestId,
   processingSyncBibliographyLibrary,
@@ -81,6 +91,11 @@ export interface LibraryEntry {
   csl_json: string
   /** Set only on works found by meaning (not by any text match) in the last search. */
   semantic?: true
+  /**
+   * Set only on works found by what their passages say (not by title, author
+   * or profile) in the last search: how the words matched and which ones.
+   */
+  content?: { kind: Exclude<PassageMatchKind, 'meaning'>; terms: string[] }
 }
 
 /**
@@ -104,6 +119,36 @@ export interface BibliographySyncRequestState {
   requested: BibliographySyncResponse | null
 }
 
+/**
+ * What the scheduler's task for a requested sync is doing, exactly as
+ * `processing_bibliography_sync_status` reads it. `state` is the task's own
+ * vocabulary: `pending`, `running`, `retry_wait`, `blocked`, `interrupted`,
+ * `succeeded`, `failed` or `cancelled`.
+ */
+export interface BibliographySyncStatus {
+  state: string
+  errorCode: string | null
+  errorMessage: string | null
+  progressDone: number
+  progressTotal: number | null
+  itemsSeen: number | null
+  remoteTotal: number | null
+  /** Works new or changed since the last sync (zero with `succeeded`: up to date). */
+  newProfiles: number
+  /** Attachments new since the last sync. */
+  newExtractions: number
+}
+
+/** The last thing known about the sync, or why it could not be read. */
+export interface BibliographySyncProgress {
+  status: BibliographySyncStatus | null
+  unreadable: string | null
+}
+
+/** Task states that will still change by themselves while the app runs. */
+const SYNC_FOLLOWED_STATES = new Set(['pending', 'running', 'retry_wait', 'interrupted'])
+const SYNC_POLL_MS = 1500
+
 /** The personal default: exactly user/0, unchanged by E1c-1. */
 const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
 
@@ -123,7 +168,11 @@ export interface ZoteroSnapshot {
   selection: ZoteroLibrarySelection
   /** Manual scheduler admission for this selection, not worker completion. */
   bibliographySync: BibliographySyncRequestState
+  /** What the requested sync is really doing; null before any request. */
+  bibliographyProgress: BibliographySyncProgress | null
   semanticStatus: SemanticSearchStatus
+  /** Whether close variants of the words are searched too (the shared preference). */
+  fuzzy: boolean
 }
 
 const EMPTY_BIBLIOGRAPHY_SYNC: BibliographySyncRequestState = {
@@ -143,8 +192,13 @@ const EMPTY: ZoteroSnapshot = {
   error: null,
   selection: { ...PERSONAL },
   bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+  bibliographyProgress: null,
   semanticStatus: 'idle',
+  fuzzy: true,
 }
+
+/** Passages asked for the content leg; works are made of however many of them rank. */
+const CONTENT_PASSAGES = 30
 
 /** How many rows the list shows. Filtering happens over the whole library. */
 const VISIBLE = 200
@@ -156,6 +210,68 @@ function message(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A catalog hit as a list entry, from the catalog's own copy of the work. */
+function entryFromHit(hit: BibliographySearchHit): LibraryEntry {
+  return {
+    key: hit.itemKey,
+    itemVersion: 0,
+    libraryType: hit.libraryType,
+    libraryId: hit.libraryNativeId,
+    title: hit.title,
+    authors: hit.authors,
+    year: hit.year ? String(hit.year) : '',
+    csl_json: hit.cslJson,
+  }
+}
+
+/** A passage's work as a list entry, for works the held list does not have. */
+function entryFromPassage(passage: BibliographyPassage): LibraryEntry {
+  return {
+    key: passage.itemKey,
+    itemVersion: 0,
+    libraryType: passage.libraryType,
+    libraryId: passage.libraryNativeId,
+    title: passage.title,
+    authors: passage.authors,
+    year: passage.year ? String(passage.year) : '',
+    csl_json: passage.cslJson,
+  }
+}
+
+type ContentMatch = {
+  passage: BibliographyPassage
+  content: NonNullable<LibraryEntry['content']>
+}
+
+/**
+ * The works whose passages carry the words, in the order their best passage
+ * ranked, each with how it matched. Passages found only by meaning say
+ * nothing about the words and are left to the meaning leg.
+ */
+function contentMatches(answer: BibliographyPassagesResponse): ContentMatch[] {
+  const byWork = new Map<string, ContentMatch>()
+  for (const passage of answer.passages ?? []) {
+    if (passage.matchKind === 'meaning') continue
+    const found = byWork.get(passage.itemKey)
+    if (!found) {
+      byWork.set(passage.itemKey, {
+        passage,
+        content: { kind: passage.matchKind, terms: [...passage.matchTerms] },
+      })
+      continue
+    }
+    // An exact passage outranks an approximate one as the work's reason.
+    if (found.content.kind === 'approximate' && passage.matchKind === 'exact') {
+      found.content = { kind: 'exact', terms: [...passage.matchTerms] }
+    } else if (found.content.kind === passage.matchKind) {
+      for (const term of passage.matchTerms) {
+        if (!found.content.terms.includes(term)) found.content.terms.push(term)
+      }
+    }
+  }
+  return [...byWork.values()]
 }
 
 /** Reads the few fields a list needs, without disturbing the CSL-JSON itself. */
@@ -203,9 +319,37 @@ export class WritingZoteroStore {
   #restoring: Promise<void> | null = null
   #syncing: Promise<void> | null = null
   #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
+  /** Bumped to retire the status follower of an older request or selection. */
+  #followToken = 0
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
+  #prefs: SearchPreferences
+  /** Read once, on the first search: after that the state is the truth. */
+  #prefsLoaded: Promise<void> | null = null
+
+  constructor(prefs: SearchPreferences = searchPreferences) {
+    this.#prefs = prefs
+  }
+
+  /** Reads the saved switch, once, so the panel shows it before any search. */
+  loadPreferences(): Promise<void> {
+    this.#prefsLoaded ??= this.#prefs.fuzzyEnabled().then((fuzzy) => this.#set({ fuzzy }))
+    return this.#prefsLoaded
+  }
+
+  /** Turns approximate search on or off, remembers it, and searches again. */
+  async setFuzzy(fuzzy: boolean): Promise<void> {
+    await this.loadPreferences()
+    this.#set({ fuzzy })
+    try {
+      await this.#prefs.setFuzzyEnabled(fuzzy)
+    } catch (error) {
+      // The switch still applies to this session; only remembering it failed.
+      this.#set({ error: message(error) })
+    }
+    if (this.#state.query.trim()) await this.searchLibrary(this.#state.query)
+  }
 
   subscribe(run: Subscriber): () => void {
     this.#subscribers.add(run)
@@ -244,6 +388,7 @@ export class WritingZoteroStore {
     this.#restoring = null
     this.#syncing = null
     this.#bibliographySyncing = null
+    this.#followToken += 1
     this.#all = []
     this.#set({
       selection: { ...this.#selection },
@@ -254,6 +399,7 @@ export class WritingZoteroStore {
       loading: false,
       error: null,
       bibliographySync: { ...EMPTY_BIBLIOGRAPHY_SYNC },
+      bibliographyProgress: null,
       semanticStatus: 'idle',
     })
   }
@@ -338,6 +484,7 @@ export class WritingZoteroStore {
   async #requestBibliographySync(selection: ZoteroLibrarySelection, epoch: number): Promise<void> {
     this.#set({
       bibliographySync: { loading: true, error: null, requested: null },
+      bibliographyProgress: null,
     })
     try {
       const requested = await processingSyncBibliographyLibrary(
@@ -349,11 +496,37 @@ export class WritingZoteroStore {
       this.#set({
         bibliographySync: { loading: false, error: null, requested },
       })
+      void this.#followBibliographySync(requested.taskId, ++this.#followToken)
     } catch (error) {
       if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
       this.#set({
         bibliographySync: { loading: false, error: message(error), requested: null },
       })
+    }
+  }
+
+  /**
+   * Reads the scheduler's own task until it settles, so the screen says what
+   * the sync is doing instead of what was asked for. Stops when the task
+   * reaches a state that will not change by itself, when another request or
+   * another library replaces it, or when the status cannot be read.
+   */
+  async #followBibliographySync(taskId: string, token: number): Promise<void> {
+    while (token === this.#followToken) {
+      let progress: BibliographySyncProgress
+      try {
+        const status = await invoke<BibliographySyncStatus>('processing_bibliography_sync_status', {
+          taskId,
+        })
+        if (typeof status?.state !== 'string') throw new Error('unreadable sync status')
+        progress = { status, unreadable: null }
+      } catch (error) {
+        progress = { status: null, unreadable: message(error) }
+      }
+      if (token !== this.#followToken) return
+      this.#set({ bibliographyProgress: progress })
+      if (!progress.status || !SYNC_FOLLOWED_STATES.has(progress.status.state)) return
+      await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
     }
   }
 
@@ -430,33 +603,80 @@ export class WritingZoteroStore {
       this.#set({ entries: this.#filtered(), semanticStatus: 'idle' })
       return
     }
-
-    const [zotero, meaning] = await Promise.allSettled([
-      invoke<LibraryPage>('writing_zotero_search', {
-        libraryType: selection.libraryType,
-        libraryId: selection.libraryId,
-        query: needle,
-      }),
-      bibliographySearchWorks(needle, { zoteroLibrary: selection }),
-    ])
-    // The box moved on while they were answering, or the library did:
-    // a late answer of another query or another selection changes nothing.
-    if (epoch !== this.#epoch) return
-    if (!this.#sameSelection(selection)) return
+    // The saved switch decides how the held list is matched, so it is read first.
+    await this.loadPreferences()
     if (this.#state.query !== query) return
 
+    // Each leg shows as soon as it answers: a closed or slow Zotero never
+    // holds the meaning-based hits back, and the other way round.
+    let zotero: PromiseSettledResult<LibraryPage> | null = null
+    let meaning: PromiseSettledResult<BibliographySearchResponse> | null = null
+    let content: PromiseSettledResult<BibliographyPassagesResponse> | null = null
+    const stale = () =>
+      epoch !== this.#epoch || !this.#sameSelection(selection) || this.#state.query !== query
+    const show = () => {
+      // The box moved on while they were answering, or the library did:
+      // a late answer of another query or another selection changes nothing.
+      if (stale()) return
+      this.#set(this.#searchPatch(zotero, meaning, content))
+    }
+    const settle = <T>(
+      promise: Promise<T>,
+      keep: (result: PromiseSettledResult<T>) => void
+    ): Promise<void> =>
+      promise
+        .then(
+          (value) => keep({ status: 'fulfilled', value }),
+          (reason) => keep({ status: 'rejected', reason })
+        )
+        .then(show)
+
+    await Promise.all([
+      settle(
+        invoke<LibraryPage>('writing_zotero_search', {
+          libraryType: selection.libraryType,
+          libraryId: selection.libraryId,
+          query: needle,
+        }),
+        (result) => (zotero = result)
+      ),
+      settle(
+        bibliographySearchWorks(needle, { zoteroLibrary: selection }),
+        (result) => (meaning = result)
+      ),
+      // The saved switch is read before this leg only: the other two never
+      // wait for it.
+      settle(
+        this.loadPreferences().then(() =>
+          bibliographySearchPassages(needle, {
+            topK: CONTENT_PASSAGES,
+            fuzzy: this.#state.fuzzy,
+            zoteroLibrary: selection,
+          })
+        ),
+        (result) => (content = result)
+      ),
+    ])
+  }
+
+  /** What the box shows given whichever of the two searches has answered. */
+  #searchPatch(
+    zotero: PromiseSettledResult<LibraryPage> | null,
+    meaning: PromiseSettledResult<BibliographySearchResponse> | null,
+    content: PromiseSettledResult<BibliographyPassagesResponse> | null = null
+  ): Partial<ZoteroSnapshot> {
     const matched = this.#filtered()
     const shown = new Set(matched.map((entry) => entry.csl_json))
     const found =
-      zotero.status === 'fulfilled'
+      zotero?.status === 'fulfilled'
         ? zotero.value.items
             .map(describe)
             .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.csl_json))
         : []
     const entries = [...matched, ...found]
 
-    let semanticStatus: SemanticSearchStatus = 'failed'
-    if (meaning.status === 'fulfilled') {
+    let semanticStatus: SemanticSearchStatus = meaning === null ? 'idle' : 'failed'
+    if (meaning?.status === 'fulfilled') {
       const answer = meaning.value
       semanticStatus = !answer.librarySynced
         ? 'not_synced'
@@ -466,20 +686,40 @@ export class WritingZoteroStore {
       const keys = new Set(entries.map((entry) => entry.key))
       const library = new Map(this.#all.map((entry) => [entry.key, entry]))
       for (const hit of answer.hits) {
-        const entry = library.get(hit.itemKey)
-        if (!entry || keys.has(entry.key)) continue
+        if (keys.has(hit.itemKey)) continue
+        // A work the held list lacks (a list from an older copy, or one not
+        // refreshed yet) is still a work of the catalog: listed from the
+        // catalog's own title, authors, year and CSL-JSON, which is also what
+        // a citation snapshots. Without CSL it is shown but cannot be cited.
+        const entry = library.get(hit.itemKey) ?? entryFromHit(hit)
         keys.add(entry.key)
         entries.push(hit.method === 'lexical' ? entry : { ...entry, semantic: true })
       }
     }
 
-    this.#set({
+    // Last of all: works whose passages carry the words. A work already listed
+    // (by text or by meaning) is not listed twice; one the held list lacks is
+    // listed from the catalog's own copy, like a meaning hit.
+    if (content?.status === 'fulfilled') {
+      const keys = new Set(entries.map((entry) => entry.key))
+      const library = new Map(this.#all.map((entry) => [entry.key, entry]))
+      for (const { passage, content: found } of contentMatches(content.value)) {
+        if (keys.has(passage.itemKey)) continue
+        const entry = library.get(passage.itemKey) ?? entryFromPassage(passage)
+        keys.add(entry.key)
+        entries.push({ ...entry, content: found })
+      }
+    }
+
+    return {
       semanticStatus,
-      ...(zotero.status === 'fulfilled'
+      ...(zotero?.status === 'fulfilled'
         ? { total: zotero.value.total, error: null }
-        : { error: message(zotero.reason) }),
+        : zotero?.status === 'rejected'
+          ? { error: message(zotero.reason) }
+          : {}),
       entries: entries.slice(0, VISIBLE),
-    })
+    }
   }
 
   /** Narrows what is already on screen. Typing never asks the library. */
@@ -489,13 +729,16 @@ export class WritingZoteroStore {
 
   /** Filters what has been read. The library is not asked again to type. */
   #filtered(query = this.#state.query): LibraryEntry[] {
-    const needle = query.trim().toLowerCase()
+    const needle = query.trim()
     if (!needle) return this.#all.slice(0, VISIBLE)
+    // Accents and case never matter; the approximate switch adds typo
+    // tolerance on top, like the corpus search.
+    const fuzzy = this.#state.fuzzy
     return this.#all
       .filter(
         (entry) =>
-          entry.title.toLowerCase().includes(needle) ||
-          entry.authors.toLowerCase().includes(needle) ||
+          matchesQuery(entry.title, needle, fuzzy) ||
+          matchesQuery(entry.authors, needle, fuzzy) ||
           entry.year.includes(needle)
       )
       .slice(0, VISIBLE)

@@ -82,7 +82,7 @@ impl RequestFailure {
     fn from_transport(error: reqwest::Error) -> Self {
         Self::Transport {
             timeout: error.is_timeout(),
-            message: error.to_string(),
+            message: crate::nlp::embeddings::error_chain(&error),
         }
     }
 
@@ -464,7 +464,12 @@ impl OpenRouterClient {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await
-            .map_err(|e| format!("OpenRouter connection test failed: {e}"))?;
+            .map_err(|e| {
+                format!(
+                    "OpenRouter connection test failed: {}",
+                    crate::nlp::embeddings::error_chain(&e)
+                )
+            })?;
 
         let status = response.status();
         if !status.is_success() {

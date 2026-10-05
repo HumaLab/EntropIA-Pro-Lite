@@ -235,7 +235,7 @@ fn load_existing_entries(log_file: &Path, max_entries: usize) -> VecDeque<AppLog
     entries
 }
 
-fn sanitize_field(value: String, max_chars: usize) -> String {
+pub(crate) fn sanitize_field(value: String, max_chars: usize) -> String {
     let mut cleaned = String::new();
     for ch in value.chars().take(max_chars) {
         if ch.is_control() && ch != '\n' && ch != '\t' {

@@ -43,6 +43,7 @@ use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::processing::compact::CompactVec;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1546,6 +1547,51 @@ fn endpoint_verdict(state: &ZoteroState) -> ExecOutput {
 mod tests {
     use super::*;
 
+    fn native_page(number: i64, quality: &str, text: &str) -> ExtractPageText {
+        ExtractPageText {
+            page_number: number,
+            method: "native".to_string(),
+            text_content: text.to_string(),
+            text_hash: extraction_text_hash(text),
+            text_chars: text.chars().count() as i64,
+            quality: quality.to_string(),
+        }
+    }
+
+    /// Sparse and empty pages always go to OCR; an unreadable page only when
+    /// the document has no native text at all, so an all-unreadable file does
+    /// not settle as `empty` without one recognition attempt.
+    #[test]
+    fn unreadable_pages_reach_ocr_only_when_the_document_has_no_native_text() {
+        let pages = [
+            native_page(1, "unreadable", ""),
+            native_page(2, "empty", ""),
+            native_page(3, "sparse", "ok"),
+            native_page(4, "rich", &"palabra ".repeat(20)),
+        ];
+        assert_eq!(ocr_candidate_pages(&pages, false), vec![2, 3]);
+        assert_eq!(ocr_candidate_pages(&pages, true), vec![1, 2, 3]);
+        let all_unreadable = [
+            native_page(1, "unreadable", ""),
+            native_page(2, "unreadable", ""),
+        ];
+        assert_eq!(ocr_candidate_pages(&all_unreadable, true), vec![1, 2]);
+        assert!(ocr_candidate_pages(&all_unreadable, false).is_empty());
+    }
+
+    /// The page layer replaces a blank or poorer whole-document text, and
+    /// never a rich one.
+    #[test]
+    fn the_richer_native_text_wins_unless_the_whole_document_is_rich() {
+        let body = "palabra ".repeat(20);
+        let pages = [native_page(1, "rich", &body)];
+        assert_eq!(richer_native_text(String::new(), &pages), body.trim());
+        assert_eq!(richer_native_text("2".to_string(), &pages), body.trim());
+        let rich_whole = "otro texto ".repeat(20);
+        assert_eq!(richer_native_text(rich_whole.clone(), &pages), rich_whole);
+        assert_eq!(richer_native_text(String::new(), &[]), "");
+    }
+
     fn row(key: &str, version: u64, csl: &str) -> serde_json::Value {
         serde_json::json!({ "key": key, "version": version, "csljson": csl })
     }
@@ -1785,6 +1831,18 @@ pub struct BibliographyProfileComputeOutput {
 /// verifiable without a network or model files.
 pub trait ProfileEmbedder: Send + Sync {
     fn embed(&self, text: &str) -> Result<Vec<f32>, String>;
+    /// Embeds several texts, one vector per text in input order. The default
+    /// keeps single-call embedders correct; providers that can batch override
+    /// it. Implementations must fail the whole call rather than return a
+    /// partial result.
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        texts.iter().map(|text| self.embed(text)).collect()
+    }
+    /// How many chunk texts one `embed_many` call should carry. One keeps the
+    /// historical per-chunk granularity for embedders that do not batch.
+    fn batch_hint(&self) -> usize {
+        1
+    }
     /// `(model, contract, dimensions)` the vector is computed under — the
     /// effective contract resolved from settings, never hardcoded constants.
     fn identity(&self) -> Result<(String, String, usize), String>;
@@ -1806,21 +1864,36 @@ impl EngineProfileEmbedder {
             }),
         }
     }
-}
 
-impl ProfileEmbedder for EngineProfileEmbedder {
-    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+    /// Resolves the engine for the current settings and releases the cache
+    /// lock before any network or model work starts.
+    fn engine(&self) -> Result<Arc<crate::nlp::embeddings::EmbeddingEngine>, String> {
         let conn = open_archive_connection(&self.db_path)?;
         let mut guard = self
             .cache
             .lock()
             .map_err(|e| format!("Embedding engine lock poisoned: {e}"))?;
         let crate::processing::embedding::EngineCache { cached, last_error } = &mut *guard;
-        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error)
-            .ok_or_else(|| {
-                crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref())
-            })?
-            .embed_text(text)
+        crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error).ok_or_else(
+            || crate::nlp::embeddings::embedding_engine_unavailable_reason(last_error.as_deref()),
+        )
+    }
+}
+
+impl ProfileEmbedder for EngineProfileEmbedder {
+    fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.engine()?.embed_text(text)
+    }
+
+    fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        self.engine()?.embed_batch(&refs)
+    }
+
+    fn batch_hint(&self) -> usize {
+        self.engine()
+            .map(|engine| engine.preferred_wave())
+            .unwrap_or(1)
     }
 
     fn identity(&self) -> Result<(String, String, usize), String> {
@@ -1836,11 +1909,23 @@ impl ProfileEmbedder for EngineProfileEmbedder {
 /// input.
 pub struct BibliographyProfileExecutor {
     embedder: Arc<dyn ProfileEmbedder>,
+    /// Chunk texts per embedding wave; `None` follows the embedder's hint.
+    embed_wave: Option<usize>,
 }
 
 impl BibliographyProfileExecutor {
     pub fn new(embedder: Arc<dyn ProfileEmbedder>) -> Self {
-        Self { embedder }
+        Self {
+            embedder,
+            embed_wave: None,
+        }
+    }
+
+    /// Pins the number of chunk texts embedded per wave (and checkpointed
+    /// together), overriding the embedder's hint.
+    pub fn with_embed_wave(mut self, wave: usize) -> Self {
+        self.embed_wave = Some(wave.max(1));
+        self
     }
 
     /// Stages one profile output or an honest verdict. Subject identity,
@@ -1929,12 +2014,13 @@ impl BibliographyProfileExecutor {
                         "Profile embedding does not satisfy {dimensions} finite dimensions"
                     ));
                 }
-                Ok(vector)
+                Ok(CompactVec(vector))
             })
             .map_err(|error| match map_embedding_error(&error) {
                 ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
                 other => other,
-            })?;
+            })?
+            .0;
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
@@ -1962,7 +2048,7 @@ impl BibliographyProfileExecutor {
             code: "storage_unavailable".to_string(),
             message: format!("failed to serialize profile provenance: {error}"),
         })?;
-        let chunks = self.stage_chunks(ctx, task, stop, dimensions)?;
+        let chunks = self.stage_chunks(ctx, task, stop, &model, &contract, dimensions)?;
         let output = BibliographyProfileComputeOutput {
             item_id: task.subject_id.clone(),
             generation_id: generation.id.clone(),
@@ -2000,18 +2086,24 @@ impl BibliographyProfileExecutor {
 
 impl BibliographyProfileExecutor {
     /// Segments every chunkable page of the work's attachments and embeds
-    /// each chunk. Ordinals run globally per work across attachments, in
-    /// (attachment, page) order; chunk ids are deterministic per
-    /// (work, ordinal) so re-chunks replace instead of appending.
-    /// Checkpoint keys bind the chunk text hash: a page-text edit without
-    /// a metadata change still re-embeds instead of serving a stale
-    /// cached vector.
+    /// the chunks in waves. Ordinals run globally per work across
+    /// attachments, in (attachment, page) order; chunk ids are deterministic
+    /// per (work, ordinal) so re-chunks replace instead of appending.
+    ///
+    /// Chunks whose vector is already stored under the same text hash and
+    /// `(model, contract, dimensions)` are reused. The rest travel in waves
+    /// through [`ProfileEmbedder::embed_many`]; each wave is one checkpoint
+    /// whose key binds the ordered chunk hashes, so a retry resumes after the
+    /// waves that succeeded and a page-text edit never serves a stale vector.
+    /// A failing wave fails the whole run: nothing is staged for publish.
     #[allow(clippy::too_many_arguments)]
     fn stage_chunks(
         &self,
         ctx: &crate::processing::scheduler::ExecCtx,
         task: &crate::processing::scheduler::ClaimedTask,
         stop: &crate::processing::scheduler::StopFlag,
+        model: &str,
+        contract: &str,
         dimensions: usize,
     ) -> Result<Vec<StagedWorkChunk>, crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
@@ -2025,7 +2117,20 @@ impl BibliographyProfileExecutor {
                     code: "storage_unavailable".to_string(),
                     message: format!("{}: {}", error.code, error.message),
                 })?;
+        let mut reusable = crate::bibliography::repository::reusable_chunk_embeddings(
+            &conn,
+            &task.subject_id,
+            model,
+            contract,
+            dimensions,
+        )
+        .map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: format!("{}: {}", error.code, error.message),
+        })?;
         drop(conn);
+        // A stored blob that does not match the contract width is not reusable.
+        reusable.retain(|_, blob| blob.len() == dimensions * 4);
         // Group pages per attachment preserving order, then segment.
         let mut by_attachment: Vec<(String, Vec<crate::bibliography::chunks::PageInput>)> =
             Vec::new();
@@ -2045,52 +2150,16 @@ impl BibliographyProfileExecutor {
                 )),
             }
         }
-        let mut staged = Vec::new();
-        let mut ordinal: i64 = 0;
+        // Segment the whole work up front: ordinals, ids, and spans are
+        // fixed before any embedding starts.
+        let mut staged: Vec<StagedWorkChunk> = Vec::new();
         for (attachment_id, inputs) in &by_attachment {
             for chunk in crate::bibliography::chunks::segment_pages(inputs) {
-                if stop.stopped() {
-                    return Err(ExecOutput::Stopped);
-                }
-                let chunk_id = format!("{}:{:06}", task.subject_id, ordinal);
-                let vector = ctx
-                    .unit(
-                        task,
-                        &format!(
-                            "chunk-emb:{ordinal}:{}",
-                            &chunk.hash[..16.min(chunk.hash.len())]
-                        ),
-                        || {
-                            let vector = self.embedder.embed(&chunk.text)?;
-                            if vector.len() != dimensions
-                                || vector.iter().any(|value| !value.is_finite())
-                            {
-                                return Err(format!(
-                                "Chunk embedding does not satisfy {dimensions} finite dimensions"
-                            ));
-                            }
-                            Ok(vector)
-                        },
-                    )
-                    .map_err(|error| {
-                        match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
-                            ExecOutput::Fatal {
-                                code: _,
-                                message: _,
-                            } => ExecOutput::Fatal {
-                                code: "embedding_failed".to_string(),
-                                message: error,
-                            },
-                            // Lease/demand loss and retryable/blocked verdicts
-                            // pass through untouched: checkpoints stay Stopped,
-                            // provider states stay honest.
-                            other => other,
-                        }
-                    })?;
+                let ordinal = staged.len() as i64;
                 staged.push(StagedWorkChunk {
                     attachment_id: attachment_id.clone(),
                     ordinal,
-                    chunk_id,
+                    chunk_id: format!("{}:{:06}", task.subject_id, ordinal),
                     input_hash: chunk.hash.clone(),
                     spans: chunk
                         .spans
@@ -2104,9 +2173,78 @@ impl BibliographyProfileExecutor {
                         })
                         .collect(),
                     text_content: chunk.text,
-                    embedding: crate::nlp::embeddings::floats_to_blob(&vector),
+                    embedding: reusable.get(&chunk.hash).cloned().unwrap_or_default(),
                 });
-                ordinal += 1;
+            }
+        }
+        // Chunks still lacking a vector, in ordinal order.
+        let pending: Vec<usize> = staged
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.embedding.is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        let wave_size = self
+            .embed_wave
+            .unwrap_or_else(|| self.embedder.batch_hint())
+            .max(1);
+        for wave in pending.chunks(wave_size) {
+            if stop.stopped() {
+                return Err(ExecOutput::Stopped);
+            }
+            let texts: Vec<String> = wave
+                .iter()
+                .map(|&index| staged[index].text_content.clone())
+                .collect();
+            let wave_digest = {
+                let mut digest = Sha256::new();
+                for &index in wave {
+                    digest.update(staged[index].input_hash.as_bytes());
+                    digest.update([0_u8]);
+                }
+                format!("{:x}", digest.finalize())
+            };
+            let key = format!(
+                "chunk-wave:{}:{}",
+                staged[wave[0]].ordinal,
+                &wave_digest[..16]
+            );
+            let vectors = ctx
+                .unit(task, &key, || {
+                    let vectors = self.embedder.embed_many(&texts)?;
+                    if vectors.len() != texts.len() {
+                        return Err(format!(
+                            "Chunk embedding returned {} vectors for {} chunks",
+                            vectors.len(),
+                            texts.len()
+                        ));
+                    }
+                    if vectors.iter().any(|vector| {
+                        vector.len() != dimensions || vector.iter().any(|value| !value.is_finite())
+                    }) {
+                        return Err(format!(
+                            "Chunk embedding does not satisfy {dimensions} finite dimensions"
+                        ));
+                    }
+                    Ok(vectors.into_iter().map(CompactVec).collect::<Vec<_>>())
+                })
+                .map_err(|error| {
+                    match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
+                        ExecOutput::Fatal {
+                            code: _,
+                            message: _,
+                        } => ExecOutput::Fatal {
+                            code: "embedding_failed".to_string(),
+                            message: error,
+                        },
+                        // Lease/demand loss and retryable/blocked verdicts
+                        // pass through untouched: checkpoints stay Stopped,
+                        // provider states stay honest.
+                        other => other,
+                    }
+                })?;
+            for (&index, vector) in wave.iter().zip(&vectors) {
+                staged[index].embedding = crate::nlp::embeddings::floats_to_blob(&vector.0);
             }
         }
         Ok(staged)
@@ -2276,6 +2414,20 @@ pub fn publish_bibliography_profile_output(
         distinct,
     )
     .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    // The publish that lands the last owed work makes the generation
+    // queryable in this same commit. Activation runs in its own savepoint and
+    // is idempotent, so a failure here never costs the profile that just
+    // landed: the next publish, sync or restart retries it.
+    if let Err(error) = crate::bibliography::generation::activate_if_complete(
+        conn,
+        &output.generation_id,
+        processing_repository::now_ms(),
+    ) {
+        eprintln!(
+            "[bibliography] generation {} activation deferred: {}: {}",
+            output.generation_id, error.code, error.message
+        );
+    }
     Ok(())
 }
 
@@ -2383,6 +2535,10 @@ struct ExtractedDocument {
     quality: &'static str,
     pages: Vec<ExtractPageText>,
     ocr_failed_pages: Vec<i64>,
+    /// A provider answered at least once (even with no text): the document
+    /// went through a real OCR pass, so an `empty` verdict is final and the
+    /// sync must not demand the same pass again.
+    ocr_attempted: bool,
 }
 
 /// An HTML snapshot is one "page": its block paragraphs, blank-line
@@ -2413,6 +2569,7 @@ fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
         quality,
         pages: vec![page],
         ocr_failed_pages: Vec::new(),
+        ocr_attempted: false,
     }
 }
 
@@ -2581,7 +2738,7 @@ impl BibliographyExtractExecutor {
                     code: "storage_unavailable".to_string(),
                     message: error,
                 })?;
-            let current = crate::bibliography::repository::extraction_matches_source(
+            let current = crate::bibliography::repository::extraction_is_settled(
                 &conn,
                 &task.subject_id,
                 attachment.mtime,
@@ -2622,22 +2779,14 @@ impl BibliographyExtractExecutor {
                 });
             }
         }
-        let bytes = ctx
-            .unit(task, "extract", || {
-                std::fs::read(&path).map_err(|error| {
-                    format!("Failed to read attachment file {}: {error}", path.display())
-                })
-            })
-            .map_err(|error| {
-                if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                    ExecOutput::Stopped
-                } else {
-                    ExecOutput::Retryable {
-                        code: "extraction_io".to_string(),
-                        message: error,
-                    }
-                }
-            })?;
+        // The file is read straight from disk, never checkpointed: a unit
+        // for it serialised every byte of the PDF as a JSON number array
+        // (about 3.5x the file, 451 MB for one large book) and bought nothing,
+        // since re-reading a local file costs less than decoding that row.
+        let bytes = std::fs::read(&path).map_err(|error| ExecOutput::Retryable {
+            code: "extraction_io".to_string(),
+            message: format!("Failed to read attachment file {}: {error}", path.display()),
+        })?;
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
@@ -2652,6 +2801,7 @@ impl BibliographyExtractExecutor {
             quality,
             pages,
             ocr_failed_pages,
+            ocr_attempted,
         } = document;
         let text_chars = text.chars().count() as i64;
         let output = BibliographyExtractComputeOutput {
@@ -2674,6 +2824,7 @@ impl BibliographyExtractExecutor {
             "pageCount": output.page_count,
             "textHash": output.text_hash,
             "ocrFailedPages": ocr_failed_pages,
+            "ocrAttempted": ocr_attempted,
         })
         .to_string();
         Ok(ExecResult {
@@ -2697,28 +2848,25 @@ impl BibliographyExtractExecutor {
         bytes: &[u8],
     ) -> Result<ExtractedDocument, crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
-        // Locked files fail here with unlock guidance, not with a
-        // complaint about damage: re-importing an unlocked copy mints
-        // fresh demand through the file-identity gate, so terminal is
-        // correct — this task can never succeed.
+        // A PDF with `/Encrypt` is only locked when it needs a real user
+        // password. Permissions-only protection (owner password, empty user
+        // password) is common on journal articles and opens freely, so it is
+        // decrypted once here and every later step — per-page text, the
+        // whole-document parser, page rendering for OCR — reads plain bytes.
+        // A genuinely locked file fails with unlock guidance, not with a
+        // complaint about damage: re-importing an unlocked copy mints fresh
+        // demand through the file-identity gate, so terminal is correct.
+        let readable = crate::ocr::pdf::open_with_empty_password(bytes).map_err(|message| {
+            ExecOutput::Fatal {
+                code: "extraction_failed".to_string(),
+                message,
+            }
+        })?;
+        let bytes: &[u8] = &readable;
         let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
             code: "extraction_failed".to_string(),
             message: format!("Failed to parse PDF: {error}"),
         })?;
-        // lopdf clears the trailer Encrypt entry when the empty user
-        // password opens the structure, while the object streams stay
-        // undecryptable — so an absent entry proves nothing and the bytes
-        // get the last word.
-        let encrypted_trailer = document.is_encrypted();
-        let encrypted_bytes = bytes
-            .windows(b"/Encrypt".len())
-            .any(|window| window == b"/Encrypt");
-        if encrypted_trailer || encrypted_bytes {
-            return Err(ExecOutput::Fatal {
-                code: "extraction_failed".to_string(),
-                message: crate::ocr::pdf::ENCRYPTED_PDF_MESSAGE.to_string(),
-            });
-        }
         let page_count = document.get_pages().len() as i64;
         let pages = read_native_page_texts(bytes, page_count)?;
         // The whole-document parser is the primary text source. When it
@@ -2748,14 +2896,35 @@ impl BibliographyExtractExecutor {
                 joined
             }
         };
-        let quality = extraction_quality(&text);
-        let (pages, ocr_failed_pages) = self.maybe_ocr_pages(ctx, task, stop, bytes, pages)?;
+        // The whole-document parser can also return less than the page layer
+        // holds (an inline image ahead of the text drops everything after
+        // it). When it is not already rich, the richer of the two wins.
+        let text = richer_native_text(text, &pages);
+        let mut quality = extraction_quality(&text);
+        let mut text = text;
+        let (pages, ocr_failed_pages, ocr_attempted) =
+            self.maybe_ocr_pages(ctx, task, stop, bytes, pages, quality == "empty")?;
+        // A scan has no native text, so the whole-document verdict above is
+        // `empty` however well OCR reads it. When recognition replaced pages
+        // and the native layer was not already rich, the document text and
+        // its quality come from the pages now published, or every scanned
+        // PDF would stay `empty` after its text exists.
+        if quality != "rich" && pages.iter().any(|page| page.method == "ocr") {
+            text = pages
+                .iter()
+                .map(|page| page.text_content.trim())
+                .filter(|page_text| !page_text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            quality = extraction_quality(&text);
+        }
         Ok(ExtractedDocument {
             page_count,
             text,
             quality,
             pages,
             ocr_failed_pages,
+            ocr_attempted,
         })
     }
 
@@ -2774,57 +2943,123 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
-    ) -> Result<(Vec<ExtractPageText>, Vec<i64>), crate::processing::scheduler::ExecOutput> {
+        native_blank: bool,
+    ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool), crate::processing::scheduler::ExecOutput>
+    {
         use crate::processing::scheduler::ExecOutput;
         let Some((renderer, provider)) = &self.selective_ocr else {
-            return Ok((pages, Vec::new()));
+            return Ok((pages, Vec::new(), false));
         };
         let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
             true,
             Some(provider.name()),
         );
+        let mut ocr_attempted = false;
+        // Whole-document recognition first, when the provider offers it and
+        // the document is mostly scan: one request per window of pages, no
+        // page rendering. A window the provider rejects (not a rate limit or
+        // a credential problem) drops back to the per-page path below.
+        let needing = ocr_candidate_pages(&pages, native_blank);
+        let mut windowed: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+        if let Some(per_request) = provider.pdf_pages_per_request() {
+            if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
+                for (first, last) in crate::bibliography::selective_ocr::plan_pdf_windows(
+                    &needing,
+                    pages.len(),
+                    per_request,
+                ) {
+                    if stop.stopped() {
+                        return Err(ExecOutput::Stopped);
+                    }
+                    let unit_key = format!("ocr-range:{first}-{last}");
+                    let result: Result<Vec<String>, String> = ctx.unit(task, &unit_key, || {
+                        let texts = provider.recognize_pdf_pages(bytes, first, last)?;
+                        let expected = (last - first + 1) as usize;
+                        if texts.len() != expected {
+                            return Err(format!(
+                                "provider_error: whole-document OCR returned {} pages for a range of {expected}",
+                                texts.len()
+                            ));
+                        }
+                        Ok(texts)
+                    });
+                    match result {
+                        Ok(texts) => {
+                            ocr_attempted = true;
+                            for (offset, text) in texts.into_iter().enumerate() {
+                                windowed.insert(i64::from(first) + offset as i64, text);
+                            }
+                        }
+                        Err(error) => {
+                            if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                                return Err(ExecOutput::Stopped);
+                            }
+                            match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
+                                ExecOutput::Fatal { .. } => {
+                                    eprintln!(
+                                        "[bibliography] whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
+                                    );
+                                }
+                                other => return Err(other),
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut out: Vec<ExtractPageText> = Vec::with_capacity(pages.len());
         let mut ocr_failed_pages: Vec<i64> = Vec::new();
         for page in pages {
-            if page.quality != "sparse" && page.quality != "empty" {
+            if !needing.contains(&page.page_number) {
                 out.push(page);
                 continue;
             }
-            if stop.stopped() {
-                return Err(ExecOutput::Stopped);
-            }
-            let unit_key = format!("ocr-page:{}", page.page_number);
-            let text = match ctx.unit(task, &unit_key, || {
-                let image = renderer
-                    .render_page(bytes, page.page_number as u32)
-                    .map_err(|error| format!("render failed: {error}"))?;
-                provider.recognize_page(&image)
-            }) {
-                Ok(text) => text,
-                Err(error) => {
-                    if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                        return Err(ExecOutput::Stopped);
+            let text = if let Some(text) = windowed.remove(&page.page_number) {
+                text
+            } else {
+                if stop.stopped() {
+                    return Err(ExecOutput::Stopped);
+                }
+                let unit_key = format!("ocr-page:{}", page.page_number);
+                match ctx.unit(task, &unit_key, || {
+                    let image = renderer
+                        .render_page(bytes, page.page_number as u32)
+                        .map_err(|error| format!("render failed: {error}"))?;
+                    provider.recognize_page(&image)
+                }) {
+                    Ok(text) => {
+                        ocr_attempted = true;
+                        text
                     }
-                    let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
-                        ExecOutput::Fatal {
-                            code: "extraction_failed".to_string(),
-                            message: detail.to_string(),
+                    Err(error) => {
+                        if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                            return Err(ExecOutput::Stopped);
                         }
-                    } else {
-                        crate::bibliography::selective_ocr::map_page_ocr_error(&error)
-                    };
-                    match verdict {
-                        // E4b-WU4 incomplete handling: a page whose OCR
-                        // hard-failed keeps its native row and is named in
-                        // the receipt. Transient and configuration verdicts
-                        // stay whole-task: backoff and user fixes must not
-                        // masquerade as partial success.
-                        ExecOutput::Fatal { .. } => {
-                            ocr_failed_pages.push(page.page_number);
-                            out.push(page);
-                            continue;
+                        let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
+                            ExecOutput::Fatal {
+                                code: "extraction_failed".to_string(),
+                                message: detail.to_string(),
+                            }
+                        } else {
+                            crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                        };
+                        match verdict {
+                            // E4b-WU4 incomplete handling: a page whose OCR
+                            // hard-failed keeps its native row and is named in
+                            // the receipt. Transient and configuration verdicts
+                            // stay whole-task: backoff and user fixes must not
+                            // masquerade as partial success.
+                            ExecOutput::Fatal { message, .. } => {
+                                eprintln!(
+                                    "[bibliography] OCR of page {} failed: {message}",
+                                    page.page_number
+                                );
+                                ocr_failed_pages.push(page.page_number);
+                                out.push(page);
+                                continue;
+                            }
+                            other => return Err(other),
                         }
-                        other => return Err(other),
                     }
                 }
             };
@@ -2842,7 +3077,7 @@ impl BibliographyExtractExecutor {
                 text_content: text,
             });
         }
-        Ok((out, ocr_failed_pages))
+        Ok((out, ocr_failed_pages, ocr_attempted))
     }
 }
 
@@ -2895,6 +3130,10 @@ impl ProductionSelectiveOcr {
 
 impl crate::bibliography::selective_ocr::PageRenderer for ProductionSelectiveOcr {
     fn render_page(&self, pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+        // pdfium resolves its library from a path cached at startup of the
+        // first OCR command; the queue worker never runs one, so without this
+        // every page failed to render and a scan ended up with no text.
+        crate::ocr::pdf::init_pdfium_path(&self.app);
         crate::ocr::pdf::render_pdf_page_to_image(pdf_bytes, page_number.saturating_sub(1) as usize)
     }
 
@@ -2925,6 +3164,44 @@ impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelective
                     "glm_ocr",
                 ))?;
             Ok(output.ocr.text)
+        }
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        // Local Paddle recognizes page images; only the remote GLM provider
+        // reads a whole PDF.
+        #[cfg(feature = "paddle-ocr")]
+        {
+            None
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            Some(crate::ocr::MAX_GLM_PDF_PAGE_COUNT)
+        }
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        #[cfg(feature = "paddle-ocr")]
+        {
+            let _ = (pdf_bytes, first_page, last_page);
+            Err("pdf_mode_unsupported: the local engine reads page images only".to_string())
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            let conn = open_archive_connection(&self.db_path)?;
+            let api_key = crate::ocr::get_glm_ocr_api_key(&conn);
+            if api_key.is_empty() {
+                return Err("configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key antes de usar OCR.".to_string());
+            }
+            let client = crate::ocr::glm_ocr::GlmOcrClient::new(api_key);
+            tauri::async_runtime::block_on(crate::ocr::glm_recognize_pdf_pages(
+                &client, pdf_bytes, first_page, last_page,
+            ))
         }
     }
 
@@ -2965,6 +3242,48 @@ impl crate::processing::scheduler::Executor for BibliographyExtractExecutor {
                 output,
             },
         }
+    }
+}
+
+/// Pages the OCR pass must read: sparse and empty ones always. A page the
+/// native decoder could not read is `unreadable`; it stays out of OCR while
+/// the document as a whole has native text, but when the document has none at
+/// all (`native_blank`) there is nothing native left to protect, so it goes
+/// to OCR too instead of the file settling as `empty` without a single
+/// recognition attempt.
+fn ocr_candidate_pages(pages: &[ExtractPageText], native_blank: bool) -> Vec<i64> {
+    pages
+        .iter()
+        .filter(|page| match page.quality.as_str() {
+            "sparse" | "empty" => true,
+            "unreadable" => native_blank,
+            _ => false,
+        })
+        .map(|page| page.page_number)
+        .collect()
+}
+
+/// Keeps the whole-document text unless it is not rich and the per-page layer
+/// holds clearly more (by alphanumeric characters).
+fn richer_native_text(text: String, pages: &[ExtractPageText]) -> String {
+    if extraction_quality(&text) == "rich" {
+        return text;
+    }
+    let joined = pages
+        .iter()
+        .map(|page| page.text_content.trim())
+        .filter(|page_text| !page_text.is_empty())
+        .collect::<Vec<_>>()
+        .join(
+            "
+
+",
+        );
+    let alphanumeric = |value: &str| value.chars().filter(|c| c.is_alphanumeric()).count();
+    if alphanumeric(&joined) > alphanumeric(&text) {
+        joined
+    } else {
+        text
     }
 }
 

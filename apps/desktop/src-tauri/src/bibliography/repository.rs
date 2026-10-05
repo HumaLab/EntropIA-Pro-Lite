@@ -2192,6 +2192,40 @@ pub fn extraction_matches_source(
     Ok(stored == Some((catalog_mtime, file_bytes)))
 }
 
+/// True when the stored extraction needs nothing more for this source: it
+/// matches the source identity AND is not an `empty` verdict that never went
+/// through a real OCR pass. A scan stored as `empty` by a build that could not
+/// read it (or while no OCR provider answered) is demanded again; once a
+/// provider has answered for it, even with no text, the verdict is final, so
+/// blank documents do not cost an OCR request on every sync. Rich and sparse
+/// extractions are never re-demanded. Admission and the executor both decide
+/// through this predicate.
+pub fn extraction_is_settled(
+    conn: &Connection,
+    attachment_id: &str,
+    catalog_mtime: Option<i64>,
+    file_bytes: i64,
+) -> BibliographyResult<bool> {
+    if !extraction_matches_source(conn, attachment_id, catalog_mtime, file_bytes)? {
+        return Ok(false);
+    }
+    let unresolved_empty: bool = conn
+        .query_row(
+            "SELECT e.quality = 'empty'
+                AND NOT EXISTS (
+                    SELECT 1 FROM processing_tasks t
+                    WHERE t.kind = 'bibliography_extract'
+                      AND t.subject_id = e.attachment_id
+                      AND t.state = 'succeeded'
+                      AND t.result_receipt_json LIKE '%\"ocrAttempted\":true%')
+             FROM bibliographic_extractions e WHERE e.attachment_id = ?1",
+            [attachment_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read extraction quality", error))?;
+    Ok(!unresolved_empty)
+}
+
 /// Reads the stored extraction for one attachment, if any.
 pub fn get_extraction(
     conn: &Connection,
@@ -2562,6 +2596,46 @@ pub fn upsert_chunk_embedding_in_transaction(
     )
     .map_err(|error| BibliographyError::sql("Failed to upsert chunk embedding", error))?;
     Ok(())
+}
+
+/// Vectors already stored for this work's current chunks under the same
+/// `(model, contract, dimensions)`, keyed by chunk text hash. A re-profile
+/// reuses them instead of paying the provider again; a different model or
+/// contract never matches, and neither does a chunk whose text moved (its
+/// hash no longer equals the stamp the vector was computed from).
+pub fn reusable_chunk_embeddings(
+    conn: &Connection,
+    item_id: &str,
+    model: &str,
+    contract: &str,
+    dimensions: usize,
+) -> BibliographyResult<std::collections::HashMap<String, Vec<u8>>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT e.input_hash, e.embedding
+               FROM bibliographic_chunk_embeddings e
+               JOIN bibliographic_chunks c ON c.id = e.chunk_id
+              WHERE c.item_id = ?1
+                AND e.input_hash = c.text_hash
+                AND e.embedding_model = ?2
+                AND e.embedding_contract = ?3
+                AND e.dimensions = ?4",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read reusable chunk vectors", error))?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![item_id, model, contract, dimensions as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read reusable chunk vectors", error))?;
+    let mut reusable = std::collections::HashMap::new();
+    for row in rows {
+        let (hash, blob) = row.map_err(|error| {
+            BibliographyError::sql("Failed to read a reusable chunk vector", error)
+        })?;
+        reusable.insert(hash, blob);
+    }
+    Ok(reusable)
 }
 
 // ── Page texts for chunking (E4c-WU2) ──────────────────────────────────────

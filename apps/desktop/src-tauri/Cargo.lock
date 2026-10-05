@@ -1515,6 +1515,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "vecscan",
  "webkit2gtk",
  "webview2-com",
  "windows",
@@ -6115,8 +6116,6 @@ dependencies = [
 [[package]]
 name = "tao"
 version = "0.35.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1c93047acf68669466a34690ac58cca7010bd1b201e1ec86f1fd0a75d3dd4a9"
 dependencies = [
  "bitflags 2.13.2",
  "block2",
@@ -7177,6 +7176,10 @@ checksum = "956ae1e0d85bca567dee1dcf87fb1ca2e792792f66f87dced8381f99cd91156a"
 dependencies = [
  "piston-float",
 ]
+
+[[package]]
+name = "vecscan"
+version = "0.1.0"
 
 [[package]]
 name = "version-compare"

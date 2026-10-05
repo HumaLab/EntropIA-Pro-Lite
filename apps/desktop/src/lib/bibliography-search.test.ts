@@ -103,7 +103,8 @@ describe('chat scope commands', () => {
       text: 'texto',
       spans: [[3, 0, 5]],
       pages: [{ pageNumber: 3, text: 'texto de la página', highlights: [[0, 5]] }],
-      openedPath: null,
+      originalKind: null,
+      originalPath: null,
       openError: null,
     }
     mockInvoke.mockResolvedValue(context)
@@ -114,8 +115,12 @@ describe('chat scope commands', () => {
     })
   })
 
-  it('opens the original through the OS viewer only by its own command', async () => {
-    mockInvoke.mockResolvedValue({ openedPath: 'C:/Zotero/storage/x.pdf', openError: null })
+  it('prepares the original for the in-app viewer only by its own command', async () => {
+    mockInvoke.mockResolvedValue({
+      originalKind: 'pdf',
+      originalPath: 'C:/Zotero/storage/x.pdf',
+      openError: null,
+    })
 
     await bibliographyOpenPassage('chunk-1')
     expect(mockInvoke).toHaveBeenCalledWith('bibliography_open_passage', { chunkId: 'chunk-1' })
@@ -130,6 +135,23 @@ describe('bibliographySearchPassages', () => {
     await expect(bibliographySearchPassages('cabildo')).resolves.toEqual(answer)
     expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
       request: { text: 'cabildo', topK: 12 },
+    })
+  })
+
+  it('forwards the approximate switch and the library when given', async () => {
+    mockInvoke.mockResolvedValue({ passages: [], notice: null })
+    await bibliographySearchPassages('cabildo', {
+      fuzzy: false,
+      zoteroLibrary: { libraryType: 'group', libraryId: '99' },
+    })
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_search_passages', {
+      request: {
+        text: 'cabildo',
+        topK: 12,
+        fuzzy: false,
+        zoteroLibraryType: 'group',
+        zoteroLibraryId: '99',
+      },
     })
   })
 

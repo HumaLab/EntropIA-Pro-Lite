@@ -17,6 +17,8 @@
 //! - Every hit carries its method, per-leg scores, contract, generation,
 //!   and the filters that applied.
 
+use std::collections::{HashMap, HashSet};
+
 use rusqlite::{Connection, OptionalExtension as _};
 
 use super::repository::BibliographyResult;
@@ -917,7 +919,10 @@ struct WorkMeta {
 }
 
 fn read_work_meta(conn: &Connection, item_id: &str) -> BibliographyResult<Option<WorkMeta>> {
-    let row: Option<(String, String, String, String, String)> = conn
+    // `title` is nullable in the catalog (Zotero keeps untitled chapters and
+    // books): reading it as a plain String failed the whole search on the
+    // first such work.
+    let row: Option<(String, String, Option<String>, String, String)> = conn
         .query_row(
             "SELECT i.item_key, i.library_id, i.title, i.csl_json_snapshot, i.native_json_snapshot
              FROM bibliographic_items i
@@ -938,6 +943,10 @@ fn read_work_meta(conn: &Connection, item_id: &str) -> BibliographyResult<Option
         .map_err(|error| err("Failed to read work metadata", error))?;
     let Some((item_key, library_id, title, csl_json, native_json)) = row else {
         return Ok(None);
+    };
+    let title = match title.filter(|title| !title.trim().is_empty()) {
+        Some(title) => title,
+        None => format!("Sin título ({item_key})"),
     };
     let csl: serde_json::Value = serde_json::from_str(&csl_json).unwrap_or(serde_json::Value::Null);
     let native: serde_json::Value =
@@ -1085,7 +1094,6 @@ pub fn search_works(
     query: &HybridQuery,
     embed_query: &dyn Fn(&str) -> Result<Vec<f32>, String>,
 ) -> BibliographyResult<HybridAnswer> {
-    use std::collections::HashMap;
     let answer_for =
         |hits: Vec<WorkHit>, vector_available: bool, active_generation_id: Option<String>| {
             HybridAnswer {
@@ -1260,10 +1268,33 @@ fn hits_for_lexical(
     Ok(hits)
 }
 
-// ── E4d-WU1: hierarchical passage search (RED stubs) ───────────────────────
+// ── Passage search ─────────────────────────────────────────────────────────
 
-/// One ranked passage: a chunk with its work identity, spans, and the
-/// work-level score that admitted its work into the candidate set.
+/// Why a passage is in the answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassageMatchKind {
+    /// Its text carries the words as typed (accents and case aside).
+    Exact,
+    /// Its text carries a close variant of them (an OCR misreading, a typo
+    /// the spelling was corrected from): see [`crate::nlp::fuzzy`].
+    Approximate,
+    /// Only its vector was near the query's.
+    Meaning,
+}
+
+impl PassageMatchKind {
+    /// Stable machine string the frontend turns into words.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Approximate => "approximate",
+            Self::Meaning => "meaning",
+        }
+    }
+}
+
+/// One ranked passage: a chunk with its work identity, spans, and the scores
+/// of the legs that admitted it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageHit {
     pub chunk_id: String,
@@ -1275,174 +1306,706 @@ pub struct PassageHit {
     pub ordinal: i64,
     pub text: String,
     pub spans: Vec<(i64, i64, i64)>,
+    /// Cosine similarity between the chunk vector and the query; `0.0` when
+    /// the query could not be embedded (a lexical-only answer).
     pub vector_score: f64,
-    pub work_score: f64,
+    /// Why it is here: the lexical leg's reason when the text matched,
+    /// otherwise `Meaning`.
+    pub match_kind: PassageMatchKind,
+    /// The words behind an exact or approximate match; empty for `Meaning`.
+    pub match_terms: Vec<String>,
+    /// Rank-fusion score of the two legs; only meaningful for ordering.
+    pub fused_score: f64,
     pub generation_id: String,
     pub contract_hash: String,
 }
 
-/// Hierarchical search: work-level hybrid retrieval admits candidate
-/// works, then chunk vectors of the active generation rank passages
-/// within them. Stale chunk vectors (text moved after embed) and
-/// tombstoned works never surface. Without a queryable space there is
-/// nothing vector to rank: the answer is empty and the embedder never
-/// runs.
+/// Candidates each leg hands to the fusion. Deep enough that a per-work cap
+/// or a filter never starves the answer, shallow enough to stay cheap.
+const PASSAGE_LEG_DEPTH: usize = 200;
+
+/// Words that carry no weight in a lexical match. They still count inside an
+/// exact phrase.
+const MATCH_STOPWORDS: &[&str] = &[
+    "a", "al", "con", "de", "del", "e", "el", "en", "la", "las", "lo", "los", "o", "para", "por",
+    "que", "se", "su", "sus", "u", "un", "una", "y", "an", "and", "as", "at", "by", "for", "in",
+    "is", "of", "on", "or", "the", "to",
+];
+
+/// Lower-cases, folds accents and typographic ligatures (PDF text carries
+/// "ﬁ") and collapses everything that is not a letter or digit into single
+/// spaces. The result starts and ends with a space so a word-bounded phrase
+/// is a plain substring. The accent table is the one the corpus search uses
+/// ([`crate::nlp::fuzzy::normalize_term`]) so both agree on what a word is.
+fn fold_for_match(text: &str, out: &mut String) {
+    out.clear();
+    out.push(' ');
+    for ch in text.chars() {
+        if ch.is_ascii() {
+            if ch.is_ascii_alphanumeric() {
+                out.push(ch.to_ascii_lowercase());
+            } else if !out.ends_with(' ') {
+                out.push(' ');
+            }
+            continue;
+        }
+        for lower in ch.to_lowercase() {
+            let folded: &str = match lower {
+                'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => "a",
+                'é' | 'è' | 'ê' | 'ë' => "e",
+                'í' | 'ì' | 'î' | 'ï' => "i",
+                'ó' | 'ò' | 'ô' | 'ö' | 'õ' => "o",
+                'ú' | 'ù' | 'û' | 'ü' => "u",
+                'ñ' => "n",
+                'ç' => "c",
+                'ý' | 'ÿ' => "y",
+                'ﬀ' => "ff",
+                'ﬁ' => "fi",
+                'ﬂ' => "fl",
+                'ﬃ' => "ffi",
+                'ﬄ' => "ffl",
+                other if other.is_alphanumeric() => {
+                    out.push(other);
+                    continue;
+                }
+                _ => {
+                    if !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                    continue;
+                }
+            };
+            out.push_str(folded);
+        }
+    }
+    if !out.ends_with(' ') {
+        out.push(' ');
+    }
+}
+
+/// Rank key of a lexical match: exact phrase, distinct terms present, density.
+type MatchRank = (bool, usize, f64);
+
+/// A chunk's reason to be in the lexical leg.
+struct LexicalCandidate {
+    chunk_id: String,
+    kind: PassageMatchKind,
+    terms: Vec<String>,
+}
+
+/// A query prepared for the lexical leg.
+struct LexicalQuery {
+    /// Whole folded query, word-bounded.
+    phrase: String,
+    /// Distinct content words, folded.
+    words: Vec<String>,
+    /// The same words with a leading space, so each matches the start of a
+    /// word ("casa" reaches "casas", never "ocasa").
+    terms: Vec<String>,
+    /// Terms a chunk must carry to count without the exact phrase.
+    required: usize,
+    /// Close variants of the words from the corpus vocabulary, folded.
+    variants: Vec<String>,
+    /// The variants word-bounded (` v `), the way they are searched.
+    variant_terms: Vec<String>,
+}
+
+impl LexicalQuery {
+    fn new(text: &str) -> Option<Self> {
+        let mut phrase = String::new();
+        fold_for_match(text, &mut phrase);
+        if phrase.trim().is_empty() {
+            return None;
+        }
+        let mut words: Vec<String> = Vec::new();
+        for word in phrase.split_whitespace() {
+            if !MATCH_STOPWORDS.contains(&word) && !words.iter().any(|known| known == word) {
+                words.push(word.to_string());
+            }
+        }
+        let terms = words.iter().map(|word| format!(" {word}")).collect();
+        let count = words.len();
+        let required = if count <= 2 {
+            count
+        } else {
+            (count * 3).div_ceil(4)
+        };
+        Some(Self {
+            phrase,
+            words,
+            terms,
+            required,
+            variants: Vec::new(),
+            variant_terms: Vec::new(),
+        })
+    }
+
+    /// Searches close variants of the words too, picked from `vocabulary`
+    /// the way the corpus search picks them.
+    fn with_variants(mut self, vocabulary: &HashMap<String, i64>) -> Self {
+        for word in &self.words {
+            for variant in crate::nlp::fuzzy::pick_variants(word, vocabulary) {
+                if !self.words.contains(&variant) && !self.variants.contains(&variant) {
+                    self.variants.push(variant);
+                }
+            }
+        }
+        self.variant_terms = self
+            .variants
+            .iter()
+            .map(|variant| format!(" {variant} "))
+            .collect();
+        self
+    }
+
+    /// How the chunk matches, and its rank key (phrase, distinct terms or
+    /// variants present, density; bigger is better); `None` when it does not.
+    fn score(&self, folded: &str) -> Option<(PassageMatchKind, Vec<String>, MatchRank)> {
+        let phrase = folded.contains(self.phrase.as_str());
+        let mut present: Vec<&str> = Vec::new();
+        let mut occurrences = 0usize;
+        for (word, term) in self.words.iter().zip(&self.terms) {
+            let found = folded.matches(term.as_str()).count();
+            if found > 0 {
+                present.push(word);
+                occurrences += found;
+            }
+        }
+        let density = |occurrences: usize| occurrences as f64 / folded.len().max(1) as f64;
+        if phrase || (self.required > 0 && present.len() >= self.required) {
+            let terms = if present.is_empty() {
+                vec![self.phrase.trim().to_string()]
+            } else {
+                present.iter().map(|word| word.to_string()).collect()
+            };
+            return Some((
+                PassageMatchKind::Exact,
+                terms,
+                (phrase, present.len(), density(occurrences)),
+            ));
+        }
+        let mut found_variants: Vec<String> = Vec::new();
+        let mut variant_occurrences = 0usize;
+        for (variant, term) in self.variants.iter().zip(&self.variant_terms) {
+            let found = folded.matches(term.as_str()).count();
+            if found > 0 {
+                found_variants.push(variant.clone());
+                variant_occurrences += found;
+            }
+        }
+        if found_variants.is_empty() {
+            return None;
+        }
+        let count = found_variants.len();
+        Some((
+            PassageMatchKind::Approximate,
+            found_variants,
+            (false, count, density(variant_occurrences)),
+        ))
+    }
+}
+
+/// Works the filters admit; `None` when there is no filter at all.
+fn eligible_items(
+    conn: &Connection,
+    filters: &WorkFilters,
+) -> BibliographyResult<Option<HashSet<String>>> {
+    if filters == &WorkFilters::default() {
+        return Ok(None);
+    }
+    let mut stmt = conn
+        .prepare("SELECT id, library_id FROM bibliographic_items")
+        .map_err(|error| err("Failed to prepare eligible works", error))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| err("Failed to read eligible works", error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| err("Failed to collect eligible works", error))?;
+    drop(stmt);
+    let only_library = filters.year_from.is_none()
+        && filters.year_to.is_none()
+        && filters.item_types.is_empty()
+        && filters.tags.is_empty();
+    let mut allowed = HashSet::new();
+    for (item_id, library_id) in rows {
+        if !filters.library_ids.is_empty() && !filters.library_ids.contains(&library_id) {
+            continue;
+        }
+        if !only_library {
+            let Some(meta) = read_work_meta(conn, &item_id)? else {
+                continue;
+            };
+            if !matches_filters(&meta, filters) {
+                continue;
+            }
+        }
+        allowed.insert(item_id);
+    }
+    Ok(Some(allowed))
+}
+
+/// Chunks of the active generation, text only. The chunk row IS the current
+/// text, so freshness of the vector is no concern of a text match; the
+/// `EXISTS` is answered from the generation index without reading a vector.
+const ACTIVE_CHUNK_TEXT_SQL: &str = "SELECT c.id, c.item_id, c.text_content
+     FROM bibliographic_chunks c
+     LEFT JOIN zotero_item_tombstones t ON t.item_id = c.item_id
+     WHERE t.item_id IS NULL
+       AND EXISTS (SELECT 1 FROM bibliographic_chunk_embeddings e
+                    WHERE e.chunk_id = c.id AND e.generation_id = ?1)";
+
+/// What the lexical leg searches: for every word of the active generation's
+/// chunks, the chunks that hold it. Chunks have no FTS table (the corpus has
+/// `fts_items` and its vocabulary view), and scanning 70 MB of text per query
+/// costs seconds, so the index is built once by one scan of the chunk text
+/// and kept in memory per archive and generation. It only nominates
+/// candidates: each one is re-read from the database and judged on its real
+/// text, so a stale entry can miss a new chunk but never invent a match.
+/// The same words, with how many chunks hold each, are the vocabulary that
+/// approximate matching picks variants from, as the corpus does with
+/// `fts_items_vocab`.
+struct ChunkIndex {
+    chunk_ids: Vec<String>,
+    /// Index into `items` of each chunk's work.
+    chunk_items: Vec<u32>,
+    items: Vec<String>,
+    postings: HashMap<String, Vec<u32>>,
+    /// Words of 4+ letters without digits with their chunk counts (what
+    /// [`crate::nlp::fuzzy::pick_variants`] reads).
+    vocabulary: HashMap<String, i64>,
+}
+
+fn build_chunk_index(conn: &Connection, generation_id: &str) -> BibliographyResult<ChunkIndex> {
+    let mut stmt = conn
+        .prepare(ACTIVE_CHUNK_TEXT_SQL)
+        .map_err(|error| err("Failed to prepare chunk index", error))?;
+    let mut rows = stmt
+        .query([generation_id])
+        .map_err(|error| err("Failed to read chunk index", error))?;
+    let mut index = ChunkIndex {
+        chunk_ids: Vec::new(),
+        chunk_items: Vec::new(),
+        items: Vec::new(),
+        postings: HashMap::new(),
+        vocabulary: HashMap::new(),
+    };
+    let mut item_slots: HashMap<String, u32> = HashMap::new();
+    let mut folded = String::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| err("Failed to read chunk index", error))?
+    {
+        let chunk: u32 = u32::try_from(index.chunk_ids.len())
+            .map_err(|error| err("Too many chunks to index", error))?;
+        let item_id = row
+            .get_ref(1)
+            .and_then(|value| value.as_str().map_err(Into::into))
+            .map_err(|error| err("Failed to read passage work", error))?;
+        let slot = match item_slots.get(item_id) {
+            Some(slot) => *slot,
+            None => {
+                let slot = u32::try_from(index.items.len())
+                    .map_err(|error| err("Too many works to index", error))?;
+                item_slots.insert(item_id.to_string(), slot);
+                index.items.push(item_id.to_string());
+                slot
+            }
+        };
+        let text = row
+            .get_ref(2)
+            .and_then(|value| value.as_str().map_err(Into::into))
+            .map_err(|error| err("Failed to read passage text", error))?;
+        fold_for_match(text, &mut folded);
+        let mut words: Vec<&str> = folded
+            .split_ascii_whitespace()
+            .filter(|word| word.chars().count() >= 2 && !MATCH_STOPWORDS.contains(word))
+            .collect();
+        words.sort_unstable();
+        words.dedup();
+        for word in words {
+            match index.postings.get_mut(word) {
+                Some(posting) => posting.push(chunk),
+                None => {
+                    index.postings.insert(word.to_string(), vec![chunk]);
+                }
+            }
+        }
+        let id: String = row
+            .get(0)
+            .map_err(|error| err("Failed to read passage id", error))?;
+        index.chunk_ids.push(id);
+        index.chunk_items.push(slot);
+    }
+    index.vocabulary = index
+        .postings
+        .iter()
+        .filter(|(word, _)| word.chars().count() >= 4 && !word.chars().any(|c| c.is_ascii_digit()))
+        .map(|(word, posting)| (word.clone(), posting.len() as i64))
+        .collect();
+    Ok(index)
+}
+
+/// The chunk index of the archive and generation, built on first use. A
+/// cheap fingerprint (chunk count and highest row id) decides when it is
+/// stale; an in-memory archive has no identity to key on and is never cached.
+fn chunk_index(
+    conn: &Connection,
+    generation_id: &str,
+) -> BibliographyResult<std::sync::Arc<ChunkIndex>> {
+    use std::sync::{Arc, Mutex};
+    static CACHE: Mutex<Option<(String, Arc<ChunkIndex>)>> = Mutex::new(None);
+
+    let key = match conn.path() {
+        Some(path) if !path.is_empty() => {
+            let (count, last): (i64, i64) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM bibliographic_chunks",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|error| err("Failed to fingerprint chunks", error))?;
+            Some(format!("{path}|{generation_id}|{count}|{last}"))
+        }
+        _ => None,
+    };
+    if let Some(key) = &key {
+        if let Ok(cache) = CACHE.lock() {
+            if let Some((cached_key, index)) = cache.as_ref() {
+                if cached_key == key {
+                    return Ok(Arc::clone(index));
+                }
+            }
+        }
+    }
+    let index = Arc::new(build_chunk_index(conn, generation_id)?);
+    if let Some(key) = key {
+        if let Ok(mut cache) = CACHE.lock() {
+            *cache = Some((key, Arc::clone(&index)));
+        }
+    }
+    Ok(index)
+}
+
+/// Lexical leg: every chunk of the active generation whose text carries the
+/// query, exact matches first and close variants after them, each group best
+/// first. The index nominates the chunks holding the words (or a variant of
+/// them); each is judged on its real text.
+fn lexical_passage_candidates(
+    conn: &Connection,
+    index: &ChunkIndex,
+    query: &LexicalQuery,
+    allowed: Option<&HashSet<String>>,
+    depth: usize,
+) -> BibliographyResult<Vec<LexicalCandidate>> {
+    // Chunks holding enough of the words (each a word prefix) to match
+    // exactly, plus those holding any variant.
+    let mut held: HashMap<u32, usize> = HashMap::new();
+    for word in &query.words {
+        let mut chunks: Vec<u32> = index
+            .postings
+            .iter()
+            .filter(|(candidate, _)| candidate.starts_with(word.as_str()))
+            .flat_map(|(_, posting)| posting.iter().copied())
+            .collect();
+        chunks.sort_unstable();
+        chunks.dedup();
+        for chunk in chunks {
+            *held.entry(chunk).or_default() += 1;
+        }
+    }
+    let mut nominated: HashSet<u32> = held
+        .into_iter()
+        .filter(|(_, count)| query.required > 0 && *count >= query.required)
+        .map(|(chunk, _)| chunk)
+        .collect();
+    for variant in &query.variants {
+        if let Some(posting) = index.postings.get(variant) {
+            nominated.extend(posting.iter().copied());
+        }
+    }
+
+    let tombstoned: HashSet<String> = {
+        let mut stmt = conn
+            .prepare("SELECT item_id FROM zotero_item_tombstones")
+            .map_err(|error| err("Failed to prepare tombstones", error))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| err("Failed to read tombstones", error))?
+            .collect::<Result<_, _>>()
+            .map_err(|error| err("Failed to collect tombstones", error))?;
+        rows
+    };
+    let mut text_stmt = conn
+        .prepare("SELECT text_content FROM bibliographic_chunks WHERE id = ?1")
+        .map_err(|error| err("Failed to prepare passage text", error))?;
+    let mut matched: Vec<(MatchRank, LexicalCandidate)> = Vec::new();
+    let mut folded = String::new();
+    for chunk in nominated {
+        let item_id = &index.items[index.chunk_items[chunk as usize] as usize];
+        if tombstoned.contains(item_id) || allowed.is_some_and(|set| !set.contains(item_id)) {
+            continue;
+        }
+        let chunk_id = &index.chunk_ids[chunk as usize];
+        let text: Option<String> = text_stmt
+            .query_row([chunk_id], |row| row.get(0))
+            .optional()
+            .map_err(|error| err("Failed to read passage text", error))?;
+        let Some(text) = text else {
+            continue;
+        };
+        fold_for_match(&text, &mut folded);
+        let Some((kind, terms, rank)) = query.score(&folded) else {
+            continue;
+        };
+        matched.push((
+            rank,
+            LexicalCandidate {
+                chunk_id: chunk_id.clone(),
+                kind,
+                terms,
+            },
+        ));
+    }
+    matched.sort_by(|a, b| {
+        let exact = |kind: PassageMatchKind| kind == PassageMatchKind::Exact;
+        exact(b.1.kind)
+            .cmp(&exact(a.1.kind))
+            .then_with(|| b.0 .0.cmp(&a.0 .0))
+            .then_with(|| b.0 .1.cmp(&a.0 .1))
+            .then_with(|| {
+                b.0 .2
+                    .partial_cmp(&a.0 .2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| a.1.chunk_id.cmp(&b.1.chunk_id))
+    });
+    matched.truncate(depth);
+    Ok(matched
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect())
+}
+
+/// Reference vector leg: exact cosine against every fresh chunk vector of
+/// the active generation, streamed from SQLite. The production leg is the
+/// quantized in-memory index (`vector_index`); this is its oracle in tests
+/// and in the ignored measurement.
+#[cfg(test)]
+pub(crate) fn exact_vector_candidates(
+    conn: &Connection,
+    generation_id: &str,
+    query_vector: &[f32],
+    allowed: Option<&HashSet<String>>,
+    depth: usize,
+) -> BibliographyResult<Vec<(String, f64)>> {
+    let norm = query_vector
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 || !norm.is_finite() {
+        return Ok(Vec::new());
+    }
+    let unit_query: Vec<f32> = query_vector
+        .iter()
+        .map(|value| (f64::from(*value) / norm) as f32)
+        .collect();
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.chunk_id, c.item_id, e.embedding
+             FROM bibliographic_chunk_embeddings e
+             JOIN bibliographic_chunks c ON c.id = e.chunk_id
+             LEFT JOIN zotero_item_tombstones t ON t.item_id = c.item_id
+             WHERE e.generation_id = ?1 AND t.item_id IS NULL
+               AND e.input_hash = c.text_hash",
+        )
+        .map_err(|error| err("Failed to prepare vector passages", error))?;
+    let mut rows = stmt
+        .query([generation_id])
+        .map_err(|error| err("Failed to read vector passages", error))?;
+    let order = |a: &(String, f64), b: &(String, f64)| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    };
+    let mut best: Vec<(String, f64)> = Vec::new();
+    // Below the current cut-off nothing can enter the leg: skip the id
+    // allocation for the overwhelming majority of rows.
+    let mut floor = f64::NEG_INFINITY;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| err("Failed to read vector passages", error))?
+    {
+        let item_id = row
+            .get_ref(1)
+            .and_then(|value| value.as_str().map_err(Into::into))
+            .map_err(|error| err("Failed to read passage work", error))?;
+        if allowed.is_some_and(|set| !set.contains(item_id)) {
+            continue;
+        }
+        let blob = row
+            .get_ref(2)
+            .and_then(|value| value.as_blob().map_err(Into::into))
+            .map_err(|error| err("Failed to read passage vector", error))?;
+        let Some(similarity) = vecscan::unit_similarity_blob(&unit_query, blob) else {
+            continue;
+        };
+        let similarity = f64::from(similarity);
+        if similarity < floor {
+            continue;
+        }
+        let chunk_id: String = row
+            .get(0)
+            .map_err(|error| err("Failed to read passage id", error))?;
+        best.push((chunk_id, similarity));
+        if best.len() >= depth * 4 {
+            best.sort_by(order);
+            best.truncate(depth);
+            floor = best.last().map_or(f64::NEG_INFINITY, |last| last.1);
+        }
+    }
+    best.sort_by(order);
+    best.truncate(depth);
+    Ok(best)
+}
+
+/// Passage search over EVERY chunk of the active generation, never through a
+/// pre-selected set of works: a lexical leg over the chunk text (an exact
+/// phrase ranks first; with `fuzzy`, close variants of the words follow the
+/// exact matches) and a vector leg over the chunk vectors, fused by rank
+/// only. Stale chunk vectors (text moved after embed) and tombstoned works
+/// never surface. Without an active generation nothing is indexed: the
+/// answer is empty and the embedder never runs. When the query cannot be
+/// embedded the lexical leg still answers; only if it finds nothing either
+/// is the failure reported (`search_unavailable`).
 #[allow(clippy::too_many_arguments)]
 pub fn search_passages(
     conn: &Connection,
     contract_hash: &str,
     query_text: &str,
-    top_works: usize,
     top_chunks_per_work: usize,
     top_k: usize,
     filters: &WorkFilters,
+    fuzzy: bool,
     embed_query: &dyn Fn(&str) -> Result<Vec<f32>, String>,
 ) -> BibliographyResult<Vec<PassageHit>> {
-    use std::collections::{HashMap, HashSet};
     if query_text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    // The vector leg only runs against the active generation of the query
-    // contract. Without one there is nothing to rank and the embedder
-    // never runs.
     let active = crate::bibliography::generation::active_generation(conn, contract_hash)?;
     let Some(active) = active else {
         return Ok(Vec::new());
     };
-    let query_vector = embed_query(query_text).map_err(|error| {
-        crate::bibliography::repository::BibliographyError::new(
-            "search_unavailable",
-            format!("Failed to embed passage query: {error}"),
-        )
-    })?;
-    if !query_vector.iter().all(|value| value.is_finite()) {
-        return Ok(Vec::new());
-    }
-    // Work-level candidacy first: the hybrid answer admits works through
-    // either leg, and its fused score travels as the hierarchy provenance.
-    let works = search_works(
-        conn,
-        contract_hash,
-        &HybridQuery {
-            text: query_text.to_string(),
-            top_k: top_works.max(1),
-            filters: filters.clone(),
-        },
-        embed_query,
-    )?;
-    if works.hits.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut work_scores: HashMap<&str, f64> = HashMap::new();
-    let mut candidates: HashSet<&str> = HashSet::new();
-    for hit in &works.hits {
-        work_scores.insert(hit.item_id.as_str(), hit.fused_score);
-        candidates.insert(hit.item_id.as_str());
-    }
-    // Chunk vectors of the active generation inside candidate works.
-    let mut stmt = conn
-        .prepare(
-            "SELECT e.chunk_id, c.item_id, e.embedding, e.dimensions, e.input_hash,
-                    c.text_content, c.text_hash, c.ordinal, c.attachment_id
-             FROM bibliographic_chunk_embeddings e
-             JOIN bibliographic_chunks c ON c.id = e.chunk_id
-             JOIN bibliographic_items i ON i.id = c.item_id
-             LEFT JOIN zotero_item_tombstones t ON t.item_id = c.item_id
-             WHERE e.generation_id = ?1 AND t.item_id IS NULL",
-        )
-        .map_err(|error| err("Failed to prepare passage candidates", error))?;
-    let rows = stmt
-        .query_map([&active.id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, String>(8)?,
-            ))
-        })
-        .map_err(|error| err("Failed to read passage candidates", error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| err("Failed to collect passage candidates", error))?;
-    drop(stmt);
-    let mut scored: Vec<(String, f64)> = Vec::new();
-    let mut chunk_rows: HashMap<String, (String, String, i64, String, i64, String)> =
-        HashMap::new();
-    for (
-        chunk_id,
-        item_id,
-        embedding,
-        dimensions,
-        input_hash,
-        text,
-        text_hash,
-        ordinal,
-        attachment_id,
-    ) in rows
-    {
-        if !candidates.contains(item_id.as_str()) {
-            continue;
+    let (query_vector, embed_error) = match embed_query(query_text) {
+        Ok(vector) if vector.iter().all(|value| value.is_finite()) => (Some(vector), None),
+        Ok(_) => (
+            None,
+            Some("the query embedding has non-finite values".to_string()),
+        ),
+        Err(error) => (None, Some(error)),
+    };
+    let allowed = eligible_items(conn, filters)?;
+    let lexical = match LexicalQuery::new(query_text) {
+        Some(mut query) => {
+            let index = chunk_index(conn, &active.id)?;
+            if fuzzy {
+                query = query.with_variants(&index.vocabulary);
+            }
+            lexical_passage_candidates(conn, &index, &query, allowed.as_ref(), PASSAGE_LEG_DEPTH)?
         }
-        // Plan section 314 at chunk level: a vector computed from older
-        // text never surfaces, even inside an active generation.
-        if input_hash != text_hash {
-            continue;
+        None => Vec::new(),
+    };
+    let vector = match &query_vector {
+        Some(query_vector) => crate::bibliography::vector_index::search(
+            conn,
+            &active.id,
+            query_vector,
+            allowed.as_ref(),
+            PASSAGE_LEG_DEPTH,
+        )?,
+        None => Vec::new(),
+    };
+    if let Some(error) = embed_error {
+        if lexical.is_empty() {
+            return Err(crate::bibliography::repository::BibliographyError::new(
+                "search_unavailable",
+                format!("Failed to embed passage query: {error}"),
+            ));
         }
-        if dimensions as usize != query_vector.len() {
-            continue;
-        }
-        let stored = match crate::nlp::vector::decode_embedding_blob(&embedding) {
-            Ok(stored) => stored,
-            Err(_) => continue,
-        };
-        if !stored.iter().all(|value| value.is_finite()) {
-            continue;
-        }
-        let distance = match crate::nlp::vector::cosine_distance(&query_vector, &stored) {
-            Some(distance) => distance,
-            None => continue,
-        };
-        scored.push((chunk_id.clone(), 1.0 - distance));
-        chunk_rows.insert(
-            chunk_id,
-            (
-                item_id,
-                text,
-                ordinal,
-                attachment_id,
-                dimensions,
-                input_hash,
-            ),
-        );
     }
-    scored.sort_by(|a, b| {
+
+    // Rank fusion: only positions count, never the legs' own scores. Ties go
+    // to the chunk the lexical leg ranked higher (an exact phrase before an
+    // equally ranked vector neighbour), then to the id.
+    let mut fused: HashMap<&str, (f64, usize)> = HashMap::new();
+    let mut why: HashMap<&str, &LexicalCandidate> = HashMap::new();
+    for (rank, candidate) in lexical.iter().enumerate() {
+        let entry = fused
+            .entry(candidate.chunk_id.as_str())
+            .or_insert((0.0, usize::MAX));
+        entry.0 += 1.0 / (RRF_K + rank as f64);
+        entry.1 = rank;
+        why.insert(candidate.chunk_id.as_str(), candidate);
+    }
+    for (rank, (chunk_id, _)) in vector.iter().enumerate() {
+        let entry = fused.entry(chunk_id.as_str()).or_insert((0.0, usize::MAX));
+        entry.0 += 1.0 / (RRF_K + rank as f64);
+    }
+    let mut ranked: Vec<(&str, f64, usize)> = fused
+        .into_iter()
+        .map(|(chunk_id, (score, lexical_rank))| (chunk_id, score, lexical_rank))
+        .collect();
+    ranked.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(b.0))
     });
+
     // Per-work cap first, then the global cut: no single work crowds out
-    // every other candidate.
+    // every other one.
     let cap = top_chunks_per_work.max(1);
-    let mut per_work: HashMap<&str, usize> = HashMap::new();
+    let mut per_work: HashMap<String, usize> = HashMap::new();
     let mut hits = Vec::new();
-    for (chunk_id, score) in scored {
+    for (chunk_id, fused_score, _) in ranked {
         if hits.len() >= top_k.max(1) {
             break;
         }
-        let Some((item_id, text, ordinal, attachment_id, _, _)) = chunk_rows.get(&chunk_id) else {
+        let row: Option<(String, String, i64, String)> = conn
+            .query_row(
+                "SELECT item_id, text_content, ordinal, attachment_id
+                 FROM bibliographic_chunks WHERE id = ?1",
+                [chunk_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|error| err("Failed to read passage chunk", error))?;
+        let Some((item_id, text, ordinal, attachment_id)) = row else {
             continue;
         };
-        let used = per_work.entry(item_id.as_str()).or_insert(0);
+        let used = per_work.entry(item_id.clone()).or_insert(0);
         if *used >= cap {
             continue;
         }
-        *used += 1;
-        let Some(meta) = read_work_meta(conn, item_id)? else {
+        let Some(meta) = read_work_meta(conn, &item_id)? else {
             continue;
+        };
+        *used += 1;
+        let vector_score = match &query_vector {
+            Some(query_vector) => conn
+                .query_row(
+                    "SELECT embedding FROM bibliographic_chunk_embeddings
+                     WHERE chunk_id = ?1 AND generation_id = ?2",
+                    rusqlite::params![chunk_id, active.id],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(|error| err("Failed to read passage vector", error))?
+                .and_then(|blob| crate::nlp::vector::cosine_distance_to_blob(query_vector, &blob))
+                .map_or(0.0, |distance| 1.0 - distance),
+            None => 0.0,
         };
         let mut spans_stmt = conn
             .prepare(
@@ -1451,7 +2014,7 @@ pub fn search_passages(
             )
             .map_err(|error| err("Failed to prepare passage spans", error))?;
         let spans = spans_stmt
-            .query_map([&chunk_id], |row| {
+            .query_map([chunk_id], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
@@ -1462,18 +2025,24 @@ pub fn search_passages(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| err("Failed to collect passage spans", error))?;
         drop(spans_stmt);
+        let (match_kind, match_terms) = match why.get(chunk_id) {
+            Some(candidate) => (candidate.kind, candidate.terms.clone()),
+            None => (PassageMatchKind::Meaning, Vec::new()),
+        };
         hits.push(PassageHit {
-            chunk_id: chunk_id.clone(),
-            item_id: item_id.clone(),
+            chunk_id: chunk_id.to_string(),
+            item_id,
             item_key: meta.item_key,
             library_id: meta.library_id,
             title: meta.title,
-            attachment_id: attachment_id.clone(),
-            ordinal: *ordinal,
-            text: text.clone(),
+            attachment_id,
+            ordinal,
+            text,
             spans,
-            vector_score: score,
-            work_score: work_scores.get(item_id.as_str()).copied().unwrap_or(0.0),
+            vector_score,
+            match_kind,
+            match_terms,
+            fused_score,
             generation_id: active.id.clone(),
             contract_hash: active.contract_hash.clone(),
         });
@@ -1487,7 +2056,7 @@ pub(crate) mod passage_tests {
         begin_index_generation, complete_index_generation, note_generation_progress,
         register_embedding_contract, set_generation_manifest, EmbeddingContractRow,
     };
-    use super::{search_passages, PassageHit, WorkFilters};
+    use super::{search_passages, PassageHit, PassageMatchKind, WorkFilters};
     use rusqlite::Connection;
 
     pub(crate) const CONTRACT: &str = "contract-passages";
@@ -1694,13 +2263,254 @@ pub(crate) mod passage_tests {
             conn,
             CONTRACT,
             text,
-            5,
             3,
             10,
             &WorkFilters::default(),
+            true,
             embed,
         )
         .expect("passage search")
+    }
+
+    /// Deterministic 4-dimension vectors (xorshift); never the zero vector.
+    fn pseudo_vectors(count: usize, mut seed: u64) -> Vec<[f32; 4]> {
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed % 20_001) as f32 / 10_000.0) - 1.0
+        };
+        (0..count)
+            .map(|_| [next(), next(), next(), next() + 0.01])
+            .collect()
+    }
+
+    /// Three works of twenty chunks each, with an active generation.
+    fn indexed_corpus() -> (Connection, String, Vec<String>) {
+        let mut conn = passage_db();
+        let mut items = Vec::new();
+        for (n, key) in ["KV0001", "KV0002", "KV0003"].into_iter().enumerate() {
+            let (_lib, item) = seed_item(&mut conn, &format!("pv{n}"), &format!("v{n}"), key, key);
+            items.push(item);
+        }
+        let gen = activate_gen(&mut conn, "gen-index");
+        let vectors = pseudo_vectors(60, 42);
+        for (i, vector) in vectors.iter().enumerate() {
+            let item = &items[i % 3];
+            seed_chunk(
+                &conn,
+                item,
+                (i / 3) as i64,
+                &format!("texto {i}"),
+                1,
+                &gen,
+                vector,
+                None,
+            );
+        }
+        (conn, gen, items)
+    }
+
+    fn assert_index_equals_exact(
+        conn: &Connection,
+        gen: &str,
+        query: &[f32],
+        allowed: Option<&std::collections::HashSet<String>>,
+        depth: usize,
+    ) -> Vec<(String, f64)> {
+        let want = super::exact_vector_candidates(conn, gen, query, allowed, depth).unwrap();
+        let got = super::super::vector_index::search(conn, gen, query, allowed, depth).unwrap();
+        let ids = |rows: &[(String, f64)]| rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&got), ids(&want), "same chunks in the same order");
+        for (g, w) in got.iter().zip(&want) {
+            assert!(
+                (g.1 - w.1).abs() < 1e-5,
+                "re-ranked score is exact: {g:?} vs {w:?}"
+            );
+        }
+        got
+    }
+
+    #[test]
+    fn the_vector_index_returns_the_exact_scans_top_k() {
+        let (conn, gen, items) = indexed_corpus();
+        let only_two: std::collections::HashSet<String> = items[..2].iter().cloned().collect();
+        for query in pseudo_vectors(6, 7) {
+            let all = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+            assert_eq!(all.len(), 10);
+            let some = assert_index_equals_exact(&conn, &gen, &query, Some(&only_two), 10);
+            assert!(some.iter().all(|(id, _)| !id.starts_with(&items[2])));
+        }
+        // Another dimension or a zero query nominates nothing.
+        let index = super::super::vector_index::search(&conn, &gen, &[1.0, 0.0], None, 5).unwrap();
+        assert!(index.is_empty());
+        let zero = super::super::vector_index::search(&conn, &gen, &[0.0; 4], None, 5).unwrap();
+        assert!(zero.is_empty());
+    }
+
+    #[test]
+    fn the_vector_index_follows_the_chunk_set_and_the_vectors() {
+        let (memory, gen, items) = indexed_corpus();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("archive.sqlite");
+        memory
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])
+            .expect("copy to a file");
+        let conn = Connection::open(&path).expect("file db");
+        let query = [0.9_f32, -0.2, 0.4, 0.1];
+        assert_index_equals_exact(&conn, &gen, &query, None, 10);
+
+        // A new chunk that is the query itself must come first.
+        let added = seed_chunk(&conn, &items[0], 99, "nuevo", 1, &gen, &query, None);
+        let after_insert = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert_eq!(after_insert[0].0, added);
+
+        // A vector re-embedded in place (same row id, new input hash) moves.
+        let victim = after_insert[1].0.clone();
+        let blob: Vec<u8> = [-0.9_f32, 0.2, -0.4, -0.1]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        conn.execute(
+            "UPDATE bibliographic_chunk_embeddings SET embedding = ?1, input_hash = 'rehash'
+             WHERE chunk_id = ?2",
+            rusqlite::params![blob, victim],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE bibliographic_chunks SET text_hash = 'rehash' WHERE id = ?1",
+            [&victim],
+        )
+        .unwrap();
+        let after_update = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_update.iter().all(|(id, _)| *id != victim));
+
+        // A chunk whose text moved after its vector was made is stale.
+        let stale = after_update[1].0.clone();
+        conn.execute(
+            "UPDATE bibliographic_chunks SET text_hash = 'moved' WHERE id = ?1",
+            [&stale],
+        )
+        .unwrap();
+        let after_stale = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_stale.iter().all(|(id, _)| *id != stale));
+
+        // A tombstoned work disappears.
+        conn.execute(
+            "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason)
+             VALUES (?1, 1, 'deleted')",
+            [&items[0]],
+        )
+        .unwrap();
+        let after_tombstone = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_tombstone
+            .iter()
+            .all(|(id, _)| !id.starts_with(&items[0])));
+
+        // Deleting a work's chunks shrinks the set.
+        conn.execute(
+            "DELETE FROM bibliographic_chunks WHERE item_id = ?1",
+            [&items[1]],
+        )
+        .unwrap();
+        let after_delete = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_delete.iter().all(|(id, _)| id.starts_with(&items[2])));
+    }
+
+    /// Measurement on a real archive copy, never part of the suite:
+    /// `ENTROPIA_VECTOR_BENCH_DB=<path> cargo test --lib vector_index_bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs ENTROPIA_VECTOR_BENCH_DB"]
+    fn vector_index_bench() {
+        use std::time::Instant;
+        let Ok(path) = std::env::var("ENTROPIA_VECTOR_BENCH_DB") else {
+            return;
+        };
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open the archive copy read-only");
+        let gen: String = conn
+            .query_row(
+                "SELECT id FROM bibliographic_index_generations WHERE status = 'active' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("an active generation");
+        let started = Instant::now();
+        let index = super::super::vector_index::index_for(&conn, &gen).expect("build");
+        eprintln!(
+            "BENCH build {:?}  rows {}  dims {}  memory {:.1} MB",
+            started.elapsed(),
+            index.len(),
+            index.dims(),
+            index.approx_bytes() as f64 / 1_048_576.0
+        );
+        let started = Instant::now();
+        super::super::vector_index::index_for(&conn, &gen).expect("cached");
+        eprintln!("BENCH fingerprint+cache hit {:?}", started.elapsed());
+
+        // Stored vectors, lightly perturbed, as realistic queries.
+        let mut queries: Vec<Vec<f32>> = Vec::new();
+        for offset in [100_i64, 20_000, 45_000, 70_000, 100_000] {
+            let blob: Vec<u8> = conn
+                .query_row(
+                    "SELECT embedding FROM bibliographic_chunk_embeddings
+                     WHERE generation_id = ?1 ORDER BY rowid LIMIT 1 OFFSET ?2",
+                    rusqlite::params![gen, offset],
+                    |row| row.get(0),
+                )
+                .expect("a stored vector");
+            let stored: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let mut seed = offset as u64 | 1;
+            let noisy = stored
+                .iter()
+                .map(|v| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    v + ((seed % 2001) as f32 / 1000.0 - 1.0) * 0.02
+                })
+                .collect();
+            queries.push(noisy);
+        }
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        queries.push(
+            (0..index.dims())
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed % 2001) as f32 / 1000.0 - 1.0
+                })
+                .collect(),
+        );
+        for (n, query) in queries.iter().enumerate() {
+            let started = Instant::now();
+            let got = super::super::vector_index::search(&conn, &gen, query, None, 200).unwrap();
+            let warm = started.elapsed();
+            let started = Instant::now();
+            let want = super::exact_vector_candidates(&conn, &gen, query, None, 200).unwrap();
+            let exact = started.elapsed();
+            let overlap = |k: usize| {
+                let want: std::collections::HashSet<&str> =
+                    want.iter().take(k).map(|r| r.0.as_str()).collect();
+                got.iter()
+                    .take(k)
+                    .filter(|r| want.contains(r.0.as_str()))
+                    .count()
+            };
+            let same_order_20 = got
+                .iter()
+                .take(20)
+                .map(|r| &r.0)
+                .eq(want.iter().take(20).map(|r| &r.0));
+            eprintln!(
+                "BENCH q{n} index {warm:?}  exact-scan {exact:?}  overlap@20 {}/20  @50 {}/50  @200 {}/200  same-order@20 {same_order_20}",
+                overlap(20), overlap(50), overlap(200)
+            );
+        }
     }
 
     #[test]
@@ -1754,8 +2564,8 @@ pub(crate) mod passage_tests {
         assert_eq!(hits[0].contract_hash, CONTRACT);
         assert_eq!(hits[0].spans, vec![(1, 0, 29)]);
         assert!(
-            hits[0].work_score > 0.0,
-            "the work-level score travels with the hit"
+            hits[0].fused_score > 0.0,
+            "the fusion score travels with the hit"
         );
         assert_eq!(hits[1].chunk_id, chunk_a);
     }
@@ -1863,10 +2673,10 @@ pub(crate) mod passage_tests {
             &conn,
             CONTRACT,
             "compartido",
-            5,
             1,
             2,
             &WorkFilters::default(),
+            true,
             &|_| Ok(vec![1.0, 0.0, 0.0, 0.0]),
         )
         .expect("passage search");
@@ -1876,6 +2686,244 @@ pub(crate) mod passage_tests {
             hits[1].item_id, item_b,
             "D survives the cap instead of A taking all three"
         );
+    }
+
+    /// The owner's case: the work's profile (title/abstract) says nothing
+    /// about the phrase, and the vectors of its chunks point elsewhere, but
+    /// one chunk contains the phrase verbatim.
+    fn seed_phrase_corpus(conn: &mut Connection) -> (String, String, String, String) {
+        let (_lib_a, item_a) = seed_item(conn, "pf", "f", "KF0001", "La producción del espacio");
+        let (_lib_b, item_b) = seed_item(conn, "pg", "g", "KG0001", "Otra obra distinta");
+        let gen = activate_gen(conn, "gen-phrase");
+        let phrase_chunk = seed_chunk(
+            conn,
+            &item_a,
+            0,
+            "Dos de dichos programas (Plan  Federal y Programa
+Dignidad) desataron la guerra por las casas.",
+            2,
+            &gen,
+            &[0.0, 0.0, 1.0, 0.0],
+            None,
+        );
+        seed_chunk(
+            conn,
+            &item_a,
+            1,
+            "Texto sin relación con la consulta.",
+            3,
+            &gen,
+            &[0.0, 0.0, 0.0, 1.0],
+            None,
+        );
+        let mut best_vector_chunk = String::new();
+        for ordinal in 0..4 {
+            let id = seed_chunk(
+                conn,
+                &item_b,
+                ordinal,
+                &format!("Fragmento {ordinal} de otra obra sobre cosas varias."),
+                1 + ordinal,
+                &gen,
+                &[1.0, 0.0, 0.0, 0.0],
+                None,
+            );
+            if ordinal == 0 {
+                best_vector_chunk = id;
+            }
+        }
+        (item_a, item_b, phrase_chunk, best_vector_chunk)
+    }
+
+    #[test]
+    fn passages_find_a_phrase_in_a_work_whose_profile_does_not_match() {
+        let mut conn = passage_db();
+        let (item_a, _item_b, phrase_chunk, _best) = seed_phrase_corpus(&mut conn);
+        let hits = search_all(&conn, "Plan Federal y Programa Dignidad", &|_| {
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        });
+        let found = hits
+            .iter()
+            .find(|hit| hit.chunk_id == phrase_chunk)
+            .unwrap_or_else(|| panic!("the phrase chunk must be returned, got {hits:?}"));
+        assert_eq!(found.item_id, item_a);
+        assert_eq!(found.match_kind, PassageMatchKind::Exact);
+        assert_eq!(
+            found.match_terms,
+            vec!["plan", "federal", "programa", "dignidad"]
+        );
+        assert_eq!(found.spans.first().map(|span| span.0), Some(2));
+        assert_eq!(
+            hits[0].chunk_id, phrase_chunk,
+            "an exact phrase ranks first, ahead of an equally ranked vector hit"
+        );
+    }
+
+    #[test]
+    fn passages_find_a_phrase_without_the_embedder() {
+        let mut conn = passage_db();
+        let (_a, _b, phrase_chunk, _best) = seed_phrase_corpus(&mut conn);
+        let hits = search_all(&conn, "plan federal y programa dignidad", &|_| {
+            Err("provider down".to_string())
+        });
+        assert_eq!(hits.len(), 1, "lexical-only answer, got {hits:?}");
+        assert_eq!(hits[0].chunk_id, phrase_chunk);
+    }
+
+    #[test]
+    fn passages_lexical_leg_ignores_accents_and_case() {
+        let mut conn = passage_db();
+        let (_a, _b, phrase_chunk, _best) = seed_phrase_corpus(&mut conn);
+        let hits = search_all(&conn, "GUERRA por las CÁSAS", &|_| {
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        });
+        assert!(hits.iter().any(|hit| hit.chunk_id == phrase_chunk));
+    }
+
+    #[test]
+    fn passages_respect_library_filters_in_both_legs() {
+        let mut conn = passage_db();
+        let (item_a, item_b, phrase_chunk, best) = seed_phrase_corpus(&mut conn);
+        let lib_b: String = conn
+            .query_row(
+                "SELECT library_id FROM bibliographic_items WHERE id = ?1",
+                [&item_b],
+                |row| row.get(0),
+            )
+            .expect("library of b");
+        let filters = WorkFilters {
+            library_ids: vec![lib_b],
+            ..WorkFilters::default()
+        };
+        let hits = search_passages(
+            &conn,
+            CONTRACT,
+            "Plan Federal y Programa Dignidad",
+            3,
+            10,
+            &filters,
+            true,
+            &|_| Ok(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .expect("passage search");
+        assert!(hits.iter().all(|hit| hit.item_id == item_b), "{hits:?}");
+        assert!(hits.iter().any(|hit| hit.chunk_id == best));
+        assert!(hits.iter().all(|hit| hit.chunk_id != phrase_chunk));
+        let _ = item_a;
+    }
+
+    /// Two chunks spell a name "Crocitto" (an OCR doubling); the reader
+    /// types "Croitto". Another chunk spells it as typed.
+    fn seed_misreading_corpus(conn: &mut Connection) -> (String, String, String) {
+        let (_lib, item) = seed_item(conn, "ph", "h", "KH0001", "Estudios del chamanismo");
+        let gen = activate_gen(conn, "gen-fuzzy");
+        let misread_a = seed_chunk(
+            conn,
+            &item,
+            0,
+            "El trabajo de Crocitto sobre los mapuche es citado a menudo.",
+            1,
+            &gen,
+            &[0.0, 0.0, 1.0, 0.0],
+            None,
+        );
+        seed_chunk(
+            conn,
+            &item,
+            1,
+            "Según Crocitto, la ceremonia cambia con el tiempo.",
+            2,
+            &gen,
+            &[0.0, 0.0, 0.0, 1.0],
+            None,
+        );
+        let exact = seed_chunk(
+            conn,
+            &item,
+            2,
+            "Croitto escribió sobre el mismo tema.",
+            3,
+            &gen,
+            &[0.0, 1.0, 0.0, 0.0],
+            None,
+        );
+        (item, misread_a, exact)
+    }
+
+    fn text_matches(hits: &[PassageHit]) -> Vec<(&str, PassageMatchKind)> {
+        hits.iter()
+            .filter(|hit| hit.match_kind != PassageMatchKind::Meaning)
+            .map(|hit| (hit.chunk_id.as_str(), hit.match_kind))
+            .collect()
+    }
+
+    #[test]
+    fn approximate_matching_adds_close_variants_after_the_exact_matches() {
+        let mut conn = passage_db();
+        let (_item, misread, exact) = seed_misreading_corpus(&mut conn);
+        let hits = search_passages(
+            &conn,
+            CONTRACT,
+            "Croitto",
+            5,
+            10,
+            &WorkFilters::default(),
+            true,
+            &|_| Ok(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .expect("passage search");
+        let found = text_matches(&hits);
+        assert_eq!(found[0], (exact.as_str(), PassageMatchKind::Exact));
+        assert!(
+            found.contains(&(misread.as_str(), PassageMatchKind::Approximate)),
+            "the misreading is found as a variant, got {found:?}"
+        );
+        let approximate = hits
+            .iter()
+            .find(|hit| hit.chunk_id == misread)
+            .expect("misreading hit");
+        assert_eq!(approximate.match_terms, vec!["crocitto"]);
+        let exact_hit = hits
+            .iter()
+            .find(|hit| hit.chunk_id == exact)
+            .expect("exact");
+        assert_eq!(exact_hit.match_terms, vec!["croitto"]);
+    }
+
+    #[test]
+    fn approximate_matching_is_off_when_not_asked_for() {
+        let mut conn = passage_db();
+        let (_item, _misread, exact) = seed_misreading_corpus(&mut conn);
+        let hits = search_passages(
+            &conn,
+            CONTRACT,
+            "Croitto",
+            5,
+            10,
+            &WorkFilters::default(),
+            false,
+            &|_| Ok(vec![1.0, 0.0, 0.0, 0.0]),
+        )
+        .expect("passage search");
+        assert_eq!(
+            text_matches(&hits),
+            vec![(exact.as_str(), PassageMatchKind::Exact)]
+        );
+    }
+
+    #[test]
+    fn a_passage_found_only_by_its_vector_is_labelled_meaning() {
+        let mut conn = passage_db();
+        let (_a, _b, _phrase, best) = seed_phrase_corpus(&mut conn);
+        let hits = search_all(&conn, "Plan Federal y Programa Dignidad", &|_| {
+            Ok(vec![1.0, 0.0, 0.0, 0.0])
+        });
+        let neighbour = hits
+            .iter()
+            .find(|hit| hit.chunk_id == best)
+            .expect("neighbour");
+        assert_eq!(neighbour.match_kind, PassageMatchKind::Meaning);
+        assert!(neighbour.match_terms.is_empty());
     }
 
     #[test]
@@ -1897,16 +2945,16 @@ pub(crate) mod passage_tests {
             &conn,
             CONTRACT,
             "compartido",
-            5,
             3,
             10,
             &WorkFilters::default(),
+            true,
             &|_| panic!("the embedder must never run without a queryable space"),
         )
         .expect("passage search");
         assert!(
             hits.is_empty(),
-            "passages are vector-only: no space, no hits"
+            "no active generation means nothing is indexed: no hits"
         );
     }
 }
@@ -2092,22 +3140,35 @@ pub fn expand_passage(
     }))
 }
 
+pub use crate::bibliography::attachment::OriginalKind;
+
+/// The original behind a passage, validated for in-app viewing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewableOriginal {
+    pub kind: OriginalKind,
+    /// The canonical file to grant to the viewer: set for a PDF, `None` for
+    /// an HTML snapshot, which is shown from the catalog's stored text.
+    pub path: Option<std::path::PathBuf>,
+}
+
 /// A passage ready to open: the expansion for the highlight surface plus
-/// the resolved file (or the reason there is none). The command opens
-/// the file; the UI renders the expansion regardless.
+/// the original validated for in-app viewing (or the reason there is none).
+/// Nothing here launches an external program; the command grants the one
+/// validated file to the webview and the UI renders the expansion regardless.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageOpenPlan {
     pub expansion: PassageExpansion,
-    pub path: Option<std::path::PathBuf>,
-    /// `(reason, detail)` when no file resolves — the same stable strings
-    /// the resolver reports.
+    pub original: Option<ViewableOriginal>,
+    /// `(reason, detail)` when no original is viewable: the resolver's or
+    /// the validator's stable strings.
     pub reason: Option<(String, String)>,
 }
 
 /// Prepares a passage opening without spawning anything: expands the
-/// chunk, reads its attachment, resolves the file. Unknown chunks fail
-/// with `unknown_chunk`; unresolvable files travel as `reason`, never as
-/// an error, so the highlight surface still renders.
+/// chunk, reads its registered attachment, resolves and validates the file.
+/// Unknown chunks fail with `unknown_chunk`; an unviewable original travels
+/// as `reason`, never as an error, so the highlight surface still renders.
+/// The only path ever produced comes from a registered attachment row.
 pub fn prepare_passage_open(
     conn: &Connection,
     chunk_id: &str,
@@ -2127,7 +3188,7 @@ pub fn prepare_passage_open(
                     format!("Failed to read passage attachment: {error}"),
                 )
             })?;
-    let (path, reason) = match attachment {
+    let (original, reason) = match attachment {
         None => (
             None,
             Some((
@@ -2135,13 +3196,32 @@ pub fn prepare_passage_open(
                 "the passage attachment left the catalog".to_string(),
             )),
         ),
+        Some(attachment) if crate::bibliography::attachment::is_html_snapshot(&attachment) => (
+            Some(ViewableOriginal {
+                kind: OriginalKind::Html,
+                path: None,
+            }),
+            None,
+        ),
         Some(attachment) => {
             match crate::bibliography::attachment::resolve_attachment_file(
                 &attachment,
                 zotero_data_dir,
             ) {
                 crate::bibliography::attachment::AttachmentResolution::File(path) => {
-                    (Some(path), None)
+                    match crate::bibliography::attachment::validate_pdf_original(
+                        &path,
+                        attachment.content_type.as_deref(),
+                    ) {
+                        Ok(canonical) => (
+                            Some(ViewableOriginal {
+                                kind: OriginalKind::Pdf,
+                                path: Some(canonical),
+                            }),
+                            None,
+                        ),
+                        Err(reason) => (None, Some(reason)),
+                    }
                 }
                 crate::bibliography::attachment::AttachmentResolution::Unavailable {
                     reason,
@@ -2152,7 +3232,7 @@ pub fn prepare_passage_open(
     };
     Ok(PassageOpenPlan {
         expansion,
-        path,
+        original,
         reason,
     })
 }
@@ -2405,7 +3485,8 @@ mod expansion_tests {
 
 #[cfg(test)]
 mod open_tests {
-    use super::super::retrieval::prepare_passage_open;
+    use super::super::attachment::plain_canonical;
+    use super::super::retrieval::{prepare_passage_open, OriginalKind};
 
     fn open_db() -> rusqlite::Connection {
         // Reuses the expansion fixture shape: catalog, relations, profiles,
@@ -2521,8 +3602,23 @@ mod open_tests {
         chunk_id
     }
 
+    fn seed_typed(
+        conn: &mut rusqlite::Connection,
+        native_path: Option<&str>,
+        content_type: &str,
+        filename: &str,
+    ) -> String {
+        let chunk_id = seed_chunk_with_attachment(conn, native_path);
+        conn.execute(
+            "UPDATE zotero_attachments SET content_type = ?1, filename = ?2",
+            rusqlite::params![content_type, filename],
+        )
+        .expect("retype attachment");
+        chunk_id
+    }
+
     #[test]
-    fn open_plan_resolves_a_readable_file_beside_the_expansion() {
+    fn open_plan_resolves_a_readable_pdf_beside_the_expansion() {
         let mut conn = open_db();
         let dir = tempfile::tempdir().expect("tempdir");
         let pdf = dir.path().join("abrible.pdf");
@@ -2532,8 +3628,37 @@ mod open_tests {
         let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
         assert_eq!(plan.expansion.chunk_id, chunk_id);
         assert_eq!(plan.expansion.spans, vec![(2, 10, 40)]);
-        assert_eq!(plan.path.as_deref(), Some(pdf.as_path()));
+        let original = plan.original.expect("a readable PDF is viewable");
+        assert_eq!(original.kind, OriginalKind::Pdf);
+        assert_eq!(
+            original.path.as_deref(),
+            Some(plain_canonical(&pdf).expect("canonical").as_path())
+        );
         assert!(plan.reason.is_none(), "a resolved file carries no reason");
+    }
+
+    /// The owner's bug: Zotero stores `native_path` with forward slashes
+    /// (`C:/Users/...`), and `explorer.exe C:/...` answers by opening the
+    /// Documents folder. The path that leaves the plan is canonical and plain:
+    /// no forward slashes on Windows, never the `\?\` verbatim form.
+    #[test]
+    fn open_plan_hands_out_a_canonical_native_path_not_the_stored_spelling() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("abrible, con coma.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 fake").expect("write pdf");
+        let forward = pdf.to_string_lossy().replace('\\', "/");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&forward));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        let path = plan
+            .original
+            .and_then(|original| original.path)
+            .expect("the forward-slash path still resolves");
+        let text = path.to_string_lossy().to_string();
+        assert!(!text.starts_with(r"\\?\"), "verbatim prefix leaked: {text}");
+        #[cfg(windows)]
+        assert!(!text.contains('/'), "forward slashes survived: {text}");
     }
 
     #[test]
@@ -2543,9 +3668,82 @@ mod open_tests {
 
         let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
         assert_eq!(plan.expansion.chunk_id, chunk_id);
-        assert!(plan.path.is_none(), "nothing to open");
+        assert!(plan.original.is_none(), "nothing to open");
         let (reason, _detail) = plan.reason.expect("the reason travels with the context");
         assert_eq!(reason, "linked_file_missing");
+    }
+
+    #[test]
+    fn open_plan_refuses_a_directory_as_the_original() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&dir.path().to_string_lossy()));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none(), "a directory is never an original");
+        assert!(plan.reason.is_some(), "the refusal is explained");
+    }
+
+    #[test]
+    fn open_plan_refuses_a_file_that_is_not_a_pdf() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake = dir.path().join("trampa.pdf");
+        std::fs::write(&fake, b"MZ not a pdf at all").expect("write file");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&fake.to_string_lossy()));
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none(), "the PDF signature is checked");
+        assert_eq!(plan.reason.expect("reason").0, "not_a_pdf");
+
+        let docx = dir.path().join("notas.docx");
+        std::fs::write(&docx, b"%PDF-1.4 but typed as word").expect("write docx");
+        let mut other = open_db();
+        let chunk = seed_typed(
+            &mut other,
+            Some(&docx.to_string_lossy()),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "notas.docx",
+        );
+        let plan = prepare_passage_open(&other, &chunk, None).expect("prepare");
+        assert!(plan.original.is_none(), "the content type decides first");
+        assert_eq!(plan.reason.expect("reason").0, "not_a_pdf");
+    }
+
+    /// Only a path derived from a registered attachment row is ever viewable:
+    /// the command takes a chunk id, never a path, and a chunk whose
+    /// attachment left the catalog yields nothing.
+    #[test]
+    fn open_plan_refuses_a_path_without_a_registered_attachment() {
+        let mut conn = open_db();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pdf = dir.path().join("abrible.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 fake").expect("write pdf");
+        let chunk_id = seed_chunk_with_attachment(&mut conn, Some(&pdf.to_string_lossy()));
+        // Foreign keys off: the chunk outlives its attachment row, the shape a
+        // half-synced catalog can leave behind.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .expect("foreign keys off");
+        conn.execute("DELETE FROM zotero_attachments", [])
+            .expect("unregister the attachment");
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        assert!(plan.original.is_none());
+        assert_eq!(plan.reason.expect("reason").0, "unknown_attachment");
+    }
+
+    /// An HTML snapshot opens from the catalog's stored text: no file is
+    /// needed and none is ever granted.
+    #[test]
+    fn open_plan_views_an_html_snapshot_without_a_file() {
+        let mut conn = open_db();
+        let chunk_id = seed_typed(&mut conn, None, "text/html", "captura.html");
+
+        let plan = prepare_passage_open(&conn, &chunk_id, None).expect("prepare");
+        let original = plan.original.expect("a snapshot is viewable in app");
+        assert_eq!(original.kind, OriginalKind::Html);
+        assert!(original.path.is_none(), "no file is granted for HTML");
+        assert!(plan.reason.is_none());
     }
 
     #[test]

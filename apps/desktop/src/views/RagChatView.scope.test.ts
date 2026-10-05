@@ -58,7 +58,12 @@ function setupBackend(overrides: Partial<Backend> = {}): Backend {
       case 'bibliography_passage_context':
         return state.context()
       case 'bibliography_open_passage':
-        return { openedPath: 'C:/Zotero/storage/x.pdf', openError: null }
+        return {
+          ...(state.context() as object),
+          originalKind: 'pdf',
+          originalPath: 'C:/Zotero/storage/x.pdf',
+          openError: null,
+        }
       default:
         throw new Error(`unexpected command: ${command}`)
     }
@@ -315,6 +320,31 @@ describe('RagChatView sources of both scopes', () => {
   })
 })
 
+describe('RagChatView Biblioteca failure', () => {
+  it('names the cause under the failed notice instead of only saying it failed', async () => {
+    setupBackend({
+      ask: () => ({
+        answer: '',
+        sources: [],
+        model: 'm',
+        conversationId: 'c',
+        bibliographyNotice: 'failed',
+        bibliographyNoticeDetail: 'sql_error: Invalid column type Null at index: 2, name: title',
+      }),
+    })
+    render(RagChatView)
+    await ask('¿Qué pasó?')
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /La búsqueda en la Biblioteca falló.*sql_error: Invalid column type Null at index: 2, name: title/
+        )
+      ).toBeVisible()
+    )
+  })
+})
+
 describe('RagChatView passage reader', () => {
   const pageText = 'Antes del pasaje. LO CITADO AQUÍ. Después del pasaje.'
   const start = pageText.indexOf('LO CITADO')
@@ -329,7 +359,8 @@ describe('RagChatView passage reader', () => {
       text: 'LO CITADO AQUÍ.',
       spans: [[3, start, end]],
       pages: [{ pageNumber: 3, text: pageText, highlights: [[start, end]] }],
-      openedPath: null,
+      originalKind: null,
+      originalPath: null,
       openError: null,
     }
   }
@@ -356,7 +387,7 @@ describe('RagChatView passage reader', () => {
     expect(navigateMock).not.toHaveBeenCalled()
   })
 
-  it('opens the original in the OS viewer only when asked', async () => {
+  it('opens the original in the app only when asked', async () => {
     await openPassage(readable)
     const dialog = await screen.findByRole('dialog')
 

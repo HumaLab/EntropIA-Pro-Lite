@@ -230,6 +230,51 @@ pub struct BibliographySyncResponse {
     pub requeued: bool,
 }
 
+/// What one requested bibliography sync has actually done so far, read from
+/// the task the scheduler owns. `state` is the task's own state vocabulary
+/// (`pending`, `running`, `retry_wait`, `blocked`, `interrupted`, `succeeded`,
+/// `failed`, `cancelled`); nothing here is inferred from the request.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographySyncStatus {
+    pub state: String,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub progress_done: i64,
+    pub progress_total: Option<i64>,
+    /// Works the finished sync walked, from its durable receipt.
+    pub items_seen: Option<i64>,
+    pub remote_total: Option<i64>,
+    /// Derived work queued since the sync began: one profile per new or
+    /// changed work, one extraction per new attachment. Zero on a finished
+    /// sync means the library was already up to date.
+    pub new_profiles: i64,
+    pub new_extractions: i64,
+}
+
+/// Reads the durable status of one `bibliography_sync` task.
+pub fn bibliography_sync_status(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<BibliographySyncStatus, String> {
+    repository::bibliography_sync_status(conn, task_id)
+}
+
+/// Honest progress for the manual "synchronize library" button: the state of
+/// the scheduler's task, so the UI never claims work that is not happening.
+#[tauri::command]
+pub async fn processing_bibliography_sync_status(
+    task_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<BibliographySyncStatus, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        bibliography_sync_status(&conn, &task_id)
+    })
+    .await
+}
+
 fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
     BatchSnapshotDto {
         id: snapshot.id,

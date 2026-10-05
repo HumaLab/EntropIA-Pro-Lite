@@ -155,6 +155,30 @@ mod tests {
     }
 
     #[test]
+    fn whole_document_mode_is_for_documents_that_are_mostly_scan() {
+        assert!(should_use_pdf_mode(70, 70), "a full scan");
+        assert!(should_use_pdf_mode(5, 10), "half the pages is enough");
+        assert!(
+            !should_use_pdf_mode(1, 10),
+            "a native paper with one sparse page"
+        );
+        assert!(!should_use_pdf_mode(0, 10), "nothing to recognize");
+    }
+
+    #[test]
+    fn windows_cover_the_document_and_skip_native_stretches() {
+        let all: Vec<i64> = (1..=205).collect();
+        assert_eq!(
+            plan_pdf_windows(&all, 205, 100),
+            vec![(1, 100), (101, 200), (201, 205)]
+        );
+        assert_eq!(plan_pdf_windows(&all[..20], 20, 100), vec![(1, 20)]);
+        // Only the last window holds a page that needs OCR.
+        assert_eq!(plan_pdf_windows(&[150], 205, 100), vec![(101, 200)]);
+        assert!(plan_pdf_windows(&[], 205, 100).is_empty());
+    }
+
+    #[test]
     fn capability_requires_both_renderer_and_provider() {
         let both = probe_page_ocr_capability(true, Some("paddle"));
         assert_eq!(
@@ -193,7 +217,60 @@ pub trait PageRenderer: Send + Sync {
 /// renderer and the provider's own regions (E4d consumes spans).
 pub trait PageOcrProvider: Send + Sync {
     fn recognize_page(&self, image_bytes: &[u8]) -> Result<String, String>;
+
+    /// How many PDF pages one whole-document request may carry, or `None`
+    /// when the provider only reads rendered page images. Whole-document
+    /// mode needs no page rendering, so a scanned PDF costs one request per
+    /// window instead of one per page.
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        None
+    }
+
+    /// Recognizes pages `first_page..=last_page` (1-based, inclusive) of
+    /// `pdf_bytes` in one request. Returns exactly one text per page of the
+    /// range, in page order (an empty string for a page with no text); any
+    /// other shape is an error, never a guess at page boundaries.
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        _first_page: u32,
+        _last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        Err("pdf_mode_unsupported: this provider reads page images only".to_string())
+    }
+
     fn name(&self) -> &str;
+}
+
+/// Whole-document OCR pays off when most of the document needs it (a scan);
+/// a mostly-native document with a few sparse pages stays on page images so
+/// native pages are never re-recognized.
+pub fn should_use_pdf_mode(needs_ocr: usize, total_pages: usize) -> bool {
+    needs_ocr > 0 && needs_ocr * 2 >= total_pages
+}
+
+/// Splits `1..=total_pages` into consecutive windows of at most
+/// `pages_per_request` pages and keeps only those holding a page that needs
+/// OCR. Windows are 1-based and inclusive.
+pub fn plan_pdf_windows(
+    needing_pages: &[i64],
+    total_pages: usize,
+    pages_per_request: usize,
+) -> Vec<(u32, u32)> {
+    let size = pages_per_request.max(1);
+    let mut windows = Vec::new();
+    let mut first = 1usize;
+    while first <= total_pages {
+        let last = (first + size - 1).min(total_pages);
+        if needing_pages
+            .iter()
+            .any(|page| *page >= first as i64 && *page <= last as i64)
+        {
+            windows.push((first as u32, last as u32));
+        }
+        first = last + 1;
+    }
+    windows
 }
 
 /// Classifies a provider failure the way the queue understands it.
@@ -203,6 +280,12 @@ pub trait PageOcrProvider: Send + Sync {
 pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutput {
     use crate::processing::scheduler::ExecOutput;
     let lower = error.to_lowercase();
+    if lower.contains("429") || lower.contains("rate limit") {
+        return ExecOutput::Retryable {
+            code: crate::processing::repository::RATE_LIMITED_CODE.to_string(),
+            message: error.to_string(),
+        };
+    }
     for signal in [
         "timeout",
         "timed out",
@@ -245,6 +328,24 @@ pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutp
 mod trait_tests {
     use super::map_page_ocr_error;
     use crate::processing::scheduler::ExecOutput;
+
+    #[test]
+    fn a_rate_limit_keeps_its_never_terminal_code_through_the_chunk_wave_mapper() {
+        match map_page_ocr_error("OpenRouter embedding API error (429 Too Many Requests): {}") {
+            ExecOutput::Retryable { code, .. } => {
+                assert_eq!(code, crate::processing::repository::RATE_LIMITED_CODE)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            map_page_ocr_error("OpenRouter embedding API error (401 Unauthorized): bad key"),
+            ExecOutput::Blocked { .. }
+        ));
+        assert!(matches!(
+            map_page_ocr_error("OpenRouter embedding API error (400 Bad Request): bad input"),
+            ExecOutput::Fatal { .. }
+        ));
+    }
 
     #[test]
     fn ocr_errors_map_to_retry_block_or_fatal() {

@@ -111,11 +111,43 @@ pub async fn settings_set(
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
         persist_setting(&conn, &key, &value)?;
+        resume_work_after_setting_change(&conn, &key);
     }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
     }
     Ok(())
+}
+
+/// Settings that decide whether the embedding engine can initialize.
+fn is_embedding_engine_setting(key: &str) -> bool {
+    key == OPENROUTER_API_KEY
+        || key == crate::nlp::embeddings::EMBEDDING_PROVIDER_SETTING_KEY
+        || key == crate::nlp::embeddings::OPENROUTER_EMBEDDING_MODEL_SETTING_KEY
+}
+
+/// Requeues queue units parked `configuration_required` when a saved setting
+/// is one the embedding engine depends on and the configuration is now valid.
+/// Best effort: a failure is logged and never fails the save. Returns how many
+/// units were requeued.
+pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    if !is_embedding_engine_setting(key) {
+        return 0;
+    }
+    match crate::processing::repository::resume_embedding_configuration_blocked(conn) {
+        Ok(resumed) => {
+            if resumed > 0 {
+                eprintln!(
+                    "[settings] Resumed {resumed} queue unit(s) blocked on embedding configuration"
+                );
+            }
+            resumed
+        }
+        Err(error) => {
+            eprintln!("[settings] Could not resume configuration-blocked work: {error}");
+            0
+        }
+    }
 }
 
 #[tauri::command]
@@ -1029,5 +1061,55 @@ mod tests {
                 .expect_err("missing public key should fail");
 
         assert!(error.contains("entropia-root"));
+    }
+
+    #[test]
+    fn saving_the_embedding_key_resumes_configuration_blocked_work_only() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code)
+               VALUES ('t1', 'embedding', 'blocked', 'configuration_required', 'configuration_required');",
+        )
+        .expect("queue table");
+        // Pin the remote provider: Pro defaults to the local engine, which
+        // needs no OpenRouter key and would make the "no key" phase valid.
+        set_setting(&conn, "embedding_provider", "api").expect("provider");
+        let state = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        // Unrelated keys and an invalid configuration leave the unit parked.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_model"),
+            0
+        );
+        assert_eq!(
+            resume_work_after_setting_change(&conn, OPENROUTER_API_KEY),
+            0
+        );
+        assert_eq!(state(&conn), "blocked");
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_model"),
+            0
+        );
+        assert_eq!(
+            state(&conn),
+            "blocked",
+            "an unrelated key never resumes work"
+        );
+        assert_eq!(
+            resume_work_after_setting_change(&conn, OPENROUTER_API_KEY),
+            1
+        );
+        assert_eq!(state(&conn), "pending");
     }
 }

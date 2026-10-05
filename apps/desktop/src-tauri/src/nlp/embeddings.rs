@@ -20,6 +20,7 @@ use std::collections::HashMap;
 #[cfg(feature = "local-ml")]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -44,6 +45,26 @@ pub const OPENROUTER_EMBEDDING_DIMENSIONS: usize = CANONICAL_EMBEDDING_DIMENSION
 /// headroom for tokenization expansion without adding a tokenizer to Lite.
 const EMBEDDING_CHUNK_MAX_CHARS: usize = 6000;
 const RAG_CHUNK_MAX_CHARS: usize = 800;
+/// Inputs per remote `/embeddings` request (OpenAI-compatible array input).
+const EMBEDDING_REQUEST_MAX_INPUTS: usize = 32;
+/// Characters per remote request across all of its inputs. A single input is
+/// always allowed alone, so one oversized text never blocks progress.
+const EMBEDDING_REQUEST_MAX_CHARS: usize = 64_000;
+/// Remote requests in flight at once inside one batched call. Small on
+/// purpose: the provider rate-limits per key and the app has other callers.
+const EMBEDDING_REQUEST_MAX_IN_FLIGHT: usize = 3;
+/// Attempts per request when the provider throttles (429) or hiccups (5xx).
+const EMBEDDING_REQUEST_MAX_ATTEMPTS: usize = 4;
+/// Reported for a request that stood down because a sibling already failed.
+const EMBEDDING_REQUEST_SKIPPED: &str = "Embedding request was skipped after a failure";
+const EMBEDDING_REQUEST_BASE_BACKOFF: Duration = Duration::from_secs(1);
+/// Longest wait absorbed in-process. A larger `Retry-After` is handed to the
+/// task scheduler through the `[retry_after_ms=..]` suffix instead.
+const EMBEDDING_REQUEST_MAX_BACKOFF: Duration = Duration::from_secs(10);
+/// Texts per wave when the provider is a local model: small enough that a
+/// stop request is honoured within a few inferences.
+#[cfg(feature = "local-ml")]
+const LOCAL_EMBEDDING_WAVE: usize = 4;
 const RAG_CHUNK_OVERLAP_CHARS: usize = 100;
 pub const RAG_CHUNKING_CONTRACT_V1: &str = "rag-chunk-800-100-char-v1";
 
@@ -327,6 +348,32 @@ impl EmbeddingConfig {
     }
 }
 
+/// Limits for the remote embeddings transport. Conservative on purpose:
+/// every request carries many inputs, a few requests fly at once, and short
+/// provider throttles are absorbed in-process.
+#[derive(Debug, Clone)]
+pub struct EmbeddingRequestPolicy {
+    pub max_inputs: usize,
+    pub max_chars: usize,
+    pub max_in_flight: usize,
+    pub max_attempts: usize,
+    pub base_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl Default for EmbeddingRequestPolicy {
+    fn default() -> Self {
+        Self {
+            max_inputs: EMBEDDING_REQUEST_MAX_INPUTS,
+            max_chars: EMBEDDING_REQUEST_MAX_CHARS,
+            max_in_flight: EMBEDDING_REQUEST_MAX_IN_FLIGHT,
+            max_attempts: EMBEDDING_REQUEST_MAX_ATTEMPTS,
+            base_backoff: EMBEDDING_REQUEST_BASE_BACKOFF,
+            max_backoff: EMBEDDING_REQUEST_MAX_BACKOFF,
+        }
+    }
+}
+
 /// Embedding engine — dispatches to the selected BGE-M3 provider.
 pub struct EmbeddingEngine {
     backend: EmbeddingBackend,
@@ -343,6 +390,7 @@ struct OpenRouterEmbeddingClient {
     api_key: String,
     model_name: String,
     endpoint_url: String,
+    policy: EmbeddingRequestPolicy,
 }
 
 #[cfg(feature = "local-ml")]
@@ -356,7 +404,15 @@ struct LocalBgeM3EmbeddingEngine {
 #[derive(Debug, Serialize)]
 struct EmbeddingRequest<'a> {
     model: &'a str,
-    input: &'a str,
+    input: EmbeddingInput<'a>,
+}
+
+/// One text keeps the historical string shape; several use the array form.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum EmbeddingInput<'a> {
+    One(&'a str),
+    Many(&'a [&'a str]),
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,6 +422,8 @@ struct EmbeddingResponse {
 
 #[derive(Debug, Deserialize)]
 struct EmbeddingData {
+    #[serde(default)]
+    index: Option<usize>,
     embedding: Vec<f32>,
 }
 
@@ -423,9 +481,11 @@ impl EmbeddingEngine {
     /// fresh ONNX session every call.
     pub fn init(config: EmbeddingConfig) -> Result<Self, String> {
         match config.provider {
-            EmbeddingProvider::Api => {
-                Self::init_openrouter_with_endpoint(config, OPENROUTER_EMBEDDINGS_URL.to_string())
-            }
+            EmbeddingProvider::Api => Self::init_openrouter_with_endpoint(
+                config,
+                OPENROUTER_EMBEDDINGS_URL.to_string(),
+                EmbeddingRequestPolicy::default(),
+            ),
             #[cfg(feature = "local-ml")]
             EmbeddingProvider::Local => Self::init_local(config),
             #[cfg(not(feature = "local-ml"))]
@@ -439,6 +499,7 @@ impl EmbeddingEngine {
     fn init_openrouter_with_endpoint(
         config: EmbeddingConfig,
         endpoint_url: String,
+        policy: EmbeddingRequestPolicy,
     ) -> Result<Self, String> {
         if config.api_key.trim().is_empty() {
             return Err("OpenRouter API key no configurada para embeddings".to_string());
@@ -457,6 +518,7 @@ impl EmbeddingEngine {
                 api_key: config.api_key,
                 model_name: config.model_name,
                 endpoint_url,
+                policy,
             }),
             cache: Mutex::new(HashMap::new()),
         })
@@ -482,7 +544,7 @@ impl EmbeddingEngine {
         endpoint_url: String,
     ) -> Result<Self, String> {
         config.provider = EmbeddingProvider::Api;
-        Self::init_openrouter_with_endpoint(config, endpoint_url)
+        Self::init_openrouter_with_endpoint(config, endpoint_url, EmbeddingRequestPolicy::default())
     }
 
     /// Compute embedding for a single text string via the selected BGE-M3 provider.
@@ -516,6 +578,75 @@ impl EmbeddingEngine {
         }
         let vector = aggregate_chunk_embeddings(&chunks, chunk_vectors)?;
 
+        self.cache_put(key, &vector);
+
+        Ok(vector)
+    }
+
+    /// Embeds many texts, returning one vector per text in input order, with
+    /// exactly the per-text semantics of [`Self::embed_text`] (oversized texts
+    /// split, then aggregate). Remote providers receive the pieces in
+    /// array-input requests with bounded concurrency; the local model runs
+    /// them one after another.
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+        let mut results: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
+        // (text index, cache key, pieces) for every text the cache missed.
+        let mut pending: Vec<(usize, u64, Vec<&str>)> = Vec::new();
+        for (index, text) in texts.iter().enumerate() {
+            let key = rolling_hash64(text.as_bytes());
+            if let Some(hit) = self.cache.lock().ok().and_then(|c| c.get(&key).cloned()) {
+                results[index] = Some(hit);
+                continue;
+            }
+            pending.push((index, key, chunk_embedding_text(text)?));
+        }
+        if !pending.is_empty() {
+            let flat: Vec<&str> = pending
+                .iter()
+                .flat_map(|(_, _, pieces)| pieces.iter().copied())
+                .collect();
+            let vectors = match &self.backend {
+                EmbeddingBackend::OpenRouter(client) => client.embed_many(&flat)?,
+                #[cfg(feature = "local-ml")]
+                EmbeddingBackend::Local(local) => flat
+                    .iter()
+                    .map(|piece| local.embed_chunk(piece))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            if vectors.len() != flat.len() {
+                return Err(format!(
+                    "Embedding provider returned {} vectors for {} inputs",
+                    vectors.len(),
+                    flat.len()
+                ));
+            }
+            let mut vectors = vectors.into_iter();
+            for (index, key, pieces) in pending {
+                let own: Vec<Vec<f32>> = vectors.by_ref().take(pieces.len()).collect();
+                let vector = aggregate_chunk_embeddings(&pieces, own)?;
+                self.cache_put(key, &vector);
+                results[index] = Some(vector);
+            }
+        }
+        results
+            .into_iter()
+            .map(|slot| slot.ok_or_else(|| "Embedding batch lost a result".to_string()))
+            .collect()
+    }
+
+    /// How many texts one [`Self::embed_batch`] call should carry so every
+    /// in-flight slot stays busy; local inference keeps waves short.
+    pub fn preferred_wave(&self) -> usize {
+        match &self.backend {
+            EmbeddingBackend::OpenRouter(client) => {
+                client.policy.max_inputs.max(1) * client.policy.max_in_flight.max(1)
+            }
+            #[cfg(feature = "local-ml")]
+            EmbeddingBackend::Local(_) => LOCAL_EMBEDDING_WAVE,
+        }
+    }
+
+    fn cache_put(&self, key: u64, vector: &[f32]) {
         if let Ok(mut cache) = self.cache.lock() {
             // Tiny bounded cache to avoid repeated work/API calls for identical text.
             if cache.len() >= 128 {
@@ -523,10 +654,18 @@ impl EmbeddingEngine {
                     cache.remove(&first_key);
                 }
             }
-            cache.insert(key, vector.clone());
+            cache.insert(key, vector.to_vec());
         }
+    }
 
-        Ok(vector)
+    #[cfg(test)]
+    fn init_with_endpoint_and_policy(
+        mut config: EmbeddingConfig,
+        endpoint_url: String,
+        policy: EmbeddingRequestPolicy,
+    ) -> Result<Self, String> {
+        config.provider = EmbeddingProvider::Api;
+        Self::init_openrouter_with_endpoint(config, endpoint_url, policy)
     }
 
     pub fn provider_name(&self) -> &'static str {
@@ -570,18 +709,268 @@ pub(crate) fn config_cache_key(config: &EmbeddingConfig) -> String {
     }
 }
 
-impl OpenRouterEmbeddingClient {
-    fn embed_chunk(&self, chunk: &str) -> Result<Vec<f32>, String> {
-        let request = EmbeddingRequest {
-            model: self.model_name.as_str(),
-            input: chunk,
-        };
+/// Outcome of one request batch: its vectors in input order, or the error.
+type BatchResult = Result<Vec<Vec<f32>>, String>;
 
-        let client = reqwest::blocking::Client::builder()
+/// Exponential backoff for attempt `attempt` (1-based) with +-25% jitter, so
+/// concurrent workers that were throttled together do not retry in lockstep.
+/// The nominal delay is capped at `cap`; jitter may stretch it a quarter past.
+fn jittered_backoff(base: Duration, cap: Duration, attempt: usize) -> Duration {
+    use std::sync::atomic::AtomicU64;
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nominal = base
+        .saturating_mul(1_u32 << attempt.saturating_sub(1).min(16))
+        .min(cap);
+    // splitmix64 over the clock and a sequence number: no dependency, and
+    // two calls in the same nanosecond still differ.
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0)
+        .wrapping_add(SEQUENCE.fetch_add(0x9E37_79B9_7F4A_7C15, AtomicOrdering::Relaxed));
+    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    state ^= state >> 31;
+    let factor = 0.75 + (state % 10_001) as f64 / 20_000.0;
+    nominal.mul_f64(factor)
+}
+
+/// Caps the requests in flight during one batched call, and lets a throttle
+/// lower the cap while the call runs.
+struct ConcurrencyGate {
+    /// `(in flight, allowed)`.
+    state: Mutex<(usize, usize)>,
+    released: std::sync::Condvar,
+}
+
+/// A held slot; dropping it frees the slot.
+struct GateSlot<'a>(&'a ConcurrencyGate);
+
+impl Drop for GateSlot<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.state.lock() {
+            state.0 = state.0.saturating_sub(1);
+        }
+        self.0.released.notify_all();
+    }
+}
+
+impl ConcurrencyGate {
+    fn new(allowed: usize) -> Self {
+        Self {
+            state: Mutex::new((0, allowed.max(1))),
+            released: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Waits for a free slot; `None` when the call was aborted meanwhile.
+    fn acquire(&self, abort: &AtomicBool) -> Option<GateSlot<'_>> {
+        let mut state = self.state.lock().ok()?;
+        loop {
+            if abort.load(AtomicOrdering::SeqCst) {
+                return None;
+            }
+            if state.0 < state.1 {
+                state.0 += 1;
+                return Some(GateSlot(self));
+            }
+            state = self
+                .released
+                .wait_timeout(state, Duration::from_millis(50))
+                .ok()?
+                .0;
+        }
+    }
+
+    /// Halves the allowance, never below one.
+    fn halve(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.1 = (state.1 / 2).max(1);
+        }
+    }
+}
+
+/// `Display` of an error followed by every `source()` below it. reqwest's own
+/// message for a transport failure is just "error sending request for url";
+/// the cause (DNS, connect, TLS, timeout) only lives in the chain.
+pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
+}
+
+/// One failed HTTP attempt, classified for the retry loop.
+struct RequestFailure {
+    message: String,
+    retryable: bool,
+    retry_after_ms: Option<i64>,
+    /// The provider answered 429: the caller should ease off.
+    throttled: bool,
+}
+
+impl OpenRouterEmbeddingClient {
+    fn http_client() -> Result<reqwest::blocking::Client, String> {
+        reqwest::blocking::Client::builder()
             .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
             .timeout(Duration::from_secs(120))
             .build()
-            .map_err(|e| format!("Failed to build OpenRouter embedding client: {e}"))?;
+            .map_err(|e| format!("Failed to build OpenRouter embedding client: {e}"))
+    }
+
+    /// Single-input request with no retry: the interactive query path keeps
+    /// its historical behaviour.
+    fn embed_chunk(&self, chunk: &str) -> Result<Vec<f32>, String> {
+        let client = Self::http_client()?;
+        self.request_once(&client, &[chunk])
+            .map_err(|failure| failure.message)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "OpenRouter embedding response returned no vectors".to_string())
+    }
+
+    /// Embeds `inputs` in order: split into requests by count and total
+    /// characters, up to `max_in_flight` of them at once, each retried on
+    /// throttling. The first failure aborts the call (in-flight requests
+    /// finish, no new ones start) and nothing partial is returned.
+    fn embed_many(&self, inputs: &[&str]) -> Result<Vec<Vec<f32>>, String> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let batches = plan_request_batches(inputs, &self.policy);
+        let client = &Self::http_client()?;
+        let workers = self.policy.max_in_flight.max(1).min(batches.len());
+        let abort = AtomicBool::new(false);
+        let next = AtomicUsize::new(0);
+        // Requests allowed in flight. A 429 halves it for the rest of this
+        // call (never below one), so a throttled key is not hit by the same
+        // burst again.
+        let gate = ConcurrencyGate::new(workers);
+        let slots: Mutex<Vec<Option<BatchResult>>> =
+            Mutex::new(batches.iter().map(|_| None).collect());
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                let (batches, slots, abort, next, gate) = (&batches, &slots, &abort, &next, &gate);
+                scope.spawn(move || loop {
+                    if abort.load(AtomicOrdering::SeqCst) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, AtomicOrdering::SeqCst);
+                    let Some(range) = batches.get(index) else {
+                        break;
+                    };
+                    let result =
+                        self.request_with_retry(client, &inputs[range.clone()], abort, gate);
+                    if result.is_err() {
+                        abort.store(true, AtomicOrdering::SeqCst);
+                    }
+                    if let Ok(mut slots) = slots.lock() {
+                        slots[index] = Some(result);
+                    }
+                });
+            }
+        });
+        let slots = slots
+            .into_inner()
+            .map_err(|_| "Embedding request results lock poisoned".to_string())?;
+        // The error to report is the real failure, not a sibling that merely
+        // stood down because of it, wherever it sits in request order.
+        let mut skipped = false;
+        let mut first_error: Option<String> = None;
+        let mut vectors = Vec::with_capacity(inputs.len());
+        for slot in slots {
+            match slot {
+                Some(Ok(batch)) => vectors.extend(batch),
+                Some(Err(error)) if error == EMBEDDING_REQUEST_SKIPPED => skipped = true,
+                Some(Err(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                None => skipped = true,
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        if skipped {
+            return Err(EMBEDDING_REQUEST_SKIPPED.to_string());
+        }
+        Ok(vectors)
+    }
+
+    fn request_with_retry(
+        &self,
+        client: &reqwest::blocking::Client,
+        inputs: &[&str],
+        abort: &AtomicBool,
+        gate: &ConcurrencyGate,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let mut attempt = 0_usize;
+        loop {
+            attempt += 1;
+            // Every attempt, first or retry, takes a slot: after a throttle
+            // the surplus workers wait here instead of retrying alongside.
+            let Some(slot) = gate.acquire(abort) else {
+                return Err(EMBEDDING_REQUEST_SKIPPED.to_string());
+            };
+            let outcome = self.request_once(client, inputs);
+            drop(slot);
+            let failure = match outcome {
+                Ok(vectors) => return Ok(vectors),
+                Err(failure) => failure,
+            };
+            if failure.throttled {
+                gate.halve();
+            }
+            if !failure.retryable || attempt >= self.policy.max_attempts.max(1) {
+                return Err(failure.message);
+            }
+            let delay = match failure.retry_after_ms {
+                Some(ms) => {
+                    let delay = Duration::from_millis(ms.max(0) as u64);
+                    if delay > self.policy.max_backoff {
+                        // Too long to hold a worker for: the scheduler's own
+                        // backoff honours the suffix in the message.
+                        return Err(failure.message);
+                    }
+                    delay
+                }
+                None => {
+                    jittered_backoff(self.policy.base_backoff, self.policy.max_backoff, attempt)
+                }
+            };
+            std::thread::sleep(delay);
+            if abort.load(AtomicOrdering::SeqCst) {
+                return Err(failure.message);
+            }
+        }
+    }
+
+    fn request_once(
+        &self,
+        client: &reqwest::blocking::Client,
+        inputs: &[&str],
+    ) -> Result<Vec<Vec<f32>>, RequestFailure> {
+        let fatal = |message: String| RequestFailure {
+            message,
+            retryable: false,
+            retry_after_ms: None,
+            throttled: false,
+        };
+        let input = match inputs {
+            [single] => EmbeddingInput::One(single),
+            many => EmbeddingInput::Many(many),
+        };
+        let request = EmbeddingRequest {
+            model: self.model_name.as_str(),
+            input,
+        };
 
         let response = client
             .post(&self.endpoint_url)
@@ -590,36 +979,106 @@ impl OpenRouterEmbeddingClient {
             .header("X-Title", "EntropIA")
             .json(&request)
             .send()
-            .map_err(|e| format!("OpenRouter embedding request failed: {e}"))?;
+            .map_err(|e| RequestFailure {
+                message: format!("OpenRouter embedding request failed: {}", error_chain(&e)),
+                retryable: true,
+                retry_after_ms: None,
+                throttled: false,
+            })?;
 
         let status = response.status();
         if !status.is_success() {
-            let retry_suffix = crate::ocr::glm_ocr::retry_after_ms(
+            let retry_after_ms = crate::ocr::glm_ocr::retry_after_ms(
                 response
                     .headers()
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|value| value.to_str().ok()),
                 std::time::SystemTime::now(),
-            )
-            .map(|delay| format!(" [retry_after_ms={delay}]"))
-            .unwrap_or_default();
+            );
+            let retry_suffix = retry_after_ms
+                .map(|delay| format!(" [retry_after_ms={delay}]"))
+                .unwrap_or_default();
             let body = response.text().unwrap_or_default();
-            return Err(format!(
-                "OpenRouter embedding API error ({status}): {body}{retry_suffix}"
-            ));
+            return Err(RequestFailure {
+                message: format!("OpenRouter embedding API error ({status}): {body}{retry_suffix}"),
+                retryable: matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504),
+                retry_after_ms,
+                throttled: status.as_u16() == 429,
+            });
         }
 
-        let parsed: EmbeddingResponse = response
-            .json()
-            .map_err(|e| format!("Failed to parse OpenRouter embedding response: {e}"))?;
-
-        parsed
-            .data
-            .into_iter()
-            .next()
-            .map(|entry| entry.embedding)
-            .ok_or_else(|| "OpenRouter embedding response returned no vectors".to_string())
+        let parsed: EmbeddingResponse = response.json().map_err(|e| {
+            fatal(format!(
+                "Failed to parse OpenRouter embedding response: {e}"
+            ))
+        })?;
+        order_response_vectors(parsed.data, inputs.len()).map_err(fatal)
     }
+}
+
+/// Greedy request plan over `inputs`: a request closes at `max_inputs`
+/// inputs or when the next input would push it past `max_chars`. Every input
+/// lands in exactly one range, in order, and a lone oversized input still
+/// gets its own request.
+fn plan_request_batches(
+    inputs: &[&str],
+    policy: &EmbeddingRequestPolicy,
+) -> Vec<std::ops::Range<usize>> {
+    let max_inputs = policy.max_inputs.max(1);
+    let mut batches = Vec::new();
+    let (mut start, mut chars) = (0_usize, 0_usize);
+    for (index, input) in inputs.iter().enumerate() {
+        let len = input.chars().count();
+        let count = index - start;
+        if count > 0 && (count >= max_inputs || chars.saturating_add(len) > policy.max_chars) {
+            batches.push(start..index);
+            start = index;
+            chars = 0;
+        }
+        chars = chars.saturating_add(len);
+    }
+    if start < inputs.len() {
+        batches.push(start..inputs.len());
+    }
+    batches
+}
+
+/// Maps a response onto its request: by the provider's `index` when every
+/// item carries one (arrival order is not guaranteed), by position otherwise.
+fn order_response_vectors(
+    data: Vec<EmbeddingData>,
+    expected: usize,
+) -> Result<Vec<Vec<f32>>, String> {
+    if data.is_empty() {
+        return Err("OpenRouter embedding response returned no vectors".to_string());
+    }
+    if data.len() != expected {
+        return Err(format!(
+            "OpenRouter embedding response returned {} vectors for {expected} inputs",
+            data.len()
+        ));
+    }
+    if data.iter().all(|entry| entry.index.is_some()) {
+        let mut slots: Vec<Option<Vec<f32>>> = vec![None; expected];
+        for entry in data {
+            let index = entry.index.unwrap_or(usize::MAX);
+            match slots.get_mut(index) {
+                Some(slot @ None) => *slot = Some(entry.embedding),
+                _ => {
+                    return Err(format!(
+                        "OpenRouter embedding response carried an invalid index {index}"
+                    ))
+                }
+            }
+        }
+        return slots
+            .into_iter()
+            .map(|slot| {
+                slot.ok_or_else(|| "OpenRouter embedding response skipped an index".to_string())
+            })
+            .collect();
+    }
+    Ok(data.into_iter().map(|entry| entry.embedding).collect())
 }
 
 fn chunk_embedding_text(text: &str) -> Result<Vec<&str>, String> {
@@ -1974,6 +2433,10 @@ fn local_embedding_model_incomplete_error(model_dir: &Path) -> Option<String> {
 // ── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "embeddings_batch_tests.rs"]
+mod batch_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read, Write};
@@ -2544,6 +3007,56 @@ mod tests {
         assert_eq!(result[0], 0.0);
         assert!((result[OPENROUTER_EMBEDDING_DIMENSIONS - 1] - expected_last).abs() < 0.000_001);
         assert!((vector_norm(&result) - 1.0).abs() < 0.000_001);
+    }
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+    impl std::fmt::Display for Layer {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as _)
+        }
+    }
+
+    #[test]
+    fn error_chain_appends_every_source_once() {
+        let error = Layer(
+            "error sending request",
+            Some(Box::new(Layer(
+                "client error (Connect)",
+                Some(Box::new(Layer("connection refused", None))),
+            ))),
+        );
+        assert_eq!(
+            error_chain(&error),
+            "error sending request: client error (Connect): connection refused"
+        );
+    }
+
+    #[test]
+    fn embed_text_transport_failure_reports_its_cause() {
+        // Port 1 on loopback: nothing listens, so the send fails at connect.
+        let engine = EmbeddingEngine::init_with_endpoint(
+            EmbeddingConfig::openrouter(
+                "sk-test".to_string(),
+                DEFAULT_OPENROUTER_EMBEDDING_MODEL.to_string(),
+            ),
+            "http://127.0.0.1:1".to_string(),
+        )
+        .expect("engine should init");
+        let message = engine.embed_text("hola").expect_err("nothing listens");
+        let detail = message
+            .strip_prefix("OpenRouter embedding request failed: ")
+            .expect("transport prefix");
+        assert!(
+            detail.matches(": ").count() >= 1,
+            "cause chain missing: {message}"
+        );
+        assert!(!message.contains("sk-test"));
     }
 
     fn local_openrouter_embedding_server(vector: Vec<f32>) -> String {

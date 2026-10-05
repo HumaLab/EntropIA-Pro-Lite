@@ -22,6 +22,7 @@
     "allow-processing-set-priority",
     "allow-processing-retry",
     "allow-processing-sync-bibliography-library",
+    "allow-processing-bibliography-sync-status",
     "allow-bibliography-search-works",
     "allow-bibliography-open-passage",
     "allow-bibliography-passage-context",

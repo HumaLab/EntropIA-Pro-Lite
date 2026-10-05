@@ -5,6 +5,11 @@
   import { primeDataDir } from '$lib/file-import'
   import { setupKeyboardShortcuts } from '$lib/keyboard'
   import { start as startAppClose, stop as stopAppClose } from '$lib/app-close'
+  import {
+    compacting,
+    start as startCompactionNotice,
+    stop as stopCompactionNotice,
+  } from '$lib/archive-compaction'
   import { initZoom } from '$lib/zoom'
   import { initializeAppearance } from '$lib/appearance'
   import { initLocale, t } from '$lib/i18n'
@@ -89,11 +94,14 @@
     // Close handshake (src-tauri/src/lib.rs): on window close, durably flush
     // the open editor before Rust runs its bounded sync-and-close sequence.
     void startAppClose()
+    // Close-time archive compaction: a notice while Rust rewrites the file.
+    void startCompactionNotice()
 
     initializeApp()
 
     return () => {
       stopAppClose()
+      stopCompactionNotice()
       cleanupKeyboard()
     }
   })
@@ -133,7 +141,29 @@
   />
 {/if}
 
+{#if $compacting}
+  <!-- Over whatever is on screen, not instead of it: unmounting the shell at
+       close would run its teardown against an archive that is being rewritten. -->
+  <main class="startup compacting" aria-labelledby="compacting-title">
+    <section class="startup-card" role="status" aria-live="polite">
+      <img class="startup-mark" src={startupMark} alt="" />
+      <div class="startup-copy">
+        <p class="startup-eyebrow">{PRODUCT_NAME}</p>
+        <h1 id="compacting-title">{t('app.compactingTitle')}</h1>
+        <p>{t('app.compactingBody')}</p>
+      </div>
+    </section>
+  </main>
+{/if}
+
 <style>
+  .compacting {
+    position: fixed;
+    inset: 0;
+    /* Above every dialog and editor overlay (the highest is 1200). */
+    z-index: 2000;
+  }
+
   .startup {
     display: flex;
     align-items: center;

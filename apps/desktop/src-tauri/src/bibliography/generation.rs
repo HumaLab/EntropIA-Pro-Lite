@@ -297,6 +297,218 @@ pub fn complete_index_generation(
         .ok_or_else(|| BibliographyError::new("sql_error", "activation lost the row"))
 }
 
+/// Live works (not tombstoned) that carry a vector in one generation.
+fn live_published_inputs(conn: &Connection, generation_id: &str) -> BibliographyResult<i64> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT e.item_id)
+           FROM bibliographic_item_embeddings e
+           JOIN bibliographic_items i ON i.id = e.item_id
+           LEFT JOIN zotero_item_tombstones t ON t.item_id = e.item_id
+          WHERE e.generation_id = ?1 AND t.item_id IS NULL",
+        [generation_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to count live published inputs: {error}"),
+        )
+    })
+}
+
+/// Live works that still owe this generation a vector and will deliver it: a
+/// profile task of the generation's contract is pending, running, waiting to
+/// retry or interrupted (a restart parks it for requeue), and no vector landed
+/// yet. A deleted (tombstoned) work owes nothing. Neither does a work whose
+/// profile ended `failed` or `cancelled` (or is `blocked` on configuration):
+/// it will not finish by itself, so it must not hold the whole library's
+/// search off. A later sync re-admits it and its vector folds into the active
+/// generation.
+fn outstanding_inputs(
+    conn: &Connection,
+    generation_id: &str,
+    contract_hash: &str,
+) -> BibliographyResult<i64> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT t.subject_id)
+           FROM processing_tasks t
+           JOIN bibliographic_items i ON i.id = t.subject_id
+           LEFT JOIN zotero_item_tombstones z ON z.item_id = t.subject_id
+          WHERE t.kind = 'bibliography_profile'
+            AND t.domain = 'bibliography' AND t.subject_kind = 'item'
+            AND t.contract_hash = ?2
+            AND t.state IN ('pending', 'running', 'retry_wait', 'interrupted')
+            AND z.item_id IS NULL
+            AND NOT EXISTS (
+                  SELECT 1 FROM bibliographic_item_embeddings e
+                   WHERE e.generation_id = ?1 AND e.item_id = t.subject_id)",
+        rusqlite::params![generation_id, contract_hash],
+        |row| row.get(0),
+    )
+    .map_err(|error| {
+        BibliographyError::new(
+            "sql_error",
+            format!("Failed to count outstanding inputs: {error}"),
+        )
+    })
+}
+
+/// Runs `body` inside a savepoint: it works both standalone and inside the
+/// caller's transaction (the profile commit, the sync commit), and a failure
+/// rolls back only its own writes.
+fn in_savepoint<T>(
+    conn: &Connection,
+    body: impl FnOnce(&Connection) -> BibliographyResult<T>,
+) -> BibliographyResult<T> {
+    conn.execute_batch("SAVEPOINT generation_activation")
+        .map_err(|error| BibliographyError::new("sql_error", format!("{error}")))?;
+    match body(conn) {
+        Ok(value) => {
+            conn.execute_batch("RELEASE generation_activation")
+                .map_err(|error| BibliographyError::new("sql_error", format!("{error}")))?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = conn
+                .execute_batch("ROLLBACK TO generation_activation; RELEASE generation_activation");
+            Err(error)
+        }
+    }
+}
+
+/// Activates a staging generation once every work it owes has landed.
+///
+/// The manifest is re-derived from live data instead of trusting the stored
+/// counters: `completed` is the number of live works that carry a vector in
+/// this generation, `expected` is that plus the live works whose profile is
+/// still in flight (pending, running, retry_wait, interrupted). Deleted works
+/// and works whose profile failed or was cancelled are not owed, so neither
+/// can strand the generation; work still in flight keeps it partial —
+/// `Ok(None)`, still staging. Healed counters are
+/// written back so the stored manifest never drifts from reality.
+///
+/// When the same contract already has an active generation, the staged
+/// vectors are folded into it (an incremental sync only re-embeds the works
+/// that changed, so replacing the active generation with the staging one
+/// would drop every unchanged work); the staging row is retired. Otherwise
+/// the staging row itself becomes active. Idempotent: a non-staging
+/// generation is a no-op, so two commits finishing back to back cannot
+/// activate twice. The caller supplies the surrounding transaction (or none).
+pub fn activate_if_complete(
+    conn: &Connection,
+    generation_id: &str,
+    now_ms: i64,
+) -> BibliographyResult<Option<IndexGeneration>> {
+    in_savepoint(conn, |conn| {
+        let Some(generation) = read_generation(conn, generation_id)? else {
+            return Ok(None);
+        };
+        if generation.status != "staging" {
+            return Ok(None);
+        }
+        let completed = live_published_inputs(conn, generation_id)?;
+        let outstanding = outstanding_inputs(conn, generation_id, &generation.contract_hash)?;
+        let expected = completed + outstanding;
+        if expected != generation.expected_inputs || completed != generation.completed_inputs {
+            conn.execute(
+                "UPDATE bibliographic_index_generations
+                 SET expected_inputs = ?1, completed_inputs = ?2
+                 WHERE id = ?3 AND status = 'staging'",
+                rusqlite::params![expected, completed, generation_id],
+            )
+            .map_err(|error| {
+                BibliographyError::new(
+                    "sql_error",
+                    format!("Failed to heal generation manifest: {error}"),
+                )
+            })?;
+        }
+        if completed == 0 || outstanding > 0 {
+            return Ok(None);
+        }
+        let sql_error = |what: &'static str| {
+            move |error: rusqlite::Error| {
+                BibliographyError::new("sql_error", format!("Failed to {what}: {error}"))
+            }
+        };
+        match active_generation(conn, &generation.contract_hash)? {
+            None => {
+                conn.execute(
+                    "UPDATE bibliographic_index_generations
+                     SET status = 'active', activated_at = ?1
+                     WHERE id = ?2 AND status = 'staging'",
+                    rusqlite::params![now_ms, generation_id],
+                )
+                .map_err(sql_error("activate generation"))?;
+                read_generation(conn, generation_id)
+            }
+            Some(active) => {
+                conn.execute(
+                    "DELETE FROM bibliographic_item_embeddings
+                      WHERE generation_id = ?1
+                        AND item_id IN (SELECT item_id FROM bibliographic_item_embeddings
+                                         WHERE generation_id = ?2)",
+                    rusqlite::params![active.id, generation_id],
+                )
+                .map_err(sql_error("clear superseded work vectors"))?;
+                conn.execute(
+                    "UPDATE bibliographic_item_embeddings SET generation_id = ?1
+                      WHERE generation_id = ?2",
+                    rusqlite::params![active.id, generation_id],
+                )
+                .map_err(sql_error("fold work vectors into the active generation"))?;
+                conn.execute(
+                    "UPDATE OR REPLACE bibliographic_chunk_embeddings SET generation_id = ?1
+                      WHERE generation_id = ?2",
+                    rusqlite::params![active.id, generation_id],
+                )
+                .map_err(sql_error("fold passage vectors into the active generation"))?;
+                conn.execute(
+                    "UPDATE bibliographic_index_generations
+                     SET status = 'retired', retired_at = ?1
+                     WHERE id = ?2 AND status = 'staging'",
+                    rusqlite::params![now_ms, generation_id],
+                )
+                .map_err(sql_error("retire the folded staging generation"))?;
+                read_generation(conn, &active.id)
+            }
+        }
+    })
+}
+
+/// Activates every complete staging generation (see [`activate_if_complete`]).
+/// This is the repair for archives that completed a generation before any
+/// production path activated it; it is cheap and safe to run at startup and
+/// at the start of every sync publication. Returns how many became active.
+pub fn activate_complete_staging_generations(
+    conn: &Connection,
+    now_ms: i64,
+) -> BibliographyResult<usize> {
+    let ids: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM bibliographic_index_generations
+             WHERE status = 'staging' ORDER BY created_at, id",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| {
+            BibliographyError::new(
+                "sql_error",
+                format!("Failed to list staging generations: {error}"),
+            )
+        })?;
+    let mut activated = 0;
+    for id in ids {
+        if activate_if_complete(conn, &id, now_ms)?.is_some() {
+            activated += 1;
+        }
+    }
+    Ok(activated)
+}
+
 /// Retires a generation. Retiring the active one is legitimate: it leaves
 /// no active space, and retrieval serves the labeled lexical fallback until
 /// a new generation completes. A retired generation never reactivates.

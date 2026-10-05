@@ -13,6 +13,7 @@
 //!   Unidad 4).
 
 pub mod commands;
+pub mod compact;
 pub mod eligibility;
 pub mod embedding;
 pub mod ner;

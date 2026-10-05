@@ -32,6 +32,8 @@ const { zoteroStore } = vi.hoisted(() => {
     total: 1,
     error: null,
     selection: { libraryType: 'user', libraryId: '0' },
+    fuzzy: true,
+    bibliographyProgress: null as unknown,
     bibliographySync: {
       loading: false,
       error: null as string | null,
@@ -56,6 +58,7 @@ const { zoteroStore } = vi.hoisted(() => {
       requestBibliographySync: vi.fn(async () => {}),
       search: vi.fn(),
       searchLibrary: vi.fn(async () => {}),
+      setFuzzy: vi.fn(async () => {}),
       select: vi.fn((libraryType: string, libraryId: string) => {
         snapshot.selection = { libraryType, libraryId } as typeof snapshot.selection
       }),
@@ -93,6 +96,8 @@ beforeEach(() => {
     error: null,
     requested: null,
   }
+  zoteroStore.snapshot.bibliographyProgress = null
+  zoteroStore.snapshot.status = { state: 'available' }
 })
 
 describe('the Zotero listing citation seam', () => {
@@ -153,7 +158,7 @@ describe('E2b-4 selected-library synchronization', () => {
     expect(screen.getByText('Solicitando la sincronización…')).toHaveAttribute('role', 'status')
   })
 
-  it('reports only that synchronization was requested, not that work completed', async () => {
+  it('reports only that the request was accepted until the scheduler says more', async () => {
     answerKnownLibraries([PERSONAL])
     zoteroStore.snapshot.bibliographySync = {
       loading: false,
@@ -168,11 +173,92 @@ describe('E2b-4 selected-library synchronization', () => {
 
     render(WritingZoteroTab, { props: {} })
 
+    const notice = await screen.findByText('Solicitud aceptada. Consultando el estado…')
+    expect(notice).toHaveAttribute('role', 'status')
+    expect(screen.queryByText(/El procesamiento continúa/)).not.toBeInTheDocument()
+  })
+
+  it('disables the synchronization with a reason while Zotero does not answer', async () => {
+    answerKnownLibraries([PERSONAL])
+    zoteroStore.snapshot.status = { state: 'endpoint_unavailable' }
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByRole('button', { name: 'Sincronizar biblioteca' })).toBeDisabled()
     expect(
-      await screen.findByText(
-        'Sincronización solicitada. El procesamiento continúa en segundo plano.'
+      screen.getByText('Para sincronizar, Zotero tiene que estar respondiendo en el puerto local.')
+    ).toBeInTheDocument()
+  })
+
+  describe('what the scheduler really did', () => {
+    const accepted = {
+      batchId: 'batch-bibliography',
+      taskId: 'task-bibliography',
+      created: true,
+      requeued: false,
+    }
+    const progress = (overrides: Record<string, unknown>) => ({
+      status: {
+        state: 'pending',
+        errorCode: null,
+        errorMessage: null,
+        progressDone: 0,
+        progressTotal: null,
+        itemsSeen: null,
+        remoteTotal: null,
+        newProfiles: 0,
+        newExtractions: 0,
+        ...overrides,
+      },
+      unreadable: null,
+    })
+
+    async function renderWith(overrides: Record<string, unknown>) {
+      answerKnownLibraries([PERSONAL])
+      zoteroStore.snapshot.bibliographySync = { loading: false, error: null, requested: accepted }
+      zoteroStore.snapshot.bibliographyProgress = progress(overrides)
+      render(WritingZoteroTab, { props: {} })
+      return await screen.findByRole('button', { name: 'Sincronizar biblioteca' })
+    }
+
+    it('says it is synchronizing, with progress, and blocks a second press', async () => {
+      const button = await renderWith({ state: 'running', progressDone: 10, progressTotal: 40 })
+
+      expect(screen.getByText('Sincronizando… 10 de 40 obras')).toHaveAttribute('role', 'status')
+      expect(button).toBeDisabled()
+    })
+
+    it('says the library is up to date when nothing new was queued', async () => {
+      const button = await renderWith({ state: 'succeeded', itemsSeen: 2812 })
+
+      expect(screen.getByText('Biblioteca al día')).toBeInTheDocument()
+      expect(button).toBeEnabled()
+    })
+
+    it('reports the new works and attachments of a finished sync', async () => {
+      await renderWith({ state: 'succeeded', newProfiles: 3, newExtractions: 2 })
+
+      expect(
+        screen.getByText('Sincronizada. Obras nuevas o actualizadas: 3. Adjuntos nuevos: 2.')
+      ).toBeInTheDocument()
+    })
+
+    it('says it is paused when Zotero stopped answering, never that it continues', async () => {
+      await renderWith({ state: 'retry_wait', errorCode: 'zotero_unreachable' })
+
+      expect(
+        screen.getByText('En pausa: Zotero no responde. Se reintenta solo cuando conteste.')
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/El procesamiento continúa/)).not.toBeInTheDocument()
+    })
+
+    it('shows a failed sync as an alert with its reason', async () => {
+      await renderWith({ state: 'failed', errorMessage: 'library missing' })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'La sincronización falló: library missing'
       )
-    ).toHaveAttribute('role', 'status')
+    })
   })
 
   it('shows scheduler admission errors next to the synchronization action', async () => {
@@ -403,7 +489,10 @@ describe('E1c-3 opening the work details (ficha)', () => {
 })
 
 describe('B2 search by meaning in the Zotero tab', () => {
-  type Entry = (typeof zoteroStore.snapshot.entries)[number] & { semantic?: true }
+  type Entry = (typeof zoteroStore.snapshot.entries)[number] & {
+    semantic?: true
+    content?: { kind: 'exact' | 'approximate'; terms: string[] }
+  }
   type Snapshot = Omit<typeof zoteroStore.snapshot, 'entries'> & {
     semanticStatus: string
     entries: Entry[]
@@ -480,5 +569,70 @@ describe('B2 search by meaning in the Zotero tab', () => {
 
     expect(await screen.findByText('Otra obra')).toBeInTheDocument()
     expect(screen.getAllByText('Por significado')).toHaveLength(1)
+  })
+  it('tags works found by what their passages say, with how the words matched', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'plan federal'
+    snapshot.semanticStatus = 'ok'
+    snapshot.entries = [
+      original,
+      {
+        ...original,
+        key: 'CON1',
+        title: 'La producción del espacio',
+        csl_json: JSON.stringify({ id: 'con1', title: 'La producción del espacio' }),
+        content: { kind: 'exact', terms: ['plan', 'federal'] },
+      },
+      {
+        ...original,
+        key: 'CON2',
+        title: 'Otra obra',
+        csl_json: JSON.stringify({ id: 'con2', title: 'Otra obra' }),
+        content: { kind: 'approximate', terms: ['crocitto'] },
+      },
+    ]
+
+    render(WritingZoteroTab, { props: {} })
+
+    expect(await screen.findByText('La producción del espacio')).toBeInTheDocument()
+    expect(screen.getAllByText('Por contenido')).toHaveLength(2)
+    expect(screen.getByText('Exacto: plan, federal')).toBeInTheDocument()
+    expect(screen.getByText('Aproximado: crocitto')).toBeInTheDocument()
+  })
+
+  it('offers the shared approximate-matching switch and hands the choice to the store', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = ''
+    snapshot.entries = [original]
+
+    render(WritingZoteroTab, { props: {} })
+
+    const toggle = await screen.findByRole('checkbox', {
+      name: 'Incluir coincidencias aproximadas',
+    })
+    expect(toggle).toBeChecked()
+    await fireEvent.click(toggle)
+    expect(zoteroStore.setFuzzy).toHaveBeenCalledWith(false)
+  })
+
+  it('cannot cite a catalog-only work that has no CSL to snapshot', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'dignidad'
+    snapshot.semanticStatus = 'ok'
+    snapshot.entries = [
+      {
+        ...original,
+        key: 'NOCSL',
+        title: 'Obra sin CSL',
+        csl_json: '',
+        semantic: true,
+      },
+    ]
+
+    render(WritingZoteroTab, { props: { oncite: vi.fn(() => 'citation-1') } })
+
+    expect(await screen.findByText('Obra sin CSL')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Citar/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Ver ficha|Ficha|Detalles/i })).toBeEnabled()
   })
 })
