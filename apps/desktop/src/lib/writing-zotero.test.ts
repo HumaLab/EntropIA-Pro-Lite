@@ -567,6 +567,46 @@ describe('searching what was read', () => {
     expect(mockInvoke).not.toHaveBeenCalled()
   })
 
+  describe('accents and typos', () => {
+    const work = (id: string, title: string) =>
+      JSON.stringify({ id, title, author: [{ family: 'Núñez' }] })
+    const spatial = [work('a', 'La producción del espacio'), work('b', 'Another work')]
+    async function spatialStore(fuzzy: boolean) {
+      answer({
+        writing_zotero_cached: { items: spatial, version: 1 },
+        writing_zotero_probe: { state: 'endpoint_unavailable' },
+      })
+      const prefs = {
+        fuzzyEnabled: async () => fuzzy,
+        setFuzzyEnabled: async () => {},
+      } as never
+      const store = new WritingZoteroStore(prefs)
+      await store.connect()
+      await store.loadPreferences()
+      return store
+    }
+
+    it('folds accents with approximate matching off', async () => {
+      const store = await spatialStore(false)
+      store.search('La produccion del espacio')
+      expect(store.snapshot.entries.map((e) => e.title)).toEqual(['La producción del espacio'])
+      store.search('nunez')
+      expect(store.snapshot.entries).toHaveLength(2)
+    })
+
+    it('does not tolerate typos with the box off', async () => {
+      const store = await spatialStore(false)
+      store.search('La produción del espasio')
+      expect(store.snapshot.entries).toHaveLength(0)
+    })
+
+    it('tolerates typos with the box on', async () => {
+      const store = await spatialStore(true)
+      store.search('La produción del espasio')
+      expect(store.snapshot.entries.map((e) => e.title)).toEqual(['La producción del espacio'])
+    })
+  })
+
   it('shows everything again when the search is cleared', async () => {
     const store = await loaded()
     store.search('formaggio')

@@ -9,6 +9,7 @@ import {
   type PassageMatchKind,
 } from './bibliography-search'
 import { SearchPreferences, searchPreferences } from './search-preferences'
+import { matchesQuery } from './text-fold'
 import {
   newBatchRequestId,
   processingSyncBibliographyLibrary,
@@ -602,6 +603,9 @@ export class WritingZoteroStore {
       this.#set({ entries: this.#filtered(), semanticStatus: 'idle' })
       return
     }
+    // The saved switch decides how the held list is matched, so it is read first.
+    await this.loadPreferences()
+    if (this.#state.query !== query) return
 
     // Each leg shows as soon as it answers: a closed or slow Zotero never
     // holds the meaning-based hits back, and the other way round.
@@ -725,13 +729,16 @@ export class WritingZoteroStore {
 
   /** Filters what has been read. The library is not asked again to type. */
   #filtered(query = this.#state.query): LibraryEntry[] {
-    const needle = query.trim().toLowerCase()
+    const needle = query.trim()
     if (!needle) return this.#all.slice(0, VISIBLE)
+    // Accents and case never matter; the approximate switch adds typo
+    // tolerance on top, like the corpus search.
+    const fuzzy = this.#state.fuzzy
     return this.#all
       .filter(
         (entry) =>
-          entry.title.toLowerCase().includes(needle) ||
-          entry.authors.toLowerCase().includes(needle) ||
+          matchesQuery(entry.title, needle, fuzzy) ||
+          matchesQuery(entry.authors, needle, fuzzy) ||
           entry.year.includes(needle)
       )
       .slice(0, VISIBLE)
