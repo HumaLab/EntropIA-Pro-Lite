@@ -394,7 +394,7 @@
                 <IconButton
                   size="sm"
                   label={t('writing.zoteroCite')}
-                  disabled={!oncite}
+                  disabled={!oncite || !entry.csl_json.trim()}
                   onclick={() => cite(entry)}
                 >
                   <ActionIcon name="text-quote" size={14} />

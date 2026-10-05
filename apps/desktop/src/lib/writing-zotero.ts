@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
-import { bibliographySearchWorks } from './bibliography-search'
+import {
+  bibliographySearchWorks,
+  type BibliographySearchHit,
+  type BibliographySearchResponse,
+} from './bibliography-search'
 import {
   newBatchRequestId,
   processingSyncBibliographyLibrary,
@@ -156,6 +160,20 @@ function message(error: unknown): string {
     return String((error as { message: unknown }).message)
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+/** A catalog hit as a list entry, from the catalog's own copy of the work. */
+function entryFromHit(hit: BibliographySearchHit): LibraryEntry {
+  return {
+    key: hit.itemKey,
+    itemVersion: 0,
+    libraryType: hit.libraryType,
+    libraryId: hit.libraryNativeId,
+    title: hit.title,
+    authors: hit.authors,
+    year: hit.year ? String(hit.year) : '',
+    csl_json: hit.cslJson,
+  }
 }
 
 /** Reads the few fields a list needs, without disturbing the CSL-JSON itself. */
@@ -431,32 +449,62 @@ export class WritingZoteroStore {
       return
     }
 
-    const [zotero, meaning] = await Promise.allSettled([
-      invoke<LibraryPage>('writing_zotero_search', {
-        libraryType: selection.libraryType,
-        libraryId: selection.libraryId,
-        query: needle,
-      }),
-      bibliographySearchWorks(needle, { zoteroLibrary: selection }),
-    ])
-    // The box moved on while they were answering, or the library did:
-    // a late answer of another query or another selection changes nothing.
-    if (epoch !== this.#epoch) return
-    if (!this.#sameSelection(selection)) return
-    if (this.#state.query !== query) return
+    // Each leg shows as soon as it answers: a closed or slow Zotero never
+    // holds the meaning-based hits back, and the other way round.
+    let zotero: PromiseSettledResult<LibraryPage> | null = null
+    let meaning: PromiseSettledResult<BibliographySearchResponse> | null = null
+    const stale = () =>
+      epoch !== this.#epoch || !this.#sameSelection(selection) || this.#state.query !== query
+    const show = () => {
+      // The box moved on while they were answering, or the library did:
+      // a late answer of another query or another selection changes nothing.
+      if (stale()) return
+      this.#set(this.#searchPatch(zotero, meaning))
+    }
+    const settle = <T>(
+      promise: Promise<T>,
+      keep: (result: PromiseSettledResult<T>) => void
+    ): Promise<void> =>
+      promise
+        .then(
+          (value) => keep({ status: 'fulfilled', value }),
+          (reason) => keep({ status: 'rejected', reason })
+        )
+        .then(show)
 
+    await Promise.all([
+      settle(
+        invoke<LibraryPage>('writing_zotero_search', {
+          libraryType: selection.libraryType,
+          libraryId: selection.libraryId,
+          query: needle,
+        }),
+        (result) => (zotero = result)
+      ),
+      settle(
+        bibliographySearchWorks(needle, { zoteroLibrary: selection }),
+        (result) => (meaning = result)
+      ),
+    ])
+  }
+
+  /** What the box shows given whichever of the two searches has answered. */
+  #searchPatch(
+    zotero: PromiseSettledResult<LibraryPage> | null,
+    meaning: PromiseSettledResult<BibliographySearchResponse> | null
+  ): Partial<ZoteroSnapshot> {
     const matched = this.#filtered()
     const shown = new Set(matched.map((entry) => entry.csl_json))
     const found =
-      zotero.status === 'fulfilled'
+      zotero?.status === 'fulfilled'
         ? zotero.value.items
             .map(describe)
             .filter((entry): entry is LibraryEntry => entry !== null && !shown.has(entry.csl_json))
         : []
     const entries = [...matched, ...found]
 
-    let semanticStatus: SemanticSearchStatus = 'failed'
-    if (meaning.status === 'fulfilled') {
+    let semanticStatus: SemanticSearchStatus = meaning === null ? 'idle' : 'failed'
+    if (meaning?.status === 'fulfilled') {
       const answer = meaning.value
       semanticStatus = !answer.librarySynced
         ? 'not_synced'
@@ -466,20 +514,26 @@ export class WritingZoteroStore {
       const keys = new Set(entries.map((entry) => entry.key))
       const library = new Map(this.#all.map((entry) => [entry.key, entry]))
       for (const hit of answer.hits) {
-        const entry = library.get(hit.itemKey)
-        if (!entry || keys.has(entry.key)) continue
+        if (keys.has(hit.itemKey)) continue
+        // A work the held list lacks (a list from an older copy, or one not
+        // refreshed yet) is still a work of the catalog: listed from the
+        // catalog's own title, authors, year and CSL-JSON, which is also what
+        // a citation snapshots. Without CSL it is shown but cannot be cited.
+        const entry = library.get(hit.itemKey) ?? entryFromHit(hit)
         keys.add(entry.key)
         entries.push(hit.method === 'lexical' ? entry : { ...entry, semantic: true })
       }
     }
 
-    this.#set({
+    return {
       semanticStatus,
-      ...(zotero.status === 'fulfilled'
+      ...(zotero?.status === 'fulfilled'
         ? { total: zotero.value.total, error: null }
-        : { error: message(zotero.reason) }),
+        : zotero?.status === 'rejected'
+          ? { error: message(zotero.reason) }
+          : {}),
       entries: entries.slice(0, VISIBLE),
-    })
+    }
   }
 
   /** Narrows what is already on screen. Typing never asks the library. */

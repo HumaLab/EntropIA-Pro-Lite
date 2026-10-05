@@ -657,11 +657,70 @@ describe('searching by meaning', () => {
     expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1'])
   })
 
-  it('skips a hit that is not in the library read from Zotero, which cannot be cited', async () => {
-    const store = await loaded(semantic([hit('GONE', 'vector'), hit('DAR1', 'vector')]))
+  it('lists a hit the held list lacks from the catalog, citable through its own CSL', async () => {
+    const store = await loaded(
+      semantic([
+        {
+          ...hit('GONE', 'vector'),
+          title: 'Plan Federal de Viviendas',
+          authors: 'Pérez',
+          year: 2010,
+          libraryType: 'user',
+          libraryNativeId: '0',
+          cslJson: '{"id":"GONE","title":"Plan Federal de Viviendas"}',
+        },
+        hit('DAR1', 'vector'),
+      ])
+    )
 
     await store.searchLibrary('formaggio')
 
+    expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'GONE', 'DAR1'])
+    const fromCatalog = store.snapshot.entries[1]
+    expect(fromCatalog).toMatchObject({
+      title: 'Plan Federal de Viviendas',
+      authors: 'Pérez',
+      year: '2010',
+      libraryType: 'user',
+      libraryId: '0',
+      semantic: true,
+      csl_json: '{"id":"GONE","title":"Plan Federal de Viviendas"}',
+    })
+  })
+
+  it('shows meaning hits from the mirror-backed list while Zotero is closed and says nothing false', async () => {
+    const store = await loaded(semantic([hit('DAR1', 'vector')]))
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? Promise.reject(new Error('Nada responde en el puerto local'))
+        : Promise.resolve(semantic([hit('DAR1', 'vector')]))) as never)
+
+    await store.searchLibrary('programa dignidad')
+
+    expect(store.snapshot.entries.map((entry) => [entry.key, entry.semantic])).toEqual([
+      ['DAR1', true],
+    ])
+    expect(store.snapshot.semanticStatus).toBe('ok')
+  })
+
+  it('does not hold the meaning hits back while Zotero is still answering', async () => {
+    const store = await loaded(semantic([hit('DAR1', 'vector')]))
+    let zoteroReply: (value: unknown) => void = () => {}
+    mockInvoke.mockImplementation(((cmd: string) =>
+      cmd === 'writing_zotero_search'
+        ? new Promise((resolve) => {
+            zoteroReply = resolve
+          })
+        : Promise.resolve(semantic([hit('DAR1', 'vector')]))) as never)
+
+    const searching = store.searchLibrary('formaggio')
+    await vi.waitFor(() => {
+      expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
+    })
+    expect(store.snapshot.semanticStatus).toBe('ok')
+
+    zoteroReply({ items: [], total: 0 })
+    await searching
     expect(store.snapshot.entries.map((entry) => entry.key)).toEqual(['GIN1', 'DAR1'])
   })
 

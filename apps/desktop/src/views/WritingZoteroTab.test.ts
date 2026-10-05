@@ -481,4 +481,24 @@ describe('B2 search by meaning in the Zotero tab', () => {
     expect(await screen.findByText('Otra obra')).toBeInTheDocument()
     expect(screen.getAllByText('Por significado')).toHaveLength(1)
   })
+  it('cannot cite a catalog-only work that has no CSL to snapshot', async () => {
+    answerKnownLibraries([PERSONAL])
+    snapshot.query = 'dignidad'
+    snapshot.semanticStatus = 'ok'
+    snapshot.entries = [
+      {
+        ...original,
+        key: 'NOCSL',
+        title: 'Obra sin CSL',
+        csl_json: '',
+        semantic: true,
+      },
+    ]
+
+    render(WritingZoteroTab, { props: { oncite: vi.fn(() => ({})) } })
+
+    expect(await screen.findByText('Obra sin CSL')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Citar/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Ver ficha|Ficha|Detalles/i })).toBeEnabled()
+  })
 })
