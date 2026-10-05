@@ -1515,6 +1515,7 @@ dependencies = [
  "tokio",
  "urlencoding",
  "uuid",
+ "vecscan",
  "webkit2gtk",
  "webview2-com",
  "windows",
@@ -7175,6 +7176,10 @@ checksum = "956ae1e0d85bca567dee1dcf87fb1ca2e792792f66f87dced8381f99cd91156a"
 dependencies = [
  "piston-float",
 ]
+
+[[package]]
+name = "vecscan"
+version = "0.1.0"
 
 [[package]]
 name = "version-compare"

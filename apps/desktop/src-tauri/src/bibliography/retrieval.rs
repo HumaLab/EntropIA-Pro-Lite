@@ -1788,52 +1788,12 @@ fn lexical_passage_candidates(
         .collect())
 }
 
-/// Cosine similarity of `query` (pre-scaled to unit length) against a stored
-/// little-endian f32 blob, read in place. Eight independent lanes let the
-/// compiler vectorize what a single running sum cannot; the result is a
-/// ranking key, so single precision is plenty (the shown score is recomputed
-/// exactly for the few passages that reach the answer).
-fn unit_similarity_to_blob(unit_query: &[f32], blob: &[u8]) -> Option<f32> {
-    if unit_query.is_empty() || blob.len() != unit_query.len() * 4 {
-        return None;
-    }
-    let mut dot = [0.0_f32; 8];
-    let mut mag = [0.0_f32; 8];
-    let mut query_lanes = unit_query.chunks_exact(8);
-    let mut blob_lanes = blob.chunks_exact(32);
-    for (q, b) in (&mut query_lanes).zip(&mut blob_lanes) {
-        for lane in 0..8 {
-            let value = f32::from_le_bytes([
-                b[lane * 4],
-                b[lane * 4 + 1],
-                b[lane * 4 + 2],
-                b[lane * 4 + 3],
-            ]);
-            dot[lane] += q[lane] * value;
-            mag[lane] += value * value;
-        }
-    }
-    let mut dot_sum: f32 = dot.iter().sum();
-    let mut mag_sum: f32 = mag.iter().sum();
-    for (q, b) in query_lanes
-        .remainder()
-        .iter()
-        .zip(blob_lanes.remainder().chunks_exact(4))
-    {
-        let value = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-        dot_sum += q * value;
-        mag_sum += value * value;
-    }
-    if mag_sum <= 0.0 || !mag_sum.is_finite() || !dot_sum.is_finite() {
-        return None;
-    }
-    Some(dot_sum / mag_sum.sqrt())
-}
-
-/// Vector leg: cosine similarity against every fresh chunk vector of the
-/// active generation, read in place from the row and never decoded or kept.
-/// Memory is bounded by the leg depth, not by the corpus.
-fn vector_passage_candidates(
+/// Reference vector leg: exact cosine against every fresh chunk vector of
+/// the active generation, streamed from SQLite. The production leg is the
+/// quantized in-memory index (`vector_index`); this is its oracle in tests
+/// and in the ignored measurement.
+#[cfg(test)]
+pub(crate) fn exact_vector_candidates(
     conn: &Connection,
     generation_id: &str,
     query_vector: &[f32],
@@ -1889,7 +1849,7 @@ fn vector_passage_candidates(
             .get_ref(2)
             .and_then(|value| value.as_blob().map_err(Into::into))
             .map_err(|error| err("Failed to read passage vector", error))?;
-        let Some(similarity) = unit_similarity_to_blob(&unit_query, blob) else {
+        let Some(similarity) = vecscan::unit_similarity_blob(&unit_query, blob) else {
             continue;
         };
         let similarity = f64::from(similarity);
@@ -1958,7 +1918,7 @@ pub fn search_passages(
         None => Vec::new(),
     };
     let vector = match &query_vector {
-        Some(query_vector) => vector_passage_candidates(
+        Some(query_vector) => crate::bibliography::vector_index::search(
             conn,
             &active.id,
             query_vector,
@@ -2310,6 +2270,247 @@ pub(crate) mod passage_tests {
             embed,
         )
         .expect("passage search")
+    }
+
+    /// Deterministic 4-dimension vectors (xorshift); never the zero vector.
+    fn pseudo_vectors(count: usize, mut seed: u64) -> Vec<[f32; 4]> {
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed % 20_001) as f32 / 10_000.0) - 1.0
+        };
+        (0..count)
+            .map(|_| [next(), next(), next(), next() + 0.01])
+            .collect()
+    }
+
+    /// Three works of twenty chunks each, with an active generation.
+    fn indexed_corpus() -> (Connection, String, Vec<String>) {
+        let mut conn = passage_db();
+        let mut items = Vec::new();
+        for (n, key) in ["KV0001", "KV0002", "KV0003"].into_iter().enumerate() {
+            let (_lib, item) = seed_item(&mut conn, &format!("pv{n}"), &format!("v{n}"), key, key);
+            items.push(item);
+        }
+        let gen = activate_gen(&mut conn, "gen-index");
+        let vectors = pseudo_vectors(60, 42);
+        for (i, vector) in vectors.iter().enumerate() {
+            let item = &items[i % 3];
+            seed_chunk(
+                &conn,
+                item,
+                (i / 3) as i64,
+                &format!("texto {i}"),
+                1,
+                &gen,
+                vector,
+                None,
+            );
+        }
+        (conn, gen, items)
+    }
+
+    fn assert_index_equals_exact(
+        conn: &Connection,
+        gen: &str,
+        query: &[f32],
+        allowed: Option<&std::collections::HashSet<String>>,
+        depth: usize,
+    ) -> Vec<(String, f64)> {
+        let want = super::exact_vector_candidates(conn, gen, query, allowed, depth).unwrap();
+        let got = super::super::vector_index::search(conn, gen, query, allowed, depth).unwrap();
+        let ids = |rows: &[(String, f64)]| rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&got), ids(&want), "same chunks in the same order");
+        for (g, w) in got.iter().zip(&want) {
+            assert!(
+                (g.1 - w.1).abs() < 1e-5,
+                "re-ranked score is exact: {g:?} vs {w:?}"
+            );
+        }
+        got
+    }
+
+    #[test]
+    fn the_vector_index_returns_the_exact_scans_top_k() {
+        let (conn, gen, items) = indexed_corpus();
+        let only_two: std::collections::HashSet<String> = items[..2].iter().cloned().collect();
+        for query in pseudo_vectors(6, 7) {
+            let all = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+            assert_eq!(all.len(), 10);
+            let some = assert_index_equals_exact(&conn, &gen, &query, Some(&only_two), 10);
+            assert!(some.iter().all(|(id, _)| !id.starts_with(&items[2])));
+        }
+        // Another dimension or a zero query nominates nothing.
+        let index = super::super::vector_index::search(&conn, &gen, &[1.0, 0.0], None, 5).unwrap();
+        assert!(index.is_empty());
+        let zero = super::super::vector_index::search(&conn, &gen, &[0.0; 4], None, 5).unwrap();
+        assert!(zero.is_empty());
+    }
+
+    #[test]
+    fn the_vector_index_follows_the_chunk_set_and_the_vectors() {
+        let (memory, gen, items) = indexed_corpus();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("archive.sqlite");
+        memory
+            .execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])
+            .expect("copy to a file");
+        let conn = Connection::open(&path).expect("file db");
+        let query = [0.9_f32, -0.2, 0.4, 0.1];
+        assert_index_equals_exact(&conn, &gen, &query, None, 10);
+
+        // A new chunk that is the query itself must come first.
+        let added = seed_chunk(&conn, &items[0], 99, "nuevo", 1, &gen, &query, None);
+        let after_insert = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert_eq!(after_insert[0].0, added);
+
+        // A vector re-embedded in place (same row id, new input hash) moves.
+        let victim = after_insert[1].0.clone();
+        let blob: Vec<u8> = [-0.9_f32, 0.2, -0.4, -0.1]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        conn.execute(
+            "UPDATE bibliographic_chunk_embeddings SET embedding = ?1, input_hash = 'rehash'
+             WHERE chunk_id = ?2",
+            rusqlite::params![blob, victim],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE bibliographic_chunks SET text_hash = 'rehash' WHERE id = ?1",
+            [&victim],
+        )
+        .unwrap();
+        let after_update = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_update.iter().all(|(id, _)| *id != victim));
+
+        // A chunk whose text moved after its vector was made is stale.
+        let stale = after_update[1].0.clone();
+        conn.execute(
+            "UPDATE bibliographic_chunks SET text_hash = 'moved' WHERE id = ?1",
+            [&stale],
+        )
+        .unwrap();
+        let after_stale = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_stale.iter().all(|(id, _)| *id != stale));
+
+        // A tombstoned work disappears.
+        conn.execute(
+            "INSERT INTO zotero_item_tombstones (item_id, observed_at, reason)
+             VALUES (?1, 1, 'deleted')",
+            [&items[0]],
+        )
+        .unwrap();
+        let after_tombstone = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_tombstone
+            .iter()
+            .all(|(id, _)| !id.starts_with(&items[0])));
+
+        // Deleting a work's chunks shrinks the set.
+        conn.execute(
+            "DELETE FROM bibliographic_chunks WHERE item_id = ?1",
+            [&items[1]],
+        )
+        .unwrap();
+        let after_delete = assert_index_equals_exact(&conn, &gen, &query, None, 10);
+        assert!(after_delete.iter().all(|(id, _)| id.starts_with(&items[2])));
+    }
+
+    /// Measurement on a real archive copy, never part of the suite:
+    /// `ENTROPIA_VECTOR_BENCH_DB=<path> cargo test --lib vector_index_bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs ENTROPIA_VECTOR_BENCH_DB"]
+    fn vector_index_bench() {
+        use std::time::Instant;
+        let Ok(path) = std::env::var("ENTROPIA_VECTOR_BENCH_DB") else {
+            return;
+        };
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("open the archive copy read-only");
+        let gen: String = conn
+            .query_row(
+                "SELECT id FROM bibliographic_index_generations WHERE status = 'active' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("an active generation");
+        let started = Instant::now();
+        let index = super::super::vector_index::index_for(&conn, &gen).expect("build");
+        eprintln!(
+            "BENCH build {:?}  rows {}  dims {}  memory {:.1} MB",
+            started.elapsed(),
+            index.len(),
+            index.dims(),
+            index.approx_bytes() as f64 / 1_048_576.0
+        );
+        let started = Instant::now();
+        super::super::vector_index::index_for(&conn, &gen).expect("cached");
+        eprintln!("BENCH fingerprint+cache hit {:?}", started.elapsed());
+
+        // Stored vectors, lightly perturbed, as realistic queries.
+        let mut queries: Vec<Vec<f32>> = Vec::new();
+        for offset in [100_i64, 20_000, 45_000, 70_000, 100_000] {
+            let blob: Vec<u8> = conn
+                .query_row(
+                    "SELECT embedding FROM bibliographic_chunk_embeddings
+                     WHERE generation_id = ?1 ORDER BY rowid LIMIT 1 OFFSET ?2",
+                    rusqlite::params![gen, offset],
+                    |row| row.get(0),
+                )
+                .expect("a stored vector");
+            let stored: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let mut seed = offset as u64 | 1;
+            let noisy = stored
+                .iter()
+                .map(|v| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    v + ((seed % 2001) as f32 / 1000.0 - 1.0) * 0.02
+                })
+                .collect();
+            queries.push(noisy);
+        }
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        queries.push(
+            (0..index.dims())
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed % 2001) as f32 / 1000.0 - 1.0
+                })
+                .collect(),
+        );
+        for (n, query) in queries.iter().enumerate() {
+            let started = Instant::now();
+            let got = super::super::vector_index::search(&conn, &gen, query, None, 200).unwrap();
+            let warm = started.elapsed();
+            let started = Instant::now();
+            let want = super::exact_vector_candidates(&conn, &gen, query, None, 200).unwrap();
+            let exact = started.elapsed();
+            let overlap = |k: usize| {
+                let want: std::collections::HashSet<&str> =
+                    want.iter().take(k).map(|r| r.0.as_str()).collect();
+                got.iter()
+                    .take(k)
+                    .filter(|r| want.contains(r.0.as_str()))
+                    .count()
+            };
+            let same_order_20 = got
+                .iter()
+                .take(20)
+                .map(|r| &r.0)
+                .eq(want.iter().take(20).map(|r| &r.0));
+            eprintln!(
+                "BENCH q{n} index {warm:?}  exact-scan {exact:?}  overlap@20 {}/20  @50 {}/50  @200 {}/200  same-order@20 {same_order_20}",
+                overlap(20), overlap(50), overlap(200)
+            );
+        }
     }
 
     #[test]
