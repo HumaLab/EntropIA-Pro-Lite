@@ -9356,3 +9356,470 @@ fn sync_status_refuses_a_task_that_is_not_a_bibliography_sync() {
     let error = bibliography_sync_status(&conn, "no-such-task").expect_err("unknown task");
     assert!(error.starts_with("unknown_task"), "{error}");
 }
+
+// ── P3: first sync of a large library — profiles first, recent works first ──
+//
+// One sync chains thousands of derived tasks. Two orderings decide what the
+// user sees first: the profile demand walks the library most-recently-changed
+// work first (and the extraction demand follows each attachment's work the
+// same way), and the claim scan serves a pending profile before the extract
+// queued ahead of it. Everything else keeps its current order.
+
+/// Rewrites one work's catalog recency: Zotero's `item_version` (the library
+/// version at the work's last modification). `None` = never modified in a way
+/// the catalog saw.
+fn set_item_version(conn: &mut rusqlite::Connection, item_id: &str, version: Option<i64>) {
+    conn.execute(
+        "UPDATE bibliographic_items SET item_version = ?1 WHERE id = ?2",
+        rusqlite::params![version, item_id],
+    )
+    .expect("set item version");
+}
+
+/// The subjects of one derived kind in task-id order. Derived task ids
+/// ascend with admission, so this is the admission order itself.
+fn derived_task_subjects(conn: &rusqlite::Connection, kind: &str) -> Vec<String> {
+    conn.prepare(
+        "SELECT subject_id FROM processing_tasks
+          WHERE domain = 'bibliography' AND kind = ?1
+          ORDER BY id",
+    )
+    .expect("derived tasks")
+    .query_map([kind], |row| row.get(0))
+    .expect("derived map")
+    .collect::<Result<_, _>>()
+    .expect("derived rows")
+}
+
+/// One bibliography derived task with an explicit id, linked live into the
+/// bibliography system batch — exactly the shape the claim scan sees after
+/// admission. Literal ids keep the ordering assertions deterministic.
+fn insert_derived_task(
+    conn: &rusqlite::Connection,
+    batch_id: &str,
+    task_id: &str,
+    kind: &str,
+    subject_kind: &str,
+    subject_id: &str,
+    contract_hash: &str,
+) {
+    conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+            input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'bibliography', ?4, ?3, 0, '', ?5, 'pending', 1, 1)",
+        rusqlite::params![task_id, kind, subject_id, subject_kind, contract_hash],
+    )
+    .expect("insert derived task");
+    conn.execute(
+        "INSERT INTO processing_batch_tasks
+           (batch_id, task_id, kind, asset_id_snapshot, request_state, domain, subject_kind, subject_id)
+         VALUES (?1, ?2, ?3, ?4, 'active', 'bibliography', ?5, ?4)",
+        rusqlite::params![batch_id, task_id, kind, subject_id, subject_kind],
+    )
+    .expect("link derived task");
+}
+
+/// Profiles first: a pending profile outranks the extraction queued before
+/// it — the semantic index lands before the passage layer whatever the ids
+/// say.
+#[test]
+fn p3_claim_serves_a_pending_profile_before_a_queued_extract() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "P3CLAIM01", "Obra perfilable", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3CLAIMA1",
+        "linked_file",
+        None,
+        "p3claim.pdf",
+        "application/pdf",
+    );
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+    insert_derived_task(
+        &conn,
+        &batch,
+        "aaa-extract",
+        "bibliography_extract",
+        "attachment",
+        &attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &batch,
+        "bbb-profile",
+        "bibliography_profile",
+        "item",
+        &item_id,
+        &contract,
+    );
+
+    let kinds = ["bibliography_profile", "bibliography_extract"];
+    let first = repository::claim_next(&conn, "p3-session", &kinds, repository::now_ms())
+        .expect("claim scan")
+        .expect("the profile must be runnable");
+    assert_eq!(
+        (first.task_id.as_str(), first.kind.as_str()),
+        ("bbb-profile", "bibliography_profile"),
+        "profiles first: the extraction waits even though it was queued earlier"
+    );
+    let second = repository::claim_next(&conn, "p3-session", &kinds, repository::now_ms())
+        .expect("second claim scan")
+        .expect("the extraction must be runnable");
+    assert_eq!(
+        (second.task_id.as_str(), second.kind.as_str()),
+        ("aaa-extract", "bibliography_extract")
+    );
+}
+
+/// The profiles-first rule swaps profiles ahead of extracts and nothing
+/// else: a corpus unit with a smaller id keeps its claim position exactly as
+/// today.
+#[test]
+fn p3_claim_keeps_corpus_units_in_their_current_order() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "P3ORDEROK", "Obra perfilable", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ORDERA1",
+        "linked_file",
+        None,
+        "p3orden.pdf",
+        "application/pdf",
+    );
+    conn.execute(
+        "INSERT INTO assets (id, item_id, path, type, size, created_at) VALUES ('a1', 'i0', 'a1.png', 'image', 10, 1)",
+        [],
+    )
+    .expect("seed corpus asset");
+    conn.execute(
+        "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, created_at, updated_at)
+         VALUES ('b-corpus', 'req-corpus', 'user', 'running', 'run', '[\"ocr\"]', 1, 1)",
+        [],
+    )
+    .expect("seed corpus batch");
+    conn.execute(
+        "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('aaa-ocr', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'pending', 1, 1)",
+        [],
+    )
+    .expect("seed ocr task");
+    conn.execute(
+        "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+         VALUES ('b-corpus', 'aaa-ocr', 'ocr', 'a1', 'corpus', 'asset', 'a1', 'active')",
+        [],
+    )
+    .expect("link ocr task");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+    insert_derived_task(
+        &conn,
+        &batch,
+        "bbb-extract",
+        "bibliography_extract",
+        "attachment",
+        &attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &batch,
+        "ccc-profile",
+        "bibliography_profile",
+        "item",
+        &item_id,
+        &contract,
+    );
+
+    let kinds = ["ocr", "bibliography_profile", "bibliography_extract"];
+    let claimed: Vec<String> = (0..3)
+        .map(|step| {
+            repository::claim_next(&conn, "p3-session", &kinds, repository::now_ms())
+                .unwrap_or_else(|error| panic!("claim {step}: {error}"))
+                .unwrap_or_else(|| panic!("claim {step}: a unit must be runnable"))
+                .task_id
+        })
+        .collect();
+    assert_eq!(
+        claimed,
+        vec![
+            "aaa-ocr".to_string(),
+            "ccc-profile".to_string(),
+            "bbb-extract".to_string()
+        ],
+        "the corpus unit keeps its id-order position; only the extract moves behind the profile"
+    );
+}
+
+/// Recent works first: the profile demand walks the library
+/// most-recently-changed work first (Zotero's `item_version`), ties by item
+/// key, unknown recency last — and the scheduler drains the tasks in exactly
+/// that order.
+#[test]
+fn p3_profile_admission_walks_works_most_recently_changed_first() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let oldest = seed_catalog(&mut conn, "P3RECENT1", "Obra vieja", "Resumen.");
+    let newest = seed_catalog(&mut conn, "P3RECENT2", "Obra nueva", "Resumen.");
+    let tie_a = seed_catalog(&mut conn, "P3RECENT3", "Obra empate a", "Resumen.");
+    let tie_b = seed_catalog(&mut conn, "P3RECENT4", "Obra empate b", "Resumen.");
+    let unknown = seed_catalog(&mut conn, "P3RECENT5", "Obra sin versión", "Resumen.");
+    set_item_version(&mut conn, &oldest, Some(10));
+    set_item_version(&mut conn, &newest, Some(30));
+    set_item_version(&mut conn, &tie_a, Some(20));
+    set_item_version(&mut conn, &tie_b, Some(20));
+    set_item_version(&mut conn, &unknown, None);
+
+    let created =
+        repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync-chained admission");
+    assert_eq!(created, 5, "every work without a profile queues one");
+
+    // Task ids ascend in recency order: newest first, ties by item key,
+    // unknown recency last.
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_profile"),
+        vec![
+            newest.clone(),
+            tie_a.clone(),
+            tie_b.clone(),
+            oldest.clone(),
+            unknown.clone()
+        ],
+        "the derived tasks are admitted most-recently-changed work first"
+    );
+
+    // And the claim scan serves them in the same order: recent works first.
+    let claimed: Vec<String> = (0..5)
+        .map(|step| {
+            repository::claim_next(
+                &conn,
+                "p3-session",
+                &["bibliography_profile"],
+                repository::now_ms(),
+            )
+            .unwrap_or_else(|error| panic!("claim {step}: {error}"))
+            .unwrap_or_else(|| panic!("claim {step}: a profile must be runnable"))
+            .subject_id
+        })
+        .collect();
+    assert_eq!(claimed, vec![newest, tie_a, tie_b, oldest, unknown]);
+}
+
+/// The extraction demand follows the same recency through each attachment's
+/// work: the newest work's attachment is demanded first, whatever the
+/// attachment ids say.
+#[test]
+fn p3_extraction_admission_follows_the_works_recency() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    for (index, key) in ["P3EXT0001", "P3EXT0002", "P3EXT0003"].iter().enumerate() {
+        let item_id = seed_catalog(&mut conn, key, "Obra con adjunto", "Resumen.");
+        let pdf = make_text_pdf(&[(
+            50.0,
+            750.0,
+            "Texto extraible del adjunto con longitud suficiente para calidad",
+        )]);
+        let path = write_temp_pdf(&dir, &format!("p3ext{index}.pdf"), &pdf);
+        seed_attachment(
+            &mut conn,
+            &item_id,
+            &format!("P3EXTA{index}"),
+            "linked_file",
+            Some(&path),
+            &format!("p3ext{index}.pdf"),
+            "application/pdf",
+        );
+    }
+    // Recency runs against the attachment row order on purpose: the walk
+    // must follow each work's Zotero recency, not the catalog's row order.
+    let by_attachment_id: Vec<(String, String)> = conn
+        .prepare("SELECT id, item_id FROM zotero_attachments ORDER BY id")
+        .expect("attachment order")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("attachment map")
+        .collect::<Result<_, _>>()
+        .expect("attachment rows");
+    for (index, (_, item_id)) in by_attachment_id.iter().enumerate() {
+        set_item_version(&mut conn, item_id, Some(10 * (index as i64 + 1)));
+    }
+    let expected: Vec<String> = by_attachment_id
+        .iter()
+        .rev()
+        .map(|(attachment_id, _)| attachment_id.clone())
+        .collect();
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, "lib-1").expect("sync-chained admission");
+    assert_eq!(
+        created, 3,
+        "every readable attachment queues one extraction"
+    );
+
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_extract"),
+        expected,
+        "extraction demand follows the work's recency, newest first"
+    );
+}
+
+/// Settles one task with the given finished attempts (`(started_at,
+/// finished_at)` in ms), the durable record a finished run leaves behind.
+fn settle_task_with_attempts(conn: &rusqlite::Connection, task_id: &str, attempts: &[(i64, i64)]) {
+    for (index, (started_at, finished_at)) in attempts.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO processing_attempts
+               (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+             VALUES (?1, ?2, 0, ?3, ?4, 'succeeded')",
+            rusqlite::params![task_id, index as i64 + 1, started_at, finished_at],
+        )
+        .expect("insert attempt");
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+        [task_id],
+    )
+    .expect("settle task");
+}
+
+/// Live derived progress (P3): the status of a sync carries what its
+/// derived backlog has really done so far — fichas and pasajes, settled
+/// over queued — and an ETA built from the finished attempts of this sync
+/// window, `null` while any kind with work left has fewer than three
+/// finished attempts to average.
+#[test]
+fn p3_sync_status_reports_live_derived_progress_and_an_honest_eta() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-live-1", "user", "0").expect("request");
+
+    let queued = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((queued.profiles_done, queued.profiles_total), (0, 0));
+    assert_eq!((queued.extractions_done, queued.extractions_total), (0, 0));
+    assert_eq!(queued.eta_ms, None, "nothing queued yet: no estimate");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("P3LIVE001", 12), item("P3LIVE002", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+
+    let derived = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (derived.profiles_done, derived.profiles_total),
+        (0, 2),
+        "two works queued two profiles and none has finished"
+    );
+    assert_eq!(
+        (derived.extractions_done, derived.extractions_total),
+        (0, 0)
+    );
+    assert_eq!(
+        derived.eta_ms, None,
+        "no finished attempt of the kind yet: no estimate"
+    );
+    assert_eq!(derived.new_profiles, 2, "the documented field is unchanged");
+    assert_eq!(
+        derived.new_extractions, 0,
+        "the documented field is unchanged"
+    );
+
+    let profile_tasks: Vec<String> = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+              WHERE domain = 'bibliography' AND kind = 'bibliography_profile'
+              ORDER BY id",
+        )
+        .expect("profile tasks")
+        .query_map([], |row| row.get(0))
+        .expect("profile map")
+        .collect::<Result<_, _>>()
+        .expect("profile rows");
+    assert_eq!(profile_tasks.len(), 2);
+
+    // Three finished attempts of 1000 ms each are enough to estimate what is
+    // left: one remaining task × 1000 ms.
+    settle_task_with_attempts(
+        &conn,
+        &profile_tasks[0],
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+    let halfway = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((halfway.profiles_done, halfway.profiles_total), (1, 2));
+    assert_eq!(
+        halfway.eta_ms,
+        Some(1_000),
+        "1 remaining × the 1000 ms average"
+    );
+
+    settle_task_with_attempts(&conn, &profile_tasks[1], &[(7_000, 8_000)]);
+    let finished = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((finished.profiles_done, finished.profiles_total), (2, 2));
+    assert_eq!(
+        finished.eta_ms,
+        Some(0),
+        "nothing remaining: nothing left to wait for"
+    );
+
+    // An unmeasured kind with work left makes every number a guess again.
+    conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('p3-extract-window', 'bibliography_extract', 'att-window', 'bibliography',
+                 'attachment', 'att-window', 'pending', 1, 1)",
+        [],
+    )
+    .expect("insert window extraction");
+    let with_extraction = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (
+            with_extraction.extractions_done,
+            with_extraction.extractions_total
+        ),
+        (0, 1)
+    );
+    assert_eq!(
+        with_extraction.eta_ms, None,
+        "an unmeasured kind with work left keeps the estimate honest"
+    );
+}
+
+/// The derived window is live before the sync task settles: a later request
+/// still sees the backlog an earlier success chained after its row.
+#[test]
+fn p3_sync_status_sees_the_derived_window_before_the_sync_task_settles() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-live-2", "user", "0").expect("request");
+    let item_id = seed_catalog(&mut conn, "P3LIVE002", "Obra en ventana", "Resumen.");
+    let _task_id = admit_profile_demand(&conn, &item_id);
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(status.state, "pending");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "the counts describe the window, not the sync task's own state"
+    );
+    assert_eq!(
+        status.new_profiles, 0,
+        "the documented field still reports zero before the sync succeeds"
+    );
+}

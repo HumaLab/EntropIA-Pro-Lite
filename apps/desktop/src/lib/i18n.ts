@@ -301,6 +301,8 @@ const es = {
   'batch.schemaNotReady': 'La base todavía está migrando. Reintentá en un momento.',
   'batch.statusIdle': 'Sin actividad',
   'batch.statusRunning': 'Procesando {count}',
+  'batch.statusBibliography':
+    'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal}',
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
   'settings.save': 'Guardar cambios',
@@ -868,6 +870,13 @@ const es = {
   'writing.zoteroBibliographySyncUnreadable':
     'No se pudo leer el estado de la sincronización: {detail}',
   'writing.zoteroBibliographySyncError': 'No se pudo solicitar la sincronización: {detail}',
+  'writing.zoteroBibliographySyncIndexing':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes',
+  'writing.zoteroBibliographySyncIndexingNoEta':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal}',
+  'writing.zoteroEtaUnderMinute': '<1 min',
+  'writing.zoteroEtaMinutes': '{minutes} min',
+  'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
   'writing.editor.label': 'Manuscrito',
   'writing.toolbar.label': 'Formato',
   'writing.toolbar.undo': 'Deshacer',
@@ -2609,6 +2618,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.zoteroBibliographySyncFailed': 'The synchronization failed: {detail}',
   'writing.zoteroBibliographySyncUnreadable': 'Could not read the synchronization status: {detail}',
   'writing.zoteroBibliographySyncError': 'Could not request synchronization: {detail}',
+  'writing.zoteroBibliographySyncIndexing':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left',
+  'writing.zoteroBibliographySyncIndexingNoEta':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal}',
+  'writing.zoteroEtaUnderMinute': '<1 min',
+  'writing.zoteroEtaMinutes': '{minutes} min',
+  'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
   'writing.editor.label': 'Manuscript',
   'writing.toolbar.label': 'Formatting',
   'writing.toolbar.undo': 'Undo',
@@ -3160,6 +3176,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.schemaNotReady': 'The database is still migrating. Try again in a moment.',
   'batch.statusIdle': 'Idle',
   'batch.statusRunning': 'Processing {count}',
+  'batch.statusBibliography':
+    'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal}',
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
   'settings.save': 'Save changes',

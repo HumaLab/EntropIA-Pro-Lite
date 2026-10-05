@@ -1,7 +1,12 @@
 import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { processingSyncBibliographyLibrary } from './batch-processing'
-import { WritingZoteroStore } from './writing-zotero'
+import {
+  bibliographyDerivedProgress,
+  formatEtaMs,
+  WritingZoteroStore,
+  type BibliographySyncStatus,
+} from './writing-zotero'
 
 /**
  * The Zotero tab's state (plan-editor.md §11.2, §11.3).
@@ -185,6 +190,74 @@ describe('E2b-4 bibliography synchronization request state', () => {
       })
 
       // A finished task is never polled again.
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps following the derived backlog after the sync succeeds and stops when it drains', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({
+          state: 'succeeded',
+          newProfiles: 2,
+          newExtractions: 0,
+          profilesDone: 0,
+          profilesTotal: 2,
+          extractionsDone: 0,
+          extractionsTotal: 0,
+          etaMs: null,
+        }),
+        status({
+          state: 'succeeded',
+          newProfiles: 2,
+          newExtractions: 0,
+          profilesDone: 1,
+          profilesTotal: 2,
+          extractionsDone: 0,
+          extractionsTotal: 0,
+          etaMs: 900,
+        }),
+        status({
+          state: 'succeeded',
+          newProfiles: 2,
+          newExtractions: 0,
+          profilesDone: 2,
+          profilesTotal: 2,
+          extractionsDone: 0,
+          extractionsTotal: 0,
+          etaMs: 0,
+        }),
+      ])
+      const store = new WritingZoteroStore()
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      // The sync task settled but its derived work has not: the store keeps
+      // reading so the progress on screen keeps moving.
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 2,
+      })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesDone: 1,
+        profilesTotal: 2,
+      })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesDone: 2,
+        profilesTotal: 2,
+      })
+
+      // All derived work is settled: the follower stops.
       const before = calls('processing_bibliography_sync_status').length
       await vi.advanceTimersByTimeAsync(10000)
       expect(calls('processing_bibliography_sync_status')).toHaveLength(before)
@@ -1338,5 +1411,42 @@ describe('E1c-1 library selection', () => {
 
     store.selection.libraryId = 'hacked'
     expect(store.selection.libraryId).toBe('6680944')
+  })
+})
+
+describe('P3 derived work of a library sync', () => {
+  const status: BibliographySyncStatus = {
+    state: 'succeeded',
+    errorCode: null,
+    errorMessage: null,
+    progressDone: 40,
+    progressTotal: 40,
+    itemsSeen: 40,
+    remoteTotal: 40,
+    newProfiles: 450,
+    newExtractions: 400,
+    profilesDone: 120,
+    profilesTotal: 450,
+    extractionsDone: 30,
+    extractionsTotal: 400,
+    etaMs: 720_000,
+  }
+
+  it('reads fichas and pasajes out of the live status window', () => {
+    expect(bibliographyDerivedProgress(status)).toEqual({
+      worksDone: 120,
+      worksTotal: 450,
+      passagesDone: 30,
+      passagesTotal: 400,
+      etaMs: 720_000,
+      remaining: 700,
+    })
+  })
+
+  it('formats the remaining time humanely', () => {
+    expect(formatEtaMs(30_000)).toBe('<1 min')
+    expect(formatEtaMs(59_000)).toBe('<1 min')
+    expect(formatEtaMs(720_000)).toBe('12 min')
+    expect(formatEtaMs(7_500_000)).toBe('2 h 5 min')
   })
 })

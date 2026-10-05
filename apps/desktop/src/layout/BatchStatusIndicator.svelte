@@ -13,12 +13,27 @@
   import { locale, t } from '$lib/i18n'
   import { workspace } from '$lib/workspace'
   import { batchStore, type BatchGlobalSummary } from '$lib/batch-processing'
+  import {
+    bibliographyDerivedProgress,
+    writingZotero,
+    type BibliographyDerivedProgress,
+  } from '$lib/writing-zotero'
   import { requestSettingsTab } from '$lib/settings-tab-request'
   import { StatusBadge } from '@entropia/ui'
 
   let summary = $state<BatchGlobalSummary>(batchStore.snapshot())
   const unsubscribe = batchStore.subscribe((next) => {
     summary = next
+  })
+
+  // P3: while the derived backlog of a library sync (fichas and pasajes)
+  // still holds work, the footer says so compactly — with the real counts,
+  // not a generic "running".
+  let bibliography = $state<BibliographyDerivedProgress | null>(null)
+  const unsubscribeZotero = writingZotero.subscribe((next) => {
+    const status = next.bibliographyProgress?.status ?? null
+    const derived = status ? bibliographyDerivedProgress(status) : null
+    bibliography = derived && derived.remaining > 0 ? derived : null
   })
 
   onMount(() => {
@@ -28,15 +43,27 @@
 
   onDestroy(() => {
     unsubscribe()
+    unsubscribeZotero()
   })
 
   const currentLocale = locale
   const activeCount = $derived(summary.active.length)
   const failedCount = $derived(summary.active.reduce((sum, batch) => sum + batch.failedUnits, 0))
-  const visible = $derived(summary.init !== null && (activeCount > 0 || failedCount > 0))
+  const visible = $derived(
+    summary.init !== null && (activeCount > 0 || failedCount > 0 || bibliography !== null)
+  )
 
   const label = $derived.by(() => {
     $currentLocale
+    const derived = bibliography
+    if (derived) {
+      return t('batch.statusBibliography', {
+        worksDone: derived.worksDone,
+        worksTotal: derived.worksTotal,
+        passagesDone: derived.passagesDone,
+        passagesTotal: derived.passagesTotal,
+      })
+    }
     if (failedCount > 0) return t('batch.statusAttention', { count: failedCount })
     if (activeCount > 0) return t('batch.statusRunning', { count: activeCount })
     return t('batch.statusIdle')

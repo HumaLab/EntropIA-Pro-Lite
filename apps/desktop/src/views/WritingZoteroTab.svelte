@@ -2,7 +2,13 @@
   import { onDestroy, onMount } from 'svelte'
   import { ActionIcon, Button, IconButton, SearchBar } from '@entropia/ui'
   import { t } from '$lib/i18n'
-  import { writingZotero, type LibraryEntry, type ZoteroState } from '$lib/writing-zotero'
+  import {
+    bibliographyDerivedProgress,
+    formatEtaMs,
+    writingZotero,
+    type LibraryEntry,
+    type ZoteroState,
+  } from '$lib/writing-zotero'
   import {
     addLibraryChecked,
     libraryLabel,
@@ -206,7 +212,30 @@
               : t('writing.zoteroBibliographySyncPaused', { detail }),
           error: true,
         }
-      case 'succeeded':
+      case 'succeeded': {
+        // The sync's own pages are done; its derived work (fichas and
+        // pasajes) may not be. While it runs, the line reports that work
+        // with its real counts and honest estimate — never a finished-sync
+        // claim over a backlog that is still moving.
+        const derived = bibliographyDerivedProgress(status)
+        if (derived.remaining > 0) {
+          const counts = {
+            worksDone: derived.worksDone,
+            worksTotal: derived.worksTotal,
+            passagesDone: derived.passagesDone,
+            passagesTotal: derived.passagesTotal,
+          }
+          return {
+            text:
+              derived.etaMs == null
+                ? t('writing.zoteroBibliographySyncIndexingNoEta', counts)
+                : t('writing.zoteroBibliographySyncIndexing', {
+                    ...counts,
+                    eta: formatEtaMs(derived.etaMs),
+                  }),
+            error: false,
+          }
+        }
         return {
           text:
             status.newProfiles + status.newExtractions === 0
@@ -217,6 +246,7 @@
                 }),
           error: false,
         }
+      }
       case 'cancelled':
         return { text: t('writing.zoteroBibliographySyncCancelled'), error: false }
       default:

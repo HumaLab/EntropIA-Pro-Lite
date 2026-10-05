@@ -654,6 +654,25 @@ fn admit_bibliography_library_or_attach(
 /// time, and the contract is the extractor identity — a replaced file or a
 /// new extractor makes in-flight work re-evaluate instead of publishing a
 /// stale text.
+/// Admission-ordered id for derived bibliography tasks (profiles and
+/// extractions, P3).
+///
+/// The claim scan serves one priority level in `id` order, so the derived
+/// backlog of a library sync drains in admission order exactly when ids
+/// ascend with admission: the demand walks works newest-first and those
+/// tasks must run newest-first too ("recent works first"). Random uuid v4
+/// ids would leave the claim order random. Corpus task ids stay untouched.
+/// The ms+sequence prefix ascends within a process (the sequence breaks
+/// same-millisecond ties); the uuid suffix keeps two instances from ever
+/// colliding on the primary key.
+static DERIVED_TASK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn derived_task_id(now_ms: i64) -> String {
+    let seq = DERIVED_TASK_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 1_000_000;
+    format!("z{now_ms:013}{seq:06}-{}", uuid::Uuid::new_v4())
+}
+
+/// Bibliography attachment admission arm (E4a-WU2).
 fn admit_bibliography_attachment_extract_or_attach(
     conn: &Connection,
     batch_id: &str,
@@ -697,7 +716,7 @@ fn admit_bibliography_attachment_extract_or_attach(
             created: false,
         });
     }
-    let task_id = uuid::Uuid::new_v4().to_string();
+    let task_id = derived_task_id(now_ms());
     let state = if dependency_task_id.is_some() {
         "blocked"
     } else {
@@ -847,7 +866,7 @@ fn admit_bibliography_item_profile_or_attach(
             created: false,
         });
     }
-    let task_id = uuid::Uuid::new_v4().to_string();
+    let task_id = derived_task_id(now_ms());
     let state = if dependency_task_id.is_some() {
         "blocked"
     } else {
@@ -1167,11 +1186,46 @@ pub fn admit_bibliography_sync_demand(
     }
 }
 
+/// Finished attempts needed before a duration average is worth showing as
+/// an ETA (P3): below this the number would be a guess in a costume.
+const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
+
+/// How many finished attempts of one kind the sync window holds and their
+/// average duration in ms, from the attempt's own start/finish stamps. The
+/// open attempt is never a sample: it has no finish stamp. A `None` average
+/// means nothing of the kind has finished yet.
+fn finished_attempt_average(
+    conn: &Connection,
+    anchor: i64,
+    kind: &str,
+) -> Result<(i64, Option<i64>), String> {
+    conn.query_row(
+        "SELECT COUNT(*), AVG(a.finished_at - a.started_at)
+           FROM processing_attempts a
+           JOIN processing_tasks t ON t.id = a.task_id
+          WHERE t.rowid > ?1 AND t.kind = ?2
+            AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at",
+        rusqlite::params![anchor, kind],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get::<_, Option<f64>>(1)?
+                    .map(|average| average.round() as i64),
+            ))
+        },
+    )
+    .map_err(|error| format!("Failed to average finished attempts of {kind}: {error}"))
+}
+
 /// Durable status of one `bibliography_sync` task, for the manual button.
 ///
-/// Derived work counts are tasks queued after the sync task's row was written
-/// (task timestamps are whole seconds, row order is not); they are only meaningful once the task has succeeded, so they
-/// are zero before that.
+/// `new_profiles`/`new_extractions` count tasks queued after the sync task's
+/// row was written (task timestamps are whole seconds, row order is not) and
+/// are only meaningful once the task has succeeded, so they are zero before
+/// that. The P3 progress counts (`profiles_done`/`profiles_total`,
+/// `extractions_done`/`extractions_total`) read the same window live: they
+/// keep answering while the derived backlog drains after a success — and
+/// while the sync task itself is still `pending` or `running`.
 pub fn bibliography_sync_status(
     conn: &Connection,
     task_id: &str,
@@ -1234,9 +1288,64 @@ pub fn bibliography_sync_status(
         )
         .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
+    // P3 live progress: the same window, settled over queued. Settled counts
+    // every terminal outcome — a failed task is finished work the backlog
+    // will not repeat, so the counters always converge and the follower
+    // knows when to stop.
+    let window_progress = |kind: &str| -> Result<(i64, i64), String> {
+        let total: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
+                rusqlite::params![kind, anchor],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to count derived bibliography work: {error}"))?;
+        let settled: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                    AND state IN ('succeeded', 'skipped', 'failed', 'cancelled')",
+                rusqlite::params![kind, anchor],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to count settled bibliography work: {error}"))?;
+        Ok((settled, total))
+    };
+    let (profiles_done, profiles_total) = window_progress("bibliography_profile")?;
+    let (extractions_done, extractions_total) = window_progress("bibliography_extract")?;
+    // P3 ETA: remaining tasks per kind times the average duration of that
+    // kind's finished attempts in this window. One unmeasured kind with work
+    // left makes the whole number a guess, so the estimate stays `None` —
+    // as it does while the window holds fewer than three finished attempts
+    // at all.
+    let mut estimate_ms = 0_i64;
+    let mut samples_total = 0_i64;
+    let mut estimable = true;
+    for (kind, remaining) in [
+        ("bibliography_profile", profiles_total - profiles_done),
+        ("bibliography_extract", extractions_total - extractions_done),
+    ] {
+        let (samples, average_ms) = finished_attempt_average(conn, anchor, kind)?;
+        samples_total += samples;
+        if remaining <= 0 {
+            continue;
+        }
+        if samples < ETA_MIN_FINISHED_ATTEMPTS {
+            estimable = false;
+            break;
+        }
+        estimate_ms += remaining * average_ms.unwrap_or(0);
+    }
+    let eta_ms = (estimable && samples_total >= ETA_MIN_FINISHED_ATTEMPTS).then_some(estimate_ms);
     Ok(super::commands::BibliographySyncStatus {
         new_profiles: derived("bibliography_profile")?,
         new_extractions: derived("bibliography_extract")?,
+        profiles_done,
+        profiles_total,
+        extractions_done,
+        extractions_total,
+        eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),
         state,
@@ -1653,6 +1762,12 @@ pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, Str
 /// nothing: no revision churn, no re-embedding of identical text. A stale
 /// hash always mints a new task because terminal profile history is never
 /// rewritten.
+///
+/// P3 recent works first: the walk admits the most-recently-changed work
+/// first (Zotero's `item_version`, NULL = unknown recency = last), ties by
+/// item key. Admission order is execution order here (derived task ids
+/// ascend with admission), so the works the user touched last are profiled
+/// first.
 pub fn admit_stale_profile_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1691,7 +1806,7 @@ pub fn admit_stale_profile_demands(
             "SELECT i.id FROM bibliographic_items i
              LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
              WHERE i.library_id = ?1 AND t.item_id IS NULL
-             ORDER BY i.item_key",
+             ORDER BY (i.item_version IS NULL), i.item_version DESC, i.item_key",
         )
         .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?
         .query_map([library_row_id], |row| row.get::<_, String>(0))
@@ -1774,6 +1889,10 @@ pub fn admit_stale_profile_demands(
 /// readable file get no demand — the executor would only park them blocked.
 /// Runs inside the sync-success transaction, so a committed sync never
 /// loses its extraction follow-up.
+///
+/// P3 recent works first: attachments are walked in their work's recency
+/// (the same order [`admit_stale_profile_demands`] walks works), then by
+/// attachment row id within one work.
 pub fn admit_stale_extraction_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1791,7 +1910,7 @@ pub fn admit_stale_extraction_demands(
              JOIN bibliographic_items i ON i.id = a.item_id
              LEFT JOIN zotero_item_tombstones t ON t.item_id = i.id
              WHERE i.library_id = ?1 AND t.item_id IS NULL
-             ORDER BY a.id",
+             ORDER BY (i.item_version IS NULL), i.item_version DESC, i.item_key, a.id",
         )
         .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
         .query_map([library_row_id], |row| {
@@ -3595,23 +3714,64 @@ pub fn claim_next(
         };
         let columns = "t.id, t.kind, t.asset_id_snapshot, t.domain, t.subject_kind, t.subject_id,
                        t.contract_hash, t.lease_epoch";
-        let state_walk = |level_filter: &str| {
+        // P3 "profiles first": each scan takes exactly the unit the current
+        // order picks (smallest id within the level) — except when that unit
+        // is a `bibliography_extract` and a `bibliography_profile` is
+        // runnable at the same level. Then the extract waits behind the
+        // profile: the semantic index lands before the passage layer. Every
+        // other pair keeps today's order byte-identical (corpus ocr/embedding
+        // untouched); only the profile/extract pair swaps. The kind-filtered
+        // re-scan keeps each query on its `ORDER BY t.id LIMIT 1` index walk,
+        // so the common case still costs exactly one scan.
+        let profile_kind_filter = " AND t.kind = 'bibliography_profile'";
+        let state_walk = |kind_filter: &str, level_filter: &str| {
             format!(
                 "SELECT * FROM (
                    SELECT * FROM (
                      SELECT {columns}
                      FROM processing_tasks t
-                     WHERE t.state = 'pending' AND {runnable}{level_filter}
+                     WHERE t.state = 'pending' AND {runnable}{level_filter}{kind_filter}
                      ORDER BY t.id LIMIT 1)
                    UNION ALL
                    SELECT * FROM (
                      SELECT {columns}
                      FROM processing_tasks t
                      WHERE t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1
-                       AND {runnable}{level_filter}
+                       AND {runnable}{level_filter}{kind_filter}
                      ORDER BY t.id LIMIT 1))
                  ORDER BY id LIMIT 1"
             )
+        };
+        let driven_walk = |kind_filter: &str| {
+            format!(
+                "SELECT {columns}
+                 FROM processing_batches pb
+                 JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
+                 JOIN processing_tasks t ON t.id = pl.task_id
+                 WHERE pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run'
+                   AND pl.request_state = 'active'
+                   AND (t.state = 'pending'
+                        OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
+                   AND {runnable}{kind_filter}
+                 ORDER BY t.id LIMIT 1"
+            )
+        };
+        let prefer_profile = |sql_general: &str,
+                              sql_profile: &str,
+                              params: &[&dyn rusqlite::ToSql]|
+         -> Result<Option<ClaimCandidate>, String> {
+            let general = conn
+                .query_row(sql_general, params, map_candidate)
+                .optional()
+                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+            if !matches!(&general, Some(candidate) if candidate.1 == "bibliography_extract") {
+                return Ok(general);
+            }
+            let profile = conn
+                .query_row(sql_profile, params, map_candidate)
+                .optional()
+                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+            Ok(profile.or(general))
         };
         let raised_levels: Vec<i64> = {
             let mut stmt = conn
@@ -3641,42 +3801,33 @@ pub fn claim_next(
                     |row| row.get(0),
                 )
                 .map_err(|e| format!("Failed to size priority level {level}: {e}"))?;
-            let sql = if links < CLAIM_LEVEL_DRIVER_LINKS {
-                format!(
-                    "SELECT {columns}
-                     FROM processing_batches pb
-                     JOIN processing_batch_tasks pl ON pl.batch_id = pb.id
-                     JOIN processing_tasks t ON t.id = pl.task_id
-                     WHERE pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run'
-                       AND pl.request_state = 'active'
-                       AND (t.state = 'pending'
-                            OR (t.state = 'retry_wait' AND t.next_retry_at IS NOT NULL AND t.next_retry_at <= ?1))
-                       AND {runnable}
-                     ORDER BY t.id LIMIT 1"
-                )
-            } else {
-                state_walk(
-                    "
+            let level_filter = "
                      AND EXISTS (
                            SELECT 1 FROM processing_batch_tasks pl
                            JOIN processing_batches pb ON pb.id = pl.batch_id
                            WHERE pl.task_id = t.id AND pl.request_state = 'active'
-                             AND pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run')",
+                             AND pb.priority = ?2 AND pb.state = 'running' AND pb.desired_state = 'run')";
+            let (sql_general, sql_profile) = if links < CLAIM_LEVEL_DRIVER_LINKS {
+                (driven_walk(""), driven_walk(profile_kind_filter))
+            } else {
+                (
+                    state_walk("", level_filter),
+                    state_walk(profile_kind_filter, level_filter),
                 )
             };
-            candidate = conn
-                .query_row(&sql, rusqlite::params![now_ms, level], map_candidate)
-                .optional()
-                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+            let params: Vec<&dyn rusqlite::ToSql> = vec![&now_ms, &level];
+            candidate = prefer_profile(&sql_general, &sql_profile, &params)?;
             if candidate.is_some() {
                 break;
             }
         }
         if candidate.is_none() {
-            candidate = conn
-                .query_row(&state_walk(""), [now_ms], map_candidate)
-                .optional()
-                .map_err(|e| format!("Failed to scan runnable tasks: {e}"))?;
+            let params: Vec<&dyn rusqlite::ToSql> = vec![&now_ms];
+            candidate = prefer_profile(
+                &state_walk("", ""),
+                &state_walk(profile_kind_filter, ""),
+                &params,
+            )?;
         }
         let Some((task_id, kind, asset_id, domain, subject_kind, subject_id, contract_hash, epoch)) =
             candidate

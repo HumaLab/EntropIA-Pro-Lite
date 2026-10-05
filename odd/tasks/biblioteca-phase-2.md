@@ -52,7 +52,7 @@ feature slice.
   sense. Explore the Colecciones/ItemView code first and propose how to reuse
   it (bibliography tables are local-only and are not `items`/`assets`); ask
   the owner before any migration.
-- [ ] P3 — First sync of a large library: process every work's profile first
+- [x] P3 — First sync of a large library: process every work's profile first
   (works search by meaning usable early), then passages, recent or opened works
   first; show progress and an estimated time in the Zotero tab (and status
   bar) instead of a generic message. The sync status command
@@ -85,3 +85,10 @@ including Pro, and the owner's visual check in the dev app.
 ## Progress
 
 - 2026-10-05: plan opened.
+- P3 (branch feat/biblio-sync-progress): claim prefers a pending profile over
+  the next extract; sync-chained admission walks works by item_version DESC and
+  derived tasks get admission-ordered ids; sync status gains live
+  profiles/extractions done/total and etaMs; Zotero tab and status bar show
+  "Fichas X/Y · Pasajes Z/W · ~N min restantes". Opened-first needs a
+  last-opened column (migration) and was left out. Status bar line is
+  session-scoped (follows the sync started in this session).

@@ -15,6 +15,7 @@ import {
   processingSyncBibliographyLibrary,
   type BibliographySyncResponse,
 } from './batch-processing'
+import { t } from './i18n'
 
 /**
  * The Zotero tab's state (plan-editor.md §6.3, §11).
@@ -137,6 +138,14 @@ export interface BibliographySyncStatus {
   newProfiles: number
   /** Attachments new since the last sync. */
   newExtractions: number
+  /** Live profile tasks (fichas) of this sync's window: settled over queued. */
+  profilesDone: number
+  profilesTotal: number
+  /** Live extraction tasks (pasajes) of this sync's window: settled over queued. */
+  extractionsDone: number
+  extractionsTotal: number
+  /** What the derived backlog still needs in ms; null while it cannot be estimated. */
+  etaMs: number | null
 }
 
 /** The last thing known about the sync, or why it could not be read. */
@@ -148,6 +157,58 @@ export interface BibliographySyncProgress {
 /** Task states that will still change by themselves while the app runs. */
 const SYNC_FOLLOWED_STATES = new Set(['pending', 'running', 'retry_wait', 'interrupted'])
 const SYNC_POLL_MS = 1500
+
+/** The derived backlog of one sync: fichas (works) and pasajes (passages). */
+export interface BibliographyDerivedProgress {
+  worksDone: number
+  worksTotal: number
+  passagesDone: number
+  passagesTotal: number
+  etaMs: number | null
+  /** Tasks still unsettled in the window; zero = nothing left to follow. */
+  remaining: number
+}
+
+/** Reads the live derived-work counts out of one sync status. */
+export function bibliographyDerivedProgress(
+  status: BibliographySyncStatus
+): BibliographyDerivedProgress {
+  const worksTotal = status.profilesTotal ?? 0
+  const worksDone = status.profilesDone ?? 0
+  const passagesTotal = status.extractionsTotal ?? 0
+  const passagesDone = status.extractionsDone ?? 0
+  return {
+    worksDone,
+    worksTotal,
+    passagesDone,
+    passagesTotal,
+    etaMs: status.etaMs ?? null,
+    remaining: worksTotal - worksDone + (passagesTotal - passagesDone),
+  }
+}
+
+/**
+ * Whether the follower must keep reading: the task can still change by
+ * itself, or its derived backlog is still draining after a success. The
+ * screen keeps moving on the derived work, not on the sync task alone.
+ */
+function bibliographyFollowPending(status: BibliographySyncStatus): boolean {
+  if (SYNC_FOLLOWED_STATES.has(status.state)) return true
+  return status.state === 'succeeded' && bibliographyDerivedProgress(status).remaining > 0
+}
+
+/**
+ * The remaining time in human terms: `<1 min`, `N min`, `N h M min`. The
+ * surrounding sentence belongs to the caller; this only names the span.
+ */
+export function formatEtaMs(etaMs: number): string {
+  const totalMinutes = Math.floor(etaMs / 60_000)
+  if (totalMinutes < 1) return t('writing.zoteroEtaUnderMinute')
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return t('writing.zoteroEtaMinutes', { minutes })
+  return t('writing.zoteroEtaHoursMinutes', { hours, minutes })
+}
 
 /** The personal default: exactly user/0, unchanged by E1c-1. */
 const PERSONAL: ZoteroLibrarySelection = { libraryType: 'user', libraryId: '0' }
@@ -508,8 +569,9 @@ export class WritingZoteroStore {
   /**
    * Reads the scheduler's own task until it settles, so the screen says what
    * the sync is doing instead of what was asked for. Stops when the task
-   * reaches a state that will not change by itself, when another request or
-   * another library replaces it, or when the status cannot be read.
+   * reaches a state that will not change by itself AND its derived backlog
+   * (fichas and pasajes) has drained, when another request or another library
+   * replaces it, or when the status cannot be read.
    */
   async #followBibliographySync(taskId: string, token: number): Promise<void> {
     while (token === this.#followToken) {
@@ -525,7 +587,7 @@ export class WritingZoteroStore {
       }
       if (token !== this.#followToken) return
       this.#set({ bibliographyProgress: progress })
-      if (!progress.status || !SYNC_FOLLOWED_STATES.has(progress.status.state)) return
+      if (!progress.status || !bibliographyFollowPending(progress.status)) return
       await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
     }
   }

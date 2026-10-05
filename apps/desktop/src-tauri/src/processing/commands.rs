@@ -250,6 +250,21 @@ pub struct BibliographySyncStatus {
     /// sync means the library was already up to date.
     pub new_profiles: i64,
     pub new_extractions: i64,
+    /// Live derived-work progress inside this sync's window (the tasks
+    /// admitted after the sync's own row): settled tasks over every task of
+    /// the kind in the window. Keeps answering while the derived backlog
+    /// drains — and while the sync task itself is still `pending` or
+    /// `running` — so the screen can follow the work instead of guessing.
+    pub profiles_done: i64,
+    pub profiles_total: i64,
+    pub extractions_done: i64,
+    pub extractions_total: i64,
+    /// What the derived backlog still needs, in ms: the remaining tasks of
+    /// each kind times the average duration of that kind's finished attempts
+    /// inside this window. `None` while the window holds fewer than three
+    /// finished attempts, or while any kind with work left has fewer than
+    /// three to average — an honest unknown, never a made-up number.
+    pub eta_ms: Option<i64>,
 }
 
 /// Reads the durable status of one `bibliography_sync` task.

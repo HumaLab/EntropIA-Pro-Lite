@@ -70,6 +70,44 @@ describe('i18n', () => {
     expect(t('dbBrowser.exportCsv')).toBe('Export CSV')
   })
 
+  it('exposes bibliography derived-progress copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+    const counts = {
+      worksDone: 120,
+      worksTotal: 450,
+      passagesDone: 30,
+      passagesTotal: 400,
+    }
+
+    expect(t('writing.zoteroBibliographySyncIndexing', { ...counts, eta: '12 min' })).toBe(
+      'Fichas 120/450 · Pasajes 30/400 · ~12 min restantes'
+    )
+    expect(t('writing.zoteroBibliographySyncIndexingNoEta', counts)).toBe(
+      'Fichas 120/450 · Pasajes 30/400'
+    )
+    expect(t('writing.zoteroEtaUnderMinute')).toBe('<1 min')
+    expect(t('writing.zoteroEtaMinutes', { minutes: 12 })).toBe('12 min')
+    expect(t('writing.zoteroEtaHoursMinutes', { hours: 2, minutes: 5 })).toBe('2 h 5 min')
+    expect(t('batch.statusBibliography', counts)).toBe(
+      'Bibliografía: fichas 120/450 · pasajes 30/400'
+    )
+
+    locale.set('en')
+
+    expect(t('writing.zoteroBibliographySyncIndexing', { ...counts, eta: '12 min' })).toBe(
+      'Works 120/450 · Passages 30/400 · ~12 min left'
+    )
+    expect(t('writing.zoteroBibliographySyncIndexingNoEta', counts)).toBe(
+      'Works 120/450 · Passages 30/400'
+    )
+    expect(t('writing.zoteroEtaUnderMinute')).toBe('<1 min')
+    expect(t('writing.zoteroEtaMinutes', { minutes: 12 })).toBe('12 min')
+    expect(t('writing.zoteroEtaHoursMinutes', { hours: 2, minutes: 5 })).toBe('2 h 5 min')
+    expect(t('batch.statusBibliography', counts)).toBe(
+      'Bibliography: works 120/450 · passages 30/400'
+    )
+  })
+
   it('exposes rag chat copy in both locales', async () => {
     const { locale, t } = await import('./i18n')
 

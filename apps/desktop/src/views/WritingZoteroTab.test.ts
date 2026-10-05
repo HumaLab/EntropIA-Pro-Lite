@@ -66,7 +66,10 @@ const { zoteroStore } = vi.hoisted(() => {
   }
 })
 
-vi.mock('$lib/writing-zotero', () => ({ writingZotero: zoteroStore }))
+vi.mock('$lib/writing-zotero', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/writing-zotero')>()),
+  writingZotero: zoteroStore,
+}))
 
 import WritingZoteroTab from './WritingZoteroTab.svelte'
 
@@ -237,6 +240,55 @@ describe('E2b-4 selected-library synchronization', () => {
 
     it('reports the new works and attachments of a finished sync', async () => {
       await renderWith({ state: 'succeeded', newProfiles: 3, newExtractions: 2 })
+
+      expect(
+        screen.getByText('Sincronizada. Obras nuevas o actualizadas: 3. Adjuntos nuevos: 2.')
+      ).toBeInTheDocument()
+    })
+
+    it('shows live fichas/pasajes progress with a humane ETA while the derived work runs', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        etaMs: 720_000,
+      })
+
+      expect(
+        screen.getByText('Fichas 120/450 · Pasajes 30/400 · ~12 min restantes')
+      ).toHaveAttribute('role', 'status')
+    })
+
+    it('shows the same progress without an estimate while the ETA cannot be known', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        etaMs: null,
+      })
+
+      expect(screen.getByText('Fichas 120/450 · Pasajes 30/400')).toBeInTheDocument()
+    })
+
+    it('reports the finished sync again once the derived work drains', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 3,
+        newExtractions: 2,
+        profilesDone: 3,
+        profilesTotal: 3,
+        extractionsDone: 2,
+        extractionsTotal: 2,
+        etaMs: 0,
+      })
 
       expect(
         screen.getByText('Sincronizada. Obras nuevas o actualizadas: 3. Adjuntos nuevos: 2.')
