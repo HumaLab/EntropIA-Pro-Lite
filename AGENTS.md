@@ -54,15 +54,18 @@
 ## Task board (hlab.com.ar)
 
 - EntropIA tasks live at https://hlab.com.ar/admin/tablero-entropia (admins only). Each card has a code: `T-1`, `T-2`… (tasks) and `P-1`… (publications).
-- When you **start** a task that has a card, move it to `En curso`. When it is **done** (committed, tests green), move it to `Hecho`. If you do not know the card code, ask; never guess it.
-- The key is in the user environment variable `HLAB_TABLERO_CLAVE`; never print it or write it into the repo.
+- When you **start** a task that has a card, move it to `En curso`. When it is **done** (committed, tests green), move it to `Hecho`. Find the code with the list call; never guess it. Create a card only when the user asks.
+- The key is in the user environment variable `HLAB_TABLERO_CLAVE`; never print it or write it into the repo. Every call sends `-H "X-Tablero-Clave: $HLAB_TABLERO_CLAVE" -H "Accept: application/json"`.
 
 ```bash
-curl -s -X PATCH https://hlab.com.ar/api/tablero/tarjetas/T-9 \
-  -H "X-Tablero-Clave: $HLAB_TABLERO_CLAVE" \
-  -H "Content-Type: application/json" -H "Accept: application/json" \
-  -d '{"columna": "Hecho"}'
+B=https://hlab.com.ar/api/tablero/tarjetas
+H=(-H "X-Tablero-Clave: $HLAB_TABLERO_CLAVE" -H "Accept: application/json" -H "Content-Type: application/json")
+curl -s "${H[@]}" "$B?tablero=tareas&columna=En%20curso"           # list (filters: tablero, columna, responsable)
+curl -s "${H[@]}" -X PATCH "$B/T-9" -d '{"columna": "Hecho"}'      # move or edit: send only the fields to change
+curl -s "${H[@]}" -X POST "$B" -d '{"titulo": "…", "area": "…", "origen": "…"}'   # create one
+curl -s "${H[@]}" -X POST "$B" -d '{"tarjetas": [{"titulo": "…"}, {"titulo": "…"}]}'  # create several: all or none
 ```
 
-- Valid columns: `Por hacer`, `En curso`, `Hecho`. The API only moves existing cards; it cannot create them.
-- Responses: 200 returns the code and new column; 401 = missing or wrong key (tell the user); 404 = unknown code; 422 = invalid column (the response lists the valid ones).
+- Fields: `tablero` (`tareas` default, or `publicaciones`), `titulo`, `detalle`, `area`, `origen`, `responsable` (`Sin asignar`, `Rodrigo`, `Agustín`, `Ambos`), `columna`; publications also `tipo` (`Post`, `Artículo`, `Video`, `Reseña`, `Traducción`) and `estado` (`Idea`, `Borrador`, `Publicado`).
+- Columns: tasks `Por hacer` (default), `En curso`, `Hecho`; publications `Ideas sin fecha` (default) or a month written like `Noviembre 2026`. Cards cannot be deleted through the API, only in the panel.
+- Responses: 200/201 return the card(s) with their code; 401 = missing or wrong key (tell the user); 404 = unknown code; 422 = invalid field (the response lists the valid values).
