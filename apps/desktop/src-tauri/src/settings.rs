@@ -1075,6 +1075,9 @@ mod tests {
                VALUES ('t1', 'embedding', 'blocked', 'configuration_required', 'configuration_required');",
         )
         .expect("queue table");
+        // Pin the remote provider: Pro defaults to the local engine, which
+        // needs no OpenRouter key and would make the "no key" phase valid.
+        set_setting(&conn, "embedding_provider", "api").expect("provider");
         let state = |conn: &Connection| -> String {
             conn.query_row(
                 "SELECT state FROM processing_tasks WHERE id = 't1'",

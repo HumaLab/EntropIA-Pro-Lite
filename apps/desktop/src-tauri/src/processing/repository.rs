@@ -9158,6 +9158,13 @@ mod tests {
         .expect("settings table");
         insert_blocked_embedding(&conn, "t-config", "configuration_required");
         insert_blocked_embedding(&conn, "t-contract", "configuration_changed");
+        // Pin the remote provider: Pro defaults to the local engine, which
+        // needs no OpenRouter key and would make the "no key" phase valid.
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('embedding_provider', 'api')",
+            [],
+        )
+        .expect("provider");
         // No OpenRouter key yet: nothing to resume, and no spinning.
         assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
         assert_eq!(task_state(&conn, "t-config"), "blocked");
