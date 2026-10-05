@@ -71,7 +71,7 @@ feature slice.
     Cargo, `@tauri-apps/api`/`cli`/plugins in `package.json`; lockfiles;
     `entropia-agent` pin unchanged; `app_acl` rejection strings re-checked
     against 2.12 sources.
-  - [ ] P4.3 Drop `vendor/tao` and the `[patch.crates-io]` entry; the
+  - [x] P4.3 Drop `vendor/tao` and the `[patch.crates-io]` entry; the
     resolved `tao` is >= 0.36 and contains tao#1215.
   - [ ] P4.4 Verify: cargo check lean + `local-ml`, `cargo test
     -- --test-threads=1`, frontend lint/typecheck/test, CI green incl. Pro,

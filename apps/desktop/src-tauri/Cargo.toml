@@ -172,9 +172,3 @@ paddle-ocr = ["dep:ocr-rs"]
 # Off by default: the commands still exist (so the ACL manifest is the same in
 # every build) but answer "unavailable". See src/navegador/viewer.rs.
 navegador = ["tauri/unstable"]
-
-# tao 0.35.3 deadlocks the UI thread on Windows while typing (PeekMessageW
-# re-enters the window proc with a non-reentrant mutex held). Backport of
-# tauri-apps/tao#1215. Drop with the Tauri upgrade; see vendor/tao/PATCHED.md.
-[patch.crates-io]
-tao = { path = "vendor/tao" }
