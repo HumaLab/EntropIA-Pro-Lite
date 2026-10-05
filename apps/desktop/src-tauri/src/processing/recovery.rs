@@ -198,6 +198,9 @@ pub fn recover_session(
         // The 0038 trigger settles dependents as their dependency ends; this
         // one scan repairs units a pre-0038 build left blocked.
         repository::settle_blocked_dependents(conn)?;
+        // A unit parked for a missing embedding configuration that is valid
+        // now (the key was saved while no scheduler watched) resumes at start.
+        repository::resume_embedding_configuration_blocked(conn)?;
         // Work only system batches own has nobody to resume it: requeue it.
         repository::requeue_interrupted_system_tasks(conn, None)?;
         // A generation whose vectors all landed but that no build ever
@@ -1129,5 +1132,29 @@ mod tests {
             .expect("free pages were returned without any checkpoint to purge");
         assert!(line.contains("returned"), "{line}");
         assert_eq!(free(&db_path), 0);
+    }
+
+    #[test]
+    fn startup_recovery_resumes_units_parked_for_a_configuration_that_is_valid_now() {
+        let (_dir, conn) = recovery_db();
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO app_settings (key, value) VALUES ('openrouter_api_key', 'sk-test');
+             INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, created_at, updated_at)
+             VALUES ('t-config', 'embedding', 'a1', 'corpus', 'asset', 'a1', 'blocked',
+                     'configuration_required', 'configuration_required', 1, 1);",
+        )
+        .expect("blocked unit with a valid configuration");
+        recover_session(&conn, "", 60_000).expect("recover");
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-config'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("state");
+        assert_eq!(state, "pending");
     }
 }
