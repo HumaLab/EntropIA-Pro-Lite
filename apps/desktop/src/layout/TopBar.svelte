@@ -320,6 +320,12 @@
     if (hit) openBibliographyHit(hit)
   }
 
+  // A row is picked with the pointer without moving focus off the input: no
+  // focusout can close or rebuild the list between mousedown and click.
+  function keepInputFocus(event: MouseEvent) {
+    event.preventDefault()
+  }
+
   function openBibliographyHit(hit: BibliographySearchHit) {
     // The ficha opens where the search is: no navigation, no tab change.
     detailsEntry = entryFromHit(hit)
@@ -479,6 +485,7 @@
               role="option"
               id={`${searchListboxId}-option-${index}`}
               aria-selected={index === activeResultIndex}
+              onmousedown={keepInputFocus}
               onclick={() => handleResultClick(result)}
             >
               <span class="global-search__result-title">{result.item.title}</span>
@@ -503,6 +510,7 @@
                   role="option"
                   id={`${searchListboxId}-option-${index}`}
                   aria-selected={index === activeResultIndex}
+                  onmousedown={keepInputFocus}
                   onclick={() => openBibliographyHit(hit)}
                 >
                   <span class="global-search__result-title">{hit.title}</span>

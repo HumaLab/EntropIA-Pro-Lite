@@ -1008,6 +1008,61 @@ describe('TopBar', () => {
       })
     })
 
+    it('opens the ficha of the clicked bibliography row, never a corpus item', async () => {
+      corpusHit()
+      bibliographyAnswers([
+        bibHit(),
+        bibHit({ itemId: 'item-uuid-2', itemKey: 'EFGH5678', title: 'Sindicatos y política' }),
+      ])
+      render(TopBar)
+      await searchFor('acta')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Sindicatos y política/ })).toBeInTheDocument()
+      })
+
+      await fireEvent.click(screen.getByRole('option', { name: /Sindicatos y política/ }))
+
+      expect(navigateActiveMock).not.toHaveBeenCalled()
+      await waitFor(() => {
+        expect(screen.getByText('Ficha de la obra')).toBeInTheDocument()
+      })
+      expect(invokeMock).toHaveBeenCalledWith(
+        'writing_zotero_item_detail',
+        expect.objectContaining({ itemKey: 'EFGH5678' })
+      )
+    })
+
+    it('keeps focus on the input when a row is pressed, so nothing closes the list mid-click', async () => {
+      corpusHit()
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      await searchFor('acta')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+
+      // fireEvent returns false when the default action was prevented.
+      expect(
+        await fireEvent.mouseDown(screen.getByRole('option', { name: /Asociaciones obreras/ }))
+      ).toBe(false)
+      expect(await fireEvent.mouseDown(screen.getByRole('option', { name: /Acta/ }))).toBe(false)
+    })
+
+    it('still opens the corpus item when a corpus row is clicked in a mixed list', async () => {
+      corpusHit()
+      bibliographyAnswers([bibHit()])
+      render(TopBar)
+      await searchFor('acta')
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Asociaciones obreras/ })).toBeInTheDocument()
+      })
+
+      await fireEvent.click(screen.getByRole('option', { name: /Acta fundacional/ }))
+
+      expect(navigateActiveMock).toHaveBeenCalled()
+      expect(screen.queryByText('Ficha de la obra')).not.toBeInTheDocument()
+    })
+
     it('closes the ficha with the search', async () => {
       storeRef.current.items.searchGlobal.mockResolvedValue([])
       bibliographyAnswers([bibHit()])
