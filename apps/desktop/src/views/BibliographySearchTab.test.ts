@@ -1,43 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
+import { bibliographyTab } from '$lib/bibliography-search'
 import BibliographySearchTab from './BibliographySearchTab.svelte'
 
 const mockInvoke = vi.mocked(invoke)
-
-function hybridResponse() {
-  return {
-    hits: [
-      {
-        itemId: 'item-1',
-        itemKey: 'AAAA1111',
-        libraryId: 'lib-1',
-        title: 'Obra A',
-        method: 'hybrid',
-        lexicalScore: -3.2,
-        vectorScore: 0.87,
-        fusedScore: 0.033,
-        contractHash: 'contract-1',
-        generationId: 'gen-1',
-      },
-      {
-        itemId: 'item-2',
-        itemKey: 'BBBB2222',
-        libraryId: 'lib-1',
-        title: 'Obra B',
-        method: 'lexical',
-        lexicalScore: -1.1,
-        vectorScore: null,
-        fusedScore: -1.1,
-        contractHash: null,
-        generationId: null,
-      },
-    ],
-    vectorAvailable: true,
-    activeGenerationId: 'gen-1',
-    contractHash: 'contract-1',
-  }
-}
 
 function passage(over: Record<string, unknown> = {}) {
   return {
@@ -80,15 +47,12 @@ const readableContext = {
 /** Answers each command on its own, as the real backend does. */
 function backend(
   options: {
-    works?: unknown
     passages?: unknown
     context?: unknown
   } = {}
 ) {
   mockInvoke.mockImplementation(async (command: string) => {
     switch (command) {
-      case 'bibliography_search_works':
-        return options.works ?? hybridResponse()
       case 'bibliography_search_passages':
         if (typeof options.passages === 'function') return (options.passages as () => never)()
         return options.passages ?? passagesResponse()
@@ -111,40 +75,22 @@ async function search(text = 'oficio') {
 
 beforeEach(() => {
   mockInvoke.mockReset()
+  bibliographyTab.reset()
 })
 
 describe('BibliographySearchTab', () => {
-  it('searches on submit and renders hits with method badges', async () => {
+  it('searches on submit and lists only passages: no works list with badges', async () => {
     backend()
     render(BibliographySearchTab)
 
     await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'revoluciones' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      'bibliography_search_works',
-      expect.objectContaining({
-        request: expect.objectContaining({ text: 'revoluciones' }),
-      })
-    )
-    expect(
-      await screen.findByText('Obra A', { selector: '.bib-search__title' })
-    ).toBeInTheDocument()
-    expect(screen.getByText('Obra B')).toBeInTheDocument()
-    expect(screen.getByText('Híbrido')).toBeInTheDocument()
-    expect(screen.getByText('Léxico')).toBeInTheDocument()
-  })
-
-  it('labels a vector-unavailable answer as lexical-only', async () => {
-    backend({ works: { ...hybridResponse(), vectorAvailable: false } })
-    render(BibliographySearchTab)
-
-    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'botánica' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
-
-    expect(
-      await screen.findByText('Solo búsqueda léxica: sin espacio vectorial activo.')
-    ).toBeInTheDocument()
+    expect(await screen.findByText('El oficio de historiador es duro.')).toBeInTheDocument()
+    expect(callsFor('bibliography_search_works')).toEqual([])
+    expect(screen.queryByText('Híbrido')).not.toBeInTheDocument()
+    expect(screen.queryByText('Léxico')).not.toBeInTheDocument()
+    expect(screen.queryByText(/similitud/)).not.toBeInTheDocument()
   })
 
   it('searches the manuscript selection verbatim on explicit click', async () => {
@@ -154,13 +100,10 @@ describe('BibliographySearchTab', () => {
     expect(screen.getByText(/envía tu consulta/)).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar desde la selección' }))
 
-    expect(mockInvoke).toHaveBeenCalledWith(
-      'bibliography_search_works',
-      expect.objectContaining({
-        request: expect.objectContaining({ text: 'revoluciones agrarias' }),
-      })
-    )
-    expect(await screen.findByText('Obra B')).toBeInTheDocument()
+    expect(await screen.findByText('El oficio de historiador es duro.')).toBeInTheDocument()
+    expect(callsFor('bibliography_search_passages')[0]![1]).toEqual({
+      request: { text: 'revoluciones agrarias', topK: 12, fuzzy: true },
+    })
   })
 
   it('does not search when the selection is empty', async () => {
@@ -169,43 +112,74 @@ describe('BibliographySearchTab', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Buscar desde la selección' }))
 
-    expect(callsFor('bibliography_search_works')).toEqual([])
     expect(callsFor('bibliography_search_passages')).toEqual([])
     expect(
       await screen.findByText('No hay texto seleccionado en el manuscrito.')
     ).toBeInTheDocument()
   })
+})
 
-  it('shows empty and error states honestly', async () => {
-    backend({ works: { ...hybridResponse(), hits: [] } })
+describe('BibliographySearchTab persistence', () => {
+  it('finds the query and results again after the tab is left and reopened', async () => {
+    backend()
+    const first = render(BibliographySearchTab)
+    await search('oficio')
+    await screen.findByText('El oficio de historiador es duro.')
+    first.unmount()
+    mockInvoke.mockClear()
+
     render(BibliographySearchTab)
 
-    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'zzz' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
-    expect(await screen.findByText('Sin resultados para esta consulta.')).toBeInTheDocument()
+    expect(screen.getByRole('searchbox')).toHaveValue('oficio')
+    expect(screen.getByText('El oficio de historiador es duro.')).toBeInTheDocument()
+    expect(mockInvoke).not.toHaveBeenCalledWith('bibliography_search_passages', expect.anything())
+  })
 
-    mockInvoke.mockRejectedValue(new Error('engine exploded'))
-    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'otra' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
-    expect(await screen.findByText(/engine exploded/)).toBeInTheDocument()
+  it('restores the scroll position of the panel it lives in', async () => {
+    backend()
+    const panel = document.createElement('div')
+    panel.setAttribute('role', 'tabpanel')
+    document.body.appendChild(panel)
+    const first = render(BibliographySearchTab, { target: panel })
+    await search('oficio')
+    await screen.findByText('El oficio de historiador es duro.')
+    panel.scrollTop = 120
+    await fireEvent.scroll(panel)
+    first.unmount()
+    panel.scrollTop = 0
+
+    render(BibliographySearchTab, { target: panel })
+
+    await waitFor(() => expect(panel.scrollTop).toBe(120))
+    panel.remove()
+  })
+
+  it('forgets everything when the search is cleared with the X', async () => {
+    backend()
+    const first = render(BibliographySearchTab)
+    await search('oficio')
+    await screen.findByText('El oficio de historiador es duro.')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Limpiar búsqueda' }))
+
+    expect(screen.queryByText('El oficio de historiador es duro.')).not.toBeInTheDocument()
+    first.unmount()
+    render(BibliographySearchTab)
+    expect(screen.getByRole('searchbox')).toHaveValue('')
+    expect(screen.queryByRole('heading', { name: 'Pasajes' })).not.toBeInTheDocument()
   })
 })
 
 describe('BibliographySearchTab passages', () => {
-  it('searches passages for the same query, below the works', async () => {
+  it('searches passages for the query', async () => {
     backend()
     render(BibliographySearchTab)
     await search('oficio')
 
-    const snippet = await screen.findByText('El oficio de historiador es duro.')
+    await screen.findByText('El oficio de historiador es duro.')
     expect(callsFor('bibliography_search_passages')).toEqual([
       ['bibliography_search_passages', { request: { text: 'oficio', topK: 12, fuzzy: true } }],
     ])
-    const works = screen.getByText('Obra B')
-    expect(
-      works.compareDocumentPosition(snippet) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'passages come after the works'
-    ).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Pasajes' })).toBeInTheDocument()
   })
 
@@ -332,7 +306,6 @@ describe('BibliographySearchTab passages', () => {
 
     expect(await screen.findByText(text)).toBeInTheDocument()
     expect(screen.queryByText('Sin pasajes para esta consulta.')).toBeNull()
-    expect(screen.getByText('Obra A')).toBeInTheDocument()
   })
 
   it('names the cause when the backend says why the passage search failed', async () => {
@@ -355,7 +328,7 @@ describe('BibliographySearchTab passages', () => {
     expect(await screen.findByText('Sin pasajes para esta consulta.')).toBeInTheDocument()
   })
 
-  it('keeps the works when the passage search fails', async () => {
+  it('says the passage search failed when it throws', async () => {
     backend({
       passages: () => {
         throw new Error('boom')
@@ -364,7 +337,6 @@ describe('BibliographySearchTab passages', () => {
     render(BibliographySearchTab)
     await search()
 
-    expect(await screen.findByText('Obra A')).toBeInTheDocument()
     expect(await screen.findByText(/La búsqueda de pasajes falló/)).toBeInTheDocument()
   })
 

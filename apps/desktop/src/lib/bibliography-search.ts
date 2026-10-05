@@ -190,3 +190,43 @@ export function bibliographySearchPassages(
     },
   })
 }
+
+/**
+ * What the Writing "Obras" tab shows, kept outside the component so it
+ * outlives it: switching to another research tab unmounts the tab, and coming
+ * back must find the same query, results and scroll position. Only the clear
+ * button (or a new search) replaces it.
+ */
+export interface BibliographyTabState {
+  query: string
+  passageAnswer: BibliographyPassagesResponse | null
+  passagesFailed: boolean
+  /** Scroll offset of the panel the tab lives in. */
+  scrollTop: number
+}
+
+const EMPTY_TAB: BibliographyTabState = {
+  query: '',
+  passageAnswer: null,
+  passagesFailed: false,
+  scrollTop: 0,
+}
+
+export class BibliographyTabStore {
+  #state: BibliographyTabState = { ...EMPTY_TAB }
+
+  get state(): BibliographyTabState {
+    return this.#state
+  }
+
+  patch(patch: Partial<BibliographyTabState>): void {
+    this.#state = { ...this.#state, ...patch }
+  }
+
+  /** Back to an untouched tab: what the clear button does. */
+  reset(): void {
+    this.#state = { ...EMPTY_TAB }
+  }
+}
+
+export const bibliographyTab = new BibliographyTabStore()
