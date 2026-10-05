@@ -50,3 +50,19 @@
 - Svelte runes dependency expressions intentionally disable `@typescript-eslint/no-unused-expressions` in `.svelte` files.
 - Empty catches are allowed only for best-effort localStorage-style access in `.svelte` files.
 - Icons go through `ActionIcon`, never around it. `no-restricted-imports` fails the build on a direct `@tabler/icons-svelte-runes` import anywhere under `apps/**` or `packages/**`; to add an icon, add its name to `ACTION_ICON_NAMES` and map it in `ActionIcon.svelte`. Genuinely non-icon SVG — charts, viewer overlays, third-party brand marks — is allowlisted in `eslint.config.js` rather than exempted by hand.
+
+## Task board (hlab.com.ar)
+
+- EntropIA tasks live at https://hlab.com.ar/admin/tablero-entropia (admins only). Each card has a code: `T-1`, `T-2`… (tasks) and `P-1`… (publications).
+- When you **start** a task that has a card, move it to `En curso`. When it is **done** (committed, tests green), move it to `Hecho`. If you do not know the card code, ask; never guess it.
+- The key is in the user environment variable `HLAB_TABLERO_CLAVE`; never print it or write it into the repo.
+
+```bash
+curl -s -X PATCH https://hlab.com.ar/api/tablero/tarjetas/T-9 \
+  -H "X-Tablero-Clave: $HLAB_TABLERO_CLAVE" \
+  -H "Content-Type: application/json" -H "Accept: application/json" \
+  -d '{"columna": "Hecho"}'
+```
+
+- Valid columns: `Por hacer`, `En curso`, `Hecho`. The API only moves existing cards; it cannot create them.
+- Responses: 200 returns the code and new column; 401 = missing or wrong key (tell the user); 404 = unknown code; 422 = invalid column (the response lists the valid ones).
