@@ -67,7 +67,7 @@ feature slice.
     `apps/desktop/src-tauri/Cargo.toml` and `crates/vecscan/Cargo.toml`,
     workflow toolchains (`lite-preview.yml`, `release.yml`), READMEs; clippy
     `-D warnings` clean on 1.90.
-  - [ ] P4.2 Tauri 2.12.x: `tauri`/`tauri-build`/plugins (dialog, fs) in
+  - [x] P4.2 Tauri 2.12.x: `tauri`/`tauri-build`/plugins (dialog, fs) in
     Cargo, `@tauri-apps/api`/`cli`/plugins in `package.json`; lockfiles;
     `entropia-agent` pin unchanged; `app_acl` rejection strings re-checked
     against 2.12 sources.

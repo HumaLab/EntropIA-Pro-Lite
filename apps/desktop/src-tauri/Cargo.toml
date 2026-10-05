@@ -10,7 +10,7 @@ name = "entropia_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.1", features = [] }
 
 [dependencies]
 # The research engine. Cargo.lock pins the exact commit; `cargo update -p
@@ -22,13 +22,13 @@ entropia-agent = { git = "https://github.com/HumaLab/EntropIA-Agent", branch = "
 # In-memory quantized cosine scan of the bibliography passage search. A path
 # crate so its hot loop can be optimized in debug builds (see the profile below).
 vecscan = { path = "../../../crates/vecscan" }
-tauri = { version = "2.11.6", features = ["protocol-asset"] }
+tauri = { version = "2.12.1", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 fs2 = "0.4"
-tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2.8.1"
+tauri-plugin-fs = "2.6.0"
 thiserror = "1"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
 pdf-extract = "0.7"
@@ -48,9 +48,9 @@ ndarray = { version = "=0.16.1", optional = true }
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray", "load-dynamic"], optional = true }
 tokenizers = { version = "0.15", default-features = false, features = ["onig"], optional = true }
 encoding_rs = "0.8"
-# Already compiled for tauri-utils and wry (same 0.27); declared here so the
+# Already compiled for tauri-utils and wry (same 0.28 since tauri 2.12); declared here so the
 # HTML snapshot extractor can use it directly. No new crate enters the build.
-dom_query = "0.27"
+dom_query = "0.28"
 llama-cpp-2 = { version = "0.1", optional = true }
 # CSL rendering (plan-editor.md §27.3). MIT OR Apache-2.0 — which is why it is
 # here and citeproc-js is not: that one is CPAL-1.0 OR AGPL-1.0, reached even
@@ -89,8 +89,9 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 # Cloud-sync stores session tokens in the Windows credential manager.
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 # Lite asks Microsoft Store for updates of its own package (store_updates.rs).
-# Same 0.61 line Tauri already resolves; only the features that module uses.
-windows = { version = "0.61", features = [
+# Same 0.62 line Tauri/wry now resolve (was 0.61 with tauri 2.11); only the
+# features that module uses.
+windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
     "Services_Store",
@@ -99,12 +100,12 @@ windows = { version = "0.61", features = [
 ] }
 # Awaiting the Store operation needs its `IntoFuture`, which only this crate's
 # `std` feature provides (`windows` depends on it without default features).
-windows-future = "0.2"
+windows-future = "0.3"
 # The Navegador closes a sign-in popup when its page calls `window.close()`:
 # wry only destroys the popup's inner container window, so the app subscribes
 # to WebView2's `WindowCloseRequested` itself (viewer.rs). Pinned to the version
-# Tauri/wry already resolve; adds no new crate to the tree.
-webview2-com = "=0.38.2"
+# Tauri/wry already resolve (0.39.1 with wry 0.57); adds no new crate to the tree.
+webview2-com = "=0.39.1"
 
 [dev-dependencies]
 # Test-only: lets the sync MockSyncApi build a `reqwest::Response` from raw bytes
@@ -112,7 +113,7 @@ webview2-com = "=0.38.2"
 http = "1"
 # Test-only: `tauri::test` drives the real IPC entry point (`Webview::on_message`)
 # with the real capabilities, which is how tests/app_acl.rs proves the ACL holds.
-tauri = { version = "2.11.6", features = ["test"] }
+tauri = { version = "2.12.1", features = ["test"] }
 
 # Local performance measurement only — never ships. Mirrors the release
 # optimization level so numbers mean something, while still inheriting `dev` so
