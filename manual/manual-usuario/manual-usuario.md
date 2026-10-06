@@ -794,6 +794,11 @@ Un documento que ya tiene resultados con ese esquema no se vuelve a procesar. **
 
 El modelo copia lo que encuentra en el texto, pero puede equivocarse o saltearse casos, sobre todo si el OCR tiene errores. Revisá una muestra contra los documentos antes de usar la tabla. En Lite cada documento es una consulta paga a OpenRouter. Los esquemas y sus resultados quedan en este equipo: todavía no viajan con la sincronización.
 
+<a id="flujos-guardados"></a>
+### 14.2. Guardar una combinación como flujo
+
+Si siempre procesás tus colecciones con los mismos pasos, guardalos una vez. Marcá las operaciones (y el esquema propio, si usás uno), pulsá **Guardar como flujo**, escribí un nombre —por ejemplo «Partes de puerto»— y **Guardar**. La próxima vez elegilo en **Flujo guardado** y quedan marcadas solas. Un flujo solo recuerda qué marcar: las colecciones las elegís en cada lote. Guardar con un nombre que ya existe lo reemplaza.
+
 ---
 
 <a id="capitulo-15-sincronizacion-y-nube"></a>

@@ -1,5 +1,7 @@
 <script lang="ts">
   import BatchSchemaPanel from './BatchSchemaPanel.svelte'
+  import BatchFlowPicker from './BatchFlowPicker.svelte'
+  import type { BatchFlowSteps } from '$lib/batch-flows'
   import { schemaOperation } from '$lib/extraction-schemas'
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
@@ -73,6 +75,21 @@
   let runTriples = $state(false)
   // A user-defined schema (T-51) the batch also runs; '' runs none.
   let schemaId = $state('')
+  // A saved flow (T-52) is these five choices under a name.
+  const flowSteps = $derived<BatchFlowSteps>({
+    ocr: runOcr,
+    embeddings: runEmbeddings,
+    ner: runNer,
+    triples: runTriples,
+    schemaId,
+  })
+  function applyFlow(steps: BatchFlowSteps) {
+    runOcr = steps.ocr
+    runEmbeddings = steps.embeddings
+    runNer = steps.ner
+    runTriples = steps.triples
+    schemaId = steps.schemaId
+  }
   // Text extractions whose draft line says how many documents they cover.
   const extractionCounts = [
     { kind: 'ner', label: 'batch.nerCount' },
@@ -1189,6 +1206,7 @@
             {/each}
           </div>
         </div>
+        <BatchFlowPicker steps={flowSteps} onapply={applyFlow} />
         <div class="batch-ops" role="group" aria-labelledby="batch-ops-label">
           <span class="batch-field__legend" id="batch-ops-label">{t('batch.operations')}</span>
           <Checkbox class="batch-ops__toggle" bind:checked={runOcr}>{t('batch.opOcr')}</Checkbox>
