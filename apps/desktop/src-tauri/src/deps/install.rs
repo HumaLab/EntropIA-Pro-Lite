@@ -1216,7 +1216,7 @@ where
     while let Ok(Some(line)) = reader.next_line().await {
         if is_build_backend_debug_spam(&line) {
             compacted_build_debug_lines += 1;
-            if compacted_build_debug_lines % BUILD_BACKEND_SPAM_REPORT_EVERY == 0 {
+            if compacted_build_debug_lines.is_multiple_of(BUILD_BACKEND_SPAM_REPORT_EVERY) {
                 let compacted = format!(
                     "{label}: [compactado] {compacted_build_debug_lines} líneas DEBUG del backend de build suprimidas"
                 );

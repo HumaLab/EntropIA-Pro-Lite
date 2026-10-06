@@ -469,7 +469,7 @@ impl OnnxLayoutEngine {
                 dets.shape()
             );
             let total = dets.len();
-            if total >= 6 && total % 6 == 0 {
+            if total >= 6 && total.is_multiple_of(6) {
                 let n = total / 6;
                 (0..n)
                     .map(|i| {
