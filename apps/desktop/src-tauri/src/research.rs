@@ -3,6 +3,7 @@ use entropia_agent::{
     cliente_llm::{ClienteLlm, ClienteLlmOpenRouter, TurnoAgente},
     embeddings::ClienteEmbeddings,
     estado::EstadoDb,
+    fuente_bibliografica::{FuenteBibliografica, PasajeBibliografico, TipoUbicacion, Ubicacion},
     recuperacion::Recuperador,
     repositorio::RepositorioSqlite,
     rerank::ClienteRerank,
@@ -10,13 +11,16 @@ use entropia_agent::{
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU8, Ordering},
         Arc, Mutex,
     },
 };
 use tauri::{AppHandle, State};
+
+use crate::rag::scope::RagLibraryRef;
+use crate::rag::RagBibliographyLocation;
 
 #[derive(Clone)]
 pub struct ResearchState(Arc<Inner>);
@@ -74,6 +78,178 @@ fn capture_terminal_job(
 fn uses_model(op: &str) -> bool {
     matches!(op, "advance" | "rewrite_section")
 }
+
+/// Un identificador de biblioteca tal como lo manda la interfaz: «user:123» o
+/// «group:456». Un único formato en los dos lados: es el mismo string que el
+/// job congela y que después trae cada cita bibliográfica.
+fn ref_de_biblioteca(texto: &str) -> Result<RagLibraryRef, String> {
+    let (tipo, id) = texto.split_once(':').ok_or_else(|| {
+        format!("Biblioteca mal nombrada «{texto}»: se espera «user:123» o «group:456»")
+    })?;
+    if tipo.trim().is_empty() || id.trim().is_empty() {
+        return Err(format!(
+            "Biblioteca mal nombrada «{texto}»: se espera «user:123» o «group:456»"
+        ));
+    }
+    Ok(RagLibraryRef {
+        library_type: tipo.trim().to_string(),
+        library_id: id.trim().to_string(),
+    })
+}
+
+/// El pasaje de la biblioteca como lo entiende el motor de investigación: la
+/// ubicación del chat (páginas o párrafos, `from..to`) se mapea a `Ubicacion`
+/// y la biblioteca se nombra con el mismo string que el job congeló.
+fn pasaje_del_hallazgo(hallazgo: &crate::rag::scope::PassageResult) -> PasajeBibliografico {
+    PasajeBibliografico {
+        chunk_id: hallazgo.chunk_id.clone(),
+        item_key: hallazgo.item_key.clone(),
+        titulo: hallazgo.title.clone(),
+        autores: hallazgo.authors.clone(),
+        anio: hallazgo.year,
+        biblioteca: format!("{}:{}", hallazgo.library_type, hallazgo.library_native_id),
+        texto: hallazgo.snippet.clone(),
+        ubicacion: hallazgo.location.as_ref().map(ubicacion_del_chat),
+    }
+}
+
+fn ubicacion_del_chat(location: &RagBibliographyLocation) -> Ubicacion {
+    Ubicacion {
+        tipo: if location.kind == "paragraphs" {
+            TipoUbicacion::Parrafos
+        } else {
+            TipoUbicacion::Paginas
+        },
+        desde: location.from,
+        hasta: location.to,
+    }
+}
+
+/// La pierna bibliográfica de una investigación: la MISMA búsqueda de pasajes
+/// que usa el chat de Recuperar (mismas bibliotecas, piso de similitud,
+/// snippet y ubicaciones), acotada a las bibliotecas que el job congeló.
+struct FuenteBiblioteca {
+    corpus: PathBuf,
+    bibliotecas: Vec<RagLibraryRef>,
+}
+
+impl FuenteBiblioteca {
+    fn nuevo(corpus: PathBuf, bibliotecas: &[String]) -> Result<Self, String> {
+        let bibliotecas = bibliotecas
+            .iter()
+            .map(|texto| ref_de_biblioteca(texto))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            corpus,
+            bibliotecas,
+        })
+    }
+}
+
+impl FuenteBibliografica for FuenteBiblioteca {
+    /// Cada llamada abre su conexión propia: el motor la hace desde el hilo del
+    /// workflow y embeber la consulta puede ser una llamada de red. Todo error
+    /// viaja como `Err(String)` y el motor lo declara como degradación.
+    fn buscar(&self, consulta: &str, limite: usize) -> Result<Vec<PasajeBibliografico>, String> {
+        use crate::bibliography::processing::ProfileEmbedder;
+
+        let conn = crate::db::open::open_archive_connection(&self.corpus)?;
+        let contrato = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)?;
+        let mut params = crate::rag::params::rag_params_from_settings(&conn);
+        params.top_k = limite.clamp(1, 50);
+        let embedder =
+            crate::bibliography::processing::EngineProfileEmbedder::new(self.corpus.clone());
+        let fuzzy = crate::nlp::fuzzy::fuzzy_enabled(&conn);
+        let buscados = crate::rag::scope::passage_search(
+            &conn,
+            &contrato.hash,
+            consulta,
+            &self.bibliotecas,
+            &params,
+            fuzzy,
+            &|text| embedder.embed(text),
+        );
+        if let Some(notice) = buscados.notice {
+            let detalle = buscados.detail.unwrap_or_default();
+            return Err(if detalle.is_empty() {
+                notice.code().to_string()
+            } else {
+                format!("{}: {}", notice.code(), detalle)
+            });
+        }
+        Ok(buscados.passages.iter().map(pasaje_del_hallazgo).collect())
+    }
+}
+
+/// Las bibliotecas que el trabajo congeló, o `None` cuando su alcance es solo
+/// corpus (el motor entonces ni consulta la fuente). En `create` se lee del
+/// pedido; en los pasos siguientes, del workflow que el motor guardó.
+fn bibliotecas_del_trabajo(
+    op: &str,
+    request: &Value,
+    plan_json: Option<&str>,
+) -> Result<Option<Vec<String>>, String> {
+    let (alcance, crudas) = if op == "create" {
+        (
+            request["alcance"].as_str().unwrap_or("corpus").to_string(),
+            request.get("bibliotecas").cloned().unwrap_or(Value::Null),
+        )
+    } else {
+        let plan: Value = plan_json
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| e.to_string())?
+            .unwrap_or(Value::Null);
+        (
+            plan["alcance"].as_str().unwrap_or("corpus").to_string(),
+            plan.get("bibliotecas").cloned().unwrap_or(Value::Null),
+        )
+    };
+    let alcance = alcance.trim();
+    if matches!(alcance, "" | "corpus") {
+        return Ok(None);
+    }
+    let bibliotecas: Vec<String> = serde_json::from_value(crudas).map_err(|e| e.to_string())?;
+    if bibliotecas.is_empty() {
+        return Err(
+            "El alcance bibliográfico necesita al menos una biblioteca declarada (por ejemplo «user:123»)"
+                .into(),
+        );
+    }
+    Ok(Some(bibliotecas))
+}
+
+/// El workflow congelado del job, tal como lo guarda el motor en `plan_json`.
+fn plan_json_del_job(state: &Path, job_id: &str) -> Option<String> {
+    let conn =
+        rusqlite::Connection::open_with_flags(state, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    conn.query_row(
+        "SELECT plan_json FROM jobs WHERE id=?1 AND modo='research'",
+        [job_id],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// La fuente bibliográfica que este pedido necesita, o `None` cuando el
+/// alcance del trabajo es solo corpus. Es `procesar_con` el único que la
+/// recibe: con `None` el motor declara la degradación si el alcance la pedía.
+fn fuente_del_trabajo(
+    request: &Value,
+    corpus: &Path,
+    state: &Path,
+) -> Result<Option<FuenteBiblioteca>, String> {
+    let op = request["op"].as_str().unwrap_or("");
+    let plan = if op == "create" {
+        None
+    } else {
+        plan_json_del_job(state, request["job_id"].as_str().unwrap_or(""))
+    };
+    bibliotecas_del_trabajo(op, request, plan.as_deref())?
+        .map(|bibliotecas| FuenteBiblioteca::nuevo(corpus.to_path_buf(), &bibliotecas))
+        .transpose()
+}
 impl ResearchState {
     pub fn new(app_dir: PathBuf, corpus: PathBuf) -> Result<Self, String> {
         let root = app_dir.join("research");
@@ -103,6 +279,10 @@ impl ResearchState {
         tauri::async_runtime::spawn_blocking(move || {
             let db = EstadoDb::abrir(inner.state.to_str().ok_or("Ruta no UTF-8")?)?;
             let repo = RepositorioSqlite::abrir(inner.corpus.to_str().ok_or("Ruta no UTF-8")?)?;
+            // La pierna bibliográfica, solo cuando el alcance del trabajo la
+            // incluye. El motor la consulta únicamente en ese caso.
+            let fuente = fuente_del_trabajo(&request, &inner.corpus, &inner.state)?;
+            let bib = fuente.as_ref().map(|f| f as &dyn FuenteBibliografica);
             if model {
                 let conn = rusqlite::Connection::open_with_flags(
                     &inner.corpus,
@@ -139,20 +319,22 @@ impl ResearchState {
                         }
                     }
                 };
-                entropia_agent::investigacion::procesar(
+                entropia_agent::investigacion::procesar_con(
                     &db,
                     &repo,
                     &llm,
                     Some(recuperador.as_ref()),
+                    bib,
                     &inner.artifacts,
                     request,
                 )
             } else {
-                entropia_agent::investigacion::procesar(
+                entropia_agent::investigacion::procesar_con(
                     &db,
                     &repo,
                     &NoModel,
                     None,
+                    bib,
                     &inner.artifacts,
                     request,
                 )
@@ -379,9 +561,214 @@ pub async fn research_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_terminal_job, terminal_job_id, uses_model};
+    use super::{
+        bibliotecas_del_trabajo, capture_terminal_job, pasaje_del_hallazgo, plan_json_del_job,
+        ref_de_biblioteca, terminal_job_id, uses_model,
+    };
+    use crate::rag::scope::PassageResult;
+    use crate::rag::RagBibliographyLocation;
+    use entropia_agent::fuente_bibliografica::{TipoUbicacion, Ubicacion};
     use serde_json::json;
     use std::path::Path;
+
+    fn hallazgo(location: Option<RagBibliographyLocation>) -> PassageResult {
+        PassageResult {
+            chunk_id: "chunk-1".into(),
+            item_id: "item-1".into(),
+            item_key: "ABCD1234".into(),
+            title: "Historia de los vencidos".into(),
+            authors: "Bloch, Febvre".into(),
+            year: Some(1949),
+            library_name: "Mi biblioteca".into(),
+            library_type: "user".into(),
+            library_native_id: "0".into(),
+            csl_json: "{}".into(),
+            snippet: "fragmento citable del pasaje".into(),
+            location,
+            score: 0.8,
+            match_kind: "meaning".into(),
+            match_terms: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn el_pasaje_conserva_autores_anio_biblioteca_y_pagina() {
+        let pasaje = pasaje_del_hallazgo(&hallazgo(Some(RagBibliographyLocation {
+            kind: "pages".into(),
+            from: 3,
+            to: 4,
+        })));
+        assert_eq!(pasaje.chunk_id, "chunk-1");
+        assert_eq!(pasaje.item_key, "ABCD1234");
+        assert_eq!(pasaje.titulo, "Historia de los vencidos");
+        assert_eq!(pasaje.autores, "Bloch, Febvre");
+        assert_eq!(pasaje.anio, Some(1949));
+        // La biblioteca se nombra con el MISMO string que el job congela.
+        assert_eq!(pasaje.biblioteca, "user:0");
+        assert_eq!(pasaje.texto, "fragmento citable del pasaje");
+        assert_eq!(
+            pasaje.ubicacion,
+            Some(Ubicacion {
+                tipo: TipoUbicacion::Paginas,
+                desde: 3,
+                hasta: 4
+            })
+        );
+    }
+
+    #[test]
+    fn los_parrafos_del_chat_se_mapean_a_parrafos_y_la_ubicacion_ausente_no_se_inventa() {
+        let parrafos = pasaje_del_hallazgo(&hallazgo(Some(RagBibliographyLocation {
+            kind: "paragraphs".into(),
+            from: 2,
+            to: 2,
+        })));
+        assert_eq!(
+            parrafos.ubicacion,
+            Some(Ubicacion {
+                tipo: TipoUbicacion::Parrafos,
+                desde: 2,
+                hasta: 2
+            })
+        );
+        let sin_ubicacion = pasaje_del_hallazgo(&hallazgo(None));
+        assert_eq!(sin_ubicacion.ubicacion, None);
+    }
+
+    #[test]
+    fn las_referencias_de_biblioteca_son_tipo_dos_puntos_id() {
+        let ref_user = ref_de_biblioteca("user:123").expect("user:123");
+        assert_eq!(ref_user.library_type, "user");
+        assert_eq!(ref_user.library_id, "123");
+        let ref_group = ref_de_biblioteca("group:456").expect("group:456");
+        assert_eq!(ref_group.library_type, "group");
+        assert_eq!(ref_group.library_id, "456");
+        // Un identificador sin tipo no se adivina: se rechaza.
+        assert!(ref_de_biblioteca("solo-id").is_err());
+        assert!(ref_de_biblioteca(":123").is_err());
+        assert!(ref_de_biblioteca("user:").is_err());
+    }
+
+    #[test]
+    fn el_create_congela_alcance_y_bibliotecas_del_pedido() {
+        // El alcance bibliográfico del pedido lleva sus bibliotecas al motor.
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "create",
+                &json!({"op":"create","alcance":"biblioteca","bibliotecas":["user:123"]}),
+                None
+            )
+            .expect("alcance biblioteca"),
+            Some(vec!["user:123".to_string()])
+        );
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "create",
+                &json!({"op":"create","alcance":"ambos","bibliotecas":["group:456","user:1"]}),
+                None
+            )
+            .expect("alcance ambos"),
+            Some(vec!["group:456".to_string(), "user:1".to_string()])
+        );
+        // «both» es el alias inglés que el motor también acepta.
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "create",
+                &json!({"op":"create","alcance":"both","bibliotecas":["user:123"]}),
+                None
+            )
+            .expect("alias both"),
+            Some(vec!["user:123".to_string()])
+        );
+    }
+
+    #[test]
+    fn un_trabajo_de_corpus_no_pide_fuente_bibliografica() {
+        assert_eq!(
+            bibliotecas_del_trabajo("create", &json!({"op":"create","alcance":"corpus"}), None)
+                .expect("corpus"),
+            None
+        );
+        // Sin alcance no hay alcance bibliográfico: es el comportamiento de siempre.
+        assert_eq!(
+            bibliotecas_del_trabajo("create", &json!({"op":"create"}), None).expect("sin alcance"),
+            None
+        );
+    }
+
+    #[test]
+    fn los_pasos_siguientes_leen_el_alcance_congelado_en_el_workflow() {
+        let plan = r#"{"step":3,"collections":["c1"],"model":null,"alcance":"ambos","bibliotecas":["group:9"]}"#;
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(plan)
+            )
+            .expect("workflow ambos"),
+            Some(vec!["group:9".to_string()])
+        );
+        // Un workflow anterior al alcance bibliográfico es de corpus.
+        let viejo = r#"{"step":0,"collections":["c1"],"model":null}"#;
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(viejo)
+            )
+            .expect("workflow viejo"),
+            None
+        );
+        // Y sin workflow legible no se inventa alcance: se pasa sin fuente y
+        // el motor declara la degradación si el job la necesitaba.
+        assert_eq!(
+            bibliotecas_del_trabajo("advance", &json!({"op":"advance","job_id":"job-1"}), None)
+                .expect("sin workflow"),
+            None
+        );
+    }
+
+    #[test]
+    fn el_alcance_bibliografico_sin_bibliotecas_es_un_error_del_pedido() {
+        assert!(bibliotecas_del_trabajo(
+            "create",
+            &json!({"op":"create","alcance":"biblioteca","bibliotecas":[]}),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn el_workflow_se_lee_del_estado_del_job() {
+        let root = temp_workspace("workflow-scope");
+        let state = root.path().join("estado.sqlite");
+        entropia_agent::estado::EstadoDb::abrir(state.to_str().expect("utf-8 path"))
+            .expect("estado schema");
+        let conn = rusqlite::Connection::open(&state).expect("state connection");
+        conn.execute(
+            "INSERT INTO jobs (id, modo, pregunta, status, close_reason, config_snapshot,
+                              corpus_snapshot_id, project, corpus, plan_json, created_at, updated_at)
+             VALUES ('job-1', 'research', '¿Pregunta?', 'running', NULL, '{}',
+                     'snap-1', 'demo', 'desktop',
+                     '{\"step\":0,\"collections\":[\"c1\"],\"model\":null,\"alcance\":\"biblioteca\",\"bibliotecas\":[\"user:7\"]}',
+                     100, 200)",
+            [],
+        )
+        .expect("insert job");
+        drop(conn);
+
+        let plan = plan_json_del_job(&state, "job-1").expect("workflow del job");
+        assert_eq!(
+            bibliotecas_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(&plan)
+            )
+            .expect("alcance del workflow"),
+            Some(vec!["user:7".to_string()])
+        );
+        assert_eq!(plan_json_del_job(&state, "job-inexistente"), None);
+    }
 
     #[test]
     fn rewriting_a_section_runs_with_the_model() {

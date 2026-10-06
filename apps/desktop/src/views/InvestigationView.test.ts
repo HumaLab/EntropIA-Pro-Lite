@@ -1302,3 +1302,133 @@ describe('InvestigationView', () => {
     })
   })
 })
+
+describe('InvestigationView citas bibliográficas', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockClear()
+    storeRef.current = createStore({})
+  })
+
+  const citaBibliografica = {
+    n: 1,
+    evidence_id: 'bib:user:123:chunk-1',
+    item_id: '',
+    chunk_id: 'chunk-1',
+    title: 'Historia de los vencidos · pp. 3–4',
+    text: 'un pasaje citable del expediente obrero',
+    start: 0,
+    end: 40,
+    provenance: 'zotero',
+    biblioteca: 'user:123',
+    item_key: 'ABCD1234',
+    autores: 'Bloch, Febvre',
+    anio: 1949,
+    ubicacion: { tipo: 'paginas', desde: 3, hasta: 4 },
+  }
+
+  function payloadConCitaBibliografica() {
+    const base = detailPayload()
+    return {
+      ...base,
+      job: { ...base.job, status: 'done', phase: 'report' },
+      artifacts: [
+        {
+          id: 'art-request',
+          kind: 'request',
+          version: 1,
+          obsolete: false,
+          content: {
+            title: 'Pregunta',
+            alcance: 'ambos',
+            bibliotecas: ['user:123'],
+          },
+        },
+        {
+          id: 'art-report',
+          kind: 'report',
+          version: 1,
+          obsolete: false,
+          content: {
+            report: {
+              title: 'Organización del trabajo',
+              references: [{ ...citaBibliografica, text: '' }],
+              sections: [
+                {
+                  title: 'Hechos',
+                  text: 'El plenario dispuso un paro general.',
+                  claim_ids: ['c1'],
+                  quotes: [citaBibliografica],
+                },
+              ],
+            },
+          },
+        },
+      ],
+    }
+  }
+
+  function backend() {
+    invokeMock.mockImplementation((async (command: string, args?: unknown) => {
+      const request = (args as { request?: { op?: string } } | undefined)?.request
+      if (command === 'bibliography_library_status') {
+        return {
+          libraries: [
+            {
+              libraryType: 'user',
+              libraryId: '123',
+              name: 'Mi biblioteca',
+              works: 2,
+              passages: 30,
+            },
+          ],
+          vectorReady: true,
+        }
+      }
+      if (command === 'research_request' && request?.op === 'source') {
+        throw new Error('una cita bibliográfica no tiene asset que abrir')
+      }
+      return payloadConCitaBibliografica()
+    }) as typeof invokeMock)
+  }
+
+  function sourceCalls() {
+    return invokeMock.mock.calls.filter(
+      ([command, args]) =>
+        command === 'research_request' &&
+        (args as { request?: { op?: string } } | undefined)?.request?.op === 'source'
+    )
+  }
+
+  it('muestra el alcance congelado y la cita bibliográfica sin cargar ningún asset', async () => {
+    backend()
+    render(InvestigationView, {
+      props: { jobId: 'job-65972-0', title: 'Investigación' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Organización del trabajo')).toBeInTheDocument()
+    })
+
+    // El alcance que el trabajo congeló al crearse se lee en el encabezado.
+    expect(screen.getByText('Ambos')).toBeInTheDocument()
+    expect(screen.getAllByText('Mi biblioteca').length).toBeGreaterThan(0)
+
+    // La cita bibliográfica trae autores · año · biblioteca y la ubicación,
+    // compuesta en el título como la escribe el motor.
+    expect(
+      screen.getAllByText(
+        'Mi biblioteca · Historia de los vencidos · pp. 3–4 · Bloch, Febvre · 1949'
+      ).length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText('pp. 3–4').length).toBeGreaterThan(0)
+
+    // Abrirla no pide ninguna fuente del corpus: el pasaje se muestra en línea.
+    await fireEvent.click(screen.getAllByRole('button', { name: /Bloch, Febvre/ })[0]!)
+    await waitFor(() => {
+      expect(screen.getAllByText('un pasaje citable del expediente obrero')).toHaveLength(2)
+    })
+    expect(sourceCalls()).toHaveLength(0)
+  })
+})

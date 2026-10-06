@@ -7,6 +7,7 @@
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { classifyFileType, getAssetUrl } from '$lib/file-import'
   import {
+    frozenResearchScope,
     researchRequest,
     researchAnswer,
     researchCancel,
@@ -37,13 +38,24 @@
     type ResearchSourceSummary,
   } from '$lib/research'
   import {
+    citationLocation,
+    isBibliographyCitation,
+    locationText,
+    researchScopeKey,
+    workLine,
+  } from '$lib/rag-scope'
+  import {
+    bibliographyLibraryStatus,
+    type BibliographyLibraryStatus,
+  } from '$lib/bibliography-search'
+  import {
     downloadInvestigationReport,
     reportFileName,
     type InvestigationDownload,
   } from '$lib/investigation-export'
   import type { ExportFormat } from '$lib/export-fidelity'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
-  import { tooltip, Button, IconButton, ActionIcon } from '@entropia/ui'
+  import { tooltip, Button, IconButton, ActionIcon, StatusBadge } from '@entropia/ui'
 
   const navigation = getNavigation()
   const paneId = getPaneId()
@@ -630,14 +642,66 @@
     return { items, conChunks, sinProcesar: items - conChunks }
   })
 
-  /** Referencia legible de una cita: colección · título · fecha. */
+  /** Referencia legible de una cita: colección · título · fecha. Una cita
+   *  bibliográfica se identifica por su obra y su biblioteca; la ubicación ya
+   *  viene compuesta en el título («Título · pp. 3–4»). */
   function citationLabel(cita: ResearchCitation): string {
+    if (isBibliographyCitation(cita)) {
+      return [
+        libraryNameOf(cita.biblioteca),
+        cita.title,
+        workLine({ authors: cita.autores ?? '', year: cita.anio ?? null }),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    }
     return [cita.collection, cita.title, cita.date].filter(Boolean).join(' · ')
   }
 
   function citationRange(cita: ResearchCitation): string {
+    if (isBibliographyCitation(cita)) {
+      // El localizador de un pasaje bibliográfico es su página o párrafo, no
+      // unos offsets sobre el texto citado.
+      return locationText(citationLocation(cita.ubicacion)) || cita.title
+    }
     return `chars ${cita.start}–${cita.end}`
   }
+
+  /** El identificador estable que el panel de la fuente muestra: la key del
+   *  item en la biblioteca para una cita bibliográfica, el chunk del corpus
+   *  para las otras. */
+  function citationStableId(cita: ResearchCitation): string {
+    return (isBibliographyCitation(cita) ? cita.item_key || cita.chunk_id : cita.chunk_id) ?? ''
+  }
+
+  /** Estado de las bibliotecas, solo para nombrar «user:123» como la ve el
+   *  usuario. Sin estado, la referencia cruda alcanza para identificarla. */
+  let libraryStatus = $state<BibliographyLibraryStatus | null>(null)
+
+  async function loadLibraryStatus() {
+    try {
+      libraryStatus = await bibliographyLibraryStatus()
+    } catch {
+      libraryStatus = null
+    }
+  }
+
+  function libraryNameOf(ref: string | undefined): string {
+    if (!ref) return ''
+    const found = libraryStatus?.libraries.find(
+      (library) => `${library.libraryType}:${library.libraryId}` === ref
+    )
+    return found?.name ?? ref
+  }
+
+  /** El alcance congelado del trabajo: el motor lo fija al crearlo. */
+  const frozenScope = $derived(frozenResearchScope(artifacts))
+  const frozenScopeLibraries = $derived(
+    (frozenScope?.bibliotecas ?? [])
+      .map((ref) => libraryNameOf(ref))
+      .filter(Boolean)
+      .join(' · ')
+  )
 
   /**
    * Abre la cita en el panel de la derecha y pide las rutas de su asset.
@@ -667,6 +731,9 @@
     actionError = null
     preview = null
     previewFailed = false
+    // Una cita bibliográfica no tiene asset que abrir: su pasaje viaja en la
+    // cita y se muestra en línea, sin pedir nada al corpus.
+    if (isBibliographyCitation(cita)) return
     const itemId = itemIdDe(cita)
     if (!itemId) {
       sourceErrorsByItemId = {
@@ -809,6 +876,7 @@
   onMount(() => {
     mounted = true
     lastLoadedJobId = jobId
+    void loadLibraryStatus()
     void refreshDetail().finally(() => {
       if (!mounted || pollTimer) return
       pollTimer = setInterval(() => {
@@ -866,6 +934,20 @@
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
       <h1 id="investigation-title-{paneId}">{visibleJobTitle}</h1>
+      {#if frozenScope}
+        <div
+          class="investigation-view__scope"
+          role="group"
+          aria-label={$currentLocale && t('ragChat.scopeLabel')}
+        >
+          <StatusBadge variant="neutral" size="sm"
+            >{$currentLocale && t(researchScopeKey(frozenScope.alcance))}</StatusBadge
+          >
+          {#if frozenScopeLibraries}
+            <StatusBadge variant="neutral" size="sm">{frozenScopeLibraries}</StatusBadge>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <div class="page-toolbar investigation-view__toolbar">
@@ -1540,7 +1622,7 @@
           <span>{citationLabel(selectedCitation)}</span>
         </p>
         <p class="report__quote-range">
-          {selectedCitation.chunk_id} · {citationRange(selectedCitation)}
+          {citationStableId(selectedCitation)} · {citationRange(selectedCitation)}
         </p>
 
         {#if selectedCitation.text}
@@ -1607,6 +1689,16 @@
     /* Separación entre el borde inferior del encabezado sticky y el panel
        Fuente, arriba y abajo del panel. */
     --investigation-source-inset: var(--space-3);
+  }
+
+  /* El alcance congelado del trabajo, en las mismas pastillas de estado que
+     el resto de la app. */
+  .investigation-view__scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
   }
 
   /* El detalle usaba una sola columna y dejaba media pantalla vacía: la

@@ -3,6 +3,8 @@ import { locale } from './i18n'
 import type { RagSource } from './rag'
 import {
   bibliographyNoticeKey,
+  citationLocation,
+  isBibliographyCitation,
   isBibliographySource,
   citedPageNumber,
   libraryChoiceKey,
@@ -11,6 +13,7 @@ import {
   passageHeading,
   passageMarks,
   passageWindow,
+  researchScopeKey,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
   withNoticeDetail,
@@ -293,5 +296,48 @@ describe('citedPageNumber', () => {
   it('falls back to the first page, then to page 1', () => {
     expect(citedPageNumber([{ pageNumber: 7, text: 'a', highlights: [] }])).toBe(7)
     expect(citedPageNumber([])).toBe(1)
+  })
+})
+
+describe('bibliography citations of the research engine', () => {
+  it('maps the engine location to the chat location vocabulary', () => {
+    expect(citationLocation({ tipo: 'paginas', desde: 3, hasta: 4 })).toEqual({
+      kind: 'pages',
+      from: 3,
+      to: 4,
+    })
+    expect(citationLocation({ tipo: 'parrafos', desde: 2, hasta: 2 })).toEqual({
+      kind: 'paragraphs',
+      from: 2,
+      to: 2,
+    })
+    expect(citationLocation(null)).toBeNull()
+    expect(citationLocation(undefined)).toBeNull()
+  })
+
+  it('renders the citation location with the shared location keys', () => {
+    expect(locationText(citationLocation({ tipo: 'paginas', desde: 3, hasta: 4 }))).toBe('pp. 3–4')
+    expect(locationText(citationLocation({ tipo: 'paginas', desde: 3, hasta: 3 }))).toBe('p. 3')
+    expect(locationText(citationLocation({ tipo: 'parrafos', desde: 2, hasta: 2 }))).toBe('párr. 2')
+    locale.set('en')
+    expect(locationText(citationLocation({ tipo: 'paginas', desde: 3, hasta: 4 }))).toBe('pp. 3–4')
+    expect(locationText(citationLocation({ tipo: 'parrafos', desde: 2, hasta: 5 }))).toBe(
+      'paras. 2–5'
+    )
+  })
+
+  it('recognizes a bibliography citation by provenance or by its library', () => {
+    expect(isBibliographyCitation({ provenance: 'zotero' })).toBe(true)
+    expect(isBibliographyCitation({ biblioteca: 'user:123' })).toBe(true)
+    expect(isBibliographyCitation({ provenance: 'zotero', biblioteca: 'user:123' })).toBe(true)
+    // A corpus citation carries neither: it is not a bibliography passage.
+    expect(isBibliographyCitation({})).toBe(false)
+    expect(isBibliographyCitation({ provenance: 'entropia_chunk' })).toBe(false)
+  })
+
+  it('labels the frozen research scope with the shared scope keys', () => {
+    expect(researchScopeKey('corpus')).toBe('ragChat.scopeCorpus')
+    expect(researchScopeKey('biblioteca')).toBe('ragChat.scopeBiblioteca')
+    expect(researchScopeKey('ambos')).toBe('ragChat.scopeBoth')
   })
 })

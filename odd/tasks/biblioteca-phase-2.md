@@ -38,7 +38,7 @@ feature slice.
 
 ## Tasks
 
-- [ ] P1 — Investigación can use the Biblioteca. The research agent lives in
+- [x] P1 — Investigación can use the Biblioteca. The research agent lives in
   the external crate `entropia-agent` (`G:\EntropIA-Stack\EntropIA-Agent`,
   pinned in `Cargo.lock` by git rev; CI's Pester guard checks the pin; the
   "Engine pin bump" workflow exists). Scope choice like the chat (Corpus /
@@ -98,3 +98,11 @@ including Pro, and the owner's visual check in the dev app.
   three commands: bibliography_list_works, bibliography_work_detail,
   bibliography_open_work_attachment (same one-file asset grant as
   open_passage). No migration. Browse order is by title.
+- P1 (branch feat/research-biblioteca + engine EntropIA-Agent
+  feat/bibliography-scope 8107eeb): engine trait FuenteBibliografica +
+  procesar_con, Workflow.alcance/bibliotecas frozen in plan_json (no SQL), rank
+  interleave, Zotero evidence with locator, citation label in the title. App
+  bridge in research.rs over the chat passage search; ResearchView scope switch
+  and library menu; InvestigationView frozen scope chips and bibliography
+  citations inline. Pending: owner OK to push the engine; then move the pin.
+  Known limit: the engine still requires collection_ids for every scope.

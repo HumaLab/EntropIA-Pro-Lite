@@ -12,6 +12,52 @@ export function isBibliographySource(source: RagSource): boolean {
   return Boolean(source.bibliography)
 }
 
+/**
+ * A citation of a bibliography passage in a research report: the engine marks
+ * it `zotero` and carries the library it came from. A corpus citation carries
+ * neither, and its `item_id` opens the document.
+ */
+export function isBibliographyCitation(citation: {
+  provenance?: string
+  biblioteca?: string
+}): boolean {
+  return citation.provenance === 'zotero' || Boolean(citation.biblioteca)
+}
+
+/**
+ * The engine's citation location (`paginas`/`parrafos`, `desde..hasta`) as the
+ * chat's location vocabulary, so the shared location keys render it.
+ */
+export function citationLocation(
+  ubicacion:
+    | {
+        tipo: 'paginas' | 'parrafos'
+        desde: number
+        hasta: number
+      }
+    | null
+    | undefined
+): RagBibliographyLocation | null {
+  if (!ubicacion) return null
+  return {
+    kind: ubicacion.tipo === 'parrafos' ? 'paragraphs' : 'pages',
+    from: ubicacion.desde,
+    to: ubicacion.hasta,
+  }
+}
+
+/** The label key of the scope a research job was frozen with. */
+export function researchScopeKey(scope: 'corpus' | 'biblioteca' | 'ambos'): I18nKey {
+  switch (scope) {
+    case 'biblioteca':
+      return 'ragChat.scopeBiblioteca'
+    case 'ambos':
+      return 'ragChat.scopeBoth'
+    default:
+      return 'ragChat.scopeCorpus'
+  }
+}
+
 /** The label key of the scope a source came from. */
 export function sourceScopeKey(source: RagSource): I18nKey {
   return isBibliographySource(source) ? 'ragChat.scopeBiblioteca' : 'ragChat.scopeCorpus'

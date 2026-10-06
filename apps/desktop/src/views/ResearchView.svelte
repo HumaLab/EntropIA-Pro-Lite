@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tooltip } from '@entropia/ui'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, untrack } from 'svelte'
   import { getNavigation, getPaneId } from '$lib/pane-context'
   import { workspace } from '$lib/workspace'
   import { locale, t, type I18nKey } from '$lib/i18n'
@@ -14,7 +14,14 @@
     type ResearchHandoffDraft,
     type ResearchJobStatus,
     type ResearchJobSummary,
+    type ResearchScope,
   } from '$lib/research'
+  import {
+    bibliographyLibraryStatus,
+    type BibliographyLibraryStatus,
+  } from '$lib/bibliography-search'
+  import { libraryChoiceKey, selectedLibrariesAfterToggle } from '$lib/rag-scope'
+  import type { RagLibraryRef } from '$lib/rag'
 
   import { renderMarkdown } from '$lib/markdown'
   import {
@@ -25,6 +32,10 @@
     ConfirmDialog,
     IconButton,
     Input,
+    TabButton,
+    TabList,
+    ToolbarMenu,
+    type ToolbarMenuItem,
   } from '@entropia/ui'
 
   const navigation = getNavigation()
@@ -68,6 +79,123 @@
   let maxCost = $state('')
   let handoff = $state<ResearchHandoffDraft | null>(null)
 
+  // ── Alcance de la evidencia: Corpus / Biblioteca / Ambos ─────────────────
+  // Los mismos controles, tokens y vocabulario que el chat de Recuperar:
+  // TabList para el alcance, ToolbarMenu para las bibliotecas.
+  const EVIDENCE_SCOPES: Array<{
+    id: ResearchScope
+    label: 'ragChat.scopeCorpus' | 'ragChat.scopeBiblioteca' | 'ragChat.scopeBoth'
+  }> = [
+    { id: 'corpus', label: 'ragChat.scopeCorpus' },
+    { id: 'biblioteca', label: 'ragChat.scopeBiblioteca' },
+    { id: 'ambos', label: 'ragChat.scopeBoth' },
+  ]
+  let evidenceScope = $state<ResearchScope>('corpus')
+  const scopeIncludesCorpus = $derived(evidenceScope !== 'biblioteca')
+  const scopeIncludesBibliography = $derived(evidenceScope !== 'corpus')
+  let libraryStatus = $state<BibliographyLibraryStatus | null>(null)
+  let libraryStatusLoading = $state(false)
+  let libraryStatusFailed = $state(false)
+  let libraryMenuOpen = $state(false)
+  let libraryStatusRequest = 0
+  /** `null` = todas las sincronizadas, como en el chat. */
+  let selectedLibraries = $state<RagLibraryRef[] | null>(null)
+
+  async function loadLibraryStatus() {
+    const request = ++libraryStatusRequest
+    libraryStatusLoading = true
+    libraryStatusFailed = false
+    try {
+      const status = await bibliographyLibraryStatus()
+      if (request !== libraryStatusRequest) return
+      libraryStatus = status
+    } catch {
+      if (request !== libraryStatusRequest) return
+      libraryStatus = null
+      libraryStatusFailed = true
+    } finally {
+      if (request === libraryStatusRequest) libraryStatusLoading = false
+    }
+  }
+
+  // El catálogo se consulta solo cuando el alcance deja de ser Corpus: la
+  // investigación de corpus nunca lo toca.
+  $effect(() => {
+    if (evidenceScope !== 'corpus') untrack(() => void loadLibraryStatus())
+  })
+
+  const libraryRefs = $derived<RagLibraryRef[]>(
+    (libraryStatus?.libraries ?? []).map((library) => ({
+      libraryType: library.libraryType,
+      libraryId: library.libraryId,
+    }))
+  )
+  const chosenLibraries = $derived(selectedLibraries ?? libraryRefs)
+  const checkedLibraryKeys = $derived(new Set(chosenLibraries.map((ref) => libraryChoiceKey(ref))))
+  const librariesAllChecked = $derived(
+    libraryRefs.length > 0 &&
+      libraryRefs.every((ref) => checkedLibraryKeys.has(libraryChoiceKey(ref)))
+  )
+  const libraryTriggerLabel = $derived(
+    $currentLocale &&
+      (librariesAllChecked
+        ? t('ragChat.librariesAll')
+        : t('ragChat.librariesSome', {
+            count: libraryRefs.filter((ref) => checkedLibraryKeys.has(libraryChoiceKey(ref)))
+              .length,
+            total: libraryRefs.length,
+          }))
+  )
+  const libraryItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: 'all',
+      label: $currentLocale && t('ragChat.librariesAll'),
+      checked: librariesAllChecked,
+      onselect: () => keepLibraryMenuOpen(() => (selectedLibraries = null)),
+    },
+    ...(libraryStatus?.libraries ?? []).map((library) => {
+      const ref = { libraryType: library.libraryType, libraryId: library.libraryId }
+      return {
+        kind: 'checkbox' as const,
+        id: libraryChoiceKey(ref),
+        label:
+          $currentLocale &&
+          `${library.name} · ${t('ragChat.libraryCounts', {
+            works: library.works,
+            passages: library.passages,
+          })}`,
+        checked: checkedLibraryKeys.has(libraryChoiceKey(ref)),
+        onselect: () =>
+          keepLibraryMenuOpen(() => {
+            selectedLibraries = selectedLibrariesAfterToggle(selectedLibraries, libraryRefs, ref)
+          }),
+      }
+    }),
+  ])
+
+  // Elegir bibliotecas son varios clics: el menú se reabre solo hasta que el
+  // investigador lo cierra.
+  function keepLibraryMenuOpen(apply: () => void) {
+    apply()
+    libraryMenuOpen = true
+  }
+
+  const libraryStatusMessage = $derived.by(() => {
+    if (!scopeIncludesBibliography) return null
+    if (libraryStatusLoading && !libraryStatus) return t('ragChat.libraryStatusLoading')
+    if (libraryStatusFailed) return t('ragChat.libraryStatusError')
+    if (!libraryStatus) return null
+    if (libraryStatus.libraries.length === 0) return t('ragChat.libraryStatusNone')
+    if (!libraryStatus.vectorReady) return t('ragChat.libraryStatusNoEmbeddings')
+    return null
+  })
+
+  function chooseEvidenceScope(next: ResearchScope) {
+    evidenceScope = next
+    submitError = null
+  }
+
   const collectionCountLabel = $derived(
     collections.length === 1
       ? t('research.collectionsOne', { count: collections.length })
@@ -96,7 +224,10 @@
     return (
       !creating &&
       trimmedQuestion.length > 0 &&
-      selectedCollectionIds.length > 0 &&
+      // Cada alcance exige lo que realmente usa: las colecciones alimentan la
+      // pierna del corpus y las bibliotecas, la de la Biblioteca.
+      (!scopeIncludesCorpus || selectedCollectionIds.length > 0) &&
+      (!scopeIncludesBibliography || chosenLibraries.length > 0) &&
       Number.isInteger(parsedCalls) &&
       parsedCalls > 0
     )
@@ -202,6 +333,12 @@
   }
 
   async function handleSubmit() {
+    // La validación de las bibliotecas es propia: el alcance bibliográfico sin
+    // ninguna biblioteca sincronizada elegida no tiene qué buscar.
+    if (scopeIncludesBibliography && chosenLibraries.length === 0) {
+      submitError = translate('research.needLibrary')
+      return
+    }
     if (!canSubmit) {
       submitError = translate('research.formInvalid')
       return
@@ -225,10 +362,20 @@
         title: title.trim(),
         question: question.trim(),
         project: project.trim() || 'investigación',
-        collection_ids: [...selectedCollectionIds],
+        // El motor siempre pide un recorte de colecciones, incluso cuando el
+        // alcance no correrá la pierna del corpus: con el selector oculto se
+        // manda el recorte que la vista ya tenía preparado.
+        collection_ids:
+          selectedCollectionIds.length > 0
+            ? [...selectedCollectionIds]
+            : collections.map((collection) => collection.id),
         max_llm_calls: parsedCalls,
         max_cost: parsedCost,
         context: handoff?.context ?? null,
+        alcance: evidenceScope,
+        // Las referencias viajan en el único formato que hablan los dos lados:
+        // «user:123» / «group:456».
+        bibliotecas: chosenLibraries.map(libraryChoiceKey),
       })
 
       await refreshJobs({ silent: true })
@@ -355,55 +502,99 @@
             ></textarea>
           </label>
 
-          <details class="research-form__advanced">
-            <summary>{$currentLocale && t('research.collectionsLabel')}</summary>
-            <fieldset class="research-form__scope">
-              <div class="research-form__scope-header">
-                <span class="research-form__scope-count">{selectedCollectionCountLabel}</span>
-                <div class="research-form__scope-actions">
-                  <IconButton
-                    size="sm"
-                    label={$currentLocale &&
-                      t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
-                    title={$currentLocale &&
-                      t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
-                    disabled={collections.length === 0}
-                    onclick={toggleAllCollections}
+          <div class="research-form__evidence">
+            <span class="research-form__evidence-label"
+              >{$currentLocale && t('ragChat.scopeLabel')}</span
+            >
+            <TabList aria-label={$currentLocale && t('ragChat.scopeLabel')}>
+              {#each EVIDENCE_SCOPES as entry (entry.id)}
+                <TabButton
+                  active={evidenceScope === entry.id}
+                  onclick={() => chooseEvidenceScope(entry.id)}
+                >
+                  {$currentLocale && t(entry.label)}
+                </TabButton>
+              {/each}
+            </TabList>
+            {#if scopeIncludesBibliography && libraryStatus && libraryStatus.libraries.length > 0}
+              <ToolbarMenu
+                label={$currentLocale && t('ragChat.librariesMenu')}
+                items={libraryItems}
+                bind:open={libraryMenuOpen}
+              >
+                {#snippet trigger(props, { open })}
+                  <button
+                    type="button"
+                    class="research-form__library-trigger"
+                    class:research-form__library-trigger--open={open}
+                    {...props}
                   >
-                    <ActionIcon
-                      name={allCollectionsSelected ? 'circle-x' : 'check-check'}
-                      size={14}
-                    />
-                  </IconButton>
-                </div>
-              </div>
-              {#if collections.length === 0}
-                <p class="research-form__hint research-form__hint--empty">
-                  {$currentLocale && t('research.noCollections')}
-                </p>
-              {:else}
-                <div class="research-form__scope-list">
-                  {#each collections as collection (collection.id)}
-                    <Checkbox
-                      class="research-form__scope-card"
-                      checked={selectedCollectionIds.includes(collection.id)}
-                      onchange={(checked) => {
-                        toggleCollection(collection.id, checked)
-                        submitError = null
-                      }}
+                    <span>{libraryTriggerLabel}</span>
+                    <ActionIcon name="chevron-down" size={12} />
+                  </button>
+                {/snippet}
+              </ToolbarMenu>
+            {/if}
+          </div>
+          {#if libraryStatusMessage}
+            <p class="research-form__hint" role="status">
+              {$currentLocale && libraryStatusMessage}
+            </p>
+          {/if}
+
+          <!-- Las colecciones alimentan la pierna del corpus: solo se eligen
+               cuando el alcance la incluye. -->
+          {#if scopeIncludesCorpus}
+            <details class="research-form__advanced">
+              <summary>{$currentLocale && t('research.collectionsLabel')}</summary>
+              <fieldset class="research-form__scope">
+                <div class="research-form__scope-header">
+                  <span class="research-form__scope-count">{selectedCollectionCountLabel}</span>
+                  <div class="research-form__scope-actions">
+                    <IconButton
+                      size="sm"
+                      label={$currentLocale &&
+                        t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
+                      title={$currentLocale &&
+                        t(allCollectionsSelected ? 'research.deselectAll' : 'research.selectAll')}
+                      disabled={collections.length === 0}
+                      onclick={toggleAllCollections}
                     >
-                      <span class="research-form__scope-row">
-                        <span class="research-form__scope-name" use:tooltip={collection.name}
-                          >{collection.name}</span
-                        >
-                        <span class="research-form__scope-count">{collection.items}</span>
-                      </span>
-                    </Checkbox>
-                  {/each}
+                      <ActionIcon
+                        name={allCollectionsSelected ? 'circle-x' : 'check-check'}
+                        size={14}
+                      />
+                    </IconButton>
+                  </div>
                 </div>
-              {/if}
-            </fieldset>
-          </details>
+                {#if collections.length === 0}
+                  <p class="research-form__hint research-form__hint--empty">
+                    {$currentLocale && t('research.noCollections')}
+                  </p>
+                {:else}
+                  <div class="research-form__scope-list">
+                    {#each collections as collection (collection.id)}
+                      <Checkbox
+                        class="research-form__scope-card"
+                        checked={selectedCollectionIds.includes(collection.id)}
+                        onchange={(checked) => {
+                          toggleCollection(collection.id, checked)
+                          submitError = null
+                        }}
+                      >
+                        <span class="research-form__scope-row">
+                          <span class="research-form__scope-name" use:tooltip={collection.name}
+                            >{collection.name}</span
+                          >
+                          <span class="research-form__scope-count">{collection.items}</span>
+                        </span>
+                      </Checkbox>
+                    {/each}
+                  </div>
+                {/if}
+              </fieldset>
+            </details>
+          {/if}
 
           {#if handoff}
             <Card padding="sm">
@@ -627,6 +818,57 @@
 
   .research-form__hint--empty {
     font-style: italic;
+  }
+
+  /* El alcance de la evidencia y la elección de bibliotecas son los MISMOS
+     controles y tokens que el chat de Recuperar: TabList para el alcance y un
+     ToolbarMenu pintado con los tokens de la app (nunca un <select> nativo). */
+  .research-form__evidence {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .research-form__evidence-label {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    letter-spacing: 0.075em;
+    text-transform: uppercase;
+  }
+
+  .research-form__library-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition:
+      background-color var(--transition-base),
+      border-color var(--transition-base);
+  }
+
+  .research-form__library-trigger:hover,
+  .research-form__library-trigger--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .research-form__library-trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .research-form__library-trigger :global(svg) {
+    color: var(--color-text-muted);
   }
 
   .research-form__scope-header {

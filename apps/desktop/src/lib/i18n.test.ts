@@ -108,6 +108,23 @@ describe('i18n', () => {
     )
   })
 
+  it('exposes the research scope copy in both locales, reusing the chat keys', async () => {
+    const { locale, t } = await import('./i18n')
+
+    expect(t('ragChat.scopeLabel')).toBe('Buscar en')
+    expect(t('ragChat.scopeCorpus')).toBe('Corpus')
+    expect(t('ragChat.scopeBiblioteca')).toBe('Biblioteca')
+    expect(t('ragChat.scopeBoth')).toBe('Ambos')
+    expect(t('research.needLibrary')).toContain('biblioteca de Zotero sincronizada')
+
+    locale.set('en')
+
+    expect(t('ragChat.scopeLabel')).toBe('Search in')
+    expect(t('ragChat.scopeBiblioteca')).toBe('Library')
+    expect(t('ragChat.scopeBoth')).toBe('Both')
+    expect(t('research.needLibrary')).toContain('synced Zotero library')
+  })
+
   it('exposes rag chat copy in both locales', async () => {
     const { locale, t } = await import('./i18n')
 

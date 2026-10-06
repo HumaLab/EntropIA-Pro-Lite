@@ -22,6 +22,39 @@ export interface ResearchModality {
   name: string
 }
 
+/**
+ * Alcance de la evidencia de una investigación: qué piernas de recuperación
+ * corre el plan. Es el vocabulario del motor (`ambos`, no `both`).
+ */
+export type ResearchScope = 'corpus' | 'biblioteca' | 'ambos'
+
+/** El alcance congelado del trabajo, tal como lo escribió el motor al crearlo. */
+export interface ResearchFrozenScope {
+  alcance: ResearchScope
+  /** Referencias de biblioteca en el formato que hablan los dos lados: «user:123». */
+  bibliotecas: string[]
+}
+
+/**
+ * El alcance congelado de un trabajo, leído de su artefacto `request`: el
+ * motor lo congela al crearlo y nunca lo cambia. `null` cuando el trabajo no
+ * trae artefacto de pedido; sin campo `alcance` el trabajo es de corpus, el
+ * comportamiento de siempre.
+ */
+export function frozenResearchScope(artifacts: ResearchArtifact[]): ResearchFrozenScope | null {
+  const request = artifacts
+    .filter((artifact) => artifact.kind === 'request' && !artifact.obsolete)
+    .sort((a, b) => b.version - a.version)[0]
+  if (!request) return null
+  const content = request.content as { alcance?: unknown; bibliotecas?: unknown } | null | undefined
+  const raw = typeof content?.alcance === 'string' ? content.alcance.trim() : ''
+  const alcance: ResearchScope = raw === 'biblioteca' || raw === 'ambos' ? raw : 'corpus'
+  const bibliotecas = Array.isArray(content?.bibliotecas)
+    ? content.bibliotecas.filter((entry): entry is string => typeof entry === 'string')
+    : []
+  return { alcance, bibliotecas }
+}
+
 /** Una pregunta de la ronda de clarificación. */
 export interface ResearchQuestion {
   id: string
@@ -60,6 +93,19 @@ export interface ResearchCitation {
   truncated?: boolean
   date?: string
   date_precision?: string
+  /** Ubicación del pasaje en su fuente bibliográfica (páginas o párrafos).
+   *  Solo las citas bibliográficas la traen. */
+  ubicacion?: { tipo: 'paginas' | 'parrafos'; desde: number; hasta: number } | null
+  /** Autores de la obra citada, tal como los declara la biblioteca. */
+  autores?: string
+  /** Año de la obra citada. */
+  anio?: number | null
+  /** Biblioteca de donde salió el pasaje, en el formato «user:123». */
+  biblioteca?: string
+  /** Identidad del item en la biblioteca (key de Zotero u otro código). */
+  item_key?: string
+  /** `zotero` para las citas bibliográficas; las del corpus no la traen. */
+  provenance?: string
 }
 
 /**
@@ -207,6 +253,10 @@ export interface ResearchCreateRequest {
   context: ResearchContextMessage[] | null
   /** Modalidad de informe; ausente equivale a `general`. */
   modalidad?: string
+  /** Alcance de la evidencia; ausente equivale a `corpus`. */
+  alcance: ResearchScope
+  /** Bibliotecas cubiertas por el trabajo, como «user:123» / «group:456». */
+  bibliotecas: string[]
 }
 
 /** Contenido del artefacto `design`: lo que la ronda muestra y deja editar. */

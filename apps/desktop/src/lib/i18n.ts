@@ -1295,6 +1295,8 @@ const es = {
   'research.starting': 'Investigando…',
   'research.start': 'Investigar',
   'research.formInvalid': 'Escribí una pregunta sobre material que ya esté en el archivo.',
+  'research.needLibrary':
+    'Elegí al menos una biblioteca de Zotero sincronizada para buscar en la Biblioteca.',
   'research.invalidCalls': 'Las llamadas LLM deben ser un entero mayor que cero.',
   'research.invalidBudget': 'El presupuesto debe ser un número válido.',
   'research.loadError': 'No se pudieron cargar los trabajos.',
@@ -3735,6 +3737,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.starting': 'Investigating…',
   'research.start': 'Investigate',
   'research.formInvalid': 'Write a question about material already in the archive.',
+  'research.needLibrary': 'Pick at least one synced Zotero library to search the Library.',
   'research.invalidCalls': 'LLM calls must be a positive integer.',
   'research.invalidBudget': 'The budget must be a valid number.',
   'research.status.blocked': 'Limited coverage: confirmation required',

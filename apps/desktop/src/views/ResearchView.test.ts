@@ -190,3 +190,120 @@ describe('ResearchView job deletion', () => {
     expect(forgetResearchMock).not.toHaveBeenCalled()
   })
 })
+
+describe('ResearchView alcance de la investigación', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockReset()
+  })
+
+  const LIBRARIES = [
+    { libraryType: 'user', libraryId: '0', name: 'Mi biblioteca', works: 12, passages: 340 },
+    { libraryType: 'group', libraryId: '77', name: 'Grupo Anales', works: 4, passages: 90 },
+  ]
+
+  /** El backend de la vista: estado de bibliotecas + create + list. */
+  function backend({ libraries = LIBRARIES }: { libraries?: typeof LIBRARIES } = {}) {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const request = (args as { request?: { op?: string } } | undefined)?.request
+      if (command === 'bibliography_library_status') {
+        return { libraries, vectorReady: true }
+      }
+      if (command === 'research_request' && request?.op === 'create') {
+        return { job: jobFixture() }
+      }
+      return listPayload()
+    })
+  }
+
+  function questionBox() {
+    return screen.getByPlaceholderText('¿Qué querés investigar?') as HTMLTextAreaElement
+  }
+
+  async function writeQuestion() {
+    await fireEvent.input(questionBox(), { target: { value: '¿Qué pasó en el plenario?' } })
+  }
+
+  function createCalls() {
+    return invokeMock.mock.calls.filter(
+      ([command, args]) =>
+        command === 'research_request' &&
+        (args as { request?: { op?: string } } | undefined)?.request?.op === 'create'
+    )
+  }
+
+  it('manda alcance y bibliotecas cuando el alcance es Biblioteca', async () => {
+    backend()
+    render(ResearchView)
+    await waitFor(() => {
+      expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Biblioteca' }))
+    const trigger = await screen.findByRole('button', { name: /Todas las bibliotecas/ })
+
+    // El menú de bibliotecas es el mismo ToolbarMenu del chat: se estrecha
+    // desmarcando una, y las refs viajan como «user:0» / «group:77».
+    await fireEvent.click(trigger)
+    const grupo = await screen.findByRole('menuitemcheckbox', { name: /Grupo Anales/ })
+    await fireEvent.click(grupo)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /1 de 2 bibliotecas/ })).toBeInTheDocument()
+    )
+
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(createCalls()[0]![1]).toEqual({
+      request: expect.objectContaining({
+        op: 'create',
+        alcance: 'biblioteca',
+        bibliotecas: ['user:0'],
+      }),
+    })
+  })
+
+  it('un alcance de corpus manda bibliotecas vacías y conserva las colecciones', async () => {
+    backend()
+    render(ResearchView)
+    await waitFor(() => {
+      expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
+    })
+
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(createCalls()[0]![1]).toEqual({
+      request: expect.objectContaining({
+        op: 'create',
+        alcance: 'corpus',
+        bibliotecas: [],
+        collection_ids: ['c-conflicto', 'c-voces'],
+      }),
+    })
+  })
+
+  it('sin bibliotecas sincronizadas el alcance bibliográfico no se envía', async () => {
+    backend({ libraries: [] })
+    render(ResearchView)
+    await waitFor(() => {
+      expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument()
+    })
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Ambos' }))
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Todavía no hay ninguna biblioteca de Zotero sincronizada/)
+      ).toBeVisible()
+    )
+
+    await writeQuestion()
+    const submit = screen.getByRole('button', { name: 'Investigar' })
+    expect(submit).toBeDisabled()
+    await fireEvent.click(submit)
+    expect(createCalls()).toHaveLength(0)
+  })
+})
