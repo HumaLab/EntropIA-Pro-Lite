@@ -2174,6 +2174,7 @@ fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
             EngineOutput::Embedding(_) => "embedding",
             EngineOutput::Ner(_) => "ner",
             EngineOutput::Triples(_) => "triples",
+            EngineOutput::Schema(_) => "schema_extract",
             EngineOutput::BibliographyProfile(_) => "bibliography_profile",
             EngineOutput::BibliographyExtract(_) => "bibliography_extract",
         };
