@@ -25,6 +25,9 @@ const es = {
   'home.firstRun.description':
     'Importá tus primeras fuentes y creá una colección para comenzar a trabajar.',
   'home.firstRun.createCollection': 'Crear colección',
+  'home.firstRun.sample': 'Probar con documentos de ejemplo',
+  'home.firstRun.sampleLoading': 'Cargando los ejemplos…',
+  'home.firstRun.sampleFailed': 'No se pudieron cargar los documentos de ejemplo: {error}',
   'home.corpus.title': 'Estado del corpus',
   'home.corpus.collections': 'Colecciones',
   'home.corpus.items': 'Documentos',
@@ -2539,6 +2542,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'home.firstRun.description':
     'Import your first sources and create a collection to start working.',
   'home.firstRun.createCollection': 'Create collection',
+  'home.firstRun.sample': 'Try it with sample documents',
+  'home.firstRun.sampleLoading': 'Loading the samples…',
+  'home.firstRun.sampleFailed': 'Could not load the sample documents: {error}',
   'home.corpus.title': 'Corpus status',
   'home.corpus.collections': 'Collections',
   'home.corpus.items': 'Documents',

@@ -101,6 +101,8 @@ Una colección es el espacio donde vas a reunir fuentes de un mismo proyecto, te
 
 Si ya existe una colección adecuada, abrila en lugar de crear otra.
 
+**¿Querés probar antes de cargar tus fuentes?** La primera vez que abrís EntropIA, **Inicio** ofrece **Probar con documentos de ejemplo**. Crea la colección *Ejemplo — Archivo Bristol 1913-1938 (ficticio)* con nueve documentos inventados —cartas, un telegrama, actas, un inventario, un recorte y dos fotos— que ya traen su texto, así podés buscar, extraer entidades o correr un lote sin gastar en reconocimiento de texto. Las personas y los hechos son ficticios. Cuando no la necesites, borrala como cualquier colección.
+
 ### 1.4. Importar el primer documento
 
 1. Dentro de la colección, pulsá el botón **Importar documento**. También podés arrastrar archivos desde el Explorador de Windows y soltarlos sobre la colección.
