@@ -57,7 +57,7 @@ feature slice.
   first; show progress and an estimated time in the Zotero tab (and status
   bar) instead of a generic message. The sync status command
   `processing_bibliography_sync_status` already exists.
-- [ ] P4 — Upgrade to Tauri 2.12 (needs Rust 1.90 in `rust-toolchain.toml`)
+- [x] P4 — Upgrade to Tauri 2.12 (needs Rust 1.90 in `rust-toolchain.toml`)
   and drop the vendored `tao` patch once the upstream fix is in the resolved
   `tao` (tao#1215, merged 2026-06-10). Check every Tauri plugin version, the
   app ACL manifest guards, both variants' builds and the Windows release build
@@ -73,7 +73,7 @@ feature slice.
     against 2.12 sources.
   - [x] P4.3 Drop `vendor/tao` and the `[patch.crates-io]` entry; the
     resolved `tao` is >= 0.36 and contains tao#1215.
-  - [ ] P4.4 Verify: cargo check lean + `local-ml`, `cargo test
+  - [x] P4.4 Verify: cargo check lean + `local-ml`, `cargo test
     -- --test-threads=1`, frontend lint/typecheck/test, CI green incl. Pro,
     owner's typing check in the dev app (no keyboard freeze).
 
@@ -106,3 +106,10 @@ including Pro, and the owner's visual check in the dev app.
   and library menu; InvestigationView frozen scope chips and bibliography
   citations inline. Pending: owner OK to push the engine; then move the pin.
   Known limit: the engine still requires collection_ids for every scope.
+- P4 landed on main a8b6f8b (CI green incl. Pro). tauri-build 2.7 links the VC
+  runtime statically by default; that mixed heaps with llama-cpp-sys-2's debug
+  CRT and hung the Pro test exe on an assertion dialog, fixed by opting out in
+  build.rs (guard tests/vc_runtime_guard.rs). Owner typed in the dev app with
+  no freeze after dropping the tao patch.
+- P2+P3 (PR #3) and P1 (PR #4, engine EntropIA-Agent 23897f7) landed on main
+  1d1ea22 after green CI incl. Pro. Owner visual check pending for P1-P3.
