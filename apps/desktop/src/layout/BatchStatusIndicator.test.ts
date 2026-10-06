@@ -26,8 +26,8 @@ type SyncStatus = {
   extractionsTotal: number
   profilesBlocked: number
   extractionsBlocked: number
-  blockedReasonCode: string | null
-  blockedReasonMessage: string | null
+  profilesBlockedReason: { code: string | null; message: string | null } | null
+  extractionsBlockedReason: { code: string | null; message: string | null } | null
   etaMs: number | null
 }
 
@@ -48,8 +48,8 @@ function syncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
     extractionsTotal: 0,
     profilesBlocked: 0,
     extractionsBlocked: 0,
-    blockedReasonCode: null,
-    blockedReasonMessage: null,
+    profilesBlockedReason: null,
+    extractionsBlockedReason: null,
     etaMs: null,
     ...overrides,
   }
@@ -239,8 +239,11 @@ describe('BatchStatusIndicator', () => {
         profilesDone: 0,
         profilesTotal: 2812,
         profilesBlocked: 2812,
-        blockedReasonCode: 'configuration_required',
-        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
       }),
       unreadable: null,
     })
@@ -255,6 +258,61 @@ describe('BatchStatusIndicator', () => {
     expect(screen.getByRole('button').className).not.toContain('batch-indicator--running')
   })
 
+  it('names what each kind waits on in the status bar, and both briefly when both are parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 0,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+        profilesBlockedReason: null,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: 82 en espera: configurá GLM-OCR en Configuración › OCR')
+    ).toBeInTheDocument()
+  })
+
+  it('mentions both configurations briefly when both kinds are parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 264,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText(
+        'Bibliografía: 346 en espera: configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
+      )
+    ).toBeInTheDocument()
+  })
+
   it('keeps counting the work that moves and names what waits beside it', () => {
     setBibliographyProgress({
       status: syncStatus({
@@ -265,8 +323,11 @@ describe('BatchStatusIndicator', () => {
         profilesBlocked: 70,
         extractionsDone: 30,
         extractionsTotal: 400,
-        blockedReasonCode: 'configuration_required',
-        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
         etaMs: 720_000,
       }),
       unreadable: null,
@@ -286,8 +347,11 @@ describe('BatchStatusIndicator', () => {
         profilesDone: 0,
         profilesTotal: 2,
         profilesBlocked: 2,
-        blockedReasonCode: 'configuration_required',
-        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
       }),
       unreadable: null,
     })

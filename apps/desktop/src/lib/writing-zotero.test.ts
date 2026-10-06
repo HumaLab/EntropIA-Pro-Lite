@@ -198,6 +198,40 @@ describe('E2b-4 bibliography synchronization request state', () => {
     }
   })
 
+  it('keeps following a newer sync that reports the backlog an older sync left behind', async () => {
+    vi.useFakeTimers()
+    try {
+      scheduler([
+        status({
+          state: 'succeeded',
+          newProfiles: 0,
+          newExtractions: 0,
+          profilesDone: 0,
+          profilesTotal: 264,
+          extractionsDone: 82,
+          extractionsTotal: 82,
+          etaMs: null,
+        }),
+      ])
+      const store = new WritingZoteroStore()
+
+      void store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(0)
+      // The newer sync queued nothing new of its own — yet the backlog it
+      // reports is not drained, so the follower keeps reading instead of
+      // declaring the screen finished over hundreds of pending tasks.
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        newProfiles: 0,
+        profilesTotal: 264,
+      })
+      const before = calls('processing_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(calls('processing_bibliography_sync_status').length).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps following the derived backlog after the sync succeeds and stops when it drains', async () => {
     vi.useFakeTimers()
     try {
@@ -521,8 +555,11 @@ describe('a backlog parked blocked on configuration', () => {
     extractionsTotal: 0,
     profilesBlocked: 2812,
     extractionsBlocked: 0,
-    blockedReasonCode: 'configuration_required',
-    blockedReasonMessage: 'OpenRouter API key no configurada.',
+    profilesBlockedReason: {
+      code: 'configuration_required_embedding',
+      message: 'OpenRouter API key no configurada.',
+    },
+    extractionsBlockedReason: null,
     etaMs: null,
     ...overrides,
   })
@@ -547,18 +584,111 @@ describe('a backlog parked blocked on configuration', () => {
     expect(derived.etaMs).toBeNull()
   })
 
-  it('names the blocking reason in the app words for the configuration code, and the recorded message otherwise', () => {
-    expect(bibliographyDerivedProgress(status()).blockedReason).toBe(
-      'configurá OpenRouter en Configuración'
-    )
+  it('names what each kind waits on: OpenRouter for fichas, GLM-OCR for pasajes', () => {
     expect(
       bibliographyDerivedProgress(
         status({
-          blockedReasonCode: 'source_unstable',
-          blockedReasonMessage: 'the source moved',
+          profilesBlocked: 2812,
+          profilesBlockedReason: {
+            code: 'configuration_required_embedding',
+            message: 'OpenRouter API key no configurada.',
+          },
+          extractionsBlocked: 0,
+          extractionsBlockedReason: null,
+        })
+      ).blockedReason
+    ).toBe('configurá OpenRouter en Configuración')
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 0,
+          profilesBlockedReason: null,
+          extractionsBlocked: 82,
+          extractionsBlockedReason: {
+            code: 'configuration_required_ocr',
+            message:
+              'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+          },
+        })
+      ).blockedReason
+    ).toBe('configurá GLM-OCR en Configuración › OCR')
+  })
+
+  it('mentions both configurations briefly when both kinds are parked', () => {
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 264,
+          profilesBlockedReason: {
+            code: 'configuration_required_embedding',
+            message: 'OpenRouter API key no configurada.',
+          },
+          extractionsBlocked: 82,
+          extractionsBlockedReason: {
+            code: 'configuration_required_ocr',
+            message: 'configuration: GLM-OCR no está configurado.',
+          },
+        })
+      ).blockedReason
+    ).toBe('configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR')
+  })
+
+  it('words rows recorded before the subcodes by kind and shows unknown reasons as recorded', () => {
+    // Legacy rows carry the plain `configuration_required` code: profiles
+    // wait on the embedding configuration, and the OCR executor signs its
+    // messages with the stable `configuration:` prefix.
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 2812,
+          profilesBlockedReason: {
+            code: 'configuration_required',
+            message: 'OpenRouter API key no configurada.',
+          },
+        })
+      ).blockedReason
+    ).toBe('configurá OpenRouter en Configuración')
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 0,
+          profilesBlockedReason: null,
+          extractionsBlocked: 82,
+          extractionsBlockedReason: {
+            code: 'configuration_required',
+            message:
+              'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+          },
+        })
+      ).blockedReason
+    ).toBe('configurá GLM-OCR en Configuración › OCR')
+    // A block with no stable vocabulary keeps its own recorded message.
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 5,
+          profilesBlockedReason: { code: 'source_unstable', message: 'the source moved' },
         })
       ).blockedReason
     ).toBe('the source moved')
+    // The contract-change blocks are not provider blocks: their recorded
+    // message is what the screen shows.
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          profilesBlocked: 0,
+          profilesBlockedReason: null,
+          extractionsBlocked: 82,
+          extractionsBlockedReason: {
+            code: 'configuration_required_extract_contract',
+            message:
+              'the bibliography extraction contract changed; resume with the current configuration to re-evaluate',
+          },
+        })
+      ).blockedReason
+    ).toBe(
+      'the bibliography extraction contract changed; resume with the current configuration to re-evaluate'
+    )
   })
 
   it('stops following when only blocked work remains and keeps the last snapshot', async () => {
@@ -620,8 +750,8 @@ describe('a backlog parked blocked on configuration', () => {
         status({
           profilesDone: 1,
           profilesBlocked: 0,
-          blockedReasonCode: null,
-          blockedReasonMessage: null,
+          profilesBlockedReason: null,
+          extractionsBlockedReason: null,
           etaMs: 60_000,
         }),
       ])
@@ -1699,8 +1829,8 @@ describe('P3 derived work of a library sync', () => {
     extractionsTotal: 400,
     profilesBlocked: 0,
     extractionsBlocked: 0,
-    blockedReasonCode: null,
-    blockedReasonMessage: null,
+    profilesBlockedReason: null,
+    extractionsBlockedReason: null,
     etaMs: 720_000,
   }
 

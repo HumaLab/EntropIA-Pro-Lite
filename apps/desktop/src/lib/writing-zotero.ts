@@ -125,6 +125,12 @@ export interface BibliographySyncRequestState {
  * `processing_bibliography_sync_status` reads it. `state` is the task's own
  * vocabulary: `pending`, `running`, `retry_wait`, `blocked`, `interrupted`,
  * `succeeded`, `failed` or `cancelled`.
+ *
+ * The derived counts describe the whole unsettled backlog window — the
+ * oldest sync window still holding unsettled fichas/pasajes work, reaching
+ * back across newer syncs that found nothing new — while `state`,
+ * `newProfiles`/`newExtractions` and the pages progress describe the
+ * requested sync alone.
  */
 export interface BibliographySyncStatus {
   state: string
@@ -138,20 +144,26 @@ export interface BibliographySyncStatus {
   newProfiles: number
   /** Attachments new since the last sync. */
   newExtractions: number
-  /** Live profile tasks (fichas) of this sync's window: settled over queued. */
+  /** Live profile tasks (fichas) of the backlog window: settled over queued. */
   profilesDone: number
   profilesTotal: number
-  /** Live extraction tasks (pasajes) of this sync's window: settled over queued. */
+  /** Live extraction tasks (pasajes) of the backlog window: settled over queued. */
   extractionsDone: number
   extractionsTotal: number
-  /** Live blocked derived work of this sync's window: parked on an owner-side change, never done. */
+  /** Live blocked derived work of the backlog window: parked on an owner-side change, never done. */
   profilesBlocked: number
   extractionsBlocked: number
-  /** What the blocked work is parked on: a stable code beside its recorded message. */
-  blockedReasonCode: string | null
-  blockedReasonMessage: string | null
+  /** What each kind's blocked work is parked on; null while that kind has none. */
+  profilesBlockedReason: BibliographyBlockedReason | null
+  extractionsBlockedReason: BibliographyBlockedReason | null
   /** What the derived backlog still needs in ms; null while it cannot be estimated. */
   etaMs: number | null
+}
+
+/** Why one kind of blocked work waits: a stable code beside its recorded message. */
+export interface BibliographyBlockedReason {
+  code: string | null
+  message: string | null
 }
 
 /** The last thing known about the sync, or why it could not be read. */
@@ -164,7 +176,7 @@ export interface BibliographySyncProgress {
 const SYNC_FOLLOWED_STATES = new Set(['pending', 'running', 'retry_wait', 'interrupted'])
 const SYNC_POLL_MS = 1500
 
-/** The derived backlog of one sync: fichas (works) and pasajes (passages). */
+/** The derived backlog of the window: fichas (works) and pasajes (passages). */
 export interface BibliographyDerivedProgress {
   worksDone: number
   worksTotal: number
@@ -183,16 +195,55 @@ export interface BibliographyDerivedProgress {
   blockedReason: string
 }
 
+/** What a block is about, in the app's own words where it can name it. */
+type BlockedFlavor = 'embedding' | 'ocr' | 'other'
+
+function blockedReasonFlavor(
+  kind: 'profiles' | 'extractions',
+  reason: BibliographyBlockedReason | null
+): { flavor: BlockedFlavor; text: string } | null {
+  if (!reason) return null
+  const code = reason.code ?? ''
+  const message = reason.message ?? ''
+  if (code === 'configuration_required_embedding') {
+    return { flavor: 'embedding', text: t('writing.zoteroBlockedReasonEmbedding') }
+  }
+  if (code === 'configuration_required_ocr') {
+    return { flavor: 'ocr', text: t('writing.zoteroBlockedReasonOcr') }
+  }
+  if (code === 'configuration_required') {
+    // Rows recorded before the subcodes existed, worded by kind: the OCR
+    // executor signs its messages with the stable `configuration:` prefix,
+    // and a profile's plain configuration block is the embedding engine's.
+    if (message.startsWith('configuration:')) {
+      return { flavor: 'ocr', text: t('writing.zoteroBlockedReasonOcr') }
+    }
+    if (kind === 'profiles') {
+      return { flavor: 'embedding', text: t('writing.zoteroBlockedReasonEmbedding') }
+    }
+  }
+  // Anything else (contract changes, blocks with no stable vocabulary) is
+  // shown as the executor recorded it: only its own message is honest.
+  return { flavor: 'other', text: message || code }
+}
+
 /**
  * Why the parked work waits, in the app's own words where a stable code names
- * the reason (`configuration_required`: the embedding engine has no usable
- * configuration) and in the executor's recorded message otherwise.
+ * the reason and in the executor's recorded message otherwise. Each kind
+ * names its own block — fichas wait on the embedding configuration
+ * (OpenRouter), pasajes on the OCR configuration (GLM-OCR) — and when both
+ * kinds are parked the answer names both, briefly.
  */
 export function bibliographyBlockedReason(status: BibliographySyncStatus): string {
-  if (status.blockedReasonCode === 'configuration_required') {
-    return t('writing.zoteroBlockedReasonConfiguration')
+  const reasons = [
+    blockedReasonFlavor('profiles', status.profilesBlockedReason),
+    blockedReasonFlavor('extractions', status.extractionsBlockedReason),
+  ].filter((entry): entry is { flavor: BlockedFlavor; text: string } => entry !== null)
+  const flavors = new Set(reasons.map((entry) => entry.flavor))
+  if (flavors.has('embedding') && flavors.has('ocr')) {
+    return t('writing.zoteroBlockedReasonEmbeddingAndOcr')
   }
-  return status.blockedReasonMessage ?? status.blockedReasonCode ?? ''
+  return [...new Set(reasons.map((entry) => entry.text))].join(' · ')
 }
 
 /** Reads the live derived-work counts out of one sync status. */

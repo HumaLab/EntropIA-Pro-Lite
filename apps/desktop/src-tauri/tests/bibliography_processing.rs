@@ -9861,10 +9861,13 @@ fn park_task_blocked(conn: &rusqlite::Connection, task_id: &str, code: &str, mes
 }
 
 /// Blocked derived work is not done work: the status counts it beside the
-/// live counts and names what it is parked on, so the screen can say
-/// «en espera» instead of a progress line that never moves.
+/// live counts and names, per kind, what it is parked on — profiles wait on
+/// the embedding configuration, extractions on the OCR configuration — so
+/// the screen can say «en espera» and name the right thing to fix. Each
+/// kind's reason is its own: one stable code beside its recorded message,
+/// never borrowed from the other kind.
 #[test]
-fn p3_sync_status_counts_blocked_derived_work_and_names_why_it_is_parked() {
+fn p3_sync_status_counts_blocked_derived_work_and_names_each_kinds_reason() {
     let (dir, conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let requested =
@@ -9885,7 +9888,7 @@ fn p3_sync_status_counts_blocked_derived_work_and_names_why_it_is_parked() {
     park_task_blocked(
         &conn,
         &profiles[0],
-        "configuration_required",
+        "configuration_required_embedding",
         "OpenRouter API key no configurada. Configurá OpenRouter para generar embeddings.",
     );
     conn.execute(
@@ -9900,26 +9903,79 @@ fn p3_sync_status_counts_blocked_derived_work_and_names_why_it_is_parked() {
     park_task_blocked(
         &conn,
         "p3-extract-blocked",
-        "configuration_required",
-        "OpenRouter API key no configurada.",
+        "configuration_required_ocr",
+        "configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key antes de usar OCR.",
     );
 
     let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
     assert_eq!((status.profiles_done, status.profiles_total), (0, 2));
     assert_eq!(status.profiles_blocked, 1);
     assert_eq!(status.extractions_blocked, 1);
+    let profiles_reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
     assert_eq!(
-        status.blocked_reason_code.as_deref(),
-        Some("configuration_required"),
-        "the stable code travels; the screen words it"
+        profiles_reason.code.as_deref(),
+        Some("configuration_required_embedding"),
+        "the embedding block travels as its own stable code"
     );
     assert!(
-        status
-            .blocked_reason_message
+        profiles_reason
+            .message
             .as_deref()
             .unwrap_or_default()
             .contains("OpenRouter"),
         "the recorded message travels beside the code"
+    );
+    let extractions_reason = status
+        .extractions_blocked_reason
+        .as_ref()
+        .expect("extractions block reason");
+    assert_eq!(
+        extractions_reason.code.as_deref(),
+        Some("configuration_required_ocr"),
+        "the OCR block travels as its own stable code, never as the embedding one"
+    );
+    assert!(
+        extractions_reason
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("GLM-OCR"),
+        "the recorded message travels beside the code"
+    );
+}
+
+/// A block with no stable vocabulary keeps its own code and message verbatim:
+/// the screen words what it knows and shows the rest as recorded.
+#[test]
+fn p3_sync_status_passes_unknown_block_codes_through_untouched() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-3", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(vec![item("P3UNK0001", 12)], Some(1)))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 1);
+    park_task_blocked(&conn, &profiles[0], "source_unstable", "the source moved");
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
+    assert_eq!(reason.code.as_deref(), Some("source_unstable"));
+    assert_eq!(reason.message.as_deref(), Some("the source moved"));
+    assert!(
+        status.extractions_blocked_reason.is_none(),
+        "a kind with nothing blocked names no reason"
     );
 }
 
@@ -9980,6 +10036,104 @@ fn p3_sync_eta_excludes_blocked_work_and_is_null_once_only_blocked_remains() {
     assert_eq!(
         parked.eta_ms, None,
         "every remaining task of the kind is blocked: the estimate is unknown, never zero"
+    );
+}
+
+/// The progress window is the whole unsettled backlog, not one sync's slice
+/// of it: a newer sync that found nothing new must never hide the pending
+/// and blocked derived work older syncs left behind. The requested sync's
+/// own fields (state, new counts) still describe the requested sync alone.
+#[test]
+fn p3_sync_status_window_covers_the_oldest_unsettled_backlog_across_syncs() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let first =
+        apply_bibliography_sync_request(&conn, "backlog-old", "user", "0").expect("first sync");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("BKLG0001", 12), item("BKLG0002", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 2);
+    // One parks on configuration; one keeps waiting. The backlog is alive.
+    park_task_blocked(
+        &conn,
+        &profiles[0],
+        "configuration_required_embedding",
+        "OpenRouter API key no configurada.",
+    );
+
+    // A second sync that finds nothing new queues no derived work at all.
+    let second =
+        apply_bibliography_sync_request(&conn, "backlog-new", "user", "0").expect("second sync");
+    let outcome = run_bibliography_once(&dir, &conn, vec![]);
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(status.state, "succeeded");
+    assert_eq!(
+        (status.new_profiles, status.new_extractions),
+        (0, 0),
+        "the requested sync's own fields say what IT queued: nothing"
+    );
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 2),
+        "the window covers the older sync's unsettled backlog, not just the new sync's slice"
+    );
+    assert_eq!(status.profiles_blocked, 1);
+
+    // The older sync reads the same whole backlog: one window, one truth.
+    let old = bibliography_sync_status(&conn, &first.task_id).expect("older status");
+    assert_eq!(
+        (old.profiles_done, old.profiles_total),
+        (0, 2),
+        "both reads describe the same unsettled backlog"
+    );
+}
+
+/// Everything older is settled: the window falls back to the requested
+/// sync's own slice — and still counts what that slice holds.
+#[test]
+fn p3_sync_status_window_falls_back_to_the_requested_sync_once_older_work_is_settled() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let _first =
+        apply_bibliography_sync_request(&conn, "backlog-fb-old", "user", "0").expect("first sync");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(vec![item("BKFB0001", 12)], Some(1)))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 1);
+    settle_task_with_attempts(&conn, &profiles[0], &[(1_000, 2_000)]);
+
+    let second =
+        apply_bibliography_sync_request(&conn, "backlog-fb-new", "user", "0").expect("second sync");
+
+    // Nothing unsettled is left anywhere: the requested window stands alone.
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 0),
+        "the settled older backlog is history; the window is the requested sync's own"
+    );
+
+    // Work admitted after the new sync is that window's business and shows.
+    let item_id = seed_catalog(&mut conn, "BKFB0002", "Obra posterior", "Resumen.");
+    admit_profile_demand(&conn, &item_id);
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "the fallback window counts the requested sync's own derived work"
     );
 }
 

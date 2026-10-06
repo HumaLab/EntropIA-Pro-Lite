@@ -92,10 +92,14 @@ describe('i18n', () => {
       'Bibliografía: fichas 120/450 · pasajes 30/400'
     )
 
-    // The blocked backlog is said out loud, with what unblocks it.
+    // The blocked backlog is said out loud, with what unblocks it — per
+    // kind: embeddings wait on OpenRouter, pasajes on GLM-OCR, and both are
+    // named briefly when both are parked.
     const waiting = { ...counts, blocked: 2812, reason: 'configurá OpenRouter en Configuración' }
-    expect(t('writing.zoteroBlockedReasonConfiguration')).toBe(
-      'configurá OpenRouter en Configuración'
+    expect(t('writing.zoteroBlockedReasonEmbedding')).toBe('configurá OpenRouter en Configuración')
+    expect(t('writing.zoteroBlockedReasonOcr')).toBe('configurá GLM-OCR en Configuración › OCR')
+    expect(t('writing.zoteroBlockedReasonEmbeddingAndOcr')).toBe(
+      'configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
     )
     expect(t('writing.zoteroBibliographySyncBlockedBacklog', waiting)).toBe(
       'Fichas 120/450 · Pasajes 30/400 · 2812 en espera: configurá OpenRouter en Configuración'
@@ -137,7 +141,11 @@ describe('i18n', () => {
       blocked: 2812,
       reason: 'configure OpenRouter in Settings',
     }
-    expect(t('writing.zoteroBlockedReasonConfiguration')).toBe('configure OpenRouter in Settings')
+    expect(t('writing.zoteroBlockedReasonEmbedding')).toBe('configure OpenRouter in Settings')
+    expect(t('writing.zoteroBlockedReasonOcr')).toBe('configure GLM-OCR in Settings › OCR')
+    expect(t('writing.zoteroBlockedReasonEmbeddingAndOcr')).toBe(
+      'configure OpenRouter in Settings and GLM-OCR in Settings › OCR'
+    )
     expect(t('writing.zoteroBibliographySyncBlockedBacklog', waitingEn)).toBe(
       'Works 120/450 · Passages 30/400 · 2812 waiting: configure OpenRouter in Settings'
     )

@@ -1956,12 +1956,12 @@ impl BibliographyProfileExecutor {
         })?;
         let effective =
             resolve_effective_embedding_contract(&conn).map_err(|error| ExecOutput::Blocked {
-                code: "configuration_required".to_string(),
+                code: "configuration_required_embedding".to_string(),
                 message: error,
             })?;
         if task.contract_hash != effective.hash {
             return Err(ExecOutput::Blocked {
-                code: "configuration_required".to_string(),
+                code: "configuration_required_embedding_contract".to_string(),
                 message:
                     "the effective embedding contract changed; resume with the current configuration to re-evaluate"
                         .to_string(),
@@ -2636,7 +2636,7 @@ impl BibliographyExtractExecutor {
         }
         if task.contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
             return Err(ExecOutput::Blocked {
-                code: "configuration_required".to_string(),
+                code: "configuration_required_extract_contract".to_string(),
                 message:
                     "the bibliography extraction contract changed; resume with the current configuration to re-evaluate"
                         .to_string(),

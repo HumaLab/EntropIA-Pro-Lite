@@ -926,7 +926,10 @@ const es = {
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · {blocked} en espera: {reason}',
   'writing.zoteroBibliographySyncIndexingWaiting':
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes · {blocked} en espera: {reason}',
-  'writing.zoteroBlockedReasonConfiguration': 'configurá OpenRouter en Configuración',
+  'writing.zoteroBlockedReasonEmbedding': 'configurá OpenRouter en Configuración',
+  'writing.zoteroBlockedReasonOcr': 'configurá GLM-OCR en Configuración › OCR',
+  'writing.zoteroBlockedReasonEmbeddingAndOcr':
+    'configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
@@ -2682,7 +2685,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · {blocked} waiting: {reason}',
   'writing.zoteroBibliographySyncIndexingWaiting':
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left · {blocked} waiting: {reason}',
-  'writing.zoteroBlockedReasonConfiguration': 'configure OpenRouter in Settings',
+  'writing.zoteroBlockedReasonEmbedding': 'configure OpenRouter in Settings',
+  'writing.zoteroBlockedReasonOcr': 'configure GLM-OCR in Settings › OCR',
+  'writing.zoteroBlockedReasonEmbeddingAndOcr':
+    'configure OpenRouter in Settings and GLM-OCR in Settings › OCR',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',

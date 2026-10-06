@@ -1230,6 +1230,17 @@ fn finished_attempt_average(
 /// while the sync task itself is still `pending` or `running`. Blocked work
 /// (`profiles_blocked`/`extractions_blocked`) is counted beside them, with
 /// the reason it is parked: waiting on the owner is not progress.
+///
+/// The progress window is the whole unsettled derived backlog, not one
+/// sync's slice of it: derived tasks chain after the sync row that admitted
+/// them, so each sync's window runs from its own row up to the next sync's.
+/// Counts, blocked work and the ETA all start at the oldest such window
+/// still holding unsettled (pending, running, retry_wait, blocked,
+/// interrupted) derived work — a newer sync that found nothing new must
+/// never hide older work still draining — and fall back to the requested
+/// sync's own row when everything older is settled. The requested-sync
+/// fields (state, pages progress, new counts) always describe the requested
+/// sync alone.
 pub fn bibliography_sync_status(
     conn: &Connection,
     task_id: &str,
@@ -1272,6 +1283,44 @@ pub fn bibliography_sync_status(
         return Err(format!("unknown_task: no bibliography sync task {task_id}"));
     };
 
+    // The anchor of the progress window: the oldest sync window that still
+    // holds unsettled derived work. Each sync's window runs from its own row
+    // to the next sync's row (derived tasks chain after the sync row that
+    // admitted them), so the oldest unsettled derived unit lies in exactly
+    // one window — the one that starts at the last sync row before it. With
+    // every older window settled, the requested sync's own row is the
+    // anchor and its slice still counts what it holds.
+    let window_anchor: i64 = {
+        let oldest_unsettled: Option<i64> = conn
+            .query_row(
+                "SELECT MIN(rowid) FROM processing_tasks
+                  WHERE domain = 'bibliography'
+                    AND kind IN ('bibliography_profile', 'bibliography_extract')
+                    AND state IN ('pending', 'running', 'retry_wait', 'blocked', 'interrupted')",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(|error| {
+                format!("Failed to find the unsettled bibliography backlog: {error}")
+            })?;
+        match oldest_unsettled {
+            Some(unsettled) => conn
+                .query_row(
+                    "SELECT MAX(rowid) FROM processing_tasks
+                      WHERE kind = 'bibliography_sync' AND rowid < ?1",
+                    [unsettled],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map_err(|error| format!("Failed to find the sync that owns the backlog: {error}"))?
+                .flatten()
+                // No sync row before the unit (manual demand): the unit
+                // itself starts the window, or it would hide inside none.
+                .unwrap_or(unsettled - 1),
+            None => anchor,
+        }
+    };
+
     let receipt: Option<serde_json::Value> =
         receipt.and_then(|json| serde_json::from_str(&json).ok());
     let receipt_number = |name: &str| {
@@ -1292,7 +1341,7 @@ pub fn bibliography_sync_status(
         )
         .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
-    // P3 live progress: the same window, settled over queued. Settled counts
+    // P3 live progress: the backlog window, settled over queued. Settled counts
     // every terminal outcome — a failed task is finished work the backlog
     // will not repeat, so the counters always converge and the follower
     // knows when to stop. `blocked` work is neither done nor moving: it is
@@ -1303,7 +1352,7 @@ pub fn bibliography_sync_status(
             .query_row(
                 "SELECT COUNT(*) FROM processing_tasks
                   WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
-                rusqlite::params![kind, anchor],
+                rusqlite::params![kind, window_anchor],
                 |row| row.get(0),
             )
             .map_err(|error| format!("Failed to count derived bibliography work: {error}"))?;
@@ -1312,7 +1361,7 @@ pub fn bibliography_sync_status(
                 "SELECT COUNT(*) FROM processing_tasks
                   WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
                     AND state IN ('succeeded', 'skipped', 'failed', 'cancelled')",
-                rusqlite::params![kind, anchor],
+                rusqlite::params![kind, window_anchor],
                 |row| row.get(0),
             )
             .map_err(|error| format!("Failed to count settled bibliography work: {error}"))?;
@@ -1321,7 +1370,7 @@ pub fn bibliography_sync_status(
                 "SELECT COUNT(*) FROM processing_tasks
                   WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
                     AND state = 'blocked'",
-                rusqlite::params![kind, anchor],
+                rusqlite::params![kind, window_anchor],
                 |row| row.get(0),
             )
             .map_err(|error| format!("Failed to count blocked bibliography work: {error}"))?;
@@ -1331,30 +1380,31 @@ pub fn bibliography_sync_status(
         window_progress("bibliography_profile")?;
     let (extractions_done, extractions_total, extractions_blocked) =
         window_progress("bibliography_extract")?;
-    // Why the blocked work is parked: the first blocked task of the window
-    // names it (window order, so the answer is stable across reads). The
-    // code is the durable vocabulary (`configuration_required` when the
-    // embedding engine has no usable configuration); the message beside it
-    // is what the executor recorded.
-    let blocked_reason = conn
-        .query_row(
+    // Why each kind's blocked work is parked: that kind's first blocked task
+    // in the window names it (window order, so the answer is stable across
+    // reads). The code is the durable vocabulary — `configuration_required_embedding`
+    // when the embedding engine has no usable configuration,
+    // `configuration_required_ocr` when the OCR engine has none — and the
+    // message beside it is what the executor recorded. Per kind, never
+    // borrowed: profiles wait on something else than extractions do.
+    let blocked_reason = |kind: &str| {
+        conn.query_row(
             "SELECT last_error_code, last_error_message
                FROM processing_tasks
-              WHERE domain = 'bibliography'
-                AND kind IN ('bibliography_profile', 'bibliography_extract')
-                AND rowid > ?1 AND state = 'blocked'
+              WHERE domain = 'bibliography' AND kind = ?1
+                AND rowid > ?2 AND state = 'blocked'
               ORDER BY rowid LIMIT 1",
-            [anchor],
+            rusqlite::params![kind, window_anchor],
             |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                ))
+                Ok(super::commands::BibliographyBlockedReason {
+                    code: row.get(0)?,
+                    message: row.get(1)?,
+                })
             },
         )
         .optional()
-        .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))?;
-    let (blocked_reason_code, blocked_reason_message) = blocked_reason.unwrap_or((None, None));
+        .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))
+    };
     // P3 ETA: actionable remaining tasks per kind times the average duration
     // of that kind's finished attempts in this window. Blocked tasks are
     // never timed — they wait on the owner, not on the clock — and a kind
@@ -1379,7 +1429,7 @@ pub fn bibliography_sync_status(
         ),
     ] {
         let actionable = remaining - blocked;
-        let (samples, average_ms) = finished_attempt_average(conn, anchor, kind)?;
+        let (samples, average_ms) = finished_attempt_average(conn, window_anchor, kind)?;
         samples_total += samples;
         if remaining <= 0 {
             continue;
@@ -1404,8 +1454,8 @@ pub fn bibliography_sync_status(
         extractions_total,
         profiles_blocked,
         extractions_blocked,
-        blocked_reason_code,
-        blocked_reason_message,
+        profiles_blocked_reason: blocked_reason("bibliography_profile")?,
+        extractions_blocked_reason: blocked_reason("bibliography_extract")?,
         eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),
@@ -3692,11 +3742,17 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
     Ok(settled)
 }
 
-/// Requeues the units parked `configuration_required` by the embedding engine
+/// Requeues the units the embedding engine parked on its configuration
 /// (corpus embeddings and bibliography profiles) once that engine can
-/// initialize from the current settings. Returns how many were requeued; with
-/// the configuration still invalid it touches nothing, so callers may invoke
-/// it on every settings change and at startup without spinning.
+/// initialize from the current settings. The whole
+/// `configuration_required…` family is resumed — the legacy
+/// `configuration_required` code rows recorded before the subcodes existed,
+/// `configuration_required_embedding` (no usable provider/engine) and
+/// `configuration_required_embedding_contract` (the effective contract
+/// changed under the task) — while every other block reason keeps its own
+/// resume path. Returns how many were requeued; with the configuration still
+/// invalid it touches nothing, so callers may invoke it on every settings
+/// change and at startup without spinning.
 pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize, String> {
     if crate::nlp::embeddings::config_from_settings(conn).is_err() {
         return Ok(0);
@@ -3705,11 +3761,42 @@ pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize
         "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
            next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
            updated_at = strftime('%s', 'now') * 1000
-         WHERE state = 'blocked' AND last_error_code = 'configuration_required'
+         WHERE state = 'blocked'
+           AND last_error_code IN ('configuration_required',
+                                  'configuration_required_embedding',
+                                  'configuration_required_embedding_contract')
            AND kind IN ('embedding', 'bibliography_profile')",
         [],
     )
     .map_err(|e| format!("Failed to resume configuration-blocked units: {e}"))
+}
+
+/// Requeues the units the OCR engine parked on its configuration (corpus
+/// OCR and bibliography extractions) once the selected OCR engine can
+/// initialize from the current settings: every unit parked
+/// `configuration_required_ocr`, plus the legacy plain
+/// `configuration_required` rows of OCR work (`ocr`/`bibliography_extract`)
+/// whose recorded message carries the executor's stable `configuration:`
+/// prefix. Embedding blocks and contract-change blocks keep their own
+/// resume paths — this never touches them. Returns how many were requeued;
+/// with the configuration still invalid it touches nothing, so callers may
+/// invoke it on every settings change without spinning.
+pub fn resume_ocr_configuration_blocked(conn: &Connection) -> Result<usize, String> {
+    if crate::ocr::ensure_selected_cloud_key(conn).is_err() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'blocked'
+           AND (last_error_code = 'configuration_required_ocr'
+                OR (last_error_code = 'configuration_required'
+                    AND kind IN ('ocr', 'bibliography_extract')
+                    AND last_error_message LIKE 'configuration:%'))",
+        [],
+    )
+    .map_err(|e| format!("Failed to resume OCR configuration-blocked units: {e}"))
 }
 
 fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
@@ -9405,6 +9492,92 @@ mod tests {
         .expect("blocked task");
     }
 
+    fn insert_blocked_unit(conn: &Connection, id: &str, kind: &str, code: &str, message: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, last_error_message, created_at, updated_at)
+             VALUES (?1, ?2, ?1, 'corpus', 'asset', ?1, 'blocked', ?3, ?3, ?4, 1, 1)",
+            rusqlite::params![id, kind, code, message],
+        )
+        .expect("blocked unit");
+    }
+
+    #[test]
+    fn configuration_blocked_ocr_work_resumes_once_the_selected_engine_has_its_key() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .expect("settings table");
+        // The OCR family: the stable subcode on any unit, plus the legacy
+        // plain-code rows of OCR work signed with the executor's stable
+        // `configuration:` message prefix.
+        insert_blocked_unit(
+            &conn,
+            "t-ocr",
+            "ocr",
+            "configuration_required_ocr",
+            "configuration: no key",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-extract",
+            "bibliography_extract",
+            "configuration_required_ocr",
+            "configuration: no key",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-legacy",
+            "bibliography_extract",
+            "configuration_required",
+            "configuration: GLM-OCR no está configurado.",
+        );
+        // Not OCR configuration blocks: an unsigned legacy row, a
+        // contract-change block and an embedding block keep their own
+        // resume paths.
+        insert_blocked_unit(
+            &conn,
+            "t-legacy-plain",
+            "ocr",
+            "configuration_required",
+            "the bibliography extraction contract changed",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-contract",
+            "bibliography_extract",
+            "configuration_required_extract_contract",
+            "contract changed",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-embed",
+            "bibliography_profile",
+            "configuration_required_embedding",
+            "no engine",
+        );
+        // GLM-OCR selected with no key yet: nothing may move into the wall.
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('ocrh_mode', 'glm_ocr')",
+        )
+        .expect("mode");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('glm_ocr_api_key', 'sk-test')",
+        )
+        .expect("key");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 3);
+        assert_eq!(task_state(&conn, "t-ocr"), "pending");
+        assert_eq!(task_state(&conn, "t-extract"), "pending");
+        assert_eq!(task_state(&conn, "t-legacy"), "pending");
+        assert_eq!(task_state(&conn, "t-legacy-plain"), "blocked");
+        assert_eq!(task_state(&conn, "t-contract"), "blocked");
+        assert_eq!(task_state(&conn, "t-embed"), "blocked");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+    }
+
     #[test]
     fn configuration_blocked_embeddings_resume_only_once_the_engine_can_initialize() {
         let (_dir, conn) = batch_db();
@@ -9412,7 +9585,15 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         )
         .expect("settings table");
+        // The whole embedding-configuration family resumes together: the
+        // legacy code, the provider/engine code and the contract-change code.
         insert_blocked_embedding(&conn, "t-config", "configuration_required");
+        insert_blocked_embedding(&conn, "t-embed", "configuration_required_embedding");
+        insert_blocked_embedding(
+            &conn,
+            "t-embed-contract",
+            "configuration_required_embedding_contract",
+        );
         insert_blocked_embedding(&conn, "t-contract", "configuration_changed");
         // Pin the remote provider: Pro defaults to the local engine, which
         // needs no OpenRouter key and would make the "no key" phase valid.
@@ -9429,8 +9610,10 @@ mod tests {
             [],
         )
         .expect("key");
-        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 1);
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 3);
         assert_eq!(task_state(&conn, "t-config"), "pending");
+        assert_eq!(task_state(&conn, "t-embed"), "pending");
+        assert_eq!(task_state(&conn, "t-embed-contract"), "pending");
         let (code, outcome): (Option<String>, String) = conn
             .query_row(
                 "SELECT last_error_code, outcome FROM processing_tasks WHERE id = 't-config'",
@@ -9480,9 +9663,10 @@ mod tests {
         // The newest row, not the oldest.
         assert_eq!(latest.state, "running");
         assert_eq!(latest.progress_done, 9);
-        // The window it reports is the newest task's own: the older task's
-        // derived backlog stays the older task's business.
-        assert_eq!((latest.profiles_done, latest.profiles_total), (0, 0));
+        // The window is the whole unsettled backlog: the older task's window
+        // still holds a pending profile, so the counts reach back to it
+        // instead of hiding behind the newer row's empty slice.
+        assert_eq!((latest.profiles_done, latest.profiles_total), (0, 1));
         // Exactly the answer the one-task read gives for that same row.
         assert_eq!(
             latest,

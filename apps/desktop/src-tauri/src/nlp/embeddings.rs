@@ -197,7 +197,7 @@ impl EmbeddingProvider {
             // switching to the remote provider: sending text externally
             // without a fresh authorization is exactly what the consent
             // contract forbids (E3a-WU2). The worker parks those units as
-            // configuration_required with this message.
+            // configuration_required_embedding with this message.
             Some("local") | Some("offline") | Some("onnx") => Err(
                 "El proveedor de embeddings local no está disponible en esta build. Elegí \'api\' o instalá la variante Pro para usar el motor local."
                     .to_string(),

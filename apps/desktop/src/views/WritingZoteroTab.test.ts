@@ -332,8 +332,11 @@ describe('E2b-4 selected-library synchronization', () => {
         extractionsTotal: 0,
         profilesBlocked: 2812,
         extractionsBlocked: 0,
-        blockedReasonCode: 'configuration_required',
-        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
         etaMs: null,
       })
 
@@ -353,8 +356,11 @@ describe('E2b-4 selected-library synchronization', () => {
         extractionsTotal: 400,
         profilesBlocked: 70,
         extractionsBlocked: 0,
-        blockedReasonCode: 'configuration_required',
-        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
         etaMs: 720_000,
       })
 
@@ -372,14 +378,93 @@ describe('E2b-4 selected-library synchronization', () => {
         profilesBlocked: 5,
         extractionsDone: 0,
         extractionsTotal: 0,
-        blockedReasonCode: 'source_unstable',
-        blockedReasonMessage: 'the source moved',
+        profilesBlockedReason: { code: 'source_unstable', message: 'the source moved' },
+        extractionsBlockedReason: null,
         etaMs: null,
       })
 
       expect(screen.getByRole('alert')).toHaveTextContent(
         'Fichas 0/5 · Pasajes 0/0 · 5 en espera: the source moved'
       )
+    })
+
+    it('names the OCR configuration when the pasajes are what waits', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 264,
+        profilesTotal: 264,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message:
+            'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+        },
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 264/264 · Pasajes 0/82 · 82 en espera: configurá GLM-OCR en Configuración › OCR'
+      )
+    })
+
+    it('mentions both configurations when fichas and pasajes wait on different ones', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 264,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 0/264 · Pasajes 0/82 · 346 en espera: configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
+      )
+    })
+
+    it('keeps the backlog an earlier sync left behind after a newer sync reports no new work', async () => {
+      await renderWith({
+        state: 'succeeded',
+        itemsSeen: 40,
+        newProfiles: 0,
+        newExtractions: 0,
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message:
+            'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+        },
+        etaMs: null,
+      })
+
+      // The newer sync queued nothing new — the older backlog is still the
+      // truth about the library, never «Sincronizada» over hundreds of
+      // pending tasks.
+      expect(screen.queryByText('Biblioteca al día')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Sincronizada\./)).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Fichas 0/264 · Pasajes 0/82 · 82 en espera: configurá GLM-OCR en Configuración › OCR'
+        )
+      ).toBeInTheDocument()
     })
   })
 

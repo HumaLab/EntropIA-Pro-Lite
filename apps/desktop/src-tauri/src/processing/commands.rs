@@ -230,6 +230,16 @@ pub struct BibliographySyncResponse {
     pub requeued: bool,
 }
 
+/// Why one kind of blocked derived work is parked: the stable code the
+/// executor wrote beside the message it recorded. `None` while that kind
+/// has nothing blocked.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographyBlockedReason {
+    pub code: Option<String>,
+    pub message: Option<String>,
+}
+
 /// What one requested bibliography sync has actually done so far, read from
 /// the task the scheduler owns. `state` is the task's own state vocabulary
 /// (`pending`, `running`, `retry_wait`, `blocked`, `interrupted`, `succeeded`,
@@ -250,34 +260,40 @@ pub struct BibliographySyncStatus {
     /// sync means the library was already up to date.
     pub new_profiles: i64,
     pub new_extractions: i64,
-    /// Live derived-work progress inside this sync's window (the tasks
-    /// admitted after the sync's own row): settled tasks over every task of
-    /// the kind in the window. Keeps answering while the derived backlog
-    /// drains — and while the sync task itself is still `pending` or
-    /// `running` — so the screen can follow the work instead of guessing.
+    /// Live derived-work progress across the whole unsettled backlog window
+    /// (the window `processing::repository::bibliography_sync_status`
+    /// describes): settled tasks over every task of the kind in the window.
+    /// Keeps answering while the derived backlog drains after a success — and
+    /// while the sync task itself is still `pending` or `running` — so the
+    /// screen can follow the work instead of guessing.
     pub profiles_done: i64,
     pub profiles_total: i64,
     pub extractions_done: i64,
     pub extractions_total: i64,
-    /// Live blocked derived work inside this sync's window: tasks parked
+    /// Live blocked derived work in the backlog window: tasks parked
     /// `blocked`, waiting for a change only the owner can make. Not settled
     /// and never counted as done — the screen says «en espera» about these.
     pub profiles_blocked: i64,
     pub extractions_blocked: i64,
-    /// What the blocked work is parked on, from the first blocked task of the
-    /// window: the stable code the executor wrote (`configuration_required`
-    /// when the embedding engine has no usable configuration) beside its
-    /// message. `None` while nothing is blocked.
-    pub blocked_reason_code: Option<String>,
-    pub blocked_reason_message: Option<String>,
+    /// What the blocked work of each kind is parked on, from that kind's
+    /// first blocked task in the window (window order, stable across reads):
+    /// the stable code the executor wrote (`configuration_required_embedding`
+    /// when the embedding engine has no usable configuration,
+    /// `configuration_required_ocr` when the OCR engine has none) beside its
+    /// recorded message. Each kind names its own reason — profiles never
+    /// borrow the extractions' — and `None` while that kind has nothing
+    /// blocked.
+    pub profiles_blocked_reason: Option<BibliographyBlockedReason>,
+    pub extractions_blocked_reason: Option<BibliographyBlockedReason>,
     /// What the derived backlog still needs, in ms: the *actionable* remaining
     /// tasks of each kind times the average duration of that kind's finished
-    /// attempts inside this window. Blocked tasks are never timed — they wait
-    /// on the owner, not on the clock — and when every remaining task of a
-    /// kind is blocked that kind has no estimate at all, so the answer is
-    /// `None`. `None` as well while the window holds fewer than three finished
-    /// attempts, or while any kind with actionable work left has fewer than
-    /// three to average — an honest unknown, never a made-up number.
+    /// attempts inside the backlog window. Blocked tasks are never timed —
+    /// they wait on the owner, not on the clock — and when every remaining
+    /// task of a kind is blocked that kind has no estimate at all, so the
+    /// answer is `None`. `None` as well while the window holds fewer than
+    /// three finished attempts, or while any kind with actionable work left
+    /// has fewer than three to average — an honest unknown, never a made-up
+    /// number.
     pub eta_ms: Option<i64>,
 }
 

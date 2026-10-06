@@ -127,19 +127,23 @@ fn is_embedding_engine_setting(key: &str) -> bool {
         || key == crate::nlp::embeddings::OPENROUTER_EMBEDDING_MODEL_SETTING_KEY
 }
 
-/// Requeues queue units parked `configuration_required` when a saved setting
-/// is one the embedding engine depends on and the configuration is now valid.
-/// Best effort: a failure is logged and never fails the save. Returns how many
-/// units were requeued.
-pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
-    if !is_embedding_engine_setting(key) {
-        return 0;
-    }
-    match crate::processing::repository::resume_embedding_configuration_blocked(conn) {
+/// Settings that decide whether the OCR engine can initialize: the engine
+/// selection and the GLM-OCR credential it reads.
+fn is_ocr_engine_setting(key: &str) -> bool {
+    key == GLM_OCR_API_KEY || key == crate::ocr::OCRH_SETTING_MODE
+}
+
+/// Runs one engine's configuration resume, logging its outcome best-effort.
+fn resume_configuration_blocked_with(
+    conn: &rusqlite::Connection,
+    engine: &str,
+    resume: impl FnOnce(&rusqlite::Connection) -> Result<usize, String>,
+) -> usize {
+    match resume(conn) {
         Ok(resumed) => {
             if resumed > 0 {
                 eprintln!(
-                    "[settings] Resumed {resumed} queue unit(s) blocked on embedding configuration"
+                    "[settings] Resumed {resumed} queue unit(s) blocked on {engine} configuration"
                 );
             }
             resumed
@@ -148,6 +152,34 @@ pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key:
             eprintln!("[settings] Could not resume configuration-blocked work: {error}");
             0
         }
+    }
+}
+
+/// Requeues queue units parked on a configuration a saved setting decides,
+/// once that configuration is now valid: the embedding engine's
+/// (`configuration_required…` on `embedding`/`bibliography_profile` units)
+/// when an embedding setting is saved, and the OCR engine's
+/// (`configuration_required_ocr`, plus the legacy plain
+/// `configuration_required` rows of OCR work signed with the executor's
+/// `configuration:` message prefix) when an OCR setting is saved. Embedding
+/// and contract-change blocks never move on an OCR save and vice versa —
+/// each engine resumes only its own. Best effort: a failure is logged and
+/// never fails the save. Returns how many units were requeued.
+pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    if is_embedding_engine_setting(key) {
+        resume_configuration_blocked_with(
+            conn,
+            "embedding",
+            crate::processing::repository::resume_embedding_configuration_blocked,
+        )
+    } else if is_ocr_engine_setting(key) {
+        resume_configuration_blocked_with(
+            conn,
+            "OCR",
+            crate::processing::repository::resume_ocr_configuration_blocked,
+        )
+    } else {
+        0
     }
 }
 
@@ -1215,6 +1247,102 @@ mod tests {
             1
         );
         assert_eq!(state(&conn), "pending");
+    }
+
+    #[test]
+    fn saving_the_ocr_key_resumes_ocr_blocked_work_only() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code, last_error_message)
+               VALUES ('t-extract', 'bibliography_extract', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-corpus', 'ocr', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: PaddleOCR liviano no está disponible'),
+                      ('t-legacy', 'ocr', 'blocked', 'configuration_required',
+                       'configuration_required', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-embed', 'embedding', 'blocked', 'configuration_required_embedding',
+                       'configuration_required_embedding', 'no engine'),
+                      ('t-contract', 'bibliography_extract', 'blocked', 'configuration_required_extract_contract',
+                       'configuration_required_extract_contract',
+                       'the bibliography extraction contract changed; resume with the current configuration to re-evaluate');",
+        )
+        .expect("queue table");
+        // GLM-OCR selected with no key yet: the configuration is still
+        // invalid, so nothing may move back into the same wall.
+        set_setting(
+            &conn,
+            crate::ocr::OCRH_SETTING_MODE,
+            crate::ocr::OCRH_MODE_GLM_OCR,
+        )
+        .expect("mode");
+        let state = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 0);
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        set_setting(&conn, GLM_OCR_API_KEY, "sk-test").expect("save key");
+        // An unrelated key never resumes the parked work.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_model"),
+            0
+        );
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 3);
+        assert_eq!(state(&conn, "t-extract"), "pending");
+        assert_eq!(state(&conn, "t-corpus"), "pending");
+        assert_eq!(state(&conn, "t-legacy"), "pending");
+        // Embedding-blocked work keeps its own resume path, and a
+        // contract-change block is never an OCR configuration block.
+        assert_eq!(state(&conn, "t-embed"), "blocked");
+        assert_eq!(state(&conn, "t-contract"), "blocked");
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 0);
+    }
+
+    #[test]
+    fn saving_the_openrouter_key_does_not_touch_ocr_blocked_work() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code, last_error_message)
+               VALUES ('t-embed', 'embedding', 'blocked', 'configuration_required',
+                       'configuration_required', 'no engine'),
+                      ('t-extract', 'bibliography_extract', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-corpus', 'ocr', 'blocked', 'configuration_required',
+                       'configuration_required', 'configuration: GLM-OCR no está configurado.');",
+        )
+        .expect("queue table");
+        set_setting(&conn, "embedding_provider", "api").expect("provider");
+        let state = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        // The embedding resume moves exactly the embedding-blocked unit.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, OPENROUTER_API_KEY),
+            1
+        );
+        assert_eq!(state(&conn, "t-embed"), "pending");
+        // OCR-blocked work waits on the OCR configuration, not on OpenRouter.
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        assert_eq!(state(&conn, "t-corpus"), "blocked");
     }
 
     // ── recently-opened works (opened works first) ────────────────────────
