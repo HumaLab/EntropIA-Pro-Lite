@@ -106,7 +106,7 @@ El manual combina capturas reales de EntropIA Lite, detalles recortados de esas 
 
 | Función visible | Disponibilidad / alcance | Sección del manual |
 |---|---|---|
-| Procesar por lote OCR o embeddings | Desde **Configuración → Lotes**, con revisión previa. No transcribe audio ni genera resúmenes, NER o tripletas por lote. | [Cap. 14](manual-usuario.md#capitulo-14-procesamiento-por-lotes) |
+| Procesar por lote OCR, embeddings, entidades o tripletes | Desde **Configuración → Lotes**, con revisión previa. Entidades y tripletes vienen apagadas y en Lite cada documento es una consulta paga a OpenRouter. No transcribe audio ni genera resúmenes por lote. | [Cap. 14](manual-usuario.md#capitulo-14-procesamiento-por-lotes) |
 | Avance, pausa, reanudación, cancelación, tareas fallidas e historial | Cerrar detiene el proceso; al volver, **Recuperar lote** retoma el último incompleto. Reintentar fallos crea otro lote. Cancelar conserva resultados terminados. | [Cap. 14](manual-usuario.md#capitulo-14-procesamiento-por-lotes) |
 | Sincronización opcional: registro, inicio de sesión, modo e intervalo, equipos, espacio y conflictos | Registrar no inicia sesión. Después de entrar, permite sincronizar y resolver diferencias; no seleccionar colecciones ni cambiar servidor. **Solicitar más espacio** abre una solicitud de plan. | [Cap. 15](manual-usuario.md#capitulo-15-sincronizacion-y-nube) |
 | Volver a comprobar archivos y borrar datos del servidor | Borrar datos remotos requiere contraseña y confirmación; no elimina los locales. No equivale a un respaldo completo. | [Cap. 15](manual-usuario.md#capitulo-15-sincronizacion-y-nube) |
