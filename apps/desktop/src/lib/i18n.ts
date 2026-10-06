@@ -348,6 +348,9 @@ const es = {
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
     'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyWaiting':
+    'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · {blocked} en espera',
+  'batch.statusBibliographyBlocked': 'Bibliografía: {blocked} en espera: {reason}',
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
   'settings.save': 'Guardar cambios',
@@ -919,6 +922,11 @@ const es = {
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes',
   'writing.zoteroBibliographySyncIndexingNoEta':
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal}',
+  'writing.zoteroBibliographySyncBlockedBacklog':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · {blocked} en espera: {reason}',
+  'writing.zoteroBibliographySyncIndexingWaiting':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes · {blocked} en espera: {reason}',
+  'writing.zoteroBlockedReasonConfiguration': 'configurá OpenRouter en Configuración',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
@@ -2670,6 +2678,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left',
   'writing.zoteroBibliographySyncIndexingNoEta':
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal}',
+  'writing.zoteroBibliographySyncBlockedBacklog':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · {blocked} waiting: {reason}',
+  'writing.zoteroBibliographySyncIndexingWaiting':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left · {blocked} waiting: {reason}',
+  'writing.zoteroBlockedReasonConfiguration': 'configure OpenRouter in Settings',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
@@ -3270,6 +3283,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':
     'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyWaiting':
+    'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · {blocked} waiting',
+  'batch.statusBibliographyBlocked': 'Bibliography: {blocked} waiting: {reason}',
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
   'settings.save': 'Save changes',

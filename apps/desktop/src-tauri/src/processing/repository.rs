@@ -1192,8 +1192,10 @@ const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
 
 /// How many finished attempts of one kind the sync window holds and their
 /// average duration in ms, from the attempt's own start/finish stamps. The
-/// open attempt is never a sample: it has no finish stamp. A `None` average
-/// means nothing of the kind has finished yet.
+/// open attempt is never a sample: it has no finish stamp. Attempts of tasks
+/// parked `blocked` are not samples either — they record a parking decision,
+/// not work, and their near-zero durations would drag the average into a
+/// lie. A `None` average means nothing of the kind has finished yet.
 fn finished_attempt_average(
     conn: &Connection,
     anchor: i64,
@@ -1203,7 +1205,7 @@ fn finished_attempt_average(
         "SELECT COUNT(*), AVG(a.finished_at - a.started_at)
            FROM processing_attempts a
            JOIN processing_tasks t ON t.id = a.task_id
-          WHERE t.rowid > ?1 AND t.kind = ?2
+          WHERE t.rowid > ?1 AND t.kind = ?2 AND t.state <> 'blocked'
             AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at",
         rusqlite::params![anchor, kind],
         |row| {
@@ -1225,7 +1227,9 @@ fn finished_attempt_average(
 /// that. The P3 progress counts (`profiles_done`/`profiles_total`,
 /// `extractions_done`/`extractions_total`) read the same window live: they
 /// keep answering while the derived backlog drains after a success — and
-/// while the sync task itself is still `pending` or `running`.
+/// while the sync task itself is still `pending` or `running`. Blocked work
+/// (`profiles_blocked`/`extractions_blocked`) is counted beside them, with
+/// the reason it is parked: waiting on the owner is not progress.
 pub fn bibliography_sync_status(
     conn: &Connection,
     task_id: &str,
@@ -1291,8 +1295,10 @@ pub fn bibliography_sync_status(
     // P3 live progress: the same window, settled over queued. Settled counts
     // every terminal outcome — a failed task is finished work the backlog
     // will not repeat, so the counters always converge and the follower
-    // knows when to stop.
-    let window_progress = |kind: &str| -> Result<(i64, i64), String> {
+    // knows when to stop. `blocked` work is neither done nor moving: it is
+    // parked on an owner-side change and counted beside the live counts,
+    // never hidden inside them.
+    let window_progress = |kind: &str| -> Result<(i64, i64, i64), String> {
         let total: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM processing_tasks
@@ -1310,32 +1316,83 @@ pub fn bibliography_sync_status(
                 |row| row.get(0),
             )
             .map_err(|error| format!("Failed to count settled bibliography work: {error}"))?;
-        Ok((settled, total))
+        let blocked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM processing_tasks
+                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                    AND state = 'blocked'",
+                rusqlite::params![kind, anchor],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to count blocked bibliography work: {error}"))?;
+        Ok((settled, total, blocked))
     };
-    let (profiles_done, profiles_total) = window_progress("bibliography_profile")?;
-    let (extractions_done, extractions_total) = window_progress("bibliography_extract")?;
-    // P3 ETA: remaining tasks per kind times the average duration of that
-    // kind's finished attempts in this window. One unmeasured kind with work
-    // left makes the whole number a guess, so the estimate stays `None` —
-    // as it does while the window holds fewer than three finished attempts
-    // at all.
+    let (profiles_done, profiles_total, profiles_blocked) =
+        window_progress("bibliography_profile")?;
+    let (extractions_done, extractions_total, extractions_blocked) =
+        window_progress("bibliography_extract")?;
+    // Why the blocked work is parked: the first blocked task of the window
+    // names it (window order, so the answer is stable across reads). The
+    // code is the durable vocabulary (`configuration_required` when the
+    // embedding engine has no usable configuration); the message beside it
+    // is what the executor recorded.
+    let blocked_reason = conn
+        .query_row(
+            "SELECT last_error_code, last_error_message
+               FROM processing_tasks
+              WHERE domain = 'bibliography'
+                AND kind IN ('bibliography_profile', 'bibliography_extract')
+                AND rowid > ?1 AND state = 'blocked'
+              ORDER BY rowid LIMIT 1",
+            [anchor],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))?;
+    let (blocked_reason_code, blocked_reason_message) = blocked_reason.unwrap_or((None, None));
+    // P3 ETA: actionable remaining tasks per kind times the average duration
+    // of that kind's finished attempts in this window. Blocked tasks are
+    // never timed — they wait on the owner, not on the clock — and a kind
+    // whose remaining work is entirely blocked has no estimate at all, which
+    // makes the combined answer honestly unknown instead of zero. One
+    // unmeasured kind with actionable work left makes the whole number a
+    // guess as well, so the estimate stays `None` — as it does while the
+    // window holds fewer than three finished attempts at all.
     let mut estimate_ms = 0_i64;
     let mut samples_total = 0_i64;
     let mut estimable = true;
-    for (kind, remaining) in [
-        ("bibliography_profile", profiles_total - profiles_done),
-        ("bibliography_extract", extractions_total - extractions_done),
+    for (kind, remaining, blocked) in [
+        (
+            "bibliography_profile",
+            profiles_total - profiles_done,
+            profiles_blocked,
+        ),
+        (
+            "bibliography_extract",
+            extractions_total - extractions_done,
+            extractions_blocked,
+        ),
     ] {
+        let actionable = remaining - blocked;
         let (samples, average_ms) = finished_attempt_average(conn, anchor, kind)?;
         samples_total += samples;
         if remaining <= 0 {
             continue;
         }
+        if actionable <= 0 {
+            estimable = false;
+            break;
+        }
         if samples < ETA_MIN_FINISHED_ATTEMPTS {
             estimable = false;
             break;
         }
-        estimate_ms += remaining * average_ms.unwrap_or(0);
+        estimate_ms += actionable * average_ms.unwrap_or(0);
     }
     let eta_ms = (estimable && samples_total >= ETA_MIN_FINISHED_ATTEMPTS).then_some(estimate_ms);
     Ok(super::commands::BibliographySyncStatus {
@@ -1345,6 +1402,10 @@ pub fn bibliography_sync_status(
         profiles_total,
         extractions_done,
         extractions_total,
+        profiles_blocked,
+        extractions_blocked,
+        blocked_reason_code,
+        blocked_reason_message,
         eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),

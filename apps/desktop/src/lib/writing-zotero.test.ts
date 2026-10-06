@@ -498,6 +498,146 @@ describe('P3 backlog follower across a restart', () => {
   })
 })
 
+/**
+ * A backlog parked `blocked`: every unit waits on a change only the owner
+ * can make (the OpenRouter key is missing), so no unit moves by itself. The
+ * follower must stop instead of counting forever, keep the last snapshot,
+ * and pick the work up again once the configuration resume moves it.
+ */
+describe('a backlog parked blocked on configuration', () => {
+  const status = (overrides: Partial<BibliographySyncStatus> = {}): BibliographySyncStatus => ({
+    state: 'succeeded',
+    errorCode: null,
+    errorMessage: null,
+    progressDone: 40,
+    progressTotal: 40,
+    itemsSeen: 40,
+    remoteTotal: 40,
+    newProfiles: 2812,
+    newExtractions: 0,
+    profilesDone: 0,
+    profilesTotal: 2812,
+    extractionsDone: 0,
+    extractionsTotal: 0,
+    profilesBlocked: 2812,
+    extractionsBlocked: 0,
+    blockedReasonCode: 'configuration_required',
+    blockedReasonMessage: 'OpenRouter API key no configurada.',
+    etaMs: null,
+    ...overrides,
+  })
+
+  /** Answers each latest-status poll with the next scripted status. */
+  function backlog(statuses: unknown[]) {
+    const polled = [...statuses]
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'processing_latest_bibliography_sync_status') {
+        return Promise.resolve(polled.length > 1 ? polled.shift() : polled[0])
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+  }
+
+  it('counts the parked work separately and keeps it out of the ETA', () => {
+    const derived = bibliographyDerivedProgress(status({ etaMs: null }))
+
+    expect(derived.blocked).toBe(2812)
+    expect(derived.remaining).toBe(2812)
+    expect(derived.remainingActive).toBe(0)
+    expect(derived.etaMs).toBeNull()
+  })
+
+  it('names the blocking reason in the app words for the configuration code, and the recorded message otherwise', () => {
+    expect(bibliographyDerivedProgress(status()).blockedReason).toBe(
+      'configurá OpenRouter en Configuración'
+    )
+    expect(
+      bibliographyDerivedProgress(
+        status({
+          blockedReasonCode: 'source_unstable',
+          blockedReasonMessage: 'the source moved',
+        })
+      ).blockedReason
+    ).toBe('the source moved')
+  })
+
+  it('stops following when only blocked work remains and keeps the last snapshot', async () => {
+    vi.useFakeTimers()
+    try {
+      backlog([status()])
+      const store = new WritingZoteroStore()
+      const following = store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(1)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesTotal: 2812,
+        profilesBlocked: 2812,
+      })
+
+      // Nothing can move by itself: the follower stops at once and the
+      // parked snapshot stays on the screen instead of being dropped.
+      const before = calls('processing_latest_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(before)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesTotal: 2812,
+        profilesBlocked: 2812,
+      })
+      await following
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps following while some work can still move beside the parked ones', async () => {
+    vi.useFakeTimers()
+    try {
+      backlog([
+        status({ profilesDone: 1, profilesTotal: 2812, profilesBlocked: 2810 }),
+        status({ profilesDone: 2, profilesTotal: 2812, profilesBlocked: 2810 }),
+      ])
+      const store = new WritingZoteroStore()
+      void store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({ profilesDone: 2 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('picks the parked backlog up again when the configuration resume moves it', async () => {
+    vi.useFakeTimers()
+    try {
+      backlog([status()])
+      const store = new WritingZoteroStore()
+      await store.followBibliographyBacklog()
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(1)
+
+      // The owner configures the key: the config-blocked resume path moves
+      // the units back to `pending`, and the next kick finds them moving.
+      backlog([
+        status({
+          profilesDone: 1,
+          profilesBlocked: 0,
+          blockedReasonCode: null,
+          blockedReasonMessage: null,
+          etaMs: 60_000,
+        }),
+      ])
+      void store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(2)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesDone: 1,
+        profilesBlocked: 0,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('probing', () => {
   it('holds what the probe said and claims nothing more', async () => {
     mockInvoke.mockResolvedValue({ state: 'api_disabled' } as never)
@@ -1557,6 +1697,10 @@ describe('P3 derived work of a library sync', () => {
     profilesTotal: 450,
     extractionsDone: 30,
     extractionsTotal: 400,
+    profilesBlocked: 0,
+    extractionsBlocked: 0,
+    blockedReasonCode: null,
+    blockedReasonMessage: null,
     etaMs: 720_000,
   }
 
@@ -1564,10 +1708,15 @@ describe('P3 derived work of a library sync', () => {
     expect(bibliographyDerivedProgress(status)).toEqual({
       worksDone: 120,
       worksTotal: 450,
+      worksBlocked: 0,
       passagesDone: 30,
       passagesTotal: 400,
+      passagesBlocked: 0,
       etaMs: 720_000,
       remaining: 700,
+      remainingActive: 700,
+      blocked: 0,
+      blockedReason: '',
     })
   })
 

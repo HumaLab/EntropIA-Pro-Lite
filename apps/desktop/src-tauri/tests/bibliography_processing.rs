@@ -9824,6 +9824,165 @@ fn p3_sync_status_sees_the_derived_window_before_the_sync_task_settles() {
     );
 }
 
+/// The window tasks of one kind, in admission order.
+fn window_tasks(conn: &rusqlite::Connection, kind: &str) -> Vec<String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+              WHERE domain = 'bibliography' AND kind = ?1
+              ORDER BY rowid",
+        )
+        .expect("window tasks");
+    statement
+        .query_map([kind], |row| row.get(0))
+        .expect("window map")
+        .collect::<Result<_, _>>()
+        .expect("window rows")
+}
+
+/// Parks one task `blocked` with the durable record a configuration block
+/// leaves behind: one closed attempt and the code/message the engine named.
+fn park_task_blocked(conn: &rusqlite::Connection, task_id: &str, code: &str, message: &str) {
+    conn.execute(
+        "INSERT INTO processing_attempts
+           (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+         VALUES (?1, 1, 0, 10, 11, 'interrupted')",
+        [task_id],
+    )
+    .expect("insert blocked attempt");
+    conn.execute(
+        "UPDATE processing_tasks
+            SET state = 'blocked', outcome = ?2,
+                last_error_code = ?2, last_error_message = ?3
+          WHERE id = ?1",
+        rusqlite::params![task_id, code, message],
+    )
+    .expect("park blocked");
+}
+
+/// Blocked derived work is not done work: the status counts it beside the
+/// live counts and names what it is parked on, so the screen can say
+/// «en espera» instead of a progress line that never moves.
+#[test]
+fn p3_sync_status_counts_blocked_derived_work_and_names_why_it_is_parked() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-1", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("P3BLK0001", 12), item("P3BLK0002", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 2);
+
+    park_task_blocked(
+        &conn,
+        &profiles[0],
+        "configuration_required",
+        "OpenRouter API key no configurada. Configurá OpenRouter para generar embeddings.",
+    );
+    conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+            created_at, updated_at)
+         VALUES ('p3-extract-blocked', 'bibliography_extract', 'att-blk', 'bibliography',
+                 'attachment', 'att-blk', 'pending', 9, 9)",
+        [],
+    )
+    .expect("insert extraction");
+    park_task_blocked(
+        &conn,
+        "p3-extract-blocked",
+        "configuration_required",
+        "OpenRouter API key no configurada.",
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((status.profiles_done, status.profiles_total), (0, 2));
+    assert_eq!(status.profiles_blocked, 1);
+    assert_eq!(status.extractions_blocked, 1);
+    assert_eq!(
+        status.blocked_reason_code.as_deref(),
+        Some("configuration_required"),
+        "the stable code travels; the screen words it"
+    );
+    assert!(
+        status
+            .blocked_reason_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("OpenRouter"),
+        "the recorded message travels beside the code"
+    );
+}
+
+/// The ETA times work that can move, never work parked on the owner: blocked
+/// tasks leave the remaining count, and once every remaining task of a kind
+/// is blocked its estimate is honestly unknown instead of zero.
+#[test]
+fn p3_sync_eta_excludes_blocked_work_and_is_null_once_only_blocked_remains() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-2", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![
+            ScriptStep::Page(page(
+                vec![item("P3ETA0001", 12), item("P3ETA0002", 3)],
+                Some(3),
+            )),
+            ScriptStep::Page(page(vec![item("P3ETA0003", 4)], Some(3))),
+        ],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 3);
+
+    // Three finished attempts of 1000 ms are the sample: one unit takes 1000 ms.
+    settle_task_with_attempts(
+        &conn,
+        &profiles[0],
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+    park_task_blocked(
+        &conn,
+        &profiles[1],
+        "configuration_required",
+        "OpenRouter API key no configurada.",
+    );
+
+    let mixed = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        mixed.eta_ms,
+        Some(1_000),
+        "1 actionable task × 1000 ms: the blocked task waits on the owner, not on the clock"
+    );
+
+    park_task_blocked(
+        &conn,
+        &profiles[2],
+        "configuration_required",
+        "OpenRouter API key no configurada.",
+    );
+    let parked = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((parked.profiles_done, parked.profiles_total), (1, 3));
+    assert_eq!(parked.profiles_blocked, 2);
+    assert_eq!(
+        parked.eta_ms, None,
+        "every remaining task of the kind is blocked: the estimate is unknown, never zero"
+    );
+}
+
 // ── Opened works first (P3) ───────────────────────────────────────────────
 
 /// Creates the local-only `app_settings` key/value table the opened-works

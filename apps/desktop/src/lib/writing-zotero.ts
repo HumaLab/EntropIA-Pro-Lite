@@ -144,6 +144,12 @@ export interface BibliographySyncStatus {
   /** Live extraction tasks (pasajes) of this sync's window: settled over queued. */
   extractionsDone: number
   extractionsTotal: number
+  /** Live blocked derived work of this sync's window: parked on an owner-side change, never done. */
+  profilesBlocked: number
+  extractionsBlocked: number
+  /** What the blocked work is parked on: a stable code beside its recorded message. */
+  blockedReasonCode: string | null
+  blockedReasonMessage: string | null
   /** What the derived backlog still needs in ms; null while it cannot be estimated. */
   etaMs: number | null
 }
@@ -162,11 +168,31 @@ const SYNC_POLL_MS = 1500
 export interface BibliographyDerivedProgress {
   worksDone: number
   worksTotal: number
+  worksBlocked: number
   passagesDone: number
   passagesTotal: number
+  passagesBlocked: number
   etaMs: number | null
-  /** Tasks still unsettled in the window; zero = nothing left to follow. */
+  /** Tasks still unsettled in the window; zero = nothing left to show. */
   remaining: number
+  /** Unsettled work that can still move by itself; zero = nothing left to follow. */
+  remainingActive: number
+  /** Unsettled work parked on a change only the owner can make. */
+  blocked: number
+  /** Why the parked work waits, in the app's words where it can word them. */
+  blockedReason: string
+}
+
+/**
+ * Why the parked work waits, in the app's own words where a stable code names
+ * the reason (`configuration_required`: the embedding engine has no usable
+ * configuration) and in the executor's recorded message otherwise.
+ */
+export function bibliographyBlockedReason(status: BibliographySyncStatus): string {
+  if (status.blockedReasonCode === 'configuration_required') {
+    return t('writing.zoteroBlockedReasonConfiguration')
+  }
+  return status.blockedReasonMessage ?? status.blockedReasonCode ?? ''
 }
 
 /** Reads the live derived-work counts out of one sync status. */
@@ -175,26 +201,38 @@ export function bibliographyDerivedProgress(
 ): BibliographyDerivedProgress {
   const worksTotal = status.profilesTotal ?? 0
   const worksDone = status.profilesDone ?? 0
+  const worksBlocked = status.profilesBlocked ?? 0
   const passagesTotal = status.extractionsTotal ?? 0
   const passagesDone = status.extractionsDone ?? 0
+  const passagesBlocked = status.extractionsBlocked ?? 0
+  const blocked = worksBlocked + passagesBlocked
+  const remaining = worksTotal - worksDone + (passagesTotal - passagesDone)
   return {
     worksDone,
     worksTotal,
+    worksBlocked,
     passagesDone,
     passagesTotal,
+    passagesBlocked,
     etaMs: status.etaMs ?? null,
-    remaining: worksTotal - worksDone + (passagesTotal - passagesDone),
+    remaining,
+    remainingActive: remaining - blocked,
+    blocked,
+    blockedReason: blocked > 0 ? bibliographyBlockedReason(status) : '',
   }
 }
 
 /**
  * Whether the follower must keep reading: the task can still change by
- * itself, or its derived backlog is still draining after a success. The
- * screen keeps moving on the derived work, not on the sync task alone.
+ * itself, or its derived backlog still holds work that can move without the
+ * owner. Parked (`blocked`) work is not followed: nothing about it will
+ * change until the owner changes the configuration, and the next kick finds
+ * it again when that happens. The screen keeps moving on the derived work,
+ * not on the sync task alone.
  */
 function bibliographyFollowPending(status: BibliographySyncStatus): boolean {
   if (SYNC_FOLLOWED_STATES.has(status.state)) return true
-  return status.state === 'succeeded' && bibliographyDerivedProgress(status).remaining > 0
+  return status.state === 'succeeded' && bibliographyDerivedProgress(status).remainingActive > 0
 }
 
 /**

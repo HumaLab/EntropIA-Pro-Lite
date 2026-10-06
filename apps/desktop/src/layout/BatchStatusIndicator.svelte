@@ -22,6 +22,18 @@
   import { StatusBadge } from '@entropia/ui'
 
   let summary = $state<BatchGlobalSummary>(batchStore.snapshot())
+
+  // P3: while the derived backlog of a library sync (fichas and pasajes)
+  // still holds work, the footer says so compactly — with the real counts,
+  // not a generic "running". Blocked work is counted separately: parked on
+  // the owner is not progress.
+  let bibliography = $state<BibliographyDerivedProgress | null>(null)
+  const unsubscribeZotero = writingZotero.subscribe((next) => {
+    const status = next.bibliographyProgress?.status ?? null
+    const derived = status ? bibliographyDerivedProgress(status) : null
+    bibliography = derived && derived.remaining > 0 ? derived : null
+  })
+
   // Which batch work the footer has already reacted to. A bibliography sync
   // admitted after startup carries a backlog this session never requested,
   // so the follower is asked again whenever the active set changes — never
@@ -40,17 +52,17 @@
     if (ids !== seenActiveIds) {
       seenActiveIds = ids
       void writingZotero.followBibliographyBacklog()
+      return
     }
-  })
-
-  // P3: while the derived backlog of a library sync (fichas and pasajes)
-  // still holds work, the footer says so compactly — with the real counts,
-  // not a generic "running".
-  let bibliography = $state<BibliographyDerivedProgress | null>(null)
-  const unsubscribeZotero = writingZotero.subscribe((next) => {
-    const status = next.bibliographyProgress?.status ?? null
-    const derived = status ? bibliographyDerivedProgress(status) : null
-    bibliography = derived && derived.remaining > 0 ? derived : null
+    // While the backlog is parked `blocked`, the configuration resume that
+    // frees it has no user batch to activate: its first committed unit
+    // announces itself through the queue alone. A refresh of the parked
+    // snapshot is therefore one cheap status read that either finds the
+    // resumed work (the follower goes live again) or finds the same parked
+    // counts and stops.
+    if (bibliography && bibliography.remainingActive === 0 && bibliography.blocked > 0) {
+      void writingZotero.followBibliographyBacklog()
+    }
   })
 
   onMount(() => {
@@ -69,6 +81,12 @@
   const currentLocale = locale
   const activeCount = $derived(summary.active.length)
   const failedCount = $derived(summary.active.reduce((sum, batch) => sum + batch.failedUnits, 0))
+  // Only blocked work left: nothing moves by itself, so the badge stops
+  // pulsing and wears the attention styling the footer already uses for
+  // work that needs the owner.
+  const parkedBibliography = $derived(
+    bibliography !== null && bibliography.remainingActive === 0 && bibliography.blocked > 0
+  )
   const visible = $derived(
     summary.init !== null && (activeCount > 0 || failedCount > 0 || bibliography !== null)
   )
@@ -76,15 +94,29 @@
   const label = $derived.by(() => {
     $currentLocale
     const derived = bibliography
-    if (derived) {
-      return t('batch.statusBibliography', {
-        worksDone: derived.worksDone,
-        worksTotal: derived.worksTotal,
-        passagesDone: derived.passagesDone,
-        passagesTotal: derived.passagesTotal,
-      })
+    if (derived && derived.remainingActive > 0) {
+      return derived.blocked > 0
+        ? t('batch.statusBibliographyWaiting', {
+            worksDone: derived.worksDone,
+            worksTotal: derived.worksTotal,
+            passagesDone: derived.passagesDone,
+            passagesTotal: derived.passagesTotal,
+            blocked: derived.blocked,
+          })
+        : t('batch.statusBibliography', {
+            worksDone: derived.worksDone,
+            worksTotal: derived.worksTotal,
+            passagesDone: derived.passagesDone,
+            passagesTotal: derived.passagesTotal,
+          })
     }
     if (failedCount > 0) return t('batch.statusAttention', { count: failedCount })
+    if (derived && derived.blocked > 0) {
+      return t('batch.statusBibliographyBlocked', {
+        blocked: derived.blocked,
+        reason: derived.blockedReason,
+      })
+    }
     if (activeCount > 0) return t('batch.statusRunning', { count: activeCount })
     return t('batch.statusIdle')
   })
@@ -101,12 +133,12 @@
   <button
     type="button"
     class="batch-indicator"
-    class:batch-indicator--running={failedCount === 0}
+    class:batch-indicator--running={failedCount === 0 && !parkedBibliography}
     onclick={openBatchTab}
     aria-label={`${t('batch.openBatchTab')} — ${label}`}
   >
     <StatusBadge
-      variant={failedCount > 0 ? 'danger' : 'info'}
+      variant={failedCount > 0 || parkedBibliography ? 'danger' : 'info'}
       size="sm"
       class="batch-indicator__badge">{label}</StatusBadge
     >

@@ -24,6 +24,10 @@ type SyncStatus = {
   profilesTotal: number
   extractionsDone: number
   extractionsTotal: number
+  profilesBlocked: number
+  extractionsBlocked: number
+  blockedReasonCode: string | null
+  blockedReasonMessage: string | null
   etaMs: number | null
 }
 
@@ -42,6 +46,10 @@ function syncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
     profilesTotal: 0,
     extractionsDone: 0,
     extractionsTotal: 0,
+    profilesBlocked: 0,
+    extractionsBlocked: 0,
+    blockedReasonCode: null,
+    blockedReasonMessage: null,
     etaMs: null,
     ...overrides,
   }
@@ -222,5 +230,77 @@ describe('BatchStatusIndicator', () => {
 
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
     expect(screen.queryByText(/Bibliografía/)).not.toBeInTheDocument()
+  })
+
+  it('shows a compact attention line instead of an endless progress line when only blocked work remains', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 2812,
+        profilesDone: 0,
+        profilesTotal: 2812,
+        profilesBlocked: 2812,
+        blockedReasonCode: 'configuration_required',
+        blockedReasonMessage: 'OpenRouter API key no configurada.',
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: 2812 en espera: configurá OpenRouter en Configuración')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/fichas/)).not.toBeInTheDocument()
+    // Nothing is moving, so the badge must not pulse as if it were.
+    expect(screen.getByRole('button').className).not.toContain('batch-indicator--running')
+  })
+
+  it('keeps counting the work that moves and names what waits beside it', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        profilesBlocked: 70,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        blockedReasonCode: 'configuration_required',
+        blockedReasonMessage: 'OpenRouter API key no configurada.',
+        etaMs: 720_000,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: fichas 120/450 · pasajes 30/400 · 70 en espera')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button').className).toContain('batch-indicator--running')
+  })
+
+  it('looks again when the queue announces work while the backlog is parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 2,
+        profilesBlocked: 2,
+        blockedReasonCode: 'configuration_required',
+        blockedReasonMessage: 'OpenRouter API key no configurada.',
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+
+    // The configuration resume has no user batch to activate: its first
+    // committed unit announces itself through the queue, and a refresh of
+    // the parked backlog is one cheap re-check that finds the resumed work.
+    setActiveBatches([])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
+    setActiveBatches([])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(3)
   })
 })

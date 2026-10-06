@@ -92,6 +92,31 @@ describe('i18n', () => {
       'Bibliografía: fichas 120/450 · pasajes 30/400'
     )
 
+    // The blocked backlog is said out loud, with what unblocks it.
+    const waiting = { ...counts, blocked: 2812, reason: 'configurá OpenRouter en Configuración' }
+    expect(t('writing.zoteroBlockedReasonConfiguration')).toBe(
+      'configurá OpenRouter en Configuración'
+    )
+    expect(t('writing.zoteroBibliographySyncBlockedBacklog', waiting)).toBe(
+      'Fichas 120/450 · Pasajes 30/400 · 2812 en espera: configurá OpenRouter en Configuración'
+    )
+    expect(
+      t('writing.zoteroBibliographySyncIndexingWaiting', {
+        ...counts,
+        eta: '12 min',
+        blocked: 70,
+        reason: 'configurá OpenRouter en Configuración',
+      })
+    ).toBe(
+      'Fichas 120/450 · Pasajes 30/400 · ~12 min restantes · 70 en espera: configurá OpenRouter en Configuración'
+    )
+    expect(t('batch.statusBibliographyWaiting', { ...counts, blocked: 70 })).toBe(
+      'Bibliografía: fichas 120/450 · pasajes 30/400 · 70 en espera'
+    )
+    expect(t('batch.statusBibliographyBlocked', waiting)).toBe(
+      'Bibliografía: 2812 en espera: configurá OpenRouter en Configuración'
+    )
+
     locale.set('en')
 
     expect(t('writing.zoteroBibliographySyncIndexing', { ...counts, eta: '12 min' })).toBe(
@@ -105,6 +130,32 @@ describe('i18n', () => {
     expect(t('writing.zoteroEtaHoursMinutes', { hours: 2, minutes: 5 })).toBe('2 h 5 min')
     expect(t('batch.statusBibliography', counts)).toBe(
       'Bibliography: works 120/450 · passages 30/400'
+    )
+
+    const waitingEn = {
+      ...counts,
+      blocked: 2812,
+      reason: 'configure OpenRouter in Settings',
+    }
+    expect(t('writing.zoteroBlockedReasonConfiguration')).toBe('configure OpenRouter in Settings')
+    expect(t('writing.zoteroBibliographySyncBlockedBacklog', waitingEn)).toBe(
+      'Works 120/450 · Passages 30/400 · 2812 waiting: configure OpenRouter in Settings'
+    )
+    expect(
+      t('writing.zoteroBibliographySyncIndexingWaiting', {
+        ...counts,
+        eta: '12 min',
+        blocked: 70,
+        reason: 'configure OpenRouter in Settings',
+      })
+    ).toBe(
+      'Works 120/450 · Passages 30/400 · ~12 min left · 70 waiting: configure OpenRouter in Settings'
+    )
+    expect(t('batch.statusBibliographyWaiting', { ...counts, blocked: 70 })).toBe(
+      'Bibliography: works 120/450 · passages 30/400 · 70 waiting'
+    )
+    expect(t('batch.statusBibliographyBlocked', waitingEn)).toBe(
+      'Bibliography: 2812 waiting: configure OpenRouter in Settings'
     )
   })
 

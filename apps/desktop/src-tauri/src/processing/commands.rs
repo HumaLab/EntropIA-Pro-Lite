@@ -259,10 +259,24 @@ pub struct BibliographySyncStatus {
     pub profiles_total: i64,
     pub extractions_done: i64,
     pub extractions_total: i64,
-    /// What the derived backlog still needs, in ms: the remaining tasks of
-    /// each kind times the average duration of that kind's finished attempts
-    /// inside this window. `None` while the window holds fewer than three
-    /// finished attempts, or while any kind with work left has fewer than
+    /// Live blocked derived work inside this sync's window: tasks parked
+    /// `blocked`, waiting for a change only the owner can make. Not settled
+    /// and never counted as done — the screen says «en espera» about these.
+    pub profiles_blocked: i64,
+    pub extractions_blocked: i64,
+    /// What the blocked work is parked on, from the first blocked task of the
+    /// window: the stable code the executor wrote (`configuration_required`
+    /// when the embedding engine has no usable configuration) beside its
+    /// message. `None` while nothing is blocked.
+    pub blocked_reason_code: Option<String>,
+    pub blocked_reason_message: Option<String>,
+    /// What the derived backlog still needs, in ms: the *actionable* remaining
+    /// tasks of each kind times the average duration of that kind's finished
+    /// attempts inside this window. Blocked tasks are never timed — they wait
+    /// on the owner, not on the clock — and when every remaining task of a
+    /// kind is blocked that kind has no estimate at all, so the answer is
+    /// `None`. `None` as well while the window holds fewer than three finished
+    /// attempts, or while any kind with actionable work left has fewer than
     /// three to average — an honest unknown, never a made-up number.
     pub eta_ms: Option<i64>,
 }
