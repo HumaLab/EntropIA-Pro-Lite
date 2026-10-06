@@ -27,6 +27,8 @@
   import { importWritingImage } from '$lib/writing-images'
   import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
+  import WritingSharePanel from './WritingSharePanel.svelte'
+  import { articleHtml, listWritingShares } from '$lib/writing-publish'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
     exportPreferences,
@@ -167,9 +169,16 @@
   /** The sync-completion refresh; created per mount, released on destroy. */
   let unsubscribeSync: (() => void) | null = null
 
+  /** Documents shared with another account, marked in the list (T-33). */
+  let sharedIds = $state(new Set<string>())
+
   onMount(async () => {
     // Idempotent: the store memoizes its own bootstrap + listener attach.
     void syncStore.initialize()
+    // Best effort: without sync or on an older server nothing is marked.
+    listWritingShares()
+      .then((shares) => (sharedIds = new Set((shares ?? []).map((s) => s.document_id))))
+      .catch(() => {})
 
     // The sync store pushes its current snapshot synchronously to a fresh
     // subscriber, so the watcher's first snapshot is a baseline, not a
@@ -470,6 +479,20 @@
    */
   let downloading = $state(false)
   let exportOutcome = $state<Exclude<DownloadOutcome, { kind: 'cancelled' }> | null>(null)
+
+  let sharePanelOpen = $state(false)
+
+  /** What "Enviar a hlab.com.ar" sends: what is on screen, as in `download`. */
+  function currentArticleHtml(): Promise<string> {
+    const content = snapshot.content
+    if (!content) return Promise.reject(new Error(t('writing.untitled')))
+    return articleHtml(
+      content.doc,
+      $exportPreferences,
+      DEFAULT_STYLE,
+      t('writing.exportBibliography')
+    )
+  }
 
   async function download(format: ExportFormat) {
     // Reads `snapshot.content`, which every keystroke already updates, so the
@@ -1110,6 +1133,16 @@
       </IconButton>
       {#if snapshot.content}
         <WritingDownloadMenu ondownload={download} busy={downloading} />
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={t('writing.shareToggle')}
+          title={t('writing.shareToggle')}
+          active={sharePanelOpen}
+          onclick={() => (sharePanelOpen = !sharePanelOpen)}
+        >
+          <ActionIcon name="send" size={14} />
+        </IconButton>
       {/if}
       <div class="writing__bar-end">
         <span class="writing__revision">
@@ -1120,6 +1153,15 @@
         </StatusBadge>
       </div>
     </header>
+
+    {#if sharePanelOpen && openDocument}
+      <WritingSharePanel
+        documentId={openDocument.id}
+        title={openDocument.title || t('writing.untitled')}
+        articleHtml={currentArticleHtml}
+        onclose={() => (sharePanelOpen = false)}
+      />
+    {/if}
 
     {#if exportOutcome}
       <WritingExportNotice outcome={exportOutcome} ondismiss={() => (exportOutcome = null)} />
@@ -1453,6 +1495,9 @@
             <button type="button" class="writing__card" onclick={() => open(doc.id)}>
               <span class="writing__card-title" use:tooltip={doc.title}>{doc.title}</span>
               <span class="writing__card-meta">{formatDate(doc.updated_at)}</span>
+              {#if sharedIds.has(doc.id)}
+                <span class="writing__card-cue">{t('writing.shared')}</span>
+              {/if}
               {#if notice?.cue}
                 <span class="writing__card-cue">{t(notice.cue)}</span>
               {/if}

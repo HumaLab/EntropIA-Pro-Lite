@@ -740,3 +740,59 @@ fn unknown_envelope_fields_are_rejected_instead_of_discarded() {
 
     assert_eq!(error.code, INVALID_SYNC_ENVELOPE);
 }
+
+#[test]
+fn shared_document_parks_foreign_collections_and_pushes_them_back() {
+    let connection = migrated_connection();
+    seed_collections(&connection);
+    connection
+        .execute_batch("CREATE TABLE sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+        .expect("sync_meta");
+    super::sync_shared::replace_shared_documents(
+        &connection,
+        &[("doc-1".to_string(), "{}".to_string())],
+    )
+    .expect("mark shared");
+
+    let mut incoming = envelope("doc-1", "active");
+    incoming.collection_associations = vec![
+        CollectionAssociationV1 {
+            collection_id: "collection-a".to_string(),
+            is_primary: false,
+        },
+        CollectionAssociationV1 {
+            collection_id: "collection-of-the-other-account".to_string(),
+            is_primary: true,
+        },
+    ];
+
+    assert!(matches!(
+        create(&connection, &incoming),
+        ReceiveOutcome::Applied { created: true, .. }
+    ));
+    let local_links: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM writing_document_collections WHERE document_id = 'doc-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("local links");
+    assert_eq!(local_links, 1);
+
+    // The push snapshot carries the other account's link back, so its owner
+    // never loses it, and receiving the same version again changes nothing.
+    let snapshot = snapshot_document(&connection, "doc-1").expect("snapshot");
+    assert_eq!(
+        snapshot.collection_associations,
+        incoming.collection_associations
+    );
+    let again = receive_envelope(
+        &connection,
+        "doc-1",
+        &incoming,
+        &replace_authorization(&connection, "doc-1"),
+        &receipt(&incoming),
+    )
+    .expect("receive again");
+    assert!(matches!(again, ReceiveOutcome::NoOp { .. }));
+}

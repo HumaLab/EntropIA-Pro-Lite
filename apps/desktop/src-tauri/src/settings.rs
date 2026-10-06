@@ -31,14 +31,17 @@ pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
 pub const ASSEMBLYAI_API_KEY: &str = "assemblyai_api_key";
 pub const GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
 pub const ZOTERO_API_KEY: &str = "zotero_api_key";
+/// Key for publishing Escritura documents to hlab.com.ar (`writing::publish`).
+pub const HLAB_PUBLISH_KEY: &str = "hlab_publish_key";
 /// The Zotero account id the stored key was last verified for. Not a secret, but
 /// only meaningful next to that key, so a new or cleared key forgets it.
 pub const ZOTERO_USER_ID_KEY: &str = "zotero_user_id";
-const SECRET_SETTING_KEYS: [&str; 4] = [
+const SECRET_SETTING_KEYS: [&str; 5] = [
     OPENROUTER_API_KEY,
     ASSEMBLYAI_API_KEY,
     GLM_OCR_API_KEY,
     ZOTERO_API_KEY,
+    HLAB_PUBLISH_KEY,
 ];
 static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "local-ml")]

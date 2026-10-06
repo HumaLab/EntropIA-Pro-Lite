@@ -393,6 +393,17 @@ pub(crate) fn snapshot_document(
         },
         attachments_manifest: AttachmentManifestV1::PreparationRequired,
     };
+    // Links to another account's collections travel with the document even
+    // though this device cannot store them (see `sync_shared`).
+    for parked in super::sync_shared::load_parked_collections(conn, document_id)? {
+        if !envelope
+            .collection_associations
+            .iter()
+            .any(|local| local.collection_id == parked.collection_id)
+        {
+            envelope.collection_associations.push(parked);
+        }
+    }
     envelope.canonicalize();
     envelope.validate()?;
     Ok(envelope)

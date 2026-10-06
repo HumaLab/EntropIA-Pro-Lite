@@ -34,6 +34,7 @@ pub mod agent_prompt;
 pub mod commands;
 pub mod csl;
 pub mod journal;
+pub mod publish;
 pub mod recovery;
 pub mod repository;
 pub mod retrieval;
@@ -54,6 +55,7 @@ mod sync_files_tests;
 pub(crate) mod sync_receive;
 #[cfg(test)]
 mod sync_receive_tests;
+pub(crate) mod sync_shared;
 pub(crate) mod sync_transport;
 #[cfg(test)]
 mod sync_transport_tests;

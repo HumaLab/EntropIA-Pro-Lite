@@ -211,6 +211,26 @@ pub(crate) async fn run_writing_cycle<A: SyncApi>(
         return outcome;
     }
 
+    // 1b. Shared-document list before pulling, so a document shared since the
+    // last cycle applies in this one (`writing::sync_shared`). A server without
+    // shares answers an error and the stored list stays as it was.
+    if let Ok(shares) = api.list_writing_shares(token).await {
+        let rows: Vec<(String, String)> = shares
+            .iter()
+            .map(|share| {
+                let value = serde_json::to_string(share).unwrap_or_default();
+                (share.document_id.clone(), value)
+            })
+            .collect();
+        if let Err(error) = crate::writing::sync_shared::replace_shared_documents(conn, &rows) {
+            note(
+                &mut outcome,
+                warn,
+                format!("writing share list not stored: {}", error.message),
+            );
+        }
+    }
+
     // 2. Since-zero writing catch-up before incremental writing pulls.
     outcome.catchup_needed_at_start = match catchup_needed(conn, &scope.server_epoch) {
         Ok(needed) => needed,
