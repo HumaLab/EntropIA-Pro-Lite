@@ -878,7 +878,7 @@ En **RAG Params**, el modelo de *reranker* reordena los pasajes recuperados y no
 
 Abrí **Configuración → Apariencia**. Los ajustes visuales ya no están en la barra superior. Se aplican al elegirlos; no cambian el contenido de los documentos.
 
-- **Tema:** **Oscuro**, **Cálido**, **Claro** o **Lite**. «Lite» es el nombre de un tema visual; no es un cambio de producto a Pro.
+- **Tema:** **Oscuro**, **Cálido**, **Claro**, **Lite**, **Papel**, **Bosque** o **Vibrante**. **Papel** imita el papel de archivo y es cómodo para leer escaneos durante horas; **Bosque** es oscuro con detalles verdes; **Vibrante** es el más llamativo, violeta y fucsia. Todos mantienen el texto legible en los tres niveles de contraste. «Lite» es el nombre de un tema visual; no es un cambio de producto a Pro.
 - **Contraste:** **Contraste suave**, **Contraste normal** o **Contraste alto**.
 - **Zoom:** pulsá **+** o **−**, o **Restablecer zoom**. El intervalo es 75 %–125 % en pasos de 5 %. En Windows podés usar **Ctrl +**, **Ctrl −** y **Ctrl 0**.
 - **Tipografía:** opciones **Académica**, **Moderna**, **Editorial** y **Archivo**.
