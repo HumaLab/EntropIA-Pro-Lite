@@ -657,7 +657,34 @@ Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción **E
 
 ### 11.7. Sincronización del manuscrito
 
-Los manuscritos de Escritura se guardan en este equipo y no forman parte de la sincronización general entre dispositivos. Exportá una copia si necesitás moverlos o conservarlos fuera de la aplicación.
+Con la [sincronización](#capitulo-15-sincronizacion-y-nube) activa, los manuscritos viajan entre los equipos de tu cuenta junto con sus imágenes. Si editaste el mismo manuscrito en dos equipos antes de sincronizar, EntropIA conserva las dos versiones: la otra queda como un manuscrito aparte para que elijas qué texto mantener. Sin sincronización, el manuscrito se queda en este equipo; descargá una copia si necesitás moverlo.
+
+<a id="compartir-manuscrito"></a>
+### 11.8. Compartir un manuscrito con otra cuenta
+
+Para escribir de a dos, cada persona usa su propia cuenta de sincronización y comparten el mismo manuscrito.
+
+1. Con el manuscrito abierto, pulsá **Compartir y publicar** en la barra (el ícono del avión de papel).
+2. En **Compartir con otra cuenta**, escribí el mail de la cuenta de EntropIA de la otra persona y pulsá **Compartir**.
+3. La otra persona lo recibe en su próxima sincronización. En la lista de Escritura, los manuscritos compartidos llevan la marca **Compartido**.
+
+Desde ese momento, lo que escribe cada uno le llega al otro al sincronizar. Conviene no editar el mismo párrafo a la vez: si los dos cambian el manuscrito entre una sincronización y la siguiente, se conserva la otra versión como manuscrito aparte, igual que entre tus equipos. Mandar el manuscrito a la papelera lo manda para los dos.
+
+- **Quitar:** quien compartió puede sacar a una persona; esa persona conserva su copia, pero deja de recibir cambios.
+- **Dejar de recibir cambios:** quien recibió el manuscrito puede salirse por su cuenta, con el mismo resultado.
+
+Las colecciones a las que está vinculado el manuscrito no se comparten: cada uno ve solo las suyas. Una cita a un documento que la otra persona no tiene se muestra con el texto citado y el aviso de fuente no disponible. Si uno actualiza EntropIA, el otro también tiene que actualizar para seguir sincronizando.
+
+<a id="enviar-a-hlab"></a>
+### 11.9. Enviar un manuscrito al blog de hlab.com.ar
+
+Esta opción es para el equipo de HLab: manda el manuscrito al blog de hlab.com.ar sin copiar y pegar.
+
+1. Pulsá **Compartir y publicar** en la barra del manuscrito.
+2. La primera vez, en **Enviar a hlab.com.ar**, pegá la **Clave para publicar en hlab.com.ar** que te pasó el equipo y pulsá **Guardar clave**. Queda guardada en el almacén de claves del sistema.
+3. Pulsá **Enviar a hlab.com.ar**. Cuando termina aparece **Listo** y **Abrir en el panel** lleva al artículo en el panel de administración del sitio.
+
+El primer envío llega como **borrador oculto**: nadie lo ve hasta que se publica desde el panel del sitio, donde también se eligen la categoría y la imagen. Si volvés a enviar el mismo manuscrito, se actualizan el título y el texto; si ya estaba publicado, el cambio sale al aire en el momento. Las citas se envían como notas al pie, igual que en la descarga HTML. El sitio no conserva la alineación de los párrafos.
 
 ---
 
@@ -802,7 +829,7 @@ El indicador inferior puede mostrar que la sincronización está al día, que ha
 
 **Re-verificar archivos** encola su reenvío para comprobarlos; no crea una copia de respaldo. **Borrar mis datos del servidor** requiere la contraseña y confirmar **Borrar todo**. Elimina los datos remotos, pero conserva los de este equipo. No lo uses como prueba para solucionar un error.
 
-> **Importante:** los manuscritos de **Escritura** permanecen en el equipo donde se crearon y no forman parte de la sincronización general. Exportalos aparte si necesitás pasarlos a otro dispositivo. Las notas asociadas a documentos pueden sincronizarse cuando configurás la cuenta.
+> **Importante:** los manuscritos de **Escritura** también se sincronizan, con sus imágenes, y se pueden compartir con otra cuenta ([11.8](#compartir-manuscrito)). Las notas asociadas a documentos pueden sincronizarse cuando configurás la cuenta.
 
 ![Decidir, iniciar sesión, configurar y revisar el estado de sincronización.](images/14-sincronizacion-opcional.svg)
 
@@ -1098,7 +1125,7 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 
 > **Atención**
 >
-> Los documentos creados en **Escritura** no se sincronizan entre dispositivos. Guardá una copia en una carpeta segura o en otro dispositivo antes de cambiar de equipo.
+> Los documentos creados en **Escritura** se sincronizan entre dispositivos solo si la sincronización está activa. Sin ella, guardá una copia en una carpeta segura antes de cambiar de equipo.
 
 ---
 
