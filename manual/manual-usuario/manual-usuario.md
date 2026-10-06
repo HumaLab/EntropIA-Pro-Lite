@@ -755,17 +755,17 @@ El agente no modifica el manuscrito automáticamente. Si el pasaje cambió, desa
 <a id="capitulo-14-procesamiento-por-lotes"></a>
 ## Capítulo 14. Procesamiento por lotes
 
-Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto y **Embeddings** para preparar materiales para compararlos por semejanza. No incluyen transcripción de audio STT ni generan un resumen conjunto.
+Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto, **Embeddings** para preparar materiales para compararlos por semejanza, **Entidades** para encontrar personas, lugares y organizaciones, y **Tripletes** para extraer relaciones del tipo quién hizo qué. No incluyen transcripción de audio STT ni generan un resumen conjunto.
 
 ![Seleccionar colecciones, revisar tareas y seguir el avance del lote.](images/06-lotes-progreso.svg)
 
 1. Abrí **Configuración → Lotes** y seleccioná una o varias colecciones. **Seleccionar todas** marca todas las disponibles.
-2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, o ambas tareas. Después, pulsá **Analizar selección**.
+2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, o varias a la vez. Después, pulsá **Analizar selección**.
 3. Revisá qué documentos y tareas incluye la propuesta. Si el alcance no es correcto, descartala.
 4. Cuando termine el análisis, pulsá **Iniciar lote**.
 5. Seguí el estado en la pestaña o desde el indicador de lotes de la barra inferior.
 
-No hace falta repetir tareas completas. Los embeddings requieren texto. El lote avanza mientras EntropIA está abierta; al cerrar, se detiene. Al reabrir, el aviso de recuperación permite **Mantener pausados** o **Reanudar**. Entrá en **Lotes activos y recuperados → Ver detalle** y revisá pendientes, interrumpidos y fallidos antes de continuar.
+No hace falta repetir tareas completas. Los embeddings, las entidades y los tripletes requieren texto: si un documento todavía no lo tiene y también marcaste **OCR**, esperan a que el OCR termine. Un documento que ya tiene entidades o tripletes no se vuelve a procesar. El lote avanza mientras EntropIA está abierta; al cerrar, se detiene. Al reabrir, el aviso de recuperación permite **Mantener pausados** o **Reanudar**. Entrá en **Lotes activos y recuperados → Ver detalle** y revisá pendientes, interrumpidos y fallidos antes de continuar.
 
 - **Pausar / Reanudar:** controlar la ejecución cuando el estado lo permite.
 - **Cancelar:** pide confirmación; conserva el trabajo ya confirmado, no deshace el OCR ni los embeddings terminados.
@@ -775,7 +775,29 @@ No hace falta repetir tareas completas. Los embeddings requieren texto. El lote 
 
 Un OCR terminado sin texto puede contar como completo. Abrí esa página y revisá el resultado; crear otro lote no garantiza que vuelva a procesarla.
 
-En Lite, reconocer texto y comparar materiales depende de servicios por Internet y claves configuradas. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+
+
+<a id="esquema-propio"></a>
+### 14.1. Extraer una tabla con tu propio esquema
+
+Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
+
+1. En **Configuración → Lotes**, debajo de las operaciones, buscá **Esquema propio** y pulsá **Nuevo esquema**.
+2. Poné un nombre al esquema y, si querés, un **Modelo** de OpenRouter solo para este esquema (vacío usa el general de **Model Params**). Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
+3. Marcá **Puede repetirse** en los campos que pueden tener varios valores en un mismo caso: un barco con muchas cargas distintas.
+4. Pulsá **Guardar esquema**. Queda elegido en **Esquema propio**.
+5. Seleccioná las colecciones y pulsá **Analizar selección**. La propuesta dice cuántos documentos pasan por el esquema. Después, **Iniciar lote**.
+6. Cuando termine, elegí el esquema y pulsá **Ver resultados**. La tabla muestra una fila por caso, con el documento del que salió. **Descargar CSV** la guarda como planilla para abrirla en Excel o LibreOffice; los valores repetidos van separados por punto y coma.
+
+Un documento que ya tiene resultados con ese esquema no se vuelve a procesar. **Editar** cambia el nombre o los campos para los próximos lotes; los resultados anteriores conservan los campos con los que se sacaron. **Borrar** elimina el esquema y todos sus resultados.
+
+El modelo copia lo que encuentra en el texto, pero puede equivocarse o saltearse casos, sobre todo si el OCR tiene errores. Revisá una muestra contra los documentos antes de usar la tabla. En Lite cada documento es una consulta paga a OpenRouter. Los esquemas y sus resultados quedan en este equipo: todavía no viajan con la sincronización.
+
+<a id="flujos-guardados"></a>
+### 14.2. Guardar una combinación como flujo
+
+Si siempre procesás tus colecciones con los mismos pasos, guardalos una vez. Marcá las operaciones (y el esquema propio, si usás uno), pulsá **Guardar como flujo**, escribí un nombre —por ejemplo «Partes de puerto»— y **Guardar**. La próxima vez elegilo en **Flujo guardado** y quedan marcadas solas. Un flujo solo recuerda qué marcar: las colecciones las elegís en cada lote. Guardar con un nombre que ya existe lo reemplaza.
 
 ---
 
@@ -987,7 +1009,7 @@ El JSON de colección puede incluir notas, tópicos, texto OCR y transcripciones
 ![Caso: preparar texto, analizar cada fuente y registrar hallazgos.](images/10-caso-analisis-documentos.svg)
 
 1. Importá las fuentes y obtené el texto de cada documento que lo necesite.
-2. Abrí cada documento y seleccioná la página o archivo con texto. Usá **OCRR/Resumen** para resumirlo, **NER** para proponer nombres de personas o lugares o **TRIPLET** para sugerir relaciones, como quién hizo qué. Revisá el alcance de la salida; los lotes no crean un resumen general.
+2. Abrí cada documento y seleccioná la página o archivo con texto. Usá **OCRR/Resumen** para resumirlo, **NER** para proponer nombres de personas o lugares o **TRIPLET** para sugerir relaciones, como quién hizo qué. Para muchos documentos, **Entidades** y **Tripletes** también corren por lote. Revisá el alcance de la salida; los lotes no crean un resumen general.
 3. Contrastá cada salida con su texto original; usá **Análisis textual** en la colección para observar frecuencias de palabras.
 4. Registrá coincidencias y diferencias en notas, citando qué documento las respalda.
 

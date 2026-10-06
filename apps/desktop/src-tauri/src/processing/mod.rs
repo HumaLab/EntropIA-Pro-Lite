@@ -16,10 +16,13 @@ pub mod commands;
 pub mod compact;
 pub mod eligibility;
 pub mod embedding;
+pub mod ner;
 pub mod ocr;
 pub mod recovery;
 pub mod repository;
 pub mod scheduler;
+pub mod schema_extract;
+pub mod triples;
 
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;

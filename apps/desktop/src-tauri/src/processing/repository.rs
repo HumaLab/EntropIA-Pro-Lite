@@ -153,11 +153,16 @@ pub fn read_summary(conn: &Connection) -> Result<QueueSummary, String> {
 pub const TERMINAL_TASK_STATES: &[&str] = &["succeeded", "failed", "skipped", "cancelled"];
 
 /// Operations a batch asked for, parsed from `processing_batches.operations`
-/// (JSON array of `"ocr"` / `"embeddings"`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// (JSON array of `"ocr"` / `"embeddings"` / `"ner"` / `"triples"` /
+/// `"schema:<id>"`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchOperations {
     pub ocr: bool,
     pub embeddings: bool,
+    pub ner: bool,
+    pub triples: bool,
+    /// Extraction with a user-defined schema (T-51): the schema id.
+    pub schema: Option<String>,
 }
 pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperations, String> {
     let raw: String = conn
@@ -173,7 +178,13 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
             match entry.as_str() {
                 "ocr" => ops.ocr = true,
                 "embeddings" => ops.embeddings = true,
-                _ => {}
+                "ner" => ops.ner = true,
+                "triples" => ops.triples = true,
+                other => {
+                    if let Some(id) = other.strip_prefix("schema:") {
+                        ops.schema = Some(id.to_string());
+                    }
+                }
             }
         }
     }
@@ -421,9 +432,12 @@ pub fn admit_subject_or_attach(
         );
     }
     subject.check_admittable()?;
-    if kind != "ocr" && kind != "embedding" {
+    if !matches!(
+        kind,
+        "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+    ) {
         return Err(format!(
-            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding only)",
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner/triples/schema_extract only)",
             subject.domain, subject.subject_kind
         ));
     }
@@ -3182,7 +3196,10 @@ pub fn list_tasks(
         }
     }
     if let Some(kind) = kind_filter {
-        if kind != "ocr" && kind != "embedding" {
+        if !matches!(
+            kind,
+            "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+        ) {
             return Err(format!("invalid_selection: unknown task kind {kind}"));
         }
     }
@@ -3644,6 +3661,9 @@ pub fn claim_next(
     for kind in kinds {
         if *kind != "ocr"
             && *kind != "embedding"
+            && *kind != "ner"
+            && *kind != "triples"
+            && *kind != "schema_extract"
             && *kind != "bibliography_sync"
             && *kind != "bibliography_profile"
             && *kind != "bibliography_extract"
@@ -4639,7 +4659,10 @@ pub fn commit_success_with(
         };
         let corpus_route = domain == "corpus"
             && subject_kind == "asset"
-            && matches!(stored_kind.as_str(), "ocr" | "embedding");
+            && matches!(
+                stored_kind.as_str(),
+                "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+            );
         let bibliography_route = domain == "bibliography"
             && subject_kind == "library"
             && stored_kind == "bibliography_sync";
@@ -4925,6 +4948,8 @@ struct MemberWork {
     reason: String,
     ocr_task: Option<(String, String, String)>,
     emb_task: Option<(String, String, Option<String>)>,
+    /// Text-extraction tasks (NER, triples, schema): `(kind, contract, wait_for_ocr)`.
+    extract_tasks: Vec<(&'static str, String, bool)>,
 }
 
 /// Progress of one classification page.
@@ -5052,6 +5077,29 @@ pub fn classify_batch_page(
                     admitted += 1;
                 }
             }
+            for (kind, contract, wait_for_ocr) in &work.extract_tasks {
+                let (kind, wait_for_ocr) = (*kind, *wait_for_ocr);
+                let revision = source_revision(conn, &work.asset_id)?;
+                // Text extraction pins only the source revision: the commit
+                // gate rejects results computed from text that changed mid-run.
+                let out = admit_subject_or_attach(
+                    conn,
+                    batch_id,
+                    kind,
+                    &TaskSubject::corpus_asset(&work.asset_id),
+                    revision,
+                    "",
+                    contract,
+                    if wait_for_ocr {
+                        ocr_id.as_deref()
+                    } else {
+                        None
+                    },
+                )?;
+                if out.created {
+                    admitted += 1;
+                }
+            }
             conn.execute(
                 "UPDATE processing_batch_members SET classification = ?1, reason = ?2
                  WHERE batch_id = ?3 AND ordinal = ?4",
@@ -5143,16 +5191,55 @@ fn plan_member(
             }
         }
     }
-    let classification = if ocr_task.is_some() || emb_task.is_some() {
+    let mut extract_tasks = Vec::new();
+    use super::eligibility::ExtractionDecision;
+    let mut decisions: Vec<(&'static str, String, ExtractionDecision)> = Vec::new();
+    if ops.ner {
+        let decision = super::eligibility::ner_decision(conn, asset_id)?;
+        decisions.push(("ner", super::ner::NER_TASK_CONTRACT.to_string(), decision));
+    }
+    if ops.triples {
+        let decision = super::eligibility::triples_decision(conn, asset_id)?;
+        decisions.push((
+            "triples",
+            super::triples::TRIPLES_TASK_CONTRACT.to_string(),
+            decision,
+        ));
+    }
+    if let Some(schema_id) = &ops.schema {
+        let decision = super::eligibility::schema_decision(conn, asset_id, schema_id)?;
+        decisions.push((
+            super::schema_extract::SCHEMA_TASK_KIND,
+            super::schema_extract::contract_for(schema_id),
+            decision,
+        ));
+    }
+    for (kind, contract, decision) in decisions {
+        match decision {
+            ExtractionDecision::Eligible => {
+                extract_tasks.push((kind, contract, false));
+                notes.push(format!("{kind}:admit"));
+            }
+            ExtractionDecision::AlreadyDone => {
+                notes.push(format!("{kind}:already_done"));
+            }
+            ExtractionDecision::NoSourceText => {
+                if ocr_open.is_some() {
+                    extract_tasks.push((kind, contract, true));
+                    notes.push(format!("{kind}:wait_for_ocr"));
+                } else {
+                    notes.push(format!("{kind}:no_source_text"));
+                }
+            }
+        }
+    }
+    let classification = if ocr_task.is_some() || emb_task.is_some() || !extract_tasks.is_empty() {
         "admitted"
     } else if notes.iter().any(|n| n.starts_with("ocr:unsupported")) {
         "unsupported_type"
     } else if notes.iter().any(|n| n.starts_with("ocr:parent_has_pages")) {
         "parent_has_pages"
-    } else if notes
-        .iter()
-        .any(|n| n.starts_with("embeddings:no_source_text"))
-    {
+    } else if notes.iter().any(|n| n.ends_with(":no_source_text")) {
         "no_source_text"
     } else {
         "already_done"
@@ -5164,6 +5251,7 @@ fn plan_member(
         reason: notes.join("; "),
         ocr_task,
         emb_task,
+        extract_tasks,
     })
 }
 
@@ -5256,6 +5344,10 @@ mod tests {
         "../../../../../packages/store/src/migrations/0055_bibliographic_chunk_embeddings.sql"
     );
     const MIGRATION_0055_NAME: &str = "0055_bibliographic_chunk_embeddings";
+    // Batch NER kind CHECK widening: same rebuild shape as 0052.
+    const MIGRATION_0058_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0058_processing_ner_tasks.sql");
+    const MIGRATION_0058_NAME: &str = "0058_processing_ner_tasks";
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let (dir, conn) = legacy_db();
@@ -5358,6 +5450,13 @@ mod tests {
             [MIGRATION_0055_NAME],
         )
         .expect("track 0055");
+        conn.execute_batch(MIGRATION_0058_SQL)
+            .expect("apply 0058 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0058_NAME],
+        )
+        .expect("track 0058");
         (dir, conn)
     }
 
@@ -7408,6 +7507,97 @@ mod tests {
         .expect("beyond");
         assert!(beyond.is_empty());
         assert!(next.is_none());
+    }
+
+    #[test]
+    fn ner_batch_admits_text_waits_on_ocr_and_skips_done_assets() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE entities (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, asset_id TEXT,
+               entity_type TEXT NOT NULL, value TEXT NOT NULL, source TEXT);
+             INSERT INTO entities (id, item_id, asset_id, entity_type, value, source)
+               VALUES ('n1', 'i1', 'a4', 'person', 'Artigas', 'spacy'),
+                      ('n2', 'i1', 'a7', 'person', 'Rivera', 'manual'),
+                      ('n3', 'i2', NULL, 'place', 'Montevideo', 'spacy');",
+        )
+        .expect("entities");
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "ner"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string(), "c2".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let ner = |asset: &str| live_task(&conn, "corpus", "asset", asset, "ner").unwrap();
+        // Text already there: admitted and runnable right away.
+        assert!(ner("a2").is_some());
+        // Only manual entities do not count as done.
+        assert!(ner("a7").is_some());
+        // Automatic entities already extracted: left alone.
+        assert!(ner("a4").is_none());
+        assert!(member_class(&conn, "b1", "a4")
+            .1
+            .contains("ner:already_done"));
+        // An item-level run (asset_id NULL) covers every asset of its item.
+        assert!(ner("a6").is_none());
+        // Image without text: NER waits for its OCR task.
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let ner_a1 = ner("a1").expect("ner waits for ocr");
+        let (state, dependency): (String, Option<String>) = conn
+            .query_row(
+                "SELECT t.state, l.dependency_task_id FROM processing_tasks t
+                   JOIN processing_batch_tasks l ON l.task_id = t.id WHERE t.id = ?1",
+                [&ner_a1],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("ner task");
+        assert_eq!((state.as_str(), dependency), ("blocked", Some(ocr_id)));
+        // Audio has no OCR and no text: nothing to run.
+        assert!(ner("a3").is_none());
+    }
+
+    #[test]
+    fn triples_batch_admits_text_waits_on_ocr_and_skips_done_assets() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE triples (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, asset_id TEXT,
+               subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL,
+               created_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO triples (id, item_id, asset_id, subject, predicate, object)
+               VALUES ('t1', 'i1', 'a4', 'Artigas', 'fundó', 'Purificación'),
+                      ('t2', 'i2', NULL, 'Barco', 'llevó', 'Cueros');",
+        )
+        .expect("triples");
+        insert_batch(&conn, "b1", "req-1", r#"["ocr", "ner", "triples"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string(), "c2".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        let triples = |asset: &str| live_task(&conn, "corpus", "asset", asset, "triples").unwrap();
+        // Text already there: admitted next to its NER task.
+        assert!(triples("a2").is_some());
+        assert!(live_task(&conn, "corpus", "asset", "a2", "ner")
+            .unwrap()
+            .is_some());
+        // Triples already extracted for the asset or its whole item: left alone.
+        assert!(triples("a4").is_none());
+        assert!(member_class(&conn, "b1", "a4")
+            .1
+            .contains("triples:already_done"));
+        assert!(triples("a6").is_none());
+        // Image without text: triples wait for its OCR task.
+        let ocr_id = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .unwrap()
+            .unwrap();
+        let triples_a1 = triples("a1").expect("triples wait for ocr");
+        let dependency: Option<String> = conn
+            .query_row(
+                "SELECT dependency_task_id FROM processing_batch_tasks WHERE task_id = ?1",
+                [&triples_a1],
+                |row| row.get(0),
+            )
+            .expect("triples link");
+        assert_eq!(dependency, Some(ocr_id));
+        // Audio has no OCR and no text: nothing to run.
+        assert!(triples("a3").is_none());
     }
 
     #[test]

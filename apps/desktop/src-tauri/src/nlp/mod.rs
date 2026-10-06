@@ -651,7 +651,7 @@ async fn run_openrouter_ner_input(
     .map_err(|error| format!("NER extraction failed: {error}"))
 }
 
-async fn run_configured_ner_input(
+pub(crate) async fn run_configured_ner_input(
     app_handle: &AppHandle,
     db_path: &std::path::Path,
     fallback: NerFallbackConfig,
@@ -726,12 +726,12 @@ enum NerLlmFallbackMode {
     OpenRouter,
 }
 
-struct NerFallbackConfig {
+pub(crate) struct NerFallbackConfig {
     mode: NerLlmFallbackMode,
     openrouter: Result<(String, crate::llm::generation::FlowGenerationConfig, String), String>,
 }
 
-fn ner_fallback_config(conn: &rusqlite::Connection) -> NerFallbackConfig {
+pub(crate) fn ner_fallback_config(conn: &rusqlite::Connection) -> NerFallbackConfig {
     let mode = match crate::settings::get_setting(conn, "llm_mode")
         .unwrap_or_else(|| "local".to_string())
         .as_str()

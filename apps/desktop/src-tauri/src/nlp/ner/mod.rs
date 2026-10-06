@@ -196,10 +196,21 @@ pub fn persist_entities_for_asset(
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| format!("Failed to start entity persist transaction: {e}"))?;
-    delete_automatic_entities_for_asset(&tx, item_id, asset_id)?;
-    insert_entities_for_asset(&tx, item_id, asset_id, entities)?;
+    replace_entities_for_asset(&tx, item_id, asset_id, entities)?;
     tx.commit()
         .map_err(|e| format!("Failed to commit entity persist transaction: {e}"))
+}
+
+/// Delete+insert of an asset's automatic entities with no transaction of its
+/// own, for callers that already hold one (the batch queue commit).
+pub fn replace_entities_for_asset(
+    conn: &Connection,
+    item_id: &str,
+    asset_id: &str,
+    entities: &[Entity],
+) -> Result<(), String> {
+    delete_automatic_entities_for_asset(conn, item_id, asset_id)?;
+    insert_entities_for_asset(conn, item_id, asset_id, entities)
 }
 
 fn insert_entities_for_item(
