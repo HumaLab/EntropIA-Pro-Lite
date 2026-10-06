@@ -1,7 +1,15 @@
 <script lang="ts">
   import { save } from '@tauri-apps/plugin-dialog'
   import { writeFile } from '@tauri-apps/plugin-fs'
-  import { ActionIcon, Button, Checkbox, IconButton, Input } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Checkbox,
+    IconButton,
+    Input,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import {
     cellText,
@@ -35,6 +43,23 @@
   let busy = $state(false)
 
   const current = $derived(schemas.find((schema) => schema.id === schemaId) ?? null)
+
+  const schemaItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: '',
+      label: t('batch.schemaNone'),
+      checked: schemaId === '',
+      onselect: () => (schemaId = ''),
+    },
+    ...schemas.map((schema) => ({
+      kind: 'radio' as const,
+      id: schema.id,
+      label: schema.name,
+      checked: schemaId === schema.id,
+      onselect: () => (schemaId = schema.id),
+    })),
+  ])
 
   async function reload() {
     try {
@@ -127,15 +152,22 @@
 
 <div class="schema-panel" role="group" aria-labelledby="schema-panel-label">
   <div class="schema-panel__row">
-    <label class="batch-field__legend" id="schema-panel-label" for="schema-panel-select">
-      {t('batch.schema')}
-    </label>
-    <select id="schema-panel-select" bind:value={schemaId} disabled={busy}>
-      <option value="">{t('batch.schemaNone')}</option>
-      {#each schemas as schema (schema.id)}
-        <option value={schema.id}>{schema.name}</option>
-      {/each}
-    </select>
+    <span class="batch-field__legend" id="schema-panel-label">{t('batch.schema')}</span>
+    <ToolbarMenu label={t('batch.schema')} items={schemaItems}>
+      {#snippet trigger(props, { open })}
+        <button
+          type="button"
+          class="menu-select"
+          class:menu-select--open={open}
+          aria-labelledby="schema-panel-label schema-panel-value"
+          disabled={busy}
+          {...props}
+        >
+          <span id="schema-panel-value">{current?.name ?? t('batch.schemaNone')}</span>
+          <ActionIcon name="chevron-down" size={12} />
+        </button>
+      {/snippet}
+    </ToolbarMenu>
     <Button variant="ghost" size="sm" disabled={busy} onclick={() => (editing = blankSchema())}>
       <ActionIcon name="add" size={14} />
       {t('batch.schemaNew')}
@@ -295,6 +327,34 @@
     border-bottom: 1px solid var(--color-border, rgba(127, 127, 127, 0.3));
     text-align: left;
     vertical-align: top;
+  }
+
+  /* Same trigger as the batch tab's state filter: the app's own menu, never a
+     native <select>, whose popup the operating system paints. */
+  .menu-select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .menu-select:hover,
+  .menu-select--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .menu-select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .schema-panel__error {
