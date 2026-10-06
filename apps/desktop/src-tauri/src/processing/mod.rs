@@ -21,6 +21,7 @@ pub mod ocr;
 pub mod recovery;
 pub mod repository;
 pub mod scheduler;
+pub mod triples;
 
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;

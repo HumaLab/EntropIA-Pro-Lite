@@ -279,6 +279,18 @@ fn processing_commit_observer(
                 }
             }
         }
+        processing::scheduler::EngineOutput::Triples(triples) => {
+            // The item view reloads its triples on this event, as it does
+            // after the per-asset button.
+            let _ = app_handle.emit(
+                "llm:complete",
+                llm::LlmCompletePayload {
+                    id: task.asset_id.clone(),
+                    job: "extract_triples".to_string(),
+                    result: serde_json::to_string(&triples.triples).unwrap_or_default(),
+                },
+            );
+        }
         processing::scheduler::EngineOutput::Bibliography(_) => {
             // `processing:changed` above is the durable bibliography signal;
             // no corpus compatibility event or follow-up applies.
@@ -324,6 +336,15 @@ fn processing_terminal_observer(
                 item_id,
                 asset_id: Some(task.asset_id.clone()),
                 job: if task.kind == "ner" { "ner" } else { "embed" }.to_string(),
+                error,
+            },
+        );
+    } else if task.kind == "triples" {
+        let _ = app_handle.emit(
+            "llm:error",
+            llm::LlmErrorPayload {
+                id: task.asset_id.clone(),
+                job: "extract_triples".to_string(),
                 error,
             },
         );
@@ -1032,6 +1053,9 @@ pub fn run() {
             )));
             scheduler_registry.register(std::sync::Arc::new(
                 processing::embedding::EmbeddingExecutor::new(scheduler_app.clone(), db_path.clone()),
+            ));
+            scheduler_registry.register(std::sync::Arc::new(
+                processing::triples::TriplesExecutor::new(scheduler_app.clone(), db_path.clone()),
             ));
             scheduler_registry.register(std::sync::Arc::new(processing::ner::NerExecutor::new(
                 scheduler_app.clone(),

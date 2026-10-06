@@ -68,6 +68,12 @@
   let runEmbeddings = $state(true)
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
+  let runTriples = $state(false)
+  // Text extractions whose draft line says how many documents they cover.
+  const extractionCounts = [
+    { kind: 'ner', label: 'batch.nerCount' },
+    { kind: 'triples', label: 'batch.triplesCount' },
+  ] as const
 
   // Draft
   let draftId = $state<string | null>(null)
@@ -349,7 +355,7 @@
   }
 
   async function handleAnalyze(): Promise<void> {
-    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer)) return
+    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer && !runTriples)) return
     analyzing = true
     feedback = null
     try {
@@ -357,6 +363,7 @@
         ...(runOcr ? ['ocr'] : []),
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
+        ...(runTriples ? ['triples'] : []),
       ]
       const key = JSON.stringify([Object.keys(selected).sort(), operations])
       if (prepareRequest?.key !== key) prepareRequest = { key, id: newBatchRequestId() }
@@ -1191,11 +1198,18 @@
           <span class="batch-ops__hinted" use:tooltip={t('batch.opNerHint')}>
             <Checkbox class="batch-ops__toggle" bind:checked={runNer}>{t('batch.opNer')}</Checkbox>
           </span>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opTriplesHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={runTriples}
+              >{t('batch.opTriples')}</Checkbox
+            >
+          </span>
           <Button
             class="batch-ops__action"
             variant="secondary"
             size="sm"
-            disabled={selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer) || analyzing}
+            disabled={selectedCount === 0 ||
+              (!runOcr && !runEmbeddings && !runNer && !runTriples) ||
+              analyzing}
             onclick={handleAnalyze}
           >
             {t('batch.analyze')}
@@ -1204,13 +1218,16 @@
         {#if draft && draftId}
           <div class="batch-tab__draft">
             <p>{t('batch.preparing')} {draft.membersClassified}/{draft.membersTotal}</p>
-            {#if draft.planningDone && draft.operations.includes('ner')}
-              {@const nerCount = draft.tasksByKind.find((kind) => kind.name === 'ner')?.count ?? 0}
-              <p>
-                {t('batch.nerCount', { count: nerCount })}
-                {#if !LOCAL_ML && nerCount > 0}{t('batch.nerPaidNotice')}{/if}
-              </p>
-            {/if}
+            {#each extractionCounts as extraction (extraction.kind)}
+              {#if draft.planningDone && draft.operations.includes(extraction.kind)}
+                {@const count =
+                  draft.tasksByKind.find((kind) => kind.name === extraction.kind)?.count ?? 0}
+                <p>
+                  {t(extraction.label, { count })}
+                  {#if !LOCAL_ML && count > 0}{t('batch.extractionPaidNotice')}{/if}
+                </p>
+              {/if}
+            {/each}
             <div class="batch-tab__actions">
               <Button variant="secondary" size="sm" onclick={handleDiscardDraft}>
                 {t('batch.discard')}

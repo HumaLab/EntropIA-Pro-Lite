@@ -991,14 +991,14 @@ pub fn ensure_llm_results_schema(conn: &rusqlite::Connection) -> Result<(), Stri
 /// Fields use `#[serde(default)]` so incomplete triples (missing object, etc.)
 /// deserialize with empty strings instead of failing the entire array.
 /// Incomplete triples are filtered out after parsing.
-#[derive(Clone, serde::Deserialize)]
-struct LlmTriple {
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct LlmTriple {
     #[serde(default, alias = "sujeto")]
-    subject: String,
+    pub subject: String,
     #[serde(default, alias = "predicado")]
-    predicate: String,
+    pub predicate: String,
     #[serde(default, alias = "objeto")]
-    object: String,
+    pub object: String,
 }
 
 static TRAILING_COMMA_RE: Lazy<Regex> =
@@ -1255,16 +1255,25 @@ fn store_triples_for_asset(
     log_prefix: &str,
 ) -> Result<usize, String> {
     let triples = parse_triples_json(raw_json, log_prefix);
+    replace_triples_for_asset(conn, item_id, asset_id, &triples)?;
+    Ok(triples.len())
+}
 
-    // Delete old triples for this specific asset only
+/// Delete+insert of one asset's triples with no transaction of its own, for
+/// callers that already hold one (the batch queue commit).
+pub(crate) fn replace_triples_for_asset(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    asset_id: &str,
+    triples: &[LlmTriple],
+) -> Result<(), String> {
     conn.execute(
         "DELETE FROM triples WHERE item_id = ?1 AND asset_id = ?2",
         params![item_id, asset_id],
     )
     .map_err(|e| format!("Failed to delete old triples for asset: {e}"))?;
 
-    let mut count = 0;
-    for triple in &triples {
+    for triple in triples {
         conn.execute(
             "INSERT INTO triples (id, item_id, asset_id, subject, predicate, object, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1279,9 +1288,73 @@ fn store_triples_for_asset(
             ],
         )
         .map_err(|e| format!("Failed to insert triple: {e}"))?;
-        count += 1;
     }
-    Ok(count)
+    Ok(())
+}
+
+/// Runs the per-asset triple extraction outside the LLM queue (the batch
+/// executor's thread), choosing the local engine or OpenRouter the same way
+/// the queue worker does. Returns the parsed triples; storing them is the
+/// caller's job. Blocks: never call it from inside the async runtime.
+pub(crate) fn extract_triples_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+) -> Result<Vec<LlmTriple>, String> {
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    let job = LlmJob::ExtractTriplesAsset {
+        asset_id: asset_id.to_string(),
+    };
+    let api_key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+    #[cfg(feature = "local-ml")]
+    {
+        let llm_mode =
+            settings::get_setting(&conn, "llm_mode").unwrap_or_else(|| "local".to_string());
+        let try_local = match llm_mode.as_str() {
+            "openrouter" => false,
+            "auto" => local_model_can_initialize_from_conn(&conn, db_path) || api_key.is_empty(),
+            _ => true,
+        };
+        if try_local {
+            let local =
+                get_or_init_local_gemma_engine(&conn, db_path, app_handle).and_then(|engine| {
+                    let engine = engine
+                        .lock()
+                        .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+                    process_job(&engine, &conn, &job)
+                });
+            match local {
+                Ok(generated) => {
+                    return Ok(parse_triples_json(&generated.output, LLM_LOCAL_PREFIX))
+                }
+                // Same fallback as the worker: only "auto" with a key goes remote.
+                Err(error) if llm_mode != "auto" || api_key.is_empty() => {
+                    return Err(format!("Local LLM unavailable: {error}"))
+                }
+                Err(error) => eprintln!(
+                    "{LLM_LOCAL_PREFIX}[triples] local engine failed, falling back to remote: {error}"
+                ),
+            }
+        }
+    }
+    if api_key.trim().is_empty() {
+        return Err(
+            "OpenRouter API key no configurada. Configure OpenRouter API key/model.".to_string(),
+        );
+    }
+    let request = prepare_remote_job_request(
+        &conn,
+        &job,
+        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+        db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
+    drop(conn);
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let generated =
+        tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
+    Ok(parse_triples_json(&generated.output, LLM_CLOUD_PREFIX))
 }
 
 // ---------------------------------------------------------------------------

@@ -177,7 +177,11 @@ const es = {
   'batch.opNerHint':
     'Busca personas, lugares y organizaciones en cada documento con texto. Saltea los que ya tienen entidades.',
   'batch.nerCount': '{count} documentos pasan por la búsqueda de entidades.',
-  'batch.nerPaidNotice': 'En esta versión cada uno es una consulta paga a OpenRouter.',
+  'batch.opTriples': 'Tripletes',
+  'batch.opTriplesHint':
+    'Extrae relaciones sujeto-verbo-objeto de cada documento con texto. Saltea los que ya tienen tripletes.',
+  'batch.triplesCount': '{count} documentos pasan por la extracción de tripletes.',
+  'batch.extractionPaidNotice': 'En esta versión cada uno es una consulta paga a OpenRouter.',
   'batch.analyze': 'Analizar selección',
   'batch.start': 'Iniciar lote',
   'batch.discard': 'Descartar borrador',
@@ -3043,7 +3047,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opNerHint':
     'Finds people, places and organizations in every document with text. Skips documents that already have entities.',
   'batch.nerCount': '{count} documents go through entity extraction.',
-  'batch.nerPaidNotice': 'In this version each one is a paid OpenRouter request.',
+  'batch.opTriples': 'Triples',
+  'batch.opTriplesHint':
+    'Extracts subject-verb-object relations from every document with text. Skips documents that already have triples.',
+  'batch.triplesCount': '{count} documents go through triple extraction.',
+  'batch.extractionPaidNotice': 'In this version each one is a paid OpenRouter request.',
   'batch.analyze': 'Analyze selection',
   'batch.start': 'Start batch',
   'batch.discard': 'Discard draft',

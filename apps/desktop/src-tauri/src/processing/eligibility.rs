@@ -431,12 +431,12 @@ fn repair_marked(conn: &Connection, asset_id: &str) -> Result<bool, String> {
     .map_err(|e| format!("Failed to read repair state of {asset_id}: {e}"))
 }
 
-/// Verdict for one asset under the batch entity (NER) rule.
+/// Verdict for one asset under a batch text-extraction rule (entities, triples).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NerDecision {
-    /// Text exists and no automatic entities were extracted from it yet.
+pub enum ExtractionDecision {
+    /// Text exists and nothing was extracted from it yet.
     Eligible,
-    /// The asset already carries automatic entities.
+    /// The asset already carries automatic results.
     AlreadyDone,
     /// No usable text in any extraction/transcription.
     NoSourceText,
@@ -448,34 +448,56 @@ pub enum NerDecision {
 // ponytail: "done" means "has automatic entities", not "entities match the
 // current text"; stamp the source revision on success if re-OCR'd text must
 // re-admit.
-pub fn ner_decision(conn: &Connection, asset_id: &str) -> Result<NerDecision, String> {
+pub fn ner_decision(conn: &Connection, asset_id: &str) -> Result<ExtractionDecision, String> {
+    extraction_decision(
+        conn,
+        asset_id,
+        "SELECT COUNT(*) FROM entities
+          WHERE (asset_id = ?1
+                 OR (asset_id IS NULL AND item_id = (SELECT item_id FROM assets WHERE id = ?1)))
+            AND COALESCE(source, '') NOT IN ('manual', 'manual_deleted')",
+    )
+}
+
+/// Same rule for semantic triples: every stored triple is automatic.
+pub fn triples_decision(conn: &Connection, asset_id: &str) -> Result<ExtractionDecision, String> {
+    extraction_decision(
+        conn,
+        asset_id,
+        "SELECT COUNT(*) FROM triples
+          WHERE asset_id = ?1
+             OR (asset_id IS NULL AND item_id = (SELECT item_id FROM assets WHERE id = ?1))",
+    )
+}
+
+/// `done_sql` counts results already stored for `?1`. Item-level runs store
+/// asset_id NULL and cover every asset of the item: running per asset on top
+/// would duplicate them.
+fn extraction_decision(
+    conn: &Connection,
+    asset_id: &str,
+    done_sql: &str,
+) -> Result<ExtractionDecision, String> {
     if text_sources(conn, asset_id)?.is_empty() {
-        return Ok(NerDecision::NoSourceText);
+        return Ok(ExtractionDecision::NoSourceText);
     }
     let done = conn
-        .query_row(
-            // Item-level runs store asset_id NULL and cover every asset of the
-            // item: running per asset on top would duplicate them.
-            "SELECT COUNT(*) FROM entities
-              WHERE (asset_id = ?1
-                     OR (asset_id IS NULL AND item_id = (SELECT item_id FROM assets WHERE id = ?1)))
-                AND COALESCE(source, '') NOT IN ('manual', 'manual_deleted')",
-            [asset_id],
-            |row| row.get::<_, i64>(0),
-        )
+        .query_row(done_sql, [asset_id], |row| row.get::<_, i64>(0))
         .map(|count| count > 0)
         .or_else(|e| {
-            // Archives that never ran NER may lack the table or its asset column.
+            // Archives that never ran the extraction may lack the table or its asset column.
             if e.to_string().contains("no such") {
                 Ok(false)
             } else {
-                Err(format!("Failed to read entities of {asset_id}: {e}"))
+                Err(format!(
+                    "Failed to read extraction results of {asset_id}: {e}"
+                ))
             }
         })?;
     Ok(if done {
-        NerDecision::AlreadyDone
+        ExtractionDecision::AlreadyDone
     } else {
-        NerDecision::Eligible
+        ExtractionDecision::Eligible
     })
 }
 
