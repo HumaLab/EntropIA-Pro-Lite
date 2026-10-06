@@ -235,8 +235,12 @@ fn main() {
     ensure_windows_vc_runtime_glob_exists();
     stage_windows_vc_runtime();
 
+    // tauri-build 2.7 links the VC runtime statically by default. Keep it
+    // dynamic: the VC runtime DLLs are staged next to the binary above and the
+    // native ML libraries use the dynamic CRT (see tests/vc_runtime_guard.rs).
     if let Err(error) = tauri_build::try_build(
         tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new().static_vc_runtime(false))
             .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
     ) {
         panic!("tauri-build failed: {error:#}");
