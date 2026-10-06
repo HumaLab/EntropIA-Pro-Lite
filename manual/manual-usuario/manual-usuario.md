@@ -775,7 +775,24 @@ No hace falta repetir tareas completas. Los embeddings, las entidades y los trip
 
 Un OCR terminado sin texto puede contar como completo. Abrí esa página y revisá el resultado; crear otro lote no garantiza que vuelva a procesarla.
 
-En Lite, reconocer texto, comparar materiales y extraer entidades o tripletes depende de servicios por Internet y claves configuradas. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+
+
+<a id="esquema-propio"></a>
+### 14.1. Extraer una tabla con tu propio esquema
+
+Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
+
+1. En **Configuración → Lotes**, debajo de las operaciones, buscá **Esquema propio** y pulsá **Nuevo esquema**.
+2. Poné un nombre al esquema y agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
+3. Marcá **Puede repetirse** en los campos que pueden tener varios valores en un mismo caso: un barco con muchas cargas distintas.
+4. Pulsá **Guardar esquema**. Queda elegido en **Esquema propio**.
+5. Seleccioná las colecciones y pulsá **Analizar selección**. La propuesta dice cuántos documentos pasan por el esquema. Después, **Iniciar lote**.
+6. Cuando termine, elegí el esquema y pulsá **Ver resultados**. La tabla muestra una fila por caso, con el documento del que salió. **Descargar CSV** la guarda como planilla para abrirla en Excel o LibreOffice; los valores repetidos van separados por punto y coma.
+
+Un documento que ya tiene resultados con ese esquema no se vuelve a procesar. **Editar** cambia el nombre o los campos para los próximos lotes; los resultados anteriores conservan los campos con los que se sacaron. **Borrar** elimina el esquema y todos sus resultados.
+
+El modelo copia lo que encuentra en el texto, pero puede equivocarse o saltearse casos, sobre todo si el OCR tiene errores. Revisá una muestra contra los documentos antes de usar la tabla. En Lite cada documento es una consulta paga a OpenRouter. Los esquemas y sus resultados quedan en este equipo: todavía no viajan con la sincronización.
 
 ---
 
