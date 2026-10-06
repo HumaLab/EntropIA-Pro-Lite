@@ -197,31 +197,29 @@
   })
 
   // ── Breadcrumb ──
+  // Crumb indexes map onto the layout `breadcrumbForView` produces
+  // (navigation.ts): the collections hierarchy keeps its Colecciones ->
+  // collection -> document path, while every section is its own root — its
+  // first crumb links to that section's root screen, and the last crumb is
+  // always the current screen (never a link).
   function getBreadcrumbPath(index: number): [View, ...View[]] | null {
     const view = nav.current
     const collectionsView: View = { name: 'collections' }
     if (index === 0) {
-      return view.name === 'collections' || view.name === 'home' ? null : [collectionsView]
-    }
-    if (view.name === 'item') {
-      if (index === 1) {
-        return [
-          collectionsView,
-          { name: 'collection', id: view.collectionId, collectionName: view.collectionName },
-        ]
-      }
+      if (view.name === 'collections' || view.name === 'home') return null
+      if (view.name === 'collection' || view.name === 'item') return [collectionsView]
+      // A deeper stop inside a section makes its root crumb a link; a
+      // single-crumb breadcrumb IS the current screen, so it stays inert.
+      if (view.name === 'bibliography-work') return [{ name: 'biblioteca' }]
+      if (view.name === 'investigation') return [{ name: 'research' }]
+      if (view.name === 'writing' && view.documentTitle) return [{ name: 'writing' }]
       return null
     }
-    if (view.name === 'research')
-      return index === 1 ? [collectionsView, { name: 'research' }] : null
-    if (view.name === 'bibliography-work') {
-      return index === 1 ? [collectionsView, { name: 'biblioteca' }] : null
-    }
-    if (view.name === 'writing') {
-      return index === 1 ? [collectionsView, { name: 'writing', documentId: null }] : null
-    }
-    if (view.name === 'investigation') {
-      return index === 1 ? [collectionsView, { name: 'research' }] : null
+    if (view.name === 'item' && index === 1) {
+      return [
+        collectionsView,
+        { name: 'collection', id: view.collectionId, collectionName: view.collectionName },
+      ]
     }
     return null
   }

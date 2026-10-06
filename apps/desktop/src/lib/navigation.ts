@@ -160,6 +160,10 @@ export class NavigationStore {
 
     // The start page has no breadcrumb: it is where the path begins, not a stop on it.
     if (view.name === 'home') return []
+    // Every section is its own breadcrumb root: Biblioteca, Chat, Investigación,
+    // Escritura, Navegador, Base de datos and Configuración are top-level
+    // siblings of Colecciones, not places inside it. Only the collections
+    // hierarchy keeps a deeper path (Colecciones -> collection -> document).
     if (view.name === 'collections') return [root]
     if (view.name === 'collection') return [root, view.collectionName]
     if (view.name === 'item') {
@@ -167,19 +171,17 @@ export class NavigationStore {
       if (view.assetLabel) breadcrumb.push(view.assetLabel)
       return breadcrumb
     }
-    if (view.name === 'db-browser') return [root, t('nav.dbBrowser')]
-    if (view.name === 'rag-chat') return [root, t('nav.ragChat')]
-    if (view.name === 'research') return [root, t('nav.research')]
-    if (view.name === 'navegador') return [root, t('nav.navegador')]
-    if (view.name === 'biblioteca') return [root, t('nav.biblioteca')]
-    if (view.name === 'bibliography-work') return [root, t('nav.biblioteca'), view.title]
-    if (view.name === 'investigation') return [root, t('nav.research'), view.title]
+    if (view.name === 'db-browser') return [t('nav.dbBrowser')]
+    if (view.name === 'rag-chat') return [t('nav.ragChat')]
+    if (view.name === 'research') return [t('nav.research')]
+    if (view.name === 'navegador') return [t('nav.navegador')]
+    if (view.name === 'biblioteca') return [t('nav.biblioteca')]
+    if (view.name === 'bibliography-work') return [t('nav.biblioteca'), view.title]
+    if (view.name === 'investigation') return [t('nav.research'), view.title]
     if (view.name === 'writing') {
-      return view.documentTitle
-        ? [root, t('writing.title'), view.documentTitle]
-        : [root, t('writing.title')]
+      return view.documentTitle ? [t('writing.title'), view.documentTitle] : [t('writing.title')]
     }
-    return [root, t('nav.settings')]
+    return [t('nav.settings')]
   }
 
   private emit(): void {
