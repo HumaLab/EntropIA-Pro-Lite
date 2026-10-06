@@ -12,7 +12,9 @@
   --scrollbar-thumb-active: color-mix(in srgb, var(--color-text-primary) 32%, transparent);
 }
 
-:root[data-theme='light'] {
+:root[data-theme='light'],
+:root[data-theme='lite'],
+:root[data-theme='paper'] {
   --scrollbar-track: rgba(0, 0, 0, 0.02);
   --scrollbar-thumb: rgba(0, 0, 0, 0.1);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
@@ -106,9 +108,12 @@ select {
   font: inherit;
 }
 
-:root[data-platform='linux']:not([data-theme='light']) select,
-:root[data-platform='linux']:not([data-theme='light']) option,
-:root[data-platform='linux']:not([data-theme='light']) optgroup {
+:root[data-platform='linux']:not([data-theme='light'], [data-theme='lite'], [data-theme='paper'])
+  select,
+:root[data-platform='linux']:not([data-theme='light'], [data-theme='lite'], [data-theme='paper'])
+  option,
+:root[data-platform='linux']:not([data-theme='light'], [data-theme='lite'], [data-theme='paper'])
+  optgroup {
   color-scheme: dark;
   background-color: var(--color-surface);
   color: var(--color-text-primary);

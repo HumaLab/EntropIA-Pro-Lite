@@ -354,6 +354,191 @@
   --writing-blend-highlight: darken;
 }
 
+/* ─── Paper Theme ───────────────────────────────────────────────────────────
+   Archive paper: a sepia page, ink-brown text and a sienna accent. The sober
+   one among the pale themes, for long reading sessions over scans. Text and
+   status colours were measured against this --color-bg (contrast-floor). */
+:root[data-theme='paper'] {
+  --color-bg: #f4eee2;
+  --color-bg-ambient: #efe8da;
+  --color-surface: #f8f3ea;
+  --color-surface-raised: #fbf8f2;
+  --color-surface-elevated: #fdfbf7;
+  --color-surface-sunken: #ebe3d4;
+  --color-surface-glass: #f4eee2;
+  --color-border: #ddd2bf;
+  --color-border-subtle: #e8dfcf;
+  --color-border-strong: #cbbda5;
+  --color-border-hover: #b3a387;
+  --color-hairline: rgba(60, 40, 15, 0.08);
+  --color-text-primary: #2a2217; /* 13.57:1 */
+  --color-text-secondary: #5f5242; /* 6.56:1 */
+  --color-text-muted: #6f6151; /* 5.19:1 */
+  --color-accent: #8b4a24; /* 5.86:1 */
+  --color-accent-hover: #743c1c;
+  --color-accent-soft: rgba(139, 74, 36, 0.09);
+  --color-accent-faint: rgba(139, 74, 36, 0.045);
+  --color-danger: #a8322c; /* 5.76:1 */
+  --color-danger-hover: #8f2924;
+  --color-danger-soft: rgba(168, 50, 44, 0.07);
+  --color-success: #2f6337; /* 6.14:1 */
+  --color-success-soft: rgba(47, 99, 55, 0.07);
+  --color-warning: #84520f; /* 5.69:1 */
+  --color-warning-soft: rgba(132, 82, 15, 0.08);
+  --color-info: #2d5f86; /* 5.88:1 */
+  --color-info-soft: rgba(45, 95, 134, 0.08);
+  --color-overlay: rgba(40, 28, 12, 0.28);
+  --color-primary: var(--color-accent);
+  --color-primary-subtle: var(--color-accent-soft);
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-glow: 0 0 0 1px var(--color-hairline);
+  --focus-ring: 0 0 0 2px rgba(139, 74, 36, 0.28);
+  --focus-ring-danger: 0 0 0 2px rgba(168, 50, 44, 0.25);
+  --control-primary-bg: #3a2e20;
+  --control-primary-bg-hover: #4a3c2b;
+  --control-primary-bg-active: #2b2117;
+  --control-primary-border: #3a2e20;
+  --control-primary-text: #f8f3ea;
+  /* The light theme's palette, with the gray toward this theme's brown. */
+  --writing-text-gray: #4f4a40;
+  --writing-text-red: #9f211c;
+  --writing-text-orange: #82410e;
+  --writing-text-yellow: #655008;
+  --writing-text-green: #1f5d34;
+  --writing-text-blue: #17519e;
+  --writing-text-purple: #6c32ae;
+  --writing-text-pink: #99205c;
+  --writing-highlight-gray: #dcd3c3;
+  --writing-highlight-red: #f5cbc9;
+  --writing-highlight-orange: #f6cdad;
+  --writing-highlight-yellow: #f3d265;
+  --writing-highlight-green: #a6e1ba;
+  --writing-highlight-blue: #bfd6f6;
+  --writing-highlight-purple: #decdf1;
+  --writing-highlight-pink: #f3c8de;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: darken;
+}
+
+/* ─── Forest Theme ──────────────────────────────────────────────────────────
+   A dark page with a trace of green and a jade accent: between the quiet dark
+   default and the loud vivid theme. Statuses keep the dark theme's values,
+   which clear 4.5:1 on this page too. */
+:root[data-theme='forest'] {
+  --color-bg: #0b120f;
+  --color-bg-ambient: #0e1612;
+  --color-surface: #101914;
+  --color-surface-raised: #15201a;
+  --color-surface-elevated: #1a2720;
+  --color-surface-sunken: #08100c;
+  --color-surface-glass: #121c17;
+  --color-border: #24342b;
+  --color-border-subtle: #1a261f;
+  --color-border-strong: #31453a;
+  --color-border-hover: #41594b;
+  --color-hairline: rgba(214, 245, 228, 0.08);
+  --color-text-primary: #dde8e1; /* 15.08:1 */
+  --color-text-secondary: #a6b8ad; /* 9.10:1 */
+  --color-text-muted: #7f9488; /* 5.86:1 */
+  --color-accent: #5fc79a; /* 9.14:1 */
+  --color-accent-hover: #7bd6ae;
+  --color-accent-soft: rgba(95, 199, 154, 0.13);
+  --color-accent-faint: rgba(95, 199, 154, 0.06);
+  --color-overlay: rgba(3, 10, 6, 0.66);
+  --focus-ring: 0 0 0 2px rgba(95, 199, 154, 0.25);
+  --control-primary-bg: #1f3a2d;
+  --control-primary-bg-hover: #27473a;
+  --control-primary-bg-active: #172c22;
+  --control-primary-border: #3f6b56;
+  --control-primary-text: #e9f5ee;
+  /* The dark theme's palette: measured on this surface as well. */
+  --writing-text-gray: #a9aeb6;
+  --writing-text-red: #ec9794;
+  --writing-text-orange: #ed9a5c;
+  --writing-text-yellow: #d5a711;
+  --writing-text-green: #4cc374;
+  --writing-text-blue: #82b0ed;
+  --writing-text-purple: #c0a0e4;
+  --writing-text-pink: #e894be;
+  --writing-highlight-gray: #393c40;
+  --writing-highlight-red: #632b29;
+  --writing-highlight-orange: #53351d;
+  --writing-highlight-yellow: #463b17;
+  --writing-highlight-green: #24422e;
+  --writing-highlight-blue: #233d5d;
+  --writing-highlight-purple: #483162;
+  --writing-highlight-pink: #5f2944;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: lighten;
+}
+
+/* ─── Vivid Theme ───────────────────────────────────────────────────────────
+   The loud one: a deep violet page, a fuchsia accent and saturated statuses.
+   Loud in hue, never in contrast: every text and status colour still clears
+   4.5:1 on this --color-bg. */
+:root[data-theme='vivid'] {
+  --color-bg: #0f0a1c;
+  --color-bg-ambient: #130d22;
+  --color-surface: #160f27;
+  --color-surface-raised: #1d1532;
+  --color-surface-elevated: #241a3c;
+  --color-surface-sunken: #0b0716;
+  --color-surface-glass: #18112b;
+  --color-border: #33264f;
+  --color-border-subtle: #251b3d;
+  --color-border-strong: #443466;
+  --color-border-hover: #5a4683;
+  --color-hairline: rgba(236, 220, 255, 0.09);
+  --color-text-primary: #efe9ff; /* 16.45:1 */
+  --color-text-secondary: #c0b3de; /* 9.94:1 */
+  --color-text-muted: #9384b5; /* 5.75:1 */
+  --color-accent: #e879f9; /* 7.90:1 */
+  --color-accent-hover: #f0a1fb;
+  --color-accent-soft: rgba(232, 121, 249, 0.15);
+  --color-accent-faint: rgba(232, 121, 249, 0.07);
+  --color-danger: #ff7a90; /* 7.81:1 */
+  --color-danger-hover: #ff97a8;
+  --color-danger-soft: rgba(255, 122, 144, 0.13);
+  --color-success: #5ee0a0; /* 11.70:1 */
+  --color-success-soft: rgba(94, 224, 160, 0.13);
+  --color-warning: #ffc35c; /* 12.23:1 */
+  --color-warning-soft: rgba(255, 195, 92, 0.13);
+  --color-info: #67d4f9; /* 11.44:1 */
+  --color-info-soft: rgba(103, 212, 249, 0.13);
+  --color-overlay: rgba(8, 4, 18, 0.68);
+  --focus-ring: 0 0 0 2px rgba(232, 121, 249, 0.3);
+  --focus-ring-danger: 0 0 0 2px rgba(255, 122, 144, 0.28);
+  --control-primary-bg: #3b1d52;
+  --control-primary-bg-hover: #4a2566;
+  --control-primary-bg-active: #2d163f;
+  --control-primary-border: #8b4bb0;
+  --control-primary-text: #fbefff;
+  /* The dark theme's palette: measured on this surface as well. */
+  --writing-text-gray: #a9aeb6;
+  --writing-text-red: #ec9794;
+  --writing-text-orange: #ed9a5c;
+  --writing-text-yellow: #d5a711;
+  --writing-text-green: #4cc374;
+  --writing-text-blue: #82b0ed;
+  --writing-text-purple: #c0a0e4;
+  --writing-text-pink: #e894be;
+  --writing-highlight-gray: #393c40;
+  --writing-highlight-red: #632b29;
+  --writing-highlight-orange: #53351d;
+  --writing-highlight-yellow: #463b17;
+  --writing-highlight-green: #24422e;
+  --writing-highlight-blue: #233d5d;
+  --writing-highlight-purple: #483162;
+  --writing-highlight-pink: #5f2944;
+  /* How a highlight meets the ink of the line above (WritingEditor.svelte):
+     the lighter pixel wins on a dark page, the darker one on a light page. */
+  --writing-blend-highlight: lighten;
+}
+
 /* ─── Contrast levels (§18) ─────────────────────────────────────────────────
    A second axis beside the theme: `data-contrast` on the same root element,
    with the three text tokens as its only subject.
@@ -424,6 +609,42 @@
   --color-text-primary: #060807; /* 19.00:1 */
   --color-text-secondary: #2d3432; /* 12.05:1 */
   --color-text-muted: #4a5350; /* 7.51:1 */
+}
+
+:root[data-theme='paper'][data-contrast='soft'] {
+  --color-text-primary: #40382d; /* 9.98:1 */
+  --color-text-secondary: #5f5343; /* 6.48:1 */
+  --color-text-muted: #77695a; /* 4.60:1 */
+}
+
+:root[data-theme='paper'][data-contrast='high'] {
+  --color-text-primary: #120e09; /* paper's darkest ink */
+  --color-text-secondary: #322b23; /* 12.07:1 */
+  --color-text-muted: #54493d; /* 7.58:1 */
+}
+
+:root[data-theme='forest'][data-contrast='soft'] {
+  --color-text-primary: #b4beb8; /* 9.93:1 */
+  --color-text-secondary: #8b9b91; /* 6.50:1 */
+  --color-text-muted: #6e8177; /* 4.58:1 */
+}
+
+:root[data-theme='forest'][data-contrast='high'] {
+  --color-text-primary: #fcfdfd; /* 18.60:1 */
+  --color-text-secondary: #c5d1c9; /* 12.04:1 */
+  --color-text-muted: #96a79d; /* 7.50:1 */
+}
+
+:root[data-theme='vivid'][data-contrast='soft'] {
+  --color-text-primary: #bcb7cc; /* 9.98:1 */
+  --color-text-secondary: #9b8fb5; /* 6.47:1 */
+  --color-text-muted: #8274a2; /* 4.60:1 */
+}
+
+:root[data-theme='vivid'][data-contrast='high'] {
+  --color-text-primary: #fbfaff; /* 18.71:1 */
+  --color-text-secondary: #d0c7e6; /* 12.03:1 */
+  --color-text-muted: #a79bc3; /* 7.51:1 */
 }
 
 /* ─── Typography presets ────────────────────────────────────────────────────
