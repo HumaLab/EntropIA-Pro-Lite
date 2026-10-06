@@ -342,6 +342,28 @@ describe('i18n', () => {
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restore defaults')
   })
 
+  it('exposes the API key clearing copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    expect(t('settings.clearKey', { service: 'OpenRouter' })).toBe('Quitar clave de OpenRouter')
+    expect(t('settings.clearKeyTitle', { service: 'OpenRouter' })).toBe(
+      '¿Quitar la clave de OpenRouter?'
+    )
+    expect(t('settings.clearKeyMessage', { service: 'OpenRouter' })).toContain('OpenRouter')
+    expect(t('settings.clearKeyConfirm')).toBe('Quitar clave')
+    expect(t('settings.keyNotConfigured')).toBe('Sin clave guardada')
+
+    locale.set('en')
+
+    expect(t('settings.clearKey', { service: 'OpenRouter' })).toBe('Clear OpenRouter key')
+    expect(t('settings.clearKeyTitle', { service: 'OpenRouter' })).toBe(
+      'Remove the OpenRouter key?'
+    )
+    expect(t('settings.clearKeyMessage', { service: 'OpenRouter' })).toContain('OpenRouter')
+    expect(t('settings.clearKeyConfirm')).toBe('Remove key')
+    expect(t('settings.keyNotConfigured')).toBe('No key stored')
+  })
+
   it('preserves local model wiring copy in both locales', async () => {
     const { locale, t } = await import('./i18n')
 

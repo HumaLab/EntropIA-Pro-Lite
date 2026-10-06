@@ -241,6 +241,18 @@ fn is_sensitive_setting_key(key: &str) -> bool {
         || normalized.contains("credential")
 }
 
+/// The database side of [`settings_delete`], split out so tests can pin what
+/// a deletion leaves behind without ever touching the system credential
+/// store (the keyring cleanup stays in the command).
+fn remove_setting_row(conn: &rusqlite::Connection, key: &str) -> Result<(), String> {
+    // DB row first: if the keyring delete then fails, only an orphaned
+    // keyring entry remains (no dangling secret_ref pointing at nothing).
+    conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+        .map_err(|e| format!("Failed to delete setting: {e}"))?;
+    forget_zotero_user_id_for(conn, key);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn settings_delete(
     key: String,
@@ -253,14 +265,7 @@ pub async fn settings_delete(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        // DB row first: if the keyring delete then fails, only an orphaned
-        // keyring entry remains (no dangling secret_ref pointing at nothing).
-        conn.execute(
-            "DELETE FROM app_settings WHERE key = ?1",
-            params![key.as_str()],
-        )
-        .map_err(|e| format!("Failed to delete setting: {e}"))?;
-        forget_zotero_user_id_for(&conn, &key);
+        remove_setting_row(&conn, &key)?;
         if is_secret_setting_key(&key) {
             if let Err(error) = delete_secret(&key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
@@ -942,6 +947,46 @@ mod tests {
                 .expect("resolve explicit key"),
             "explicit"
         );
+    }
+
+    // The embedding engine cache is keyed on a config fingerprint that
+    // includes the (hashed) API key, but it is only reachable through a
+    // config resolved from the database. After `settings_delete` drops the
+    // key row, resolution must fail closed — that is what makes the engine
+    // stop using the cached key. The GLM-OCR credential is read per call and
+    // must fail closed the same way.
+    #[test]
+    fn deleting_the_openrouter_key_makes_embedding_config_report_missing_key() {
+        let conn = in_memory_settings_db();
+        set_setting(
+            &conn,
+            crate::nlp::embeddings::EMBEDDING_PROVIDER_SETTING_KEY,
+            "api",
+        )
+        .expect("select api provider");
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        assert!(crate::nlp::embeddings::config_from_settings(&conn).is_ok());
+
+        remove_setting_row(&conn, OPENROUTER_API_KEY).expect("delete key");
+
+        let error = crate::nlp::embeddings::config_from_settings(&conn)
+            .err()
+            .expect("a deleted key must fail embedding config resolution");
+        assert!(error.contains("OpenRouter API key"), "{error}");
+    }
+
+    #[test]
+    fn deleting_the_glm_ocr_key_makes_ocr_config_report_missing_key() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, crate::ocr::OCRH_SETTING_MODE, "glm_ocr").expect("select glm ocr");
+        set_setting(&conn, GLM_OCR_API_KEY, "sk-glm").expect("save key");
+        crate::ocr::ensure_selected_cloud_key(&conn).expect("stored key satisfies the config");
+
+        remove_setting_row(&conn, GLM_OCR_API_KEY).expect("delete key");
+
+        let error = crate::ocr::ensure_selected_cloud_key(&conn)
+            .expect_err("a deleted key must fail OCR config resolution");
+        assert!(error.contains("GLM-OCR"), "{error}");
     }
 
     #[test]
