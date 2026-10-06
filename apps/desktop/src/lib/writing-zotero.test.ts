@@ -370,6 +370,134 @@ describe('E2b-4 bibliography synchronization request state', () => {
   })
 })
 
+describe('P3 backlog follower across a restart', () => {
+  const status = (overrides: Record<string, unknown> = {}) => ({
+    state: 'succeeded',
+    errorCode: null,
+    errorMessage: null,
+    progressDone: 40,
+    progressTotal: 40,
+    itemsSeen: 40,
+    remoteTotal: 40,
+    newProfiles: 2,
+    newExtractions: 1,
+    profilesDone: 0,
+    profilesTotal: 2,
+    extractionsDone: 0,
+    extractionsTotal: 1,
+    etaMs: null,
+    ...overrides,
+  })
+
+  /** Answers each latest-status poll with the next scripted status. */
+  function backlog(statuses: unknown[]) {
+    const polled = [...statuses]
+    mockInvoke.mockImplementation(((cmd: string) => {
+      if (cmd === 'processing_latest_bibliography_sync_status') {
+        return Promise.resolve(polled.length > 1 ? polled.shift() : polled[0])
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`))
+    }) as never)
+  }
+
+  it('follows the draining backlog of the latest sync at startup and stops when it drains', async () => {
+    vi.useFakeTimers()
+    try {
+      backlog([
+        status({ profilesDone: 0, profilesTotal: 2, extractionsDone: 0, extractionsTotal: 1 }),
+        status({ profilesDone: 1, profilesTotal: 2, extractionsDone: 1, extractionsTotal: 1 }),
+        status({ profilesDone: 2, profilesTotal: 2, extractionsDone: 1, extractionsTotal: 1 }),
+      ])
+      const store = new WritingZoteroStore()
+
+      const following = store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(1)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({
+        profilesDone: 0,
+        profilesTotal: 2,
+      })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({ profilesDone: 1 })
+
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(store.snapshot.bibliographyProgress?.status).toMatchObject({ profilesDone: 2 })
+
+      // The backlog drained: the follower stops and the line goes quiet.
+      const before = calls('processing_latest_bibliography_sync_status').length
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(before)
+      await following
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('claims nothing when no bibliography sync was ever requested', async () => {
+    backlog([null])
+    const store = new WritingZoteroStore()
+
+    await store.followBibliographyBacklog()
+
+    expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(1)
+    expect(store.snapshot.bibliographyProgress).toBeNull()
+  })
+
+  it('joins a follow already running instead of polling twice', async () => {
+    vi.useFakeTimers()
+    try {
+      backlog([status({ state: 'running', profilesDone: 0, profilesTotal: 5 })])
+      const store = new WritingZoteroStore()
+
+      const first = store.followBibliographyBacklog()
+      const joined = store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(joined).toBe(first)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves the screen to a sync requested in this session', async () => {
+    vi.useFakeTimers()
+    try {
+      mockInvoke.mockImplementation(((cmd: string) => {
+        if (cmd === 'processing_latest_bibliography_sync_status') {
+          return Promise.resolve(status({ state: 'running' }))
+        }
+        if (cmd === 'processing_sync_bibliography_library') {
+          return Promise.resolve({
+            batchId: 'batch-bibliography',
+            taskId: 'task-bibliography',
+            created: true,
+            requeued: false,
+          })
+        }
+        if (cmd === 'processing_bibliography_sync_status') {
+          return Promise.resolve(status({ state: 'running' }))
+        }
+        return Promise.reject(new Error(`unexpected ${cmd}`))
+      }) as never)
+      const store = new WritingZoteroStore()
+
+      void store.followBibliographyBacklog()
+      await vi.advanceTimersByTimeAsync(0)
+      const latestBefore = calls('processing_latest_bibliography_sync_status').length
+
+      await store.requestBibliographySync()
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(calls('processing_bibliography_sync_status').length).toBeGreaterThan(0)
+      expect(calls('processing_latest_bibliography_sync_status')).toHaveLength(latestBefore)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('probing', () => {
   it('holds what the probe said and claims nothing more', async () => {
     mockInvoke.mockResolvedValue({ state: 'api_disabled' } as never)

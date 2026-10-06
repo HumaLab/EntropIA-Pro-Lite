@@ -8,7 +8,13 @@
     bibliographySearchWorks,
     type BibliographyLibraryStatusRow,
   } from '$lib/bibliography-search'
-  import { bibliographyListWorks, type BibliographyWorkRow } from '$lib/bibliography-library'
+  import {
+    bibliographyListWorks,
+    readBibliotecaSort,
+    writeBibliotecaSort,
+    type BibliotecaSort,
+    type BibliographyWorkRow,
+  } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
   import { ActionIcon, Button, SearchBar, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
 
@@ -50,6 +56,9 @@
   let searchHits = $state<DisplayRow[] | null>(null)
   let searchFailed = $state(false)
   let libraryMenuOpen = $state(false)
+  /** The remembered listing order, like other view preferences. */
+  let sort = $state<BibliotecaSort>(readBibliotecaSort())
+  let sortMenuOpen = $state(false)
 
   const rows = $derived(searchHits ?? works)
   const countsLabel = $derived.by(() => {
@@ -94,6 +103,27 @@
     }),
   ])
 
+  const sortLabel = $derived.by(() => {
+    $currentLocale
+    return sort === 'recent' ? t('biblioteca.sortRecent') : t('biblioteca.sortTitle')
+  })
+  const sortItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: 'title',
+      label: $currentLocale && t('biblioteca.sortTitle'),
+      checked: sort === 'title',
+      onselect: () => chooseSort('title'),
+    },
+    {
+      kind: 'radio',
+      id: 'recent',
+      label: $currentLocale && t('biblioteca.sortRecent'),
+      checked: sort === 'recent',
+      onselect: () => chooseSort('recent'),
+    },
+  ])
+
   async function loadPage(reset: boolean): Promise<void> {
     if (reset) {
       loading = true
@@ -104,6 +134,7 @@
     try {
       const page = await bibliographyListWorks({
         library: selected,
+        sort,
         offset: reset ? 0 : works.length,
         limit: PAGE_SIZE,
       })
@@ -150,6 +181,23 @@
     selected = ref
     // A scope change starts the list over: a search of the old scope would
     // answer a question nobody asked any more.
+    query = ''
+    searchHits = null
+    searchFailed = false
+    void loadPage(true)
+  }
+
+  /**
+   * Choosing an order is a new listing, not a reshuffle of the rows on
+   * screen: the list reloads from the start and the search box is remounted
+   * (the {#key} below) so it cannot show words the listing no longer
+   * answers. The choice is remembered like other view preferences.
+   */
+  function chooseSort(next: BibliotecaSort): void {
+    sortMenuOpen = false
+    if (sort === next) return
+    sort = next
+    writeBibliotecaSort(next)
     query = ''
     searchHits = null
     searchFailed = false
@@ -212,9 +260,9 @@
       <div class="page-toolbar biblioteca__toolbar">
         <!-- Uncontrolled on purpose: echoing `value` back into SearchBar
              resets its debounce timer and the search would never fire. The
-             scope key remounts it when the library changes, so the box and
-             the listing can never disagree. -->
-        {#key selected ? `${selected.libraryType}/${selected.libraryId}` : 'all'}
+             scope key remounts it when the library or the order changes, so
+             the box and the listing can never disagree. -->
+        {#key `${selected ? `${selected.libraryType}/${selected.libraryId}` : 'all'}:${sort}`}
           <SearchBar
             placeholder={$currentLocale && t('biblioteca.searchPlaceholder')}
             ariaLabel={$currentLocale && t('biblioteca.searchLabel')}
@@ -246,6 +294,26 @@
             {/snippet}
           </ToolbarMenu>
         {/if}
+        <!-- The order menu wears the library menu's own trigger: the two
+             menus of one toolbar stay visually one control family. -->
+        <ToolbarMenu
+          label={$currentLocale && t('biblioteca.sortMenu')}
+          items={sortItems}
+          bind:open={sortMenuOpen}
+        >
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="biblioteca__library-trigger"
+              class:biblioteca__library-trigger--open={open}
+              aria-label={$currentLocale && t('biblioteca.sortMenu')}
+              {...props}
+            >
+              <span class="biblioteca__library-trigger-label">{sortLabel}</span>
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
       </div>
     {/if}
   </section>

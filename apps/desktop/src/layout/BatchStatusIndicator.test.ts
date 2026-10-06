@@ -100,6 +100,7 @@ const {
       requestFocus: vi.fn(),
     },
     writingZoteroMock: {
+      followBibliographyBacklog: vi.fn().mockResolvedValue(undefined),
       subscribe(run: (snapshot: unknown) => void) {
         zoteroSubscribers.add(run)
         run({ bibliographyProgress })
@@ -145,6 +146,7 @@ beforeEach(() => {
   locale.set('es')
   setActiveBatches([])
   setBibliographyProgress(null)
+  writingZoteroMock.followBibliographyBacklog.mockClear()
 })
 
 describe('BatchStatusIndicator', () => {
@@ -180,6 +182,28 @@ describe('BatchStatusIndicator', () => {
 
     expect(screen.getByText('Procesando 1')).toBeInTheDocument()
     expect(screen.queryByText(/Bibliografía/)).not.toBeInTheDocument()
+  })
+
+  it('resumes the bibliography backlog follower at startup', () => {
+    render(BatchStatusIndicator)
+
+    // After a restart no sync was requested in this session, so the footer
+    // itself asks the store to find the backlog that may still be draining.
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows again when batch work appears and not on every refresh', () => {
+    render(BatchStatusIndicator)
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+
+    // New batch work (a bibliography sync among it) may carry a backlog the
+    // session knows nothing about yet.
+    setActiveBatches([ACTIVE_BATCH])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
+
+    // Steady progress of the same active set is not a new reason to look.
+    setActiveBatches([{ ...ACTIVE_BATCH, revision: 2 }])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
   })
 
   it('drops the bibliography line again once the backlog drains', () => {

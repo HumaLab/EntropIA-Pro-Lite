@@ -22,8 +22,25 @@
   import { StatusBadge } from '@entropia/ui'
 
   let summary = $state<BatchGlobalSummary>(batchStore.snapshot())
+  // Which batch work the footer has already reacted to. A bibliography sync
+  // admitted after startup carries a backlog this session never requested,
+  // so the follower is asked again whenever the active set changes — never
+  // on every refresh of the same set.
+  let seenActiveIds: string | null = null
   const unsubscribe = batchStore.subscribe((next) => {
     summary = next
+    const ids = next.active
+      .map((batch) => batch.id)
+      .sort()
+      .join(',')
+    if (seenActiveIds === null) {
+      seenActiveIds = ids
+      return
+    }
+    if (ids !== seenActiveIds) {
+      seenActiveIds = ids
+      void writingZotero.followBibliographyBacklog()
+    }
   })
 
   // P3: while the derived backlog of a library sync (fichas and pasajes)
@@ -39,6 +56,9 @@
   onMount(() => {
     // Idempotent: the store memoizes the bootstrap + listener attach.
     void batchStore.initialize()
+    // Restart-safe: a derived backlog still draining after an app restart was
+    // never requested in this session, so the footer asks for it here.
+    void writingZotero.followBibliographyBacklog()
   })
 
   onDestroy(() => {

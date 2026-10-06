@@ -1356,6 +1356,36 @@ pub fn bibliography_sync_status(
     })
 }
 
+/// Durable status of the newest `bibliography_sync` task, or `None` when no
+/// sync was ever admitted.
+///
+/// This is the restart-safe read behind the status bar's follower: after an
+/// app restart no sync was requested in this session, so nothing holds a task
+/// id to follow. The newest task is the one whose derived backlog the most
+/// recent request can still be leaving behind, and the answer is exactly the
+/// one-task read of that row — [`bibliography_sync_status`] — window and
+/// estimate included.
+pub fn latest_bibliography_sync_status(
+    conn: &Connection,
+) -> Result<Option<super::commands::BibliographySyncStatus>, String> {
+    use rusqlite::OptionalExtension as _;
+    let latest: Option<String> = conn
+        .query_row(
+            "SELECT id FROM processing_tasks
+              WHERE kind = 'bibliography_sync'
+              ORDER BY rowid DESC
+              LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the latest bibliography sync: {error}"))?;
+    match latest {
+        Some(task_id) => bibliography_sync_status(conn, &task_id).map(Some),
+        None => Ok(None),
+    }
+}
+
 /// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
 ///
 /// External callers (lib/nlp/ocr/transcription) stay on this signature: it
@@ -9340,5 +9370,74 @@ mod tests {
             "other block reasons keep their own resume path"
         );
         assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
+    }
+
+    // ── Restart-safe bibliography progress (P3 follow-up) ────────────────
+    // After an app restart no sync was requested in this session, so the
+    // status bar follows the newest `bibliography_sync` task — the one whose
+    // derived backlog the most recent request can still be leaving behind.
+
+    #[test]
+    fn latest_bibliography_sync_status_reads_the_newest_task_or_none() {
+        let (_dir, conn) = migrated_db();
+        assert!(
+            latest_bibliography_sync_status(&conn)
+                .expect("read with no tasks")
+                .is_none(),
+            "no sync task was ever admitted: there is nothing to follow"
+        );
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, created_at, updated_at)
+             VALUES ('sync-old', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', 5, 1, 1),
+                    ('profile-1', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'pending', 0, 2, 2),
+                    ('sync-new', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'running', 9, 3, 3)",
+        )
+        .expect("seed sync tasks");
+
+        let latest = latest_bibliography_sync_status(&conn)
+            .expect("latest read")
+            .expect("one sync task exists");
+        // The newest row, not the oldest.
+        assert_eq!(latest.state, "running");
+        assert_eq!(latest.progress_done, 9);
+        // The window it reports is the newest task's own: the older task's
+        // derived backlog stays the older task's business.
+        assert_eq!((latest.profiles_done, latest.profiles_total), (0, 0));
+        // Exactly the answer the one-task read gives for that same row.
+        assert_eq!(
+            latest,
+            bibliography_sync_status(&conn, "sync-new").expect("direct read")
+        );
+    }
+
+    #[test]
+    fn latest_bibliography_sync_status_reports_the_live_window_of_the_newest_task() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, created_at, updated_at)
+             VALUES ('sync-1', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', 40, 1, 1),
+                    ('profile-1', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'succeeded', 0, 2, 2),
+                    ('extract-1', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1',
+                     'pending', 0, 3, 3)",
+        )
+        .expect("seed one sync with draining derived work");
+
+        let latest = latest_bibliography_sync_status(&conn)
+            .expect("latest read")
+            .expect("one sync task exists");
+        // The sync succeeded but its derived backlog is still draining: the
+        // live window is exactly what the status bar follows.
+        assert_eq!(latest.state, "succeeded");
+        assert_eq!((latest.profiles_done, latest.profiles_total), (1, 1));
+        assert_eq!((latest.extractions_done, latest.extractions_total), (0, 1));
     }
 }

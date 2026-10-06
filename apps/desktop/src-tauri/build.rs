@@ -26,6 +26,7 @@ const APP_COMMANDS: &[&str] = &[
     "processing_retry",
     "processing_sync_bibliography_library",
     "processing_bibliography_sync_status",
+    "processing_latest_bibliography_sync_status",
     "bibliography_search_works",
     "bibliography_open_passage",
     "bibliography_passage_context",

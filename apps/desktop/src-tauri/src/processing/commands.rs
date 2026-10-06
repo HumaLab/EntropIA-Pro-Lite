@@ -290,6 +290,22 @@ pub async fn processing_bibliography_sync_status(
     .await
 }
 
+/// Honest progress for the restart-safe follower: the status of the newest
+/// `bibliography_sync` task, or `null` when none was ever admitted. After an
+/// app restart no sync was requested in this session, so this read is what
+/// finds the derived backlog that may still be draining. Read-only.
+#[tauri::command]
+pub async fn processing_latest_bibliography_sync_status(
+    db: State<'_, AppDbState>,
+) -> Result<Option<BibliographySyncStatus>, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_ready(&db_path)?;
+        repository::latest_bibliography_sync_status(&conn)
+    })
+    .await
+}
+
 fn snapshot_dto(snapshot: repository::BatchSnapshot) -> BatchSnapshotDto {
     BatchSnapshotDto {
         id: snapshot.id,

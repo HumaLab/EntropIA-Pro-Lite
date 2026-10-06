@@ -469,21 +469,24 @@ pub async fn bibliography_search_passages(
 // ── Biblioteca (P2) ─────────────────────────────────────────────────────────
 
 /// One page of the Biblioteca listing from the UI: paging, an optional
-/// substring filter, and the optional Zotero library scope (type + native
-/// id, both or neither — resolved here to the internal library rows).
+/// substring filter, the optional Zotero library scope (type + native id,
+/// both or neither — resolved here to the internal library rows), and the
+/// order to list in (`"title"` — the default, and what older callers omit —
+/// or `"recent"`).
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListWorksRequest {
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     pub query: Option<String>,
+    pub sort: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_library_id: Option<String>,
 }
 
-/// One page of the catalog's works (title order, tombstones excluded) with
-/// the scope's total, so the Biblioteca can page a library of thousands
-/// without counting on its own. Read-only.
+/// One page of the catalog's works in the requested order (tombstones
+/// excluded) with the scope's total, so the Biblioteca can page a library of
+/// thousands without counting on its own. Read-only.
 #[tauri::command]
 pub async fn bibliography_list_works(
     request: ListWorksRequest,
@@ -492,12 +495,20 @@ pub async fn bibliography_list_works(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_archive_connection(&db_path)?;
+        let sort = match request.sort.as_deref() {
+            // The order every caller without a preference names, and what
+            // older callers that send no `sort` mean.
+            None | Some("title") => crate::bibliography::work_view::WorkListSort::Title,
+            Some("recent") => crate::bibliography::work_view::WorkListSort::Recent,
+            Some(other) => return Err(format!("invalid_sort: unknown work order {other:?}")),
+        };
         crate::bibliography::work_view::list_works(
             &conn,
             &crate::bibliography::work_view::WorkListRequest {
                 library_type: request.zotero_library_type.as_deref(),
                 library_native_id: request.zotero_library_id.as_deref(),
                 query: request.query.as_deref(),
+                sort,
                 offset: request.offset.unwrap_or(0),
                 limit: request.limit.unwrap_or(50),
             },

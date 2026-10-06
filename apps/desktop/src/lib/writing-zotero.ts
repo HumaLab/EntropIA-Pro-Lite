@@ -382,6 +382,10 @@ export class WritingZoteroStore {
   #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
   /** Bumped to retire the status follower of an older request or selection. */
   #followToken = 0
+  /** The follower of a sync requested in this session, while one is live. */
+  #taskFollow: Promise<void> | null = null
+  /** The restart-safe follower of the latest sync's backlog, while one is live. */
+  #backlogFollow: Promise<void> | null = null
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
@@ -557,7 +561,12 @@ export class WritingZoteroStore {
       this.#set({
         bibliographySync: { loading: false, error: null, requested },
       })
-      void this.#followBibliographySync(requested.taskId, ++this.#followToken)
+      const follow = this.#followBibliographySync(requested.taskId, ++this.#followToken).finally(
+        () => {
+          if (this.#taskFollow === follow) this.#taskFollow = null
+        }
+      )
+      this.#taskFollow = follow
     } catch (error) {
       if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
       this.#set({
@@ -588,6 +597,55 @@ export class WritingZoteroStore {
       if (token !== this.#followToken) return
       this.#set({ bibliographyProgress: progress })
       if (!progress.status || !bibliographyFollowPending(progress.status)) return
+      await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
+    }
+  }
+
+  /**
+   * Follows the latest bibliography sync whose derived work may still be
+   * draining — the restart-safe half of the follower. After an app restart no
+   * sync was requested in this session, so nothing else would find the backlog
+   * still draining from before; the footer asks for it at startup and whenever
+   * batch work appears. Idempotent: a follow already live is joined, and a
+   * sync requested in this session keeps the screen (this follower stands
+   * down for it). Stops when the newest task's backlog drains, as the
+   * requested follower does.
+   */
+  followBibliographyBacklog(): Promise<void> {
+    if (this.#backlogFollow) return this.#backlogFollow
+    if (this.#taskFollow) return this.#taskFollow
+    const token = ++this.#followToken
+    const follow = this.#followLatestBibliographySync(token).finally(() => {
+      if (this.#backlogFollow === follow) this.#backlogFollow = null
+    })
+    this.#backlogFollow = follow
+    return follow
+  }
+
+  /**
+   * Reads the newest sync's status until it settles and its backlog drains.
+   * Unlike the requested follower there is no task id to name and no button
+   * waiting for an answer, so a missing or unreadable status claims nothing
+   * at all and simply stops.
+   */
+  async #followLatestBibliographySync(token: number): Promise<void> {
+    while (token === this.#followToken) {
+      let progress: BibliographySyncProgress
+      try {
+        const status = await invoke<BibliographySyncStatus | null>(
+          'processing_latest_bibliography_sync_status'
+        )
+        progress =
+          status && typeof status.state === 'string'
+            ? { status, unreadable: null }
+            : { status: null, unreadable: null }
+      } catch (error) {
+        progress = { status: null, unreadable: message(error) }
+      }
+      if (token !== this.#followToken) return
+      if (!progress.status) return
+      this.#set({ bibliographyProgress: progress })
+      if (!bibliographyFollowPending(progress.status)) return
       await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
     }
   }

@@ -95,6 +95,7 @@ beforeEach(() => {
   mockInvoke.mockReset()
   navigationRef.navigate.mockReset()
   workspaceRef.navigateActive.mockReset()
+  localStorage.clear()
   locale.set('es')
 })
 
@@ -122,6 +123,7 @@ describe('BibliotecaView', () => {
         query: null,
         zoteroLibraryType: null,
         zoteroLibraryId: null,
+        sort: 'title',
       },
     })
   })
@@ -173,6 +175,7 @@ describe('BibliotecaView', () => {
           query: null,
           zoteroLibraryType: 'group',
           zoteroLibraryId: '7',
+          sort: 'title',
         },
       })
     })
@@ -220,8 +223,50 @@ describe('BibliotecaView', () => {
           query: null,
           zoteroLibraryType: null,
           zoteroLibraryId: null,
+          sort: 'title',
         },
       })
+    })
+  })
+
+  it('sends the chosen order to the works listing and remembers it', async () => {
+    backend()
+    render(BibliotecaView)
+    await screen.findByText('El oficio de historiador')
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Elegir orden' }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Recientes' }))
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('bibliography_list_works', {
+        request: {
+          offset: 0,
+          limit: 50,
+          query: null,
+          zoteroLibraryType: null,
+          zoteroLibraryId: null,
+          sort: 'recent',
+        },
+      })
+    })
+    expect(localStorage.getItem('entropia:biblioteca:sort')).toBe('recent')
+  })
+
+  it('lists in the remembered order on the next mount', async () => {
+    localStorage.setItem('entropia:biblioteca:sort', 'recent')
+    backend()
+    render(BibliotecaView)
+
+    await screen.findByText('El oficio de historiador')
+    expect(callsFor('bibliography_list_works')[0]?.[1]).toEqual({
+      request: {
+        offset: 0,
+        limit: 50,
+        query: null,
+        zoteroLibraryType: null,
+        zoteroLibraryId: null,
+        sort: 'recent',
+      },
     })
   })
 
