@@ -70,17 +70,17 @@ export type View =
 
 type RootSectionView = Extract<
   View,
-  | {
-      name:
-        | 'home'
-        | 'settings'
-        | 'db-browser'
-        | 'rag-chat'
-        | 'research'
-        | 'writing'
-        | 'biblioteca'
-        | 'navegador'
-    }
+  {
+    name:
+      | 'home'
+      | 'settings'
+      | 'db-browser'
+      | 'rag-chat'
+      | 'research'
+      | 'writing'
+      | 'biblioteca'
+      | 'navegador'
+  }
 >
 
 type NavigationSnapshot = {

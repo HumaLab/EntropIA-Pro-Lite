@@ -923,9 +923,7 @@ describe('WorkPane', () => {
         return undefined
       })
       routeOverride.current = (name) =>
-        name === 'bibliography-work'
-          ? import('../views/BibliographyWorkView.svelte')
-          : undefined
+        name === 'bibliography-work' ? import('../views/BibliographyWorkView.svelte') : undefined
 
       workspace.activeNavigation.navigate(workView())
       render(WorkPane, { paneId: workspace.activeTabId })

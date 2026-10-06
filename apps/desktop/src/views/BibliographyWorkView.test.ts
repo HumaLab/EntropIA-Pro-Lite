@@ -160,9 +160,7 @@ describe('BibliographyWorkView', () => {
     render(BibliographyWorkView, { props })
 
     expect(await screen.findByText('Texto de la captura.')).toBeInTheDocument()
-    expect(
-      screen.getByText('Se muestra el texto guardado de la captura HTML.')
-    ).toBeInTheDocument()
+    expect(screen.getByText('Se muestra el texto guardado de la captura HTML.')).toBeInTheDocument()
   })
 
   it('shows why the original cannot open, as a notice', async () => {

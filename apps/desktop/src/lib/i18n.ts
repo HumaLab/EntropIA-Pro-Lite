@@ -246,8 +246,7 @@ const es = {
   'bibliographyWork.attachmentLabel': 'Adjunto',
   'bibliographyWork.originalNote': 'Se muestra el PDF original del adjunto.',
   'bibliographyWork.snapshotNote': 'Se muestra el texto guardado de la captura HTML.',
-  'bibliographyWork.originalEmpty':
-    'Esta obra no tiene un original visible en la aplicación.',
+  'bibliographyWork.originalEmpty': 'Esta obra no tiene un original visible en la aplicación.',
   'bibliographyWork.textTitle': 'Texto extraído',
   'bibliographyWork.textPage': 'Página {page}',
   'bibliographyWork.textEmpty': 'El texto extraído aparecerá cuando esté disponible.',

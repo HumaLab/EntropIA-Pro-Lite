@@ -54,9 +54,7 @@
   let attachmentMenuOpen = $state(false)
 
   const displayTitle = $derived(detail?.title || title)
-  const metaLine = $derived(
-    detail ? workLine({ authors: detail.authors, year: detail.year }) : ''
-  )
+  const metaLine = $derived(detail ? workLine({ authors: detail.authors, year: detail.year }) : '')
   const attachments = $derived(detail?.item.attachments ?? [])
   const currentAttachment = $derived(
     attachments.find((entry) => entry.attachmentKey === activeKey) ?? null
@@ -135,10 +133,7 @@
   }
 
   const creatorLine = $derived(
-    (detail?.item.creators ?? [])
-      .map(creatorName)
-      .filter(Boolean)
-      .join(', ')
+    (detail?.item.creators ?? []).map(creatorName).filter(Boolean).join(', ')
   )
 </script>
 
@@ -181,7 +176,10 @@
     </TabList>
 
     {#if activeTab === 'original'}
-      <section class="work-section" aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}>
+      <section
+        class="work-section"
+        aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
+      >
         {#if attachments.length > 1}
           <ToolbarMenu
             label={$currentLocale && t('bibliographyWork.attachmentMenu')}
@@ -256,7 +254,10 @@
         {/if}
       </section>
     {:else}
-      <section class="work-section" aria-label={$currentLocale && t('bibliographyWork.tabMetadata')}>
+      <section
+        class="work-section"
+        aria-label={$currentLocale && t('bibliographyWork.tabMetadata')}
+      >
         <h3 class="work-section__title">
           {$currentLocale && t('bibliographyWork.tabMetadata')}
         </h3>

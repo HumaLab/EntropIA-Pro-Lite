@@ -51,7 +51,9 @@ function library(over: Record<string, unknown> = {}) {
 function backend(
   options: {
     libraries?: unknown[]
-    page?: { works: unknown[]; total: number } | ((offset: number) => { works: unknown[]; total: number })
+    page?:
+      | { works: unknown[]; total: number }
+      | ((offset: number) => { works: unknown[]; total: number })
     pageError?: boolean
     search?: unknown
   } = {}
@@ -64,7 +66,9 @@ function backend(
         if (options.pageError) throw new Error('boom')
         const offset = (payload as { request: { offset: number } }).request.offset
         const page =
-          typeof options.page === 'function' ? options.page(offset) : (options.page ?? { works: [work()], total: 1 })
+          typeof options.page === 'function'
+            ? options.page(offset)
+            : (options.page ?? { works: [work()], total: 1 })
         return page
       }
       case 'bibliography_search_works':
@@ -98,7 +102,10 @@ describe('BibliotecaView', () => {
   it('lists the works of the synced libraries as rows', async () => {
     backend({
       page: {
-        works: [work(), work({ itemId: 'item-2', title: 'La sociedad', authors: 'Bloch', year: 1949 })],
+        works: [
+          work(),
+          work({ itemId: 'item-2', title: 'La sociedad', authors: 'Bloch', year: 1949 }),
+        ],
         total: 2,
       },
     })
@@ -149,7 +156,9 @@ describe('BibliotecaView', () => {
   })
 
   it('offers the library picker only when more than one library is synced', async () => {
-    backend({ libraries: [library(), library({ libraryType: 'group', libraryId: '7', name: 'Grupo' })] })
+    backend({
+      libraries: [library(), library({ libraryType: 'group', libraryId: '7', name: 'Grupo' })],
+    })
     render(BibliotecaView)
 
     const trigger = await screen.findByRole('button', { name: /Elegir biblioteca/ })

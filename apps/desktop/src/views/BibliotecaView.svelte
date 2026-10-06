@@ -88,8 +88,7 @@
         kind: 'radio' as const,
         id: `${library.libraryType}/${library.libraryId}`,
         label: library.name,
-        checked:
-          selected?.libraryType === ref.libraryType && selected?.libraryId === ref.libraryId,
+        checked: selected?.libraryType === ref.libraryType && selected?.libraryId === ref.libraryId,
         onselect: () => chooseLibrary(ref),
       }
     }),
@@ -145,10 +144,7 @@
 
   function chooseLibrary(ref: LibraryRef | null): void {
     libraryMenuOpen = false
-    if (
-      selected?.libraryType === ref?.libraryType &&
-      selected?.libraryId === ref?.libraryId
-    ) {
+    if (selected?.libraryType === ref?.libraryType && selected?.libraryId === ref?.libraryId) {
       return
     }
     selected = ref
@@ -267,19 +263,23 @@
     <div class="surface-message surface-message--center empty">
       <p>{$currentLocale && t('biblioteca.empty')}</p>
       <p class="biblioteca__hint">{$currentLocale && t('biblioteca.emptyHint')}</p>
-      <Button variant="secondary" size="sm" onclick={() => workspace.navigateActive({ name: 'writing' })}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onclick={() => workspace.navigateActive({ name: 'writing' })}
+      >
         {$currentLocale && t('biblioteca.emptyAction')}
       </Button>
     </div>
   {:else if loading}
-    <p class="surface-message surface-message--center">{$currentLocale && t('biblioteca.loading')}</p>
+    <p class="surface-message surface-message--center">
+      {$currentLocale && t('biblioteca.loading')}
+    </p>
   {:else if rows.length === 0}
     <div class="surface-message surface-message--center empty">
       <p>
         {$currentLocale &&
-          (searchHits !== null
-            ? t('biblioteca.emptySearch', { query })
-            : t('biblioteca.empty'))}
+          (searchHits !== null ? t('biblioteca.emptySearch', { query }) : t('biblioteca.empty'))}
       </p>
     </div>
   {:else}
@@ -297,7 +297,12 @@
     <p class="biblioteca__counts">{$currentLocale && countsLabel}</p>
     {#if showLoadMore}
       <div class="page-continuation">
-        <Button variant="secondary" size="sm" loading={loadingMore} onclick={() => void loadPage(false)}>
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={loadingMore}
+          onclick={() => void loadPage(false)}
+        >
           {$currentLocale && t('biblioteca.loadMore')}
         </Button>
       </div>
