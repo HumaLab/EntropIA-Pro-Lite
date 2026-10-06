@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { ActionIcon, Button, IconButton, Input } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    IconButton,
+    Input,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { settingsGet, settingsSet } from '$lib/settings'
   import {
@@ -28,6 +35,23 @@
   let naming = $state(false)
   let name = $state('')
   let error = $state('')
+
+  const items = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: '',
+      label: t('batch.flowNone'),
+      checked: chosen === '',
+      onselect: () => choose(''),
+    },
+    ...flows.map((flow) => ({
+      kind: 'radio' as const,
+      id: flow.name,
+      label: flow.name,
+      checked: chosen === flow.name,
+      onselect: () => choose(flow.name),
+    })),
+  ])
 
   async function load() {
     try {
@@ -74,17 +98,21 @@
 </script>
 
 <div class="flow-picker">
-  <label class="batch-field__legend" for="batch-flow-select">{t('batch.flow')}</label>
-  <select
-    id="batch-flow-select"
-    value={chosen}
-    onchange={(event) => choose(event.currentTarget.value)}
-  >
-    <option value="">{t('batch.flowNone')}</option>
-    {#each flows as flow (flow.name)}
-      <option value={flow.name}>{flow.name}</option>
-    {/each}
-  </select>
+  <span class="batch-field__legend" id="batch-flow-label">{t('batch.flow')}</span>
+  <ToolbarMenu label={t('batch.flow')} {items}>
+    {#snippet trigger(props, { open })}
+      <button
+        type="button"
+        class="menu-select"
+        class:menu-select--open={open}
+        aria-labelledby="batch-flow-label batch-flow-value"
+        {...props}
+      >
+        <span id="batch-flow-value">{chosen || t('batch.flowNone')}</span>
+        <ActionIcon name="chevron-down" size={12} />
+      </button>
+    {/snippet}
+  </ToolbarMenu>
   {#if chosen}
     <IconButton size="sm" variant="ghost" label={t('batch.flowDelete')} onclick={remove}>
       <ActionIcon name="delete" size={14} />
@@ -111,6 +139,34 @@
     flex-wrap: wrap;
     align-items: flex-end;
     gap: var(--space-2);
+  }
+
+  /* Same trigger as the batch tab's state filter: the app's own menu, never a
+     native <select>, whose popup the operating system paints. */
+  .menu-select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .menu-select:hover,
+  .menu-select--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .menu-select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 
   .flow-picker__error {
