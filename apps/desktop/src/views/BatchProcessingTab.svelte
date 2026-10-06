@@ -1,4 +1,6 @@
 <script lang="ts">
+  import BatchSchemaPanel from './BatchSchemaPanel.svelte'
+  import { schemaOperation } from '$lib/extraction-schemas'
   import { onDestroy, onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { getStore } from '$lib/db'
@@ -69,6 +71,8 @@
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
   let runTriples = $state(false)
+  // A user-defined schema (T-51) the batch also runs; '' runs none.
+  let schemaId = $state('')
   // Text extractions whose draft line says how many documents they cover.
   const extractionCounts = [
     { kind: 'ner', label: 'batch.nerCount' },
@@ -355,7 +359,8 @@
   }
 
   async function handleAnalyze(): Promise<void> {
-    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer && !runTriples)) return
+    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId))
+      return
     analyzing = true
     feedback = null
     try {
@@ -364,6 +369,7 @@
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
         ...(runTriples ? ['triples'] : []),
+        ...(schemaId ? [schemaOperation(schemaId)] : []),
       ]
       const key = JSON.stringify([Object.keys(selected).sort(), operations])
       if (prepareRequest?.key !== key) prepareRequest = { key, id: newBatchRequestId() }
@@ -1208,16 +1214,25 @@
             variant="secondary"
             size="sm"
             disabled={selectedCount === 0 ||
-              (!runOcr && !runEmbeddings && !runNer && !runTriples) ||
+              (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId) ||
               analyzing}
             onclick={handleAnalyze}
           >
             {t('batch.analyze')}
           </Button>
         </div>
+        <BatchSchemaPanel bind:schemaId />
         {#if draft && draftId}
           <div class="batch-tab__draft">
             <p>{t('batch.preparing')} {draft.membersClassified}/{draft.membersTotal}</p>
+            {#if draft.planningDone && draft.operations.some((op) => op.startsWith('schema:'))}
+              {@const count =
+                draft.tasksByKind.find((kind) => kind.name === 'schema_extract')?.count ?? 0}
+              <p>
+                {t('batch.schemaCount', { count })}
+                {#if !LOCAL_ML && count > 0}{t('batch.extractionPaidNotice')}{/if}
+              </p>
+            {/if}
             {#each extractionCounts as extraction (extraction.kind)}
               {#if draft.planningDone && draft.operations.includes(extraction.kind)}
                 {@const count =

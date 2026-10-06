@@ -87,6 +87,7 @@ pub enum EngineOutput {
     Embedding(super::embedding::EmbeddingComputeOutput),
     Ner(super::ner::NerComputeOutput),
     Triples(super::triples::TriplesComputeOutput),
+    Schema(super::schema_extract::SchemaComputeOutput),
     Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
     BibliographyProfile(crate::bibliography::processing::BibliographyProfileComputeOutput),
     BibliographyExtract(crate::bibliography::processing::BibliographyExtractComputeOutput),
@@ -510,6 +511,9 @@ fn publish_engine_output(
         }
         ("corpus", "asset", "triples", EngineOutput::Triples(triples)) => {
             super::triples::publish_triples_output(conn, &task.asset_id, triples)
+        }
+        ("corpus", "asset", "schema_extract", EngineOutput::Schema(schema)) => {
+            super::schema_extract::publish_schema_output(conn, &task.asset_id, schema)
         }
         (
             "bibliography",

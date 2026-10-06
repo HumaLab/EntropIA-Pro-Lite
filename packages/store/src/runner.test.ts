@@ -2959,7 +2959,7 @@ describe('batch NER tasks migration (0058)', () => {
     try {
       db.exec('PRAGMA foreign_keys=ON')
       await runMigrations(shim(db))
-      for (const kind of ['ner', 'triples']) {
+      for (const kind of ['ner', 'triples', 'schema_extract']) {
         db.prepare(
           `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
            VALUES (?, ?, 'a1', 'pending', 1, 1)`

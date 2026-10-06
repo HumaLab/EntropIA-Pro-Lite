@@ -291,6 +291,16 @@ fn processing_commit_observer(
                 },
             );
         }
+        processing::scheduler::EngineOutput::Schema(schema) => {
+            let _ = app_handle.emit(
+                "llm:complete",
+                llm::LlmCompletePayload {
+                    id: task.asset_id.clone(),
+                    job: "extract_schema".to_string(),
+                    result: schema.records.len().to_string(),
+                },
+            );
+        }
         processing::scheduler::EngineOutput::Bibliography(_) => {
             // `processing:changed` above is the durable bibliography signal;
             // no corpus compatibility event or follow-up applies.
@@ -339,12 +349,17 @@ fn processing_terminal_observer(
                 error,
             },
         );
-    } else if task.kind == "triples" {
+    } else if task.kind == "triples" || task.kind == "schema_extract" {
         let _ = app_handle.emit(
             "llm:error",
             llm::LlmErrorPayload {
                 id: task.asset_id.clone(),
-                job: "extract_triples".to_string(),
+                job: if task.kind == "triples" {
+                    "extract_triples"
+                } else {
+                    "extract_schema"
+                }
+                .to_string(),
                 error,
             },
         );
@@ -1057,6 +1072,12 @@ pub fn run() {
             scheduler_registry.register(std::sync::Arc::new(
                 processing::triples::TriplesExecutor::new(scheduler_app.clone(), db_path.clone()),
             ));
+            scheduler_registry.register(std::sync::Arc::new(
+                processing::schema_extract::SchemaExtractExecutor::new(
+                    scheduler_app.clone(),
+                    db_path.clone(),
+                ),
+            ));
             scheduler_registry.register(std::sync::Arc::new(processing::ner::NerExecutor::new(
                 scheduler_app.clone(),
                 db_path.clone(),
@@ -1262,6 +1283,10 @@ pub fn run() {
             db::commands::db_browser_query_rows,
             processing::processing_initialize,
             processing::commands::processing_prepare,
+            processing::schema_extract::extraction_schemas_list,
+            processing::schema_extract::extraction_schema_save,
+            processing::schema_extract::extraction_schema_delete,
+            processing::schema_extract::extraction_records_list,
             processing::commands::processing_start,
             processing::commands::processing_control,
             processing::commands::processing_set_priority,

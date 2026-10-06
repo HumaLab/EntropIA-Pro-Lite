@@ -553,6 +553,11 @@ pub enum LlmJob {
     ExtractTriplesAsset {
         asset_id: String,
     },
+    /// Batch-only (T-51): fields are `(name, description, repeatable)`.
+    ExtractSchemaAsset {
+        asset_id: String,
+        fields: Vec<(String, String, bool)>,
+    },
     SummarizeAsset {
         asset_id: String,
     },
@@ -572,6 +577,7 @@ impl LlmJob {
             LlmJob::ExtractEntitiesAsset { .. } => "extract_entities",
             LlmJob::ConsolidateEntitiesAsset { .. } => "consolidate_entities",
             LlmJob::ExtractTriplesAsset { .. } => "extract_triples",
+            LlmJob::ExtractSchemaAsset { .. } => "extract_schema",
             LlmJob::SummarizeAsset { .. } => "summarize",
         }
     }
@@ -591,6 +597,7 @@ impl LlmJob {
             | LlmJob::ExtractEntitiesAsset { asset_id }
             | LlmJob::ConsolidateEntitiesAsset { asset_id, .. }
             | LlmJob::ExtractTriplesAsset { asset_id }
+            | LlmJob::ExtractSchemaAsset { asset_id, .. }
             | LlmJob::SummarizeAsset { asset_id } => asset_id,
         }
     }
@@ -608,6 +615,7 @@ impl LlmJob {
             | LlmJob::ExtractEntitiesAsset { .. }
             | LlmJob::ConsolidateEntitiesAsset { .. }
             | LlmJob::ExtractTriplesAsset { .. }
+            | LlmJob::ExtractSchemaAsset { .. }
             | LlmJob::SummarizeAsset { .. } => LLM_TARGET_ASSET,
         }
     }
@@ -1293,18 +1301,44 @@ pub(crate) fn replace_triples_for_asset(
 }
 
 /// Runs the per-asset triple extraction outside the LLM queue (the batch
-/// executor's thread), choosing the local engine or OpenRouter the same way
-/// the queue worker does. Returns the parsed triples; storing them is the
+/// executor's thread). Returns the parsed triples; storing them is the
 /// caller's job. Blocks: never call it from inside the async runtime.
 pub(crate) fn extract_triples_for_asset_blocking(
     app_handle: &AppHandle,
     db_path: &std::path::Path,
     asset_id: &str,
 ) -> Result<Vec<LlmTriple>, String> {
-    let conn = crate::db::open::open_archive_connection(db_path)?;
     let job = LlmJob::ExtractTriplesAsset {
         asset_id: asset_id.to_string(),
     };
+    let (output, prefix) = run_asset_job_blocking(app_handle, db_path, &job)?;
+    Ok(parse_triples_json(&output, prefix))
+}
+
+/// The same for a user-defined schema (T-51): returns the model's raw
+/// output; parsing is the caller's.
+pub(crate) fn extract_schema_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+    fields: Vec<(String, String, bool)>,
+) -> Result<String, String> {
+    let job = LlmJob::ExtractSchemaAsset {
+        asset_id: asset_id.to_string(),
+        fields,
+    };
+    run_asset_job_blocking(app_handle, db_path, &job).map(|(output, _)| output)
+}
+
+/// Runs one asset job outside the LLM queue, choosing the local engine or
+/// OpenRouter the same way the queue worker does. Returns the raw output and
+/// the log prefix of the engine that produced it.
+fn run_asset_job_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    job: &LlmJob,
+) -> Result<(String, &'static str), String> {
+    let conn = crate::db::open::open_archive_connection(db_path)?;
     let api_key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
     #[cfg(feature = "local-ml")]
     {
@@ -1321,18 +1355,17 @@ pub(crate) fn extract_triples_for_asset_blocking(
                     let engine = engine
                         .lock()
                         .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
-                    process_job(&engine, &conn, &job)
+                    process_job(&engine, &conn, job)
                 });
             match local {
-                Ok(generated) => {
-                    return Ok(parse_triples_json(&generated.output, LLM_LOCAL_PREFIX))
-                }
+                Ok(generated) => return Ok((generated.output, LLM_LOCAL_PREFIX)),
                 // Same fallback as the worker: only "auto" with a key goes remote.
                 Err(error) if llm_mode != "auto" || api_key.is_empty() => {
                     return Err(format!("Local LLM unavailable: {error}"))
                 }
                 Err(error) => eprintln!(
-                    "{LLM_LOCAL_PREFIX}[triples] local engine failed, falling back to remote: {error}"
+                    "{LLM_LOCAL_PREFIX}[{}] local engine failed, falling back to remote: {error}",
+                    job.job_name()
                 ),
             }
         }
@@ -1344,7 +1377,7 @@ pub(crate) fn extract_triples_for_asset_blocking(
     }
     let request = prepare_remote_job_request(
         &conn,
-        &job,
+        job,
         OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
         db_path
             .parent()
@@ -1354,7 +1387,7 @@ pub(crate) fn extract_triples_for_asset_blocking(
     let client = OpenRouterClient::new(api_key, request.generation.model.clone());
     let generated =
         tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
-    Ok(parse_triples_json(&generated.output, LLM_CLOUD_PREFIX))
+    Ok((generated.output, LLM_CLOUD_PREFIX))
 }
 
 // ---------------------------------------------------------------------------
@@ -1732,6 +1765,7 @@ fn max_tokens_for(job: &LlmJob) -> i32 {
         | LlmJob::ConsolidateEntities { .. }
         | LlmJob::ConsolidateEntitiesAsset { .. } => 1024,
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => 1024,
+        LlmJob::ExtractSchemaAsset { .. } => 2048,
         LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 512,
         LlmJob::Classify { .. } => 256,
         LlmJob::Ask { .. } => 512,
@@ -2014,6 +2048,16 @@ fn process_job(
             engine.generate_triples(&p, max_tokens_for(job), &log_prefix)
         }
 
+        LlmJob::ExtractSchemaAsset { asset_id, fields } => {
+            let text = text_provider::get_asset_text(conn, asset_id)?;
+            if text.is_empty() {
+                return Err("No text available for schema extraction on this asset".to_string());
+            }
+            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
+            let p = prompt::gemma_wrap(&prompt::raw_schema_extraction(&truncated, fields));
+            engine.generate(&p, max_tokens_for(job), &log_prefix)
+        }
+
         LlmJob::SummarizeAsset { asset_id } => {
             let text = text_provider::get_asset_text(conn, asset_id)?;
             if text.is_empty() {
@@ -2131,7 +2175,7 @@ fn generation_flow_for_job(job: &LlmJob) -> Option<GenerationFlow> {
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => {
             Some(GenerationFlow::Triplets)
         }
-        LlmJob::Classify { .. } | LlmJob::Ask { .. } => None,
+        LlmJob::Classify { .. } | LlmJob::Ask { .. } | LlmJob::ExtractSchemaAsset { .. } => None,
     }
 }
 
@@ -2421,6 +2465,20 @@ fn prepare_remote_job_request(
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
             Ok(PreparedRemotePrompt {
                 prompt: render_prompt_from_settings(conn, GenerationFlow::Triplets, &truncated),
+                max_tokens,
+                truncate_to_sentence_boundary: false,
+            })
+        }
+
+        LlmJob::ExtractSchemaAsset { asset_id, fields } => {
+            let text = text_provider::get_asset_text(conn, asset_id)?;
+            if text.is_empty() {
+                return Err("No text available for schema extraction on this asset".to_string());
+            }
+            let max_tokens = max_tokens.max(max_tokens_for(job));
+            let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
+            Ok(PreparedRemotePrompt {
+                prompt: prompt::raw_schema_extraction(&truncated, fields),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })

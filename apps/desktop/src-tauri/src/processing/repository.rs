@@ -153,13 +153,16 @@ pub fn read_summary(conn: &Connection) -> Result<QueueSummary, String> {
 pub const TERMINAL_TASK_STATES: &[&str] = &["succeeded", "failed", "skipped", "cancelled"];
 
 /// Operations a batch asked for, parsed from `processing_batches.operations`
-/// (JSON array of `"ocr"` / `"embeddings"` / `"ner"` / `"triples"`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// (JSON array of `"ocr"` / `"embeddings"` / `"ner"` / `"triples"` /
+/// `"schema:<id>"`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchOperations {
     pub ocr: bool,
     pub embeddings: bool,
     pub ner: bool,
     pub triples: bool,
+    /// Extraction with a user-defined schema (T-51): the schema id.
+    pub schema: Option<String>,
 }
 pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperations, String> {
     let raw: String = conn
@@ -177,7 +180,11 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
                 "embeddings" => ops.embeddings = true,
                 "ner" => ops.ner = true,
                 "triples" => ops.triples = true,
-                _ => {}
+                other => {
+                    if let Some(id) = other.strip_prefix("schema:") {
+                        ops.schema = Some(id.to_string());
+                    }
+                }
             }
         }
     }
@@ -425,9 +432,12 @@ pub fn admit_subject_or_attach(
         );
     }
     subject.check_admittable()?;
-    if !matches!(kind, "ocr" | "embedding" | "ner" | "triples") {
+    if !matches!(
+        kind,
+        "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+    ) {
         return Err(format!(
-            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner/triples only)",
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner/triples/schema_extract only)",
             subject.domain, subject.subject_kind
         ));
     }
@@ -3067,7 +3077,10 @@ pub fn list_tasks(
         }
     }
     if let Some(kind) = kind_filter {
-        if !matches!(kind, "ocr" | "embedding" | "ner" | "triples") {
+        if !matches!(
+            kind,
+            "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+        ) {
             return Err(format!("invalid_selection: unknown task kind {kind}"));
         }
     }
@@ -3531,6 +3544,7 @@ pub fn claim_next(
             && *kind != "embedding"
             && *kind != "ner"
             && *kind != "triples"
+            && *kind != "schema_extract"
             && *kind != "bibliography_sync"
             && *kind != "bibliography_profile"
             && *kind != "bibliography_extract"
@@ -4496,7 +4510,7 @@ pub fn commit_success_with(
             && subject_kind == "asset"
             && matches!(
                 stored_kind.as_str(),
-                "ocr" | "embedding" | "ner" | "triples"
+                "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
             );
         let bibliography_route = domain == "bibliography"
             && subject_kind == "library"
@@ -4783,8 +4797,8 @@ struct MemberWork {
     reason: String,
     ocr_task: Option<(String, String, String)>,
     emb_task: Option<(String, String, Option<String>)>,
-    /// Text-extraction tasks (NER, triples): `(kind, contract, wait_for_ocr)`.
-    extract_tasks: Vec<(&'static str, &'static str, bool)>,
+    /// Text-extraction tasks (NER, triples, schema): `(kind, contract, wait_for_ocr)`.
+    extract_tasks: Vec<(&'static str, String, bool)>,
 }
 
 /// Progress of one classification page.
@@ -4912,7 +4926,8 @@ pub fn classify_batch_page(
                     admitted += 1;
                 }
             }
-            for &(kind, contract, wait_for_ocr) in &work.extract_tasks {
+            for (kind, contract, wait_for_ocr) in &work.extract_tasks {
+                let (kind, wait_for_ocr) = (*kind, *wait_for_ocr);
                 let revision = source_revision(conn, &work.asset_id)?;
                 // Text extraction pins only the source revision: the commit
                 // gate rejects results computed from text that changed mid-run.
@@ -5026,34 +5041,38 @@ fn plan_member(
         }
     }
     let mut extract_tasks = Vec::new();
-    type Decide = fn(&Connection, &str) -> Result<super::eligibility::ExtractionDecision, String>;
-    let extractions: [(bool, &'static str, &'static str, Decide); 2] = [
-        (
-            ops.ner,
-            "ner",
-            super::ner::NER_TASK_CONTRACT,
-            super::eligibility::ner_decision,
-        ),
-        (
-            ops.triples,
+    use super::eligibility::ExtractionDecision;
+    let mut decisions: Vec<(&'static str, String, ExtractionDecision)> = Vec::new();
+    if ops.ner {
+        let decision = super::eligibility::ner_decision(conn, asset_id)?;
+        decisions.push(("ner", super::ner::NER_TASK_CONTRACT.to_string(), decision));
+    }
+    if ops.triples {
+        let decision = super::eligibility::triples_decision(conn, asset_id)?;
+        decisions.push((
             "triples",
-            super::triples::TRIPLES_TASK_CONTRACT,
-            super::eligibility::triples_decision,
-        ),
-    ];
-    for (enabled, kind, contract, decide) in extractions {
-        if !enabled {
-            continue;
-        }
-        match decide(conn, asset_id)? {
-            super::eligibility::ExtractionDecision::Eligible => {
+            super::triples::TRIPLES_TASK_CONTRACT.to_string(),
+            decision,
+        ));
+    }
+    if let Some(schema_id) = &ops.schema {
+        let decision = super::eligibility::schema_decision(conn, asset_id, schema_id)?;
+        decisions.push((
+            super::schema_extract::SCHEMA_TASK_KIND,
+            super::schema_extract::contract_for(schema_id),
+            decision,
+        ));
+    }
+    for (kind, contract, decision) in decisions {
+        match decision {
+            ExtractionDecision::Eligible => {
                 extract_tasks.push((kind, contract, false));
                 notes.push(format!("{kind}:admit"));
             }
-            super::eligibility::ExtractionDecision::AlreadyDone => {
+            ExtractionDecision::AlreadyDone => {
                 notes.push(format!("{kind}:already_done"));
             }
-            super::eligibility::ExtractionDecision::NoSourceText => {
+            ExtractionDecision::NoSourceText => {
                 if ocr_open.is_some() {
                     extract_tasks.push((kind, contract, true));
                     notes.push(format!("{kind}:wait_for_ocr"));

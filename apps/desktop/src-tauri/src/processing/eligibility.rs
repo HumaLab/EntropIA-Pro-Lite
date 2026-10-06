@@ -470,6 +470,25 @@ pub fn triples_decision(conn: &Connection, asset_id: &str) -> Result<ExtractionD
     )
 }
 
+/// Same rule for a user-defined schema: done once the asset holds records of
+/// that schema.
+// ponytail: an asset where the schema found nothing has no records and is
+// admitted again on every batch; store an empty marker if that costs too much.
+pub fn schema_decision(
+    conn: &Connection,
+    asset_id: &str,
+    schema_id: &str,
+) -> Result<ExtractionDecision, String> {
+    let quoted = schema_id.replace('\'', "''");
+    extraction_decision(
+        conn,
+        asset_id,
+        &format!(
+            "SELECT COUNT(*) FROM extraction_records WHERE asset_id = ?1 AND schema_id = '{quoted}'"
+        ),
+    )
+}
+
 /// `done_sql` counts results already stored for `?1`. Item-level runs store
 /// asset_id NULL and cover every asset of the item: running per asset on top
 /// would duplicate them.

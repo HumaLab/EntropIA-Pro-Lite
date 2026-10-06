@@ -3058,7 +3058,7 @@ DROP TABLE processing_tasks;
 
 CREATE TABLE processing_tasks (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples')),
+  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples', 'schema_extract')),
   asset_id_snapshot TEXT NOT NULL,
   input_revision INTEGER NOT NULL DEFAULT 0,
   input_fingerprint TEXT NOT NULL DEFAULT '',
@@ -3094,7 +3094,7 @@ CREATE UNIQUE INDEX idx_processing_tasks_subject_active_unique
 CREATE TABLE processing_batch_tasks (
   batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
   task_id TEXT NOT NULL REFERENCES processing_tasks(id),
-  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples')),
+  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples', 'schema_extract')),
   asset_id_snapshot TEXT NOT NULL,
   request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),
   dependency_task_id TEXT REFERENCES processing_tasks(id),
@@ -3179,3 +3179,27 @@ BEGIN
    WHERE NEW.state = 'succeeded' AND state = 'blocked'
      AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);
 END;
+
+-- Extraction with a user-defined schema (T-51): the user names the fields
+-- (one may repeat: one ship, many cargoes) and a batch fills one record per
+-- thing the text describes. Local to this device for now: sync does not
+-- capture these tables.
+CREATE TABLE IF NOT EXISTS extraction_schemas (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  fields_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS extraction_records (
+  id TEXT PRIMARY KEY,
+  schema_id TEXT NOT NULL REFERENCES extraction_schemas(id) ON DELETE CASCADE,
+  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+  item_id TEXT NOT NULL,
+  record_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_records_schema_asset
+  ON extraction_records(schema_id, asset_id);
