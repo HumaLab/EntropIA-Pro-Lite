@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadSampleCollection } from '$lib/sample-collection'
   /**
    * Inicio (home): the startup overview — what to continue, what to start,
    * how the corpus stands, and where the main workspaces are.
@@ -150,6 +151,24 @@
    */
   function openCreateCollection() {
     requestCreateCollection(false)
+  }
+
+  /** T-37: nine invented documents with their text, to try the app on. */
+  let loadingSample = $state(false)
+  async function openSampleCollection() {
+    if (loadingSample) return
+    loadingSample = true
+    actionError = null
+    try {
+      const sample = await loadSampleCollection()
+      navigation.navigate({ name: 'collection', id: sample.id, collectionName: sample.name })
+    } catch (failure) {
+      actionError = t('home.firstRun.sampleFailed', {
+        error: failure instanceof Error ? failure.message : String(failure),
+      })
+    } finally {
+      loadingSample = false
+    }
   }
 
   function openCollections() {
@@ -378,6 +397,10 @@
             </Button>
             <Button variant="secondary" onclick={openCreateCollection}>
               {$currentLocale && t('home.firstRun.createCollection')}
+            </Button>
+            <Button variant="ghost" disabled={loadingSample} onclick={openSampleCollection}>
+              {$currentLocale &&
+                t(loadingSample ? 'home.firstRun.sampleLoading' : 'home.firstRun.sample')}
             </Button>
           </div>
         </div>
