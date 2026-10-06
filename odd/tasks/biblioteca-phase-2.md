@@ -113,3 +113,8 @@ including Pro, and the owner's visual check in the dev app.
   no freeze after dropping the tao patch.
 - P2+P3 (PR #3) and P1 (PR #4, engine EntropIA-Agent 23897f7) landed on main
   1d1ea22 after green CI incl. Pro. Owner visual check pending for P1-P3.
+- Follow-ups on main: section breadcrumbs rooted at each section (f8d98ff);
+  status-bar sync progress survives a restart + Biblioteca Título/Recientes
+  sort (5ea072c); opened works first (7158814) stored in a bounded local-only
+  app_settings list instead of a migration, because any new migration raises
+  the sync schema_tag and the server answers 426 to older devices.
