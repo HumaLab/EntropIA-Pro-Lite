@@ -9823,3 +9823,105 @@ fn p3_sync_status_sees_the_derived_window_before_the_sync_task_settles() {
         "the documented field still reports zero before the sync succeeds"
     );
 }
+
+// ── Opened works first (P3) ───────────────────────────────────────────────
+
+/// Creates the local-only `app_settings` key/value table the opened-works
+/// bookkeeping lives in (it is not part of any synced schema).
+fn create_app_settings(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )
+    .expect("app_settings table");
+}
+
+/// Seeds the recently-opened works list exactly as the app stores it: the
+/// local `app_settings` key `bibliography_recently_opened`, a JSON array of
+/// `{ "itemId", "openedAt" }` most recent first. Tests write the storage
+/// contract directly so they pin it independently of the writer.
+fn seed_recently_opened(conn: &rusqlite::Connection, entries: &[(&str, i64)]) {
+    create_app_settings(conn);
+    let list: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(item_id, opened_at)| serde_json::json!({ "itemId": item_id, "openedAt": opened_at }))
+        .collect();
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('bibliography_recently_opened', ?1)",
+        rusqlite::params![serde_json::to_string(&list).expect("recently-opened JSON")],
+    )
+    .expect("seed recently-opened");
+}
+
+/// P3 opened works first: the profile demand a sync chains walks the works
+/// the user opened first (most recently opened first), then the rest in the
+/// current recency order (item_version DESC, NULLs last, then item key).
+/// Admission order is execution order, so this is also run order.
+#[test]
+fn p3_profile_admission_walks_opened_works_first_most_recent_first_then_recency() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let newest = seed_catalog(&mut conn, "OPENA001", "Obra nueva", "Resumen A.");
+    let middle = seed_catalog(&mut conn, "OPENB001", "Obra media", "Resumen B.");
+    let oldest = seed_catalog(&mut conn, "OPENC001", "Obra vieja", "Resumen C.");
+    set_item_version(&mut conn, &newest, Some(5));
+    set_item_version(&mut conn, &middle, Some(3));
+    set_item_version(&mut conn, &oldest, Some(1));
+    // The user opened the oldest work most recently, then the newest one.
+    seed_recently_opened(&conn, &[(oldest.as_str(), 300), (newest.as_str(), 200)]);
+
+    let created = repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission");
+
+    assert_eq!(created, 3, "all three works demand a profile");
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_profile"),
+        vec![oldest, newest, middle],
+        "opened works first (most recently opened first), then the rest in recency order"
+    );
+}
+
+/// Extraction admission follows its work's opened rank: attachments walk
+/// their work's order (opened first, then recency), keeping the attachment
+/// row order inside one work.
+#[test]
+fn p3_extraction_admission_follows_the_works_opened_rank() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let mut attachments = Vec::new();
+    for (index, (key, version)) in [("EXPA0001", 5i64), ("EXPB0001", 3), ("EXPC0001", 1)]
+        .into_iter()
+        .enumerate()
+    {
+        let item_id = seed_catalog(&mut conn, key, &format!("Obra {key}"), "Resumen.");
+        set_item_version(&mut conn, &item_id, Some(version));
+        let pdf = make_text_pdf(&[(
+            50.0,
+            750.0,
+            "Texto extraible del adjunto con longitud suficiente para calidad",
+        )]);
+        let path = write_temp_pdf(&dir, &format!("expediente{index}.pdf"), &pdf);
+        let attachment_id = seed_attachment(
+            &mut conn,
+            &item_id,
+            &format!("ATT{index}"),
+            "linked_file",
+            Some(&path),
+            &format!("expediente{index}.pdf"),
+            "application/pdf",
+        );
+        attachments.push((attachment_id, item_id));
+    }
+    let (attachment_a, item_a) = attachments[0].clone();
+    let (attachment_b, _item_b) = attachments[1].clone();
+    let (attachment_c, item_c) = attachments[2].clone();
+    // The user opened work C most recently, then work A.
+    seed_recently_opened(&conn, &[(item_c.as_str(), 300), (item_a.as_str(), 200)]);
+
+    let created = repository::admit_stale_extraction_demands(&conn, "lib-1").expect("admission");
+
+    assert_eq!(created, 3, "every readable attachment demands extraction");
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_extract"),
+        vec![attachment_c, attachment_a, attachment_b],
+        "extraction admission follows the work's opened rank"
+    );
+}

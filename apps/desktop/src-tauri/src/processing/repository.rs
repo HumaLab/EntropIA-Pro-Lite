@@ -1793,11 +1793,12 @@ pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, Str
 /// hash always mints a new task because terminal profile history is never
 /// rewritten.
 ///
-/// P3 recent works first: the walk admits the most-recently-changed work
-/// first (Zotero's `item_version`, NULL = unknown recency = last), ties by
-/// item key. Admission order is execution order here (derived task ids
-/// ascend with admission), so the works the user touched last are profiled
-/// first.
+/// P3 opened works first, then recency: the walk admits the works the user
+/// opened recently first (most recently opened first), then the rest by
+/// recency of change (Zotero's `item_version`, NULL = unknown recency =
+/// last), ties by item key. Admission order is execution order here (derived
+/// task ids ascend with admission), so what the user touched last is
+/// profiled first.
 pub fn admit_stale_profile_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1844,6 +1845,11 @@ pub fn admit_stale_profile_demands(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?;
     items.dedup();
+    // P3 opened works first: a stable sort over the recency order the query
+    // already produced, keyed by the stored open rank (works never opened
+    // keep their recency position).
+    let opened_rank = crate::settings::recently_opened_ranks(conn);
+    items.sort_by_key(|item_id| opened_rank.get(item_id).copied().unwrap_or(usize::MAX));
     let mut created = 0;
     for item_id in &items {
         let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
@@ -1920,9 +1926,10 @@ pub fn admit_stale_profile_demands(
 /// Runs inside the sync-success transaction, so a committed sync never
 /// loses its extraction follow-up.
 ///
-/// P3 recent works first: attachments are walked in their work's recency
-/// (the same order [`admit_stale_profile_demands`] walks works), then by
-/// attachment row id within one work.
+/// P3 opened works first, then recency: attachments are walked in the same
+/// work order [`admit_stale_profile_demands`] uses (recently opened works
+/// first, then recency of change), then by attachment row id within one
+/// work.
 pub fn admit_stale_extraction_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1934,7 +1941,7 @@ pub fn admit_stale_extraction_demands(
         conn,
         crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
     );
-    let attachments: Vec<(String, String)> = conn
+    let mut attachments: Vec<(String, String)> = conn
         .prepare(
             "SELECT a.id, a.item_id FROM zotero_attachments a
              JOIN bibliographic_items i ON i.id = a.item_id
@@ -1949,6 +1956,13 @@ pub fn admit_stale_extraction_demands(
         .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?;
+    // P3 opened works first: the same open rank as the profile walk, applied
+    // over the query's work-recency order (stable, so attachments of one
+    // work keep their row order).
+    let opened_rank = crate::settings::recently_opened_ranks(conn);
+    attachments.sort_by_key(|(_attachment_id, item_id)| {
+        opened_rank.get(item_id).copied().unwrap_or(usize::MAX)
+    });
     let mut created = 0;
     for (attachment_id, _item_id) in &attachments {
         let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)

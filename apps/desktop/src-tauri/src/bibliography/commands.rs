@@ -520,7 +520,9 @@ pub async fn bibliography_list_works(
 
 /// One work's ficha for the Biblioteca work view: the display line (authors,
 /// year, library) plus the catalog projection of the item — metadata,
-/// collections, tags and attachment metadata. Read-only.
+/// collections, tags and attachment metadata. Read-only except the
+/// best-effort bookkeeping that records the open for the "opened works
+/// first" order.
 #[tauri::command]
 pub async fn bibliography_work_detail(
     item_id: String,
@@ -529,8 +531,12 @@ pub async fn bibliography_work_detail(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_archive_connection(&db_path)?;
-        crate::bibliography::work_view::work_detail(&conn, &item_id)
-            .map_err(|error| format!("{}: {}", error.code, error.message))
+        crate::bibliography::work_view::work_detail_recording_open(
+            &conn,
+            &item_id,
+            crate::processing::repository::now_ms(),
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))
     })
     .await
 }
@@ -578,11 +584,12 @@ pub async fn bibliography_open_work_attachment(
             &conn,
             crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
         );
-        let plan = crate::bibliography::work_view::prepare_work_attachment_open(
+        let plan = crate::bibliography::work_view::prepare_work_attachment_recording_open(
             &conn,
             &item_id,
             &attachment_key,
             data_dir.as_deref(),
+            crate::processing::repository::now_ms(),
         )
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
         let mut open_error = plan

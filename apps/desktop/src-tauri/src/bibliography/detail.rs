@@ -249,6 +249,46 @@ pub fn item_detail(
     Ok(ItemDetail::NotInCatalog)
 }
 
+/// The `bibliographic_items` row id behind one ficha address (library +
+/// item key) — the id the "opened works first" bookkeeping records. `None`
+/// when the local personal namespace has no row for the key (including
+/// group libraries, which never read from the confirmed catalog).
+pub fn item_row_id(conn: &Connection, library: &Library, item_key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT i.id
+           FROM bibliographic_items i
+           JOIN zotero_libraries l ON l.id = i.library_id
+           JOIN zotero_connections c ON c.id = l.connection_id
+          WHERE c.source_origin = 'local'
+            AND c.source_instance_id IS NULL
+            AND l.library_type = ?1
+            AND l.library_id = ?2
+            AND i.item_key = ?3",
+        rusqlite::params![library.library_type.as_str(), &library.library_id, item_key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+/// [`item_detail`] with its "opened" bookkeeping side effect: opening the
+/// Zotero ficha records the work by its catalog row id for the "opened works
+/// first" admission order. Recording is best-effort — a failure is logged
+/// and never fails the read; a key outside the catalog records nothing.
+pub fn item_detail_recording_open(
+    conn: &Connection,
+    library: &Library,
+    item_key: &str,
+    now_ms: i64,
+) -> BibliographyResult<ItemDetail> {
+    let detail = item_detail(conn, library, item_key)?;
+    if let Some(item_id) = item_row_id(conn, library, item_key) {
+        crate::settings::record_work_opened_best_effort(conn, &item_id, now_ms);
+    }
+    Ok(detail)
+}
+
 /// Every table the detail reads. A missing one means there is no catalog to
 /// confirm yet, so the ficha renders from its held CSL.
 fn has_detail_tables(conn: &Connection) -> BibliographyResult<bool> {
@@ -1081,5 +1121,82 @@ mod tests {
                 .expect("serialize catalog_unavailable"),
             serde_json::json!({ "status": "catalog_unavailable" })
         );
+    }
+
+    // ── opened-works bookkeeping on the ficha read ─────────────────────────
+
+    fn create_app_settings(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("app_settings table");
+    }
+
+    fn recorded_opens(conn: &Connection) -> Vec<(String, i64)> {
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'bibliography_recently_opened'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("recorded list");
+        serde_json::from_str::<Vec<crate::settings::RecentlyOpenedEntry>>(&raw)
+            .expect("valid recently-opened JSON")
+            .into_iter()
+            .map(|entry| (entry.item_id, entry.opened_at))
+            .collect()
+    }
+
+    /// Opening the Zotero ficha records the work by its `bibliographic_items`
+    /// row id (the ficha only carries library + item key), so the "opened
+    /// works first" order matches what the library sync admits.
+    #[test]
+    fn reading_the_ficha_records_the_catalog_row_id_of_the_opened_work() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        confirmed_namespace(&mut conn, "DETAIL1");
+        let row_id: String = conn
+            .query_row(
+                "SELECT id FROM bibliographic_items WHERE item_key = 'DETAIL1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("catalog row id");
+
+        let detail =
+            item_detail_recording_open(&conn, &Library::user("0"), "DETAIL1", 99).expect("read");
+
+        assert!(matches!(detail, ItemDetail::Confirmed { .. }));
+        assert_eq!(recorded_opens(&conn), vec![(row_id, 99)]);
+    }
+
+    #[test]
+    fn a_ficha_read_succeeds_even_when_recording_the_open_fails() {
+        // No `app_settings` table: recording cannot persist anything.
+        let mut conn = migrated_db();
+        confirmed_namespace(&mut conn, "DETAIL1");
+
+        let detail =
+            item_detail_recording_open(&conn, &Library::user("0"), "DETAIL1", 5).expect("read");
+
+        assert!(matches!(detail, ItemDetail::Confirmed { .. }));
+    }
+
+    /// TRIANGULATE: a key outside the catalog records nothing — there is no
+    /// catalog row id to rank.
+    #[test]
+    fn a_ficha_outside_the_catalog_records_nothing() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        confirmed_namespace(&mut conn, "DETAIL1");
+
+        let detail =
+            item_detail_recording_open(&conn, &Library::user("0"), "NEVER-SEEN", 5).expect("read");
+
+        assert_eq!(detail, ItemDetail::NotInCatalog);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+            .expect("settings rows");
+        assert_eq!(rows, 0, "a work that is not there opens nothing");
     }
 }

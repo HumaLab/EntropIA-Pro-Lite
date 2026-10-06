@@ -305,6 +305,20 @@ pub fn work_detail(conn: &Connection, item_id: &str) -> BibliographyResult<WorkD
     })
 }
 
+/// [`work_detail`] with its "opened" bookkeeping side effect: opening a work
+/// in the Biblioteca records it for the "opened works first" admission
+/// order. Recording is best-effort — a failure is logged and never fails
+/// the read.
+pub fn work_detail_recording_open(
+    conn: &Connection,
+    item_id: &str,
+    now_ms: i64,
+) -> BibliographyResult<WorkDetail> {
+    let detail = work_detail(conn, item_id)?;
+    crate::settings::record_work_opened_best_effort(conn, item_id, now_ms);
+    Ok(detail)
+}
+
 /// One extracted page text of a work attachment, exactly as the catalog
 /// stores it (`bibliographic_page_texts`).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -461,6 +475,21 @@ pub fn prepare_work_attachment_open(
         pages,
         snapshot_text,
     })
+}
+
+/// [`prepare_work_attachment_open`] with the same "opened" bookkeeping side
+/// effect: opening a work attachment opens its work. Recording is
+/// best-effort — a failure is logged and never fails the read.
+pub fn prepare_work_attachment_recording_open(
+    conn: &Connection,
+    item_id: &str,
+    attachment_key: &str,
+    zotero_data_dir: Option<&str>,
+    now_ms: i64,
+) -> BibliographyResult<WorkAttachmentOpen> {
+    let plan = prepare_work_attachment_open(conn, item_id, attachment_key, zotero_data_dir)?;
+    crate::settings::record_work_opened_best_effort(conn, item_id, now_ms);
+    Ok(plan)
 }
 
 /// The stable error constructor these reads use (same shape as the rest of
@@ -1116,5 +1145,76 @@ mod tests {
         let unknown_attachment =
             prepare_work_attachment_open(&conn, &item_id, "NOPE", None).expect_err("attachment");
         assert_eq!(unknown_attachment.code, "unknown_attachment");
+    }
+
+    // ── opened-works bookkeeping on the read commands ───────────────────
+
+    fn create_app_settings(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("app_settings table");
+    }
+
+    fn recorded_opens(conn: &Connection) -> Vec<(String, i64)> {
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'bibliography_recently_opened'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("recorded list");
+        serde_json::from_str::<Vec<crate::settings::RecentlyOpenedEntry>>(&raw)
+            .expect("valid recently-opened JSON")
+            .into_iter()
+            .map(|entry| (entry.item_id, entry.opened_at))
+            .collect()
+    }
+
+    #[test]
+    fn reading_a_work_detail_records_the_opened_work() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+
+        let detail =
+            work_detail_recording_open(&conn, &item_id, 1_700_000_000_123).expect("detail");
+
+        assert_eq!(detail.item_id, item_id);
+        assert_eq!(recorded_opens(&conn), vec![(item_id, 1_700_000_000_123)]);
+    }
+
+    #[test]
+    fn a_work_read_succeeds_even_when_recording_the_open_fails() {
+        // No `app_settings` table: recording cannot persist anything.
+        let mut conn = migrated_db();
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+
+        let detail = work_detail_recording_open(&conn, &item_id, 5).expect("read must not fail");
+
+        assert_eq!(detail.item_id, item_id);
+    }
+
+    #[test]
+    fn opening_an_attachment_records_the_work_and_survives_a_recording_failure() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+        let pdf = temp_pdf("recording");
+        seed_pdf_attachment(&mut conn, &item_id, "ATT1", &pdf);
+
+        let plan = prepare_work_attachment_recording_open(&conn, &item_id, "ATT1", None, 42)
+            .expect("prepare");
+
+        assert_eq!(plan.item_id, item_id);
+        assert_eq!(recorded_opens(&conn), vec![(item_id.clone(), 42)]);
+
+        // With recording broken the read still succeeds.
+        conn.execute("DROP TABLE app_settings", []).expect("drop");
+        prepare_work_attachment_recording_open(&conn, &item_id, "ATT1", None, 43)
+            .expect("read must not fail");
     }
 }
