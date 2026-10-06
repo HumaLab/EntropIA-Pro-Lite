@@ -190,6 +190,10 @@ const es = {
   'batch.schemaDelete': 'Borrar el esquema y sus resultados',
   'batch.schemaResults': 'Ver resultados',
   'batch.schemaName': 'Nombre del esquema',
+  'batch.schemaModel': 'Modelo',
+  'batch.schemaModelPlaceholder': 'El modelo general',
+  'batch.schemaModelHint':
+    'Opcional. Un modelo de OpenRouter solo para este esquema, por ejemplo anthropic/claude-sonnet-4.5.',
   'batch.schemaFieldName': 'Campo',
   'batch.schemaFieldDescription': 'Qué es (ayuda al modelo)',
   'batch.schemaFieldRepeatable': 'Puede repetirse',
@@ -3081,6 +3085,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.schemaDelete': 'Delete the schema and its results',
   'batch.schemaResults': 'Show results',
   'batch.schemaName': 'Schema name',
+  'batch.schemaModel': 'Model',
+  'batch.schemaModelPlaceholder': 'The general model',
+  'batch.schemaModelHint':
+    'Optional. An OpenRouter model just for this schema, for example anthropic/claude-sonnet-4.5.',
   'batch.schemaFieldName': 'Field',
   'batch.schemaFieldDescription': 'What it is (helps the model)',
   'batch.schemaFieldRepeatable': 'Can repeat',

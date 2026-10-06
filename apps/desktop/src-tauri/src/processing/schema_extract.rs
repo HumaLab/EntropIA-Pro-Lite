@@ -47,6 +47,9 @@ pub struct ExtractionSchema {
     pub id: String,
     pub name: String,
     pub fields: Vec<SchemaField>,
+    /// OpenRouter model for this schema; empty uses the general one.
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -57,20 +60,21 @@ pub struct SchemaComputeOutput {
 }
 
 fn load_schema(conn: &Connection, schema_id: &str) -> Result<Option<ExtractionSchema>, String> {
-    let row: Option<(String, String)> = conn
+    let row: Option<(String, String, String)> = conn
         .query_row(
-            "SELECT name, fields_json FROM extraction_schemas WHERE id = ?1",
+            "SELECT name, fields_json, model FROM extraction_schemas WHERE id = ?1",
             [schema_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|e| format!("Failed to read schema {schema_id}: {e}"))?;
-    row.map(|(name, fields_json)| {
+    row.map(|(name, fields_json, model)| {
         serde_json::from_str(&fields_json)
             .map(|fields| ExtractionSchema {
                 id: schema_id.to_string(),
                 name,
                 fields,
+                model,
             })
             .map_err(|e| format!("Schema {schema_id} has invalid fields: {e}"))
     })
@@ -255,6 +259,7 @@ impl Executor for SchemaExtractExecutor {
             &self.db_path,
             &task.asset_id,
             fields,
+            Some(schema.model.clone()).filter(|model| !model.trim().is_empty()),
         ) {
             Ok(raw) => {
                 let records = parse_records(&raw, &schema.fields);
@@ -342,6 +347,7 @@ pub async fn extraction_schema_save(
         field.description = field.description.trim().to_string();
     }
     schema.name = schema.name.trim().to_string();
+    schema.model = schema.model.trim().to_string();
     validate(&schema)?;
     if schema.id.is_empty() {
         schema.id = uuid::Uuid::new_v4().to_string();
@@ -350,11 +356,11 @@ pub async fn extraction_schema_save(
     let now = super::repository::now_ms();
     open(&db)?
         .execute(
-            "INSERT INTO extraction_schemas (id, name, fields_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)
-             ON CONFLICT(id) DO UPDATE SET name = excluded.name,
-               fields_json = excluded.fields_json, updated_at = excluded.updated_at",
-            params![schema.id, schema.name, fields_json, now],
+            "INSERT INTO extraction_schemas (id, name, fields_json, model, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name, fields_json = excluded.fields_json,
+               model = excluded.model, updated_at = excluded.updated_at",
+            params![schema.id, schema.name, fields_json, schema.model, now],
         )
         .map_err(|e| format!("Failed to save schema: {e}"))?;
     Ok(schema)

@@ -784,7 +784,7 @@ En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o u
 Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
 
 1. En **Configuración → Lotes**, debajo de las operaciones, buscá **Esquema propio** y pulsá **Nuevo esquema**.
-2. Poné un nombre al esquema y agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
+2. Poné un nombre al esquema y, si querés, un **Modelo** de OpenRouter solo para este esquema (vacío usa el general de **Model Params**). Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
 3. Marcá **Puede repetirse** en los campos que pueden tener varios valores en un mismo caso: un barco con muchas cargas distintas.
 4. Pulsá **Guardar esquema**. Queda elegido en **Esquema propio**.
 5. Seleccioná las colecciones y pulsá **Analizar selección**. La propuesta dice cuántos documentos pasan por el esquema. Después, **Iniciar lote**.

@@ -6,6 +6,7 @@ describe('recordsCsv', () => {
     const schema: ExtractionSchema = {
       id: 's1',
       name: 'Barcos',
+      model: '',
       fields: [
         { name: 'barco', description: '', repeatable: false },
         { name: 'carga', description: '', repeatable: true },

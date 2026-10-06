@@ -56,7 +56,12 @@
   })
 
   function blankSchema(): ExtractionSchema {
-    return { id: '', name: '', fields: [{ name: '', description: '', repeatable: false }] }
+    return {
+      id: '',
+      name: '',
+      model: '',
+      fields: [{ name: '', description: '', repeatable: false }],
+    }
   }
 
   async function run(action: () => Promise<void>) {
@@ -164,7 +169,15 @@
 
   {#if editing}
     <div class="schema-panel__editor">
-      <Input bind:value={editing.name} label={t('batch.schemaName')} />
+      <div class="schema-panel__row">
+        <Input bind:value={editing.name} label={t('batch.schemaName')} />
+        <Input
+          bind:value={editing.model}
+          label={t('batch.schemaModel')}
+          placeholder={t('batch.schemaModelPlaceholder')}
+          hint={t('batch.schemaModelHint')}
+        />
+      </div>
       {#each editing.fields as field, index (index)}
         <div class="schema-panel__field">
           <Input bind:value={field.name} label={t('batch.schemaFieldName')} />

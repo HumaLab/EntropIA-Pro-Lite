@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS extraction_schemas (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   fields_json TEXT NOT NULL,
+  -- OpenRouter model for this schema; '' uses the general one (T-26).
+  model TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );

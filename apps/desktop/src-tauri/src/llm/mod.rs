@@ -557,6 +557,8 @@ pub enum LlmJob {
     ExtractSchemaAsset {
         asset_id: String,
         fields: Vec<(String, String, bool)>,
+        /// OpenRouter model chosen for the schema (T-26); None uses the general one.
+        model: Option<String>,
     },
     SummarizeAsset {
         asset_id: String,
@@ -1322,10 +1324,12 @@ pub(crate) fn extract_schema_for_asset_blocking(
     db_path: &std::path::Path,
     asset_id: &str,
     fields: Vec<(String, String, bool)>,
+    model: Option<String>,
 ) -> Result<String, String> {
     let job = LlmJob::ExtractSchemaAsset {
         asset_id: asset_id.to_string(),
         fields,
+        model,
     };
     run_asset_job_blocking(app_handle, db_path, &job).map(|(output, _)| output)
 }
@@ -2048,7 +2052,9 @@ fn process_job(
             engine.generate_triples(&p, max_tokens_for(job), &log_prefix)
         }
 
-        LlmJob::ExtractSchemaAsset { asset_id, fields } => {
+        LlmJob::ExtractSchemaAsset {
+            asset_id, fields, ..
+        } => {
             let text = text_provider::get_asset_text(conn, asset_id)?;
             if text.is_empty() {
                 return Err("No text available for schema extraction on this asset".to_string());
@@ -2187,7 +2193,12 @@ fn remote_generation_config_for_job(
         return generation_config_from_settings(conn, flow);
     }
 
-    let model = settings::get_setting(conn, "openrouter_model")
+    let chosen = match job {
+        LlmJob::ExtractSchemaAsset { model, .. } => model.clone(),
+        _ => None,
+    };
+    let model = chosen
+        .or_else(|| settings::get_setting(conn, "openrouter_model"))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| settings::DEFAULT_OPENROUTER_MODEL.to_string());
@@ -2470,7 +2481,9 @@ fn prepare_remote_job_request(
             })
         }
 
-        LlmJob::ExtractSchemaAsset { asset_id, fields } => {
+        LlmJob::ExtractSchemaAsset {
+            asset_id, fields, ..
+        } => {
             let text = text_provider::get_asset_text(conn, asset_id)?;
             if text.is_empty() {
                 return Err("No text available for schema extraction on this asset".to_string());

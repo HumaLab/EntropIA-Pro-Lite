@@ -18,6 +18,8 @@ export interface ExtractionSchema {
   id: string
   name: string
   fields: SchemaField[]
+  /** OpenRouter model for this schema (T-26); '' uses the general one. */
+  model: string
 }
 
 export interface ExtractionRecordRow {
