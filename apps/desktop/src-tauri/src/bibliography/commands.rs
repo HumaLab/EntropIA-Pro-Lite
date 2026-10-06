@@ -465,3 +465,152 @@ pub async fn bibliography_search_passages(
     })
     .await
 }
+
+// ── Biblioteca (P2) ─────────────────────────────────────────────────────────
+
+/// One page of the Biblioteca listing from the UI: paging, an optional
+/// substring filter, and the optional Zotero library scope (type + native
+/// id, both or neither — resolved here to the internal library rows).
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorksRequest {
+    pub offset: Option<i64>,
+    pub limit: Option<i64>,
+    pub query: Option<String>,
+    pub zotero_library_type: Option<String>,
+    pub zotero_library_id: Option<String>,
+}
+
+/// One page of the catalog's works (title order, tombstones excluded) with
+/// the scope's total, so the Biblioteca can page a library of thousands
+/// without counting on its own. Read-only.
+#[tauri::command]
+pub async fn bibliography_list_works(
+    request: ListWorksRequest,
+    db: State<'_, AppDbState>,
+) -> Result<crate::bibliography::work_view::WorkListPage, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        crate::bibliography::work_view::list_works(
+            &conn,
+            &crate::bibliography::work_view::WorkListRequest {
+                library_type: request.zotero_library_type.as_deref(),
+                library_native_id: request.zotero_library_id.as_deref(),
+                query: request.query.as_deref(),
+                offset: request.offset.unwrap_or(0),
+                limit: request.limit.unwrap_or(50),
+            },
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+    })
+    .await
+}
+
+/// One work's ficha for the Biblioteca work view: the display line (authors,
+/// year, library) plus the catalog projection of the item — metadata,
+/// collections, tags and attachment metadata. Read-only.
+#[tauri::command]
+pub async fn bibliography_work_detail(
+    item_id: String,
+    db: State<'_, AppDbState>,
+) -> Result<crate::bibliography::work_view::WorkDetail, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        crate::bibliography::work_view::work_detail(&conn, &item_id)
+            .map_err(|error| format!("{}: {}", error.code, error.message))
+    })
+    .await
+}
+
+/// One work attachment prepared for the in-app viewer, with the extracted
+/// page texts beside it. Same grant discipline as `bibliography_open_passage`:
+/// the frontend names the work and the attachment key, never a path; the file
+/// comes from the cataloged attachment row, is validated as an existing
+/// regular PDF (HTML snapshots need no file), and only then is that single
+/// file allowed on the asset protocol at runtime. The extracted texts travel
+/// even when no original is viewable — the "Texto" tab is never gated on the
+/// file.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenWorkAttachmentResponse {
+    pub item_id: String,
+    pub item_key: String,
+    pub title: String,
+    pub attachment_key: String,
+    /// `"pdf"` or `"html"` when the original can be shown inside the app.
+    pub original_kind: Option<String>,
+    /// The canonical PDF path the viewer was just granted (and only that one
+    /// file). `None` for HTML snapshots and whenever nothing was granted.
+    pub original_path: Option<String>,
+    pub open_error: Option<String>,
+    pub pages: Vec<crate::bibliography::work_view::WorkPageText>,
+    /// The whole-document extraction, empty when never extracted.
+    pub snapshot_text: String,
+    /// False when neither page texts nor a whole-document extraction exist.
+    pub extracted: bool,
+}
+
+#[tauri::command]
+pub async fn bibliography_open_work_attachment(
+    item_id: String,
+    attachment_key: String,
+    app: tauri::AppHandle,
+    db: State<'_, AppDbState>,
+) -> Result<OpenWorkAttachmentResponse, String> {
+    use tauri::Manager;
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        let data_dir = crate::settings::get_setting(
+            &conn,
+            crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+        );
+        let plan = crate::bibliography::work_view::prepare_work_attachment_open(
+            &conn,
+            &item_id,
+            &attachment_key,
+            data_dir.as_deref(),
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        let mut open_error = plan
+            .reason
+            .as_ref()
+            .map(|(reason, detail)| format!("{reason}: {detail}"));
+        let mut granted = None;
+        if let Some(path) = plan
+            .original
+            .as_ref()
+            .and_then(|original| original.path.as_ref())
+        {
+            match app.asset_protocol_scope().allow_file(path) {
+                Ok(()) => granted = Some(path.to_string_lossy().to_string()),
+                Err(error) => {
+                    open_error = Some(format!("scope_grant_failed: {error}"));
+                }
+            }
+        }
+        let mut original_kind = plan.original.as_ref().map(|original| match original.kind {
+            crate::bibliography::attachment::OriginalKind::Pdf => "pdf".to_string(),
+            crate::bibliography::attachment::OriginalKind::Html => "html".to_string(),
+        });
+        // A PDF only shows when its one file was actually granted.
+        if granted.is_none() && original_kind.as_deref() == Some("pdf") {
+            original_kind = None;
+        }
+        Ok(OpenWorkAttachmentResponse {
+            item_id: plan.item_id,
+            item_key: plan.item_key,
+            title: plan.title,
+            attachment_key: plan.attachment_key,
+            original_kind,
+            original_path: granted,
+            open_error,
+            pages: plan.pages,
+            snapshot_text: plan.snapshot_text,
+            extracted: plan.extracted,
+        })
+    })
+    .await
+}

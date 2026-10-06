@@ -24,6 +24,10 @@ export function tabTitle(view: View): string {
       return view.title
     case 'writing':
       return view.documentTitle ?? t('writing.title')
+    case 'biblioteca':
+      return t('nav.biblioteca')
+    case 'bibliography-work':
+      return view.title
     case 'settings':
       return t('nav.settings')
     case 'navegador':
@@ -53,6 +57,10 @@ export function tabIcon(view: View): ActionIconName {
       return 'research'
     case 'writing':
       return 'edit'
+    // A work is a book in the library's books, whatever page it opens on.
+    case 'biblioteca':
+    case 'bibliography-work':
+      return 'books'
     case 'settings':
       return 'settings'
     case 'navegador':

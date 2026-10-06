@@ -861,4 +861,81 @@ describe('WorkPane', () => {
       expect(screen.queryByText('El Navegador está abierto en otra pestaña.')).toBeNull()
     })
   })
+
+  describe('Biblioteca (P2)', () => {
+    function workView(): View {
+      return {
+        name: 'bibliography-work',
+        libraryRowId: 'lib-row-1',
+        itemId: 'item-1',
+        itemKey: 'AAAA1111',
+        title: 'El oficio de historiador',
+      }
+    }
+
+    it('breadcrumbs a work under Biblioteca and links back to it', async () => {
+      const nav = workspace.activeNavigation
+      nav.navigate({ name: 'biblioteca' })
+      nav.navigate(workView())
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      // The work title is the current crumb, never a link; Biblioteca is.
+      expect(screen.getByText('El oficio de historiador')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'El oficio de historiador' })).toBeNull()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Biblioteca' }))
+      expect(nav.current).toEqual({ name: 'biblioteca' })
+    })
+
+    it('routes a work through the lazy loader with its view identity', async () => {
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'bibliography_work_detail') {
+          return {
+            itemId: 'item-1',
+            itemKey: 'AAAA1111',
+            title: 'El oficio de historiador',
+            authors: 'Bloch',
+            year: 1949,
+            libraryName: 'Mi biblioteca',
+            libraryType: 'user',
+            libraryNativeId: '0',
+            cslJson: '{}',
+            item: {
+              itemKey: 'AAAA1111',
+              itemType: 'book',
+              title: 'El oficio de historiador',
+              creators: null,
+              publicationTitle: null,
+              publisher: null,
+              date: null,
+              doi: null,
+              isbn: null,
+              abstract: null,
+              language: null,
+              url: null,
+              itemVersion: 3,
+              collections: [],
+              tags: [],
+              attachments: [],
+            },
+          }
+        }
+        return undefined
+      })
+      routeOverride.current = (name) =>
+        name === 'bibliography-work'
+          ? import('../views/BibliographyWorkView.svelte')
+          : undefined
+
+      workspace.activeNavigation.navigate(workView())
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      // The routed work view mounts with the view's own identity: its detail
+      // read carries the catalog item id this pane was navigated to.
+      expect(await screen.findByText('Mi biblioteca')).toBeInTheDocument()
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith('bibliography_work_detail', {
+        itemId: 'item-1',
+      })
+    })
+  })
 })

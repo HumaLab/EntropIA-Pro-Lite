@@ -882,7 +882,7 @@ fn err(
     )
 }
 
-fn csl_year(value: &serde_json::Value) -> Option<i64> {
+pub(crate) fn csl_year(value: &serde_json::Value) -> Option<i64> {
     value
         .get("issued")?
         .get("date-parts")?
@@ -1031,7 +1031,7 @@ pub struct WorkDisplay {
     pub csl_json: String,
 }
 
-fn csl_authors(value: &serde_json::Value) -> String {
+pub(crate) fn csl_authors(value: &serde_json::Value) -> String {
     value
         .get("author")
         .and_then(|authors| authors.as_array())

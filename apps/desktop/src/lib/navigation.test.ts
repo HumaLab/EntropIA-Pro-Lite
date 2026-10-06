@@ -868,3 +868,51 @@ describe('NavigationStore', () => {
     expect(nav.current).toEqual({ name: 'home' })
   })
 })
+
+describe('NavigationStore — Biblioteca', () => {
+  let nav: NavigationStore
+
+  beforeEach(() => {
+    nav = new NavigationStore()
+    locale.set('es')
+  })
+
+  it('opens biblioteca as a root section and breadcrumbs it under Colecciones', () => {
+    nav.openRootSection({ name: 'biblioteca' })
+
+    expect(nav.current).toEqual({ name: 'biblioteca' })
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Biblioteca'])
+  })
+
+  it('breadcrumbs a bibliography work under Biblioteca and keeps its title', () => {
+    nav.navigate({ name: 'biblioteca' })
+    nav.navigate({
+      name: 'bibliography-work',
+      libraryRowId: 'lib-row-1',
+      itemId: 'item-1',
+      itemKey: 'AAAA1111',
+      title: 'El oficio de historiador',
+    })
+
+    expect(nav.breadcrumb).toEqual(['Colecciones', 'Biblioteca', 'El oficio de historiador'])
+
+    nav.back()
+    expect(nav.current).toEqual({ name: 'biblioteca' })
+  })
+
+  it('pushing the same work view twice is a no-op', () => {
+    const work: View = {
+      name: 'bibliography-work',
+      libraryRowId: 'lib-row-1',
+      itemId: 'item-1',
+      itemKey: 'AAAA1111',
+      title: 'Obra',
+    }
+    nav.navigate(work)
+    nav.navigate(work)
+
+    expect(nav.canGoBack).toBe(true)
+    nav.back()
+    expect(nav.current).toEqual({ name: 'home' })
+  })
+})

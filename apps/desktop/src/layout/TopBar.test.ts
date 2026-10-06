@@ -222,6 +222,18 @@ describe('TopBar', () => {
     expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'collections' })
   })
 
+  it('opens Biblioteca from its icon button, right after Colecciones', async () => {
+    const { container } = render(TopBar)
+
+    const button = screen.getByRole('button', { name: 'Abrir Biblioteca' })
+    expect(container.querySelectorAll('.topbar__icon-btn')[2]).toBe(button)
+    expect(button.querySelector('svg')?.getAttribute('data-action-icon')).toBe('books')
+
+    await fireEvent.click(button)
+
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'biblioteca' })
+  })
+
   it('navigates to the research chat from the chat icon button', async () => {
     render(TopBar)
 

@@ -100,6 +100,12 @@
   const collectionsAria = $derived(
     $currentLocale ? translate('topbar.collectionsAria') : 'Abrir Colecciones'
   )
+  const bibliotecaTitle = $derived(
+    $currentLocale ? translate('topbar.bibliotecaTitle') : 'Biblioteca'
+  )
+  const bibliotecaAria = $derived(
+    $currentLocale ? translate('topbar.bibliotecaAria') : 'Abrir Biblioteca'
+  )
   const ragChatTitle = $derived(
     $currentLocale ? translate('topbar.ragChatTitle') : 'Chat de investigación'
   )
@@ -566,6 +572,17 @@
       title={collectionsTitle}
     >
       <ActionIcon name="folder" size={16} />
+    </IconButton>
+
+    <IconButton
+      class="topbar__icon-btn"
+      size="md"
+      variant="secondary"
+      label={bibliotecaAria}
+      onclick={() => workspace.navigateActive({ name: 'biblioteca' })}
+      title={bibliotecaTitle}
+    >
+      <ActionIcon name="books" size={16} />
     </IconButton>
 
     <IconButton

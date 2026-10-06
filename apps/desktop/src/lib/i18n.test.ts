@@ -363,3 +363,38 @@ describe('i18n', () => {
     expect(t('item.transcription')).toBe('Transcription')
   })
 })
+
+describe('i18n — biblioteca copy', () => {
+  beforeEach(async () => {
+    settingsGetMock.mockReset().mockResolvedValue(null)
+    settingsSetMock.mockReset().mockResolvedValue(undefined)
+
+    const { locale } = await import('./i18n')
+    locale.set('es')
+  })
+
+  it('exposes the Biblioteca and work-view copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    expect(t('nav.biblioteca')).toBe('Biblioteca')
+    expect(t('topbar.bibliotecaTitle')).toBe('Biblioteca')
+    expect(t('topbar.bibliotecaAria')).toBe('Abrir Biblioteca')
+    expect(t('biblioteca.libraryAll')).toBe('Todas las bibliotecas')
+    expect(t('biblioteca.emptySearch', { query: 'bloch' })).toBe('Sin resultados para "bloch"')
+    expect(t('bibliographyWork.tabOriginal')).toBe('Original')
+    expect(t('bibliographyWork.tabText')).toBe('Texto')
+    expect(t('bibliographyWork.tabMetadata')).toBe('Metadatos')
+
+    locale.set('en')
+
+    expect(t('nav.biblioteca')).toBe('Library')
+    expect(t('topbar.bibliotecaTitle')).toBe('Library')
+    expect(t('topbar.bibliotecaAria')).toBe('Open Library')
+    expect(t('biblioteca.libraryAll')).toBe('All libraries')
+    expect(t('biblioteca.emptySearch', { query: 'bloch' })).toBe('No results for "bloch"')
+    expect(t('bibliographyWork.tabOriginal')).toBe('Original')
+    expect(t('bibliographyWork.tabText')).toBe('Text')
+    expect(t('bibliographyWork.tabMetadata')).toBe('Metadata')
+    expect(t('bibliographyWork.textPage', { page: 3 })).toBe('Page 3')
+  })
+})

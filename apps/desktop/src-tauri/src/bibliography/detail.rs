@@ -278,7 +278,7 @@ fn has_detail_tables(conn: &Connection) -> BibliographyResult<bool> {
 
 /// Projects one persisted snapshot with its membership edges. Attachment
 /// columns are metadata only; `native_path` never leaves the database.
-fn project_item(
+pub(crate) fn project_item(
     conn: &Connection,
     library_row_id: &str,
     item: &BibliographicItem,

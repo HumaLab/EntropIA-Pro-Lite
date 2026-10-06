@@ -37,6 +37,29 @@ describe('tab-meta', () => {
     expect(tabTitle({ name: 'writing' })).toBe(t('writing.title'))
   })
 
+  it('titles the Biblioteca section and its works, both under the books glyph', () => {
+    expect(tabTitle({ name: 'biblioteca' })).toBe('Biblioteca')
+    expect(
+      tabTitle({
+        name: 'bibliography-work',
+        libraryRowId: 'lib-row-1',
+        itemId: 'i1',
+        itemKey: 'K1',
+        title: 'El oficio de historiador',
+      })
+    ).toBe('El oficio de historiador')
+    expect(tabIcon({ name: 'biblioteca' })).toBe('books')
+    expect(
+      tabIcon({
+        name: 'bibliography-work',
+        libraryRowId: 'lib-row-1',
+        itemId: 'i1',
+        itemKey: 'K1',
+        title: 'Obra',
+      })
+    ).toBe('books')
+  })
+
   it('icons every view name, sharing collections/collection and research/investigation', () => {
     expect(tabIcon({ name: 'home' })).toBe('home')
     expect(tabIcon({ name: 'collections' })).toBe('folder')

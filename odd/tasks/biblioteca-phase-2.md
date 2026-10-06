@@ -45,7 +45,7 @@ feature slice.
   Biblioteca / Ambos), frozen in the job snapshot; bibliography passages as a
   source with citations "p. N" / "párr. a–b"; reuse `rag/scope.rs` passage
   search. Pushing EntropIA-Agent needs the owner's authorization.
-- [ ] P2 — Top-level "Biblioteca" section in the navigation, built like
+- [x] P2 — Top-level "Biblioteca" section in the navigation, built like
   Colecciones: each Zotero work is an item/document; the item view shows the
   page viewer (PDF pages, in-app via the per-file asset scope grant) and the
   extracted-text tab, metadata, attachments, the same actions where they make
@@ -92,3 +92,9 @@ including Pro, and the owner's visual check in the dev app.
   "Fichas X/Y · Pasajes Z/W · ~N min restantes". Opened-first needs a
   last-opened column (migration) and was left out. Status bar line is
   session-scoped (follows the sync started in this session).
+- P2 (branch feat/biblioteca-section): top-level Biblioteca section (TopBar
+  'books' icon, views BibliotecaView + BibliographyWorkView with Original /
+  Texto / Metadatos tabs). Read-only adapter `bibliography/work_view.rs` and
+  three commands: bibliography_list_works, bibliography_work_detail,
+  bibliography_open_work_attachment (same one-file asset grant as
+  open_passage). No migration. Browse order is by title.

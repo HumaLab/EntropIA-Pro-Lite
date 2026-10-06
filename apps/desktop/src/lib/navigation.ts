@@ -52,13 +52,35 @@ export type View =
   // Escritura (plan-editor.md §6). `documentId` is optional so the section can
   // open on its document list and then deep-link into one.
   | { name: 'writing'; documentId?: string | null; documentTitle?: string | null }
+  // Biblioteca (P2): each synced Zotero work is an item; opening one shows
+  // the document-like work view. `itemId` is the catalog's stable internal
+  // id (`bibliographic_items.id`); `itemKey` and `libraryRowId` travel
+  // alongside so a deep link also keeps the durable Zotero identity.
+  | { name: 'biblioteca' }
+  | {
+      name: 'bibliography-work'
+      libraryRowId: string
+      itemId: string
+      itemKey: string
+      title: string
+    }
   | { name: 'settings' }
   // Experimental in-app browser; reachable only with VITE_NAVEGADOR=1.
   | { name: 'navegador' }
 
 type RootSectionView = Extract<
   View,
-  { name: 'home' | 'settings' | 'db-browser' | 'rag-chat' | 'research' | 'writing' | 'navegador' }
+  | {
+      name:
+        | 'home'
+        | 'settings'
+        | 'db-browser'
+        | 'rag-chat'
+        | 'research'
+        | 'writing'
+        | 'biblioteca'
+        | 'navegador'
+    }
 >
 
 type NavigationSnapshot = {
@@ -149,6 +171,8 @@ export class NavigationStore {
     if (view.name === 'rag-chat') return [root, t('nav.ragChat')]
     if (view.name === 'research') return [root, t('nav.research')]
     if (view.name === 'navegador') return [root, t('nav.navegador')]
+    if (view.name === 'biblioteca') return [root, t('nav.biblioteca')]
+    if (view.name === 'bibliography-work') return [root, t('nav.biblioteca'), view.title]
     if (view.name === 'investigation') return [root, t('nav.research'), view.title]
     if (view.name === 'writing') {
       return view.documentTitle

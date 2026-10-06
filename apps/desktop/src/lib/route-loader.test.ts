@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createRouteLoader } from './route-loader'
+import { createRouteLoader, loadRouteView } from './route-loader'
 
 describe('createRouteLoader', () => {
   it('shares one promise for repeated loads of the same route', async () => {
@@ -25,5 +25,17 @@ describe('createRouteLoader', () => {
     await expect(load('item')).rejects.toThrow('chunk unavailable')
     await expect(load('item')).resolves.toBe('loaded')
     expect(importRoute).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('loadRouteView — Biblioteca routes', () => {
+  it('loads the Biblioteca views under their route names', async () => {
+    const biblioteca = await loadRouteView('biblioteca')
+    const work = await loadRouteView('bibliography-work')
+    const BibliotecaView = (await import('../views/BibliotecaView.svelte')).default
+    const BibliographyWorkView = (await import('../views/BibliographyWorkView.svelte')).default
+
+    expect(biblioteca.default).toBe(BibliotecaView)
+    expect(work.default).toBe(BibliographyWorkView)
   })
 })

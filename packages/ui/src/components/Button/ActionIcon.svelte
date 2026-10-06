@@ -29,6 +29,7 @@
   import IconAsterisk from '@tabler/icons-svelte-runes/icons/asterisk'
   import IconBell from '@tabler/icons-svelte-runes/icons/bell'
   import IconBold from '@tabler/icons-svelte-runes/icons/bold'
+  import IconBooks from '@tabler/icons-svelte-runes/icons/books'
   import IconBrowser from '@tabler/icons-svelte-runes/icons/browser'
   import IconBrush from '@tabler/icons-svelte-runes/icons/brush'
   import IconCheck from '@tabler/icons-svelte-runes/icons/check'
@@ -156,6 +157,9 @@
     add: IconPlus,
     bell: IconBell,
     bold: IconBold,
+    // The Biblioteca section: the library's own books, which is also the tab
+    // glyph of a work opened from it.
+    books: IconBooks,
     // The embedded web browser section, not a window or a tab.
     browser: IconBrowser,
     strikethrough: IconStrikethrough,

@@ -214,6 +214,9 @@
     }
     if (view.name === 'research')
       return index === 1 ? [collectionsView, { name: 'research' }] : null
+    if (view.name === 'bibliography-work') {
+      return index === 1 ? [collectionsView, { name: 'biblioteca' }] : null
+    }
     if (view.name === 'writing') {
       return index === 1 ? [collectionsView, { name: 'writing', documentId: null }] : null
     }
@@ -473,6 +476,13 @@
         <RouteView
           jobId={(currentView as Extract<View, { name: 'investigation' }>).jobId}
           title={(currentView as Extract<View, { name: 'investigation' }>).title}
+        />
+      {:else if currentViewName === 'bibliography-work'}
+        <RouteView
+          itemId={(currentView as Extract<View, { name: 'bibliography-work' }>).itemId}
+          itemKey={(currentView as Extract<View, { name: 'bibliography-work' }>).itemKey}
+          libraryRowId={(currentView as Extract<View, { name: 'bibliography-work' }>).libraryRowId}
+          title={(currentView as Extract<View, { name: 'bibliography-work' }>).title}
         />
       {:else}
         <RouteView />
