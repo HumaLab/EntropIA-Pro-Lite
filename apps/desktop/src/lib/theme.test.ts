@@ -28,7 +28,10 @@ describe('walking the cycle', () => {
     expect(nextTheme('dark')).toBe('dim')
     expect(nextTheme('dim')).toBe('light')
     expect(nextTheme('light')).toBe('lite')
-    expect(nextTheme('lite')).toBe('dark')
+    expect(nextTheme('lite')).toBe('paper')
+    expect(nextTheme('paper')).toBe('forest')
+    expect(nextTheme('forest')).toBe('vivid')
+    expect(nextTheme('vivid')).toBe('dark')
   })
 
   it('reaches every theme from any of them', () => {

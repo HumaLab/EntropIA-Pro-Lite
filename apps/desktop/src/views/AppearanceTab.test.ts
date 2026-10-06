@@ -59,6 +59,9 @@ describe('AppearanceTab', () => {
         'Cálido',
         'Claro',
         'Lite',
+        'Papel',
+        'Bosque',
+        'Vibrante',
       ])
       expect(screen.getByRole('menuitemradio', { name: 'Oscuro' })).toHaveAttribute(
         'aria-checked',

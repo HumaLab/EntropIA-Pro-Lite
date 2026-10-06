@@ -7,14 +7,14 @@
  * consumed by both the Apariencia settings tab and this module's own tests.
  */
 
-export type AppTheme = 'dark' | 'dim' | 'light' | 'lite'
+export type AppTheme = 'dark' | 'dim' | 'light' | 'lite' | 'paper' | 'forest' | 'vivid'
 
 export const THEME_STORAGE_KEY = 'entropia-theme'
 
-// Dark first because it is the default, then the two warm/pale steps, then
-// Lite last: it is the quiet one, and someone cycling past it lands back on
-// the default rather than on another pale theme.
-export const THEME_CYCLE: AppTheme[] = ['dark', 'dim', 'light', 'lite']
+// Dark first because it is the default, then the two warm/pale steps and
+// Lite, the quiet one. The three after it (T-50) widen the range: Paper is
+// the sober archive page, Forest sits between, Vivid is the loud one.
+export const THEME_CYCLE: AppTheme[] = ['dark', 'dim', 'light', 'lite', 'paper', 'forest', 'vivid']
 
 export const THEME_DEFAULT: AppTheme = 'dark'
 
@@ -23,6 +23,9 @@ export const themeLabels: Record<AppTheme, string> = {
   dim: 'Cálido',
   light: 'Claro',
   lite: 'Lite',
+  paper: 'Papel',
+  forest: 'Bosque',
+  vivid: 'Vibrante',
 }
 
 /**

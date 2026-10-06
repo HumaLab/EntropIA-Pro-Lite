@@ -85,6 +85,24 @@ const THEMES = [
     soft: ":root[data-theme='lite'][data-contrast='soft']",
     high: ":root[data-theme='lite'][data-contrast='high']",
   },
+  {
+    name: 'paper',
+    base: ":root[data-theme='paper']",
+    soft: ":root[data-theme='paper'][data-contrast='soft']",
+    high: ":root[data-theme='paper'][data-contrast='high']",
+  },
+  {
+    name: 'forest',
+    base: ":root[data-theme='forest']",
+    soft: ":root[data-theme='forest'][data-contrast='soft']",
+    high: ":root[data-theme='forest'][data-contrast='high']",
+  },
+  {
+    name: 'vivid',
+    base: ":root[data-theme='vivid']",
+    soft: ":root[data-theme='vivid'][data-contrast='soft']",
+    high: ":root[data-theme='vivid'][data-contrast='high']",
+  },
 ] as const
 
 const TEXT = ['color-text-primary', 'color-text-secondary', 'color-text-muted'] as const
