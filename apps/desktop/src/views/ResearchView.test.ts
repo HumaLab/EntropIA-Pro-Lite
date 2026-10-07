@@ -67,7 +67,11 @@ describe('ResearchView', () => {
   beforeEach(() => {
     locale.set('es')
     invokeMock.mockReset()
-    invokeMock.mockResolvedValue(listPayload())
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
+      return listPayload()
+    })
   })
 
   it('arranca con las colecciones que tienen material procesado', async () => {
@@ -161,6 +165,8 @@ describe('ResearchView job deletion', () => {
     invokeMock.mockImplementation(async (command: string, args?: unknown) => {
       const op = (args as { request?: { op?: string } } | undefined)?.request?.op
       if (command === 'research_request' && op === 'delete') return {}
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
       return listPayloadWithJob()
     })
 
@@ -178,6 +184,8 @@ describe('ResearchView job deletion', () => {
       if (command === 'research_request' && op === 'delete') {
         throw new Error('backend unavailable')
       }
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
       return listPayloadWithJob()
     })
 
@@ -210,6 +218,8 @@ describe('ResearchView alcance de la investigación', () => {
       if (command === 'bibliography_library_status') {
         return { libraries, vectorReady: true }
       }
+      if (command === 'settings_get') return null
+      if (command === 'test_openrouter_connection') return []
       if (command === 'research_request' && request?.op === 'create') {
         return { job: jobFixture() }
       }
@@ -305,5 +315,124 @@ describe('ResearchView alcance de la investigación', () => {
     expect(submit).toBeDisabled()
     await fireEvent.click(submit)
     expect(createCalls()).toHaveLength(0)
+  })
+})
+
+describe('ResearchView modelo de la investigación', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockReset()
+  })
+
+  /** El backend de la vista: ajustes de modelo, sugerencias, create y list. */
+  function backend({
+    ragModel = null,
+    openrouterModel = null,
+    models = [] as Array<{ id: string; name: string; context_length: number }>,
+  }: {
+    ragModel?: string | null
+    openrouterModel?: string | null
+    models?: Array<{ id: string; name: string; context_length: number }>
+  } = {}) {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      const request = (args as { request?: { op?: string } } | undefined)?.request
+      if (command === 'settings_get') {
+        const key = (args as { key?: string } | undefined)?.key
+        if (key === 'rag_model') return ragModel
+        if (key === 'openrouter_model') return openrouterModel
+        return null
+      }
+      if (command === 'test_openrouter_connection') return models
+      if (command === 'research_request' && request?.op === 'create') return { job: jobFixture() }
+      return listPayload()
+    })
+  }
+
+  function modelBox() {
+    return screen.getByRole('textbox', { name: 'Modelo' }) as HTMLInputElement
+  }
+
+  async function writeQuestion() {
+    await fireEvent.input(screen.getByPlaceholderText('¿Qué querés investigar?'), {
+      target: { value: '¿Qué pasó en el plenario?' },
+    })
+  }
+
+  function createCalls() {
+    return invokeMock.mock.calls.filter(
+      ([command, args]) =>
+        command === 'research_request' &&
+        (args as { request?: { op?: string } } | undefined)?.request?.op === 'create'
+    )
+  }
+
+  function sentRequest() {
+    return createCalls()[0]![1] as { request: Record<string, unknown> }
+  }
+
+  it('manda en el create el modelo efectivo por defecto', async () => {
+    backend({ ragModel: 'google/gemma-4-26b-a4b-it' })
+    render(ResearchView)
+    await waitFor(() => expect(modelBox().value).toBe('google/gemma-4-26b-a4b-it'))
+
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(sentRequest().request).toEqual(
+      expect.objectContaining({ op: 'create', modelo: 'google/gemma-4-26b-a4b-it' })
+    )
+  })
+
+  it('sin rag_model el modelo efectivo es el general de OpenRouter', async () => {
+    backend({ openrouterModel: 'openrouter/mistral-7b' })
+    render(ResearchView)
+    await waitFor(() => expect(modelBox().value).toBe('openrouter/mistral-7b'))
+  })
+
+  it('el modelo editado viaja en el create', async () => {
+    backend({ ragModel: 'google/gemma-4-26b-a4b-it' })
+    render(ResearchView)
+    await waitFor(() => expect(modelBox().value).toBe('google/gemma-4-26b-a4b-it'))
+
+    await fireEvent.input(modelBox(), { target: { value: 'meta/llama-3.3-70b' } })
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(sentRequest().request).toEqual(
+      expect.objectContaining({ op: 'create', modelo: 'meta/llama-3.3-70b' })
+    )
+  })
+
+  it('sin modelo escrito el create no manda ninguno y el backend resuelve', async () => {
+    backend()
+    render(ResearchView)
+    await waitFor(() => expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument())
+    expect(modelBox().value).toBe('')
+
+    await writeQuestion()
+    await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
+
+    await waitFor(() => expect(createCalls()).toHaveLength(1))
+    expect(sentRequest().request.modelo).toBeUndefined()
+  })
+
+  it('las sugerencias de OpenRouter se eligen de la misma lista de Configuración', async () => {
+    backend({
+      ragModel: 'google/gemma-4-26b-a4b-it',
+      models: [
+        { id: 'meta/llama-3.3-70b', name: 'Llama 3.3 70B', context_length: 131072 },
+        { id: 'qwen/qwen-2.5-7b', name: 'Qwen 2.5 7B', context_length: 32768 },
+      ],
+    })
+    render(ResearchView)
+    await waitFor(() =>
+      expect(screen.getByText('Modelos sugeridos desde OpenRouter')).toBeInTheDocument()
+    )
+
+    await fireEvent.click(screen.getByRole('button', { name: /meta\/llama-3.3-70b/ }))
+    expect(modelBox().value).toBe('meta/llama-3.3-70b')
   })
 })

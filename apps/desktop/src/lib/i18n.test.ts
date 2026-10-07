@@ -184,6 +184,20 @@ describe('i18n', () => {
     expect(t('research.needLibrary')).toContain('synced Zotero library')
   })
 
+  it('exposes the research model copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    // El selector de modelo de Investigación reusa el título de sugerencias
+    // de Configuración: es la misma lista de OpenRouter.
+    expect(t('research.modelLabel')).toBe('Modelo')
+    expect(t('settings.suggestedModels')).toBe('Modelos sugeridos desde OpenRouter')
+
+    locale.set('en')
+
+    expect(t('research.modelLabel')).toBe('Model')
+    expect(t('settings.suggestedModels')).toBe('Suggested models from OpenRouter')
+  })
+
   it('exposes rag chat copy in both locales', async () => {
     const { locale, t } = await import('./i18n')
 

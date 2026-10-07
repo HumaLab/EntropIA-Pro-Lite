@@ -1277,6 +1277,7 @@ const es = {
   'research.projectLabel': 'Proyecto',
   'research.projectPlaceholder': 'Nombre corto del proyecto',
   'research.titlePlaceholder': 'Título de la investigación',
+  'research.modelLabel': 'Modelo',
   'research.deleteTitle': 'Borrar la investigación',
   'research.deleteMessage':
     'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
@@ -3740,6 +3741,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.projectLabel': 'Project',
   'research.projectPlaceholder': 'Short project name',
   'research.titlePlaceholder': 'Title of the investigation',
+  'research.modelLabel': 'Model',
   'research.deleteTitle': 'Delete the investigation',
   'research.deleteMessage':
     'The report, the evidence, the judgments and the files all go. This cannot be undone.',

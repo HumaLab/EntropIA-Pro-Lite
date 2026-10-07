@@ -55,6 +55,22 @@ export function frozenResearchScope(artifacts: ResearchArtifact[]): ResearchFroz
   return { alcance, bibliotecas }
 }
 
+/**
+ * El modelo congelado del trabajo, leído del mismo artefacto `request` que el
+ * alcance: el investigador lo eligió al crear el job y el motor lo congela.
+ * `null` cuando el trabajo no trae modelo elegido — los jobs anteriores al
+ * selector de modelo, que corrían con el modelo de Configuración.
+ */
+export function frozenResearchModel(artifacts: ResearchArtifact[]): string | null {
+  const request = artifacts
+    .filter((artifact) => artifact.kind === 'request' && !artifact.obsolete)
+    .sort((a, b) => b.version - a.version)[0]
+  if (!request) return null
+  const content = request.content as { modelo?: unknown } | null | undefined
+  const modelo = typeof content?.modelo === 'string' ? content.modelo.trim() : ''
+  return modelo || null
+}
+
 /** Una pregunta de la ronda de clarificación. */
 export interface ResearchQuestion {
   id: string
@@ -257,6 +273,9 @@ export interface ResearchCreateRequest {
   alcance: ResearchScope
   /** Bibliotecas cubiertas por el trabajo, como «user:123» / «group:456». */
   bibliotecas: string[]
+  /** Modelo elegido para el trabajo; el motor lo congela al crearlo.
+   *  Ausente, el motor usa el modelo configurado. */
+  modelo?: string
 }
 
 /** Contenido del artefacto `design`: lo que la ronda muestra y deja editar. */
