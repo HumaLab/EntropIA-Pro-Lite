@@ -63,7 +63,7 @@
 
   async function reload() {
     try {
-      schemas = await listSchemas()
+      schemas = (await listSchemas()) ?? []
       if (schemaId && !schemas.some((schema) => schema.id === schemaId)) schemaId = ''
     } catch (failure) {
       error = String(failure)
