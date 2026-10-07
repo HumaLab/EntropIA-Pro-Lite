@@ -124,6 +124,25 @@ describe('BibliographyWorkView', () => {
     expect(screen.getByText('Se muestra el PDF original del adjunto.')).toBeInTheDocument()
   })
 
+  it('hosts the viewer in the fill-height Original pane', async () => {
+    // jsdom cannot measure heights, so the fill-height contract is pinned by
+    // the structure that carries it (the same chain ItemAssetPanel uses for
+    // ItemView): .work-view (flex column, min-height: 100% of the WorkPane
+    // body) > section.work-section--original (flex: 1; min-height: 0) >
+    // .work-viewer (display: flex; flex: 1) > :global(.document-viewer)
+    // (flex: 1; min-height: 0) — the DocumentViewer root must be a flex
+    // child of the viewer box, never a percentage child of a min-height-only
+    // frame (that collapsed the PDF to the toolbar's ~20px).
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    expect(viewer.classList.contains('work-viewer')).toBe(true)
+    expect(viewer.parentElement?.classList.contains('work-section--original')).toBe(true)
+    expect(viewer.closest('.work-view')).not.toBeNull()
+    expect(viewer.querySelector('.document-viewer')).not.toBeNull()
+  })
+
   it('lists the extracted page texts in the Texto tab', async () => {
     backend()
     render(BibliographyWorkView, { props })

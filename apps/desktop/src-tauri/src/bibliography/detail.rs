@@ -57,6 +57,9 @@ pub struct ItemDetailItem {
     pub creators: Option<Vec<Creator>>,
     pub publication_title: Option<String>,
     pub publisher: Option<String>,
+    /// The CSL `issued` date rendered for reading (`YYYY-MM-DD` / `YYYY-MM` /
+    /// `YYYY`, or `raw`/`literal` verbatim), falling back to the stored
+    /// snapshot only when the CSL carries no date.
     pub date: Option<String>,
     pub doi: Option<String>,
     pub isbn: Option<String>,
@@ -431,7 +434,7 @@ pub(crate) fn project_item(
         creators: parse_creators(item.creators_json.as_deref()),
         publication_title: item.publication_title.clone(),
         publisher: item.publisher.clone(),
-        date: item.date.clone(),
+        date: display_date(item),
         doi: item.doi.clone(),
         isbn: item.isbn.clone(),
         abstract_text: item.abstract_text.clone(),
@@ -450,6 +453,48 @@ pub(crate) fn project_item(
 /// malformed half cannot arrive from the database; this stays total anyway.
 fn parse_creators(creators_json: Option<&str>) -> Option<Vec<Creator>> {
     creators_json.and_then(|raw| serde_json::from_str(raw).ok())
+}
+
+/// The ficha's date: the CSL `issued` date rendered for reading, falling
+/// back to the stored snapshot only when the CSL carries no date. The
+/// stored string is not trusted as the display — a collapsed projection
+/// (the "1" a work issued 2025-03-14 showed) must never reach a ficha.
+fn display_date(item: &BibliographicItem) -> Option<String> {
+    csl_issued_date(item.csl_json_snapshot.as_str()).or_else(|| item.date.clone())
+}
+
+/// One CSL date rendered for reading: `raw`/`literal` verbatim, or
+/// `date-parts` [[Y, M?, D?]] as zero-padded `YYYY-MM-DD` / `YYYY-MM` /
+/// `YYYY`. Anything else — unparsable CSL, no `issued`, no readable
+/// parts — reads as no date so the caller keeps its fallback.
+fn csl_issued_date(csl_json: &str) -> Option<String> {
+    let csl: serde_json::Value = serde_json::from_str(csl_json).ok()?;
+    let issued = csl.get("issued")?;
+    for key in ["raw", "literal"] {
+        let text = issued.get(key).and_then(serde_json::Value::as_str);
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            return Some(text.to_string());
+        }
+    }
+    let parts = issued.get("date-parts")?.as_array()?.first()?.as_array()?;
+    let year = date_part(parts.first())?;
+    let month = date_part(parts.get(1)).filter(|month| (1..=12).contains(month));
+    let day = date_part(parts.get(2)).filter(|day| (1..=31).contains(day));
+    match (month, day) {
+        (Some(month), Some(day)) => Some(format!("{year}-{month:02}-{day:02}")),
+        (Some(month), None) => Some(format!("{year}-{month:02}")),
+        (None, _) => Some(year.to_string()),
+    }
+}
+
+/// One CSL date part: a number or a numeric string (both shapes arrive in
+/// the wild). Anything else is not a part.
+fn date_part(value: Option<&serde_json::Value>) -> Option<i64> {
+    match value? {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -743,6 +788,143 @@ mod tests {
             attachment.url.as_deref(),
             Some("https://synthetic.invalid/chapter.pdf")
         );
+    }
+
+    /// The ficha's date reads the CSL `issued` date the way it is cited —
+    /// `date-parts` [[Y, M?, D?]] as `YYYY-MM-DD` / `YYYY-MM` / `YYYY`, or a
+    /// `raw`/`literal` string verbatim — never a collapsed string like the
+    /// "1" a work issued 2025-03-14 showed. The stored `date` column is only
+    /// the fallback when the CSL carries no date at all. Both fichas (the
+    /// Biblioteca work view and the Zotero details) read this projection.
+    #[test]
+    fn the_ficha_date_renders_the_csl_issued_date() {
+        let cases: [(&str, Option<&str>, Option<&str>); 7] = [
+            // (CSL item, stored `date` column, expected ficha date)
+            (
+                r#"{"id":"csl","type":"book","issued":{"date-parts":[[2025,3,14]]}}"#,
+                Some("1"),
+                Some("2025-03-14"),
+            ),
+            (
+                r#"{"id":"csl","type":"book","issued":{"date-parts":[[2025,3]]}}"#,
+                None,
+                Some("2025-03"),
+            ),
+            (
+                r#"{"id":"csl","type":"book","issued":{"date-parts":[[2025]]}}"#,
+                None,
+                Some("2025"),
+            ),
+            (
+                r#"{"id":"csl","type":"book","issued":{"raw":"marzo de 2025"}}"#,
+                Some("1"),
+                Some("marzo de 2025"),
+            ),
+            (
+                r#"{"id":"csl","type":"book","issued":{"literal":"s. f."}}"#,
+                Some("1"),
+                Some("s. f."),
+            ),
+            (r#"{"id":"csl","type":"book"}"#, Some("2024"), Some("2024")),
+            (r#"{"id":"csl","type":"book"}"#, None, None),
+        ];
+        for (index, (csl, stored, expected)) in cases.iter().enumerate() {
+            let mut conn = migrated_db();
+            let source =
+                upsert_connection(&mut conn, connection("conn-local")).expect("connection");
+            let personal = upsert_library(
+                &mut conn,
+                library(&source.id, CatalogLibraryType::User, "0"),
+            )
+            .expect("library");
+            let key = format!("DATE{index}");
+            upsert_item(
+                &mut conn,
+                &personal.id,
+                BibliographicItemInput {
+                    item_key: key.clone(),
+                    item_version: Some(3),
+                    native_json_snapshot: format!(r#"{{"key":"{key}"}}"#),
+                    csl_json_snapshot: csl.to_string(),
+                    date: stored.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .expect("item");
+            let item = read_item(&conn, &personal.id, &key).expect("read");
+            let projected = project_item(&conn, &personal.id, &item).expect("projection");
+            assert_eq!(
+                projected.date.as_deref(),
+                *expected,
+                "case {index}: {csl} (stored {stored:?})"
+            );
+        }
+    }
+
+    /// Alternates around the same contract: both numeric shapes of a date
+    /// part render alike, `raw`/`literal` win over `date-parts` (and an empty
+    /// one steps aside), a range reads as its first date, and parts that are
+    /// not dates at all fall back to the stored snapshot.
+    #[test]
+    fn the_ficha_date_tolerates_the_csl_date_shapes_that_arrive() {
+        let cases: [(&str, Option<&str>, Option<&str>); 5] = [
+            (
+                r#"{"id":"csl","issued":{"date-parts":[["2022"]]}}"#,
+                None,
+                Some("2022"),
+            ),
+            (
+                r#"{"id":"csl","issued":{"raw":"","date-parts":[[2020]]}}"#,
+                None,
+                Some("2020"),
+            ),
+            (
+                r#"{"id":"csl","issued":{"literal":"s. f.","date-parts":[[2020]]}}"#,
+                None,
+                Some("s. f."),
+            ),
+            (
+                r#"{"id":"csl","issued":{"date-parts":[[2020,1,1],[2020,2,2]]}}"#,
+                None,
+                Some("2020-01-01"),
+            ),
+            (
+                r#"{"id":"csl","issued":{"date-parts":[["spring"]]}}"#,
+                Some("2024"),
+                Some("2024"),
+            ),
+        ];
+        for (index, (csl, stored, expected)) in cases.iter().enumerate() {
+            let mut conn = migrated_db();
+            let source =
+                upsert_connection(&mut conn, connection("conn-local")).expect("connection");
+            let personal = upsert_library(
+                &mut conn,
+                library(&source.id, CatalogLibraryType::User, "0"),
+            )
+            .expect("library");
+            let key = format!("ALT{index}");
+            upsert_item(
+                &mut conn,
+                &personal.id,
+                BibliographicItemInput {
+                    item_key: key.clone(),
+                    item_version: Some(3),
+                    native_json_snapshot: format!(r#"{{"key":"{key}"}}"#),
+                    csl_json_snapshot: csl.to_string(),
+                    date: stored.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .expect("item");
+            let item = read_item(&conn, &personal.id, &key).expect("read");
+            let projected = project_item(&conn, &personal.id, &item).expect("projection");
+            assert_eq!(
+                projected.date.as_deref(),
+                *expected,
+                "case {index}: {csl} (stored {stored:?})"
+            );
+        }
     }
 
     /// E1c-3 RED: `creators_json` present but not a creator array omits

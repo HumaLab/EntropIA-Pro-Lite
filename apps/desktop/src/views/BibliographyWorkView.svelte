@@ -15,6 +15,7 @@
     ActionIcon,
     Button,
     DocumentViewer,
+    IconButton,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -52,6 +53,9 @@
   let activeTab = $state<Tab>('original')
   let activeKey = $state<string | null>(null)
   let attachmentMenuOpen = $state(false)
+  /** The page shown and how many there are, as the viewer reports them. */
+  let page = $state(1)
+  let total = $state(1)
 
   const displayTitle = $derived(detail?.title || title)
   const metaLine = $derived(detail ? workLine({ authors: detail.authors, year: detail.year }) : '')
@@ -85,6 +89,8 @@
   async function openAttachment(attachmentKey: string): Promise<void> {
     activeKey = attachmentKey
     attachmentMenuOpen = false
+    page = 1
+    total = 1
     openLoading = true
     openFailed = false
     try {
@@ -177,7 +183,7 @@
 
     {#if activeTab === 'original'}
       <section
-        class="work-section"
+        class="work-section work-section--original"
         aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
       >
         {#if attachments.length > 1}
@@ -219,8 +225,40 @@
               type="pdf"
               readOnly
               labels={viewerLabels}
+              currentPage={page}
+              onPageChange={(next, count) => {
+                total = count
+                page = next
+              }}
             />
           </div>
+          {#if total > 1}
+            <div class="work-viewer-pager">
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.previousPage')}
+                title={$currentLocale && t('item.previousPage')}
+                disabled={page <= 1}
+                onclick={() => (page = Math.max(1, page - 1))}
+              >
+                <ActionIcon name="chevron-left" size={14} />
+              </IconButton>
+              <span class="work-viewer-pager__count">
+                {$currentLocale && t('navegador.pdf.page', { page, total })}
+              </span>
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.nextPage')}
+                title={$currentLocale && t('item.nextPage')}
+                disabled={page >= total}
+                onclick={() => (page = Math.min(total, page + 1))}
+              >
+                <ActionIcon name="chevron-right" size={14} />
+              </IconButton>
+            </div>
+          {/if}
           <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
         {:else if opened?.originalKind === 'html'}
           <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
@@ -375,6 +413,10 @@
     flex-direction: column;
     gap: var(--space-3);
     max-width: 1100px;
+    /* Fill-height contract (the PDF needs a real height to fit into): the
+       view fills the WorkPane body, so the Original tab keeps exactly the
+       height the header and tabs leave and the viewer reads a real rect. */
+    min-height: 100%;
   }
 
   .work-header {
@@ -427,6 +469,14 @@
     gap: var(--space-3);
   }
 
+  /* The Original tab owns the remaining height of the fill-height view:
+     `flex: 1; min-height: 0` lets the viewer chain below shrink with the
+     pane instead of pushing it to scroll. */
+  .work-section--original {
+    flex: 1;
+    min-height: 0;
+  }
+
   .work-section__title {
     margin: 0;
     color: var(--color-text-secondary);
@@ -469,11 +519,35 @@
   }
 
   .work-viewer {
+    /* The DocumentViewer is a flex child of this frame (the exact pattern of
+       ItemAssetPanel's .left-panel-pane--document): its fit scale reads the
+       container rect, which a min-height-only frame never made definite.
+       The 480px floor stays so a short window scrolls instead of collapsing
+       the page back to the toolbar's height. */
+    display: flex;
+    flex: 1;
     min-height: 480px;
     overflow: hidden;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
     background: var(--surface-app);
+  }
+
+  .work-viewer :global(.document-viewer) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .work-viewer-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+  }
+
+  .work-viewer-pager__count {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .work-note {

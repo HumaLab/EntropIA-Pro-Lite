@@ -980,6 +980,27 @@ mod tests {
         assert_eq!(error.code, "unknown_work");
     }
 
+    /// The work view's Fecha reads the CSL `issued` date rendered for
+    /// reading (the shared projection the Zotero ficha also uses), never a
+    /// collapsed storage string.
+    #[test]
+    fn the_work_detail_date_is_the_csl_issued_date() {
+        let mut conn = migrated_db();
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(
+            &mut conn,
+            &lib,
+            "K1",
+            "El oficio de historiador",
+            None,
+            r#"{"id":"csl","type":"book","issued":{"date-parts":[[2025,3,14]]}}"#,
+        );
+
+        let detail = work_detail(&conn, &item_id).expect("detail");
+
+        assert_eq!(detail.item.date.as_deref(), Some("2025-03-14"));
+    }
+
     // ── prepare_work_attachment_open ────────────────────────────────────
 
     fn seed_pdf_attachment(
