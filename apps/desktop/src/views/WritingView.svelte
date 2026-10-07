@@ -64,6 +64,7 @@
   } from '$lib/writing'
   import { getStore } from '$lib/db'
   import { syncStore } from '$lib/sync-store'
+  import { describeSyncError, syncNow, type SyncState } from '$lib/sync'
   import { createSyncCompletedWatcher } from '$lib/writing-sync-refresh'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
@@ -172,6 +173,38 @@
   /** Documents shared with another account, marked in the list (T-33). */
   let sharedIds = $state(new Set<string>())
 
+  /** The sync button here mirrors «Sincronizar ahora» in Settings. */
+  let syncState = $state<SyncState>(syncStore.status.state)
+  let syncing = $state(false)
+  let syncError = $state<string | null>(null)
+  let unsubscribeSyncState: (() => void) | null = null
+
+  /**
+   * Sends local changes and brings the other side's. Flushes first, like the
+   * Settings button (W-GUARD1). The list refresh is the completion watcher's;
+   * the open manuscript is reloaded here only when the pass changed it and
+   * nothing was typed meanwhile, since the editor never re-reads on its own.
+   */
+  async function syncHere() {
+    syncing = true
+    syncError = null
+    try {
+      await store.flush()
+      syncStore.setStatus(await syncNow())
+      const open = snapshot.open
+      if (!open) return
+      await store.listDocuments()
+      const fresh = snapshot.documents.find((doc) => doc.id === open.id)
+      if (fresh && fresh.revision !== snapshot.revision && snapshot.status === 'saved') {
+        await store.openDocument(open.id)
+      }
+    } catch (error) {
+      syncError = describeSyncError(error)
+    } finally {
+      syncing = false
+    }
+  }
+
   onMount(async () => {
     // Idempotent: the store memoizes its own bootstrap + listener attach.
     void syncStore.initialize()
@@ -197,6 +230,7 @@
         void refreshSyncNotices()
       })
     )
+    unsubscribeSyncState = syncStore.subscribe((status) => (syncState = status.state))
 
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
@@ -228,6 +262,7 @@
     unsubscribe()
     unsubscribeNav()
     unsubscribeSync?.()
+    unsubscribeSyncState?.()
     unlistenDragDrop?.()
     // Persist whatever is pending. The document stays open in the store on
     // purpose: navigating away and back should return to it, and onMount
@@ -1091,6 +1126,29 @@
   )
 </script>
 
+{#snippet syncButton(size: 'sm' | 'md')}
+  {#if syncState !== 'disabled'}
+    <IconButton
+      {size}
+      variant="ghost"
+      label={syncing ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      title={syncing ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      disabled={syncing || syncState === 'syncing'}
+      onclick={() => void syncHere()}
+    >
+      <ActionIcon name="refresh" size={size === 'sm' ? 14 : 20} />
+    </IconButton>
+  {/if}
+{/snippet}
+
+{#snippet syncErrorPanel()}
+  {#if syncError}
+    <Panel padding="md">
+      <p class="writing__error" role="alert">{syncError}</p>
+    </Panel>
+  {/if}
+{/snippet}
+
 <section class="writing" bind:this={writingRootEl}>
   {#if !snapshot.ready}
     <Panel padding="lg">
@@ -1144,6 +1202,7 @@
           <ActionIcon name="send" size={14} />
         </IconButton>
       {/if}
+      {@render syncButton('sm')}
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -1153,6 +1212,8 @@
         </StatusBadge>
       </div>
     </header>
+
+    {@render syncErrorPanel()}
 
     {#if sharePanelOpen && openDocument}
       <WritingSharePanel
@@ -1447,17 +1508,22 @@
         <h1 class="writing__title">{t('writing.title')}</h1>
         <p class="writing__subtitle">{t('writing.subtitle')}</p>
       </div>
-      <Button
-        variant="primary"
-        size="md"
-        iconOnly
-        aria-label={t('writing.newDocument')}
-        title={t('writing.newDocument')}
-        onclick={createDocument}
-      >
-        <ActionIcon name="file-plus" size={20} />
-      </Button>
+      <div class="writing__header-actions">
+        {@render syncButton('md')}
+        <Button
+          variant="primary"
+          size="md"
+          iconOnly
+          aria-label={t('writing.newDocument')}
+          title={t('writing.newDocument')}
+          onclick={createDocument}
+        >
+          <ActionIcon name="file-plus" size={20} />
+        </Button>
+      </div>
     </header>
+
+    {@render syncErrorPanel()}
 
     {#if snapshot.error}
       <Panel padding="md">
@@ -1562,6 +1628,12 @@
     justify-content: space-between;
     gap: var(--space-4);
     flex-wrap: wrap;
+  }
+
+  .writing__header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .writing__eyebrow {
