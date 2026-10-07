@@ -107,9 +107,12 @@ describe('the lateral citation editor', () => {
     mount({ items: [{ ...ITEMS[0]! }], onapply })
 
     await fireEvent.input(screen.getByLabelText('Localizador'), { target: { value: '45-50' } })
-    const locatorKind = screen.getByLabelText('Tipo de localizador') as HTMLSelectElement
-    locatorKind.value = 'section'
-    await fireEvent.change(locatorKind)
+    // The locator kind is the themed radio menu (never a native select): the
+    // checked entry is the choice, and picking it drives the same change path.
+    const locatorKind = screen.getByRole('button', { name: /^Tipo de localizador/ })
+    expect(locatorKind).toHaveAttribute('aria-haspopup', 'menu')
+    await fireEvent.click(locatorKind)
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Sección' }))
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Ya nombré al autor en mi frase' }))
     await fireEvent.input(screen.getByLabelText('Antes de la cita'), {
       target: { value: 'véase ' },

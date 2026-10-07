@@ -232,6 +232,12 @@ describe('DbBrowserView', () => {
     })
   }
 
+  /** Opens the table picker's themed radio menu and chooses a table. */
+  async function chooseTable(name: string) {
+    await fireEvent.click(screen.getByRole('button', { name: /^Tabla/ }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name }))
+  }
+
   async function renderPagedView(total: number) {
     queryRowsMock.mockReset().mockResolvedValue({
       table: 'documents',
@@ -329,10 +335,70 @@ describe('DbBrowserView', () => {
     expect(screen.getByText('documents · 1 columnas')).toBeInTheDocument()
   })
 
-  it('renders the selected table control after loading tables', async () => {
+  it('renders the table picker as the themed radio menu after loading tables', async () => {
     await renderDbBrowserView()
 
-    expect(screen.getByLabelText('Tabla')).toHaveValue('documents')
+    // The canonical radio pattern BibliotecaView paints: a ToolbarMenu whose
+    // checked entry is the selection — never a native select.
+    const trigger = screen.getByRole('button', { name: 'Tabla documents' })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    expect(dbBrowserViewSource).not.toContain('<select')
+
+    await fireEvent.click(trigger)
+    const entries = await screen.findAllByRole('menuitemradio')
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(['documents', 'archives'])
+    expect(screen.getByRole('menuitemradio', { name: 'documents' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    expect(screen.getByRole('menuitemradio', { name: 'archives' })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+  })
+
+  it('switches the open table from the menu through the same change handler', async () => {
+    await renderDbBrowserView()
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Filtro simple' }), {
+      target: { value: 'acta' },
+    })
+    // Let the debounced filter land first, so the switch below is what clears it.
+    await waitFor(() => {
+      expect(queryRowsMock).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'acta' }))
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Tabla documents' }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'archives' }))
+
+    // The same work the select's change handler did: describe the table, reload
+    // its first page, and clear the filter.
+    await waitFor(() => {
+      expect(describeTableMock).toHaveBeenCalledWith('archives')
+      expect(queryRowsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ table: 'archives', page: 1, search: undefined })
+      )
+    })
+    expect(screen.getByRole('searchbox', { name: 'Filtro simple' })).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
+  })
+
+  it('changes the page size from the themed radio menu', async () => {
+    await renderDbBrowserView()
+
+    const trigger = screen.getByRole('button', { name: 'Filas por página 25' })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    await fireEvent.click(trigger)
+    const entries = await screen.findAllByRole('menuitemradio')
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(['25', '50', '100'])
+
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: '50' }))
+
+    await waitFor(() => {
+      expect(queryRowsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1, pageSize: 50 })
+      )
+    })
+    expect(screen.getByRole('button', { name: 'Filas por página 50' })).toBeInTheDocument()
   })
 
   it('describes expanded embedding cells as Base64 with the row dimensions', async () => {
@@ -567,10 +633,10 @@ describe('DbBrowserView', () => {
       expect(queryAllRowsMock).toHaveBeenCalledTimes(1)
     })
 
-    await fireEvent.change(screen.getByLabelText('Tabla'), { target: { value: 'archives' } })
-    expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+    await chooseTable('archives')
+    expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
     await flushPromises()
-    expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+    expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
     pendingRows.resolve({
       table: 'documents',
       page: 1,
@@ -834,7 +900,7 @@ describe('DbBrowserView', () => {
       })
       await renderAndWaitForInitialLoad()
 
-      await fireEvent.change(screen.getByLabelText('Tabla'), { target: { value: 'archives' } })
+      await chooseTable('archives')
       await waitFor(() => expect(describeTableMock).toHaveBeenLastCalledWith('archives'))
 
       // Sort descending on the only column.
@@ -875,7 +941,7 @@ describe('DbBrowserView', () => {
         sortDirection: 'desc',
         search: 'acta',
       })
-      expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+      expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
     })
 
     it('an automatic reload keeps the grid on screen instead of swapping to a loading page', async () => {
@@ -894,9 +960,9 @@ describe('DbBrowserView', () => {
       )
       await vi.advanceTimersByTimeAsync(600)
 
-      // The schema re-read is in flight, but the table select (proof the
+      // The schema re-read is in flight, but the table picker (proof the
       // grid, not a loading message, is still on screen) is still there.
-      expect(screen.getByLabelText('Tabla')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Tabla documents' })).toBeInTheDocument()
       expect(screen.queryByText('Cargando tablas disponibles...')).not.toBeInTheDocument()
 
       pendingDescribe.resolve([
@@ -908,7 +974,7 @@ describe('DbBrowserView', () => {
     it('an automatic reload re-reads the schema, lists new tables and keeps the selected one', async () => {
       await renderAndWaitForInitialLoad()
 
-      await fireEvent.change(screen.getByLabelText('Tabla'), { target: { value: 'archives' } })
+      await chooseTable('archives')
       await waitFor(() => {
         expect(describeTableMock).toHaveBeenLastCalledWith('archives')
       })
@@ -927,10 +993,15 @@ describe('DbBrowserView', () => {
 
       await waitFor(() => {
         expect(listTablesMock).toHaveBeenCalledTimes(2)
-        expect(screen.getByRole('option', { name: 'added_by_migration' })).toBeInTheDocument()
       })
+      // The new table shows up in the picker's radio menu, which scrolls for
+      // long schemas, and the selection survives the reload.
+      await fireEvent.click(screen.getByRole('button', { name: 'Tabla archives' }))
+      expect(
+        await screen.findByRole('menuitemradio', { name: 'added_by_migration' })
+      ).toBeInTheDocument()
       expect(describeTableMock).toHaveBeenLastCalledWith('archives')
-      expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+      expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
     })
 
     it('falls back to the first table when an automatic reload no longer finds the selected one', async () => {
@@ -945,7 +1016,7 @@ describe('DbBrowserView', () => {
       await vi.advanceTimersByTimeAsync(600)
 
       await waitFor(() => {
-        expect(screen.getByLabelText('Tabla')).toHaveValue('archives')
+        expect(screen.getByRole('button', { name: 'Tabla archives' })).toBeInTheDocument()
       })
       expect(describeTableMock).toHaveBeenLastCalledWith('archives')
     })

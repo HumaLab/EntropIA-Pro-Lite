@@ -25,7 +25,15 @@
 
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { ActionIcon, Button, Checkbox, IconButton, tooltip } from '@entropia/ui'
+  import {
+    ActionIcon,
+    Button,
+    Checkbox,
+    IconButton,
+    ToolbarMenu,
+    tooltip,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import { t } from '$lib/i18n'
   import { DEFAULT_STYLE, isCslError, renderCluster, type StyleSource } from '$lib/writing-csl'
 
@@ -54,6 +62,7 @@
   let works = $state<CitationWork[]>(untrack(() => items.map((item) => ({ ...item }))))
   let prefix = $state(untrack(() => affixes.prefix))
   let suffix = $state(untrack(() => affixes.suffix))
+  let locatorKindMenuOpen = $state<boolean[]>(untrack(() => items.map(() => false)))
 
   let preview = $state('')
   let renderError = $state<string | null>(null)
@@ -68,6 +77,26 @@
     } catch {
       return work.itemKey
     }
+  }
+
+  function locatorKindLabel(locatorType: string): string {
+    const kind = LOCATOR_KINDS.find((candidate) => candidate.value === locatorType)
+    return kind ? t(kind.label) : locatorType
+  }
+
+  /** The locator-kind picker: the canonical radio pattern (a ToolbarMenu whose
+   *  checked entry is the choice), never a native select. */
+  function locatorKindItems(work: CitationWork): ToolbarMenuItem[] {
+    return LOCATOR_KINDS.map((kind) => ({
+      kind: 'radio' as const,
+      id: kind.value,
+      label: t(kind.label),
+      checked: work.locatorType === kind.value,
+      onselect: () => {
+        work.locatorType = kind.value
+        changed()
+      },
+    }))
   }
 
   function draft(): CitationDraft {
@@ -187,21 +216,31 @@
               }}
             />
           </label>
-          <label class="cite__field">
-            <span class="cite__label">{t('writing.citeLocatorKind')}</span>
-            <select
-              class="cite__input"
-              value={work.locatorType}
-              onchange={(event) => {
-                work.locatorType = event.currentTarget.value
-                changed()
-              }}
+          <div class="cite__field">
+            <span class="cite__label" id="cite-locator-kind-label-{index}"
+              >{t('writing.citeLocatorKind')}</span
             >
-              {#each LOCATOR_KINDS as kind (kind.value)}
-                <option value={kind.value}>{t(kind.label)}</option>
-              {/each}
-            </select>
-          </label>
+            <ToolbarMenu
+              label={t('writing.citeLocatorKind')}
+              items={locatorKindItems(work)}
+              bind:open={locatorKindMenuOpen[index]}
+            >
+              {#snippet trigger(props, { open })}
+                <button
+                  type="button"
+                  class="cite__menu-trigger"
+                  class:cite__menu-trigger--open={open}
+                  aria-labelledby="cite-locator-kind-label-{index} cite-locator-kind-value-{index}"
+                  {...props}
+                >
+                  <span class="cite__menu-trigger-label" id="cite-locator-kind-value-{index}"
+                    >{locatorKindLabel(work.locatorType)}</span
+                  >
+                  <ActionIcon name="chevron-down" size={12} />
+                </button>
+              {/snippet}
+            </ToolbarMenu>
+          </div>
         </div>
 
         <Checkbox
@@ -366,6 +405,47 @@
     outline: none;
     border-color: var(--border-focus);
     box-shadow: var(--focus-ring);
+  }
+
+  /* The locator-kind trigger. It replaces the native select that wore
+     .cite__input, so it keeps that field look and adds the canonical
+     label/name/chevron shape of the other choice menus. */
+  .cite__menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-input);
+    background: var(--surface-input);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .cite__menu-trigger:hover,
+  .cite__menu-trigger--open {
+    border-color: color-mix(in srgb, var(--border-focus) 40%, var(--border-subtle));
+  }
+
+  .cite__menu-trigger:focus-visible {
+    outline: none;
+    border-color: var(--border-focus);
+    box-shadow: var(--focus-ring);
+  }
+
+  .cite__menu-trigger-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .cite__preview-block {

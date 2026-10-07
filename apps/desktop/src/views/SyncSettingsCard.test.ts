@@ -191,7 +191,14 @@ describe('SyncSettingsCard — plan change request', () => {
     mockInvoke.mockReset()
   })
 
-  it('opens the plan modal and renders the target-plan select (current excluded)', async () => {
+  /** Opens the plan picker's themed radio menu once the catalog has loaded. */
+  async function openPlanMenu() {
+    const trigger = await screen.findByRole('button', { name: /^Plan al que querés cambiar/ })
+    await waitFor(() => expect(trigger).toBeEnabled())
+    await fireEvent.click(trigger)
+  }
+
+  it('opens the plan modal and renders the target-plan menu (current excluded)', async () => {
     render(SyncSettingsCard)
     // Wait for the upgrade button to appear (usage resolved → plan action block).
     const button = await screen.findByText('Solicitar cambio de plan')
@@ -204,10 +211,12 @@ describe('SyncSettingsCard — plan change request', () => {
     expect(screen.getByText(/Plan actual/)).toBeInTheDocument()
     expect(screen.getByText(/Esto es una SOLICITUD/)).toBeInTheDocument()
 
-    // The select offers the non-current plans using the commercial names, not Free (is_current).
+    // The themed radio menu offers the non-current plans using the commercial
+    // names, not Free (is_current) — never a native select.
+    await openPlanMenu()
     await waitFor(() => {
-      const options = Array.from(document.querySelectorAll('#sync-plan-target option'))
-      const labels = options.map((o) => o.textContent?.trim())
+      const entries = screen.getAllByRole('menuitemradio')
+      const labels = entries.map((entry) => entry.textContent?.trim())
       expect(labels).toContain('Go · 5 GB')
       expect(labels).toContain('Pro 1 · 10 GB')
       expect(labels).toContain('Pro 2 · 20 GB')
@@ -231,8 +240,8 @@ describe('SyncSettingsCard — plan change request', () => {
     render(SyncSettingsCard)
     await fireEvent.click(await screen.findByText('Solicitar cambio de plan'))
 
-    const select = (await screen.findByLabelText('Plan al que querés cambiar')) as HTMLSelectElement
-    await fireEvent.change(select, { target: { value: 'gb5' } })
+    await openPlanMenu()
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Go · 5 GB' }))
 
     await fireEvent.click(screen.getByText('Enviar solicitud'))
 
@@ -272,8 +281,8 @@ describe('SyncSettingsCard — plan change request', () => {
     render(SyncSettingsCard)
     await fireEvent.click(await screen.findByText('Solicitar cambio de plan'))
 
-    const select = (await screen.findByLabelText('Plan al que querés cambiar')) as HTMLSelectElement
-    await fireEvent.change(select, { target: { value: 'gb5' } })
+    await openPlanMenu()
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Go · 5 GB' }))
     await fireEvent.click(screen.getByText('Enviar solicitud'))
 
     // The persistent banner appears (text + disabled button both carry the phrase).

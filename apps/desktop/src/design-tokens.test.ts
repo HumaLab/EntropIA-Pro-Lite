@@ -78,6 +78,18 @@ function stylesOf(componentPath: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
+/**
+ * A component's source with comments removed. Prose is allowed to mention a
+ * native `<select>` — several historical comments do — but an element is not,
+ * and the guard below must only see real markup.
+ */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^\s*\/\/.*$/gm, ' ')
+}
+
 function undefinedTokensIn(componentPath: string, published: Set<string>): string[] {
   const source = readFileSync(componentPath, 'utf-8')
   const styles = stylesOf(componentPath)
@@ -292,6 +304,19 @@ describe('desktop design tokens', () => {
       .sort()
 
     expect(owners).toEqual(['SearchBar.svelte'])
+  })
+
+  it('leaves no native select in any component', () => {
+    // The operating system draws a native <select>: white, square, and from
+    // another theme. Every choice in the app wears the app's own look through
+    // ToolbarMenu's radio entries, so no component may ship the element at all.
+    const offenders = everyComponent()
+      .map((path) => [path, withoutComments(readFileSync(path, 'utf-8'))] as const)
+      .filter(([, source]) => /<select[\s/>]/.test(source))
+      .map(([path]) => basename(path))
+      .sort()
+
+    expect(offenders).toEqual([])
   })
 
   it('hides the native search cancel button globally as a safety net', () => {

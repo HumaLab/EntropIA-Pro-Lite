@@ -1,6 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
-  import { tooltip, ActionIcon, Button, IconButton, portal, SearchBar } from '@entropia/ui'
+  import {
+    tooltip,
+    ActionIcon,
+    Button,
+    IconButton,
+    portal,
+    SearchBar,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
   import {
     describeDbBrowserTable,
     listDbBrowserTables,
@@ -77,6 +86,8 @@
   let copyFeedback = $state<CopyFeedback | null>(null)
   let expandedCell = $state<ExpandedCell | null>(null)
   let exportingTable = $state(false)
+  let tableMenuOpen = $state(false)
+  let pageSizeMenuOpen = $state(false)
 
   let copyFeedbackTimeout: ReturnType<typeof setTimeout> | null = null
   let expandedModalElement = $state<HTMLDivElement | null>(null)
@@ -103,6 +114,28 @@
   const fromRow = $derived(total === 0 ? 0 : (page - 1) * pageSize + 1)
   const toRow = $derived(total === 0 ? 0 : Math.min(total, page * pageSize))
   const activeSortIcon = $derived(sortDirection === 'asc' ? 'chevron-up' : 'chevron-down')
+  /** The table picker: the canonical radio pattern BibliotecaView paints — a
+   *  ToolbarMenu whose checked entry is the selection, never a native select.
+   *  The menu scrolls, so the whole schema (some databases offer dozens of
+   *  tables) stays reachable. */
+  const tableMenuItems = $derived<ToolbarMenuItem[]>(
+    tables.map((table) => ({
+      kind: 'radio' as const,
+      id: table.name,
+      label: table.name,
+      checked: table.name === selectedTable,
+      onselect: () => handleTableChange(table.name),
+    }))
+  )
+  const pageSizeMenuItems = $derived<ToolbarMenuItem[]>(
+    PAGE_SIZE_OPTIONS.map((option) => ({
+      kind: 'radio' as const,
+      id: String(option),
+      label: String(option),
+      checked: option === pageSize,
+      onselect: () => handlePageSizeChange(option),
+    }))
+  )
   /** A change signal from outside typing/sorting/paging: schedule a coalesced
    *  reload instead of reacting to it directly. */
   function handleExternalChange() {
@@ -300,10 +333,13 @@
     return nextColumns.find((column) => column.isPrimaryKey)?.name ?? nextColumns[0]?.name ?? ''
   }
 
-  async function handleTableChange(event: Event) {
+  async function handleTableChange(name: string) {
     searchDraft = ''
     searchTerm = ''
-    await initializeTable((event.target as HTMLSelectElement).value)
+    // The select this replaces bound its value before the handler ran, so the
+    // header names the picked table immediately, before its schema resolves.
+    selectedTable = name
+    await initializeTable(name)
   }
 
   function clearFilterDebounce() {
@@ -464,21 +500,13 @@
     })
   }
 
-  async function handlePageSizeChange(event: Event) {
-    const nextPageSize = Number((event.target as HTMLSelectElement).value)
-
+  async function handlePageSizeChange(nextPageSize: number) {
     if (!Number.isFinite(nextPageSize) || nextPageSize <= 0 || nextPageSize === pageSize) {
       return
     }
 
-    const nextState = {
-      page: 1,
-      pageSize: nextPageSize,
-    }
-
-    if (!nextState) return
-    pageSize = nextState.pageSize
-    page = nextState.page
+    pageSize = nextPageSize
+    page = 1
     await loadRows()
   }
 
@@ -566,20 +594,33 @@
 
     <div class="page-toolbar db-browser-toolbar">
       <div class="db-browser-toolbar__field">
-        <label for="db-browser-table-select"
-          >{$currentLocale && translate('dbBrowser.tableLabel')}</label
+        <span class="db-browser-toolbar__label" id="db-browser-table-label"
+          >{$currentLocale && translate('dbBrowser.tableLabel')}</span
         >
-        <select
-          id="db-browser-table-select"
-          class="db-browser-toolbar__input"
-          bind:value={selectedTable}
-          onchange={handleTableChange}
-          disabled={loadingTables || tables.length === 0}
+        <!-- The app's themed choice menu (the same radio pattern
+             WritingZoteroTab and BibliotecaView wear): the operating system
+             must never draw this control. -->
+        <ToolbarMenu
+          label={$currentLocale && translate('dbBrowser.tableLabel')}
+          items={tableMenuItems}
+          bind:open={tableMenuOpen}
         >
-          {#each tables as table (table.name)}
-            <option value={table.name}>{table.name}</option>
-          {/each}
-        </select>
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="db-browser-menu-trigger"
+              class:db-browser-menu-trigger--open={open}
+              aria-labelledby="db-browser-table-label db-browser-table-value"
+              disabled={loadingTables || tables.length === 0}
+              {...props}
+            >
+              <span class="db-browser-menu-trigger-label" id="db-browser-table-value"
+                >{selectedTable}</span
+              >
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
       </div>
 
       <form class="db-browser-toolbar__search" onsubmit={handleSearchSubmit}>
@@ -673,20 +714,30 @@
           </Button>
         </div>
         <div class="db-browser-page-size">
-          <label for="db-browser-page-size"
-            >{$currentLocale && translate('dbBrowser.pageSizeLabel')}</label
+          <span class="db-browser-page-size__label" id="db-browser-page-size-label"
+            >{$currentLocale && translate('dbBrowser.pageSizeLabel')}</span
           >
-          <select
-            id="db-browser-page-size"
-            class="db-browser-toolbar__input db-browser-page-size__select"
-            bind:value={pageSize}
-            onchange={handlePageSizeChange}
-            disabled={loadingRows}
+          <ToolbarMenu
+            label={$currentLocale && translate('dbBrowser.pageSizeLabel')}
+            items={pageSizeMenuItems}
+            bind:open={pageSizeMenuOpen}
           >
-            {#each PAGE_SIZE_OPTIONS as option (option)}
-              <option value={option}>{option}</option>
-            {/each}
-          </select>
+            {#snippet trigger(props, { open })}
+              <button
+                type="button"
+                class="db-browser-menu-trigger db-browser-page-size__trigger"
+                class:db-browser-menu-trigger--open={open}
+                aria-labelledby="db-browser-page-size-label db-browser-page-size-value"
+                disabled={loadingRows}
+                {...props}
+              >
+                <span class="db-browser-menu-trigger-label" id="db-browser-page-size-value"
+                  >{pageSize}</span
+                >
+                <ActionIcon name="chevron-down" size={12} />
+              </button>
+            {/snippet}
+          </ToolbarMenu>
         </div>
       </div>
 
@@ -944,12 +995,57 @@
     min-width: min(100%, 220px);
   }
 
-  .db-browser-toolbar__field label {
+  .db-browser-toolbar__field label,
+  .db-browser-toolbar__label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     letter-spacing: 0.075em;
     text-transform: uppercase;
     color: var(--color-text-secondary);
+  }
+
+  /* The trigger of a choice menu. It replaces the native select this screen
+     used to render, so it wears the control look of BibliotecaView's library
+     picker (the other page-toolbar that opens radio menus): label, name,
+     chevron. */
+  .db-browser-menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    max-width: 260px;
+    min-height: var(--control-height-md);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-control);
+    background: var(--color-surface-glass);
+    color: var(--color-text-primary);
+    cursor: pointer;
+  }
+
+  .db-browser-menu-trigger:hover,
+  .db-browser-menu-trigger--open {
+    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
+  }
+
+  .db-browser-menu-trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .db-browser-menu-trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .db-browser-menu-trigger-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--font-size-sm);
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .db-browser-card {
@@ -999,7 +1095,7 @@
     flex-shrink: 0;
   }
 
-  .db-browser-page-size label {
+  .db-browser-page-size__label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
     letter-spacing: 0.075em;
@@ -1007,9 +1103,10 @@
     color: var(--color-text-secondary);
   }
 
-  .db-browser-page-size__select {
+  .db-browser-page-size__trigger {
+    width: auto;
     min-width: 92px;
-    padding-right: var(--space-8);
+    justify-content: space-between;
   }
 
   .db-browser-table-wrap {

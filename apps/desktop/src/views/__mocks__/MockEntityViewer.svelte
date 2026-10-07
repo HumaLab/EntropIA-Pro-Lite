@@ -21,6 +21,7 @@
   // El alta real vive detrás del chip +: el mock reproduce ese gesto para que
   // las pruebas de integración recorran el mismo camino que la interfaz.
   let creating = $state(false)
+  let typeMenuOpen = $state(false)
 </script>
 
 <div data-testid="mock-entity-viewer">
@@ -68,15 +69,32 @@
   {#if creatableTypes.length > 0}
     {#if creating}
       <div data-testid="mock-entity-new">
-        <select
+        <!-- El visor real elige el tipo con su menú temático (nunca un
+             select); el mock reproduce ese gesto con elementos simples. -->
+        <button
+          type="button"
           aria-label={labels?.newEntityTypeAria ?? 'New entity type'}
-          value={newEntityType ?? creatableTypes[0]}
-          onchange={(event) => onnewentitytypechange(event.currentTarget.value)}
+          aria-haspopup="menu"
+          aria-expanded={typeMenuOpen}
+          onclick={() => (typeMenuOpen = !typeMenuOpen)}
         >
-          {#each creatableTypes as type (type)}
-            <option value={type}>{type}</option>
-          {/each}
-        </select>
+          {newEntityType ?? creatableTypes[0]}
+        </button>
+        {#if typeMenuOpen}
+          <div role="menu" aria-label={labels?.newEntityTypeAria ?? 'New entity type'}>
+            {#each creatableTypes as type (type)}
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={(newEntityType ?? creatableTypes[0]) === type}
+                onclick={() => {
+                  onnewentitytypechange(type)
+                  typeMenuOpen = false
+                }}>{type}</button
+              >
+            {/each}
+          </div>
+        {/if}
         <input
           type="text"
           aria-label={labels?.newEntityValueAria ?? 'New entity value'}

@@ -3,6 +3,8 @@
   import type { MapViewerLabels, MapViewerProps } from './MapViewer.types'
   import { onMount, onDestroy, tick } from 'svelte'
   import ActionIcon from '../Button/ActionIcon.svelte'
+  import ToolbarMenu from '../ToolbarMenu/ToolbarMenu.svelte'
+  import type { ToolbarMenuItem } from '../ToolbarMenu/ToolbarMenu.types'
   import L from 'leaflet'
   import 'leaflet/dist/leaflet.css'
   import markerIconUrl from 'leaflet/dist/images/marker-icon.png'
@@ -45,6 +47,7 @@
   let draftLocation = $state<{ latitude: number; longitude: number } | null>(null)
   let saving = $state(false)
   let actionError = $state<string | null>(null)
+  let locationMenuOpen = $state(false)
   const leafletMarkers = new Map<string, L.Marker>()
 
   let ui = $derived({ ...defaultLabels, ...labels })
@@ -58,6 +61,18 @@
   )
   let selectedMarker = $derived(
     markers.find((marker) => marker.entityId === selectedEntityId) ?? null
+  )
+  /** The location picker: the canonical radio pattern (a ToolbarMenu whose
+   *  checked entry is the selection), never a native select — the operating
+   *  system would draw that outside the app's theme. */
+  let locationMenuItems = $derived<ToolbarMenuItem[]>(
+    availableLocations.map((location) => ({
+      kind: 'radio' as const,
+      id: location.entityId,
+      label: location.label,
+      checked: location.entityId === selectedEntityId,
+      onselect: () => selectLocation(location.entityId),
+    }))
   )
 
   const defaultCenter: L.LatLngExpression = [-34.6, -58.4]
@@ -265,6 +280,11 @@
     }
   }
 
+  function selectLocation(entityId: string) {
+    selectedEntityId = entityId
+    actionError = null
+  }
+
   $effect(() => {
     const firstMarkerId = availableLocations[0]?.entityId ?? null
     if (
@@ -312,19 +332,23 @@
         </span>
 
         {#if availableLocations.length > 1}
-          <select
-            aria-label={ui.location}
-            value={selectedEntityId ?? ''}
-            disabled={editingEntityId !== null || saving}
-            onchange={(event) => {
-              selectedEntityId = event.currentTarget.value
-              actionError = null
-            }}
-          >
-            {#each availableLocations as location (location.entityId)}
-              <option value={location.entityId}>{location.label}</option>
-            {/each}
-          </select>
+          <ToolbarMenu label={ui.location} items={locationMenuItems} bind:open={locationMenuOpen}>
+            {#snippet trigger(props, { open })}
+              <button
+                type="button"
+                class="map-viewer__location-trigger"
+                class:map-viewer__location-trigger--open={open}
+                aria-label={ui.location}
+                disabled={editingEntityId !== null || saving}
+                {...props}
+              >
+                <span class="map-viewer__location-trigger-label"
+                  >{selectedLocation?.label ?? ''}</span
+                >
+                <ActionIcon name="chevron-down" size={12} />
+              </button>
+            {/snippet}
+          </ToolbarMenu>
         {:else if selectedLocation}
           <strong>{selectedLocation.label}</strong>
         {/if}
@@ -443,11 +467,34 @@
     color: var(--color-text-primary);
   }
 
-  .map-viewer__editor select {
+  /* The location picker trigger. It replaces the native select (the project
+     rule forbids one), so it keeps that selector's width constraint inside the
+     narrow editor row and adds the canonical name + chevron shape. */
+  .map-viewer__location-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     flex: 1 1 auto;
     width: 100%;
     min-width: 0;
     max-width: 100%;
+    justify-content: space-between;
+    cursor: pointer;
+  }
+
+  .map-viewer__location-trigger:hover,
+  .map-viewer__location-trigger--open {
+    border-color: var(--color-accent, #5b7cfa);
+  }
+
+  .map-viewer__location-trigger-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-xs, 0.75rem);
   }
 
   .map-viewer__location-row strong {
