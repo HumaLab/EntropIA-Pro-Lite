@@ -2497,6 +2497,10 @@ fn extraction_text_hash(text: &str) -> String {
 fn extraction_quality(text: &str) -> &'static str {
     if text.trim().is_empty() {
         "empty"
+    } else if crate::ocr::pdf::is_garbled_text(text) {
+        // Raw glyph codes from a custom font encoding: not text a reader can
+        // use, and nothing to protect. Graded `empty` so OCR owns the page.
+        "empty"
     } else if crate::ocr::pdf::is_quality_text(text) {
         "rich"
     } else {
@@ -2902,6 +2906,12 @@ impl BibliographyExtractExecutor {
         let text = richer_native_text(text, &pages);
         let mut quality = extraction_quality(&text);
         let mut text = text;
+        // Garbled native text (raw glyph codes) is not text: when the OCR
+        // pass replaced or dropped any page, the whole-document row is
+        // rebuilt from the published pages so no glyph code survives in it.
+        let had_garbled_native = pages
+            .iter()
+            .any(|page| crate::ocr::pdf::is_garbled_text(&page.text_content));
         let (pages, ocr_failed_pages, ocr_attempted) =
             self.maybe_ocr_pages(ctx, task, stop, bytes, pages, quality == "empty")?;
         // A scan has no native text, so the whole-document verdict above is
@@ -2909,7 +2919,9 @@ impl BibliographyExtractExecutor {
         // and the native layer was not already rich, the document text and
         // its quality come from the pages now published, or every scanned
         // PDF would stay `empty` after its text exists.
-        if quality != "rich" && pages.iter().any(|page| page.method == "ocr") {
+        if (quality != "rich" || had_garbled_native)
+            && pages.iter().any(|page| page.method == "ocr")
+        {
             text = pages
                 .iter()
                 .map(|page| page.text_content.trim())
@@ -2933,7 +2945,9 @@ impl BibliographyExtractExecutor {
     /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
     /// `ctx.unit`, so resume reuses confirmed texts without re-sending
     /// content, and demand loss stops before the next provider call.
-    /// An empty OCR answer keeps the native row untouched; a non-empty
+    /// An empty OCR answer keeps the native row untouched — unless the
+    /// native text is garbled raw glyph codes, which OCR owns: the page is
+    /// then recorded empty and the codes are never kept. A non-empty
     /// one replaces the page text (method `ocr`) with a fresh hash —
     /// never appended, so native fragments cannot duplicate.
     fn maybe_ocr_pages(
@@ -3031,6 +3045,18 @@ impl BibliographyExtractExecutor {
                         ocr_attempted = true;
                         text
                     }
+                    // A GLM-OCR answer with no content is a blank page, not
+                    // a page failure: the provider answered, the page simply
+                    // holds no text (whole-asset corpus OCR keeps it an
+                    // error). Recorded as empty text below.
+                    Err(error)
+                        if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
+                            &error,
+                        ) =>
+                    {
+                        ocr_attempted = true;
+                        String::new()
+                    }
                     Err(error) => {
                         if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
                             return Err(ExecOutput::Stopped);
@@ -3064,7 +3090,25 @@ impl BibliographyExtractExecutor {
                 }
             };
             if text.trim().is_empty() {
-                out.push(page);
+                eprintln!(
+                    "[bibliography] page {}: no text recognized",
+                    page.page_number
+                );
+                if crate::ocr::pdf::is_garbled_text(&page.text_content) {
+                    // OCR owns a garbled page: the raw glyph codes must not
+                    // survive a blank answer, so the page is recorded with
+                    // empty text instead of keeping the garbage.
+                    out.push(ExtractPageText {
+                        page_number: page.page_number,
+                        method: "ocr".to_string(),
+                        text_hash: extraction_text_hash(""),
+                        text_chars: 0,
+                        quality: "empty".to_string(),
+                        text_content: String::new(),
+                    });
+                } else {
+                    out.push(page);
+                }
                 continue;
             }
             let quality = extraction_quality(&text);

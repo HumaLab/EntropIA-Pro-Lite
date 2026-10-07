@@ -2192,14 +2192,58 @@ pub fn extraction_matches_source(
     Ok(stored == Some((catalog_mtime, file_bytes)))
 }
 
+/// True when any stored text of the attachment — the whole-document
+/// extraction or one page row — is garbled (raw glyph codes from a custom
+/// font encoding; see [`crate::ocr::pdf::is_garbled_text`]). Such an
+/// extraction is never settled: the stored text is not something a reader
+/// can use, and re-running the extraction (with the selective OCR pass) is
+/// the only repair. One scan over the stored strings per attachment.
+fn stored_extraction_is_garbled(
+    conn: &Connection,
+    attachment_id: &str,
+) -> BibliographyResult<bool> {
+    let extraction: Option<String> = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [attachment_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read extraction text", error))?;
+    if let Some(text) = extraction {
+        if crate::ocr::pdf::is_garbled_text(&text) {
+            return Ok(true);
+        }
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    let pages = stmt
+        .query_map([attachment_id], |row| row.get::<_, String>(0))
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    for page in pages {
+        let text =
+            page.map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+        if crate::ocr::pdf::is_garbled_text(&text) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// True when the stored extraction needs nothing more for this source: it
 /// matches the source identity AND is not an `empty` verdict that never went
 /// through a real OCR pass. A scan stored as `empty` by a build that could not
 /// read it (or while no OCR provider answered) is demanded again; once a
 /// provider has answered for it, even with no text, the verdict is final, so
 /// blank documents do not cost an OCR request on every sync. Rich and sparse
-/// extractions are never re-demanded. Admission and the executor both decide
-/// through this predicate.
+/// extractions are never re-demanded — unless their stored text is garbled
+/// (raw glyph codes from a custom font encoding), which is never settled and
+/// is always demanded again so OCR can replace it. Admission and the
+/// executor both decide through this predicate.
 pub fn extraction_is_settled(
     conn: &Connection,
     attachment_id: &str,
@@ -2207,6 +2251,9 @@ pub fn extraction_is_settled(
     file_bytes: i64,
 ) -> BibliographyResult<bool> {
     if !extraction_matches_source(conn, attachment_id, catalog_mtime, file_bytes)? {
+        return Ok(false);
+    }
+    if stored_extraction_is_garbled(conn, attachment_id)? {
         return Ok(false);
     }
     let unresolved_empty: bool = conn

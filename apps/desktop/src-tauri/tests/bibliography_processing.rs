@@ -10686,3 +10686,290 @@ fn p3_extraction_admission_follows_the_works_opened_rank() {
         "extraction admission follows the work's opened rank"
     );
 }
+
+// ── Garbled native text (custom font encodings without ToUnicode) ─────────
+//
+// Some PDFs return raw glyph codes instead of characters ("3FWJTUB" is
+// "Revista"): the old quality bar called those pages rich, so selective OCR
+// never ran and the codes were stored and embedded. The detector routes them
+// to OCR, which owns the page; sync admission re-demands the already-stored
+// garbage even when the source identity never moved.
+
+const GARBLED_GLYPH_TEXT: &str = "3FWJTUB %JDJBMJ[BMF 4FQJFNCJ[BDJ %JSJF[B 1VCJPFT 4B[BDJ 4JFOUJGJDP -VDIBZPSHBOJ[BDJO 6PMJBM 1SJNFSB 4FSJF 5SBKBCPKP %FQBSBNFOUP %F 1TZDPMPHJ[BDJ";
+const CLEAN_OCR_TEXT: &str =
+    "Texto reconocido limpio de la pagina convertida con longitud suficiente para calidad";
+
+/// Writes what the previous build stored for one attachment: the extraction
+/// and its single page row, graded `rich`, pinned to the exact source
+/// identity of the file on disk.
+fn seed_stored_texts(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+    item_id: &str,
+    path: &str,
+    extraction_text: &str,
+    page_text: &str,
+    quality: &str,
+) {
+    use entropia_desktop_lib::bibliography::repository::{
+        upsert_extraction_in_transaction, upsert_page_text_in_transaction, ExtractionRow,
+        PageTextRow,
+    };
+    let source_bytes = std::fs::metadata(path).expect("source metadata").len() as i64;
+    upsert_extraction_in_transaction(
+        conn,
+        &ExtractionRow {
+            attachment_id: attachment_id.to_string(),
+            item_id: item_id.to_string(),
+            page_count: 1,
+            method: "native".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(extraction_text.as_bytes())),
+            text_chars: extraction_text.chars().count() as i64,
+            quality: quality.to_string(),
+            text_content: extraction_text.to_string(),
+            source_mtime: Some(1_700_000_000),
+            source_bytes,
+        },
+        repository::now_ms(),
+    )
+    .expect("seed extraction");
+    upsert_page_text_in_transaction(
+        conn,
+        &PageTextRow {
+            attachment_id: attachment_id.to_string(),
+            page_number: 1,
+            method: "native".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(page_text.as_bytes())),
+            text_chars: page_text.chars().count() as i64,
+            quality: quality.to_string(),
+            text_content: page_text.to_string(),
+        },
+        repository::now_ms(),
+    )
+    .expect("seed page text");
+}
+
+/// A stored extraction whose text is garbled raw glyph codes is re-demanded
+/// although the source identity (catalog mtime + file bytes) never moved.
+#[test]
+fn admission_re_demands_a_garbled_stored_extraction_with_unchanged_source_identity() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        GARBLED_GLYPH_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("garbled sync");
+    assert_eq!(
+        created, 1,
+        "garbled stored text must be re-demanded despite the unchanged source identity"
+    );
+}
+
+/// One garbled page row poisons the whole stored extraction: admission
+/// checks the page texts too, not just the joined document text.
+#[test]
+fn admission_re_demands_when_only_a_stored_page_text_is_garbled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        CLEAN_OCR_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("garbled page sync");
+    assert_eq!(created, 1, "a garbled stored page must be re-demanded");
+}
+
+/// The negative control: a clean stored extraction of the same shape stays
+/// settled — the detector must not re-demand readable text.
+#[test]
+fn admission_leaves_a_clean_stored_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        CLEAN_OCR_TEXT,
+        CLEAN_OCR_TEXT,
+        "rich",
+    );
+
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("clean sync");
+    assert_eq!(created, 0, "clean stored text must stay settled");
+}
+
+/// The re-process must actually run OCR despite the unchanged source
+/// identity (no mtime/bytes short-circuit), replace the page with the OCR
+/// text, keep no glyph code anywhere, and chain the profile re-demand that
+/// re-embeds the moved passages.
+#[test]
+fn garbled_pages_are_re_processed_and_ocr_owns_the_page() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "GARBWORK1",
+        "Obra con codigos crudos",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf(&[(50.0, 750.0, GARBLED_GLYPH_TEXT)]);
+    let path = write_temp_pdf(&dir, "garabatos.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GARBATT01",
+        "linked_file",
+        Some(&path),
+        "garabatos.pdf",
+        "application/pdf",
+    );
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        GARBLED_GLYPH_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
+        1
+    );
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(CLEAN_OCR_TEXT);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the garbled re-extract must succeed, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "the executor must OCR the garbled page despite the unchanged source identity"
+    );
+    let (method, text): (String, String) = conn
+        .query_row(
+            "SELECT method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page row");
+    assert_eq!(method, "ocr", "OCR owns the garbled page");
+    assert!(text.contains("Texto reconocido limpio"), "{text}");
+    assert!(!text.contains("3FWJTUB"), "no glyph code survives: {text}");
+    let whole: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    assert!(
+        !whole.contains("3FWJTUB"),
+        "the extraction row must not keep glyph codes: {whole}"
+    );
+    let profile_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND subject_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("profile tasks");
+    assert!(
+        profile_tasks >= 1,
+        "the moved page layer must re-demand the profile so passages re-embed"
+    );
+}
+
+/// A GLM-OCR answer with no content is an empty page: the row records empty
+/// text and the task succeeds — it is not a page failure, and the garbage it
+/// replaced is never kept.
+#[test]
+fn an_empty_glm_page_response_records_empty_text_not_a_failure() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "GLMWORK01",
+        "Obra con pagina en blanco",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf(&[(50.0, 750.0, GARBLED_GLYPH_TEXT)]);
+    let path = write_temp_pdf(&dir, "glm-vacio.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GLMATT001",
+        "linked_file",
+        Some(&path),
+        "glm-vacio.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::failing(
+        entropia_desktop_lib::bibliography::selective_ocr::EMPTY_OCR_PAGE_RESPONSE,
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "an empty answer is not a page failure, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "the garbled page must reach the provider"
+    );
+    let (method, quality, text): (String, String, String) = conn
+        .query_row(
+            "SELECT method, quality, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("page row");
+    assert_eq!(method, "ocr");
+    assert_eq!(quality, "empty");
+    assert!(
+        text.is_empty(),
+        "the empty answer is recorded as empty text, never as kept garbage: {text}"
+    );
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks
+             WHERE subject_id = ?1 AND kind = 'bibliography_extract' AND state = 'succeeded'",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(
+        receipt.contains("\"ocrFailedPages\":[]"),
+        "the empty page is not a failed page: {receipt}"
+    );
+}

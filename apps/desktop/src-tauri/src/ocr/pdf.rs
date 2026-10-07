@@ -522,11 +522,225 @@ pub const UNREADABLE_PDF_TEXT_MESSAGE: &str =
     "No se pudo leer el texto de este PDF: su estructura interna no es compatible con el lector.";
 
 /// Returns `true` if the text contains at least `MIN_ALPHANUM_CHARS` valid
-/// UTF-8 alphanumeric characters. Used to decide whether native PDF text is
-/// rich enough or we should fall back to OCR.
+/// UTF-8 alphanumeric characters and is not garbled (see [`is_garbled_text`]).
+/// Used to decide whether native PDF text is rich enough or we should fall
+/// back to OCR: raw glyph codes pass the character-count bar but are not
+/// text a reader can use, so they route to OCR like a scanned page.
 pub fn is_quality_text(text: &str) -> bool {
     const MIN_ALPHANUM_CHARS: usize = 50;
     text.chars().filter(|c| c.is_alphanumeric()).count() >= MIN_ALPHANUM_CHARS
+        && !is_garbled_text(text)
+}
+
+/// True when the text looks like raw glyph codes instead of language.
+///
+/// Some PDFs embed fonts with a custom encoding and no ToUnicode map; every
+/// parser then returns the raw glyph codes instead of the characters the
+/// reader sees ("3FWJTUB" where the page says "Revista"). The codes are
+/// deterministic per font — a constant shift, a symbol soup — but they are
+/// not language, and letter statistics see that: shifted text is consonant
+/// soup in capitals, with digits and symbols glued inside words.
+///
+/// Deterministic and language-light (Spanish/English/Portuguese primary).
+/// Over letters it weighs the uppercase ratio, the vowel ratio (accented
+/// vowels included), digits glued to letters, letters in tokens longer than
+/// 24 characters, intrusive symbols like `[ @ ¨ ˇ ¡` inside words, and the
+/// whitespace ratio. Tuned on two real garbled extractions from a user
+/// library plus normal ES/EN academic text, an all-caps title page, short
+/// all-caps headings, a table of numbers, references with DOIs/URLs/emails
+/// and ligature text — none of which may flag.
+pub fn is_garbled_text(text: &str) -> bool {
+    let Some(stats) = GarbleStats::of(text) else {
+        return false;
+    };
+    let letters = stats.letters as f64;
+    let vowel_ratio = stats.vowel_letters as f64 / letters;
+    let upper_ratio = stats.upper_letters as f64 / letters;
+    let intrusion_ratio = stats.intrusive_symbols as f64 / letters;
+    let glue_ratio = stats.glued_letters as f64 / letters;
+    let long_token_ratio = stats.long_token_letters as f64 / letters;
+    let whitespace_ratio = stats.whitespace_chars as f64 / stats.total_chars.max(1) as f64;
+
+    // Vowel starvation: real Spanish/English/Portuguese prose never drops
+    // this low over a paragraph (shifted glyph codes sit near 0.05-0.15,
+    // because the vowel positions are filled by consonant codes).
+    if stats.letters >= 24 && vowel_ratio < 0.15 {
+        return true;
+    }
+    // The shift signature: capital consonant soup corroborated by digits
+    // glued to letters, intrusive symbols inside words, or runaway tokens.
+    if stats.letters >= 24
+        && upper_ratio >= 0.60
+        && vowel_ratio < 0.25
+        && (intrusion_ratio >= 0.04 || glue_ratio >= 0.10 || long_token_ratio >= 0.25)
+    {
+        return true;
+    }
+    // Symbol soup around the words, whatever the case.
+    if stats.letters >= 24 && intrusion_ratio >= 0.10 && vowel_ratio < 0.35 {
+        return true;
+    }
+    // A page with no word separation at all is not language either.
+    if stats.letters >= 40 && whitespace_ratio < 0.04 && vowel_ratio < 0.30 {
+        return true;
+    }
+    // Short fragments (headings, captions) flag only on the full signature:
+    // "STRENGTH" is a word, "3FWJTUB" is not.
+    if stats.letters < 24
+        && upper_ratio >= 0.90
+        && vowel_ratio < 0.25
+        && (intrusion_ratio >= 0.04 || glue_ratio >= 0.10 || long_token_ratio >= 0.15)
+    {
+        return true;
+    }
+    false
+}
+
+/// Vowel letters of Spanish/English/Portuguese, accented forms included.
+fn is_vowel_letter(lower: char) -> bool {
+    matches!(
+        lower,
+        'a' | 'e'
+            | 'i'
+            | 'o'
+            | 'u'
+            | 'á'
+            | 'é'
+            | 'í'
+            | 'ó'
+            | 'ú'
+            | 'ü'
+            | 'à'
+            | 'è'
+            | 'ì'
+            | 'ò'
+            | 'ù'
+            | 'â'
+            | 'ê'
+            | 'î'
+            | 'ô'
+            | 'û'
+            | 'ã'
+            | 'õ'
+            | 'ä'
+            | 'ë'
+            | 'ï'
+            | 'ö'
+            | 'ÿ'
+            | 'å'
+            | 'æ'
+            | 'œ'
+    )
+}
+
+/// Punctuation language actually uses. Anything else glued to a word is
+/// evidence of a broken encoding (`[ @ ¨ ˇ ¡` and friends).
+const COMMON_PUNCT: &[char] = &[
+    '.', ',', ';', ':', '!', '?', '(', ')', '\'', '"', '-', '_', '/', '\\', '%', '&', '*', '+',
+    '=', '<', '>', '#', '$', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2013}',
+    '\u{2014}', '\u{2026}', '\u{00A7}', '\u{00B0}', '\u{00AB}', '\u{00BB}', '\u{2022}', '\u{00B7}',
+];
+
+/// Letter statistics [`is_garbled_text`] scores.
+struct GarbleStats {
+    letters: usize,
+    upper_letters: usize,
+    vowel_letters: usize,
+    intrusive_symbols: usize,
+    glued_letters: usize,
+    long_token_letters: usize,
+    whitespace_chars: usize,
+    total_chars: usize,
+}
+
+impl GarbleStats {
+    /// Collects the statistics in one pass over the (ligature-expanded) text.
+    /// `None` when the text holds fewer than six letters: too little evidence
+    /// for any verdict but "not garbled".
+    fn of(text: &str) -> Option<Self> {
+        const MIN_LETTERS: usize = 6;
+        let mut chars: Vec<char> = Vec::with_capacity(text.len());
+        for c in text.chars() {
+            match c {
+                '\u{FB00}' => chars.extend(['f', 'f']),
+                '\u{FB01}' => chars.extend(['f', 'i']),
+                '\u{FB02}' => chars.extend(['f', 'l']),
+                '\u{FB03}' => chars.extend(['f', 'f', 'i']),
+                '\u{FB04}' => chars.extend(['f', 'f', 'l']),
+                other => chars.push(other),
+            }
+        }
+        let mut stats = Self {
+            letters: 0,
+            upper_letters: 0,
+            vowel_letters: 0,
+            intrusive_symbols: 0,
+            glued_letters: 0,
+            long_token_letters: 0,
+            whitespace_chars: 0,
+            total_chars: 0,
+        };
+        // A maximal alphanumeric run with at least one digit and three
+        // letters: digits glued into words ("3FWJTUB", "Table2shows").
+        let mut run_letters = 0usize;
+        let mut run_digits = 0usize;
+        for (index, &c) in chars.iter().enumerate() {
+            stats.total_chars += 1;
+            if c.is_whitespace() {
+                stats.whitespace_chars += 1;
+            } else if c.is_alphabetic() {
+                stats.letters += 1;
+                if c.is_uppercase() {
+                    stats.upper_letters += 1;
+                }
+                let mut lower = c.to_lowercase();
+                if let (Some(first), None) = (lower.next(), lower.next()) {
+                    if is_vowel_letter(first) {
+                        stats.vowel_letters += 1;
+                    }
+                }
+            }
+            if c.is_alphanumeric() {
+                if c.is_alphabetic() {
+                    run_letters += 1;
+                } else {
+                    run_digits += 1;
+                }
+                continue;
+            }
+            flush_run(&mut stats, &mut run_letters, &mut run_digits);
+            if c.is_whitespace() || COMMON_PUNCT.contains(&c) {
+                continue;
+            }
+            let near_letter = chars
+                .get(index.wrapping_sub(1))
+                .is_some_and(|before| before.is_alphabetic())
+                || chars
+                    .get(index + 1)
+                    .is_some_and(|after| after.is_alphabetic());
+            if near_letter {
+                stats.intrusive_symbols += 1;
+            }
+        }
+        flush_run(&mut stats, &mut run_letters, &mut run_digits);
+        // Letters sitting in whitespace-free tokens longer than 24 chars.
+        for token in text.split_whitespace() {
+            let token_letters = token.chars().filter(|c| c.is_alphabetic()).count();
+            if token_letters > 24 {
+                stats.long_token_letters += token_letters;
+            }
+        }
+        (stats.letters >= MIN_LETTERS).then_some(stats)
+    }
+}
+
+/// Books one maximal alphanumeric run into the glue counter and resets it.
+fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut usize) {
+    if *run_digits > 0 && *run_letters >= 3 {
+        stats.glued_letters += *run_letters;
+    }
+    *run_letters = 0;
+    *run_digits = 0;
 }
 
 /// Build a conservative per-page profile for a PDF, synchronously.
@@ -2008,6 +2222,77 @@ mod tests {
     fn normal_text_is_quality() {
         let text = "This is a perfectly normal paragraph of text that contains well over fifty alphanumeric characters and should pass the quality heuristic with ease.";
         assert!(is_quality_text(text));
+    }
+
+    // ── Garbled-text detector: custom-encoded fonts without ToUnicode ─────
+    //
+    // Two real garbled extractions from a user library: one font shifted by
+    // a constant -31 ("3FWJTUB" = "Revista", "-VDIBZPSHBOJ[BDJO" =
+    // "Luchayorganización"), one producing symbol soup
+    // ("@QDK@BHlMDMSQDBK@RDNAQDQ@XONKgSHB@"). Both pages were classified
+    // rich and embedded. The samples below are the garbled page texts,
+    // with the quoted fragments verbatim.
+    const GARBLED_SHIFTED_PAGE: &str = "3FWJTUB %JDJBMJ[BMF 4FQJFNCJ[BDJ %JSJF[B 1VCJPFT 4B[BDJ 4JFOUJGJDP -VDIBZPSHBOJ[BDJO 6PMJBM 1SJNFSB 4FSJF 5SBKBCPKP %FQBSBNFOUP %F 1TZDPMPHJ[BDJ";
+    const GARBLED_SYMBOL_PAGE: &str = "@QDK@BHlMDMSQDBK@RDNAQDQ@XONKgSHB@ wKl@RDN@QDK@BHlMDMSQDBK gSHB@RDNAQDQ@XONK wDMSQDBK@RDN@BHlMDMSQDB";
+
+    #[test]
+    fn the_reported_garbled_pages_are_detected() {
+        assert!(
+            is_garbled_text(GARBLED_SHIFTED_PAGE),
+            "the -31-shift page must be garbled: {GARBLED_SHIFTED_PAGE}"
+        );
+        assert!(
+            is_garbled_text(GARBLED_SYMBOL_PAGE),
+            "the symbol-soup page must be garbled: {GARBLED_SYMBOL_PAGE}"
+        );
+    }
+
+    #[test]
+    fn the_literal_garbled_fragments_are_detected() {
+        assert!(is_garbled_text("3FWJTUB"));
+        assert!(is_garbled_text("-VDIBZPSHBOJ[BDJO"));
+        assert!(is_garbled_text("@QDK@BHlMDMSQDBK@RDNAQDQ@XONKgSHB@"));
+    }
+
+    #[test]
+    fn normal_spanish_and_english_academic_text_is_not_garbled() {
+        let spanish = "El presente trabajo analiza el efecto de la intervencion educativa sobre el rendimiento academico de los estudiantes de secundaria. Se utilizo un diseno cuasiexperimental con una muestra de 240 participantes distribuidos en dos grupos: control y experimental. Los resultados muestran mejoras significativas en comprension lectora (p < 0,01) y en motivacion escolar.";
+        let english = "This paper presents a controlled study of bilingual reading comprehension across two instructional conditions. Participants completed standardized vocabulary and fluency measures before and after a twelve week intervention. Mixed effects models revealed a reliable main effect of condition, with no interaction involving prior proficiency (beta = 0.42, SE = 0.08).";
+        assert!(!is_garbled_text(spanish), "{spanish}");
+        assert!(!is_garbled_text(english), "{english}");
+    }
+
+    #[test]
+    fn all_caps_titles_and_short_headings_are_not_garbled() {
+        let title_page = "REVISTA DE PSICOLOGIA APLICADA A LA EDUCACION\nVOLUMEN XII - NUMERO 3 - SEPTIEMBRE 2019\nUNIVERSIDAD NACIONAL AUTONOMA DE MEXICO\nFACULTAD DE CIENCIAS SOCIALES";
+        assert!(!is_garbled_text(title_page), "{title_page}");
+        assert!(!is_garbled_text("STRENGTH AND LIMITS"));
+        assert!(!is_garbled_text("RESULTADOS"));
+    }
+
+    #[test]
+    fn tables_of_numbers_are_not_garbled() {
+        let table = "Tabla 3\n12 45.6 789\n33 21.0 456\n17 90.2 321";
+        assert!(!is_garbled_text(table), "{table}");
+        assert!(!is_garbled_text("10.1016/j.bbr.2019.109315"));
+    }
+
+    #[test]
+    fn references_with_dois_urls_and_emails_are_not_garbled() {
+        let references = "Garcia, J. R., and Perez, M. (2019). Aprendizaje automatico en contextos educativos. Revista de Educacion, 45(2), 123-145. https://doi.org/10.1016/j.edurev.2019.05.003\nSmith, A. B., and Jones, C. D. (2021). Bilingual reading comprehension revisited. Journal of Applied Linguistics, 33(4), 512-530. https://doi.org/10.1080/02664623.2021.1876543\nCorrespondence: a.garcia@csic.es; see also https://www.sciencedirect.com/science/article/pii/S0149763419305291";
+        assert!(!is_garbled_text(references), "{references}");
+    }
+
+    #[test]
+    fn ligature_rich_text_is_not_garbled() {
+        let ligatures = "The final flow of fluid in fluctuating fields (fluorine compounds) shows consistent effects; fissure patterns and flame dynamics were analysed with the aeolian model.";
+        assert!(!is_garbled_text(ligatures), "{ligatures}");
+    }
+
+    #[test]
+    fn garbled_text_is_never_quality_text() {
+        assert!(!is_quality_text(GARBLED_SHIFTED_PAGE));
+        assert!(!is_quality_text(GARBLED_SYMBOL_PAGE));
     }
 
     /// get_pdfium() must never panic — it should return Err when the native
