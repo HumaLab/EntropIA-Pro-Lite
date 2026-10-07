@@ -11,7 +11,7 @@
  */
 
 import { listen } from '@tauri-apps/api/event'
-import { SyncEventManager, syncStatus, type SyncState, type SyncStatus } from './sync'
+import { SyncEventManager, syncNow, syncStatus, type SyncState, type SyncStatus } from './sync'
 
 /** The disabled snapshot: opt-in default, renders nothing in the UI (DESIGN §11). */
 const DISABLED_STATUS: SyncStatus = {
@@ -159,3 +159,38 @@ export function badgeVariantForState(
 }
 
 export const syncStore = new SyncStore()
+
+/**
+ * Asks for a sync pass and resolves once it has run. `syncNow` only queues
+ * one and answers with the status from before it, so a caller that wants to
+ * see what the pass brought has to wait for the new `last_sync_at` — or for
+ * the run to end in `error`/`offline`, which rejects.
+ */
+export function syncAndWait(timeoutMs = 120_000): Promise<SyncStatus> {
+  const before = syncStore.status.last_sync_at
+  return new Promise((resolve, reject) => {
+    let unsubscribe: () => void = () => {}
+    let started = false
+    let settled = false
+    const settle = (finish: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      unsubscribe()
+      finish()
+    }
+    const timer = setTimeout(() => settle(() => reject(new Error('sync_timeout'))), timeoutMs)
+    unsubscribe = syncStore.subscribe((status) => {
+      if (status.state === 'syncing') started = true
+      if (status.last_sync_at !== before) settle(() => resolve(status))
+      else if (started && (status.state === 'error' || status.state === 'offline')) {
+        settle(() => reject(new Error(status.message ?? status.state)))
+      }
+    })
+    if (settled) unsubscribe()
+    // The answer is the pre-run status; the engine's own events carry the
+    // run, and adopting this stale snapshot could undo a completion that
+    // already arrived.
+    syncNow().catch((error) => settle(() => reject(error)))
+  })
+}

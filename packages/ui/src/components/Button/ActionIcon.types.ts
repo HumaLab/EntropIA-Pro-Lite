@@ -82,6 +82,7 @@ export const ACTION_ICON_NAMES = [
   'hand',
   'heading-1',
   'heading-2',
+  'history',
   'home',
   'heading-3',
   'import',

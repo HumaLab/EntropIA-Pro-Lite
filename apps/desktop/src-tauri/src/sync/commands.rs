@@ -103,6 +103,29 @@ pub async fn sync_full_resync(
         .map_err(|e| format!("[sync] full_resync task failed: {e}"))
 }
 
+/// The auto-sync toggle and interval as stored, defaults included, so the
+/// Settings card and Escritura show what the engine will actually do.
+#[derive(serde::Serialize)]
+pub struct AutoSync {
+    pub enabled: bool,
+    pub interval_min: u64,
+}
+
+#[tauri::command]
+pub async fn sync_get_auto(db: State<'_, AppDbState>) -> Result<AutoSync, String> {
+    crate::dev_profile::require_sync()?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || -> Result<AutoSync, String> {
+        let conn = open_sync_connection(&db_path)?;
+        Ok(AutoSync {
+            enabled: super::engine::auto_enabled(&conn),
+            interval_min: super::engine::auto_interval(&conn).as_secs() / 60,
+        })
+    })
+    .await
+    .map_err(|e| format!("[sync] get_auto task failed: {e}"))?
+}
+
 /// Sets the auto-sync toggle + interval (DESIGN §11). Persists to `sync_meta`
 /// (`auto_sync_enabled`, `auto_sync_interval_min`) and nudges the engine so the
 /// new cadence applies. `interval_min` is clamped to ≥ 1.

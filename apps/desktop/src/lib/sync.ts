@@ -219,6 +219,11 @@ export function syncSetAuto(enabled: boolean, intervalMin: number): Promise<void
   return invoke<void>('sync_set_auto', { enabled, intervalMin })
 }
 
+/** The auto-sync toggle and interval as stored (defaults: on, 5 min). */
+export function syncGetAuto(): Promise<{ enabled: boolean; interval_min: number }> {
+  return invoke('sync_get_auto')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Devices (PROTOCOL `GET/DELETE /v1/devices`)
 // ─────────────────────────────────────────────────────────────────────────────

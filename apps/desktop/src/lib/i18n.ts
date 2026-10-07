@@ -1149,6 +1149,17 @@ const es = {
   'writing.downloadHtml': 'Descargar como HTML',
   'writing.downloadDocx': 'Descargar como Word (.docx)',
   'writing.shareToggle': 'Compartir y publicar',
+  'writing.historyTitle': 'Historial de versiones',
+  'writing.historyEmpty':
+    'Todavía no hay versiones guardadas. Se guarda una cada diez minutos de trabajo y otra antes de recibir cambios de otra cuenta.',
+  'writing.historyPick': 'Elegí una versión para verla.',
+  'writing.historyAuto': 'Guardado automático',
+  'writing.historyBeforeReceive': 'Antes de recibir cambios de otra cuenta',
+  'writing.historyBeforeRestore': 'Antes de restaurar otra versión',
+  'writing.historyOther': 'Versión guardada',
+  'writing.historyRestore': 'Restaurar esta versión',
+  'writing.historyRestoreHint':
+    'No se pierde nada: lo que tenés ahora queda guardado como otra versión.',
   'writing.shareTitle': 'Compartir con otra cuenta',
   'writing.shareHint':
     'La otra persona lo recibe en su próxima sincronización y los cambios de cada uno le llegan al otro.',
@@ -2934,6 +2945,16 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.downloadHtml': 'Download as HTML',
   'writing.downloadDocx': 'Download as Word (.docx)',
   'writing.shareToggle': 'Share and publish',
+  'writing.historyTitle': 'Version history',
+  'writing.historyEmpty':
+    'No saved versions yet. One is kept every ten minutes of work and another before changes from another account arrive.',
+  'writing.historyPick': 'Pick a version to read it.',
+  'writing.historyAuto': 'Automatic save',
+  'writing.historyBeforeReceive': 'Before changes from another account',
+  'writing.historyBeforeRestore': 'Before restoring another version',
+  'writing.historyOther': 'Saved version',
+  'writing.historyRestore': 'Restore this version',
+  'writing.historyRestoreHint': 'Nothing is lost: what you have now is kept as another version.',
   'writing.shareTitle': 'Share with another account',
   'writing.shareHint':
     "They receive it on their next sync, and each one's changes reach the other.",

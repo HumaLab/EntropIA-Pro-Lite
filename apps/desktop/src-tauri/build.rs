@@ -210,6 +210,7 @@ const APP_COMMANDS: &[&str] = &[
     "sync_status",
     "sync_now",
     "sync_full_resync",
+    "sync_get_auto",
     "sync_set_auto",
     "sync_list_devices",
     "sync_revoke_device",

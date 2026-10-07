@@ -412,6 +412,13 @@ pub(super) fn apply_receive_plan(
             stored_shape,
             prior_local_revision: Some(local_revision),
         } => {
+            // What this device had, kept in the history before the other
+            // side's content replaces it.
+            super::versions::snapshot_if_changed(
+                conn,
+                document_id,
+                super::versions::BEFORE_RECEIVE_REASON,
+            )?;
             update_document_aggregate(conn, &stored_shape, local_revision)?;
             applied_outcome(conn, document_id, local_revision + 1, false)
         }

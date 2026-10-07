@@ -1067,3 +1067,39 @@ describe('isReusableBlankDocument', () => {
     ).toBe(false)
   })
 })
+
+describe('writing store — content that arrives by sync', () => {
+  const REMOTE = { schemaVersion: 1, doc: { type: 'doc', content: [{ type: 'horizontalRule' }] } }
+
+  function remoteRow(revision: number) {
+    mockInvoke.mockImplementation(async (command: string) =>
+      command === 'writing_load_document'
+        ? ({ ...ROW, revision, current_content_json: JSON.stringify(REMOTE) } as never)
+        : (undefined as never)
+    )
+  }
+
+  it('takes a newer revision in place, without blanking the content', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    const seen: unknown[] = []
+    store.subscribe((s) => seen.push(s.content))
+
+    remoteRow(4)
+    expect(await store.refreshOpen()).toBe(true)
+    expect(store.snapshot.content).toEqual(REMOTE)
+    expect(store.snapshot.revision).toBe(4)
+    expect(seen).not.toContain(null)
+  })
+
+  it('never overwrites an edit still pending', async () => {
+    const { store } = makeStore()
+    await store.openDocument('d1')
+    const typed = { schemaVersion: 1, doc: { type: 'doc', content: [] } }
+    store.applyEdit(typed as never)
+
+    remoteRow(4)
+    expect(await store.refreshOpen()).toBe(false)
+    expect(store.snapshot.content).toEqual(typed)
+  })
+})
