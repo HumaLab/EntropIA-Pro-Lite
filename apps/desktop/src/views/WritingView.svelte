@@ -28,6 +28,7 @@
   import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
   import WritingSharePanel from './WritingSharePanel.svelte'
+  import WritingHistoryPanel from './WritingHistoryPanel.svelte'
   import { articleHtml, listWritingShares } from '$lib/writing-publish'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
@@ -546,6 +547,7 @@
   let exportOutcome = $state<Exclude<DownloadOutcome, { kind: 'cancelled' }> | null>(null)
 
   let sharePanelOpen = $state(false)
+  let historyPanelOpen = $state(false)
 
   /** What "Enviar a hlab.com.ar" sends: what is on screen, as in `download`. */
   function currentArticleHtml(): Promise<string> {
@@ -1234,6 +1236,18 @@
           <ActionIcon name="send" size={14} />
         </IconButton>
       {/if}
+      {#if snapshot.content}
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={t('writing.historyTitle')}
+          title={t('writing.historyTitle')}
+          active={historyPanelOpen}
+          onclick={() => (historyPanelOpen = !historyPanelOpen)}
+        >
+          <ActionIcon name="history" size={14} />
+        </IconButton>
+      {/if}
       {@render syncButton('sm')}
       <div class="writing__bar-end">
         <span class="writing__revision">
@@ -1246,6 +1260,12 @@
     </header>
 
     {@render syncErrorPanel()}
+
+    {#if historyPanelOpen && openDocument}
+      {#key openDocument.id}
+        <WritingHistoryPanel onclose={() => (historyPanelOpen = false)} />
+      {/key}
+    {/if}
 
     {#if sharePanelOpen && openDocument}
       <WritingSharePanel
