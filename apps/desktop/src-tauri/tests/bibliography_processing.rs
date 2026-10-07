@@ -10137,6 +10137,223 @@ fn p3_sync_status_window_falls_back_to_the_requested_sync_once_older_work_is_set
     );
 }
 
+// ── Distinct subjects, not task rows ──────────────────────────────────────
+//
+// One work can carry several `bibliography_profile` tasks in the same
+// backlog window (sync admission queues one, a re-demand queues another when
+// an extraction moves its pages), and one attachment can carry several
+// `bibliography_extract` tasks the same way. The counts describe the
+// subjects — works and attachments — classified by each subject's *latest*
+// task in the window (max rowid): never the rows, or one work would count
+// several times and the screen would show more fichas than the library has
+// works.
+
+/// One work with two profile tasks in the window is one work: its latest
+/// task decides whether it is done — a succeeded task under a newer pending
+/// one leaves the work unfinished — and both tasks settled count the work
+/// once. Distinct works never collapse into each other.
+#[test]
+fn p3_sync_status_counts_distinct_works_by_their_latest_task_in_the_window() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-work-1", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-1-a",
+        "bibliography_profile",
+        "item",
+        "work-1",
+        &contract,
+    );
+    settle_task_with_attempts(&conn, "subj-work-1-a", &[(1_000, 2_000)]);
+    // The re-demand: one more task for the same work, admitted later.
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-1-b",
+        "bibliography_profile",
+        "item",
+        "work-1",
+        &contract,
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "one work with a succeeded profile and a newer pending one: one work left, none done"
+    );
+
+    settle_task_with_attempts(&conn, "subj-work-1-b", &[(3_000, 4_000)]);
+    let settled = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (settled.profiles_done, settled.profiles_total),
+        (1, 1),
+        "both tasks settled: the one work is done exactly once"
+    );
+
+    // A second work is a second unit whatever its task count: distinct
+    // subjects never collapse into each other.
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-2-a",
+        "bibliography_profile",
+        "item",
+        "work-2",
+        &contract,
+    );
+    let two_works = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (two_works.profiles_done, two_works.profiles_total),
+        (1, 2),
+        "a distinct work adds one unit, not one row"
+    );
+}
+
+/// A work whose latest task is parked waits on the owner even when an older
+/// task of the same work succeeded: the classification is the latest word,
+/// never the sum of every row.
+#[test]
+fn p3_sync_status_counts_a_work_by_its_latest_task_when_it_is_blocked() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-work-blk", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-blk-a",
+        "bibliography_profile",
+        "item",
+        "work-blk",
+        &contract,
+    );
+    settle_task_with_attempts(&conn, "subj-work-blk-a", &[(1_000, 2_000)]);
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-blk-b",
+        "bibliography_profile",
+        "item",
+        "work-blk",
+        &contract,
+    );
+    park_task_blocked(
+        &conn,
+        "subj-work-blk-b",
+        "configuration_required_embedding",
+        "OpenRouter API key no configurada.",
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "the latest task parked: the work waits on the owner, not done"
+    );
+    assert_eq!(status.profiles_blocked, 1, "the one work is blocked once");
+    let reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
+    assert_eq!(
+        reason.code.as_deref(),
+        Some("configuration_required_embedding"),
+        "the reason travels from the work's latest blocked task"
+    );
+}
+
+/// The pasajes side counts attachments the same way: several extraction
+/// tasks for one attachment are one attachment, classified by its latest
+/// task — pending under a settled one, settled once all settle, blocked when
+/// the newest is parked.
+#[test]
+fn p3_sync_status_counts_distinct_attachments_by_their_latest_task_in_the_window() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-att-1", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-a",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(&conn, "subj-att-1-a", &[(1_000, 2_000)]);
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-b",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.extractions_done, status.extractions_total),
+        (0, 1),
+        "one attachment with a succeeded extraction and a newer pending one"
+    );
+
+    settle_task_with_attempts(&conn, "subj-att-1-b", &[(3_000, 4_000)]);
+    let settled = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (settled.extractions_done, settled.extractions_total),
+        (1, 1),
+        "both tasks settled: the one attachment is done exactly once"
+    );
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-c",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    park_task_blocked(
+        &conn,
+        "subj-att-1-c",
+        "configuration_required_ocr",
+        "configuration: GLM-OCR no está configurado.",
+    );
+    let blocked = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (blocked.extractions_done, blocked.extractions_total),
+        (0, 1),
+        "the latest task parked: the attachment waits on the owner"
+    );
+    assert_eq!(blocked.extractions_blocked, 1);
+    let reason = blocked
+        .extractions_blocked_reason
+        .as_ref()
+        .expect("extractions block reason");
+    assert_eq!(reason.code.as_deref(), Some("configuration_required_ocr"));
+}
+
 // ── Opened works first (P3) ───────────────────────────────────────────────
 
 /// Creates the local-only `app_settings` key/value table the opened-works

@@ -1225,7 +1225,12 @@ fn finished_attempt_average(
 /// row was written (task timestamps are whole seconds, row order is not) and
 /// are only meaningful once the task has succeeded, so they are zero before
 /// that. The P3 progress counts (`profiles_done`/`profiles_total`,
-/// `extractions_done`/`extractions_total`) read the same window live: they
+/// `extractions_done`/`extractions_total`) read the same window live and
+/// count distinct *subjects* — works for the profiles, attachments for the
+/// extractions — each classified by its latest task in the window (max
+/// rowid): one work carrying several `bibliography_profile` tasks (admission
+/// plus a re-demand when an extraction moves its pages) is one work done or
+/// left, never several. The counts
 /// keep answering while the derived backlog drains after a success — and
 /// while the sync task itself is still `pending` or `running`. Blocked work
 /// (`profiles_blocked`/`extractions_blocked`) is counted beside them, with
@@ -1341,47 +1346,41 @@ pub fn bibliography_sync_status(
         )
         .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
-    // P3 live progress: the backlog window, settled over queued. Settled counts
-    // every terminal outcome — a failed task is finished work the backlog
-    // will not repeat, so the counters always converge and the follower
-    // knows when to stop. `blocked` work is neither done nor moving: it is
-    // parked on an owner-side change and counted beside the live counts,
-    // never hidden inside them.
+    // P3 live progress: the backlog window counts *subjects*, not task rows —
+    // one unit of work is one work (fichas) or one attachment (pasajes), and
+    // the same subject can carry several tasks of the kind in the window
+    // (sync admission plus a re-demand when an extraction moves its pages).
+    // Each subject is classified by its *latest* task in the window (max
+    // rowid): settled (succeeded/skipped/failed/cancelled) is finished work
+    // the backlog will not repeat, so the counters always converge and the
+    // follower knows when to stop; `blocked` is neither done nor moving — it
+    // is parked on an owner-side change and counted beside the live counts,
+    // never hidden inside them; the rest (pending, running, retry_wait,
+    // interrupted) is what is left to do. A GROUP BY subject_id over the
+    // window with a MAX(rowid) join keeps this index-friendly at backlog
+    // sizes.
     let window_progress = |kind: &str| -> Result<(i64, i64, i64), String> {
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks
-                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
-                rusqlite::params![kind, window_anchor],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Failed to count derived bibliography work: {error}"))?;
-        let settled: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks
-                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
-                    AND state IN ('succeeded', 'skipped', 'failed', 'cancelled')",
-                rusqlite::params![kind, window_anchor],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Failed to count settled bibliography work: {error}"))?;
-        let blocked: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks
-                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
-                    AND state = 'blocked'",
-                rusqlite::params![kind, window_anchor],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Failed to count blocked bibliography work: {error}"))?;
-        Ok((settled, total, blocked))
+        conn.query_row(
+            "SELECT COALESCE(SUM(t.state IN ('succeeded', 'skipped', 'failed', 'cancelled')), 0),
+                    COUNT(*),
+                    COALESCE(SUM(t.state = 'blocked'), 0)
+               FROM (SELECT MAX(rowid) AS latest_rowid
+                       FROM processing_tasks
+                      WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                      GROUP BY subject_id) AS latest
+               JOIN processing_tasks t ON t.rowid = latest.latest_rowid",
+            rusqlite::params![kind, window_anchor],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
     let (profiles_done, profiles_total, profiles_blocked) =
         window_progress("bibliography_profile")?;
     let (extractions_done, extractions_total, extractions_blocked) =
         window_progress("bibliography_extract")?;
-    // Why each kind's blocked work is parked: that kind's first blocked task
-    // in the window names it (window order, so the answer is stable across
+    // Why each kind's blocked work is parked: each blocked subject's latest
+    // task is its latest blocked task, and among those the first in window
+    // order names the reason (window order, so the answer is stable across
     // reads). The code is the durable vocabulary — `configuration_required_embedding`
     // when the embedding engine has no usable configuration,
     // `configuration_required_ocr` when the OCR engine has none — and the
@@ -1389,11 +1388,14 @@ pub fn bibliography_sync_status(
     // borrowed: profiles wait on something else than extractions do.
     let blocked_reason = |kind: &str| {
         conn.query_row(
-            "SELECT last_error_code, last_error_message
-               FROM processing_tasks
-              WHERE domain = 'bibliography' AND kind = ?1
-                AND rowid > ?2 AND state = 'blocked'
-              ORDER BY rowid LIMIT 1",
+            "SELECT t.last_error_code, t.last_error_message
+               FROM (SELECT MAX(rowid) AS latest_rowid
+                       FROM processing_tasks
+                      WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                      GROUP BY subject_id) AS latest
+               JOIN processing_tasks t ON t.rowid = latest.latest_rowid
+              WHERE t.state = 'blocked'
+              ORDER BY t.rowid LIMIT 1",
             rusqlite::params![kind, window_anchor],
             |row| {
                 Ok(super::commands::BibliographyBlockedReason {
@@ -1405,8 +1407,8 @@ pub fn bibliography_sync_status(
         .optional()
         .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))
     };
-    // P3 ETA: actionable remaining tasks per kind times the average duration
-    // of that kind's finished attempts in this window. Blocked tasks are
+    // P3 ETA: actionable remaining subjects per kind times the average duration
+    // of that kind's finished attempts in this window. Blocked subjects are
     // never timed — they wait on the owner, not on the clock — and a kind
     // whose remaining work is entirely blocked has no estimate at all, which
     // makes the combined answer honestly unknown instead of zero. One

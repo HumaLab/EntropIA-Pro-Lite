@@ -144,10 +144,10 @@ export interface BibliographySyncStatus {
   newProfiles: number
   /** Attachments new since the last sync. */
   newExtractions: number
-  /** Live profile tasks (fichas) of the backlog window: settled over queued. */
+  /** Live works (fichas) of the backlog window: settled over queued, one unit per work. */
   profilesDone: number
   profilesTotal: number
-  /** Live extraction tasks (pasajes) of the backlog window: settled over queued. */
+  /** Live attachments (pasajes) of the backlog window: settled over queued, one unit per attachment. */
   extractionsDone: number
   extractionsTotal: number
   /** Live blocked derived work of the backlog window: parked on an owner-side change, never done. */
@@ -185,7 +185,7 @@ export interface BibliographyDerivedProgress {
   passagesTotal: number
   passagesBlocked: number
   etaMs: number | null
-  /** Tasks still unsettled in the window; zero = nothing left to show. */
+  /** Works and attachments still unsettled in the window; zero = nothing left to show. */
   remaining: number
   /** Unsettled work that can still move by itself; zero = nothing left to follow. */
   remainingActive: number

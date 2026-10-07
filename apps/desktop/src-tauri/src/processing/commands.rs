@@ -262,21 +262,27 @@ pub struct BibliographySyncStatus {
     pub new_extractions: i64,
     /// Live derived-work progress across the whole unsettled backlog window
     /// (the window `processing::repository::bibliography_sync_status`
-    /// describes): settled tasks over every task of the kind in the window.
-    /// Keeps answering while the derived backlog drains after a success — and
+    /// describes): distinct subjects of the kind, settled over queued — works
+    /// for the profiles, attachments for the extractions. Each subject is
+    /// classified by its latest task in the window (max rowid), so one work
+    /// carrying several `bibliography_profile` tasks counts once and the
+    /// screen can never show more fichas than the library has works. Keeps
+    /// answering while the derived backlog drains after a success — and
     /// while the sync task itself is still `pending` or `running` — so the
     /// screen can follow the work instead of guessing.
     pub profiles_done: i64,
     pub profiles_total: i64,
     pub extractions_done: i64,
     pub extractions_total: i64,
-    /// Live blocked derived work in the backlog window: tasks parked
-    /// `blocked`, waiting for a change only the owner can make. Not settled
-    /// and never counted as done — the screen says «en espera» about these.
+    /// Live blocked derived work in the backlog window: subjects whose
+    /// latest task is parked `blocked`, waiting for a change only the owner
+    /// can make. Not settled and never counted as done — the screen says «en
+    /// espera» about these.
     pub profiles_blocked: i64,
     pub extractions_blocked: i64,
-    /// What the blocked work of each kind is parked on, from that kind's
-    /// first blocked task in the window (window order, stable across reads):
+    /// What the blocked work of each kind is parked on, read from each
+    /// blocked subject's latest blocked task and named, per kind, by the
+    /// first of those in window order (window order, stable across reads):
     /// the stable code the executor wrote (`configuration_required_embedding`
     /// when the embedding engine has no usable configuration,
     /// `configuration_required_ocr` when the OCR engine has none) beside its
@@ -286,10 +292,10 @@ pub struct BibliographySyncStatus {
     pub profiles_blocked_reason: Option<BibliographyBlockedReason>,
     pub extractions_blocked_reason: Option<BibliographyBlockedReason>,
     /// What the derived backlog still needs, in ms: the *actionable* remaining
-    /// tasks of each kind times the average duration of that kind's finished
-    /// attempts inside the backlog window. Blocked tasks are never timed —
+    /// subjects of each kind times the average duration of that kind's finished
+    /// attempts inside the backlog window. Blocked subjects are never timed —
     /// they wait on the owner, not on the clock — and when every remaining
-    /// task of a kind is blocked that kind has no estimate at all, so the
+    /// subject of a kind is blocked that kind has no estimate at all, so the
     /// answer is `None`. `None` as well while the window holds fewer than
     /// three finished attempts, or while any kind with actionable work left
     /// has fewer than three to average — an honest unknown, never a made-up
