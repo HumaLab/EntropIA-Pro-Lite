@@ -125,6 +125,12 @@ export interface BibliographySyncRequestState {
  * `processing_bibliography_sync_status` reads it. `state` is the task's own
  * vocabulary: `pending`, `running`, `retry_wait`, `blocked`, `interrupted`,
  * `succeeded`, `failed` or `cancelled`.
+ *
+ * The derived counts describe the whole unsettled backlog window — the
+ * oldest sync window still holding unsettled fichas/pasajes work, reaching
+ * back across newer syncs that found nothing new — while `state`,
+ * `newProfiles`/`newExtractions` and the pages progress describe the
+ * requested sync alone.
  */
 export interface BibliographySyncStatus {
   state: string
@@ -138,14 +144,26 @@ export interface BibliographySyncStatus {
   newProfiles: number
   /** Attachments new since the last sync. */
   newExtractions: number
-  /** Live profile tasks (fichas) of this sync's window: settled over queued. */
+  /** Live works (fichas) of the backlog window: settled over queued, one unit per work. */
   profilesDone: number
   profilesTotal: number
-  /** Live extraction tasks (pasajes) of this sync's window: settled over queued. */
+  /** Live attachments (pasajes) of the backlog window: settled over queued, one unit per attachment. */
   extractionsDone: number
   extractionsTotal: number
+  /** Live blocked derived work of the backlog window: parked on an owner-side change, never done. */
+  profilesBlocked: number
+  extractionsBlocked: number
+  /** What each kind's blocked work is parked on; null while that kind has none. */
+  profilesBlockedReason: BibliographyBlockedReason | null
+  extractionsBlockedReason: BibliographyBlockedReason | null
   /** What the derived backlog still needs in ms; null while it cannot be estimated. */
   etaMs: number | null
+}
+
+/** Why one kind of blocked work waits: a stable code beside its recorded message. */
+export interface BibliographyBlockedReason {
+  code: string | null
+  message: string | null
 }
 
 /** The last thing known about the sync, or why it could not be read. */
@@ -158,15 +176,74 @@ export interface BibliographySyncProgress {
 const SYNC_FOLLOWED_STATES = new Set(['pending', 'running', 'retry_wait', 'interrupted'])
 const SYNC_POLL_MS = 1500
 
-/** The derived backlog of one sync: fichas (works) and pasajes (passages). */
+/** The derived backlog of the window: fichas (works) and pasajes (passages). */
 export interface BibliographyDerivedProgress {
   worksDone: number
   worksTotal: number
+  worksBlocked: number
   passagesDone: number
   passagesTotal: number
+  passagesBlocked: number
   etaMs: number | null
-  /** Tasks still unsettled in the window; zero = nothing left to follow. */
+  /** Works and attachments still unsettled in the window; zero = nothing left to show. */
   remaining: number
+  /** Unsettled work that can still move by itself; zero = nothing left to follow. */
+  remainingActive: number
+  /** Unsettled work parked on a change only the owner can make. */
+  blocked: number
+  /** Why the parked work waits, in the app's words where it can word them. */
+  blockedReason: string
+}
+
+/** What a block is about, in the app's own words where it can name it. */
+type BlockedFlavor = 'embedding' | 'ocr' | 'other'
+
+function blockedReasonFlavor(
+  kind: 'profiles' | 'extractions',
+  reason: BibliographyBlockedReason | null
+): { flavor: BlockedFlavor; text: string } | null {
+  if (!reason) return null
+  const code = reason.code ?? ''
+  const message = reason.message ?? ''
+  if (code === 'configuration_required_embedding') {
+    return { flavor: 'embedding', text: t('writing.zoteroBlockedReasonEmbedding') }
+  }
+  if (code === 'configuration_required_ocr') {
+    return { flavor: 'ocr', text: t('writing.zoteroBlockedReasonOcr') }
+  }
+  if (code === 'configuration_required') {
+    // Rows recorded before the subcodes existed, worded by kind: the OCR
+    // executor signs its messages with the stable `configuration:` prefix,
+    // and a profile's plain configuration block is the embedding engine's.
+    if (message.startsWith('configuration:')) {
+      return { flavor: 'ocr', text: t('writing.zoteroBlockedReasonOcr') }
+    }
+    if (kind === 'profiles') {
+      return { flavor: 'embedding', text: t('writing.zoteroBlockedReasonEmbedding') }
+    }
+  }
+  // Anything else (contract changes, blocks with no stable vocabulary) is
+  // shown as the executor recorded it: only its own message is honest.
+  return { flavor: 'other', text: message || code }
+}
+
+/**
+ * Why the parked work waits, in the app's own words where a stable code names
+ * the reason and in the executor's recorded message otherwise. Each kind
+ * names its own block — fichas wait on the embedding configuration
+ * (OpenRouter), pasajes on the OCR configuration (GLM-OCR) — and when both
+ * kinds are parked the answer names both, briefly.
+ */
+export function bibliographyBlockedReason(status: BibliographySyncStatus): string {
+  const reasons = [
+    blockedReasonFlavor('profiles', status.profilesBlockedReason),
+    blockedReasonFlavor('extractions', status.extractionsBlockedReason),
+  ].filter((entry): entry is { flavor: BlockedFlavor; text: string } => entry !== null)
+  const flavors = new Set(reasons.map((entry) => entry.flavor))
+  if (flavors.has('embedding') && flavors.has('ocr')) {
+    return t('writing.zoteroBlockedReasonEmbeddingAndOcr')
+  }
+  return [...new Set(reasons.map((entry) => entry.text))].join(' · ')
 }
 
 /** Reads the live derived-work counts out of one sync status. */
@@ -175,26 +252,38 @@ export function bibliographyDerivedProgress(
 ): BibliographyDerivedProgress {
   const worksTotal = status.profilesTotal ?? 0
   const worksDone = status.profilesDone ?? 0
+  const worksBlocked = status.profilesBlocked ?? 0
   const passagesTotal = status.extractionsTotal ?? 0
   const passagesDone = status.extractionsDone ?? 0
+  const passagesBlocked = status.extractionsBlocked ?? 0
+  const blocked = worksBlocked + passagesBlocked
+  const remaining = worksTotal - worksDone + (passagesTotal - passagesDone)
   return {
     worksDone,
     worksTotal,
+    worksBlocked,
     passagesDone,
     passagesTotal,
+    passagesBlocked,
     etaMs: status.etaMs ?? null,
-    remaining: worksTotal - worksDone + (passagesTotal - passagesDone),
+    remaining,
+    remainingActive: remaining - blocked,
+    blocked,
+    blockedReason: blocked > 0 ? bibliographyBlockedReason(status) : '',
   }
 }
 
 /**
  * Whether the follower must keep reading: the task can still change by
- * itself, or its derived backlog is still draining after a success. The
- * screen keeps moving on the derived work, not on the sync task alone.
+ * itself, or its derived backlog still holds work that can move without the
+ * owner. Parked (`blocked`) work is not followed: nothing about it will
+ * change until the owner changes the configuration, and the next kick finds
+ * it again when that happens. The screen keeps moving on the derived work,
+ * not on the sync task alone.
  */
 function bibliographyFollowPending(status: BibliographySyncStatus): boolean {
   if (SYNC_FOLLOWED_STATES.has(status.state)) return true
-  return status.state === 'succeeded' && bibliographyDerivedProgress(status).remaining > 0
+  return status.state === 'succeeded' && bibliographyDerivedProgress(status).remainingActive > 0
 }
 
 /**
@@ -382,6 +471,10 @@ export class WritingZoteroStore {
   #bibliographySyncing: { epoch: number; promise: Promise<void> } | null = null
   /** Bumped to retire the status follower of an older request or selection. */
   #followToken = 0
+  /** The follower of a sync requested in this session, while one is live. */
+  #taskFollow: Promise<void> | null = null
+  /** The restart-safe follower of the latest sync's backlog, while one is live. */
+  #backlogFollow: Promise<void> | null = null
   #selection: ZoteroLibrarySelection = { ...PERSONAL }
   /** Bumped on every effective selection change; late responses compare it. */
   #epoch = 0
@@ -557,7 +650,12 @@ export class WritingZoteroStore {
       this.#set({
         bibliographySync: { loading: false, error: null, requested },
       })
-      void this.#followBibliographySync(requested.taskId, ++this.#followToken)
+      const follow = this.#followBibliographySync(requested.taskId, ++this.#followToken).finally(
+        () => {
+          if (this.#taskFollow === follow) this.#taskFollow = null
+        }
+      )
+      this.#taskFollow = follow
     } catch (error) {
       if (epoch !== this.#epoch || !this.#sameSelection(selection)) return
       this.#set({
@@ -588,6 +686,55 @@ export class WritingZoteroStore {
       if (token !== this.#followToken) return
       this.#set({ bibliographyProgress: progress })
       if (!progress.status || !bibliographyFollowPending(progress.status)) return
+      await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
+    }
+  }
+
+  /**
+   * Follows the latest bibliography sync whose derived work may still be
+   * draining — the restart-safe half of the follower. After an app restart no
+   * sync was requested in this session, so nothing else would find the backlog
+   * still draining from before; the footer asks for it at startup and whenever
+   * batch work appears. Idempotent: a follow already live is joined, and a
+   * sync requested in this session keeps the screen (this follower stands
+   * down for it). Stops when the newest task's backlog drains, as the
+   * requested follower does.
+   */
+  followBibliographyBacklog(): Promise<void> {
+    if (this.#backlogFollow) return this.#backlogFollow
+    if (this.#taskFollow) return this.#taskFollow
+    const token = ++this.#followToken
+    const follow = this.#followLatestBibliographySync(token).finally(() => {
+      if (this.#backlogFollow === follow) this.#backlogFollow = null
+    })
+    this.#backlogFollow = follow
+    return follow
+  }
+
+  /**
+   * Reads the newest sync's status until it settles and its backlog drains.
+   * Unlike the requested follower there is no task id to name and no button
+   * waiting for an answer, so a missing or unreadable status claims nothing
+   * at all and simply stops.
+   */
+  async #followLatestBibliographySync(token: number): Promise<void> {
+    while (token === this.#followToken) {
+      let progress: BibliographySyncProgress
+      try {
+        const status = await invoke<BibliographySyncStatus | null>(
+          'processing_latest_bibliography_sync_status'
+        )
+        progress =
+          status && typeof status.state === 'string'
+            ? { status, unreadable: null }
+            : { status: null, unreadable: null }
+      } catch (error) {
+        progress = { status: null, unreadable: message(error) }
+      }
+      if (token !== this.#followToken) return
+      if (!progress.status) return
+      this.#set({ bibliographyProgress: progress })
+      if (!bibliographyFollowPending(progress.status)) return
       await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS))
     }
   }

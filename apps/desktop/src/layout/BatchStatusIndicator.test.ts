@@ -24,6 +24,10 @@ type SyncStatus = {
   profilesTotal: number
   extractionsDone: number
   extractionsTotal: number
+  profilesBlocked: number
+  extractionsBlocked: number
+  profilesBlockedReason: { code: string | null; message: string | null } | null
+  extractionsBlockedReason: { code: string | null; message: string | null } | null
   etaMs: number | null
 }
 
@@ -42,6 +46,10 @@ function syncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
     profilesTotal: 0,
     extractionsDone: 0,
     extractionsTotal: 0,
+    profilesBlocked: 0,
+    extractionsBlocked: 0,
+    profilesBlockedReason: null,
+    extractionsBlockedReason: null,
     etaMs: null,
     ...overrides,
   }
@@ -100,6 +108,7 @@ const {
       requestFocus: vi.fn(),
     },
     writingZoteroMock: {
+      followBibliographyBacklog: vi.fn().mockResolvedValue(undefined),
       subscribe(run: (snapshot: unknown) => void) {
         zoteroSubscribers.add(run)
         run({ bibliographyProgress })
@@ -145,6 +154,7 @@ beforeEach(() => {
   locale.set('es')
   setActiveBatches([])
   setBibliographyProgress(null)
+  writingZoteroMock.followBibliographyBacklog.mockClear()
 })
 
 describe('BatchStatusIndicator', () => {
@@ -182,6 +192,28 @@ describe('BatchStatusIndicator', () => {
     expect(screen.queryByText(/Bibliografía/)).not.toBeInTheDocument()
   })
 
+  it('resumes the bibliography backlog follower at startup', () => {
+    render(BatchStatusIndicator)
+
+    // After a restart no sync was requested in this session, so the footer
+    // itself asks the store to find the backlog that may still be draining.
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows again when batch work appears and not on every refresh', () => {
+    render(BatchStatusIndicator)
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+
+    // New batch work (a bibliography sync among it) may carry a backlog the
+    // session knows nothing about yet.
+    setActiveBatches([ACTIVE_BATCH])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
+
+    // Steady progress of the same active set is not a new reason to look.
+    setActiveBatches([{ ...ACTIVE_BATCH, revision: 2 }])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
+  })
+
   it('drops the bibliography line again once the backlog drains', () => {
     setBibliographyProgress({
       status: syncStatus({
@@ -198,5 +230,141 @@ describe('BatchStatusIndicator', () => {
 
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
     expect(screen.queryByText(/Bibliografía/)).not.toBeInTheDocument()
+  })
+
+  it('shows a compact attention line instead of an endless progress line when only blocked work remains', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 2812,
+        profilesDone: 0,
+        profilesTotal: 2812,
+        profilesBlocked: 2812,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: 2812 en espera: configurá OpenRouter en Configuración')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/fichas/)).not.toBeInTheDocument()
+    // Nothing is moving, so the badge must not pulse as if it were.
+    expect(screen.getByRole('button').className).not.toContain('batch-indicator--running')
+  })
+
+  it('names what each kind waits on in the status bar, and both briefly when both are parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 0,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+        profilesBlockedReason: null,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: 82 en espera: configurá GLM-OCR en Configuración › OCR')
+    ).toBeInTheDocument()
+  })
+
+  it('mentions both configurations briefly when both kinds are parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 264,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText(
+        'Bibliografía: 346 en espera: configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('keeps counting the work that moves and names what waits beside it', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        profilesBlocked: 70,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
+        etaMs: 720_000,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: fichas 120/450 · pasajes 30/400 · 70 en espera')
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button').className).toContain('batch-indicator--running')
+  })
+
+  it('looks again when the queue announces work while the backlog is parked', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 0,
+        profilesTotal: 2,
+        profilesBlocked: 2,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(1)
+
+    // The configuration resume has no user batch to activate: its first
+    // committed unit announces itself through the queue, and a refresh of
+    // the parked backlog is one cheap re-check that finds the resumed work.
+    setActiveBatches([])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(2)
+    setActiveBatches([])
+    expect(writingZoteroMock.followBibliographyBacklog).toHaveBeenCalledTimes(3)
   })
 })

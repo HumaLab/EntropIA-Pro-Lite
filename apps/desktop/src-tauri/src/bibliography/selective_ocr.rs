@@ -314,7 +314,7 @@ pub fn map_page_ocr_error(error: &str) -> crate::processing::scheduler::ExecOutp
         || lower.contains("not installed")
     {
         return ExecOutput::Blocked {
-            code: "configuration_required".to_string(),
+            code: "configuration_required_ocr".to_string(),
             message: error.to_string(),
         };
     }

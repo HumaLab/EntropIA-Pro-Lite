@@ -279,7 +279,9 @@ pub async fn writing_apply_retention(
 /// the last snapshot, or the explicit state telling the UI to render from
 /// its held CSL (E1c-3).
 ///
-/// Read-only. A blank library is `invalid_library` like every other command
+/// Read-only except the best-effort bookkeeping that records the open (by
+/// the work's `bibliographic_items` row id) for the "opened works first"
+/// order. A blank library is `invalid_library` like every other command
 /// taking one; a blank item key is `invalid_item_key`. An archive that cannot
 /// be opened reads `catalog_unavailable` rather than failing: a ficha must
 /// not break because the database is busy.
@@ -355,8 +357,13 @@ fn read_item_detail(
         Ok(conn) => conn,
         Err(_) => return Ok(crate::bibliography::detail::ItemDetail::CatalogUnavailable),
     };
-    crate::bibliography::detail::item_detail(&conn, library, item_key)
-        .map_err(|error| WritingError::new(&error.code, error.message))
+    crate::bibliography::detail::item_detail_recording_open(
+        &conn,
+        library,
+        item_key,
+        crate::processing::repository::now_ms(),
+    )
+    .map_err(|error| WritingError::new(&error.code, error.message))
 }
 
 /// The Zotero client, built once. `reqwest` pools connections, so rebuilding it

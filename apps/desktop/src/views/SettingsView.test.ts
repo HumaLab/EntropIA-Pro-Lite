@@ -28,6 +28,7 @@ const {
   settingsGetMock,
   settingsGetAllMock,
   settingsSetMock,
+  settingsDeleteMock,
   testOpenrouterConnectionMock,
   testAssemblyaiConnectionMock,
   testGlmOcrConnectionMock,
@@ -46,6 +47,7 @@ const {
   settingsGetMock: vi.fn(),
   settingsGetAllMock: vi.fn(),
   settingsSetMock: vi.fn(),
+  settingsDeleteMock: vi.fn(),
   testOpenrouterConnectionMock: vi.fn(),
   testAssemblyaiConnectionMock: vi.fn(),
   testGlmOcrConnectionMock: vi.fn(),
@@ -72,6 +74,7 @@ vi.mock('$lib/settings', async () => {
     settingsGet: settingsGetMock,
     settingsGetAll: settingsGetAllMock,
     settingsSet: settingsSetMock,
+    settingsDelete: settingsDeleteMock,
     testOpenrouterConnection: testOpenrouterConnectionMock,
     testAssemblyaiConnection: testAssemblyaiConnectionMock,
     testGlmOcrConnection: testGlmOcrConnectionMock,
@@ -121,6 +124,7 @@ describe('SettingsView', () => {
     settingsGetMock.mockReset()
     settingsGetAllMock.mockReset().mockResolvedValue([])
     settingsSetMock.mockReset().mockResolvedValue(undefined)
+    settingsDeleteMock.mockReset().mockResolvedValue(undefined)
     testOpenrouterConnectionMock.mockReset()
     testAssemblyaiConnectionMock.mockReset().mockResolvedValue(undefined)
     testGlmOcrConnectionMock.mockReset().mockResolvedValue(undefined)
@@ -1519,6 +1523,117 @@ describe('SettingsView', () => {
       await waitFor(() => expect(input).toHaveValue(''))
       // Saving forgets the cached account; checking the stored key learns it again.
       await waitFor(() => expect(verifyZoteroKeyMock).toHaveBeenCalledWith(''))
+    })
+  })
+
+  // Before this, the UI only wrote a key when the field was non-empty, so a
+  // stored key could be replaced but never removed. Each service now carries
+  // an icon-only clear button behind a destructive confirmation.
+  describe('API key clearing', () => {
+    it('offers an icon-only clear-key button only where a key is stored', async () => {
+      render(SettingsView)
+
+      // The default backend stores OpenRouter + AssemblyAI only.
+      const clearOpenRouter = await screen.findByRole('button', {
+        name: 'Quitar clave de OpenRouter',
+      })
+      expect(clearOpenRouter.textContent?.trim()).toBe('')
+      expect(clearOpenRouter.querySelector('svg')).not.toBeNull()
+      expect(clearOpenRouter).toHaveAttribute('data-tooltip', 'Quitar clave de OpenRouter')
+      expect(screen.getByRole('button', { name: 'Quitar clave de AssemblyAI' })).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Quitar clave de GLM-OCR' })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Quitar clave de Zotero' })
+      ).not.toBeInTheDocument()
+    })
+
+    it('asks for confirmation, deletes the stored key, and resets the field state', async () => {
+      render(SettingsView)
+
+      const clear = await screen.findByRole('button', { name: 'Quitar clave de OpenRouter' })
+      await fireEvent.click(clear)
+
+      const dialog = await screen.findByRole('dialog')
+      expect(
+        within(dialog).getByRole('heading', { name: '¿Quitar la clave de OpenRouter?' })
+      ).toBeInTheDocument()
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Quitar clave' }))
+
+      await waitFor(() => expect(settingsDeleteMock).toHaveBeenCalledWith('openrouter_api_key'))
+      // Masked value cleared: the status no longer claims a loaded key…
+      await waitFor(() =>
+        expect(screen.queryByText('Clave cargada: sk-o****...****-key')).not.toBeInTheDocument()
+      )
+      // …and it reports the key as not configured instead.
+      expect(screen.getAllByText('Sin clave guardada').length).toBeGreaterThanOrEqual(1)
+      expect(
+        screen.queryByRole('button', { name: 'Quitar clave de OpenRouter' })
+      ).not.toBeInTheDocument()
+      // Dependent features behave like a fresh profile: the connection test
+      // for this service is disabled again.
+      const row = screen.getByPlaceholderText('sk-or-v1-...').closest('.settings__input-row')
+      expect(row).not.toBeNull()
+      expect(
+        within(row as HTMLElement).getByRole('button', { name: 'Probar conexión' })
+      ).toBeDisabled()
+    })
+
+    it('cancelling the confirmation keeps the stored key untouched', async () => {
+      render(SettingsView)
+
+      const clear = await screen.findByRole('button', { name: 'Quitar clave de OpenRouter' })
+      await fireEvent.click(clear)
+
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(settingsDeleteMock).not.toHaveBeenCalled()
+      expect(screen.getByRole('button', { name: 'Quitar clave de OpenRouter' })).toBeInTheDocument()
+    })
+
+    it('keeps the dialog open and shows the notice when the deletion fails', async () => {
+      settingsDeleteMock.mockRejectedValueOnce(new Error('credential store unavailable'))
+      render(SettingsView)
+
+      const clear = await screen.findByRole('button', { name: 'Quitar clave de OpenRouter' })
+      await fireEvent.click(clear)
+      const dialog = await screen.findByRole('dialog')
+      await fireEvent.click(within(dialog).getByRole('button', { name: 'Quitar clave' }))
+
+      await waitFor(() => expect(settingsDeleteMock).toHaveBeenCalledWith('openrouter_api_key'))
+      const alert = await within(dialog).findByRole('alert')
+      expect(alert).toHaveTextContent('credential store unavailable')
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Quitar clave de OpenRouter' })).toBeInTheDocument()
+    })
+
+    it('deletes exactly the setting that belongs to each service', async () => {
+      settingsGetMock.mockImplementation(async (key: string) => {
+        if (key === 'openrouter_api_key') return 'sk-or-v1-test-key'
+        if (key === 'assemblyai_api_key') return 'aai-orig-test-1234'
+        if (key === 'glm_ocr_api_key') return 'glm-ocr-test-1234'
+        if (key === 'zotero_api_key') return 'zotero-test-1234'
+        return null
+      })
+      const cases: Array<[string, string]> = [
+        ['Quitar clave de OpenRouter', 'openrouter_api_key'],
+        ['Quitar clave de AssemblyAI', 'assemblyai_api_key'],
+        ['Quitar clave de GLM-OCR', 'glm_ocr_api_key'],
+        ['Quitar clave de Zotero', 'zotero_api_key'],
+      ]
+      for (const [buttonName, settingKey] of cases) {
+        settingsDeleteMock.mockClear()
+        const view = render(SettingsView)
+        const clear = await screen.findByRole('button', { name: buttonName })
+        await fireEvent.click(clear)
+        const dialog = await screen.findByRole('dialog')
+        await fireEvent.click(within(dialog).getByRole('button', { name: 'Quitar clave' }))
+        await waitFor(() => expect(settingsDeleteMock).toHaveBeenCalledWith(settingKey))
+        view.unmount()
+      }
     })
   })
 })

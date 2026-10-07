@@ -58,6 +58,18 @@ pub struct WorkListPage {
     pub total: i64,
 }
 
+/// How one page of works is ordered. `Title` is the default — what every
+/// caller without a preference names — and `Recent` is Zotero's own recency:
+/// `item_version` descending, works whose version is unknown last (recency
+/// never guesses an order for a work it cannot date), ties by the same title
+/// order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkListSort {
+    #[default]
+    Title,
+    Recent,
+}
+
 /// The scope and paging of one [`list_works`] read. The library is named the
 /// way the UI names it (`user`/`group` + native id); both fields must be
 /// present for the scope to apply, exactly like the search commands.
@@ -66,13 +78,17 @@ pub struct WorkListRequest<'a> {
     pub library_native_id: Option<&'a str>,
     /// Substring match over title and creators. `None` lists everything.
     pub query: Option<&'a str>,
+    /// The order one page is read in. Callers without a preference send
+    /// [`WorkListSort::Title`].
+    pub sort: WorkListSort,
     pub offset: i64,
     pub limit: i64,
 }
 
-/// One page of a library's works, ordered by title (case-insensitive) with
-/// the internal id as a stable tiebreak. Tombstoned works are not listed:
-/// Zotero no longer carries them. Works with no title fall back to their key.
+/// One page of a library's works, in the requested order ([`WorkListSort`])
+/// with the internal id as a stable tiebreak. Tombstoned works are not
+/// listed: Zotero no longer carries them. Works with no title fall back to
+/// their key.
 pub fn list_works(
     conn: &Connection,
     request: &WorkListRequest<'_>,
@@ -141,11 +157,23 @@ pub fn list_works(
         )
         .map_err(|e| error("sql_error", format!("Failed to count catalog works: {e}")))?;
 
+    // Title order is the default and the tiebreak of every order: on the
+    // displayed name (falls back to the key), case-insensitive, with the
+    // internal id for a stable end. `Recent` leads with Zotero's own
+    // `item_version` descending and leaves works without a known version
+    // until after every dated one.
+    let order_by = match request.sort {
+        WorkListSort::Title => "COALESCE(i.title, i.item_key) COLLATE NOCASE ASC, i.id ASC",
+        WorkListSort::Recent => {
+            "(i.item_version IS NULL) ASC, i.item_version DESC, \
+             COALESCE(i.title, i.item_key) COLLATE NOCASE ASC, i.id ASC"
+        }
+    };
     let sql = format!(
         "SELECT i.id, i.item_key, i.library_id, COALESCE(i.title, i.item_key),
                 i.csl_json_snapshot, l.name, l.library_type, l.library_id
           {base}
-         ORDER BY COALESCE(i.title, i.item_key) COLLATE NOCASE ASC, i.id ASC
+         ORDER BY {order_by}
          LIMIT ?{} OFFSET ?{}",
         params.len() + 1,
         params.len() + 2
@@ -275,6 +303,20 @@ pub fn work_detail(conn: &Connection, item_id: &str) -> BibliographyResult<WorkD
         csl_json: display.csl_json,
         item: snapshot,
     })
+}
+
+/// [`work_detail`] with its "opened" bookkeeping side effect: opening a work
+/// in the Biblioteca records it for the "opened works first" admission
+/// order. Recording is best-effort — a failure is logged and never fails
+/// the read.
+pub fn work_detail_recording_open(
+    conn: &Connection,
+    item_id: &str,
+    now_ms: i64,
+) -> BibliographyResult<WorkDetail> {
+    let detail = work_detail(conn, item_id)?;
+    crate::settings::record_work_opened_best_effort(conn, item_id, now_ms);
+    Ok(detail)
 }
 
 /// One extracted page text of a work attachment, exactly as the catalog
@@ -433,6 +475,21 @@ pub fn prepare_work_attachment_open(
         pages,
         snapshot_text,
     })
+}
+
+/// [`prepare_work_attachment_open`] with the same "opened" bookkeeping side
+/// effect: opening a work attachment opens its work. Recording is
+/// best-effort — a failure is logged and never fails the read.
+pub fn prepare_work_attachment_recording_open(
+    conn: &Connection,
+    item_id: &str,
+    attachment_key: &str,
+    zotero_data_dir: Option<&str>,
+    now_ms: i64,
+) -> BibliographyResult<WorkAttachmentOpen> {
+    let plan = prepare_work_attachment_open(conn, item_id, attachment_key, zotero_data_dir)?;
+    crate::settings::record_work_opened_best_effort(conn, item_id, now_ms);
+    Ok(plan)
 }
 
 /// The stable error constructor these reads use (same shape as the rest of
@@ -612,6 +669,7 @@ mod tests {
                 query: None,
                 offset: 0,
                 limit: 2,
+                sort: WorkListSort::Title,
             },
         )
         .expect("page");
@@ -628,6 +686,7 @@ mod tests {
                 query: None,
                 offset: 2,
                 limit: 2,
+                sort: WorkListSort::Title,
             },
         )
         .expect("next page");
@@ -642,6 +701,7 @@ mod tests {
                 query: None,
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("scoped page");
@@ -665,6 +725,7 @@ mod tests {
                 query: None,
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("page");
@@ -694,6 +755,7 @@ mod tests {
                 query: Some("oficio"),
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("by title");
@@ -710,6 +772,7 @@ mod tests {
                 query: Some("Bloch"),
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("by creator");
@@ -723,6 +786,7 @@ mod tests {
                 query: Some("zzz"),
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("no match");
@@ -756,12 +820,70 @@ mod tests {
                 query: None,
                 offset: 0,
                 limit: 10,
+                sort: WorkListSort::Title,
             },
         )
         .expect("page");
         let titles: Vec<_> = page.works.iter().map(|w| w.title.as_str()).collect();
         assert_eq!(titles, ["Kept"]);
         assert_eq!(page.total, 1);
+    }
+
+    #[test]
+    fn recent_order_sorts_by_item_version_newest_first_and_unknown_last() {
+        let mut conn = migrated_db();
+        let lib = seed_library(&mut conn, "a");
+        seed_work(&mut conn, &lib, "K1", "Zeta", None, "{}");
+        seed_work(&mut conn, &lib, "K2", "Alpha", None, "{}");
+        seed_work(&mut conn, &lib, "K3", "Middle", None, "{}");
+        seed_work(&mut conn, &lib, "K4", "Beta", None, "{}");
+        conn.execute(
+            "UPDATE bibliographic_items SET item_version = 2 WHERE item_key = 'K1'",
+            [],
+        )
+        .expect("Zeta at version 2");
+        conn.execute(
+            "UPDATE bibliographic_items SET item_version = 5 WHERE item_key IN ('K2', 'K4')",
+            [],
+        )
+        .expect("Alpha and Beta at version 5");
+        conn.execute(
+            "UPDATE bibliographic_items SET item_version = NULL WHERE item_key = 'K3'",
+            [],
+        )
+        .expect("Middle without a known version");
+
+        let recent = list_works(
+            &conn,
+            &WorkListRequest {
+                library_type: None,
+                library_native_id: None,
+                query: None,
+                offset: 0,
+                limit: 10,
+                sort: WorkListSort::Recent,
+            },
+        )
+        .expect("recent page");
+        let titles: Vec<_> = recent.works.iter().map(|w| w.title.as_str()).collect();
+        // Zotero's item_version descending, ties by title, unknown versions
+        // last: recency never invents an order for a work it cannot date.
+        assert_eq!(titles, ["Alpha", "Beta", "Zeta", "Middle"]);
+
+        let by_title = list_works(
+            &conn,
+            &WorkListRequest {
+                library_type: None,
+                library_native_id: None,
+                query: None,
+                offset: 0,
+                limit: 10,
+                sort: WorkListSort::Title,
+            },
+        )
+        .expect("title page");
+        let titles: Vec<_> = by_title.works.iter().map(|w| w.title.as_str()).collect();
+        assert_eq!(titles, ["Alpha", "Beta", "Middle", "Zeta"]);
     }
 
     // ── work_detail ─────────────────────────────────────────────────────
@@ -1023,5 +1145,76 @@ mod tests {
         let unknown_attachment =
             prepare_work_attachment_open(&conn, &item_id, "NOPE", None).expect_err("attachment");
         assert_eq!(unknown_attachment.code, "unknown_attachment");
+    }
+
+    // ── opened-works bookkeeping on the read commands ───────────────────
+
+    fn create_app_settings(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("app_settings table");
+    }
+
+    fn recorded_opens(conn: &Connection) -> Vec<(String, i64)> {
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'bibliography_recently_opened'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("recorded list");
+        serde_json::from_str::<Vec<crate::settings::RecentlyOpenedEntry>>(&raw)
+            .expect("valid recently-opened JSON")
+            .into_iter()
+            .map(|entry| (entry.item_id, entry.opened_at))
+            .collect()
+    }
+
+    #[test]
+    fn reading_a_work_detail_records_the_opened_work() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+
+        let detail =
+            work_detail_recording_open(&conn, &item_id, 1_700_000_000_123).expect("detail");
+
+        assert_eq!(detail.item_id, item_id);
+        assert_eq!(recorded_opens(&conn), vec![(item_id, 1_700_000_000_123)]);
+    }
+
+    #[test]
+    fn a_work_read_succeeds_even_when_recording_the_open_fails() {
+        // No `app_settings` table: recording cannot persist anything.
+        let mut conn = migrated_db();
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+
+        let detail = work_detail_recording_open(&conn, &item_id, 5).expect("read must not fail");
+
+        assert_eq!(detail.item_id, item_id);
+    }
+
+    #[test]
+    fn opening_an_attachment_records_the_work_and_survives_a_recording_failure() {
+        let mut conn = migrated_db();
+        create_app_settings(&conn);
+        let lib = seed_library(&mut conn, "a");
+        let item_id = seed_work(&mut conn, &lib, "K1", "Obra", None, "{}");
+        let pdf = temp_pdf("recording");
+        seed_pdf_attachment(&mut conn, &item_id, "ATT1", &pdf);
+
+        let plan = prepare_work_attachment_recording_open(&conn, &item_id, "ATT1", None, 42)
+            .expect("prepare");
+
+        assert_eq!(plan.item_id, item_id);
+        assert_eq!(recorded_opens(&conn), vec![(item_id.clone(), 42)]);
+
+        // With recording broken the read still succeeds.
+        conn.execute("DROP TABLE app_settings", []).expect("drop");
+        prepare_work_attachment_recording_open(&conn, &item_id, "ATT1", None, 43)
+            .expect("read must not fail");
     }
 }

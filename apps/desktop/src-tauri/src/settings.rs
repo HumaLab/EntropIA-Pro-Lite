@@ -1,5 +1,6 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -129,19 +130,23 @@ fn is_embedding_engine_setting(key: &str) -> bool {
         || key == crate::nlp::embeddings::OPENROUTER_EMBEDDING_MODEL_SETTING_KEY
 }
 
-/// Requeues queue units parked `configuration_required` when a saved setting
-/// is one the embedding engine depends on and the configuration is now valid.
-/// Best effort: a failure is logged and never fails the save. Returns how many
-/// units were requeued.
-pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
-    if !is_embedding_engine_setting(key) {
-        return 0;
-    }
-    match crate::processing::repository::resume_embedding_configuration_blocked(conn) {
+/// Settings that decide whether the OCR engine can initialize: the engine
+/// selection and the GLM-OCR credential it reads.
+fn is_ocr_engine_setting(key: &str) -> bool {
+    key == GLM_OCR_API_KEY || key == crate::ocr::OCRH_SETTING_MODE
+}
+
+/// Runs one engine's configuration resume, logging its outcome best-effort.
+fn resume_configuration_blocked_with(
+    conn: &rusqlite::Connection,
+    engine: &str,
+    resume: impl FnOnce(&rusqlite::Connection) -> Result<usize, String>,
+) -> usize {
+    match resume(conn) {
         Ok(resumed) => {
             if resumed > 0 {
                 eprintln!(
-                    "[settings] Resumed {resumed} queue unit(s) blocked on embedding configuration"
+                    "[settings] Resumed {resumed} queue unit(s) blocked on {engine} configuration"
                 );
             }
             resumed
@@ -153,12 +158,48 @@ pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key:
     }
 }
 
+/// Requeues queue units parked on a configuration a saved setting decides,
+/// once that configuration is now valid: the embedding engine's
+/// (`configuration_required…` on `embedding`/`bibliography_profile` units)
+/// when an embedding setting is saved, and the OCR engine's
+/// (`configuration_required_ocr`, plus the legacy plain
+/// `configuration_required` rows of OCR work signed with the executor's
+/// `configuration:` message prefix) when an OCR setting is saved. Embedding
+/// and contract-change blocks never move on an OCR save and vice versa —
+/// each engine resumes only its own. Best effort: a failure is logged and
+/// never fails the save. Returns how many units were requeued.
+pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    if is_embedding_engine_setting(key) {
+        resume_configuration_blocked_with(
+            conn,
+            "embedding",
+            crate::processing::repository::resume_embedding_configuration_blocked,
+        )
+    } else if is_ocr_engine_setting(key) {
+        resume_configuration_blocked_with(
+            conn,
+            "OCR",
+            crate::processing::repository::resume_ocr_configuration_blocked,
+        )
+    } else {
+        0
+    }
+}
+
 #[tauri::command]
 pub async fn settings_get_all(db: State<'_, AppDbState>) -> Result<Vec<SettingEntry>, String> {
     let conn = db
         .ui_conn
         .lock()
         .map_err(|e| format!("DB lock error: {e}"))?;
+    read_visible_settings(&conn)
+}
+
+/// Every setting the Settings UI may see: the whole `app_settings` table
+/// with secrets redacted, minus internal bookkeeping state — which is not
+/// user configuration and must never render or break there. The command
+/// delegates here so tests can pin the visibility contract.
+pub fn read_visible_settings(conn: &rusqlite::Connection) -> Result<Vec<SettingEntry>, String> {
     let mut stmt = conn
         .prepare("SELECT key, value FROM app_settings ORDER BY key")
         .map_err(|e| format!("Failed to prepare settings query: {e}"))?;
@@ -171,8 +212,16 @@ pub async fn settings_get_all(db: State<'_, AppDbState>) -> Result<Vec<SettingEn
             Ok(redact_setting_entry(entry))
         })
         .map_err(|e| format!("Failed to query settings: {e}"))?;
-    let entries = rows.flatten().collect();
-    Ok(entries)
+    Ok(rows
+        .flatten()
+        .filter(|entry| !is_internal_state_key(&entry.key))
+        .collect())
+}
+
+/// Local bookkeeping state, not user configuration: hidden from the
+/// Settings UI's bulk read. Currently just the recently-opened works list.
+fn is_internal_state_key(key: &str) -> bool {
+    key == RECENTLY_OPENED_SETTING_KEY
 }
 
 fn redact_setting_entry(entry: SettingEntry) -> SettingEntry {
@@ -195,6 +244,18 @@ fn is_sensitive_setting_key(key: &str) -> bool {
         || normalized.contains("credential")
 }
 
+/// The database side of [`settings_delete`], split out so tests can pin what
+/// a deletion leaves behind without ever touching the system credential
+/// store (the keyring cleanup stays in the command).
+fn remove_setting_row(conn: &rusqlite::Connection, key: &str) -> Result<(), String> {
+    // DB row first: if the keyring delete then fails, only an orphaned
+    // keyring entry remains (no dangling secret_ref pointing at nothing).
+    conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+        .map_err(|e| format!("Failed to delete setting: {e}"))?;
+    forget_zotero_user_id_for(conn, key);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn settings_delete(
     key: String,
@@ -207,14 +268,7 @@ pub async fn settings_delete(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        // DB row first: if the keyring delete then fails, only an orphaned
-        // keyring entry remains (no dangling secret_ref pointing at nothing).
-        conn.execute(
-            "DELETE FROM app_settings WHERE key = ?1",
-            params![key.as_str()],
-        )
-        .map_err(|e| format!("Failed to delete setting: {e}"))?;
-        forget_zotero_user_id_for(&conn, &key);
+        remove_setting_row(&conn, &key)?;
         if is_secret_setting_key(&key) {
             if let Err(error) = delete_secret(&key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
@@ -497,6 +551,93 @@ pub fn set_setting(
 pub fn delete_setting(conn: &rusqlite::Connection, key: &str) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Recently opened works (the "opened works first" admission order)
+// ---------------------------------------------------------------------------
+
+/// Local-only bookkeeping key: the works the user opened, most recent
+/// first. `app_settings` never syncs (it is not in
+/// `sync::capture::SYNCED_TABLES`) and this key is hidden from the Settings
+/// UI (see [`read_visible_settings`]).
+pub const RECENTLY_OPENED_SETTING_KEY: &str = "bibliography_recently_opened";
+
+/// The recently-opened list never grows past this many works.
+pub const RECENTLY_OPENED_MAX_ENTRIES: usize = 500;
+
+/// One `{ "itemId", "openedAt" }` entry of the recently-opened list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentlyOpenedEntry {
+    pub item_id: String,
+    pub opened_at: i64,
+}
+
+/// Records that the user opened one work at `now_ms` — the "opened works
+/// first" order the library sync admits derived work in.
+///
+/// The list stays most-recent-first, deduplicated by work (a re-open moves
+/// the work to the front with the new timestamp) and capped at
+/// [`RECENTLY_OPENED_MAX_ENTRIES`]. A corrupt stored list is replaced,
+/// never propagated. This is bookkeeping, not user data: read commands use
+/// [`record_work_opened_best_effort`] so a failure never surfaces.
+pub fn record_work_opened(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    if item_id.trim().is_empty() {
+        return Err("invalid_input: an opened work needs a non-empty item id".to_string());
+    }
+    let mut entries = recently_opened_entries(conn);
+    entries.retain(|entry| entry.item_id != item_id);
+    entries.insert(
+        0,
+        RecentlyOpenedEntry {
+            item_id: item_id.to_string(),
+            opened_at: now_ms,
+        },
+    );
+    entries.truncate(RECENTLY_OPENED_MAX_ENTRIES);
+    let value = serde_json::to_string(&entries)
+        .map_err(|error| format!("Failed to encode the recently-opened works: {error}"))?;
+    set_setting(conn, RECENTLY_OPENED_SETTING_KEY, &value)
+        .map_err(|error| format!("Failed to save the recently-opened works: {error}"))
+}
+
+/// [`record_work_opened`] for read commands: a bookkeeping failure is
+/// logged and never fails the read it decorates.
+pub fn record_work_opened_best_effort(conn: &rusqlite::Connection, item_id: &str, now_ms: i64) {
+    if let Err(error) = record_work_opened(conn, item_id, now_ms) {
+        eprintln!("[settings] Could not record opened work {item_id}: {error}");
+    }
+}
+
+/// The recently-opened list, most recent first. A missing or corrupt list
+/// reads as empty (logged): bookkeeping never breaks a reader.
+pub fn recently_opened_entries(conn: &rusqlite::Connection) -> Vec<RecentlyOpenedEntry> {
+    let Some(raw) = get_raw_setting(conn, RECENTLY_OPENED_SETTING_KEY) else {
+        return Vec::new();
+    };
+    match serde_json::from_str(&raw) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("[settings] Discarding a corrupt recently-opened works list: {error}");
+            Vec::new()
+        }
+    }
+}
+
+/// The open rank of every recently-opened work: 0 is the most recently
+/// opened. Works missing from the map were not opened recently and keep
+/// their current order wherever this ranks.
+pub fn recently_opened_ranks(conn: &rusqlite::Connection) -> HashMap<String, usize> {
+    recently_opened_entries(conn)
+        .into_iter()
+        .enumerate()
+        .map(|(rank, entry)| (entry.item_id, rank))
+        .collect()
 }
 
 /// One-shot rename of the stale default OpenRouter model. Rows whose
@@ -811,6 +952,46 @@ mod tests {
         );
     }
 
+    // The embedding engine cache is keyed on a config fingerprint that
+    // includes the (hashed) API key, but it is only reachable through a
+    // config resolved from the database. After `settings_delete` drops the
+    // key row, resolution must fail closed — that is what makes the engine
+    // stop using the cached key. The GLM-OCR credential is read per call and
+    // must fail closed the same way.
+    #[test]
+    fn deleting_the_openrouter_key_makes_embedding_config_report_missing_key() {
+        let conn = in_memory_settings_db();
+        set_setting(
+            &conn,
+            crate::nlp::embeddings::EMBEDDING_PROVIDER_SETTING_KEY,
+            "api",
+        )
+        .expect("select api provider");
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        assert!(crate::nlp::embeddings::config_from_settings(&conn).is_ok());
+
+        remove_setting_row(&conn, OPENROUTER_API_KEY).expect("delete key");
+
+        let error = crate::nlp::embeddings::config_from_settings(&conn)
+            .err()
+            .expect("a deleted key must fail embedding config resolution");
+        assert!(error.contains("OpenRouter API key"), "{error}");
+    }
+
+    #[test]
+    fn deleting_the_glm_ocr_key_makes_ocr_config_report_missing_key() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, crate::ocr::OCRH_SETTING_MODE, "glm_ocr").expect("select glm ocr");
+        set_setting(&conn, GLM_OCR_API_KEY, "sk-glm").expect("save key");
+        crate::ocr::ensure_selected_cloud_key(&conn).expect("stored key satisfies the config");
+
+        remove_setting_row(&conn, GLM_OCR_API_KEY).expect("delete key");
+
+        let error = crate::ocr::ensure_selected_cloud_key(&conn)
+            .expect_err("a deleted key must fail OCR config resolution");
+        assert!(error.contains("GLM-OCR"), "{error}");
+    }
+
     #[test]
     fn migration_replaces_plaintext_only_after_secret_store_succeeds() {
         let conn = in_memory_settings_db();
@@ -1114,5 +1295,174 @@ mod tests {
             1
         );
         assert_eq!(state(&conn), "pending");
+    }
+
+    #[test]
+    fn saving_the_ocr_key_resumes_ocr_blocked_work_only() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code, last_error_message)
+               VALUES ('t-extract', 'bibliography_extract', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-corpus', 'ocr', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: PaddleOCR liviano no está disponible'),
+                      ('t-legacy', 'ocr', 'blocked', 'configuration_required',
+                       'configuration_required', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-embed', 'embedding', 'blocked', 'configuration_required_embedding',
+                       'configuration_required_embedding', 'no engine'),
+                      ('t-contract', 'bibliography_extract', 'blocked', 'configuration_required_extract_contract',
+                       'configuration_required_extract_contract',
+                       'the bibliography extraction contract changed; resume with the current configuration to re-evaluate');",
+        )
+        .expect("queue table");
+        // GLM-OCR selected with no key yet: the configuration is still
+        // invalid, so nothing may move back into the same wall.
+        set_setting(
+            &conn,
+            crate::ocr::OCRH_SETTING_MODE,
+            crate::ocr::OCRH_MODE_GLM_OCR,
+        )
+        .expect("mode");
+        let state = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 0);
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        set_setting(&conn, GLM_OCR_API_KEY, "sk-test").expect("save key");
+        // An unrelated key never resumes the parked work.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_model"),
+            0
+        );
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 3);
+        assert_eq!(state(&conn, "t-extract"), "pending");
+        assert_eq!(state(&conn, "t-corpus"), "pending");
+        assert_eq!(state(&conn, "t-legacy"), "pending");
+        // Embedding-blocked work keeps its own resume path, and a
+        // contract-change block is never an OCR configuration block.
+        assert_eq!(state(&conn, "t-embed"), "blocked");
+        assert_eq!(state(&conn, "t-contract"), "blocked");
+        assert_eq!(resume_work_after_setting_change(&conn, GLM_OCR_API_KEY), 0);
+    }
+
+    #[test]
+    fn saving_the_openrouter_key_does_not_touch_ocr_blocked_work() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code, last_error_message)
+               VALUES ('t-embed', 'embedding', 'blocked', 'configuration_required',
+                       'configuration_required', 'no engine'),
+                      ('t-extract', 'bibliography_extract', 'blocked', 'configuration_required_ocr',
+                       'configuration_required_ocr', 'configuration: GLM-OCR no está configurado.'),
+                      ('t-corpus', 'ocr', 'blocked', 'configuration_required',
+                       'configuration_required', 'configuration: GLM-OCR no está configurado.');",
+        )
+        .expect("queue table");
+        set_setting(&conn, "embedding_provider", "api").expect("provider");
+        let state = |conn: &Connection, id: &str| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        // The embedding resume moves exactly the embedding-blocked unit.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, OPENROUTER_API_KEY),
+            1
+        );
+        assert_eq!(state(&conn, "t-embed"), "pending");
+        // OCR-blocked work waits on the OCR configuration, not on OpenRouter.
+        assert_eq!(state(&conn, "t-extract"), "blocked");
+        assert_eq!(state(&conn, "t-corpus"), "blocked");
+    }
+
+    // ── recently-opened works (opened works first) ────────────────────────
+
+    fn recently_opened_rows(conn: &Connection) -> Vec<(String, i64)> {
+        let raw = get_raw_setting(conn, RECENTLY_OPENED_SETTING_KEY).expect("stored list");
+        serde_json::from_str::<Vec<RecentlyOpenedEntry>>(&raw)
+            .expect("valid recently-opened JSON")
+            .into_iter()
+            .map(|entry| (entry.item_id, entry.opened_at))
+            .collect()
+    }
+
+    #[test]
+    fn recording_opened_works_is_deduplicated_most_recent_first() {
+        let conn = in_memory_settings_db();
+        record_work_opened(&conn, "item-a", 100).expect("record a");
+        record_work_opened(&conn, "item-b", 200).expect("record b");
+        record_work_opened(&conn, "item-a", 300).expect("re-open a");
+
+        assert_eq!(
+            recently_opened_rows(&conn),
+            vec![("item-a".to_string(), 300), ("item-b".to_string(), 200)],
+            "the newest open leads and the older duplicate is dropped"
+        );
+        let ranks = recently_opened_ranks(&conn);
+        assert_eq!(ranks.get("item-a"), Some(&0));
+        assert_eq!(ranks.get("item-b"), Some(&1));
+    }
+
+    #[test]
+    fn recording_opened_works_caps_the_list_at_500() {
+        let conn = in_memory_settings_db();
+        for now in 0..(RECENTLY_OPENED_MAX_ENTRIES as i64 + 2) {
+            record_work_opened(&conn, &format!("item-{now:03}"), now).expect("record");
+        }
+
+        let rows = recently_opened_rows(&conn);
+        assert_eq!(rows.len(), RECENTLY_OPENED_MAX_ENTRIES);
+        assert_eq!(rows.first().map(|(id, _)| id.as_str()), Some("item-501"));
+        assert_eq!(rows.last().map(|(id, _)| id.as_str()), Some("item-002"));
+    }
+
+    #[test]
+    fn recording_an_open_repairs_a_corrupt_list() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, RECENTLY_OPENED_SETTING_KEY, "not json").expect("corrupt row");
+
+        record_work_opened(&conn, "item-a", 5).expect("record over corrupt list");
+
+        assert_eq!(recently_opened_rows(&conn), vec![("item-a".to_string(), 5)]);
+    }
+
+    #[test]
+    fn the_bulk_settings_read_hides_the_recently_opened_bookkeeping() {
+        let conn = in_memory_settings_db();
+        set_setting(&conn, RECENTLY_OPENED_SETTING_KEY, "[]").expect("bookkeeping row");
+        set_setting(&conn, "openrouter_model", "google/gemma").expect("model row");
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-secret").expect("key row");
+
+        let entries = read_visible_settings(&conn).expect("bulk read");
+        let shown: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|entry| (entry.key.as_str(), entry.value.as_str()))
+            .collect();
+        assert!(
+            !shown
+                .iter()
+                .any(|(key, _)| *key == RECENTLY_OPENED_SETTING_KEY),
+            "the bookkeeping key must never reach the Settings UI: {shown:?}"
+        );
+        assert!(shown.contains(&("openrouter_model", "google/gemma")));
+        assert!(shown.contains(&(OPENROUTER_API_KEY, REDACTED_SETTING_VALUE)));
     }
 }

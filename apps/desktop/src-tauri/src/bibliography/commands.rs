@@ -469,21 +469,24 @@ pub async fn bibliography_search_passages(
 // ── Biblioteca (P2) ─────────────────────────────────────────────────────────
 
 /// One page of the Biblioteca listing from the UI: paging, an optional
-/// substring filter, and the optional Zotero library scope (type + native
-/// id, both or neither — resolved here to the internal library rows).
+/// substring filter, the optional Zotero library scope (type + native id,
+/// both or neither — resolved here to the internal library rows), and the
+/// order to list in (`"title"` — the default, and what older callers omit —
+/// or `"recent"`).
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListWorksRequest {
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     pub query: Option<String>,
+    pub sort: Option<String>,
     pub zotero_library_type: Option<String>,
     pub zotero_library_id: Option<String>,
 }
 
-/// One page of the catalog's works (title order, tombstones excluded) with
-/// the scope's total, so the Biblioteca can page a library of thousands
-/// without counting on its own. Read-only.
+/// One page of the catalog's works in the requested order (tombstones
+/// excluded) with the scope's total, so the Biblioteca can page a library of
+/// thousands without counting on its own. Read-only.
 #[tauri::command]
 pub async fn bibliography_list_works(
     request: ListWorksRequest,
@@ -492,12 +495,20 @@ pub async fn bibliography_list_works(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_archive_connection(&db_path)?;
+        let sort = match request.sort.as_deref() {
+            // The order every caller without a preference names, and what
+            // older callers that send no `sort` mean.
+            None | Some("title") => crate::bibliography::work_view::WorkListSort::Title,
+            Some("recent") => crate::bibliography::work_view::WorkListSort::Recent,
+            Some(other) => return Err(format!("invalid_sort: unknown work order {other:?}")),
+        };
         crate::bibliography::work_view::list_works(
             &conn,
             &crate::bibliography::work_view::WorkListRequest {
                 library_type: request.zotero_library_type.as_deref(),
                 library_native_id: request.zotero_library_id.as_deref(),
                 query: request.query.as_deref(),
+                sort,
                 offset: request.offset.unwrap_or(0),
                 limit: request.limit.unwrap_or(50),
             },
@@ -509,7 +520,9 @@ pub async fn bibliography_list_works(
 
 /// One work's ficha for the Biblioteca work view: the display line (authors,
 /// year, library) plus the catalog projection of the item — metadata,
-/// collections, tags and attachment metadata. Read-only.
+/// collections, tags and attachment metadata. Read-only except the
+/// best-effort bookkeeping that records the open for the "opened works
+/// first" order.
 #[tauri::command]
 pub async fn bibliography_work_detail(
     item_id: String,
@@ -518,8 +531,12 @@ pub async fn bibliography_work_detail(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_archive_connection(&db_path)?;
-        crate::bibliography::work_view::work_detail(&conn, &item_id)
-            .map_err(|error| format!("{}: {}", error.code, error.message))
+        crate::bibliography::work_view::work_detail_recording_open(
+            &conn,
+            &item_id,
+            crate::processing::repository::now_ms(),
+        )
+        .map_err(|error| format!("{}: {}", error.code, error.message))
     })
     .await
 }
@@ -567,11 +584,12 @@ pub async fn bibliography_open_work_attachment(
             &conn,
             crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
         );
-        let plan = crate::bibliography::work_view::prepare_work_attachment_open(
+        let plan = crate::bibliography::work_view::prepare_work_attachment_recording_open(
             &conn,
             &item_id,
             &attachment_key,
             data_dir.as_deref(),
+            crate::processing::repository::now_ms(),
         )
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
         let mut open_error = plan

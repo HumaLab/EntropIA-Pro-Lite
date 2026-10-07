@@ -544,7 +544,9 @@ describe('ItemAnalysisPanel', () => {
     render(ItemAnalysisPanel, makeProps(vi.fn()))
 
     // Ni el selector de tipo ni el campo de valor existen en reposo: el alta
-    // vive dentro del conjunto de etiquetas, no en una fila fija del panel.
+    // vive dentro del conjunto de etiquetas, no en una fila fija del panel. El
+    // selector de tipo es el menú temático (botón disparador), nunca un select.
+    expect(screen.queryByRole('button', { name: 'item.newEntityType' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'item.newEntityType' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'item.newEntityValue' })).not.toBeInTheDocument()
     expect(itemAnalysisPanelSource).not.toContain('entity-editor__create')

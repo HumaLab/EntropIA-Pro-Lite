@@ -100,7 +100,7 @@ pub(crate) fn map_ocr_error(error: &str) -> ExecOutput {
     }
     if error.starts_with("configuration:") {
         return ExecOutput::Blocked {
-            code: "configuration_required".to_string(),
+            code: "configuration_required_ocr".to_string(),
             message: error.to_string(),
         };
     }

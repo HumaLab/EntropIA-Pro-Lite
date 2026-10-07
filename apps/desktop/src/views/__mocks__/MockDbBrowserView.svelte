@@ -10,6 +10,7 @@
 
   let tables = $state<Array<{ name: string }>>([])
   let selectedTable = $state('')
+  let tableMenuOpen = $state(false)
   let columns = $state<Array<{ name: string; isPrimaryKey?: boolean }>>([])
   let sortColumn = $state('')
   let exportingTable = $state(false)
@@ -72,12 +73,34 @@
   {#if selectedTable}
     <span>{selectedTable} · {columns.length} columnas</span>
   {/if}
-  <label for="db-browser-table-select">Tabla</label>
-  <select id="db-browser-table-select" bind:value={selectedTable}>
-    {#each tables as table (table.name)}
-      <option value={table.name}>{table.name}</option>
-    {/each}
-  </select>
+  <span id="db-browser-table-label">Tabla</span>
+  <!-- The real view opens a ToolbarMenu radio list here (never a native
+       select); the mock mirrors that gesture with plain elements. -->
+  <button
+    type="button"
+    id="db-browser-table-select"
+    aria-labelledby="db-browser-table-label db-browser-table-value"
+    aria-haspopup="menu"
+    aria-expanded={tableMenuOpen}
+    onclick={() => (tableMenuOpen = !tableMenuOpen)}
+  >
+    <span id="db-browser-table-value">{selectedTable}</span>
+  </button>
+  {#if tableMenuOpen}
+    <div role="menu" aria-label="Tabla">
+      {#each tables as table (table.name)}
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={table.name === selectedTable}
+          onclick={() => {
+            selectedTable = table.name
+            tableMenuOpen = false
+          }}>{table.name}</button
+        >
+      {/each}
+    </div>
+  {/if}
 </section>
 
 {#if selectedTable}

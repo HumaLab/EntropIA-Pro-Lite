@@ -263,6 +263,9 @@ const es = {
   'biblioteca.worksCount.other': '{count} obras',
   'biblioteca.libraryMenu': 'Elegir biblioteca',
   'biblioteca.libraryAll': 'Todas las bibliotecas',
+  'biblioteca.sortMenu': 'Elegir orden',
+  'biblioteca.sortTitle': 'Título',
+  'biblioteca.sortRecent': 'Recientes',
   'biblioteca.searchLabel': 'Buscar obras',
   'biblioteca.searchPlaceholder': 'Título, autor o significado…',
   'biblioteca.searchClear': 'Limpiar búsqueda',
@@ -388,6 +391,9 @@ const es = {
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
     'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyWaiting':
+    'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · {blocked} en espera',
+  'batch.statusBibliographyBlocked': 'Bibliografía: {blocked} en espera: {reason}',
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
   'settings.save': 'Guardar cambios',
@@ -959,6 +965,14 @@ const es = {
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes',
   'writing.zoteroBibliographySyncIndexingNoEta':
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal}',
+  'writing.zoteroBibliographySyncBlockedBacklog':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · {blocked} en espera: {reason}',
+  'writing.zoteroBibliographySyncIndexingWaiting':
+    'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes · {blocked} en espera: {reason}',
+  'writing.zoteroBlockedReasonEmbedding': 'configurá OpenRouter en Configuración',
+  'writing.zoteroBlockedReasonOcr': 'configurá GLM-OCR en Configuración › OCR',
+  'writing.zoteroBlockedReasonEmbeddingAndOcr':
+    'configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
@@ -1479,6 +1493,12 @@ const es = {
   'settings.apiKeyPlaceholder': 'sk-or-v1-...',
   'settings.hideApiKey': 'Ocultar API key',
   'settings.showApiKey': 'Mostrar API key',
+  'settings.clearKey': 'Quitar clave de {service}',
+  'settings.clearKeyTitle': '¿Quitar la clave de {service}?',
+  'settings.clearKeyMessage':
+    'Se va a eliminar la clave guardada de {service}. Las funciones que dependan de ella van a quedar sin configurar hasta que cargues una nueva.',
+  'settings.clearKeyConfirm': 'Quitar clave',
+  'settings.keyNotConfigured': 'Sin clave guardada',
   'settings.testConnection': 'Probar conexión',
   'settings.testingConnection': 'Probando...',
   'settings.loadedKey': 'Clave cargada: {key}',
@@ -2733,6 +2753,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left',
   'writing.zoteroBibliographySyncIndexingNoEta':
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal}',
+  'writing.zoteroBibliographySyncBlockedBacklog':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · {blocked} waiting: {reason}',
+  'writing.zoteroBibliographySyncIndexingWaiting':
+    'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left · {blocked} waiting: {reason}',
+  'writing.zoteroBlockedReasonEmbedding': 'configure OpenRouter in Settings',
+  'writing.zoteroBlockedReasonOcr': 'configure GLM-OCR in Settings › OCR',
+  'writing.zoteroBlockedReasonEmbeddingAndOcr':
+    'configure OpenRouter in Settings and GLM-OCR in Settings › OCR',
   'writing.zoteroEtaUnderMinute': '<1 min',
   'writing.zoteroEtaMinutes': '{minutes} min',
   'writing.zoteroEtaHoursMinutes': '{hours} h {minutes} min',
@@ -3267,6 +3295,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'biblioteca.worksCount.other': '{count} works',
   'biblioteca.libraryMenu': 'Choose library',
   'biblioteca.libraryAll': 'All libraries',
+  'biblioteca.sortMenu': 'Choose sort order',
+  'biblioteca.sortTitle': 'Title',
+  'biblioteca.sortRecent': 'Recent',
   'biblioteca.searchLabel': 'Search works',
   'biblioteca.searchPlaceholder': 'Title, author, or meaning…',
   'biblioteca.searchClear': 'Clear search',
@@ -3390,6 +3421,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':
     'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyWaiting':
+    'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · {blocked} waiting',
+  'batch.statusBibliographyBlocked': 'Bibliography: {blocked} waiting: {reason}',
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
   'settings.save': 'Save changes',
@@ -3985,6 +4019,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.apiKeyPlaceholder': 'sk-or-v1-...',
   'settings.hideApiKey': 'Hide API key',
   'settings.showApiKey': 'Show API key',
+  'settings.clearKey': 'Clear {service} key',
+  'settings.clearKeyTitle': 'Remove the {service} key?',
+  'settings.clearKeyMessage':
+    'The stored {service} key will be deleted. Features that depend on it will be unconfigured until you add a new one.',
+  'settings.clearKeyConfirm': 'Remove key',
+  'settings.keyNotConfigured': 'No key stored',
   'settings.testConnection': 'Test connection',
   'settings.testingConnection': 'Testing...',
   'settings.loadedKey': 'Loaded key: {key}',

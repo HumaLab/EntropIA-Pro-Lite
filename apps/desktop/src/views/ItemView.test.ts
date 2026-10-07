@@ -4601,11 +4601,11 @@ describe('ItemView entity editing UX', () => {
   it('creates manual DATE entities', async () => {
     await renderAnalysisWithEntities()
 
-    // El alta arranca cerrada: el chip + es lo único visible en reposo.
+    // El alta arranca cerrada: el chip + es lo único visible en reposo. El tipo
+    // se elige con el menú temático del visor (nunca un select nativo).
     await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
-    await fireEvent.change(screen.getByLabelText('Nuevo tipo de entidad'), {
-      target: { value: 'date' },
-    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Nuevo tipo de entidad' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'date' }))
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: '21 de agosto de 1970' },
     })
@@ -4637,9 +4637,8 @@ describe('ItemView entity editing UX', () => {
     invokeMock.mockClear()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Agregar entidad' }))
-    await fireEvent.change(screen.getByLabelText('Nuevo tipo de entidad'), {
-      target: { value: 'place' },
-    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Nuevo tipo de entidad' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'place' }))
     await fireEvent.input(screen.getByLabelText('Nuevo valor de entidad'), {
       target: { value: 'Tucumán' },
     })

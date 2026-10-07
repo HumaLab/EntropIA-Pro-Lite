@@ -879,6 +879,9 @@ describe('WorkPane', () => {
       nav.navigate(workView())
       render(WorkPane, { paneId: workspace.activeTabId })
 
+      // Biblioteca is the breadcrumb root, not a child of Colecciones.
+      expect(screen.queryByText('Colecciones')).toBeNull()
+
       // The work title is the current crumb, never a link; Biblioteca is.
       expect(screen.getByText('El oficio de historiador')).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'El oficio de historiador' })).toBeNull()
@@ -934,6 +937,45 @@ describe('WorkPane', () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith('bibliography_work_detail', {
         itemId: 'item-1',
       })
+    })
+  })
+
+  describe('section breadcrumb roots (each section is a top-level sibling)', () => {
+    it('an investigation breadcrumbs under Investigación and its first crumb opens the research list', async () => {
+      const nav = workspace.activeNavigation
+      nav.navigate({ name: 'research' })
+      nav.navigate({ name: 'investigation', jobId: 'job-1', title: 'Pregunta larga' })
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      // Investigación is the root crumb, not a child of Colecciones; the
+      // investigation title is the current crumb, never a link.
+      expect(screen.queryByText('Colecciones')).toBeNull()
+      expect(screen.getByText('Pregunta larga')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Pregunta larga' })).toBeNull()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Investigación' }))
+      expect(nav.current).toEqual({ name: 'research' })
+    })
+
+    it('a writing document breadcrumbs under Escritura and its first crumb opens the section root', async () => {
+      const nav = workspace.activeNavigation
+      nav.navigate({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscrito' })
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      expect(screen.queryByText('Colecciones')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Manuscrito' })).toBeNull()
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Escritura' }))
+      // The section root: the writing document list, without the documentId.
+      expect(nav.current).toEqual({ name: 'writing' })
+    })
+
+    it('a single-crumb section is its own current crumb, never a link', () => {
+      workspace.activeNavigation.navigate({ name: 'rag-chat' })
+      render(WorkPane, { paneId: workspace.activeTabId })
+
+      expect(screen.getByText('Chat')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
     })
   })
 })

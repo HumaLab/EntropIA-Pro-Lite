@@ -1206,8 +1206,10 @@ const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
 
 /// How many finished attempts of one kind the sync window holds and their
 /// average duration in ms, from the attempt's own start/finish stamps. The
-/// open attempt is never a sample: it has no finish stamp. A `None` average
-/// means nothing of the kind has finished yet.
+/// open attempt is never a sample: it has no finish stamp. Attempts of tasks
+/// parked `blocked` are not samples either — they record a parking decision,
+/// not work, and their near-zero durations would drag the average into a
+/// lie. A `None` average means nothing of the kind has finished yet.
 fn finished_attempt_average(
     conn: &Connection,
     anchor: i64,
@@ -1217,7 +1219,7 @@ fn finished_attempt_average(
         "SELECT COUNT(*), AVG(a.finished_at - a.started_at)
            FROM processing_attempts a
            JOIN processing_tasks t ON t.id = a.task_id
-          WHERE t.rowid > ?1 AND t.kind = ?2
+          WHERE t.rowid > ?1 AND t.kind = ?2 AND t.state <> 'blocked'
             AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at",
         rusqlite::params![anchor, kind],
         |row| {
@@ -1237,9 +1239,27 @@ fn finished_attempt_average(
 /// row was written (task timestamps are whole seconds, row order is not) and
 /// are only meaningful once the task has succeeded, so they are zero before
 /// that. The P3 progress counts (`profiles_done`/`profiles_total`,
-/// `extractions_done`/`extractions_total`) read the same window live: they
+/// `extractions_done`/`extractions_total`) read the same window live and
+/// count distinct *subjects* — works for the profiles, attachments for the
+/// extractions — each classified by its latest task in the window (max
+/// rowid): one work carrying several `bibliography_profile` tasks (admission
+/// plus a re-demand when an extraction moves its pages) is one work done or
+/// left, never several. The counts
 /// keep answering while the derived backlog drains after a success — and
-/// while the sync task itself is still `pending` or `running`.
+/// while the sync task itself is still `pending` or `running`. Blocked work
+/// (`profiles_blocked`/`extractions_blocked`) is counted beside them, with
+/// the reason it is parked: waiting on the owner is not progress.
+///
+/// The progress window is the whole unsettled derived backlog, not one
+/// sync's slice of it: derived tasks chain after the sync row that admitted
+/// them, so each sync's window runs from its own row up to the next sync's.
+/// Counts, blocked work and the ETA all start at the oldest such window
+/// still holding unsettled (pending, running, retry_wait, blocked,
+/// interrupted) derived work — a newer sync that found nothing new must
+/// never hide older work still draining — and fall back to the requested
+/// sync's own row when everything older is settled. The requested-sync
+/// fields (state, pages progress, new counts) always describe the requested
+/// sync alone.
 pub fn bibliography_sync_status(
     conn: &Connection,
     task_id: &str,
@@ -1282,6 +1302,44 @@ pub fn bibliography_sync_status(
         return Err(format!("unknown_task: no bibliography sync task {task_id}"));
     };
 
+    // The anchor of the progress window: the oldest sync window that still
+    // holds unsettled derived work. Each sync's window runs from its own row
+    // to the next sync's row (derived tasks chain after the sync row that
+    // admitted them), so the oldest unsettled derived unit lies in exactly
+    // one window — the one that starts at the last sync row before it. With
+    // every older window settled, the requested sync's own row is the
+    // anchor and its slice still counts what it holds.
+    let window_anchor: i64 = {
+        let oldest_unsettled: Option<i64> = conn
+            .query_row(
+                "SELECT MIN(rowid) FROM processing_tasks
+                  WHERE domain = 'bibliography'
+                    AND kind IN ('bibliography_profile', 'bibliography_extract')
+                    AND state IN ('pending', 'running', 'retry_wait', 'blocked', 'interrupted')",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(|error| {
+                format!("Failed to find the unsettled bibliography backlog: {error}")
+            })?;
+        match oldest_unsettled {
+            Some(unsettled) => conn
+                .query_row(
+                    "SELECT MAX(rowid) FROM processing_tasks
+                      WHERE kind = 'bibliography_sync' AND rowid < ?1",
+                    [unsettled],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map_err(|error| format!("Failed to find the sync that owns the backlog: {error}"))?
+                .flatten()
+                // No sync row before the unit (manual demand): the unit
+                // itself starts the window, or it would hide inside none.
+                .unwrap_or(unsettled - 1),
+            None => anchor,
+        }
+    };
+
     let receipt: Option<serde_json::Value> =
         receipt.and_then(|json| serde_json::from_str(&json).ok());
     let receipt_number = |name: &str| {
@@ -1302,54 +1360,105 @@ pub fn bibliography_sync_status(
         )
         .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
-    // P3 live progress: the same window, settled over queued. Settled counts
-    // every terminal outcome — a failed task is finished work the backlog
-    // will not repeat, so the counters always converge and the follower
-    // knows when to stop.
-    let window_progress = |kind: &str| -> Result<(i64, i64), String> {
-        let total: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks
-                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2",
-                rusqlite::params![kind, anchor],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Failed to count derived bibliography work: {error}"))?;
-        let settled: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM processing_tasks
-                  WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
-                    AND state IN ('succeeded', 'skipped', 'failed', 'cancelled')",
-                rusqlite::params![kind, anchor],
-                |row| row.get(0),
-            )
-            .map_err(|error| format!("Failed to count settled bibliography work: {error}"))?;
-        Ok((settled, total))
+    // P3 live progress: the backlog window counts *subjects*, not task rows —
+    // one unit of work is one work (fichas) or one attachment (pasajes), and
+    // the same subject can carry several tasks of the kind in the window
+    // (sync admission plus a re-demand when an extraction moves its pages).
+    // Each subject is classified by its *latest* task in the window (max
+    // rowid): settled (succeeded/skipped/failed/cancelled) is finished work
+    // the backlog will not repeat, so the counters always converge and the
+    // follower knows when to stop; `blocked` is neither done nor moving — it
+    // is parked on an owner-side change and counted beside the live counts,
+    // never hidden inside them; the rest (pending, running, retry_wait,
+    // interrupted) is what is left to do. A GROUP BY subject_id over the
+    // window with a MAX(rowid) join keeps this index-friendly at backlog
+    // sizes.
+    let window_progress = |kind: &str| -> Result<(i64, i64, i64), String> {
+        conn.query_row(
+            "SELECT COALESCE(SUM(t.state IN ('succeeded', 'skipped', 'failed', 'cancelled')), 0),
+                    COUNT(*),
+                    COALESCE(SUM(t.state = 'blocked'), 0)
+               FROM (SELECT MAX(rowid) AS latest_rowid
+                       FROM processing_tasks
+                      WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                      GROUP BY subject_id) AS latest
+               JOIN processing_tasks t ON t.rowid = latest.latest_rowid",
+            rusqlite::params![kind, window_anchor],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| format!("Failed to count derived bibliography work: {error}"))
     };
-    let (profiles_done, profiles_total) = window_progress("bibliography_profile")?;
-    let (extractions_done, extractions_total) = window_progress("bibliography_extract")?;
-    // P3 ETA: remaining tasks per kind times the average duration of that
-    // kind's finished attempts in this window. One unmeasured kind with work
-    // left makes the whole number a guess, so the estimate stays `None` —
-    // as it does while the window holds fewer than three finished attempts
-    // at all.
+    let (profiles_done, profiles_total, profiles_blocked) =
+        window_progress("bibliography_profile")?;
+    let (extractions_done, extractions_total, extractions_blocked) =
+        window_progress("bibliography_extract")?;
+    // Why each kind's blocked work is parked: each blocked subject's latest
+    // task is its latest blocked task, and among those the first in window
+    // order names the reason (window order, so the answer is stable across
+    // reads). The code is the durable vocabulary — `configuration_required_embedding`
+    // when the embedding engine has no usable configuration,
+    // `configuration_required_ocr` when the OCR engine has none — and the
+    // message beside it is what the executor recorded. Per kind, never
+    // borrowed: profiles wait on something else than extractions do.
+    let blocked_reason = |kind: &str| {
+        conn.query_row(
+            "SELECT t.last_error_code, t.last_error_message
+               FROM (SELECT MAX(rowid) AS latest_rowid
+                       FROM processing_tasks
+                      WHERE domain = 'bibliography' AND kind = ?1 AND rowid > ?2
+                      GROUP BY subject_id) AS latest
+               JOIN processing_tasks t ON t.rowid = latest.latest_rowid
+              WHERE t.state = 'blocked'
+              ORDER BY t.rowid LIMIT 1",
+            rusqlite::params![kind, window_anchor],
+            |row| {
+                Ok(super::commands::BibliographyBlockedReason {
+                    code: row.get(0)?,
+                    message: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))
+    };
+    // P3 ETA: actionable remaining subjects per kind times the average duration
+    // of that kind's finished attempts in this window. Blocked subjects are
+    // never timed — they wait on the owner, not on the clock — and a kind
+    // whose remaining work is entirely blocked has no estimate at all, which
+    // makes the combined answer honestly unknown instead of zero. One
+    // unmeasured kind with actionable work left makes the whole number a
+    // guess as well, so the estimate stays `None` — as it does while the
+    // window holds fewer than three finished attempts at all.
     let mut estimate_ms = 0_i64;
     let mut samples_total = 0_i64;
     let mut estimable = true;
-    for (kind, remaining) in [
-        ("bibliography_profile", profiles_total - profiles_done),
-        ("bibliography_extract", extractions_total - extractions_done),
+    for (kind, remaining, blocked) in [
+        (
+            "bibliography_profile",
+            profiles_total - profiles_done,
+            profiles_blocked,
+        ),
+        (
+            "bibliography_extract",
+            extractions_total - extractions_done,
+            extractions_blocked,
+        ),
     ] {
-        let (samples, average_ms) = finished_attempt_average(conn, anchor, kind)?;
+        let actionable = remaining - blocked;
+        let (samples, average_ms) = finished_attempt_average(conn, window_anchor, kind)?;
         samples_total += samples;
         if remaining <= 0 {
             continue;
+        }
+        if actionable <= 0 {
+            estimable = false;
+            break;
         }
         if samples < ETA_MIN_FINISHED_ATTEMPTS {
             estimable = false;
             break;
         }
-        estimate_ms += remaining * average_ms.unwrap_or(0);
+        estimate_ms += actionable * average_ms.unwrap_or(0);
     }
     let eta_ms = (estimable && samples_total >= ETA_MIN_FINISHED_ATTEMPTS).then_some(estimate_ms);
     Ok(super::commands::BibliographySyncStatus {
@@ -1359,6 +1468,10 @@ pub fn bibliography_sync_status(
         profiles_total,
         extractions_done,
         extractions_total,
+        profiles_blocked,
+        extractions_blocked,
+        profiles_blocked_reason: blocked_reason("bibliography_profile")?,
+        extractions_blocked_reason: blocked_reason("bibliography_extract")?,
         eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),
@@ -1368,6 +1481,36 @@ pub fn bibliography_sync_status(
         progress_done,
         progress_total,
     })
+}
+
+/// Durable status of the newest `bibliography_sync` task, or `None` when no
+/// sync was ever admitted.
+///
+/// This is the restart-safe read behind the status bar's follower: after an
+/// app restart no sync was requested in this session, so nothing holds a task
+/// id to follow. The newest task is the one whose derived backlog the most
+/// recent request can still be leaving behind, and the answer is exactly the
+/// one-task read of that row — [`bibliography_sync_status`] — window and
+/// estimate included.
+pub fn latest_bibliography_sync_status(
+    conn: &Connection,
+) -> Result<Option<super::commands::BibliographySyncStatus>, String> {
+    use rusqlite::OptionalExtension as _;
+    let latest: Option<String> = conn
+        .query_row(
+            "SELECT id FROM processing_tasks
+              WHERE kind = 'bibliography_sync'
+              ORDER BY rowid DESC
+              LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the latest bibliography sync: {error}"))?;
+    match latest {
+        Some(task_id) => bibliography_sync_status(conn, &task_id).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// Corpus-only convenience wrapper over [`admit_subject_or_attach`].
@@ -1777,11 +1920,12 @@ pub fn apply_priority_aging(conn: &Connection, now_ms: i64) -> Result<usize, Str
 /// hash always mints a new task because terminal profile history is never
 /// rewritten.
 ///
-/// P3 recent works first: the walk admits the most-recently-changed work
-/// first (Zotero's `item_version`, NULL = unknown recency = last), ties by
-/// item key. Admission order is execution order here (derived task ids
-/// ascend with admission), so the works the user touched last are profiled
-/// first.
+/// P3 opened works first, then recency: the walk admits the works the user
+/// opened recently first (most recently opened first), then the rest by
+/// recency of change (Zotero's `item_version`, NULL = unknown recency =
+/// last), ties by item key. Admission order is execution order here (derived
+/// task ids ascend with admission), so what the user touched last is
+/// profiled first.
 pub fn admit_stale_profile_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1828,6 +1972,11 @@ pub fn admit_stale_profile_demands(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list works of {library_row_id}: {e}"))?;
     items.dedup();
+    // P3 opened works first: a stable sort over the recency order the query
+    // already produced, keyed by the stored open rank (works never opened
+    // keep their recency position).
+    let opened_rank = crate::settings::recently_opened_ranks(conn);
+    items.sort_by_key(|item_id| opened_rank.get(item_id).copied().unwrap_or(usize::MAX));
     let mut created = 0;
     for item_id in &items {
         let input = crate::bibliography::profile::profile_input_for_item(conn, item_id)
@@ -1904,9 +2053,10 @@ pub fn admit_stale_profile_demands(
 /// Runs inside the sync-success transaction, so a committed sync never
 /// loses its extraction follow-up.
 ///
-/// P3 recent works first: attachments are walked in their work's recency
-/// (the same order [`admit_stale_profile_demands`] walks works), then by
-/// attachment row id within one work.
+/// P3 opened works first, then recency: attachments are walked in the same
+/// work order [`admit_stale_profile_demands`] uses (recently opened works
+/// first, then recency of change), then by attachment row id within one
+/// work.
 pub fn admit_stale_extraction_demands(
     conn: &Connection,
     library_row_id: &str,
@@ -1918,7 +2068,7 @@ pub fn admit_stale_extraction_demands(
         conn,
         crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
     );
-    let attachments: Vec<(String, String)> = conn
+    let mut attachments: Vec<(String, String)> = conn
         .prepare(
             "SELECT a.id, a.item_id FROM zotero_attachments a
              JOIN bibliographic_items i ON i.id = a.item_id
@@ -1933,6 +2083,13 @@ pub fn admit_stale_extraction_demands(
         .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to list attachments of {library_row_id}: {e}"))?;
+    // P3 opened works first: the same open rank as the profile walk, applied
+    // over the query's work-recency order (stable, so attachments of one
+    // work keep their row order).
+    let opened_rank = crate::settings::recently_opened_ranks(conn);
+    attachments.sort_by_key(|(_attachment_id, item_id)| {
+        opened_rank.get(item_id).copied().unwrap_or(usize::MAX)
+    });
     let mut created = 0;
     for (attachment_id, _item_id) in &attachments {
         let attachment = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
@@ -3604,11 +3761,17 @@ pub fn settle_blocked_dependents(conn: &Connection) -> Result<usize, String> {
     Ok(settled)
 }
 
-/// Requeues the units parked `configuration_required` by the embedding engine
+/// Requeues the units the embedding engine parked on its configuration
 /// (corpus embeddings and bibliography profiles) once that engine can
-/// initialize from the current settings. Returns how many were requeued; with
-/// the configuration still invalid it touches nothing, so callers may invoke
-/// it on every settings change and at startup without spinning.
+/// initialize from the current settings. The whole
+/// `configuration_required…` family is resumed — the legacy
+/// `configuration_required` code rows recorded before the subcodes existed,
+/// `configuration_required_embedding` (no usable provider/engine) and
+/// `configuration_required_embedding_contract` (the effective contract
+/// changed under the task) — while every other block reason keeps its own
+/// resume path. Returns how many were requeued; with the configuration still
+/// invalid it touches nothing, so callers may invoke it on every settings
+/// change and at startup without spinning.
 pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize, String> {
     if crate::nlp::embeddings::config_from_settings(conn).is_err() {
         return Ok(0);
@@ -3617,11 +3780,42 @@ pub fn resume_embedding_configuration_blocked(conn: &Connection) -> Result<usize
         "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
            next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
            updated_at = strftime('%s', 'now') * 1000
-         WHERE state = 'blocked' AND last_error_code = 'configuration_required'
+         WHERE state = 'blocked'
+           AND last_error_code IN ('configuration_required',
+                                  'configuration_required_embedding',
+                                  'configuration_required_embedding_contract')
            AND kind IN ('embedding', 'bibliography_profile')",
         [],
     )
     .map_err(|e| format!("Failed to resume configuration-blocked units: {e}"))
+}
+
+/// Requeues the units the OCR engine parked on its configuration (corpus
+/// OCR and bibliography extractions) once the selected OCR engine can
+/// initialize from the current settings: every unit parked
+/// `configuration_required_ocr`, plus the legacy plain
+/// `configuration_required` rows of OCR work (`ocr`/`bibliography_extract`)
+/// whose recorded message carries the executor's stable `configuration:`
+/// prefix. Embedding blocks and contract-change blocks keep their own
+/// resume paths — this never touches them. Returns how many were requeued;
+/// with the configuration still invalid it touches nothing, so callers may
+/// invoke it on every settings change without spinning.
+pub fn resume_ocr_configuration_blocked(conn: &Connection) -> Result<usize, String> {
+    if crate::ocr::ensure_selected_cloud_key(conn).is_err() {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'blocked'
+           AND (last_error_code = 'configuration_required_ocr'
+                OR (last_error_code = 'configuration_required'
+                    AND kind IN ('ocr', 'bibliography_extract')
+                    AND last_error_message LIKE 'configuration:%'))",
+        [],
+    )
+    .map_err(|e| format!("Failed to resume OCR configuration-blocked units: {e}"))
 }
 
 fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
@@ -9490,6 +9684,92 @@ mod tests {
         .expect("blocked task");
     }
 
+    fn insert_blocked_unit(conn: &Connection, id: &str, kind: &str, code: &str, message: &str) {
+        conn.execute(
+            "INSERT INTO processing_tasks
+               (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, outcome,
+                last_error_code, last_error_message, created_at, updated_at)
+             VALUES (?1, ?2, ?1, 'corpus', 'asset', ?1, 'blocked', ?3, ?3, ?4, 1, 1)",
+            rusqlite::params![id, kind, code, message],
+        )
+        .expect("blocked unit");
+    }
+
+    #[test]
+    fn configuration_blocked_ocr_work_resumes_once_the_selected_engine_has_its_key() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        )
+        .expect("settings table");
+        // The OCR family: the stable subcode on any unit, plus the legacy
+        // plain-code rows of OCR work signed with the executor's stable
+        // `configuration:` message prefix.
+        insert_blocked_unit(
+            &conn,
+            "t-ocr",
+            "ocr",
+            "configuration_required_ocr",
+            "configuration: no key",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-extract",
+            "bibliography_extract",
+            "configuration_required_ocr",
+            "configuration: no key",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-legacy",
+            "bibliography_extract",
+            "configuration_required",
+            "configuration: GLM-OCR no está configurado.",
+        );
+        // Not OCR configuration blocks: an unsigned legacy row, a
+        // contract-change block and an embedding block keep their own
+        // resume paths.
+        insert_blocked_unit(
+            &conn,
+            "t-legacy-plain",
+            "ocr",
+            "configuration_required",
+            "the bibliography extraction contract changed",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-contract",
+            "bibliography_extract",
+            "configuration_required_extract_contract",
+            "contract changed",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-embed",
+            "bibliography_profile",
+            "configuration_required_embedding",
+            "no engine",
+        );
+        // GLM-OCR selected with no key yet: nothing may move into the wall.
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('ocrh_mode', 'glm_ocr')",
+        )
+        .expect("mode");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('glm_ocr_api_key', 'sk-test')",
+        )
+        .expect("key");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 3);
+        assert_eq!(task_state(&conn, "t-ocr"), "pending");
+        assert_eq!(task_state(&conn, "t-extract"), "pending");
+        assert_eq!(task_state(&conn, "t-legacy"), "pending");
+        assert_eq!(task_state(&conn, "t-legacy-plain"), "blocked");
+        assert_eq!(task_state(&conn, "t-contract"), "blocked");
+        assert_eq!(task_state(&conn, "t-embed"), "blocked");
+        assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+    }
+
     #[test]
     fn configuration_blocked_embeddings_resume_only_once_the_engine_can_initialize() {
         let (_dir, conn) = batch_db();
@@ -9497,7 +9777,15 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         )
         .expect("settings table");
+        // The whole embedding-configuration family resumes together: the
+        // legacy code, the provider/engine code and the contract-change code.
         insert_blocked_embedding(&conn, "t-config", "configuration_required");
+        insert_blocked_embedding(&conn, "t-embed", "configuration_required_embedding");
+        insert_blocked_embedding(
+            &conn,
+            "t-embed-contract",
+            "configuration_required_embedding_contract",
+        );
         insert_blocked_embedding(&conn, "t-contract", "configuration_changed");
         // Pin the remote provider: Pro defaults to the local engine, which
         // needs no OpenRouter key and would make the "no key" phase valid.
@@ -9514,8 +9802,10 @@ mod tests {
             [],
         )
         .expect("key");
-        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 1);
+        assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 3);
         assert_eq!(task_state(&conn, "t-config"), "pending");
+        assert_eq!(task_state(&conn, "t-embed"), "pending");
+        assert_eq!(task_state(&conn, "t-embed-contract"), "pending");
         let (code, outcome): (Option<String>, String) = conn
             .query_row(
                 "SELECT last_error_code, outcome FROM processing_tasks WHERE id = 't-config'",
@@ -9530,5 +9820,75 @@ mod tests {
             "other block reasons keep their own resume path"
         );
         assert_eq!(resume_embedding_configuration_blocked(&conn).unwrap(), 0);
+    }
+
+    // ── Restart-safe bibliography progress (P3 follow-up) ────────────────
+    // After an app restart no sync was requested in this session, so the
+    // status bar follows the newest `bibliography_sync` task — the one whose
+    // derived backlog the most recent request can still be leaving behind.
+
+    #[test]
+    fn latest_bibliography_sync_status_reads_the_newest_task_or_none() {
+        let (_dir, conn) = migrated_db();
+        assert!(
+            latest_bibliography_sync_status(&conn)
+                .expect("read with no tasks")
+                .is_none(),
+            "no sync task was ever admitted: there is nothing to follow"
+        );
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, created_at, updated_at)
+             VALUES ('sync-old', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', 5, 1, 1),
+                    ('profile-1', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'pending', 0, 2, 2),
+                    ('sync-new', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'running', 9, 3, 3)",
+        )
+        .expect("seed sync tasks");
+
+        let latest = latest_bibliography_sync_status(&conn)
+            .expect("latest read")
+            .expect("one sync task exists");
+        // The newest row, not the oldest.
+        assert_eq!(latest.state, "running");
+        assert_eq!(latest.progress_done, 9);
+        // The window is the whole unsettled backlog: the older task's window
+        // still holds a pending profile, so the counts reach back to it
+        // instead of hiding behind the newer row's empty slice.
+        assert_eq!((latest.profiles_done, latest.profiles_total), (0, 1));
+        // Exactly the answer the one-task read gives for that same row.
+        assert_eq!(
+            latest,
+            bibliography_sync_status(&conn, "sync-new").expect("direct read")
+        );
+    }
+
+    #[test]
+    fn latest_bibliography_sync_status_reports_the_live_window_of_the_newest_task() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 progress_done, created_at, updated_at)
+             VALUES ('sync-1', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', 40, 1, 1),
+                    ('profile-1', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'succeeded', 0, 2, 2),
+                    ('extract-1', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1',
+                     'pending', 0, 3, 3)",
+        )
+        .expect("seed one sync with draining derived work");
+
+        let latest = latest_bibliography_sync_status(&conn)
+            .expect("latest read")
+            .expect("one sync task exists");
+        // The sync succeeded but its derived backlog is still draining: the
+        // live window is exactly what the status bar follows.
+        assert_eq!(latest.state, "succeeded");
+        assert_eq!((latest.profiles_done, latest.profiles_total), (1, 1));
+        assert_eq!((latest.extractions_done, latest.extractions_total), (0, 1));
     }
 }

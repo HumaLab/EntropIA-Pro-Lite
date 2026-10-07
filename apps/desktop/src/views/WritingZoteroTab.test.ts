@@ -46,12 +46,23 @@ const { zoteroStore } = vi.hoisted(() => {
     },
   }
 
+  const subscribers = new Set<(value: typeof snapshot) => void>()
+  const emit = () => {
+    // A fresh object per change: Svelte 5 state compares by identity, so a
+    // mutated-then-resent object would never repaint anything.
+    const value = { ...snapshot, selection: { ...snapshot.selection } } as typeof snapshot
+    for (const run of subscribers) run(value)
+  }
+
   return {
     zoteroStore: {
       snapshot,
       subscribe: vi.fn((run: (value: typeof snapshot) => void) => {
+        subscribers.add(run)
         run(snapshot)
-        return () => {}
+        return () => {
+          subscribers.delete(run)
+        }
       }),
       connect: vi.fn(async () => {}),
       sync: vi.fn(async () => {}),
@@ -61,6 +72,7 @@ const { zoteroStore } = vi.hoisted(() => {
       setFuzzy: vi.fn(async () => {}),
       select: vi.fn((libraryType: string, libraryId: string) => {
         snapshot.selection = { libraryType, libraryId } as typeof snapshot.selection
+        emit()
       }),
     },
   }
@@ -130,11 +142,9 @@ describe('E2b-4 selected-library synchronization', () => {
   it('keeps background synchronization distinct from Refresh and targets the selection', async () => {
     answerKnownLibraries([PERSONAL, SEMINARIO])
     render(WritingZoteroTab, { props: {} })
-    await screen.findByRole('option', { name: 'Seminario' })
 
-    await fireEvent.change(screen.getByLabelText('Biblioteca'), {
-      target: { value: 'group/6680944' },
-    })
+    await fireEvent.click(await screen.findByRole('button', { name: /^Biblioteca/ }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Seminario' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Sincronizar biblioteca' }))
 
     expect(zoteroStore.select).toHaveBeenCalledWith('group', '6680944')
@@ -311,6 +321,151 @@ describe('E2b-4 selected-library synchronization', () => {
         'La sincronización falló: library missing'
       )
     })
+
+    it('names the parked backlog and how to unblock it instead of an endless progress line', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 2812,
+        profilesDone: 0,
+        profilesTotal: 2812,
+        extractionsDone: 0,
+        extractionsTotal: 0,
+        profilesBlocked: 2812,
+        extractionsBlocked: 0,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 0/2812 · Pasajes 0/0 · 2812 en espera: configurá OpenRouter en Configuración'
+      )
+    })
+
+    it('keeps the estimate for the work that can move and names what waits beside it', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        profilesBlocked: 70,
+        extractionsBlocked: 0,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsBlockedReason: null,
+        etaMs: 720_000,
+      })
+
+      const line = screen.getByText(
+        'Fichas 120/450 · Pasajes 30/400 · ~12 min restantes · 70 en espera: configurá OpenRouter en Configuración'
+      )
+      expect(line).toHaveAttribute('role', 'status')
+    })
+
+    it('words a block without a stable code with its own recorded message', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 5,
+        profilesBlocked: 5,
+        extractionsDone: 0,
+        extractionsTotal: 0,
+        profilesBlockedReason: { code: 'source_unstable', message: 'the source moved' },
+        extractionsBlockedReason: null,
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 0/5 · Pasajes 0/0 · 5 en espera: the source moved'
+      )
+    })
+
+    it('names the OCR configuration when the pasajes are what waits', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 264,
+        profilesTotal: 264,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message:
+            'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+        },
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 264/264 · Pasajes 0/82 · 82 en espera: configurá GLM-OCR en Configuración › OCR'
+      )
+    })
+
+    it('mentions both configurations when fichas and pasajes wait on different ones', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 264,
+        profilesBlockedReason: {
+          code: 'configuration_required_embedding',
+          message: 'OpenRouter API key no configurada.',
+        },
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+        etaMs: null,
+      })
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Fichas 0/264 · Pasajes 0/82 · 346 en espera: configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
+      )
+    })
+
+    it('keeps the backlog an earlier sync left behind after a newer sync reports no new work', async () => {
+      await renderWith({
+        state: 'succeeded',
+        itemsSeen: 40,
+        newProfiles: 0,
+        newExtractions: 0,
+        profilesDone: 0,
+        profilesTotal: 264,
+        profilesBlocked: 0,
+        extractionsDone: 0,
+        extractionsTotal: 82,
+        extractionsBlocked: 82,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message:
+            'configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key',
+        },
+        etaMs: null,
+      })
+
+      // The newer sync queued nothing new — the older backlog is still the
+      // truth about the library, never «Sincronizada» over hundreds of
+      // pending tasks.
+      expect(screen.queryByText('Biblioteca al día')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Sincronizada\./)).not.toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Fichas 0/264 · Pasajes 0/82 · 82 en espera: configurá GLM-OCR en Configuración › OCR'
+        )
+      ).toBeInTheDocument()
+    })
   })
 
   it('shows scheduler admission errors next to the synchronization action', async () => {
@@ -330,8 +485,9 @@ describe('E2b-4 selected-library synchronization', () => {
 })
 
 /**
- * E1c-2 (UI half): the library selector. RED first: none of this is rendered
- * yet, so every query below misses.
+ * E1c-2 (UI half): the library picker. The canonical radio pattern is the
+ * one BibliotecaView paints: a ToolbarMenu whose checked entry is the
+ * selection — never a native select.
  */
 describe('E1c-2 library selector', () => {
   it('lists known libraries merged with manual entries, personal first', async () => {
@@ -344,36 +500,41 @@ describe('E1c-2 library selector', () => {
     render(WritingZoteroTab, { props: {} })
 
     // The offered list arrives after the mount; wait for it before reading.
-    await screen.findByRole('option', { name: 'Seminario' })
-    const selector = await screen.findByLabelText('Biblioteca')
-    const options = [...(selector as HTMLSelectElement).options].map((o) => o.text)
-    expect(options[0]).toBe('Personal')
-    expect(options).toContain('Seminario')
-    expect(options).toContain('user/9')
+    const trigger = await screen.findByRole('button', { name: /^Biblioteca/ })
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu')
+    await fireEvent.click(trigger)
+    const entries = await screen.findAllByRole('menuitemradio')
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual([
+      'Personal',
+      'Seminario',
+      'user/9',
+    ])
   })
 
   it('selecting an entry selects it in the store and reconnects', async () => {
     answerKnownLibraries([PERSONAL, SEMINARIO])
     render(WritingZoteroTab, { props: {} })
-    await screen.findByRole('option', { name: 'Seminario' })
-    const selector = await screen.findByLabelText('Biblioteca')
     const connected = zoteroStore.connect.mock.calls.length
 
-    await fireEvent.change(selector, { target: { value: 'group/6680944' } })
+    await fireEvent.click(await screen.findByRole('button', { name: /^Biblioteca/ }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Seminario' }))
 
     expect(zoteroStore.select).toHaveBeenCalledWith('group', '6680944')
     expect(zoteroStore.connect.mock.calls.length).toBeGreaterThan(connected)
   })
 
-  it('reflects the current selection', async () => {
+  it('reflects the current selection in the trigger and checks its entry', async () => {
     answerKnownLibraries([PERSONAL, SEMINARIO])
     zoteroStore.snapshot.selection = { libraryType: 'group', libraryId: '6680944' }
 
     render(WritingZoteroTab, { props: {} })
 
-    await screen.findByRole('option', { name: 'Seminario' })
-    expect(((await screen.findByLabelText('Biblioteca')) as HTMLSelectElement).value).toBe(
-      'group/6680944'
+    const trigger = await screen.findByRole('button', { name: /^Biblioteca/ })
+    expect(trigger.textContent).toContain('Seminario')
+    await fireEvent.click(trigger)
+    expect(await screen.findByRole('menuitemradio', { name: 'Seminario' })).toHaveAttribute(
+      'aria-checked',
+      'true'
     )
   })
 
@@ -383,7 +544,7 @@ describe('E1c-2 library selector', () => {
 
     await screen.findByText('Los orígenes')
     expect(zoteroStore.select).not.toHaveBeenCalled()
-    expect(((await screen.findByLabelText('Biblioteca')) as HTMLSelectElement).value).toBe('user/0')
+    expect(screen.getByRole('button', { name: /^Biblioteca/ }).textContent).toContain('Personal')
   })
 })
 
@@ -397,14 +558,20 @@ describe('E1c-2 adding a library by hand', () => {
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
-    await screen.findByLabelText('Biblioteca')
+    await screen.findByRole('button', { name: /^Biblioteca/ })
     await fireEvent.click(screen.getByRole('button', { name: 'Agregar biblioteca' }))
+  }
+
+  /** The type picker is the same radio menu as the library picker. */
+  async function chooseType(label: 'Usuario' | 'Grupo') {
+    await fireEvent.click(await screen.findByRole('button', { name: /^Tipo/ }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: label }))
   }
 
   it('adds an available library and selects it', async () => {
     await openAddForm()
 
-    await fireEvent.change(screen.getByLabelText('Tipo'), { target: { value: 'group' } })
+    await chooseType('Grupo')
     await fireEvent.input(screen.getByLabelText('ID'), { target: { value: '6680944' } })
     await fireEvent.click(screen.getByRole('button', { name: /^Agregar$/ }))
 
@@ -423,10 +590,10 @@ describe('E1c-2 adding a library by hand', () => {
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
-    await screen.findByLabelText('Biblioteca')
+    await screen.findByRole('button', { name: /^Biblioteca/ })
     await fireEvent.click(screen.getByRole('button', { name: 'Agregar biblioteca' }))
 
-    await fireEvent.change(screen.getByLabelText('Tipo'), { target: { value: 'user' } })
+    await chooseType('Usuario')
     await fireEvent.input(screen.getByLabelText('ID'), { target: { value: '9' } })
     await fireEvent.click(screen.getByRole('button', { name: /^Agregar$/ }))
 
@@ -442,10 +609,10 @@ describe('E1c-2 adding a library by hand', () => {
       return Promise.reject(new Error(`unexpected ${cmd}`))
     }) as never)
     render(WritingZoteroTab, { props: {} })
-    await screen.findByLabelText('Biblioteca')
+    await screen.findByRole('button', { name: /^Biblioteca/ })
     await fireEvent.click(screen.getByRole('button', { name: 'Agregar biblioteca' }))
 
-    await fireEvent.change(screen.getByLabelText('Tipo'), { target: { value: 'group' } })
+    await chooseType('Grupo')
     await fireEvent.input(screen.getByLabelText('ID'), { target: { value: '404' } })
     await fireEvent.click(screen.getByRole('button', { name: /^Agregar$/ }))
 
@@ -465,6 +632,24 @@ describe('E1c-2 adding a library by hand', () => {
       false
     )
     expect(zoteroStore.select).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The project rule: no native select anywhere. Both pickers wear the shared
+ * ToolbarMenu radio pattern (the one BibliotecaView paints), and the icons
+ * go through ActionIcon like everywhere else.
+ */
+describe('the shared menu is the only picker this tab paints', () => {
+  it('renders no native select in the library picker or the add form', async () => {
+    answerKnownLibraries([PERSONAL, SEMINARIO])
+    const { container } = render(WritingZoteroTab, { props: {} })
+    await screen.findByRole('button', { name: /^Biblioteca/ })
+    await fireEvent.click(screen.getByRole('button', { name: 'Agregar biblioteca' }))
+    await screen.findByRole('button', { name: /^Tipo/ })
+
+    expect(container.querySelector('select')).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
   })
 })
 

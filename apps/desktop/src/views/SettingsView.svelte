@@ -51,6 +51,7 @@
     settingsGet,
     settingsGetAll,
     settingsSet,
+    settingsDelete,
     describeSettingsError,
     testOpenrouterConnection,
     testAssemblyaiConnection,
@@ -303,6 +304,24 @@
   let zoteroError = $state<string | null>(null)
   let availableModels = $state<ModelInfo[]>([])
   let loadSettingsError = $state<string | null>(null)
+
+  // Stored-key removal: one confirmation shared by the four API key fields.
+  type ClearableKey = 'openrouter' | 'assemblyai' | 'glmOcr' | 'zotero'
+  const CLEARABLE_KEY_SETTINGS: Record<ClearableKey, string> = {
+    openrouter: SETTINGS_KEYS.OPENROUTER_API_KEY,
+    assemblyai: SETTINGS_KEYS.ASSEMBLYAI_API_KEY,
+    glmOcr: SETTINGS_KEYS.GLM_OCR_API_KEY,
+    zotero: SETTINGS_KEYS.ZOTERO_API_KEY,
+  }
+  const CLEARABLE_KEY_SERVICES: Record<ClearableKey, string> = {
+    openrouter: 'OpenRouter',
+    assemblyai: 'AssemblyAI',
+    glmOcr: 'GLM-OCR',
+    zotero: 'Zotero',
+  }
+  let pendingClearKey = $state<ClearableKey | null>(null)
+  let clearingKey = $state(false)
+  let clearKeyError = $state<string | null>(null)
 
   const hasOpenRouterCredential = $derived(Boolean(apiKey.trim() || maskedApiKey))
 
@@ -1126,6 +1145,64 @@
       return
     }
     await runZoteroCheck(zoteroApiKey.trim())
+  }
+
+  /* A stored key can be removed, not just replaced. The button only exists
+     while a masked key is around, and the removal goes through the same
+     destructive confirmation as the other deletions. */
+  function requestClearKey(target: ClearableKey) {
+    clearKeyError = null
+    pendingClearKey = target
+  }
+
+  /** Fresh-profile state for one key field: no typed key, no masked key, and
+      no leftovers of what the removed key had produced (test results, the
+      verified Zotero account, suggested models). */
+  function applyClearedKeyState(target: ClearableKey) {
+    switch (target) {
+      case 'openrouter':
+        apiKey = ''
+        maskedApiKey = ''
+        showApiKey = false
+        testResult = null
+        availableModels = []
+        break
+      case 'assemblyai':
+        assemblyAiApiKey = ''
+        maskedAssemblyAiApiKey = ''
+        showAssemblyAiApiKey = false
+        assemblyAiTestResult = null
+        break
+      case 'glmOcr':
+        glmOcrApiKey = ''
+        maskedGlmOcrApiKey = ''
+        showGlmOcrApiKey = false
+        glmOcrTestResult = null
+        break
+      case 'zotero':
+        zoteroApiKey = ''
+        maskedZoteroApiKey = ''
+        showZoteroApiKey = false
+        zoteroCheck = null
+        zoteroError = null
+        break
+    }
+  }
+
+  async function handleClearKeyConfirm() {
+    const target = pendingClearKey
+    if (!target) return
+    clearingKey = true
+    clearKeyError = null
+    try {
+      await settingsDelete(CLEARABLE_KEY_SETTINGS[target])
+      applyClearedKeyState(target)
+      pendingClearKey = null
+    } catch (e) {
+      clearKeyError = describeSettingsError(e, t)
+    } finally {
+      clearingKey = false
+    }
   }
 
   async function handleSave() {
@@ -1953,6 +2030,17 @@
                 >
                   <ActionIcon name={showApiKey ? 'eye-off' : 'eye'} size={14} />
                 </button>
+                {#if maskedApiKey}
+                  <button
+                    class="settings__icon-btn"
+                    type="button"
+                    onclick={() => requestClearKey('openrouter')}
+                    use:tooltip={t('settings.clearKey', { service: 'OpenRouter' })}
+                    aria-label={t('settings.clearKey', { service: 'OpenRouter' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </button>
+                {/if}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -1974,6 +2062,8 @@
                   />
                   <span>{openRouterKeyStatus.text}</span>
                 </p>
+              {:else if !apiKey.trim()}
+                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
               {/if}
 
               {#if testResult}
@@ -2131,6 +2221,17 @@
                 >
                   <ActionIcon name={showAssemblyAiApiKey ? 'eye-off' : 'eye'} size={14} />
                 </button>
+                {#if maskedAssemblyAiApiKey}
+                  <button
+                    class="settings__icon-btn"
+                    type="button"
+                    onclick={() => requestClearKey('assemblyai')}
+                    use:tooltip={t('settings.clearKey', { service: 'AssemblyAI' })}
+                    aria-label={t('settings.clearKey', { service: 'AssemblyAI' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </button>
+                {/if}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -2154,6 +2255,8 @@
                   />
                   <span>{assemblyAiKeyStatus.text}</span>
                 </p>
+              {:else if !assemblyAiApiKey.trim()}
+                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
               {/if}
 
               {#if assemblyAiTestResult}
@@ -2296,6 +2399,17 @@
                 >
                   <ActionIcon name={showGlmOcrApiKey ? 'eye-off' : 'eye'} size={14} />
                 </button>
+                {#if maskedGlmOcrApiKey}
+                  <button
+                    class="settings__icon-btn"
+                    type="button"
+                    onclick={() => requestClearKey('glmOcr')}
+                    use:tooltip={t('settings.clearKey', { service: 'GLM-OCR' })}
+                    aria-label={t('settings.clearKey', { service: 'GLM-OCR' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </button>
+                {/if}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -2317,6 +2431,8 @@
                   />
                   <span>{glmOcrKeyStatus.text}</span>
                 </p>
+              {:else if !glmOcrApiKey.trim()}
+                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
               {/if}
 
               {#if glmOcrTestResult}
@@ -2376,6 +2492,17 @@
                 >
                   <ActionIcon name={showZoteroApiKey ? 'eye-off' : 'eye'} size={14} />
                 </button>
+                {#if maskedZoteroApiKey}
+                  <button
+                    class="settings__icon-btn"
+                    type="button"
+                    onclick={() => requestClearKey('zotero')}
+                    use:tooltip={t('settings.clearKey', { service: 'Zotero' })}
+                    aria-label={t('settings.clearKey', { service: 'Zotero' })}
+                  >
+                    <ActionIcon name="delete" size={14} />
+                  </button>
+                {/if}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -2397,6 +2524,8 @@
                   />
                   <span>{zoteroKeyStatus.text}</span>
                 </p>
+              {:else if !zoteroApiKey.trim()}
+                <p class="settings__hint">{t('settings.keyNotConfigured')}</p>
               {/if}
 
               <p class="settings__hint">{t('settings.zotero.syncNote')}</p>
@@ -2812,6 +2941,23 @@
         variant="destructive"
         oncancel={() => (showDiscardConfirm = false)}
         onconfirm={handleDiscardConfirm}
+      />
+    {/if}
+
+    {#if pendingClearKey}
+      <ConfirmDialog
+        title={t('settings.clearKeyTitle', { service: CLEARABLE_KEY_SERVICES[pendingClearKey] })}
+        titleId="settings-clear-key-title"
+        message={t('settings.clearKeyMessage', {
+          service: CLEARABLE_KEY_SERVICES[pendingClearKey],
+        })}
+        error={clearKeyError}
+        cancelLabel={t('collections.cancel')}
+        confirmLabel={t('settings.clearKeyConfirm')}
+        variant="destructive"
+        confirming={clearingKey}
+        oncancel={() => (pendingClearKey = null)}
+        onconfirm={handleClearKeyConfirm}
       />
     {/if}
   </div>

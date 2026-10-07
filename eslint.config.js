@@ -80,9 +80,9 @@ export default tseslint.config(
       'svelte/no-restricted-html-elements': [
         'error',
         {
-          elements: ['svg'],
+          elements: ['svg', 'select'],
           message:
-            'Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid). Use <ActionIcon name="..." />. Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
+            'This app owns every glyph and control. Hand-written <svg> drifts from the icon contract (stroke 2, 24 grid) — use <ActionIcon name="..." />. A native <select> is drawn by the operating system outside the app theme — use the ToolbarMenu radio pattern (see WritingZoteroTab). Data visualisations and viewer overlays are exempt — add the file to the allowlist in eslint.config.js.',
         },
       ],
     },

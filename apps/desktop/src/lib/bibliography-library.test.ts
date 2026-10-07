@@ -1,15 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import {
+  BIBLIOTECA_SORT_STORAGE_KEY,
   bibliographyListWorks,
   bibliographyOpenWorkAttachment,
   bibliographyWorkDetail,
+  parseBibliotecaSort,
+  readBibliotecaSort,
+  writeBibliotecaSort,
+  type BibliotecaSort,
 } from './bibliography-library'
 
 const mockInvoke = vi.mocked(invoke)
 
 beforeEach(() => {
   mockInvoke.mockReset()
+  localStorage.clear()
 })
 
 describe('bibliography-library', () => {
@@ -48,6 +54,7 @@ describe('bibliography-library', () => {
         query: 'oficio',
         zoteroLibraryType: 'user',
         zoteroLibraryId: '0',
+        sort: 'title',
       },
     })
   })
@@ -64,8 +71,45 @@ describe('bibliography-library', () => {
         query: null,
         zoteroLibraryType: null,
         zoteroLibraryId: null,
+        sort: 'title',
       },
     })
+  })
+
+  it('sends the requested order on the wire', async () => {
+    mockInvoke.mockResolvedValueOnce({ works: [], total: 0 })
+
+    await bibliographyListWorks({ offset: 0, limit: 50, sort: 'recent' })
+
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_list_works', {
+      request: {
+        offset: 0,
+        limit: 50,
+        query: null,
+        zoteroLibraryType: null,
+        zoteroLibraryId: null,
+        sort: 'recent',
+      },
+    })
+  })
+
+  it('reads and remembers the listing order through its stable key', () => {
+    expect(BIBLIOTECA_SORT_STORAGE_KEY).toBe('entropia:biblioteca:sort')
+    expect(readBibliotecaSort()).toBe('title')
+
+    writeBibliotecaSort('recent')
+
+    expect(localStorage.getItem(BIBLIOTECA_SORT_STORAGE_KEY)).toBe('recent')
+    expect(readBibliotecaSort()).toBe('recent')
+  })
+
+  it('falls back to the title order for anything unrecognised', () => {
+    localStorage.setItem(BIBLIOTECA_SORT_STORAGE_KEY, 'by-magic')
+    expect(readBibliotecaSort()).toBe('title')
+    expect(parseBibliotecaSort(null)).toBe('title')
+    expect(parseBibliotecaSort('"recent"')).toBe('title')
+    const sorts: BibliotecaSort[] = ['title', 'recent']
+    expect(sorts).toContain(readBibliotecaSort())
   })
 
   it('reads one work detail by its catalog item id', async () => {

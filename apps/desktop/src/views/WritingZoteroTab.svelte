@@ -1,7 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { ActionIcon, Button, IconButton, SearchBar } from '@entropia/ui'
-  import { t } from '$lib/i18n'
+  import {
+    ActionIcon,
+    Button,
+    IconButton,
+    SearchBar,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
+  import { locale, t } from '$lib/i18n'
   import {
     bibliographyDerivedProgress,
     formatEtaMs,
@@ -82,20 +89,71 @@
   let addId = $state('')
   let addError = $state<string | null>(null)
   let adding = $state(false)
+  let libraryMenuOpen = $state(false)
+  let typeMenuOpen = $state(false)
+
+  const currentLocale = locale
 
   function nameOf(option: LibraryOption): string {
     const base = libraryLabel(option, t('writing.zoteroLibraryPersonal'))
     return option.unverified ? `${base} ${t('writing.zoteroLibraryUnverified')}` : base
   }
 
-  function chooseLibrary(event: Event) {
-    const value = (event.currentTarget as HTMLSelectElement).value
-    const slash = value.indexOf('/')
-    if (slash < 0) return
-    const type = value.slice(0, slash)
-    const id = value.slice(slash + 1)
-    if ((type !== 'user' && type !== 'group') || !id) return
-    store.select(type, id)
+  /**
+   * The name the picker shows: the offered name of the selected library, or
+   * its raw id while the offered list has not caught up with the selection.
+   */
+  const libraryHeading = $derived.by(() => {
+    $currentLocale
+    const picked = libraries.find(
+      (option) =>
+        option.libraryType === snapshot.selection.libraryType &&
+        option.libraryId === snapshot.selection.libraryId
+    )
+    return picked
+      ? nameOf(picked)
+      : `${snapshot.selection.libraryType}/${snapshot.selection.libraryId}`
+  })
+
+  /** The picker: one radio entry per offered library, checked = selected. */
+  const libraryItems = $derived.by<ToolbarMenuItem[]>(() => {
+    $currentLocale
+    return libraries.map((option) => ({
+      kind: 'radio' as const,
+      id: `${option.libraryType}/${option.libraryId}`,
+      label: nameOf(option),
+      checked:
+        option.libraryType === snapshot.selection.libraryType &&
+        option.libraryId === snapshot.selection.libraryId,
+      onselect: () => chooseLibrary(option),
+    }))
+  })
+
+  const addTypeLabel = $derived.by(() => {
+    $currentLocale
+    return addType === 'user'
+      ? t('writing.zoteroLibraryTypeUser')
+      : t('writing.zoteroLibraryTypeGroup')
+  })
+
+  const addTypeItems = $derived.by<ToolbarMenuItem[]>(() => {
+    $currentLocale
+    return (['user', 'group'] as const).map((type) => ({
+      kind: 'radio' as const,
+      id: type,
+      label:
+        type === 'user' ? t('writing.zoteroLibraryTypeUser') : t('writing.zoteroLibraryTypeGroup'),
+      checked: addType === type,
+      onselect: () => {
+        typeMenuOpen = false
+        addType = type
+      },
+    }))
+  })
+
+  function chooseLibrary(option: LibraryOption): void {
+    libraryMenuOpen = false
+    store.select(option.libraryType, option.libraryId)
     void store.connect()
   }
 
@@ -225,6 +283,29 @@
             passagesDone: derived.passagesDone,
             passagesTotal: derived.passagesTotal,
           }
+          if (derived.blocked > 0) {
+            const waiting = {
+              ...counts,
+              blocked: derived.blocked,
+              reason: derived.blockedReason,
+            }
+            // Parked work that cannot move is an attention line: the counts
+            // stop being progress and start naming what only the owner can
+            // do about it. While other work still moves, the same note is a
+            // plain notice beside the estimate of the actionable part.
+            return derived.remainingActive === 0
+              ? { text: t('writing.zoteroBibliographySyncBlockedBacklog', waiting), error: true }
+              : {
+                  text:
+                    derived.etaMs == null
+                      ? t('writing.zoteroBibliographySyncBlockedBacklog', waiting)
+                      : t('writing.zoteroBibliographySyncIndexingWaiting', {
+                          ...waiting,
+                          eta: formatEtaMs(derived.etaMs),
+                        }),
+                  error: false,
+                }
+          }
           return {
             text:
               derived.etaMs == null
@@ -288,29 +369,34 @@
     {/key}
   {:else}
     <div class="zotero__library">
-      <label class="zotero__library-label" for="zotero-library">
+      <span class="zotero__library-label" id="zotero-library-label">
         {t('writing.zoteroLibrary')}
-      </label>
-      <!-- Keyed on the offered set: the list arrives after the mount, and a
-        select keeps the value it was mounted with when its options change
-        underneath it. Remounting applies the store selection together with
-        the full options, so a selection outside the initial personal-only
-        option still shows. Reloads happen on mount and after an add, never
-        mid-interaction with the select itself. -->
-      {#key libraries.map((option) => `${option.libraryType}/${option.libraryId}`).join(',')}
-        <select
-          id="zotero-library"
-          class="zotero__select"
-          value={`${snapshot.selection.libraryType}/${snapshot.selection.libraryId}`}
-          onchange={chooseLibrary}
-        >
-          {#each libraries as option (`${option.libraryType}/${option.libraryId}`)}
-            <option value={`${option.libraryType}/${option.libraryId}`}>
-              {nameOf(option)}
-            </option>
-          {/each}
-        </select>
-      {/key}
+      </span>
+      <!-- The same radio menu BibliotecaView paints for its library picker:
+        the project rule forbids a native select. The checked entry and the
+        trigger name derive from the store selection live, so — unlike the
+        select this replaces — nothing is remounted when the offered list
+        arrives after the mount. -->
+      <ToolbarMenu
+        label={t('writing.zoteroLibrary')}
+        items={libraryItems}
+        bind:open={libraryMenuOpen}
+      >
+        {#snippet trigger(props, { open })}
+          <button
+            type="button"
+            class="zotero__menu-trigger"
+            class:zotero__menu-trigger--open={open}
+            aria-labelledby="zotero-library-label zotero-library-value"
+            {...props}
+          >
+            <span class="zotero__menu-trigger-label" id="zotero-library-value">
+              {libraryHeading}
+            </span>
+            <ActionIcon name="chevron-down" size={12} />
+          </button>
+        {/snippet}
+      </ToolbarMenu>
       <Button
         variant="ghost"
         size="sm"
@@ -326,21 +412,29 @@
 
     {#if showAdd}
       <form class="zotero__add" onsubmit={submitAdd}>
-        <label class="zotero__add-label" for="zotero-add-type">
+        <span class="zotero__add-label" id="zotero-add-type-label">
           {t('writing.zoteroLibraryType')}
-        </label>
-        <select
-          id="zotero-add-type"
-          class="zotero__select"
-          value={addType}
-          onchange={(event) => {
-            const next = (event.currentTarget as HTMLSelectElement).value
-            if (next === 'user' || next === 'group') addType = next
-          }}
+        </span>
+        <ToolbarMenu
+          label={t('writing.zoteroLibraryType')}
+          items={addTypeItems}
+          bind:open={typeMenuOpen}
         >
-          <option value="user">{t('writing.zoteroLibraryTypeUser')}</option>
-          <option value="group">{t('writing.zoteroLibraryTypeGroup')}</option>
-        </select>
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="zotero__menu-trigger"
+              class:zotero__menu-trigger--open={open}
+              aria-labelledby="zotero-add-type-label zotero-add-type-value"
+              {...props}
+            >
+              <span class="zotero__menu-trigger-label" id="zotero-add-type-value">
+                {addTypeLabel}
+              </span>
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
         <label class="zotero__add-label" for="zotero-add-id">
           {t('writing.zoteroLibraryId')}
         </label>
@@ -616,7 +710,6 @@
     font-size: var(--font-size-xs);
   }
 
-  .zotero__select,
   .zotero__input {
     min-height: var(--control-height-sm);
     padding: 0 var(--space-2);
@@ -628,8 +721,38 @@
     max-width: 100%;
   }
 
-  .zotero__select {
-    flex: 1 1 10rem;
+  /* The picker trigger wears this tab's own control look (the select it
+     replaced dressed exactly like the input above), shaped like the library
+     pickers of BibliotecaView and BatchProcessingTab: label, name, chevron. */
+  .zotero__menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    max-width: 260px;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+  }
+
+  .zotero__menu-trigger:hover,
+  .zotero__menu-trigger--open {
+    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-subtle));
+  }
+
+  .zotero__menu-trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .zotero__menu-trigger-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .zotero__add {

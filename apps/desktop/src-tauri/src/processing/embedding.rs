@@ -230,7 +230,7 @@ pub(crate) fn map_embedding_error(error: &str) -> ExecOutput {
         || lower.contains("403")
     {
         return ExecOutput::Blocked {
-            code: "configuration_required".to_string(),
+            code: "configuration_required_embedding".to_string(),
             message: error.to_string(),
         };
     }
@@ -363,7 +363,7 @@ impl Executor for EmbeddingExecutor {
             Ok(contract) => contract,
             Err(error) => {
                 return failed(ExecOutput::Blocked {
-                    code: "configuration_required".to_string(),
+                    code: "configuration_required_embedding".to_string(),
                     message: error,
                 })
             }

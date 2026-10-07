@@ -108,8 +108,9 @@ describe('MapViewer location editing', () => {
 
   it('constrains the location selector inside narrow editor panels', () => {
     expect(mapViewerSource).toContain('box-sizing: border-box;')
+    expect(mapViewerSource).not.toContain('<select')
     expect(mapViewerSource).toMatch(
-      /\.map-viewer__editor select\s*\{[^}]*width: 100%;[^}]*max-width: 100%;/s
+      /\.map-viewer__location-trigger\s*\{[^}]*width: 100%;[^}]*max-width: 100%;/s
     )
   })
 
@@ -158,7 +159,9 @@ describe('MapViewer location editing', () => {
     })
 
     const locationIcon = await screen.findByRole('img', { name: 'Ubicación' })
-    const selector = screen.getByRole('combobox')
+    // The selector is the themed radio menu trigger, never a native select.
+    const selector = screen.getByRole('button', { name: 'Ubicación' })
+    expect(selector).toHaveAttribute('aria-haspopup', 'menu')
     const editLocation = screen.getByRole('button', { name: 'Editar ubicación' })
     const row = selector.closest('.map-viewer__location-row')
 
@@ -230,9 +233,8 @@ describe('MapViewer location editing', () => {
       },
     })
 
-    const locationSelect = await screen.findByRole('combobox', { name: 'Location' })
-    ;(locationSelect as HTMLSelectElement).value = 'place-tucuman'
-    await fireEvent.change(locationSelect)
+    await fireEvent.click(await screen.findByRole('button', { name: 'Location' }))
+    await fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Tucumán' }))
     await fireEvent.click(await screen.findByRole('button', { name: 'Create location' }))
 
     await waitFor(() => expect(leafletMock.markers).toHaveLength(2))

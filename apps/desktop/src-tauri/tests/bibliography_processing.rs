@@ -9826,3 +9826,635 @@ fn p3_sync_status_sees_the_derived_window_before_the_sync_task_settles() {
         "the documented field still reports zero before the sync succeeds"
     );
 }
+
+/// The window tasks of one kind, in admission order.
+fn window_tasks(conn: &rusqlite::Connection, kind: &str) -> Vec<String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id FROM processing_tasks
+              WHERE domain = 'bibliography' AND kind = ?1
+              ORDER BY rowid",
+        )
+        .expect("window tasks");
+    statement
+        .query_map([kind], |row| row.get(0))
+        .expect("window map")
+        .collect::<Result<_, _>>()
+        .expect("window rows")
+}
+
+/// Parks one task `blocked` with the durable record a configuration block
+/// leaves behind: one closed attempt and the code/message the engine named.
+fn park_task_blocked(conn: &rusqlite::Connection, task_id: &str, code: &str, message: &str) {
+    conn.execute(
+        "INSERT INTO processing_attempts
+           (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+         VALUES (?1, 1, 0, 10, 11, 'interrupted')",
+        [task_id],
+    )
+    .expect("insert blocked attempt");
+    conn.execute(
+        "UPDATE processing_tasks
+            SET state = 'blocked', outcome = ?2,
+                last_error_code = ?2, last_error_message = ?3
+          WHERE id = ?1",
+        rusqlite::params![task_id, code, message],
+    )
+    .expect("park blocked");
+}
+
+/// Blocked derived work is not done work: the status counts it beside the
+/// live counts and names, per kind, what it is parked on — profiles wait on
+/// the embedding configuration, extractions on the OCR configuration — so
+/// the screen can say «en espera» and name the right thing to fix. Each
+/// kind's reason is its own: one stable code beside its recorded message,
+/// never borrowed from the other kind.
+#[test]
+fn p3_sync_status_counts_blocked_derived_work_and_names_each_kinds_reason() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-1", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("P3BLK0001", 12), item("P3BLK0002", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 2);
+
+    park_task_blocked(
+        &conn,
+        &profiles[0],
+        "configuration_required_embedding",
+        "OpenRouter API key no configurada. Configurá OpenRouter para generar embeddings.",
+    );
+    conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+            created_at, updated_at)
+         VALUES ('p3-extract-blocked', 'bibliography_extract', 'att-blk', 'bibliography',
+                 'attachment', 'att-blk', 'pending', 9, 9)",
+        [],
+    )
+    .expect("insert extraction");
+    park_task_blocked(
+        &conn,
+        "p3-extract-blocked",
+        "configuration_required_ocr",
+        "configuration: GLM-OCR no está configurado. Andá a Configuración > OCR y cargá una API key antes de usar OCR.",
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((status.profiles_done, status.profiles_total), (0, 2));
+    assert_eq!(status.profiles_blocked, 1);
+    assert_eq!(status.extractions_blocked, 1);
+    let profiles_reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
+    assert_eq!(
+        profiles_reason.code.as_deref(),
+        Some("configuration_required_embedding"),
+        "the embedding block travels as its own stable code"
+    );
+    assert!(
+        profiles_reason
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("OpenRouter"),
+        "the recorded message travels beside the code"
+    );
+    let extractions_reason = status
+        .extractions_blocked_reason
+        .as_ref()
+        .expect("extractions block reason");
+    assert_eq!(
+        extractions_reason.code.as_deref(),
+        Some("configuration_required_ocr"),
+        "the OCR block travels as its own stable code, never as the embedding one"
+    );
+    assert!(
+        extractions_reason
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("GLM-OCR"),
+        "the recorded message travels beside the code"
+    );
+}
+
+/// A block with no stable vocabulary keeps its own code and message verbatim:
+/// the screen words what it knows and shows the rest as recorded.
+#[test]
+fn p3_sync_status_passes_unknown_block_codes_through_untouched() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-3", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(vec![item("P3UNK0001", 12)], Some(1)))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 1);
+    park_task_blocked(&conn, &profiles[0], "source_unstable", "the source moved");
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
+    assert_eq!(reason.code.as_deref(), Some("source_unstable"));
+    assert_eq!(reason.message.as_deref(), Some("the source moved"));
+    assert!(
+        status.extractions_blocked_reason.is_none(),
+        "a kind with nothing blocked names no reason"
+    );
+}
+
+/// The ETA times work that can move, never work parked on the owner: blocked
+/// tasks leave the remaining count, and once every remaining task of a kind
+/// is blocked its estimate is honestly unknown instead of zero.
+#[test]
+fn p3_sync_eta_excludes_blocked_work_and_is_null_once_only_blocked_remains() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-blocked-2", "user", "0").expect("request");
+
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![
+            ScriptStep::Page(page(
+                vec![item("P3ETA0001", 12), item("P3ETA0002", 3)],
+                Some(3),
+            )),
+            ScriptStep::Page(page(vec![item("P3ETA0003", 4)], Some(3))),
+        ],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 3);
+
+    // Three finished attempts of 1000 ms are the sample: one unit takes 1000 ms.
+    settle_task_with_attempts(
+        &conn,
+        &profiles[0],
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+    park_task_blocked(
+        &conn,
+        &profiles[1],
+        "configuration_required",
+        "OpenRouter API key no configurada.",
+    );
+
+    let mixed = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        mixed.eta_ms,
+        Some(1_000),
+        "1 actionable task × 1000 ms: the blocked task waits on the owner, not on the clock"
+    );
+
+    park_task_blocked(
+        &conn,
+        &profiles[2],
+        "configuration_required",
+        "OpenRouter API key no configurada.",
+    );
+    let parked = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!((parked.profiles_done, parked.profiles_total), (1, 3));
+    assert_eq!(parked.profiles_blocked, 2);
+    assert_eq!(
+        parked.eta_ms, None,
+        "every remaining task of the kind is blocked: the estimate is unknown, never zero"
+    );
+}
+
+/// The progress window is the whole unsettled backlog, not one sync's slice
+/// of it: a newer sync that found nothing new must never hide the pending
+/// and blocked derived work older syncs left behind. The requested sync's
+/// own fields (state, new counts) still describe the requested sync alone.
+#[test]
+fn p3_sync_status_window_covers_the_oldest_unsettled_backlog_across_syncs() {
+    let (dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let first =
+        apply_bibliography_sync_request(&conn, "backlog-old", "user", "0").expect("first sync");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(
+            vec![item("BKLG0001", 12), item("BKLG0002", 3)],
+            Some(2),
+        ))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 2);
+    // One parks on configuration; one keeps waiting. The backlog is alive.
+    park_task_blocked(
+        &conn,
+        &profiles[0],
+        "configuration_required_embedding",
+        "OpenRouter API key no configurada.",
+    );
+
+    // A second sync that finds nothing new queues no derived work at all.
+    let second =
+        apply_bibliography_sync_request(&conn, "backlog-new", "user", "0").expect("second sync");
+    let outcome = run_bibliography_once(&dir, &conn, vec![]);
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(status.state, "succeeded");
+    assert_eq!(
+        (status.new_profiles, status.new_extractions),
+        (0, 0),
+        "the requested sync's own fields say what IT queued: nothing"
+    );
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 2),
+        "the window covers the older sync's unsettled backlog, not just the new sync's slice"
+    );
+    assert_eq!(status.profiles_blocked, 1);
+
+    // The older sync reads the same whole backlog: one window, one truth.
+    let old = bibliography_sync_status(&conn, &first.task_id).expect("older status");
+    assert_eq!(
+        (old.profiles_done, old.profiles_total),
+        (0, 2),
+        "both reads describe the same unsettled backlog"
+    );
+}
+
+/// Everything older is settled: the window falls back to the requested
+/// sync's own slice — and still counts what that slice holds.
+#[test]
+fn p3_sync_status_window_falls_back_to_the_requested_sync_once_older_work_is_settled() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let _first =
+        apply_bibliography_sync_request(&conn, "backlog-fb-old", "user", "0").expect("first sync");
+    let outcome = run_bibliography_once(
+        &dir,
+        &conn,
+        vec![ScriptStep::Page(page(vec![item("BKFB0001", 12)], Some(1)))],
+    );
+    assert!(matches!(outcome, RunOneOutcome::Succeeded { .. }));
+    let profiles = window_tasks(&conn, "bibliography_profile");
+    assert_eq!(profiles.len(), 1);
+    settle_task_with_attempts(&conn, &profiles[0], &[(1_000, 2_000)]);
+
+    let second =
+        apply_bibliography_sync_request(&conn, "backlog-fb-new", "user", "0").expect("second sync");
+
+    // Nothing unsettled is left anywhere: the requested window stands alone.
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 0),
+        "the settled older backlog is history; the window is the requested sync's own"
+    );
+
+    // Work admitted after the new sync is that window's business and shows.
+    let item_id = seed_catalog(&mut conn, "BKFB0002", "Obra posterior", "Resumen.");
+    admit_profile_demand(&conn, &item_id);
+    let status = bibliography_sync_status(&conn, &second.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "the fallback window counts the requested sync's own derived work"
+    );
+}
+
+// ── Distinct subjects, not task rows ──────────────────────────────────────
+//
+// One work can carry several `bibliography_profile` tasks in the same
+// backlog window (sync admission queues one, a re-demand queues another when
+// an extraction moves its pages), and one attachment can carry several
+// `bibliography_extract` tasks the same way. The counts describe the
+// subjects — works and attachments — classified by each subject's *latest*
+// task in the window (max rowid): never the rows, or one work would count
+// several times and the screen would show more fichas than the library has
+// works.
+
+/// One work with two profile tasks in the window is one work: its latest
+/// task decides whether it is done — a succeeded task under a newer pending
+/// one leaves the work unfinished — and both tasks settled count the work
+/// once. Distinct works never collapse into each other.
+#[test]
+fn p3_sync_status_counts_distinct_works_by_their_latest_task_in_the_window() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-work-1", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-1-a",
+        "bibliography_profile",
+        "item",
+        "work-1",
+        &contract,
+    );
+    settle_task_with_attempts(&conn, "subj-work-1-a", &[(1_000, 2_000)]);
+    // The re-demand: one more task for the same work, admitted later.
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-1-b",
+        "bibliography_profile",
+        "item",
+        "work-1",
+        &contract,
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "one work with a succeeded profile and a newer pending one: one work left, none done"
+    );
+
+    settle_task_with_attempts(&conn, "subj-work-1-b", &[(3_000, 4_000)]);
+    let settled = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (settled.profiles_done, settled.profiles_total),
+        (1, 1),
+        "both tasks settled: the one work is done exactly once"
+    );
+
+    // A second work is a second unit whatever its task count: distinct
+    // subjects never collapse into each other.
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-2-a",
+        "bibliography_profile",
+        "item",
+        "work-2",
+        &contract,
+    );
+    let two_works = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (two_works.profiles_done, two_works.profiles_total),
+        (1, 2),
+        "a distinct work adds one unit, not one row"
+    );
+}
+
+/// A work whose latest task is parked waits on the owner even when an older
+/// task of the same work succeeded: the classification is the latest word,
+/// never the sum of every row.
+#[test]
+fn p3_sync_status_counts_a_work_by_its_latest_task_when_it_is_blocked() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-work-blk", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    let contract =
+        entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("effective embedding contract")
+            .hash;
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-blk-a",
+        "bibliography_profile",
+        "item",
+        "work-blk",
+        &contract,
+    );
+    settle_task_with_attempts(&conn, "subj-work-blk-a", &[(1_000, 2_000)]);
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-work-blk-b",
+        "bibliography_profile",
+        "item",
+        "work-blk",
+        &contract,
+    );
+    park_task_blocked(
+        &conn,
+        "subj-work-blk-b",
+        "configuration_required_embedding",
+        "OpenRouter API key no configurada.",
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.profiles_done, status.profiles_total),
+        (0, 1),
+        "the latest task parked: the work waits on the owner, not done"
+    );
+    assert_eq!(status.profiles_blocked, 1, "the one work is blocked once");
+    let reason = status
+        .profiles_blocked_reason
+        .as_ref()
+        .expect("profiles block reason");
+    assert_eq!(
+        reason.code.as_deref(),
+        Some("configuration_required_embedding"),
+        "the reason travels from the work's latest blocked task"
+    );
+}
+
+/// The pasajes side counts attachments the same way: several extraction
+/// tasks for one attachment are one attachment, classified by its latest
+/// task — pending under a settled one, settled once all settle, blocked when
+/// the newest is parked.
+#[test]
+fn p3_sync_status_counts_distinct_attachments_by_their_latest_task_in_the_window() {
+    let (_dir, conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "subj-att-1", "user", "0").expect("request");
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-a",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(&conn, "subj-att-1-a", &[(1_000, 2_000)]);
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-b",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (status.extractions_done, status.extractions_total),
+        (0, 1),
+        "one attachment with a succeeded extraction and a newer pending one"
+    );
+
+    settle_task_with_attempts(&conn, "subj-att-1-b", &[(3_000, 4_000)]);
+    let settled = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (settled.extractions_done, settled.extractions_total),
+        (1, 1),
+        "both tasks settled: the one attachment is done exactly once"
+    );
+
+    insert_derived_task(
+        &conn,
+        &batch,
+        "subj-att-1-c",
+        "bibliography_extract",
+        "attachment",
+        "att-1",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    park_task_blocked(
+        &conn,
+        "subj-att-1-c",
+        "configuration_required_ocr",
+        "configuration: GLM-OCR no está configurado.",
+    );
+    let blocked = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert_eq!(
+        (blocked.extractions_done, blocked.extractions_total),
+        (0, 1),
+        "the latest task parked: the attachment waits on the owner"
+    );
+    assert_eq!(blocked.extractions_blocked, 1);
+    let reason = blocked
+        .extractions_blocked_reason
+        .as_ref()
+        .expect("extractions block reason");
+    assert_eq!(reason.code.as_deref(), Some("configuration_required_ocr"));
+}
+
+// ── Opened works first (P3) ───────────────────────────────────────────────
+
+/// Creates the local-only `app_settings` key/value table the opened-works
+/// bookkeeping lives in (it is not part of any synced schema).
+fn create_app_settings(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )
+    .expect("app_settings table");
+}
+
+/// Seeds the recently-opened works list exactly as the app stores it: the
+/// local `app_settings` key `bibliography_recently_opened`, a JSON array of
+/// `{ "itemId", "openedAt" }` most recent first. Tests write the storage
+/// contract directly so they pin it independently of the writer.
+fn seed_recently_opened(conn: &rusqlite::Connection, entries: &[(&str, i64)]) {
+    create_app_settings(conn);
+    let list: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(item_id, opened_at)| serde_json::json!({ "itemId": item_id, "openedAt": opened_at }))
+        .collect();
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('bibliography_recently_opened', ?1)",
+        rusqlite::params![serde_json::to_string(&list).expect("recently-opened JSON")],
+    )
+    .expect("seed recently-opened");
+}
+
+/// P3 opened works first: the profile demand a sync chains walks the works
+/// the user opened first (most recently opened first), then the rest in the
+/// current recency order (item_version DESC, NULLs last, then item key).
+/// Admission order is execution order, so this is also run order.
+#[test]
+fn p3_profile_admission_walks_opened_works_first_most_recent_first_then_recency() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let newest = seed_catalog(&mut conn, "OPENA001", "Obra nueva", "Resumen A.");
+    let middle = seed_catalog(&mut conn, "OPENB001", "Obra media", "Resumen B.");
+    let oldest = seed_catalog(&mut conn, "OPENC001", "Obra vieja", "Resumen C.");
+    set_item_version(&mut conn, &newest, Some(5));
+    set_item_version(&mut conn, &middle, Some(3));
+    set_item_version(&mut conn, &oldest, Some(1));
+    // The user opened the oldest work most recently, then the newest one.
+    seed_recently_opened(&conn, &[(oldest.as_str(), 300), (newest.as_str(), 200)]);
+
+    let created = repository::admit_stale_profile_demands(&conn, "lib-1").expect("sync admission");
+
+    assert_eq!(created, 3, "all three works demand a profile");
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_profile"),
+        vec![oldest, newest, middle],
+        "opened works first (most recently opened first), then the rest in recency order"
+    );
+}
+
+/// Extraction admission follows its work's opened rank: attachments walk
+/// their work's order (opened first, then recency), keeping the attachment
+/// row order inside one work.
+#[test]
+fn p3_extraction_admission_follows_the_works_opened_rank() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let mut attachments = Vec::new();
+    for (index, (key, version)) in [("EXPA0001", 5i64), ("EXPB0001", 3), ("EXPC0001", 1)]
+        .into_iter()
+        .enumerate()
+    {
+        let item_id = seed_catalog(&mut conn, key, &format!("Obra {key}"), "Resumen.");
+        set_item_version(&mut conn, &item_id, Some(version));
+        let pdf = make_text_pdf(&[(
+            50.0,
+            750.0,
+            "Texto extraible del adjunto con longitud suficiente para calidad",
+        )]);
+        let path = write_temp_pdf(&dir, &format!("expediente{index}.pdf"), &pdf);
+        let attachment_id = seed_attachment(
+            &mut conn,
+            &item_id,
+            &format!("ATT{index}"),
+            "linked_file",
+            Some(&path),
+            &format!("expediente{index}.pdf"),
+            "application/pdf",
+        );
+        attachments.push((attachment_id, item_id));
+    }
+    let (attachment_a, item_a) = attachments[0].clone();
+    let (attachment_b, _item_b) = attachments[1].clone();
+    let (attachment_c, item_c) = attachments[2].clone();
+    // The user opened work C most recently, then work A.
+    seed_recently_opened(&conn, &[(item_c.as_str(), 300), (item_a.as_str(), 200)]);
+
+    let created = repository::admit_stale_extraction_demands(&conn, "lib-1").expect("admission");
+
+    assert_eq!(created, 3, "every readable attachment demands extraction");
+    assert_eq!(
+        derived_task_subjects(&conn, "bibliography_extract"),
+        vec![attachment_c, attachment_a, attachment_b],
+        "extraction admission follows the work's opened rank"
+    );
+}

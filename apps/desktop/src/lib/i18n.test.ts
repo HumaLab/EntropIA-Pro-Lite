@@ -92,6 +92,35 @@ describe('i18n', () => {
       'Bibliografía: fichas 120/450 · pasajes 30/400'
     )
 
+    // The blocked backlog is said out loud, with what unblocks it — per
+    // kind: embeddings wait on OpenRouter, pasajes on GLM-OCR, and both are
+    // named briefly when both are parked.
+    const waiting = { ...counts, blocked: 2812, reason: 'configurá OpenRouter en Configuración' }
+    expect(t('writing.zoteroBlockedReasonEmbedding')).toBe('configurá OpenRouter en Configuración')
+    expect(t('writing.zoteroBlockedReasonOcr')).toBe('configurá GLM-OCR en Configuración › OCR')
+    expect(t('writing.zoteroBlockedReasonEmbeddingAndOcr')).toBe(
+      'configurá OpenRouter en Configuración y GLM-OCR en Configuración › OCR'
+    )
+    expect(t('writing.zoteroBibliographySyncBlockedBacklog', waiting)).toBe(
+      'Fichas 120/450 · Pasajes 30/400 · 2812 en espera: configurá OpenRouter en Configuración'
+    )
+    expect(
+      t('writing.zoteroBibliographySyncIndexingWaiting', {
+        ...counts,
+        eta: '12 min',
+        blocked: 70,
+        reason: 'configurá OpenRouter en Configuración',
+      })
+    ).toBe(
+      'Fichas 120/450 · Pasajes 30/400 · ~12 min restantes · 70 en espera: configurá OpenRouter en Configuración'
+    )
+    expect(t('batch.statusBibliographyWaiting', { ...counts, blocked: 70 })).toBe(
+      'Bibliografía: fichas 120/450 · pasajes 30/400 · 70 en espera'
+    )
+    expect(t('batch.statusBibliographyBlocked', waiting)).toBe(
+      'Bibliografía: 2812 en espera: configurá OpenRouter en Configuración'
+    )
+
     locale.set('en')
 
     expect(t('writing.zoteroBibliographySyncIndexing', { ...counts, eta: '12 min' })).toBe(
@@ -105,6 +134,36 @@ describe('i18n', () => {
     expect(t('writing.zoteroEtaHoursMinutes', { hours: 2, minutes: 5 })).toBe('2 h 5 min')
     expect(t('batch.statusBibliography', counts)).toBe(
       'Bibliography: works 120/450 · passages 30/400'
+    )
+
+    const waitingEn = {
+      ...counts,
+      blocked: 2812,
+      reason: 'configure OpenRouter in Settings',
+    }
+    expect(t('writing.zoteroBlockedReasonEmbedding')).toBe('configure OpenRouter in Settings')
+    expect(t('writing.zoteroBlockedReasonOcr')).toBe('configure GLM-OCR in Settings › OCR')
+    expect(t('writing.zoteroBlockedReasonEmbeddingAndOcr')).toBe(
+      'configure OpenRouter in Settings and GLM-OCR in Settings › OCR'
+    )
+    expect(t('writing.zoteroBibliographySyncBlockedBacklog', waitingEn)).toBe(
+      'Works 120/450 · Passages 30/400 · 2812 waiting: configure OpenRouter in Settings'
+    )
+    expect(
+      t('writing.zoteroBibliographySyncIndexingWaiting', {
+        ...counts,
+        eta: '12 min',
+        blocked: 70,
+        reason: 'configure OpenRouter in Settings',
+      })
+    ).toBe(
+      'Works 120/450 · Passages 30/400 · ~12 min left · 70 waiting: configure OpenRouter in Settings'
+    )
+    expect(t('batch.statusBibliographyWaiting', { ...counts, blocked: 70 })).toBe(
+      'Bibliography: works 120/450 · passages 30/400 · 70 waiting'
+    )
+    expect(t('batch.statusBibliographyBlocked', waitingEn)).toBe(
+      'Bibliography: 2812 waiting: configure OpenRouter in Settings'
     )
   })
 
@@ -281,6 +340,28 @@ describe('i18n', () => {
       'snippetMaxChars cannot exceed contextMaxChars.'
     )
     expect(t('settings.ragParams.restoreDefaults')).toBe('Restore defaults')
+  })
+
+  it('exposes the API key clearing copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    expect(t('settings.clearKey', { service: 'OpenRouter' })).toBe('Quitar clave de OpenRouter')
+    expect(t('settings.clearKeyTitle', { service: 'OpenRouter' })).toBe(
+      '¿Quitar la clave de OpenRouter?'
+    )
+    expect(t('settings.clearKeyMessage', { service: 'OpenRouter' })).toContain('OpenRouter')
+    expect(t('settings.clearKeyConfirm')).toBe('Quitar clave')
+    expect(t('settings.keyNotConfigured')).toBe('Sin clave guardada')
+
+    locale.set('en')
+
+    expect(t('settings.clearKey', { service: 'OpenRouter' })).toBe('Clear OpenRouter key')
+    expect(t('settings.clearKeyTitle', { service: 'OpenRouter' })).toBe(
+      'Remove the OpenRouter key?'
+    )
+    expect(t('settings.clearKeyMessage', { service: 'OpenRouter' })).toContain('OpenRouter')
+    expect(t('settings.clearKeyConfirm')).toBe('Remove key')
+    expect(t('settings.keyNotConfigured')).toBe('No key stored')
   })
 
   it('preserves local model wiring copy in both locales', async () => {

@@ -41,7 +41,17 @@
   import { syncStore } from '$lib/sync-store'
   import { writing } from '$lib/writing'
   import { appendLog } from '$lib/logs'
-  import { tooltip, ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
+  import {
+    tooltip,
+    ActionIcon,
+    Button,
+    Card,
+    Checkbox,
+    ConfirmDialog,
+    Input,
+    ToolbarMenu,
+    type ToolbarMenuItem,
+  } from '@entropia/ui'
 
   // First-sync preflight threshold (DESIGN §11): 500 MB of pending blob bytes.
   const PREFLIGHT_THRESHOLD_BYTES = 500 * 1024 * 1024
@@ -113,6 +123,7 @@
   let plansError = $state<string | null>(null)
   let selectedPlanId = $state('')
   let planNote = $state('')
+  let planMenuOpen = $state(false)
   let requestingPlan = $state(false)
   let planRequestError = $state<string | null>(null)
   // Locally-tracked pending request (seeds from usage, then updates on submit/409).
@@ -480,6 +491,24 @@
     const label = canonicalPlanLabel(plan)
     return t('sync.upgrade.planOption', { name: label.name, quota: label.quota })
   }
+
+  /** The plan picker: the canonical radio pattern (a ToolbarMenu whose checked
+   *  entry is the selection), never a native select. */
+  const planMenuItems = $derived<ToolbarMenuItem[]>(
+    targetPlans.map((plan) => ({
+      kind: 'radio' as const,
+      id: plan.id,
+      label: planOptionLabel(plan),
+      checked: plan.id === selectedPlanId,
+      onselect: () => {
+        selectedPlanId = plan.id
+      },
+    }))
+  )
+  const selectedPlanLabel = $derived.by(() => {
+    const plan = targetPlans.find((candidate) => candidate.id === selectedPlanId)
+    return plan ? planOptionLabel(plan) : t('sync.upgrade.targetPlanPlaceholder')
+  })
 
   async function openPlanModal() {
     showPlanModal = true
@@ -860,20 +889,33 @@
   >
     <div class="sync-plan-modal">
       <div class="sync-plan-modal__field">
-        <label class="sync-card__label" for="sync-plan-target">
+        <span class="sync-card__label" id="sync-plan-target-label">
           {t('sync.upgrade.targetPlanLabel')}
-        </label>
-        <select
-          id="sync-plan-target"
-          class="sync-card__number-input sync-plan-modal__select"
-          bind:value={selectedPlanId}
-          disabled={plansLoading || targetPlans.length === 0}
+        </span>
+        <!-- The app's themed choice menu: the operating system must never draw
+             this control. -->
+        <ToolbarMenu
+          label={t('sync.upgrade.targetPlanLabel')}
+          items={planMenuItems}
+          bind:open={planMenuOpen}
         >
-          <option value="" disabled>{t('sync.upgrade.targetPlanPlaceholder')}</option>
-          {#each targetPlans as plan (plan.id)}
-            <option value={plan.id}>{planOptionLabel(plan)}</option>
-          {/each}
-        </select>
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              id="sync-plan-target"
+              class="sync-plan-modal__trigger"
+              class:sync-plan-modal__trigger--open={open}
+              aria-labelledby="sync-plan-target-label sync-plan-target-value"
+              disabled={plansLoading || targetPlans.length === 0}
+              {...props}
+            >
+              <span class="sync-plan-modal__trigger-label" id="sync-plan-target-value"
+                >{selectedPlanLabel}</span
+              >
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
       </div>
 
       <div class="sync-plan-modal__field">
@@ -1167,8 +1209,47 @@
     flex-direction: column;
   }
 
-  .sync-plan-modal__select {
-    appearance: auto;
+  /* The trigger of the plan choice. It replaces the native select the modal
+     used to render (the project rule forbids one): label, name, chevron, in
+     this card's own input look. */
+  .sync-plan-modal__trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: var(--control-height-md);
+    padding: 0 var(--space-3);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    background-color: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
+    border-radius: var(--radius-input);
+    cursor: pointer;
+  }
+
+  .sync-plan-modal__trigger:hover,
+  .sync-plan-modal__trigger--open {
+    border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-hairline));
+  }
+
+  .sync-plan-modal__trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  .sync-plan-modal__trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .sync-plan-modal__trigger-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .sync-plan-modal__textarea {

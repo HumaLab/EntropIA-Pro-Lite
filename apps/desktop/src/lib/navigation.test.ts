@@ -158,15 +158,15 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
-  it('db browser breadcrumb shows Base de datos', () => {
+  it('db browser breadcrumb is its own root: Base de datos', () => {
     nav.navigate({ name: 'db-browser' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Base de datos'])
+    expect(nav.breadcrumb).toEqual(['Base de datos'])
   })
 
   it('navigates to the navegador and shows it in the breadcrumb', () => {
     nav.navigate({ name: 'navegador' })
     expect(nav.current).toEqual({ name: 'navegador' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Navegador'])
+    expect(nav.breadcrumb).toEqual(['Navegador'])
   })
 
   it('navigates to rag chat view', () => {
@@ -175,9 +175,9 @@ describe('NavigationStore', () => {
     expect(nav.canGoBack).toBe(true)
   })
 
-  it('rag chat breadcrumb shows Chat', () => {
+  it('rag chat breadcrumb is its own root: Chat', () => {
     nav.navigate({ name: 'rag-chat' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Chat'])
+    expect(nav.breadcrumb).toEqual(['Chat'])
   })
 
   it('openRootSection rebuilds canonical breadcrumb for rag chat', () => {
@@ -186,13 +186,51 @@ describe('NavigationStore', () => {
     nav.openRootSection({ name: 'rag-chat' })
 
     expect(nav.current).toEqual({ name: 'rag-chat' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Chat'])
+    expect(nav.breadcrumb).toEqual(['Chat'])
     expect(nav.canGoBack).toBe(true)
   })
 
-  it('settings breadcrumb shows Configuracion', () => {
+  it('each section is its own breadcrumb root, a sibling of Colecciones', () => {
+    nav.navigate({ name: 'db-browser' })
+    expect(nav.breadcrumb).toEqual(['Base de datos'])
+
+    nav.navigate({ name: 'rag-chat' })
+    expect(nav.breadcrumb).toEqual(['Chat'])
+
+    nav.navigate({ name: 'research' })
+    expect(nav.breadcrumb).toEqual(['Investigación'])
+
+    nav.navigate({ name: 'writing' })
+    expect(nav.breadcrumb).toEqual(['Escritura'])
+
+    nav.navigate({ name: 'biblioteca' })
+    expect(nav.breadcrumb).toEqual(['Biblioteca'])
+
     nav.navigate({ name: 'settings' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+    expect(nav.breadcrumb).toEqual(['Configuración'])
+
+    nav.navigate({ name: 'navegador' })
+    expect(nav.breadcrumb).toEqual(['Navegador'])
+  })
+
+  it('investigation breadcrumbs under Investigación, never under Colecciones', () => {
+    nav.navigate({ name: 'research' })
+    nav.navigate({ name: 'investigation', jobId: 'j1', title: 'Pregunta larga' })
+
+    expect(nav.breadcrumb).toEqual(['Investigación', 'Pregunta larga'])
+  })
+
+  it('a writing document breadcrumbs under Escritura, never under Colecciones', () => {
+    nav.navigate({ name: 'writing', documentId: 'w1', documentTitle: 'Manuscrito' })
+    expect(nav.breadcrumb).toEqual(['Escritura', 'Manuscrito'])
+
+    nav.navigate({ name: 'writing' })
+    expect(nav.breadcrumb).toEqual(['Escritura'])
+  })
+
+  it('settings breadcrumb is its own root: Configuración', () => {
+    nav.navigate({ name: 'settings' })
+    expect(nav.breadcrumb).toEqual(['Configuración'])
   })
 
   it('can go back from settings to home', () => {
@@ -206,7 +244,7 @@ describe('NavigationStore', () => {
     nav.navigate({ name: 'collection', id: 'c1', collectionName: 'Test' })
     nav.replace({ name: 'settings' })
     expect(nav.current).toEqual({ name: 'settings' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+    expect(nav.breadcrumb).toEqual(['Configuración'])
   })
 
   it('openRootSection rebuilds canonical breadcrumb for settings', () => {
@@ -222,7 +260,7 @@ describe('NavigationStore', () => {
     nav.openRootSection({ name: 'settings' })
 
     expect(nav.current).toEqual({ name: 'settings' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+    expect(nav.breadcrumb).toEqual(['Configuración'])
     expect(nav.canGoBack).toBe(true)
   })
 
@@ -232,7 +270,7 @@ describe('NavigationStore', () => {
     nav.openRootSection({ name: 'settings' })
 
     expect(nav.current).toEqual({ name: 'settings' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Configuración'])
+    expect(nav.breadcrumb).toEqual(['Configuración'])
 
     nav.back()
     expect(nav.current).toEqual({ name: 'db-browser' })
@@ -877,11 +915,11 @@ describe('NavigationStore — Biblioteca', () => {
     locale.set('es')
   })
 
-  it('opens biblioteca as a root section and breadcrumbs it under Colecciones', () => {
+  it('opens biblioteca as its own breadcrumb root', () => {
     nav.openRootSection({ name: 'biblioteca' })
 
     expect(nav.current).toEqual({ name: 'biblioteca' })
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Biblioteca'])
+    expect(nav.breadcrumb).toEqual(['Biblioteca'])
   })
 
   it('breadcrumbs a bibliography work under Biblioteca and keeps its title', () => {
@@ -894,7 +932,7 @@ describe('NavigationStore — Biblioteca', () => {
       title: 'El oficio de historiador',
     })
 
-    expect(nav.breadcrumb).toEqual(['Colecciones', 'Biblioteca', 'El oficio de historiador'])
+    expect(nav.breadcrumb).toEqual(['Biblioteca', 'El oficio de historiador'])
 
     nav.back()
     expect(nav.current).toEqual({ name: 'biblioteca' })
