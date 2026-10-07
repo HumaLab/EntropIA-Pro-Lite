@@ -3002,20 +3002,34 @@ fn interactive_bibliography_batch_outranks_background_corpus() {
     let biblio_id = admit_bibliography_task(&conn, "lib-prio");
     // Roles follow the physical id order so the test is deterministic:
     // the larger id goes interactive, the smaller stays background.
-    let (hi_batch, hi_task, bg_task) = if ocr_id < biblio_id {
+    let (hi_batch, bg_batch, hi_task, bg_task) = if ocr_id < biblio_id {
         (
             "batch-system-bibliography",
+            "batch-system-manual",
             biblio_id.as_str(),
             ocr_id.as_str(),
         )
     } else {
-        ("batch-system-manual", ocr_id.as_str(), biblio_id.as_str())
+        (
+            "batch-system-manual",
+            "batch-system-bibliography",
+            ocr_id.as_str(),
+            biblio_id.as_str(),
+        )
     };
     conn.execute(
         "UPDATE processing_batches SET priority = 2 WHERE id = ?1",
         [hi_batch],
     )
     .expect("raise the interactive batch");
+    // Manual demand is interactive by construction (the E2c-WU3 manual-work
+    // fix), so the background role is forced explicitly: what this test
+    // locks in is the cross-domain level order of the claim scan.
+    conn.execute(
+        "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+        [bg_batch],
+    )
+    .expect("keep the background batch at background");
 
     let first = repository::claim_next(
         &conn,
@@ -3038,6 +3052,223 @@ fn interactive_bibliography_batch_outranks_background_corpus() {
     .expect("claim scan")
     .expect("the survivor must be runnable");
     assert_eq!(second.task_id, bg_task);
+}
+
+/// E2c-WU3 (manual-work priority): the work the user explicitly requests
+/// outranks the aged background backlog. The owner's archive had two manual
+/// OCR tasks pending behind thousands of bibliography extractions: starvation
+/// aging promotes the background batch to high (1) after 30 minutes, the
+/// claim scan serves the highest batch level first, and manual demand admitted
+/// at background level waited for the whole backlog. A manual demand is
+/// interactive (2) by construction — above anything aging can reach.
+#[test]
+fn manual_demand_jumps_the_aged_bibliography_backlog() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "MANPRIO01", "Obra de fondo", "Resumen.");
+    let attachment_1 = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANPRIOA1",
+        "linked_file",
+        None,
+        "manprio-1.pdf",
+        "application/pdf",
+    );
+    let attachment_2 = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANPRIOA2",
+        "linked_file",
+        None,
+        "manprio-2.pdf",
+        "application/pdf",
+    );
+    seed_corpus_asset(&conn, "manual-priority-asset");
+    // The background bibliography batch as the owner's evidence has it:
+    // aging promoted it to high and a derived backlog waits inside it.
+    let bibliography =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-1",
+        "bibliography_extract",
+        "attachment",
+        &attachment_1,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-2",
+        "bibliography_extract",
+        "attachment",
+        &attachment_2,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    let batch_priority = |id: &str| -> i64 {
+        conn.query_row(
+            "SELECT priority FROM processing_batches WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("batch priority")
+    };
+    // Aging promotes the starved background backlog to high — and stops
+    // there. The cap is what keeps background below interactive forever.
+    assert_eq!(
+        repository::apply_priority_aging(&conn, repository::now_ms()).expect("age"),
+        1
+    );
+    assert_eq!(batch_priority(&bibliography), 1);
+    assert_eq!(
+        repository::apply_priority_aging(&conn, repository::now_ms()).expect("age again"),
+        0
+    );
+    assert_eq!(batch_priority(&bibliography), 1, "aging never reaches 2");
+
+    let ocr_task_id = admit_ocr_task(&conn, "manual-priority-asset");
+    let manual = repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "a manual demand is interactive by construction"
+    );
+
+    let first = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the manual demand must be runnable");
+    assert_eq!(
+        first.task_id, ocr_task_id,
+        "the manual demand jumps ahead of the aged background backlog"
+    );
+    let second = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the backlog must drain after the manual work");
+    assert_eq!(second.kind, "bibliography_extract");
+    assert_eq!(batch_priority(&bibliography), 1);
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "aging never pushes background above interactive"
+    );
+}
+
+/// The manual lane reopens on demand: a cancel resets the system batch's
+/// priority (and withdraws its old demand), and the next click re-opens the
+/// batch and re-raises it to interactive. Cancelled demand stays final —
+/// only the fresh unit flows, and it flows before the background backlog.
+#[test]
+fn a_manual_demand_after_a_cancel_is_interactive_again() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "MANCNCL01", "Obra de fondo", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANCNCLA1",
+        "linked_file",
+        None,
+        "mancncl.pdf",
+        "application/pdf",
+    );
+    seed_corpus_asset(&conn, "manual-cancel-asset");
+    let bibliography =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    conn.execute(
+        "UPDATE processing_batches SET priority = 1 WHERE id = ?1",
+        [&bibliography],
+    )
+    .expect("aged background batch");
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-1",
+        "bibliography_extract",
+        "attachment",
+        &attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    let batch_priority = |id: &str| -> i64 {
+        conn.query_row(
+            "SELECT priority FROM processing_batches WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("batch priority")
+    };
+
+    let first_ocr = admit_ocr_task(&conn, "manual-cancel-asset");
+    let manual = repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    repository::control_batch(&conn, &manual, BatchAction::Cancel, None)
+        .expect("cancel the manual batch");
+    assert_eq!(batch_priority(&manual), 0, "a cancel resets priority");
+    let first_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&first_ocr],
+            |row| row.get(0),
+        )
+        .expect("withdrawn demand state");
+    assert_eq!(
+        first_state, "cancelled",
+        "the withdrawn demand is orphan-cancelled"
+    );
+
+    let second_ocr = admit_ocr_task(&conn, "manual-cancel-asset");
+    assert_ne!(second_ocr, first_ocr, "a fresh demand mints a fresh unit");
+    let (state, desired): (String, String) = conn
+        .query_row(
+            "SELECT state, desired_state FROM processing_batches WHERE id = ?1",
+            [&manual],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("manual batch state");
+    assert_eq!(
+        (state.as_str(), desired.as_str()),
+        ("running", "run"),
+        "the next manual demand reopens the system batch"
+    );
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "the next manual demand re-raises interactive priority"
+    );
+
+    let claimed = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the fresh manual demand must be runnable");
+    assert_eq!(
+        claimed.task_id, second_ocr,
+        "the demand after the cancel is interactive again"
+    );
+    let first_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&first_ocr],
+            |row| row.get(0),
+        )
+        .expect("withdrawn demand state");
+    assert_eq!(
+        first_state, "cancelled",
+        "cancelled demand is never resurrected"
+    );
 }
 
 /// Page source that withdraws real scheduler demand while serving one

@@ -79,6 +79,10 @@ pub fn recover_once_if_needed(db_path: &Path) -> Result<Option<RecoverySummary>,
         Err(error) => return Err(format!("Cannot acquire processing ownership: {error}")),
     }
     let summary = recover_session(&conn, "", repository::now_ms())?;
+    // Startup sweep: an existing manual system batch is interactive again
+    // before the user clicks anything — its pending work must not wait behind
+    // the aged background backlog (see `raise_manual_system_batch`).
+    repository::raise_manual_system_batch(&conn)?;
     *owner = Some(lock);
     spawn_checkpoint_cleanup(db_path.to_path_buf());
     super::scheduler::READY.store(true, std::sync::atomic::Ordering::Release);

@@ -2139,6 +2139,13 @@ pub fn admit_stale_extraction_demands(
 /// always `running` with a complete (empty) snapshot, so admitted units flow
 /// straight to the scheduler without a UI batch around them. Hidden from the
 /// batch history by origin (Unidad 5 lists `user` batches).
+///
+/// `manual` carries the work the user explicitly requests — a clicked OCR, a
+/// requested embedding — so it is interactive (priority 2, the
+/// [`ensure_bibliography_sync_lane`] pattern): every demand re-raises it
+/// because a cancel resets priority, and starvation aging never reaches 2.
+/// The other system origins stay background; aging may promote them to high,
+/// never further.
 pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, String> {
     if origin != "manual" && origin != "repair" && origin != "bibliography" {
         return Err(format!("invalid_selection: unknown system origin {origin}"));
@@ -2148,7 +2155,10 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
         origin,
         &format!("system-{origin}"),
         &format!("batch-system-{origin}"),
-        None,
+        // Manual demand is interactive and re-raised here on every demand;
+        // repair/bibliography keep the background default and age to high at
+        // most.
+        (origin == "manual").then_some(2),
     )
 }
 
@@ -2196,8 +2206,14 @@ fn ensure_system_batch_row(
             other => Err(format!("Failed to read system batch {origin}: {other}")),
         })?
     {
+        // Demand reopens the long-lived container from a finished run and
+        // from a cancel (system batches never finalize on their own — the
+        // origin guard in `maybe_finalize_batch` — so a cancel parks them
+        // `cancelling`): the next demand is fresh work and must flow straight
+        // to the scheduler. Cancelled links and units stay final; only the
+        // batch row is revived.
         conn.execute(
-            "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors')",
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors','cancelling','cancelled')",
             [&id],
         ).map_err(|e| format!("Failed to reopen system batch: {e}"))?;
         if let Some(priority) = priority {
@@ -2225,6 +2241,28 @@ fn ensure_system_batch_row(
         .map_err(|e| format!("Failed to raise system batch {origin}: {e}"))?;
     }
     Ok(new_batch_id.to_string())
+}
+
+/// Startup sweep for the interactive manual lane: re-raises the manual
+/// system batch to priority 2 when its row already exists and is live.
+///
+/// Priority arrives with 0046 and backfills nothing, so an archive whose
+/// `batch-system-manual` predates interactive manual priority would keep the
+/// user's own pending work behind the aged background backlog until the next
+/// demand re-raised it. One UPDATE on the existing row: it never mints a
+/// batch, never touches a cancelled container (a cancel stays final until
+/// fresh demand reopens it), and never raises anything but the manual lane.
+/// Returns whether a row was raised.
+pub fn raise_manual_system_batch(conn: &Connection) -> Result<bool, String> {
+    let raised = conn
+        .execute(
+            "UPDATE processing_batches SET priority = 2
+              WHERE request_id = 'system-manual' AND priority != 2
+                AND state IN ('running', 'ready') AND desired_state = 'run'",
+            [],
+        )
+        .map_err(|e| format!("Failed to raise the manual system batch: {e}"))?;
+    Ok(raised > 0)
 }
 /// A recorded control-plane request: the durable answer to "did this
 /// requestId already run, and with which parameters?". Double-clicks,
@@ -7319,6 +7357,145 @@ mod tests {
         // Idempotent and capped: a second pass promotes nothing, never to 2.
         assert_eq!(apply_priority_aging(&conn, now_ms).expect("age again"), 0);
         assert_eq!(priority("b-old"), 1);
+    }
+
+    #[test]
+    fn manual_system_batch_is_interactive_and_re_raised_on_every_demand() {
+        let (_dir, conn) = batch_db();
+        let priority = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("priority row")
+        };
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        assert_eq!(
+            priority(&manual),
+            2,
+            "deliberate manual work is interactive by construction"
+        );
+        let repair = ensure_system_batch(&conn, "repair").expect("create repair");
+        let bibliography = ensure_system_batch(&conn, "bibliography").expect("create bibliography");
+        assert_eq!(priority(&repair), 0, "repair stays background");
+        assert_eq!(
+            priority(&bibliography),
+            0,
+            "background system batches stay background; aging caps at high"
+        );
+        // An archive whose manual row predates interactive manual priority
+        // (0046 backfills nothing) — or was reset by a cancel — is re-raised
+        // by the next demand.
+        conn.execute(
+            "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+            [&manual],
+        )
+        .expect("reset priority");
+        assert_eq!(
+            ensure_system_batch(&conn, "manual").expect("reopen"),
+            manual
+        );
+        assert_eq!(
+            priority(&manual),
+            2,
+            "every demand re-raises the manual lane"
+        );
+    }
+
+    #[test]
+    fn manual_demand_reopens_a_cancelled_manual_batch_and_re_raises_it() {
+        let (_dir, conn) = batch_db();
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        let first = admit_or_attach(&conn, &manual, "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("first demand");
+        control_batch(&conn, &manual, BatchAction::Cancel, None).expect("cancel");
+        let (state, priority): (String, i64) = conn
+            .query_row(
+                "SELECT state, priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("cancelled batch row");
+        assert_eq!(state, "cancelling");
+        assert_eq!(priority, 0, "a cancel resets priority");
+
+        // The next demand is fresh work: it reopens the long-lived container
+        // and re-raises it, and only the fresh unit flows.
+        let reopened = ensure_system_batch(&conn, "manual").expect("next demand");
+        assert_eq!(reopened, manual);
+        let (state, desired, priority): (String, String, i64) = conn
+            .query_row(
+                "SELECT state, desired_state, priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("reopened batch row");
+        assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+        assert_eq!(
+            priority, 2,
+            "the next demand re-raises interactive priority"
+        );
+        let second = admit_or_attach(&conn, &manual, "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("second demand");
+        assert_ne!(
+            first.task_id, second.task_id,
+            "a fresh demand is a fresh unit"
+        );
+        let claimed = claim_next(&conn, "s", &["ocr"], 1)
+            .expect("claim")
+            .expect("the fresh manual demand must be runnable");
+        assert_eq!(claimed.task_id, second.task_id);
+        let first_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("withdrawn demand state");
+        assert_eq!(
+            first_state, "cancelled",
+            "cancelled demand is never resurrected"
+        );
+    }
+
+    #[test]
+    fn startup_sweep_re_raises_an_existing_manual_batch_only() {
+        let (_dir, conn) = batch_db();
+        assert!(
+            !raise_manual_system_batch(&conn).expect("empty sweep"),
+            "an archive with no manual row has nothing to raise"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM processing_batches", [], |row| {
+                row.get(0)
+            })
+            .expect("batch count");
+        assert_eq!(rows, 0, "the sweep never mints a batch row");
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        // The owner's shape: a manual row created before interactive manual
+        // priority (0046 defaults existing rows to background).
+        conn.execute(
+            "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+            [&manual],
+        )
+        .expect("reset priority");
+        assert!(raise_manual_system_batch(&conn).expect("startup sweep"));
+        let priority: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(
+            priority, 2,
+            "an existing manual row is interactive before the next click"
+        );
+        assert!(
+            !raise_manual_system_batch(&conn).expect("idempotent sweep"),
+            "a second sweep changes nothing"
+        );
     }
 
     #[test]
