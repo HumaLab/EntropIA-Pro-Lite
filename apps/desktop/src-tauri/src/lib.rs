@@ -1399,6 +1399,7 @@ pub fn run() {
             sync::commands::sync_status,
             sync::commands::sync_now,
             sync::commands::sync_full_resync,
+            sync::commands::sync_get_auto,
             sync::commands::sync_set_auto,
             sync::commands::sync_list_devices,
             sync::commands::sync_revoke_device,

@@ -63,8 +63,8 @@
     type WritingSyncNoticeView,
   } from '$lib/writing'
   import { getStore } from '$lib/db'
-  import { syncStore } from '$lib/sync-store'
-  import { describeSyncError, syncNow, type SyncState } from '$lib/sync'
+  import { syncAndWait, syncStore } from '$lib/sync-store'
+  import { describeSyncError, syncGetAuto, type SyncState } from '$lib/sync'
   import { createSyncCompletedWatcher } from '$lib/writing-sync-refresh'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
@@ -178,32 +178,58 @@
   let syncing = $state(false)
   let syncError = $state<string | null>(null)
   let unsubscribeSyncState: (() => void) | null = null
+  /** Settings › Sincronización › «Sincronizar automáticamente», read on mount. */
+  let autoSync = $state(false)
+
+  /** Pause after a save before sending it, so a burst of typing goes once. */
+  const PUSH_DELAY_MS = 5_000
+  /** How often an open Escritura looks for the other side's changes. */
+  const PULL_EVERY_MS = 30_000
 
   /**
    * Sends local changes and brings the other side's. Flushes first, like the
-   * Settings button (W-GUARD1). The list refresh is the completion watcher's;
-   * the open manuscript is reloaded here only when the pass changed it and
-   * nothing was typed meanwhile, since the editor never re-reads on its own.
+   * Settings button (W-GUARD1), then waits for the pass to actually run —
+   * `sync_now` only queues it. The list refresh is the completion watcher's;
+   * the open manuscript takes the new content in place.
    */
   async function syncHere() {
+    if (syncing) return
     syncing = true
     syncError = null
     try {
       await store.flush()
-      syncStore.setStatus(await syncNow())
-      const open = snapshot.open
-      if (!open) return
-      await store.listDocuments()
-      const fresh = snapshot.documents.find((doc) => doc.id === open.id)
-      if (fresh && fresh.revision !== snapshot.revision && snapshot.status === 'saved') {
-        await store.openDocument(open.id)
-      }
+      await syncAndWait()
+      await store.refreshOpen()
     } catch (error) {
       syncError = describeSyncError(error)
     } finally {
       syncing = false
     }
   }
+
+  const autoOn = $derived(autoSync && syncState !== 'disabled')
+
+  // Pull: every so often, unless something local is in flight.
+  $effect(() => {
+    if (!autoOn) return
+    const timer = setInterval(() => {
+      if (!syncing && snapshot.status === 'saved') void syncHere()
+    }, PULL_EVERY_MS)
+    return () => clearInterval(timer)
+  })
+
+  // Push: a local save ends in saving -> saved; a pass that brought the other
+  // side's content goes saved -> saved and must not echo back as a push.
+  let lastStatus: string = 'saved'
+  let pushTimer: ReturnType<typeof setTimeout> | undefined
+  $effect(() => {
+    const status = snapshot.status
+    const was = lastStatus
+    lastStatus = status
+    if (!autoOn || was !== 'saving' || status !== 'saved') return
+    clearTimeout(pushTimer)
+    pushTimer = setTimeout(() => void syncHere(), PUSH_DELAY_MS)
+  })
 
   onMount(async () => {
     // Idempotent: the store memoizes its own bootstrap + listener attach.
@@ -231,6 +257,9 @@
       })
     )
     unsubscribeSyncState = syncStore.subscribe((status) => (syncState = status.state))
+    syncGetAuto()
+      .then((auto) => (autoSync = auto.enabled))
+      .catch(() => {})
 
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
@@ -263,6 +292,7 @@
     unsubscribeNav()
     unsubscribeSync?.()
     unsubscribeSyncState?.()
+    clearTimeout(pushTimer)
     unlistenDragDrop?.()
     // Persist whatever is pending. The document stays open in the store on
     // purpose: navigating away and back should return to it, and onMount
@@ -1128,12 +1158,14 @@
 
 {#snippet syncButton(size: 'sm' | 'md')}
   {#if syncState !== 'disabled'}
+    {@const busy = syncing || syncState === 'syncing'}
     <IconButton
       {size}
       variant="ghost"
-      label={syncing ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
-      title={syncing ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
-      disabled={syncing || syncState === 'syncing'}
+      class={busy ? 'writing__sync--spinning' : ''}
+      label={busy ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      title={busy ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      disabled={busy}
       onclick={() => void syncHere()}
     >
       <ActionIcon name="refresh" size={size === 'sm' ? 14 : 20} />
@@ -1628,6 +1660,22 @@
     justify-content: space-between;
     gap: var(--space-4);
     flex-wrap: wrap;
+  }
+
+  :global(.writing__sync--spinning svg) {
+    animation: writing-sync-spin 1s linear infinite;
+  }
+
+  @keyframes writing-sync-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.writing__sync--spinning svg) {
+      animation: none;
+    }
   }
 
   .writing__header-actions {

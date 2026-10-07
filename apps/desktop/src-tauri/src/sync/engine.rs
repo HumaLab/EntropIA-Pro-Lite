@@ -537,7 +537,7 @@ fn is_gated_open(conn: &Connection) -> bool {
 }
 
 /// Auto-sync enabled flag (DESIGN §3.1: default ON when unset).
-fn auto_enabled(conn: &Connection) -> bool {
+pub(crate) fn auto_enabled(conn: &Connection) -> bool {
     meta_get(conn, "auto_sync_enabled")
         .ok()
         .flatten()
@@ -546,7 +546,7 @@ fn auto_enabled(conn: &Connection) -> bool {
 }
 
 /// Configured auto-sync interval (DESIGN §3.1: default 5 min, floor 1 min).
-fn auto_interval(conn: &Connection) -> Duration {
+pub(crate) fn auto_interval(conn: &Connection) -> Duration {
     let mins = meta_get_i64(conn, "auto_sync_interval_min")
         .ok()
         .filter(|m| *m > 0)

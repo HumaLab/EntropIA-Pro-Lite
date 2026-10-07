@@ -119,6 +119,56 @@ pub fn snapshot(conn: &Connection, document_id: &str, reason: &str) -> WritingRe
     Ok(next)
 }
 
+/// Taken before a sync receive replaces the content with the other side's.
+/// The schema has no reason of its own for it, and nothing else writes a
+/// checkpoint yet, so the history panel reads `checkpoint` as exactly that.
+pub const BEFORE_RECEIVE_REASON: &str = "checkpoint";
+
+/// How far apart automatic versions of a document being edited are.
+pub const AUTO_INTERVAL_MS: i64 = 10 * 60 * 1000;
+
+/// Automatic versions kept per document; older `auto` ones are compacted.
+pub const AUTO_KEEP: usize = 50;
+
+/// The newest version's hash and time, if any.
+fn latest(conn: &Connection, document_id: &str) -> WritingResult<Option<(String, i64)>> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT content_hash, created_at FROM writing_document_versions
+          WHERE document_id = ?1 ORDER BY version_number DESC LIMIT 1",
+        rusqlite::params![document_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| WritingError::sql("Failed to read the latest version", e))
+}
+
+/// Snapshots the document unless the newest version already holds this exact
+/// content, so the history never lists the same text twice in a row.
+pub fn snapshot_if_changed(
+    conn: &Connection,
+    document_id: &str,
+    reason: &str,
+) -> WritingResult<Option<i64>> {
+    let current = hash_of(&repository::load_document(conn, document_id)?.current_content_json);
+    if latest(conn, document_id)?.is_some_and(|(hash, _)| hash == current) {
+        return Ok(None);
+    }
+    snapshot(conn, document_id, reason).map(Some)
+}
+
+/// After a save: an automatic version when the newest one is older than
+/// [`AUTO_INTERVAL_MS`] (or there is none), then retention.
+pub fn auto_snapshot_after_save(conn: &Connection, document_id: &str) -> WritingResult<()> {
+    if latest(conn, document_id)?.is_some_and(|(_, at)| now_ms() - at < AUTO_INTERVAL_MS) {
+        return Ok(());
+    }
+    if snapshot_if_changed(conn, document_id, AUTOMATIC_REASON)?.is_some() {
+        apply_retention(conn, document_id, AUTO_KEEP)?;
+    }
+    Ok(())
+}
+
 /// Versions newest first, for the history panel (§16.4).
 pub fn list(conn: &Connection, document_id: &str) -> WritingResult<Vec<VersionSummary>> {
     require_schema(conn)?;
@@ -532,5 +582,32 @@ mod tests {
         let removed = apply_retention(&conn, "d1", 0).expect("retention");
         assert_eq!(removed, 0, "none of these record an automatic save");
         assert_eq!(list(&conn, "d1").expect("list").len(), 4);
+    }
+
+    #[test]
+    fn automatic_versions_are_spaced_and_never_repeat_the_same_text() {
+        let (_dir, mut conn) = migrated_db();
+        a_document(&conn, "d1");
+
+        auto_snapshot_after_save(&conn, "d1").expect("first");
+        assert_eq!(list(&conn, "d1").expect("list").len(), 1, "no history yet: take one");
+
+        save(&mut conn, "d1", 0, r#"{"v":1}"#);
+        auto_snapshot_after_save(&conn, "d1").expect("too soon");
+        assert_eq!(list(&conn, "d1").expect("list").len(), 1, "inside the interval");
+
+        conn.execute(
+            "UPDATE writing_document_versions SET created_at = created_at - ?1",
+            rusqlite::params![AUTO_INTERVAL_MS + 1],
+        )
+        .expect("age it");
+        auto_snapshot_after_save(&conn, "d1").expect("due");
+        assert_eq!(list(&conn, "d1").expect("list").len(), 2, "interval passed");
+
+        assert_eq!(
+            snapshot_if_changed(&conn, "d1", BEFORE_RECEIVE_REASON).expect("same text"),
+            None,
+            "the newest version already holds this content"
+        );
     }
 }

@@ -346,6 +346,27 @@ export class WritingStore {
   }
 
   /**
+   * Re-reads the open manuscript after a sync pass and swaps its content in
+   * place: the editor applies an external change without remounting, so the
+   * page does not blank the way `openDocument` does. Only when the stored
+   * revision moved and nothing local is pending — a pending edit is never
+   * overwritten; its save meets the new revision as a conflict instead.
+   */
+  async refreshOpen(): Promise<boolean> {
+    const open = this.#state.open
+    if (!open || this.#state.status !== 'saved') return false
+    const row = await invoke<WritingDocumentRow>('writing_load_document', { id: open.id })
+    const state = this.#state
+    if (state.open?.id !== open.id || state.status !== 'saved' || row.revision === state.revision) {
+      return false
+    }
+    const parsed = parseCanonical(row.current_content_json)
+    if (!parsed.ok) return false
+    this.#set({ open: row, content: parsed.document, revision: row.revision })
+    return true
+  }
+
+  /**
    * Renames a document. The backend does not advance the revision for this —
    * a title is metadata, and bumping it would turn an edit in flight into a
    * spurious conflict — so neither does the local state.

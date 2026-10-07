@@ -31,6 +31,7 @@
     syncRequestPlanChange,
     syncReverifyBlobs,
     syncRevokeDevice,
+    syncGetAuto,
     syncSetAuto,
     type PlanCatalogItem,
     type SyncConflict,
@@ -162,7 +163,18 @@
   }
 
   async function refreshAll() {
-    await Promise.all([refreshDevices(), refreshUsage(), refreshConflicts()])
+    await Promise.all([refreshDevices(), refreshUsage(), refreshConflicts(), refreshAuto()])
+  }
+
+  /** The toggle shows what is stored, not its default. */
+  async function refreshAuto() {
+    try {
+      const auto = await syncGetAuto()
+      autoEnabled = auto.enabled
+      autoInterval = String(auto.interval_min)
+    } catch {
+      // An older backend: keep the defaults the card always showed.
+    }
   }
 
   async function refreshDevices() {

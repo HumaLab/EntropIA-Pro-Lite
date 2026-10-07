@@ -171,6 +171,7 @@
     "allow-sync-status",
     "allow-sync-now",
     "allow-sync-full-resync",
+    "allow-sync-get-auto",
     "allow-sync-set-auto",
     "allow-sync-list-devices",
     "allow-sync-revoke-device",

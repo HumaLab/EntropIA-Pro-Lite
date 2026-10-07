@@ -104,7 +104,13 @@ pub async fn writing_save_document(
     let db_path = db.db_path.clone();
     tokio::task::spawn_blocking(move || {
         let mut conn = open(&db_path)?;
-        repository::save_document(&mut conn, save)
+        let document_id = save.document_id.clone();
+        let revision = repository::save_document(&mut conn, save)?;
+        // The history is a safety net, never a reason to fail a save.
+        if let Err(error) = versions::auto_snapshot_after_save(&conn, &document_id) {
+            eprintln!("[writing] automatic version skipped: {}", error.message);
+        }
+        Ok(revision)
     })
     .await
     .map_err(|e| joined("writing_save_document", e))?
