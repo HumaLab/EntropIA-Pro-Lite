@@ -51,6 +51,16 @@
   let openLoading = $state(false)
   let openFailed = $state(false)
   let activeTab = $state<Tab>('original')
+  // Same condition as the PDF branch of the Original tab: only then does the
+  // view need the pane's full height for the viewer.
+  const showsPdf = $derived(
+    activeTab === 'original' &&
+      !openLoading &&
+      !openFailed &&
+      !opened?.openError &&
+      opened?.originalKind === 'pdf' &&
+      Boolean(opened.originalPath)
+  )
   let activeKey = $state<string | null>(null)
   let attachmentMenuOpen = $state(false)
   /** The page shown and how many there are, as the viewer reports them. */
@@ -143,7 +153,7 @@
   )
 </script>
 
-<div class="work-view">
+<div class="work-view" class:work-view--fill={showsPdf}>
   {#if detailFailed}
     <div class="surface-message surface-message--center empty">
       <p>{$currentLocale && t('bibliographyWork.error')}</p>
@@ -413,10 +423,16 @@
     flex-direction: column;
     gap: var(--space-3);
     max-width: 1100px;
-    /* Fill-height contract (the PDF needs a real height to fit into): the
-       view fills the WorkPane body, so the Original tab keeps exactly the
-       height the header and tabs leave and the viewer reads a real rect. */
-    min-height: 100%;
+  }
+
+  /* While a PDF is shown, the view takes the WorkPane body's full height,
+     like ItemView's `height: 100%`. A min-height is not a definite height:
+     the viewer below measured ~0, so the page stayed hidden behind a
+     clipped toolbar. The reading tabs keep their natural flow and the pane
+     scrolls them. */
+  .work-view--fill {
+    height: 100%;
+    min-height: 0;
   }
 
   .work-header {
@@ -522,11 +538,11 @@
     /* The DocumentViewer is a flex child of this frame (the exact pattern of
        ItemAssetPanel's .left-panel-pane--document): its fit scale reads the
        container rect, which a min-height-only frame never made definite.
-       The 480px floor stays so a short window scrolls instead of collapsing
-       the page back to the toolbar's height. */
+       The view's definite height (.work-view--fill) flows down to it; a
+       min-height floor here would push the pager and note out of the pane. */
     display: flex;
     flex: 1;
-    min-height: 480px;
+    min-height: 0;
     overflow: hidden;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);

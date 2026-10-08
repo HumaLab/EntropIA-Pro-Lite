@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
@@ -141,6 +143,43 @@ describe('BibliographyWorkView', () => {
     expect(viewer.parentElement?.classList.contains('work-section--original')).toBe(true)
     expect(viewer.closest('.work-view')).not.toBeNull()
     expect(viewer.querySelector('.document-viewer')).not.toBeNull()
+  })
+
+  it('gives the viewer a definite height only while the Original tab shows a PDF', async () => {
+    // A min-height chain is not a definite height: the viewer measured ~0
+    // and the page stayed hidden behind a clipped toolbar. While a PDF is
+    // shown, the view takes the pane's full height (like ItemView's
+    // `height: 100%`); the reading tabs keep their natural flow and the
+    // pane scrolls them.
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    expect(viewer.closest('.work-view')?.classList.contains('work-view--fill')).toBe(true)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+    await waitFor(() =>
+      expect(document.querySelector('.work-view')?.classList.contains('work-view--fill')).toBe(
+        false
+      )
+    )
+  })
+
+  it('pins the fill-height rules in the component styles', () => {
+    // jsdom does not lay out, so the CSS that makes the height definite is
+    // pinned on the source itself.
+    const source = readFileSync(
+      resolve(import.meta.dirname, 'BibliographyWorkView.svelte'),
+      'utf-8'
+    )
+    const rule = (selector: string) =>
+      source.match(new RegExp(`\\n  ${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('.work-view--fill')).toMatch(/height: 100%;/)
+    expect(rule('.work-view--fill')).not.toMatch(/min-height: 100%/)
+    expect(rule('.work-section--original')).toMatch(/flex: 1;/)
+    expect(rule('.work-section--original')).toMatch(/min-height: 0;/)
+    expect(rule('.work-viewer')).toMatch(/flex: 1;/)
+    expect(rule('.work-viewer')).toMatch(/min-height: 0;/)
   })
 
   it('lists the extracted page texts in the Texto tab', async () => {
