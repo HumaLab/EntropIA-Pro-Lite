@@ -51,7 +51,7 @@ Branch `feat/pdfium-page-text`, worktree `G:/EntropIA-Stack/EntropIA-Pro-Lite-wo
   `pdf-extract`/`richer_native_text` choice for stored bibliography text.
 - [x] A4 — Delete page rows beyond the new `page_count` on publish. Count the deletion as a page move, so
   the profile is re-demanded and stale passages are dropped.
-- [ ] A5 — Verify locally, CI green including Pro, judgment on the code, merge.
+- [x] A5 — Verify locally, CI green including Pro, judgment on the code, merge.
 
 ## Progress
 
@@ -81,3 +81,4 @@ Branch `feat/pdfium-page-text`, worktree `G:/EntropIA-Stack/EntropIA-Pro-Lite-wo
   Windows CI test leg) and the batch-lifecycle test proves PDFium really ran (JD6-A-006,
   JD6-B-003); the Pdfium instance counters are thread-scoped so parallel tests cannot move each
   other's assertions (JD6-A-007); the off-page text policy is pinned (JD6-B-005).
+- 2026-10-08: A5 done — local verification green (2402 unit, bibliography_processing 158 twice in parallel, clippy, fmt, navegador check, ENTROPIA_REQUIRE_PDFIUM=1); CI run 37846732953 green incl. Pro; merged to main.
