@@ -1,10 +1,21 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
 import BibliographyWorkView from './BibliographyWorkView.svelte'
 
 const mockInvoke = vi.mocked(invoke)
+
+const pdfMock = vi.hoisted(() => ({ getDocument: vi.fn() }))
+
+// The viewer must open the PDF exactly once however often the tabs change,
+// so the load is counted here instead of letting real pdf.js fetch.
+vi.mock('pdfjs-dist', () => ({
+  getDocument: pdfMock.getDocument,
+  GlobalWorkerOptions: { workerSrc: '' },
+}))
 
 const props = {
   itemId: 'item-1',
@@ -100,9 +111,37 @@ function callsFor(command: string) {
   return mockInvoke.mock.calls.filter(([name]) => name === command)
 }
 
+/** The owner's real GLM-OCR shape: a statistical table as HTML plus footnotes. */
+const OWNER_HTML_PAGE =
+  '<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td></tr></tbody></table>\nFuente: Boletín Mensual de Estadística, Buenos Aires.'
+
+/** The same page as the backend now stores it: a Markdown pipe table. */
+const OWNER_MARKDOWN_PAGE =
+  '| Mio | Enero | Febrero |\n| --- | --- | --- |\n| - en centavos de dólar norteamericano - |  |  |\n| 1926 | 20,5 | 21,0 |\n\nFuente: Boletín Mensual de Estadística, Buenos Aires.'
+
+/** Hostile markup riding along with an OCR page. */
+const INJECTION_HTML_PAGE =
+  '<p onclick="steal()">Intro</p><script>alert(1)</script><table><tr><td onclick="steal()">A</td><td><img src="x" onerror="alert(2)"></td></tr></table><a href="javascript:alert(3)">enlace</a>'
+
 beforeEach(() => {
   mockInvoke.mockReset()
   locale.set('es')
+  pdfMock.getDocument.mockReset()
+  pdfMock.getDocument.mockImplementation(() => ({
+    promise: Promise.resolve({
+      numPages: 1,
+      getPage: () =>
+        Promise.resolve({
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 800 * scale,
+            height: 600 * scale,
+            scale,
+          }),
+          render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+        }),
+    }),
+    destroy: () => Promise.resolve(),
+  }))
 })
 
 describe('BibliographyWorkView', () => {
@@ -124,6 +163,115 @@ describe('BibliographyWorkView', () => {
     expect(screen.getByText('Se muestra el PDF original del adjunto.')).toBeInTheDocument()
   })
 
+  it('hosts the viewer in the fill-height Original pane', async () => {
+    // jsdom cannot measure heights, so the fill-height contract is pinned by
+    // the structure that carries it (the same chain ItemAssetPanel uses for
+    // ItemView): .work-view (flex column, min-height: 100% of the WorkPane
+    // body) > section.work-section--original (flex: 1; min-height: 0) >
+    // .work-viewer (display: flex; flex: 1) > :global(.document-viewer)
+    // (flex: 1; min-height: 0) — the DocumentViewer root must be a flex
+    // child of the viewer box, never a percentage child of a min-height-only
+    // frame (that collapsed the PDF to the toolbar's ~20px).
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    expect(viewer.classList.contains('work-viewer')).toBe(true)
+    expect(viewer.parentElement?.classList.contains('work-section--original')).toBe(true)
+    expect(viewer.closest('.work-view')).not.toBeNull()
+    expect(viewer.querySelector('.document-viewer')).not.toBeNull()
+  })
+
+  it('gives the viewer a definite height only while the Original tab shows a PDF', async () => {
+    // A min-height chain is not a definite height: the viewer measured ~0
+    // and the page stayed hidden behind a clipped toolbar. While a PDF is
+    // shown, the view takes the pane's full height (like ItemView's
+    // `height: 100%`); the reading tabs keep their natural flow and the
+    // pane scrolls them.
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    expect(viewer.closest('.work-view')?.classList.contains('work-view--fill')).toBe(true)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+    await waitFor(() =>
+      expect(document.querySelector('.work-view')?.classList.contains('work-view--fill')).toBe(
+        false
+      )
+    )
+  })
+
+  it('pins the fill-height rules in the component styles', () => {
+    // jsdom does not lay out, so the CSS that makes the height definite is
+    // pinned on the source itself.
+    const source = readFileSync(
+      resolve(import.meta.dirname, 'BibliographyWorkView.svelte'),
+      'utf-8'
+    )
+    const rule = (selector: string) =>
+      source.match(new RegExp(`\\n  ${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`))?.[1] ?? ''
+    expect(rule('.work-view--fill')).toMatch(/height: 100%;/)
+    expect(rule('.work-view--fill')).not.toMatch(/min-height: 100%/)
+    expect(rule('.work-section--original')).toMatch(/flex: 1;/)
+    expect(rule('.work-section--original')).toMatch(/min-height: 0;/)
+    expect(rule('.work-viewer')).toMatch(/flex: 1;/)
+    expect(rule('.work-viewer')).toMatch(/min-height: 0;/)
+  })
+
+  it('keeps the Original viewer mounted and does not reopen the PDF across tabs', async () => {
+    backend()
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await waitFor(() => expect(pdfMock.getDocument).toHaveBeenCalledTimes(1))
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+    await fireEvent.click(screen.getByRole('tab', { name: 'Original' }))
+
+    expect(await screen.findByTestId('work-original-viewer')).toBeInTheDocument()
+    expect(pdfMock.getDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the mounted Original tab from focus and the accessibility tree', async () => {
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    const section = viewer.closest('section')
+    expect(section).not.toBeNull()
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    // Still mounted (the document stays open) but gone for users, screen
+    // readers and the tab order.
+    expect(document.querySelector('[data-testid="work-original-viewer"]')).not.toBeNull()
+    expect(section).toHaveClass('is-hidden')
+    expect(section).not.toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Original' })).toBeNull()
+    expect(section?.contains(document.activeElement)).toBe(false)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Original' }))
+    expect(section).toBeVisible()
+  })
+
+  it('pins the hidden-tab CSS and the paused viewer wiring in the source', () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, 'BibliographyWorkView.svelte'),
+      'utf-8'
+    )
+    // The hidden tab must actually be invisible: `.work-section` sets
+    // display: flex, which would beat the UA rule behind the `hidden`
+    // attribute without this rule.
+    const hiddenRule = source.match(
+      new RegExp('\\n {2}\\.work-section--original\\.is-hidden \\{([^}]*)\\}')
+    )?.[1]
+    expect(hiddenRule ?? '').toMatch(/display: none;/)
+    // Only the Biblioteca viewer opts into paused rendering while hidden.
+    const viewerTag = source.match(/<DocumentViewer[\s\S]*?\/>/)?.[0] ?? ''
+    expect(viewerTag).toContain('pauseWhenHidden')
+  })
+
   it('lists the extracted page texts in the Texto tab', async () => {
     backend()
     render(BibliographyWorkView, { props })
@@ -133,6 +281,74 @@ describe('BibliographyWorkView', () => {
 
     expect(screen.getByText('Página 1')).toBeInTheDocument()
     expect(screen.getByText('Primera página.')).toBeInTheDocument()
+  })
+
+  it('renders a legacy HTML page table as a real table in the Texto tab', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: OWNER_HTML_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    const table = region.querySelector('table')
+    expect(table).not.toBeNull()
+    expect(within(table as HTMLElement).getByText('Mio')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('Enero')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('1926')).toBeInTheDocument()
+    // The colspan caption row keeps its text; the footnotes stay plain.
+    expect(within(region).getByText('- en centavos de dólar norteamericano -')).toBeInTheDocument()
+    expect(
+      within(region).getByText('Fuente: Boletín Mensual de Estadística, Buenos Aires.')
+    ).toBeInTheDocument()
+  })
+
+  it('renders a Markdown table page as a real table in the Texto tab', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: OWNER_MARKDOWN_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    const table = region.querySelector('table')
+    expect(table).not.toBeNull()
+    expect(within(table as HTMLElement).getByText('Mio')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('1926')).toBeInTheDocument()
+  })
+
+  it('renders page text with no script or attribute injection surviving', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: INJECTION_HTML_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    // The table part still reads as a table…
+    expect(region.querySelector('table')).not.toBeNull()
+    expect(within(region).getByText('A')).toBeInTheDocument()
+    // …but nothing executable survives the sanitizer.
+    expect(region.querySelector('script')).toBeNull()
+    expect(region.querySelector('img')).toBeNull()
+    expect(region.querySelector('a[href]')).toBeNull()
+    for (const element of region.querySelectorAll('*')) {
+      for (const name of element.getAttributeNames()) {
+        expect(name.startsWith('on'), `${element.tagName} keeps ${name}`).toBe(false)
+      }
+    }
   })
 
   it('says the text is pending when nothing was extracted yet', async () => {
@@ -197,9 +413,12 @@ describe('BibliographyWorkView', () => {
     await screen.findByTestId('work-original-viewer')
     await fireEvent.click(screen.getByRole('tab', { name: 'Metadatos' }))
 
-    expect(screen.getByText('10.0000/synth')).toBeInTheDocument()
-    expect(screen.getByText('oficio.pdf')).toBeInTheDocument()
-    expect(screen.getByText('apendice.pdf')).toBeInTheDocument()
+    // Scoped to the Metadatos region: the now-mounted (hidden) Original tab
+    // also names the current attachment.
+    const metadata = within(screen.getByRole('region', { name: 'Metadatos' }))
+    expect(metadata.getByText('10.0000/synth')).toBeInTheDocument()
+    expect(metadata.getByText('oficio.pdf')).toBeInTheDocument()
+    expect(metadata.getByText('apendice.pdf')).toBeInTheDocument()
 
     await fireEvent.click(screen.getAllByRole('button', { name: 'Ver en Original' })[1]!)
     await waitFor(() => {

@@ -4,6 +4,7 @@
   import AudioPlayer from '../AudioPlayer/AudioPlayer.svelte'
   import type { DocumentViewerLabels, DocumentViewerProps } from './DocumentViewer.types'
   import type { AnnotationTool, EditTool, ViewerAnnotation } from './DocumentViewer.types'
+  import { pdfDocumentOptions } from '../../lib/pdf-document-options'
 
   let {
     path: _path,
@@ -22,6 +23,7 @@
     canRedo = false,
     readOnly = false,
     currentPage = 1,
+    pauseWhenHidden = false,
     layoutReferenceWidth = 0,
     layoutReferenceHeight = 0,
     onAnnotationsChange = () => {},
@@ -107,6 +109,11 @@
   let pdfCanvasH = $state(0)
   let renderRequestId = 0
   let activeRenderTask: RenderTask | null = null
+  // Resolves when the most recently started render task settles (its
+  // rejection swallowed). pdf.js registers a canvas as "in rendering" until
+  // the active task settles — a cancelled one settles asynchronously — so
+  // every new render awaits this barrier before touching a canvas again.
+  let renderBarrier: Promise<void> = Promise.resolve()
   let loadRequestId = 0
   let activeLoadingTask: PDFDocumentLoadingTask | null = null
 
@@ -318,6 +325,12 @@
     )
     if (width <= 0 || height <= 0) return 1
     return Math.min(width / pageW, height / pageH)
+  }
+
+  /** True while the PDF scroll container has no box at all (hidden panel/tab). */
+  function pdfContainerIsEmpty() {
+    const rect = pdfScrollEl?.getBoundingClientRect()
+    return !rect || rect.width <= 0 || rect.height <= 0
   }
 
   /** Convert a viewport PointerEvent to normalized [0,1] coordinates.
@@ -815,7 +828,7 @@
         import.meta.url
       ).href
       if (requestId !== loadRequestId) return
-      const loadingTask = pdfjs.getDocument(url)
+      const loadingTask = pdfjs.getDocument(pdfDocumentOptions(url))
       activeLoadingTask = loadingTask
       const doc = await loadingTask.promise
       if (requestId !== loadRequestId) return
@@ -838,10 +851,17 @@
     const requestId = ++renderRequestId
     const requestedPage = pdfPage
     const requestedZoom = pdfZoom
+    const previousRenderSettled = renderBarrier
     cancelActiveRenderTask()
     activeRenderTask = null
 
     try {
+      // Rendering before the cancelled task settles makes pdf.js reject the
+      // new render with "Cannot use the same canvas during multiple render()
+      // operations" on image-heavy pages, so always wait it out first.
+      await previousRenderSettled
+      if (requestId !== renderRequestId) return
+
       const page = await pdfDoc.getPage(requestedPage)
       if (requestId !== renderRequestId) return
 
@@ -852,19 +872,35 @@
       const viewport = page.getViewport({
         scale: requestedZoom * pdfFitScale(naturalViewport.width, naturalViewport.height),
       })
-      const context = canvasEl.getContext('2d')
+
+      // Render into a fresh offscreen canvas and copy on success, so the
+      // visible canvas keeps showing the previous page until the new one is
+      // ready: a slow or failed render can never leave the page black.
+      const target = document.createElement('canvas')
+      target.width = Math.max(1, Math.round(viewport.width))
+      target.height = Math.max(1, Math.round(viewport.height))
+      const context = target.getContext('2d')
       if (!context) return
-      canvasEl.width = viewport.width
-      canvasEl.height = viewport.height
-      pdfCanvasW = viewport.width
-      pdfCanvasH = viewport.height
+
+      const renderTask = page.render({ canvasContext: context, viewport })
+      activeRenderTask = renderTask
+      renderBarrier = renderTask.promise.then(
+        () => undefined,
+        () => undefined
+      )
+      await renderTask.promise
+      if (requestId !== renderRequestId) return
+
+      const visibleContext = canvasEl.getContext('2d')
+      if (!visibleContext) return
+      canvasEl.width = target.width
+      canvasEl.height = target.height
+      visibleContext.drawImage(target, 0, 0)
+      pdfCanvasW = target.width
+      pdfCanvasH = target.height
       naturalW = naturalViewport.width
       naturalH = naturalViewport.height
       onDimensionsChange({ width: naturalViewport.width, height: naturalViewport.height })
-      const renderTask = page.render({ canvasContext: context, viewport })
-      activeRenderTask = renderTask
-      await renderTask.promise
-      if (requestId !== renderRequestId) return
       onPageChange(requestedPage, totalPages)
     } catch (err) {
       if (requestId !== renderRequestId || isRenderCancellation(err)) return
@@ -933,6 +969,9 @@
         if (pdfResizeFrame !== null) cancelAnimationFrame(pdfResizeFrame)
         pdfResizeFrame = requestAnimationFrame(() => {
           pdfResizeFrame = null
+          // Checked at draw time, not notification time: a pending draw whose
+          // container was hidden meanwhile must not fire either.
+          if (pauseWhenHidden && pdfContainerIsEmpty()) return
           void renderPage()
         })
       }

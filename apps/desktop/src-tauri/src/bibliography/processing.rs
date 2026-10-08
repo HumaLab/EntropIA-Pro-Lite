@@ -2374,7 +2374,7 @@ pub fn publish_bibliography_profile_output(
             ordinal: chunk.ordinal,
             text_content: chunk.text_content.clone(),
             text_hash: chunk.input_hash.clone(),
-            chunking_contract: crate::bibliography::chunks::BIBLIOGRAPHY_CHUNKING_CONTRACT_V1
+            chunking_contract: crate::bibliography::chunks::BIBLIOGRAPHY_CHUNKING_CONTRACT_V2
                 .to_string(),
             spans: chunk.spans.clone(),
         })
@@ -2494,10 +2494,19 @@ fn extraction_text_hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-fn extraction_quality(text: &str) -> &'static str {
-    if text.trim().is_empty() {
+/// The verdict over the text a reader gets: GLM-OCR answers tables as HTML,
+/// and the raw `td/tr/th` soup grades garbled (`ocr::pdf::is_garbled_text`
+/// sees almost no vowels), so every sync re-demanded the extraction and
+/// re-OCRed the page. Grading on the converted Markdown stops that loop.
+pub fn extraction_quality(text: &str) -> &'static str {
+    let converted = crate::ocr::markup::ocr_markup_to_text(text);
+    if converted.trim().is_empty() {
         "empty"
-    } else if crate::ocr::pdf::is_quality_text(text) {
+    } else if crate::ocr::pdf::is_garbled_text(&converted) {
+        // Raw glyph codes from a custom font encoding: not text a reader can
+        // use, and nothing to protect. Graded `empty` so OCR owns the page.
+        "empty"
+    } else if crate::ocr::pdf::is_quality_text(&converted) {
         "rich"
     } else {
         "sparse"
@@ -2539,6 +2548,9 @@ struct ExtractedDocument {
     /// went through a real OCR pass, so an `empty` verdict is final and the
     /// sync must not demand the same pass again.
     ocr_attempted: bool,
+    /// The pages the OCR pass had to read (0 when it never ran): the honest
+    /// `progress_total` of the task and the denominator of its page counter.
+    ocr_pages: i64,
 }
 
 /// An HTML snapshot is one "page": its block paragraphs, blank-line
@@ -2570,6 +2582,7 @@ fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
         pages: vec![page],
         ocr_failed_pages: Vec::new(),
         ocr_attempted: false,
+        ocr_pages: 0,
     }
 }
 
@@ -2802,6 +2815,7 @@ impl BibliographyExtractExecutor {
             pages,
             ocr_failed_pages,
             ocr_attempted,
+            ocr_pages,
         } = document;
         let text_chars = text.chars().count() as i64;
         let output = BibliographyExtractComputeOutput {
@@ -2829,7 +2843,10 @@ impl BibliographyExtractExecutor {
         .to_string();
         Ok(ExecResult {
             checkpoints: Vec::new(),
-            progress_total: Some(1),
+            // The page total of the OCR pass it ran (the same number the
+            // progress writes carried through it), or the single settle-unit
+            // a run without OCR work accounts for.
+            progress_total: Some(if ocr_pages > 0 { ocr_pages } else { 1 }),
             engine_output: Some(EngineOutput::BibliographyExtract(output)),
             output: ExecOutput::Success {
                 outcome: "bibliography_extracted".to_string(),
@@ -2902,14 +2919,24 @@ impl BibliographyExtractExecutor {
         let text = richer_native_text(text, &pages);
         let mut quality = extraction_quality(&text);
         let mut text = text;
-        let (pages, ocr_failed_pages, ocr_attempted) =
+        // Garbled native text (raw glyph codes) is not text: when the OCR
+        // pass replaced or dropped any page, the whole-document row is
+        // rebuilt from the published pages so no glyph code survives in it.
+        let had_garbled_native = pages.iter().any(|page| {
+            crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
+                &page.text_content,
+            ))
+        });
+        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) =
             self.maybe_ocr_pages(ctx, task, stop, bytes, pages, quality == "empty")?;
         // A scan has no native text, so the whole-document verdict above is
         // `empty` however well OCR reads it. When recognition replaced pages
         // and the native layer was not already rich, the document text and
         // its quality come from the pages now published, or every scanned
         // PDF would stay `empty` after its text exists.
-        if quality != "rich" && pages.iter().any(|page| page.method == "ocr") {
+        if (quality != "rich" || had_garbled_native)
+            && pages.iter().any(|page| page.method == "ocr")
+        {
             text = pages
                 .iter()
                 .map(|page| page.text_content.trim())
@@ -2925,6 +2952,7 @@ impl BibliographyExtractExecutor {
             pages,
             ocr_failed_pages,
             ocr_attempted,
+            ocr_pages,
         })
     }
 
@@ -2933,7 +2961,9 @@ impl BibliographyExtractExecutor {
     /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
     /// `ctx.unit`, so resume reuses confirmed texts without re-sending
     /// content, and demand loss stops before the next provider call.
-    /// An empty OCR answer keeps the native row untouched; a non-empty
+    /// An empty OCR answer keeps the native row untouched — unless the
+    /// native text is garbled raw glyph codes, which OCR owns: the page is
+    /// then recorded empty and the codes are never kept. A non-empty
     /// one replaces the page text (method `ocr`) with a fresh hash —
     /// never appended, so native fragments cannot duplicate.
     fn maybe_ocr_pages(
@@ -2944,11 +2974,11 @@ impl BibliographyExtractExecutor {
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
         native_blank: bool,
-    ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool), crate::processing::scheduler::ExecOutput>
+    ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool, i64), crate::processing::scheduler::ExecOutput>
     {
         use crate::processing::scheduler::ExecOutput;
         let Some((renderer, provider)) = &self.selective_ocr else {
-            return Ok((pages, Vec::new(), false));
+            return Ok((pages, Vec::new(), false, 0));
         };
         let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
             true,
@@ -2960,6 +2990,16 @@ impl BibliographyExtractExecutor {
         // page rendering. A window the provider rejects (not a rate limit or
         // a credential problem) drops back to the per-page path below.
         let needing = ocr_candidate_pages(&pages, native_blank);
+        // Honest page progress before the first provider call: the task row
+        // reads 0 over the pages that need OCR, and every settled page — a
+        // cached checkpoint re-walked after a restart included — advances it.
+        // The count is rebuilt from the pages this pass settles, so it
+        // survives a restart exactly like the checkpoints beside it.
+        let pages_needed = needing.len() as i64;
+        let mut landed: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        if pages_needed > 0 {
+            record_page_progress(ctx, task, 0, pages_needed)?;
+        }
         let mut windowed: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
         if let Some(per_request) = provider.pdf_pages_per_request() {
             if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
@@ -2989,6 +3029,16 @@ impl BibliographyExtractExecutor {
                             for (offset, text) in texts.into_iter().enumerate() {
                                 windowed.insert(i64::from(first) + offset as i64, text);
                             }
+                            // One landed wave settles every page of the
+                            // window that needed OCR at once.
+                            for page_number in &needing {
+                                if i64::from(first) <= *page_number
+                                    && *page_number <= i64::from(last)
+                                {
+                                    landed.insert(*page_number);
+                                }
+                            }
+                            record_page_progress(ctx, task, landed.len() as i64, pages_needed)?;
                         }
                         Err(error) => {
                             if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
@@ -3014,70 +3064,81 @@ impl BibliographyExtractExecutor {
                 out.push(page);
                 continue;
             }
-            let text = if let Some(text) = windowed.remove(&page.page_number) {
-                text
-            } else {
-                if stop.stopped() {
-                    return Err(ExecOutput::Stopped);
-                }
-                let unit_key = format!("ocr-page:{}", page.page_number);
-                match ctx.unit(task, &unit_key, || {
-                    let image = renderer
-                        .render_page(bytes, page.page_number as u32)
-                        .map_err(|error| format!("render failed: {error}"))?;
-                    provider.recognize_page(&image)
-                }) {
-                    Ok(text) => {
-                        ocr_attempted = true;
-                        text
+            // Whatever comes back — text, a blank answer, or a hard failure
+            // keeping the native row — this page's fate is settled below, and
+            // every settled page advances the progress count exactly once.
+            let page_number = page.page_number;
+            let answer: Option<String> = match windowed.remove(&page_number) {
+                Some(text) => Some(text),
+                None => {
+                    if stop.stopped() {
+                        return Err(ExecOutput::Stopped);
                     }
-                    Err(error) => {
-                        if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
-                            return Err(ExecOutput::Stopped);
+                    let unit_key = format!("ocr-page:{}", page.page_number);
+                    match ctx.unit(task, &unit_key, || {
+                        let image = renderer
+                            .render_page(bytes, page.page_number as u32)
+                            .map_err(|error| format!("render failed: {error}"))?;
+                        provider.recognize_page(&image)
+                    }) {
+                        Ok(text) => {
+                            ocr_attempted = true;
+                            Some(text)
                         }
-                        let verdict = if let Some(detail) = error.strip_prefix("render failed: ") {
-                            ExecOutput::Fatal {
-                                code: "extraction_failed".to_string(),
-                                message: detail.to_string(),
+                        // A GLM-OCR answer with no content is a blank page, not
+                        // a page failure: the provider answered, the page simply
+                        // holds no text (whole-asset corpus OCR keeps it an
+                        // error). Recorded as empty text below.
+                        Err(error)
+                            if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
+                                &error,
+                            ) =>
+                        {
+                            ocr_attempted = true;
+                            Some(String::new())
+                        }
+                        Err(error) => {
+                            if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
+                                return Err(ExecOutput::Stopped);
                             }
-                        } else {
-                            crate::bibliography::selective_ocr::map_page_ocr_error(&error)
-                        };
-                        match verdict {
-                            // E4b-WU4 incomplete handling: a page whose OCR
-                            // hard-failed keeps its native row and is named in
-                            // the receipt. Transient and configuration verdicts
-                            // stay whole-task: backoff and user fixes must not
-                            // masquerade as partial success.
-                            ExecOutput::Fatal { message, .. } => {
-                                eprintln!(
-                                    "[bibliography] OCR of page {} failed: {message}",
-                                    page.page_number
-                                );
-                                ocr_failed_pages.push(page.page_number);
-                                out.push(page);
-                                continue;
+                            let verdict =
+                                if let Some(detail) = error.strip_prefix("render failed: ") {
+                                    ExecOutput::Fatal {
+                                        code: "extraction_failed".to_string(),
+                                        message: detail.to_string(),
+                                    }
+                                } else {
+                                    crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                                };
+                            match verdict {
+                                // E4b-WU4 incomplete handling: a page whose OCR
+                                // hard-failed keeps its native row and is named in
+                                // the receipt. Transient and configuration verdicts
+                                // stay whole-task: backoff and user fixes must not
+                                // masquerade as partial success.
+                                ExecOutput::Fatal { message, .. } => {
+                                    eprintln!(
+                                        "[bibliography] OCR of page {} failed: {message}",
+                                        page.page_number
+                                    );
+                                    ocr_failed_pages.push(page.page_number);
+                                    None
+                                }
+                                other => return Err(other),
                             }
-                            other => return Err(other),
                         }
                     }
                 }
             };
-            if text.trim().is_empty() {
-                out.push(page);
-                continue;
+            match answer {
+                Some(text) => out.push(settled_page_row(page, text)),
+                // The hard-failed page keeps its native row, untouched.
+                None => out.push(page),
             }
-            let quality = extraction_quality(&text);
-            out.push(ExtractPageText {
-                page_number: page.page_number,
-                method: "ocr".to_string(),
-                text_hash: extraction_text_hash(&text),
-                text_chars: text.chars().count() as i64,
-                quality: quality.to_string(),
-                text_content: text,
-            });
+            landed.insert(page_number);
+            record_page_progress(ctx, task, landed.len() as i64, pages_needed)?;
         }
-        Ok((out, ocr_failed_pages, ocr_attempted))
+        Ok((out, ocr_failed_pages, ocr_attempted, pages_needed))
     }
 }
 
@@ -3242,6 +3303,87 @@ impl crate::processing::scheduler::Executor for BibliographyExtractExecutor {
                 output,
             },
         }
+    }
+}
+
+/// Records the extraction's honest page progress on the task row: pages
+/// processed so far over the pages that need OCR, fenced on the running
+/// lease exactly like the checkpoints beside it. A lost lease or demand is
+/// the checkpoint path's to observe — the next `ctx.unit` fails the same way
+/// — so the pass stops here too; any other error leaves the previous count
+/// standing (an undercount, never a lie) and the run continues.
+fn record_page_progress(
+    ctx: &crate::processing::scheduler::ExecCtx,
+    task: &crate::processing::scheduler::ClaimedTask,
+    done: i64,
+    total: i64,
+) -> Result<(), crate::processing::scheduler::ExecOutput> {
+    use crate::processing::scheduler::ExecOutput;
+    let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+        code: "storage_unavailable".to_string(),
+        message: error,
+    })?;
+    // Total first: a reader must never see more pages processed than the
+    // document holds.
+    let result =
+        processing_repository::set_progress_total(&conn, &task.task_id, task.lease_epoch, total)
+            .and_then(|_| {
+                processing_repository::set_progress_done(
+                    &conn,
+                    &task.task_id,
+                    task.lease_epoch,
+                    done,
+                )
+            });
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.starts_with("lease_lost") || error.starts_with("demand_lost") => {
+            Err(ExecOutput::Stopped)
+        }
+        Err(error) => {
+            eprintln!("[bibliography] could not record extraction progress: {error}");
+            Ok(())
+        }
+    }
+}
+
+/// One OCR answer's place in the page layer: a non-empty answer replaces the
+/// page text (method `ocr`) with a fresh hash — never appended, so native
+/// fragments cannot duplicate. The answer is stored as Markdown: GLM-OCR
+/// returns HTML tables and the tags poison grading, chunking and reading
+/// (see [`crate::ocr::markup::ocr_markup_to_text`]). An empty one keeps the
+/// native row untouched — unless the native text is garbled raw glyph codes,
+/// which OCR owns: the page is then recorded empty and the codes are never
+/// kept.
+pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText {
+    let text = crate::ocr::markup::ocr_markup_to_text(&text);
+    if text.trim().is_empty() {
+        eprintln!(
+            "[bibliography] page {}: no text recognized",
+            page.page_number
+        );
+        if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
+            &page.text_content,
+        )) {
+            return ExtractPageText {
+                page_number: page.page_number,
+                method: "ocr".to_string(),
+                text_hash: extraction_text_hash(""),
+                text_chars: 0,
+                quality: "empty".to_string(),
+                text_content: String::new(),
+            };
+        }
+        return page;
+    }
+    let quality = extraction_quality(&text);
+    ExtractPageText {
+        page_number: page.page_number,
+        method: "ocr".to_string(),
+        text_hash: extraction_text_hash(&text),
+        text_chars: text.chars().count() as i64,
+        quality: quality.to_string(),
+        text_content: text,
     }
 }
 

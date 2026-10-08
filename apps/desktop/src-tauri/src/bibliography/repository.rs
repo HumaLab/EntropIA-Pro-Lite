@@ -2192,14 +2192,65 @@ pub fn extraction_matches_source(
     Ok(stored == Some((catalog_mtime, file_bytes)))
 }
 
+/// True when any stored text of the attachment — the whole-document
+/// extraction or one page row — is garbled (raw glyph codes from a custom
+/// font encoding; see [`crate::ocr::pdf::is_garbled_text`]). The verdict is
+/// decided on the text a reader gets: raw OCR markup (GLM-OCR HTML tables)
+/// converts first (see [`crate::ocr::markup::ocr_markup_to_text`]), because
+/// the tag soup reads as garbled to the letter statistics and must not
+/// re-demand pages full of real text. Such an extraction is never settled:
+/// the stored text is not something a reader can use, and re-running the
+/// extraction (with the selective OCR pass) is the only repair. One scan
+/// over the stored strings per attachment.
+fn stored_extraction_is_garbled(
+    conn: &Connection,
+    attachment_id: &str,
+) -> BibliographyResult<bool> {
+    let extraction: Option<String> = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [attachment_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| BibliographyError::sql("Failed to read extraction text", error))?;
+    if let Some(text) = extraction {
+        if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(&text)) {
+            return Ok(true);
+        }
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    let pages = stmt
+        .query_map([attachment_id], |row| row.get::<_, String>(0))
+        .map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+    for page in pages {
+        let text =
+            page.map_err(|error| BibliographyError::sql("Failed to read page texts", error))?;
+        if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(&text)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// True when the stored extraction needs nothing more for this source: it
 /// matches the source identity AND is not an `empty` verdict that never went
 /// through a real OCR pass. A scan stored as `empty` by a build that could not
 /// read it (or while no OCR provider answered) is demanded again; once a
 /// provider has answered for it, even with no text, the verdict is final, so
 /// blank documents do not cost an OCR request on every sync. Rich and sparse
-/// extractions are never re-demanded. Admission and the executor both decide
-/// through this predicate.
+/// extractions are never re-demanded — unless their stored text is garbled
+/// (raw glyph codes from a custom font encoding), which is never settled and
+/// is always demanded again so OCR can replace it. An `empty` verdict whose
+/// stored text is real text once OCR markup is converted (raw GLM-OCR HTML
+/// tables graded `empty` by the letter statistics) is settled too: the
+/// verdict is a grading artifact, not missing text. Admission and the
+/// executor both decide through this predicate.
 pub fn extraction_is_settled(
     conn: &Connection,
     attachment_id: &str,
@@ -2209,10 +2260,13 @@ pub fn extraction_is_settled(
     if !extraction_matches_source(conn, attachment_id, catalog_mtime, file_bytes)? {
         return Ok(false);
     }
-    let unresolved_empty: bool = conn
+    if stored_extraction_is_garbled(conn, attachment_id)? {
+        return Ok(false);
+    }
+    let (quality_empty, text_content, ocr_attempted): (bool, String, bool) = conn
         .query_row(
-            "SELECT e.quality = 'empty'
-                AND NOT EXISTS (
+            "SELECT e.quality = 'empty', e.text_content,
+                EXISTS (
                     SELECT 1 FROM processing_tasks t
                     WHERE t.kind = 'bibliography_extract'
                       AND t.subject_id = e.attachment_id
@@ -2220,10 +2274,30 @@ pub fn extraction_is_settled(
                       AND t.result_receipt_json LIKE '%\"ocrAttempted\":true%')
              FROM bibliographic_extractions e WHERE e.attachment_id = ?1",
             [attachment_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|error| BibliographyError::sql("Failed to read extraction quality", error))?;
-    Ok(!unresolved_empty)
+    if !quality_empty || ocr_attempted {
+        return Ok(true);
+    }
+    // The `empty` verdict may only be the old markup grading artifact: when
+    // the text a reader gets is real text, there is nothing left to demand.
+    if !crate::ocr::markup::ocr_markup_to_text(&text_content)
+        .trim()
+        .is_empty()
+    {
+        return Ok(true);
+    }
+    // "Empty until OCR was attempted" only waits on files OCR can read. An
+    // HTML snapshot never gets OCR, so its empty text is final; without this
+    // it was re-demanded on every sync forever.
+    let html_snapshot = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+        .map_err(|message| BibliographyError {
+            code: "attachment_read_failed".to_string(),
+            message,
+        })?
+        .is_some_and(|attachment| crate::bibliography::attachment::is_html_snapshot(&attachment));
+    Ok(html_snapshot)
 }
 
 /// Reads the stored extraction for one attachment, if any.
@@ -2650,7 +2724,10 @@ pub struct ChunkablePage {
 
 /// Every chunkable page of one work's attachments, ordered by attachment
 /// then page. OCR rows win over native rows per page; unreadable pages
-/// (empty text) are skipped — there is nothing to segment.
+/// (empty text) are skipped — there is nothing to segment. The text is the
+/// converted one ([`crate::ocr::markup::ocr_markup_to_text`]): passages and
+/// embeddings must never contain HTML tags, and the spans recorded against
+/// it stay exact because the chunker reads the same strings.
 pub fn chunkable_pages_for_item(
     conn: &Connection,
     item_id: &str,
@@ -2685,7 +2762,7 @@ pub fn chunkable_pages_for_item(
             out.push(ChunkablePage {
                 attachment_id,
                 page_number,
-                text_content,
+                text_content: crate::ocr::markup::ocr_markup_to_text(&text_content),
             });
         }
     }

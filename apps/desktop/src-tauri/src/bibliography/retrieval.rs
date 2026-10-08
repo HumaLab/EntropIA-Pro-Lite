@@ -3098,6 +3098,16 @@ pub fn expand_passage(
         let Some(page_text) = page_text else {
             continue;
         };
+        // The marks are the chunk's spans: they point into the text the
+        // chunker read (normalized page text for V2 chunks, the raw stored
+        // rows for V1). Show the same text, so the marks land where they
+        // were cut on both generations.
+        let page_text = if crate::bibliography::chunks::page_text_is_normalized(&chunking_contract)
+        {
+            crate::ocr::markup::ocr_markup_to_text(&page_text)
+        } else {
+            page_text
+        };
         let highlights: Vec<(i64, i64)> = spans
             .iter()
             .filter(|(page, _, _)| page == page_number)

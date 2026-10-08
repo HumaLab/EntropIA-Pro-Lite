@@ -22,14 +22,29 @@ pub enum PageQuality {
 
 /// Classifies one page's native text: the same richness bar the
 /// extraction publisher uses (`ocr::pdf::is_quality_text`), so a page the
-/// publisher called rich is never re-examined by the OCR pass.
+/// publisher called rich is never re-examined by the OCR pass. Garbled
+/// text (raw glyph codes from a custom font encoding) grades
+/// [`PageQuality::NativeEmpty`]: OCR owns that page and the codes are never
+/// merged back in.
 pub fn classify_page_text(native_text: Option<&str>) -> PageQuality {
     match native_text {
         None => PageQuality::NativeEmpty,
         Some(text) if text.trim().is_empty() => PageQuality::NativeEmpty,
+        Some(text) if crate::ocr::pdf::is_garbled_text(text) => PageQuality::NativeEmpty,
         Some(text) if crate::ocr::pdf::is_quality_text(text) => PageQuality::NativeRich,
         Some(_) => PageQuality::NativeSparse,
     }
+}
+
+/// The exact upstream error a GLM-OCR answer with no useful content
+/// produces (`ocr::GLM_OCR_EMPTY_RESPONSE_MESSAGE`). In the page path that
+/// answer means "this page holds no text", not a page failure.
+pub const EMPTY_OCR_PAGE_RESPONSE: &str = crate::ocr::GLM_OCR_EMPTY_RESPONSE_MESSAGE;
+
+/// True when `error` is the GLM-OCR empty response, i.e. the provider
+/// answered but the page carries no recognizable text.
+pub fn is_empty_ocr_page_response(error: &str) -> bool {
+    error.contains(EMPTY_OCR_PAGE_RESPONSE)
 }
 
 /// Coverage of one document: totals the UI renders and the executor
@@ -123,6 +138,31 @@ mod tests {
         assert_eq!(classify_page_text(Some("ok")), PageQuality::NativeSparse);
         assert_eq!(classify_page_text(Some("   ")), PageQuality::NativeEmpty);
         assert_eq!(classify_page_text(None), PageQuality::NativeEmpty);
+    }
+
+    #[test]
+    fn garbled_pages_route_to_ocr_which_owns_the_page() {
+        // Raw glyph codes from a font with a custom encoding and no
+        // ToUnicode map ("3FWJTUB" = "Revista"): needs OCR and the native
+        // codes must never be kept, so the verdict is NativeEmpty.
+        assert_eq!(
+            classify_page_text(Some(
+                "3FWJTUB %JDJBMJ[BMF 4FQJFNCJ[BDJ %JSJF[B 1VCJPFT 4B[BDJ 4JFOUJGJDP"
+            )),
+            PageQuality::NativeEmpty
+        );
+    }
+
+    #[test]
+    fn a_glm_empty_response_is_an_empty_page_not_a_failure() {
+        assert!(is_empty_ocr_page_response(EMPTY_OCR_PAGE_RESPONSE));
+        assert!(is_empty_ocr_page_response(&format!(
+            "provider: {EMPTY_OCR_PAGE_RESPONSE}"
+        )));
+        assert!(!is_empty_ocr_page_response("request timed out after 30s"));
+        assert!(!is_empty_ocr_page_response(
+            "GLM-OCR no está configurado: cargá una API key"
+        ));
     }
 
     #[test]

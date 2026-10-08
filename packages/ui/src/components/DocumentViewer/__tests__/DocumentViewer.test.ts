@@ -67,19 +67,92 @@ vi.stubGlobal('cancelAnimationFrame', (id: number) => {
 vi.stubGlobal('getComputedStyle', window.getComputedStyle.bind(window))
 
 const pdfMock = vi.hoisted(() => {
-  const createPage = (width = 800, height = 600) => ({
+  type MockRenderTask = {
+    promise: Promise<void>
+    cancel: () => void
+    /** Test hook: settle a slow render successfully. */
+    finish: () => void
+    /** Test hook: settle a slow render with a real (non-cancellation) error. */
+    fail: (error: Error) => void
+  }
+
+  // pdf.js semantics this mock enforces:
+  //  - a canvas stays "in rendering" until its task settles, even after
+  //    cancel(), and cancel() settles the task only on a deferred tick;
+  //  - render() on a canvas whose previous task has not settled throws
+  //    "Cannot use the same canvas during multiple render() operations".
+  const canvasInUse = new Set<object>()
+
+  const collisionError = () =>
+    new Error(
+      'Cannot use the same canvas during multiple render() operations. ' +
+        'Use different canvas or ensure previous operations were cancelled or completed.'
+    )
+
+  const cancellationError = () => {
+    const error = new Error('Rendering cancelled, page 1')
+    error.name = 'RenderingCancelledException'
+    return error
+  }
+
+  const createRenderTask = (key: object, autoFinish: boolean): MockRenderTask => {
+    let resolve!: () => void
+    let reject!: (reason: unknown) => void
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    // The component may legitimately abandon a cancelled task; keep Node
+    // quiet about the rejection it never observes.
+    promise.catch(() => {})
+    promise.then(
+      () => canvasInUse.delete(key),
+      () => canvasInUse.delete(key)
+    )
+
+    let settled = false
+    const settle = (outcome: () => void) => {
+      if (settled) return
+      settled = true
+      outcome()
+    }
+
+    const task: MockRenderTask = {
+      promise,
+      cancel() {
+        // A cancelled pdf.js render settles one deferred tick later.
+        setTimeout(() => settle(() => reject(cancellationError())), 0)
+      },
+      finish() {
+        settle(() => resolve())
+      },
+      fail(error) {
+        settle(() => reject(error))
+      },
+    }
+    if (autoFinish) task.finish()
+    return task
+  }
+
+  const createPage = (width = 800, height = 600, options: { slow?: boolean } = {}) => ({
     getViewport: vi.fn(({ scale }: { scale: number }) => ({
       width: width * scale,
       height: height * scale,
       scale,
     })),
-    render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
+    render: vi.fn((params: { canvasContext: object }) => {
+      // pdf.js keys "canvas in use" off canvasContext.canvas.
+      const key = (params.canvasContext as { canvas?: object }).canvas ?? params.canvasContext
+      if (canvasInUse.has(key)) throw collisionError()
+      canvasInUse.add(key)
+      return createRenderTask(key, !options.slow)
+    }),
   })
 
   const mockPage = createPage()
   const mockDocument = {
     numPages: 3,
-    getPage: vi.fn(() => Promise.resolve(mockPage)),
+    getPage: vi.fn((_pageNumber?: number) => Promise.resolve(mockPage)),
   }
 
   const createLoadingTask = (document: unknown = mockDocument) => ({
@@ -140,6 +213,20 @@ describe('DocumentViewer', () => {
     await flushRaf()
   }
 
+  /**
+   * Drains the promise chains a queued render travels through before it
+   * reaches `page.render`, so "no render happened" is observable and not just
+   * "not yet". All of them are microtasks; one macrotask tick runs after all.
+   */
+  async function settleRenderWork() {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  function stubCanvasContext() {
+    // Enough of a 2d context for the offscreen -> visible canvas copy.
+    return { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
+  }
+
   function setupImage(
     img: HTMLImageElement,
     naturalW: number,
@@ -181,6 +268,22 @@ describe('DocumentViewer', () => {
       height,
       toJSON: () => ({}),
     }))
+  }
+
+  function stubUserAgentData(brands: Array<{ brand: string; version: string }>): () => void {
+    // Shadow the property on the live navigator instead of stubGlobal: this
+    // file owns several vi.stubGlobal installs that unstubAllGlobals would
+    // wipe together with this one.
+    const nav = navigator as unknown as Record<string, unknown>
+    const previous = Object.getOwnPropertyDescriptor(nav, 'userAgentData')
+    Object.defineProperty(nav, 'userAgentData', {
+      configurable: true,
+      value: { brands },
+    })
+    return () => {
+      if (previous) Object.defineProperty(nav, 'userAgentData', previous)
+      else delete nav.userAgentData
+    }
   }
 
   describe('image mode', () => {
@@ -1403,6 +1506,35 @@ describe('DocumentViewer', () => {
       expect(canvas).toBeInTheDocument()
     })
 
+    it('opens the document through pdfDocumentOptions with the native decoder on Chromium 154', async () => {
+      const restore = stubUserAgentData([
+        { brand: 'Chromium', version: '154' },
+        { brand: 'Microsoft Edge', version: '154' },
+      ])
+      try {
+        render(DocumentViewer, {
+          props: {
+            path: '/path/to/doc.pdf',
+            type: 'pdf',
+            assetUrl: 'asset://localhost/path/to/doc.pdf',
+            annotations: [],
+            selectedAnnotationId: null,
+            annotationTool: 'select',
+            annotationColor: 'var(--color-accent)',
+          },
+        })
+
+        await waitFor(() => {
+          expect(pdfMock.getDocument).toHaveBeenCalledWith({
+            url: 'asset://localhost/path/to/doc.pdf',
+            isImageDecoderSupported: true,
+          })
+        })
+      } finally {
+        restore()
+      }
+    })
+
     it('renders the shared editing toolbar (asset navigation lives in the host view)', () => {
       render(DocumentViewer, {
         props: {
@@ -1450,7 +1582,7 @@ describe('DocumentViewer', () => {
 
     it('fits the PDF page to the scroll container like images and re-fits on resize', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
 
       const pageRequest = deferred<typeof pdfMock.mockPage>()
       pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
@@ -1501,6 +1633,71 @@ describe('DocumentViewer', () => {
       getContext.mockRestore()
     })
 
+    it('with pauseWhenHidden, a 0x0 resize does not render and a real size renders exactly once', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+          pauseWhenHidden: true,
+        },
+      })
+
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1))
+
+      // Hiding the tab zeroes the container; the notification must not draw
+      // a full-size page nobody sees.
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 0, 0)
+      await triggerResizeObservers(scrollContainer)
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1)
+
+      // Back to a real size: exactly one redraw, not a backlog.
+      setupContainer(scrollContainer, 400, 300)
+      await triggerResizeObservers(scrollContainer)
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2))
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2)
+
+      getContext.mockRestore()
+    })
+
+    it('without pauseWhenHidden, a 0x0 resize notification still renders', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1))
+
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 0, 0)
+      await triggerResizeObservers(scrollContainer)
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2))
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2)
+
+      getContext.mockRestore()
+    })
+
     it('anchors oversized PDF content to the real left scroll origin', () => {
       expect(documentViewerSource).toMatch(
         /\.document-viewer__canvas-container\s*\{[^}]*justify-content:\s*flex-start;[^}]*overflow:\s*auto;/s
@@ -1544,9 +1741,7 @@ describe('DocumentViewer', () => {
     })
 
     it('renders the requested page when currentPage changes after the pdf loads', async () => {
-      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-        {} as CanvasRenderingContext2D
-      )
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(stubCanvasContext())
       const onPageChange = vi.fn()
       render(DocumentViewerPagingTestHost, { props: { onPageChange } })
 
@@ -1563,7 +1758,7 @@ describe('DocumentViewer', () => {
 
     it('ignores stale pdf renders after a newer render starts', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
 
       const initialPage = pdfMock.createPage()
       const stalePage = pdfMock.createPage()
@@ -1605,6 +1800,132 @@ describe('DocumentViewer', () => {
       getContext.mockRestore()
     })
 
+    it('draws the requested page when a page change interrupts a slow render', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const firstPage = pdfMock.createPage(800, 600, { slow: true })
+      const secondPage = pdfMock.createPage(800, 600)
+      pdfMock.mockDocument.getPage.mockImplementation((pageNumber) =>
+        Promise.resolve(pageNumber === 2 ? secondPage : firstPage)
+      )
+      const onPageChange = vi.fn()
+
+      render(DocumentViewerPagingTestHost, { props: { onPageChange } })
+      await waitFor(() => expect(firstPage.render).toHaveBeenCalledTimes(1))
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      // The unfinished page-1 render must neither block nor poison the
+      // page-2 render: the requested page still draws, with no error.
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(2, 3))
+      expect(secondPage.render).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('pdf-error')).not.toBeInTheDocument()
+
+      getContext.mockRestore()
+    })
+
+    it('draws only the last requested page when page changes arrive back to back', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const firstPage = pdfMock.createPage()
+      const slowMiddlePage = pdfMock.createPage(800, 600, { slow: true })
+      const lastPage = pdfMock.createPage()
+      pdfMock.mockDocument.getPage.mockImplementation((pageNumber) => {
+        if (pageNumber === 2) return Promise.resolve(slowMiddlePage)
+        if (pageNumber === 3) return Promise.resolve(lastPage)
+        return Promise.resolve(firstPage)
+      })
+      const onPageChange = vi.fn()
+
+      render(DocumentViewerPagingTestHost, { props: { onPageChange } })
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(1, 3))
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(3, 3))
+      expect(lastPage.render).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('pdf-error')).not.toBeInTheDocument()
+
+      getContext.mockRestore()
+    })
+
+    it('renders an earlier page again when navigating back during a slow render', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const firstPage = pdfMock.createPage()
+      const slowSecondPage = pdfMock.createPage(800, 600, { slow: true })
+      pdfMock.mockDocument.getPage.mockImplementation((pageNumber) =>
+        Promise.resolve(pageNumber === 2 ? slowSecondPage : firstPage)
+      )
+      const onPageChange = vi.fn()
+
+      render(DocumentViewerPagingTestHost, { props: { onPageChange } })
+      await waitFor(() => expect(onPageChange).toHaveBeenLastCalledWith(1, 3))
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+      await waitFor(() => expect(slowSecondPage.render).toHaveBeenCalledTimes(1))
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Previous page' }))
+
+      await waitFor(() => expect(firstPage.render).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(onPageChange).toHaveBeenCalledTimes(2))
+      expect(onPageChange).toHaveBeenLastCalledWith(1, 3)
+      expect(screen.queryByTestId('pdf-error')).not.toBeInTheDocument()
+
+      getContext.mockRestore()
+    })
+
+    it('keeps the previous page visible until the new page has drawn', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const firstPage = pdfMock.createPage(800, 600)
+      const slowSecondPage = pdfMock.createPage(400, 300, { slow: true })
+      pdfMock.mockDocument.getPage.mockImplementation((pageNumber) =>
+        Promise.resolve(pageNumber === 2 ? slowSecondPage : firstPage)
+      )
+      const onPageChange = vi.fn()
+
+      render(DocumentViewerPagingTestHost, { props: { onPageChange } })
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(800)
+      })
+
+      await fireEvent.click(screen.getByRole('button', { name: 'Next page' }))
+      await waitFor(() => expect(slowSecondPage.render).toHaveBeenCalledTimes(1))
+
+      // The in-flight render must not clear or resize the visible page.
+      expect((screen.getByTestId('pdf-canvas') as HTMLCanvasElement).width).toBe(800)
+
+      slowSecondPage.render.mock.results[0]!.value.finish()
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(400)
+      })
+      expect(onPageChange).toHaveBeenLastCalledWith(2, 3)
+      expect(screen.queryByTestId('pdf-error')).not.toBeInTheDocument()
+
+      getContext.mockRestore()
+    })
+
+    it('surfaces a real render failure through the error banner', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const brokenPage = pdfMock.createPage(800, 600, { slow: true })
+      pdfMock.mockDocument.getPage.mockImplementation(() => Promise.resolve(brokenPage))
+
+      render(DocumentViewerPagingTestHost, { props: { onPageChange: vi.fn() } })
+      await waitFor(() => expect(brokenPage.render).toHaveBeenCalledTimes(1))
+
+      brokenPage.render.mock.results[0]!.value.fail(new Error('broken image stream'))
+
+      const banner = await screen.findByTestId('pdf-error')
+      expect(banner).toHaveTextContent('broken image stream')
+
+      getContext.mockRestore()
+    })
+
     it('shows loading state initially', () => {
       render(DocumentViewer, {
         props: {
@@ -1623,7 +1944,7 @@ describe('DocumentViewer', () => {
     it('creates normalized annotations on the rendered PDF page', async () => {
       const onAnnotationsChange = vi.fn()
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
 
       render(DocumentViewer, {
         props: {
@@ -1663,7 +1984,7 @@ describe('DocumentViewer', () => {
 
     it('keeps persisted PDF edits aligned while zooming and rotating the page', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
       const now = 10
 
       render(DocumentViewer, {
@@ -1741,7 +2062,7 @@ describe('DocumentViewer', () => {
 
     it('keeps the PDF edit selection aligned with the viewport after rotation', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
 
       render(DocumentViewer, {
         props: {
@@ -1831,7 +2152,7 @@ describe('DocumentViewer', () => {
 
     it('removes the old interactive overlay immediately when switching PDF assets', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
-      getContext.mockReturnValue({} as CanvasRenderingContext2D)
+      getContext.mockReturnValue(stubCanvasContext())
       const nextDocument = deferred<typeof pdfMock.mockDocument>()
 
       const view = render(DocumentViewer, {
@@ -1946,7 +2267,9 @@ describe('DocumentViewer', () => {
       })
 
       await waitFor(() => expect(pdfMock.getDocument).toHaveBeenCalledTimes(2))
-      expect(pdfMock.getDocument).toHaveBeenLastCalledWith('asset://localhost/path/to/doc-b.pdf')
+      expect(pdfMock.getDocument).toHaveBeenLastCalledWith(
+        expect.objectContaining({ url: 'asset://localhost/path/to/doc-b.pdf' })
+      )
       expect(firstTask.destroy).toHaveBeenCalledTimes(1)
     })
 

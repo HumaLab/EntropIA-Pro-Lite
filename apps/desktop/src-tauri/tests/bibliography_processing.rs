@@ -3005,20 +3005,34 @@ fn interactive_bibliography_batch_outranks_background_corpus() {
     let biblio_id = admit_bibliography_task(&conn, "lib-prio");
     // Roles follow the physical id order so the test is deterministic:
     // the larger id goes interactive, the smaller stays background.
-    let (hi_batch, hi_task, bg_task) = if ocr_id < biblio_id {
+    let (hi_batch, bg_batch, hi_task, bg_task) = if ocr_id < biblio_id {
         (
             "batch-system-bibliography",
+            "batch-system-manual",
             biblio_id.as_str(),
             ocr_id.as_str(),
         )
     } else {
-        ("batch-system-manual", ocr_id.as_str(), biblio_id.as_str())
+        (
+            "batch-system-manual",
+            "batch-system-bibliography",
+            ocr_id.as_str(),
+            biblio_id.as_str(),
+        )
     };
     conn.execute(
         "UPDATE processing_batches SET priority = 2 WHERE id = ?1",
         [hi_batch],
     )
     .expect("raise the interactive batch");
+    // Manual demand is interactive by construction (the E2c-WU3 manual-work
+    // fix), so the background role is forced explicitly: what this test
+    // locks in is the cross-domain level order of the claim scan.
+    conn.execute(
+        "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+        [bg_batch],
+    )
+    .expect("keep the background batch at background");
 
     let first = repository::claim_next(
         &conn,
@@ -3041,6 +3055,223 @@ fn interactive_bibliography_batch_outranks_background_corpus() {
     .expect("claim scan")
     .expect("the survivor must be runnable");
     assert_eq!(second.task_id, bg_task);
+}
+
+/// E2c-WU3 (manual-work priority): the work the user explicitly requests
+/// outranks the aged background backlog. The owner's archive had two manual
+/// OCR tasks pending behind thousands of bibliography extractions: starvation
+/// aging promotes the background batch to high (1) after 30 minutes, the
+/// claim scan serves the highest batch level first, and manual demand admitted
+/// at background level waited for the whole backlog. A manual demand is
+/// interactive (2) by construction — above anything aging can reach.
+#[test]
+fn manual_demand_jumps_the_aged_bibliography_backlog() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "MANPRIO01", "Obra de fondo", "Resumen.");
+    let attachment_1 = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANPRIOA1",
+        "linked_file",
+        None,
+        "manprio-1.pdf",
+        "application/pdf",
+    );
+    let attachment_2 = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANPRIOA2",
+        "linked_file",
+        None,
+        "manprio-2.pdf",
+        "application/pdf",
+    );
+    seed_corpus_asset(&conn, "manual-priority-asset");
+    // The background bibliography batch as the owner's evidence has it:
+    // aging promoted it to high and a derived backlog waits inside it.
+    let bibliography =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-1",
+        "bibliography_extract",
+        "attachment",
+        &attachment_1,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-2",
+        "bibliography_extract",
+        "attachment",
+        &attachment_2,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    let batch_priority = |id: &str| -> i64 {
+        conn.query_row(
+            "SELECT priority FROM processing_batches WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("batch priority")
+    };
+    // Aging promotes the starved background backlog to high — and stops
+    // there. The cap is what keeps background below interactive forever.
+    assert_eq!(
+        repository::apply_priority_aging(&conn, repository::now_ms()).expect("age"),
+        1
+    );
+    assert_eq!(batch_priority(&bibliography), 1);
+    assert_eq!(
+        repository::apply_priority_aging(&conn, repository::now_ms()).expect("age again"),
+        0
+    );
+    assert_eq!(batch_priority(&bibliography), 1, "aging never reaches 2");
+
+    let ocr_task_id = admit_ocr_task(&conn, "manual-priority-asset");
+    let manual = repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "a manual demand is interactive by construction"
+    );
+
+    let first = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the manual demand must be runnable");
+    assert_eq!(
+        first.task_id, ocr_task_id,
+        "the manual demand jumps ahead of the aged background backlog"
+    );
+    let second = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the backlog must drain after the manual work");
+    assert_eq!(second.kind, "bibliography_extract");
+    assert_eq!(batch_priority(&bibliography), 1);
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "aging never pushes background above interactive"
+    );
+}
+
+/// The manual lane reopens on demand: a cancel resets the system batch's
+/// priority (and withdraws its old demand), and the next click re-opens the
+/// batch and re-raises it to interactive. Cancelled demand stays final —
+/// only the fresh unit flows, and it flows before the background backlog.
+#[test]
+fn a_manual_demand_after_a_cancel_is_interactive_again() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "MANCNCL01", "Obra de fondo", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "MANCNCLA1",
+        "linked_file",
+        None,
+        "mancncl.pdf",
+        "application/pdf",
+    );
+    seed_corpus_asset(&conn, "manual-cancel-asset");
+    let bibliography =
+        repository::ensure_system_batch(&conn, "bibliography").expect("bibliography system batch");
+    conn.execute(
+        "UPDATE processing_batches SET priority = 1 WHERE id = ?1",
+        [&bibliography],
+    )
+    .expect("aged background batch");
+    insert_derived_task(
+        &conn,
+        &bibliography,
+        "aaa-extract-1",
+        "bibliography_extract",
+        "attachment",
+        &attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    let batch_priority = |id: &str| -> i64 {
+        conn.query_row(
+            "SELECT priority FROM processing_batches WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .expect("batch priority")
+    };
+
+    let first_ocr = admit_ocr_task(&conn, "manual-cancel-asset");
+    let manual = repository::ensure_system_batch(&conn, "manual").expect("manual system batch");
+    repository::control_batch(&conn, &manual, BatchAction::Cancel, None)
+        .expect("cancel the manual batch");
+    assert_eq!(batch_priority(&manual), 0, "a cancel resets priority");
+    let first_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&first_ocr],
+            |row| row.get(0),
+        )
+        .expect("withdrawn demand state");
+    assert_eq!(
+        first_state, "cancelled",
+        "the withdrawn demand is orphan-cancelled"
+    );
+
+    let second_ocr = admit_ocr_task(&conn, "manual-cancel-asset");
+    assert_ne!(second_ocr, first_ocr, "a fresh demand mints a fresh unit");
+    let (state, desired): (String, String) = conn
+        .query_row(
+            "SELECT state, desired_state FROM processing_batches WHERE id = ?1",
+            [&manual],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("manual batch state");
+    assert_eq!(
+        (state.as_str(), desired.as_str()),
+        ("running", "run"),
+        "the next manual demand reopens the system batch"
+    );
+    assert_eq!(
+        batch_priority(&manual),
+        2,
+        "the next manual demand re-raises interactive priority"
+    );
+
+    let claimed = repository::claim_next(
+        &conn,
+        "prio-session",
+        &["ocr", "bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim scan")
+    .expect("the fresh manual demand must be runnable");
+    assert_eq!(
+        claimed.task_id, second_ocr,
+        "the demand after the cancel is interactive again"
+    );
+    let first_state: String = conn
+        .query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [&first_ocr],
+            |row| row.get(0),
+        )
+        .expect("withdrawn demand state");
+    assert_eq!(
+        first_state, "cancelled",
+        "cancelled demand is never resurrected"
+    );
 }
 
 /// Page source that withdraws real scheduler demand while serving one
@@ -10457,4 +10688,1012 @@ fn p3_extraction_admission_follows_the_works_opened_rank() {
         vec![attachment_c, attachment_a, attachment_b],
         "extraction admission follows the work's opened rank"
     );
+}
+
+// ── Garbled native text (custom font encodings without ToUnicode) ─────────
+//
+// Some PDFs return raw glyph codes instead of characters ("3FWJTUB" is
+// "Revista"): the old quality bar called those pages rich, so selective OCR
+// never ran and the codes were stored and embedded. The detector routes them
+// to OCR, which owns the page; sync admission re-demands the already-stored
+// garbage even when the source identity never moved.
+
+const GARBLED_GLYPH_TEXT: &str = "3FWJTUB %JDJBMJ[BMF 4FQJFNCJ[BDJ %JSJF[B 1VCJPFT 4B[BDJ 4JFOUJGJDP -VDIBZPSHBOJ[BDJO 6PMJBM 1SJNFSB 4FSJF 5SBKBCPKP %FQBSBNFOUP %F 1TZDPMPHJ[BDJ";
+const CLEAN_OCR_TEXT: &str =
+    "Texto reconocido limpio de la pagina convertida con longitud suficiente para calidad";
+
+/// Writes what the previous build stored for one attachment: the extraction
+/// and its single page row, graded `rich`, pinned to the exact source
+/// identity of the file on disk.
+fn seed_stored_texts(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+    item_id: &str,
+    path: &str,
+    extraction_text: &str,
+    page_text: &str,
+    quality: &str,
+) {
+    use entropia_desktop_lib::bibliography::repository::{
+        upsert_extraction_in_transaction, upsert_page_text_in_transaction, ExtractionRow,
+        PageTextRow,
+    };
+    let source_bytes = std::fs::metadata(path).expect("source metadata").len() as i64;
+    upsert_extraction_in_transaction(
+        conn,
+        &ExtractionRow {
+            attachment_id: attachment_id.to_string(),
+            item_id: item_id.to_string(),
+            page_count: 1,
+            method: "native".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(extraction_text.as_bytes())),
+            text_chars: extraction_text.chars().count() as i64,
+            quality: quality.to_string(),
+            text_content: extraction_text.to_string(),
+            source_mtime: Some(1_700_000_000),
+            source_bytes,
+        },
+        repository::now_ms(),
+    )
+    .expect("seed extraction");
+    upsert_page_text_in_transaction(
+        conn,
+        &PageTextRow {
+            attachment_id: attachment_id.to_string(),
+            page_number: 1,
+            method: "native".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(page_text.as_bytes())),
+            text_chars: page_text.chars().count() as i64,
+            quality: quality.to_string(),
+            text_content: page_text.to_string(),
+        },
+        repository::now_ms(),
+    )
+    .expect("seed page text");
+}
+
+/// A stored extraction whose text is garbled raw glyph codes is re-demanded
+/// although the source identity (catalog mtime + file bytes) never moved.
+#[test]
+fn admission_re_demands_a_garbled_stored_extraction_with_unchanged_source_identity() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        GARBLED_GLYPH_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("garbled sync");
+    assert_eq!(
+        created, 1,
+        "garbled stored text must be re-demanded despite the unchanged source identity"
+    );
+}
+
+/// One garbled page row poisons the whole stored extraction: admission
+/// checks the page texts too, not just the joined document text.
+#[test]
+fn admission_re_demands_when_only_a_stored_page_text_is_garbled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        CLEAN_OCR_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("garbled page sync");
+    assert_eq!(created, 1, "a garbled stored page must be re-demanded");
+}
+
+/// The negative control: a clean stored extraction of the same shape stays
+/// settled — the detector must not re-demand readable text.
+#[test]
+fn admission_leaves_a_clean_stored_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        CLEAN_OCR_TEXT,
+        CLEAN_OCR_TEXT,
+        "rich",
+    );
+
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("clean sync");
+    assert_eq!(created, 0, "clean stored text must stay settled");
+}
+
+/// An empty HTML snapshot is final: OCR never applies to it, so the "empty
+/// until OCR was attempted" retry rule must not re-demand it on every sync
+/// (it did, which also walked the sync progress counter backwards).
+#[test]
+fn admission_leaves_an_empty_html_snapshot_settled() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_catalog(&mut conn, "HTMLW0001", "Obra con captura web", "Resumen.");
+    let path = write_temp_pdf(&dir, "captura.html", b"<html><body></body></html>");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT01",
+        "imported_url",
+        Some(&path),
+        "captura.html",
+        "text/html",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    seed_stored_texts(&conn, &attachment_id, &item_id, &path, "", "", "empty");
+
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("html sync");
+    assert_eq!(created, 0, "an empty HTML snapshot has no OCR to wait for");
+}
+
+/// The retry rule still holds for PDFs: an empty PDF whose OCR was never
+/// attempted is re-demanded.
+#[test]
+fn admission_re_demands_an_empty_pdf_until_ocr_was_attempted() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(&conn, &attachment_id, &item_id, &path, "", "", "empty");
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("empty pdf sync");
+    assert_eq!(created, 1, "an empty PDF waits for an OCR attempt");
+}
+
+/// The re-process must actually run OCR despite the unchanged source
+/// identity (no mtime/bytes short-circuit), replace the page with the OCR
+/// text, keep no glyph code anywhere, and chain the profile re-demand that
+/// re-embeds the moved passages.
+#[test]
+fn garbled_pages_are_re_processed_and_ocr_owns_the_page() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "GARBWORK1",
+        "Obra con codigos crudos",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf(&[(50.0, 750.0, GARBLED_GLYPH_TEXT)]);
+    let path = write_temp_pdf(&dir, "garabatos.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GARBATT01",
+        "linked_file",
+        Some(&path),
+        "garabatos.pdf",
+        "application/pdf",
+    );
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        GARBLED_GLYPH_TEXT,
+        GARBLED_GLYPH_TEXT,
+        "rich",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
+        1
+    );
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(CLEAN_OCR_TEXT);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the garbled re-extract must succeed, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "the executor must OCR the garbled page despite the unchanged source identity"
+    );
+    let (method, text): (String, String) = conn
+        .query_row(
+            "SELECT method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page row");
+    assert_eq!(method, "ocr", "OCR owns the garbled page");
+    assert!(text.contains("Texto reconocido limpio"), "{text}");
+    assert!(!text.contains("3FWJTUB"), "no glyph code survives: {text}");
+    let whole: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    assert!(
+        !whole.contains("3FWJTUB"),
+        "the extraction row must not keep glyph codes: {whole}"
+    );
+    let profile_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks
+             WHERE kind = 'bibliography_profile' AND subject_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("profile tasks");
+    assert!(
+        profile_tasks >= 1,
+        "the moved page layer must re-demand the profile so passages re-embed"
+    );
+}
+
+/// A GLM-OCR answer with no content is an empty page: the row records empty
+/// text and the task succeeds — it is not a page failure, and the garbage it
+/// replaced is never kept.
+#[test]
+fn an_empty_glm_page_response_records_empty_text_not_a_failure() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "GLMWORK01",
+        "Obra con pagina en blanco",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf(&[(50.0, 750.0, GARBLED_GLYPH_TEXT)]);
+    let path = write_temp_pdf(&dir, "glm-vacio.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GLMATT001",
+        "linked_file",
+        Some(&path),
+        "glm-vacio.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::failing(
+        entropia_desktop_lib::bibliography::selective_ocr::EMPTY_OCR_PAGE_RESPONSE,
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "an empty answer is not a page failure, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "the garbled page must reach the provider"
+    );
+    let (method, quality, text): (String, String, String) = conn
+        .query_row(
+            "SELECT method, quality, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("page row");
+    assert_eq!(method, "ocr");
+    assert_eq!(quality, "empty");
+    assert!(
+        text.is_empty(),
+        "the empty answer is recorded as empty text, never as kept garbage: {text}"
+    );
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks
+             WHERE subject_id = ?1 AND kind = 'bibliography_extract' AND state = 'succeeded'",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(
+        receipt.contains("\"ocrFailedPages\":[]"),
+        "the empty page is not a failed page: {receipt}"
+    );
+}
+
+// ── Honest page progress and a page-rate ETA for long extractions ─────────
+//
+// A 1500-page scanned book OCRs page by page for hours. The task row has to
+// say which page it is on (done over the pages that need OCR) and the ETA has
+// to be measured from that progress — never from the per-attachment average
+// of other books.
+
+/// Reads the running extraction's progress row the way the screen does, at
+/// every provider call: `progress_done` must already count the pages that
+/// landed and `progress_total` the pages that need OCR.
+struct ProgressRecordingProvider {
+    db_path: std::path::PathBuf,
+    window_pages: Option<usize>,
+    seen: Mutex<Vec<(i64, i64)>>,
+}
+
+impl ProgressRecordingProvider {
+    fn per_page(db_path: std::path::PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            db_path,
+            window_pages: None,
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn pdf_windows(db_path: std::path::PathBuf, window_pages: usize) -> Arc<Self> {
+        Arc::new(Self {
+            db_path,
+            window_pages: Some(window_pages),
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The (done, total) the extraction task carries right now.
+    fn progress_now(&self) -> (i64, i64) {
+        let conn = rusqlite::Connection::open(&self.db_path).expect("open progress db");
+        conn.query_row(
+            "SELECT progress_done, progress_total FROM processing_tasks
+              WHERE kind = 'bibliography_extract'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("progress row")
+    }
+
+    fn record(&self) {
+        let progress = self.progress_now();
+        self.seen.lock().expect("seen").push(progress);
+    }
+}
+
+impl PageOcrProvider for ProgressRecordingProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        self.record();
+        Ok("Texto reconocido por pagina con progreso, suficientemente largo para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        self.window_pages
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.record();
+        Ok((first_page..=last_page)
+            .map(|page| format!("Contenido reconocido de la pagina {page} del escaneo"))
+            .collect())
+    }
+
+    fn name(&self) -> &str {
+        "progress-recorder"
+    }
+}
+
+fn extract_progress_row(conn: &rusqlite::Connection) -> (i64, i64) {
+    conn.query_row(
+        "SELECT progress_done, progress_total FROM processing_tasks
+          WHERE kind = 'bibliography_extract'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("progress row")
+}
+
+/// The extraction task records honest page progress as OCR pages land:
+/// `progress_total` is the pages that need OCR, `progress_done` counts the
+/// pages processed so far — updated per page, and durable in the task row.
+#[test]
+fn extraction_progress_counts_ocr_pages_as_they_land() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PROGPAGE1", "Obra con progreso", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank, blank, blank]);
+    let path = write_temp_pdf(&dir, "progreso.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PROGATT01",
+        "linked_file",
+        Some(&path),
+        "progreso.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let provider = ProgressRecordingProvider::per_page(dir.path().join("entropia.sqlite"));
+    let renderer = fresh_renderer();
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.seen.lock().expect("seen").as_slice(),
+        &[(0, 3), (1, 3), (2, 3)],
+        "every provider call sees the pages already processed over the pages that need OCR"
+    );
+    assert_eq!(
+        extract_progress_row(&conn),
+        (3, 3),
+        "a finished extraction reads every OCR page processed"
+    );
+}
+
+/// The same progress when recognition lands in whole-document waves: one
+/// window settles every page it covers, never one checkpoint per window.
+#[test]
+fn extraction_progress_counts_whole_windows_when_ocr_lands_by_wave() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PROGWAVE1", "Obra escaneada", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank, blank, blank, blank, blank]);
+    let path = write_temp_pdf(&dir, "olas.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PROGATT02",
+        "linked_file",
+        Some(&path),
+        "olas.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let provider = ProgressRecordingProvider::pdf_windows(dir.path().join("entropia.sqlite"), 2);
+    let renderer = fresh_renderer();
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.seen.lock().expect("seen").as_slice(),
+        &[(0, 5), (2, 5), (4, 5)],
+        "waves land 2, 2 and 1 pages; one window is never one page"
+    );
+    assert_eq!(extract_progress_row(&conn), (5, 5));
+}
+
+/// The durable state of a running extraction the tests plant: the task
+/// row's page progress, the open attempt it measures itself against, the
+/// landings that attempt confirmed, and the long finished attempts that
+/// must stay out of every average the status computes.
+struct RunningExtractionFixture<'a> {
+    task_id: &'a str,
+    attachment_id: &'a str,
+    pages_done: i64,
+    pages_total: i64,
+    attempt_started_at: i64,
+    landings: &'a [(&'a str, i64)],
+    long_finished_attempts: usize,
+}
+
+/// One derived extraction planted as `running`, exactly as a supervisor
+/// mid-OCR leaves it.
+fn plant_running_extraction(conn: &rusqlite::Connection, fixture: RunningExtractionFixture<'_>) {
+    let RunningExtractionFixture {
+        task_id,
+        attachment_id,
+        pages_done,
+        pages_total,
+        attempt_started_at,
+        landings,
+        long_finished_attempts,
+    } = fixture;
+    let batch = repository::ensure_system_batch(conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        conn,
+        &batch,
+        task_id,
+        "bibliography_extract",
+        "attachment",
+        attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    conn.execute(
+        "UPDATE processing_tasks
+            SET state = 'running', progress_done = ?2, progress_total = ?3
+          WHERE id = ?1",
+        rusqlite::params![task_id, pages_done, pages_total],
+    )
+    .expect("mark extraction running");
+    conn.execute(
+        "INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, outcome)
+         VALUES (?1, 1, 0, ?2, 'open')",
+        rusqlite::params![task_id, attempt_started_at],
+    )
+    .expect("open attempt");
+    for (index, (unit_key, created_at)) in landings.iter().enumerate() {
+        let payload = format!("\"pagina landing {index}\"");
+        let checksum = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+             VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                task_id,
+                unit_key,
+                repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+                payload,
+                checksum,
+                created_at
+            ],
+        )
+        .expect("landing checkpoint");
+    }
+    for attempt in 0..long_finished_attempts {
+        conn.execute(
+            "INSERT INTO processing_attempts
+               (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+             VALUES (?1, ?2, 0, 0, 10000000, 'interrupted')",
+            rusqlite::params![task_id, attempt as i64 + 2],
+        )
+        .expect("long past attempt");
+    }
+}
+
+/// The ETA of a running long extraction is its own page rate — pages done
+/// over the elapsed time of its attempt times the pages left — and the queued
+/// attachments keep the per-attachment average of finished attempts with the
+/// running task's own long attempts excluded from that average.
+#[test]
+fn p3_sync_eta_uses_the_running_extraction_page_rate_and_excludes_its_attempt() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-1", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN1", "El problema del yute", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT1",
+        "linked_file",
+        None,
+        "yute.pdf",
+        "application/pdf",
+    );
+    // 3 of 10 pages processed inside an attempt that started 60 s ago, with a
+    // landing every ~5 s: 20 000 ms per page.
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-running",
+            attachment_id: &attachment_id,
+            pages_done: 3,
+            pages_total: 10,
+            attempt_started_at: now - 60_000,
+            landings: &[
+                ("ocr-page:1", now - 40_000),
+                ("ocr-page:2", now - 35_000),
+                ("ocr-page:3", now - 30_000),
+            ],
+            long_finished_attempts: 3,
+        },
+    );
+
+    // One queued attachment and one settled one (three 1000 ms attempts):
+    // the queued average is 1000 ms only when the running task is excluded.
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-queued",
+        "bibliography_extract",
+        "attachment",
+        "att-queued",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-done",
+        "bibliography_extract",
+        "attachment",
+        "att-done",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(
+        &conn,
+        "eta-done",
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let eta = status
+        .eta_ms
+        .expect("the running extraction measures its own page rate");
+    // 7 remaining pages × 20 000 ms/page plus 1 queued attachment × 1000 ms.
+    assert!(
+        (141_000..=143_000).contains(&eta),
+        "page-rate ETA plus the queued average, got {eta}"
+    );
+}
+
+/// Wave landings weigh in pages, never in checkpoints: one `ocr-range` of
+/// 200 pages is 200 pages of rate evidence, not one sample of unknown size.
+#[test]
+fn p3_sync_eta_weighs_wave_landings_in_pages_not_checkpoints() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-3", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN3", "Obra escaneada", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT3",
+        "linked_file",
+        None,
+        "escaneado.pdf",
+        "application/pdf",
+    );
+    // 200 of 300 pages landed in ONE wave, 200 s into an attempt that started
+    // 200 s ago: 1000 ms per page even though only one checkpoint exists.
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-waves",
+            attachment_id: &attachment_id,
+            pages_done: 200,
+            pages_total: 300,
+            attempt_started_at: now - 200_000,
+            landings: &[("ocr-range:1-200", now - 150_000)],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let eta = status.eta_ms.expect("a landed wave measures pages");
+    assert!(
+        (100_000..=101_500).contains(&eta),
+        "100 remaining pages × 1000 ms/page, got {eta}"
+    );
+}
+
+/// Until the running extraction has processed a page, its rate is unmeasured
+/// and the ETA is honestly unknown: no samples, no number.
+#[test]
+fn p3_sync_eta_stays_null_until_the_running_extraction_measures_a_page() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-2", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN2", "Obra sin muestras", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT2",
+        "linked_file",
+        None,
+        "sin-muestras.pdf",
+        "application/pdf",
+    );
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-unmeasured",
+            attachment_id: &attachment_id,
+            pages_done: 0,
+            pages_total: 10,
+            attempt_started_at: now - 60_000,
+            landings: &[],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-done-2",
+        "bibliography_extract",
+        "attachment",
+        "att-done-2",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(
+        &conn,
+        "eta-done-2",
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert!(
+        status.eta_ms.is_none(),
+        "no page landed yet: the estimate is unknown, never a guess, got {:?}",
+        status.eta_ms
+    );
+}
+
+/// The status names the derived task the supervisor is running right now:
+/// its kind, the work it belongs to (the attachment's work title) and its
+/// page progress, so the screen can say «Procesando «…»: página 117 de
+/// 1537» instead of a counter that never moves.
+#[test]
+fn p3_sync_status_names_the_running_derived_task_and_its_pages() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-current-1", "user", "0").expect("request");
+
+    let queued = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert!(queued.current.is_none(), "nothing is running yet: no name");
+
+    let item_id = seed_catalog(&mut conn, "P3CURRUN1", "El problema del yute", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3CURATT1",
+        "linked_file",
+        None,
+        "yute.pdf",
+        "application/pdf",
+    );
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "current-running",
+            attachment_id: &attachment_id,
+            pages_done: 117,
+            pages_total: 1537,
+            attempt_started_at: repository::now_ms(),
+            landings: &[],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let current = status.current.expect("a running derived task is named");
+    assert_eq!(current.kind, "bibliography_extract");
+    assert_eq!(
+        current.title, "El problema del yute",
+        "the running extraction is named by its work"
+    );
+    assert_eq!(
+        (current.pages_done, current.pages_total),
+        (117, 1537),
+        "its own page progress travels with the name"
+    );
+}
+
+// ── OCR markup pages (GLM-OCR HTML tables) ─────────────────────────────────
+//
+// GLM-OCR answers statistical tables as HTML and the rest as plain lines.
+// The owner's real shape: one `<table class="table table-bordered">` with a
+// thead of `th` cells, a colspan caption row, and numeric rows, followed by
+// plain footnote lines. Stored as-is, the tag soup grades garbled to the
+// letter statistics (`ocr::pdf::is_garbled_text`), so every sync re-demanded
+// the extraction and paid for OCR again, and the chunker indexed the tags.
+
+const OCR_TABLE_HTML: &str = concat!(
+    r#"<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th><th>Marzo</th><th>Abril</th><th>Mayo</th><th>Junio</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td><td>21,5</td><td>22,0</td><td>22,5</td><td>23,0</td></tr><tr><td>1927</td><td>24,5</td><td>25,0</td><td>25,5</td><td>26,0</td><td>26,5</td><td>27,0</td></tr></tbody></table>"#,
+    "\nFuente: Boletín Mensual de Estadística, Buenos Aires.",
+    "\na) Cifras correspondientes a los primeros quince días del mes."
+);
+
+/// The Markdown the OCR answer must become before it is stored.
+const OCR_TABLE_MARKDOWN: &str = concat!(
+    "| Mio | Enero | Febrero | Marzo | Abril | Mayo | Junio |\n",
+    "| --- | --- | --- | --- | --- | --- | --- |\n",
+    "| - en centavos de dólar norteamericano - |  |  |  |  |  |  |\n",
+    "| 1926 | 20,5 | 21,0 | 21,5 | 22,0 | 22,5 | 23,0 |\n",
+    "| 1927 | 24,5 | 25,0 | 25,5 | 26,0 | 26,5 | 27,0 |\n",
+    "\n",
+    "Fuente: Boletín Mensual de Estadística, Buenos Aires.\n",
+    "a) Cifras correspondientes a los primeros quince días del mes."
+);
+
+/// The same table without its footnote lines: one line of tags with almost
+/// no word separation — the shape the garbled detector reports.
+const OCR_TABLE_SOUP_HTML: &str = r#"<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th><th>Marzo</th><th>Abril</th><th>Mayo</th><th>Junio</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td><td>21,5</td><td>22,0</td><td>22,5</td><td>23,0</td></tr><tr><td>1927</td><td>24,5</td><td>25,0</td><td>25,5</td><td>26,0</td><td>26,5</td><td>27,0</td></tr></tbody></table>"#;
+
+/// The OCR path stores Markdown: a page whose provider answered with an HTML
+/// table lands in the page row as its pipe-table form, never as tags.
+#[test]
+fn ocr_answers_are_stored_as_markdown_not_html() {
+    use entropia_desktop_lib::bibliography::processing::{settled_page_row, ExtractPageText};
+    let page = ExtractPageText {
+        page_number: 42,
+        method: "native".to_string(),
+        text_content: "texto nativo disperso".to_string(),
+        text_hash: "native-hash".to_string(),
+        text_chars: 21,
+        quality: "sparse".to_string(),
+    };
+    let settled = settled_page_row(page, OCR_TABLE_HTML.to_string());
+    assert_eq!(settled.method, "ocr");
+    assert_eq!(
+        settled.text_content, OCR_TABLE_MARKDOWN,
+        "the stored page text must be the Markdown form"
+    );
+    assert!(!settled.text_content.contains("<td"), "no tags survive");
+    assert_ne!(
+        settled.quality, "empty",
+        "a table page is real text and must never grade empty"
+    );
+}
+
+/// The quality verdict of an HTML table page is decided on the text a reader
+/// gets, not on the tag soup.
+#[test]
+fn an_html_table_page_never_grades_empty() {
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_SOUP_HTML),
+        "empty",
+        "the raw tag-soup page must grade on its converted text"
+    );
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_HTML),
+        "empty",
+        "the raw HTML page must grade on its converted text"
+    );
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_MARKDOWN),
+        "empty"
+    );
+}
+
+/// The stored extraction the owner already has: pages full of GLM-OCR HTML
+/// graded `empty` by the old letter statistics. With the source identity
+/// unchanged it must stay settled — the bug re-OCRed those pages every sync.
+#[test]
+fn admission_leaves_an_ocr_html_table_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        OCR_TABLE_HTML,
+        OCR_TABLE_HTML,
+        "empty",
+    );
+    let source_bytes = std::fs::metadata(&path).expect("source metadata").len() as i64;
+    assert!(
+        entropia_desktop_lib::bibliography::repository::extraction_is_settled(
+            &conn,
+            &attachment_id,
+            Some(1_700_000_000),
+            source_bytes
+        )
+        .expect("settled"),
+        "an HTML table page must settle on its converted text"
+    );
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("sync");
+    assert_eq!(
+        created, 0,
+        "the HTML table pages must not be re-demanded (no more paid OCR)"
+    );
+}
+
+/// The same page graded `rich` (an earlier build that saw it clearly): the
+/// garbled detector alone must not un-settle it either.
+#[test]
+fn admission_leaves_a_rich_graded_ocr_html_table_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        OCR_TABLE_SOUP_HTML,
+        OCR_TABLE_SOUP_HTML,
+        "rich",
+    );
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("sync");
+    assert_eq!(
+        created, 0,
+        "markup is not garbled text and must stay settled"
+    );
+}
+
+/// Chunking never carries HTML tags into passages or embeddings: the pages
+/// the chunker reads are the converted text, and spans stay exact against it.
+#[test]
+fn chunking_never_carries_html_tags_into_passages() {
+    use entropia_desktop_lib::bibliography::repository::{
+        upsert_page_text_in_transaction, PageTextRow,
+    };
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "HTMLTAB1", "Obra con tablas", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT1",
+        "linked_file",
+        None,
+        "tabla.pdf",
+        "application/pdf",
+    );
+    upsert_page_text_in_transaction(
+        &conn,
+        &PageTextRow {
+            attachment_id,
+            page_number: 1,
+            method: "ocr".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(OCR_TABLE_HTML.as_bytes())),
+            text_chars: OCR_TABLE_HTML.chars().count() as i64,
+            quality: "empty".to_string(),
+            text_content: OCR_TABLE_HTML.to_string(),
+        },
+        repository::now_ms(),
+    )
+    .expect("seed page text");
+
+    let chunkable =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(&conn, &item_id)
+            .expect("chunkable pages");
+    assert_eq!(chunkable.len(), 1);
+    assert_eq!(
+        chunkable[0].text_content, OCR_TABLE_MARKDOWN,
+        "the chunker reads the converted page text"
+    );
+    let chunks = entropia_desktop_lib::bibliography::chunks::segment_pages(&[
+        entropia_desktop_lib::bibliography::chunks::PageInput {
+            page_number: 1,
+            text: chunkable[0].text_content.clone(),
+        },
+    ]);
+    let joined = chunks
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!joined.contains("<td"), "no tags in passages: {joined}");
+    assert!(!joined.contains('<'), "no tags in passages: {joined}");
+    assert!(joined.contains("1926 | 20,5"), "the table is in the text");
+    for chunk in &chunks {
+        for span in &chunk.spans {
+            let slice: String = chunkable[0]
+                .text_content
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect();
+            assert!(
+                chunk.text.contains(&slice),
+                "span slice {slice:?} must sit inside the chunk text"
+            );
+        }
+    }
 }

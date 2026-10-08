@@ -11,10 +11,12 @@
     type BibliographyWorkOpen,
   } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
+  import { renderOcrMarkup, sanitizeOcrHtml } from '$lib/ocr-rich-text'
   import {
     ActionIcon,
     Button,
     DocumentViewer,
+    IconButton,
     TabButton,
     TabList,
     ToolbarMenu,
@@ -50,8 +52,21 @@
   let openLoading = $state(false)
   let openFailed = $state(false)
   let activeTab = $state<Tab>('original')
+  // Same condition as the PDF branch of the Original tab: only while that tab
+  // is visible and showing a PDF does the view need the pane's full height.
+  const showsPdf = $derived(
+    activeTab === 'original' &&
+      !openLoading &&
+      !openFailed &&
+      !opened?.openError &&
+      opened?.originalKind === 'pdf' &&
+      Boolean(opened.originalPath)
+  )
   let activeKey = $state<string | null>(null)
   let attachmentMenuOpen = $state(false)
+  /** The page shown and how many there are, as the viewer reports them. */
+  let page = $state(1)
+  let total = $state(1)
 
   const displayTitle = $derived(detail?.title || title)
   const metaLine = $derived(detail ? workLine({ authors: detail.authors, year: detail.year }) : '')
@@ -85,6 +100,8 @@
   async function openAttachment(attachmentKey: string): Promise<void> {
     activeKey = attachmentKey
     attachmentMenuOpen = false
+    page = 1
+    total = 1
     openLoading = true
     openFailed = false
     try {
@@ -124,6 +141,17 @@
     }
   })
 
+  /**
+   * One page's stored text as safe rich HTML: new pages are Markdown (pipe
+   * tables), legacy GLM-OCR pages raw HTML tables — the shared OCR renderer
+   * turns both into tables and its sanitizer drops anything executable.
+   * No region images: bibliography pages carry no region references. The
+   * raw text is never rendered unsanitized.
+   */
+  function pageRichHtml(text: string): string {
+    return sanitizeOcrHtml(renderOcrMarkup(text).html)
+  }
+
   function creatorName(creator: BibliographyWorkCreator): string {
     if (creator.name?.trim()) return creator.name.trim()
     return [creator.firstName, creator.lastName]
@@ -137,7 +165,7 @@
   )
 </script>
 
-<div class="work-view">
+<div class="work-view" class:work-view--fill={showsPdf}>
   {#if detailFailed}
     <div class="surface-message surface-message--center empty">
       <p>{$currentLocale && t('bibliographyWork.error')}</p>
@@ -175,63 +203,100 @@
       </TabButton>
     </TabList>
 
-    {#if activeTab === 'original'}
-      <section
-        class="work-section"
-        aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
-      >
-        {#if attachments.length > 1}
-          <ToolbarMenu
-            label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-            items={attachmentItems}
-            bind:open={attachmentMenuOpen}
-          >
-            {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="work-attachment-trigger"
-                class:work-attachment-trigger--open={open}
-                aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-                {...props}
-              >
-                <span class="work-attachment-trigger__label">
-                  {currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
-                </span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
-            {/snippet}
-          </ToolbarMenu>
-        {/if}
+    <!-- The Original tab stays mounted (hidden) while the reading tabs show:
+         unmounting it reopened the 128 MB document on every return. -->
+    <section
+      class="work-section work-section--original"
+      class:is-hidden={activeTab !== 'original'}
+      hidden={activeTab !== 'original'}
+      aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
+    >
+      {#if attachments.length > 1}
+        <ToolbarMenu
+          label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+          items={attachmentItems}
+          bind:open={attachmentMenuOpen}
+        >
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="work-attachment-trigger"
+              class:work-attachment-trigger--open={open}
+              aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+              {...props}
+            >
+              <span class="work-attachment-trigger__label">
+                {currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
+              </span>
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
+      {/if}
 
-        {#if openLoading}
-          <p class="surface-message surface-message--center">
-            {$currentLocale && t('bibliographyWork.opening')}
-          </p>
-        {:else if openFailed || opened?.openError}
-          <p class="surface-message surface-message--error" role="alert">
-            {opened?.openError ?? t('bibliographyWork.error')}
-          </p>
-        {:else if opened?.originalKind === 'pdf' && opened.originalPath}
-          <div class="work-viewer" data-testid="work-original-viewer">
-            <DocumentViewer
-              path={opened.originalPath}
-              assetUrl={convertFileSrc(opened.originalPath)}
-              type="pdf"
-              readOnly
-              labels={viewerLabels}
-            />
+      {#if openLoading}
+        <p class="surface-message surface-message--center">
+          {$currentLocale && t('bibliographyWork.opening')}
+        </p>
+      {:else if openFailed || opened?.openError}
+        <p class="surface-message surface-message--error" role="alert">
+          {opened?.openError ?? t('bibliographyWork.error')}
+        </p>
+      {:else if opened?.originalKind === 'pdf' && opened.originalPath}
+        <div class="work-viewer" data-testid="work-original-viewer">
+          <DocumentViewer
+            path={opened.originalPath}
+            assetUrl={convertFileSrc(opened.originalPath)}
+            type="pdf"
+            readOnly
+            pauseWhenHidden
+            labels={viewerLabels}
+            currentPage={page}
+            onPageChange={(next, count) => {
+              total = count
+              page = next
+            }}
+          />
+        </div>
+        {#if total > 1}
+          <div class="work-viewer-pager">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={$currentLocale && t('item.previousPage')}
+              title={$currentLocale && t('item.previousPage')}
+              disabled={page <= 1}
+              onclick={() => (page = Math.max(1, page - 1))}
+            >
+              <ActionIcon name="chevron-left" size={14} />
+            </IconButton>
+            <span class="work-viewer-pager__count">
+              {$currentLocale && t('navegador.pdf.page', { page, total })}
+            </span>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={$currentLocale && t('item.nextPage')}
+              title={$currentLocale && t('item.nextPage')}
+              disabled={page >= total}
+              onclick={() => (page = Math.min(total, page + 1))}
+            >
+              <ActionIcon name="chevron-right" size={14} />
+            </IconButton>
           </div>
-          <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
-        {:else if opened?.originalKind === 'html'}
-          <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
-          <p class="work-snapshot">{opened.snapshotText}</p>
-        {:else}
-          <p class="surface-message surface-message--center">
-            {$currentLocale && t('bibliographyWork.originalEmpty')}
-          </p>
         {/if}
-      </section>
-    {:else if activeTab === 'text'}
+        <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+      {:else if opened?.originalKind === 'html'}
+        <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
+        <p class="work-snapshot">{opened.snapshotText}</p>
+      {:else}
+        <p class="surface-message surface-message--center">
+          {$currentLocale && t('bibliographyWork.originalEmpty')}
+        </p>
+      {/if}
+    </section>
+
+    {#if activeTab === 'text'}
       <section class="work-section" aria-label={$currentLocale && t('bibliographyWork.tabText')}>
         <h3 class="work-section__title">{$currentLocale && t('bibliographyWork.textTitle')}</h3>
         {#if openLoading}
@@ -243,7 +308,10 @@
             <h4 class="work-page__title">
               {$currentLocale && t('bibliographyWork.textPage', { page: page.pageNumber })}
             </h4>
-            <p class="work-page__text">{page.text}</p>
+            <div class="work-page__rich">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderOcrMarkup output passes sanitizeOcrHtml -->
+              {@html pageRichHtml(page.text)}
+            </div>
           {/each}
         {:else if opened?.extracted && opened.snapshotText}
           <p class="work-page__text">{opened.snapshotText}</p>
@@ -253,7 +321,7 @@
           </p>
         {/if}
       </section>
-    {:else}
+    {:else if activeTab === 'metadata'}
       <section
         class="work-section"
         aria-label={$currentLocale && t('bibliographyWork.tabMetadata')}
@@ -377,6 +445,16 @@
     max-width: 1100px;
   }
 
+  /* While a PDF is shown, the view takes the WorkPane body's full height,
+     like ItemView's `height: 100%`. A min-height is not a definite height:
+     the viewer below measured ~0, so the page stayed hidden behind a
+     clipped toolbar. The reading tabs keep their natural flow and the pane
+     scrolls them. */
+  .work-view--fill {
+    height: 100%;
+    min-height: 0;
+  }
+
   .work-header {
     display: flex;
     flex-direction: column;
@@ -427,6 +505,20 @@
     gap: var(--space-3);
   }
 
+  /* The Original tab owns the remaining height of the fill-height view:
+     `flex: 1; min-height: 0` lets the viewer chain below shrink with the
+     pane instead of pushing it to scroll. */
+  .work-section--original {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* The hidden Original tab must beat `.work-section`'s display: flex (and the
+     UA rule behind the `hidden` attribute) or it would stay laid out. */
+  .work-section--original.is-hidden {
+    display: none;
+  }
+
   .work-section__title {
     margin: 0;
     color: var(--color-text-secondary);
@@ -469,11 +561,35 @@
   }
 
   .work-viewer {
-    min-height: 480px;
+    /* The DocumentViewer is a flex child of this frame (the exact pattern of
+       ItemAssetPanel's .left-panel-pane--document): its fit scale reads the
+       container rect, which a min-height-only frame never made definite.
+       The view's definite height (.work-view--fill) flows down to it; a
+       min-height floor here would push the pager and note out of the pane. */
+    display: flex;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-surface);
     background: var(--surface-app);
+  }
+
+  .work-viewer :global(.document-viewer) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .work-viewer-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+  }
+
+  .work-viewer-pager__count {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .work-note {
@@ -497,6 +613,73 @@
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  /* The same reading surface the Colecciones OCR text has (OcrRichText's
+     .ocr-rich-text): pages render through the shared safe renderer, so a
+     legacy GLM-OCR HTML table and a new Markdown pipe table show the same
+     table. {@html} content is unscoped, hence :global. */
+  .work-page__rich {
+    min-width: 0;
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .work-page__rich :global(p),
+  .work-page__rich :global(ul),
+  .work-page__rich :global(ol),
+  .work-page__rich :global(blockquote),
+  .work-page__rich :global(table),
+  .work-page__rich :global(pre) {
+    margin: 0 0 var(--space-3);
+  }
+
+  .work-page__rich :global(h1),
+  .work-page__rich :global(h2),
+  .work-page__rich :global(h3),
+  .work-page__rich :global(h4),
+  .work-page__rich :global(h5),
+  .work-page__rich :global(h6) {
+    margin: var(--space-4) 0 var(--space-2);
+    color: var(--color-text-primary);
+    line-height: 1.25;
+  }
+
+  .work-page__rich :global(ul),
+  .work-page__rich :global(ol) {
+    padding-inline-start: var(--space-6);
+  }
+
+  .work-page__rich :global(blockquote) {
+    padding-inline-start: var(--space-3);
+    border-inline-start: 2px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+  }
+
+  .work-page__rich :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: inherit;
+  }
+
+  .work-page__rich :global(th),
+  .work-page__rich :global(td) {
+    padding: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    text-align: start;
+    vertical-align: top;
+  }
+
+  .work-page__rich :global(code),
+  .work-page__rich :global(pre) {
+    font-family: var(--font-mono);
+  }
+
+  .work-page__rich :global(a) {
+    color: var(--color-accent);
   }
 
   .work-page__text {

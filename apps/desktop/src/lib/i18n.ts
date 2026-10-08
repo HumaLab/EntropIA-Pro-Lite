@@ -391,8 +391,12 @@ const es = {
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
     'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyOcr':
+    'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal}',
   'batch.statusBibliographyWaiting':
     'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · {blocked} en espera',
+  'batch.statusBibliographyWaitingOcr':
+    'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal} · {blocked} en espera',
   'batch.statusBibliographyBlocked': 'Bibliografía: {blocked} en espera: {reason}',
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
@@ -969,6 +973,13 @@ const es = {
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · {blocked} en espera: {reason}',
   'writing.zoteroBibliographySyncIndexingWaiting':
     'Fichas {worksDone}/{worksTotal} · Pasajes {passagesDone}/{passagesTotal} · ~{eta} restantes · {blocked} en espera: {reason}',
+  'writing.zoteroBibliographyCurrent': 'Procesando «{title}»',
+  'writing.zoteroBibliographyCurrentEta': 'Procesando «{title}» · ~{eta} restantes',
+  'writing.zoteroBibliographyCurrentPages': 'Procesando «{title}»: página {done} de {total}',
+  'writing.zoteroBibliographyCurrentPagesEta':
+    'Procesando «{title}»: página {done} de {total} · ~{eta} restantes',
+  'writing.zoteroBibliographySyncReread':
+    'Vuelve a leer el catálogo de Zotero; no reinicia el procesamiento en curso',
   'writing.zoteroBlockedReasonEmbedding': 'configurá OpenRouter en Configuración',
   'writing.zoteroBlockedReasonOcr': 'configurá GLM-OCR en Configuración › OCR',
   'writing.zoteroBlockedReasonEmbeddingAndOcr':
@@ -1351,6 +1362,7 @@ const es = {
   'research.projectLabel': 'Proyecto',
   'research.projectPlaceholder': 'Nombre corto del proyecto',
   'research.titlePlaceholder': 'Título de la investigación',
+  'research.modelLabel': 'Modelo',
   'research.deleteTitle': 'Borrar la investigación',
   'research.deleteMessage':
     'Se van el informe, la evidencia, los juicios y los archivos. No se puede deshacer.',
@@ -2768,6 +2780,13 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · {blocked} waiting: {reason}',
   'writing.zoteroBibliographySyncIndexingWaiting':
     'Works {worksDone}/{worksTotal} · Passages {passagesDone}/{passagesTotal} · ~{eta} left · {blocked} waiting: {reason}',
+  'writing.zoteroBibliographyCurrent': 'Processing “{title}”',
+  'writing.zoteroBibliographyCurrentEta': 'Processing “{title}” · ~{eta} left',
+  'writing.zoteroBibliographyCurrentPages': 'Processing “{title}”: page {done} of {total}',
+  'writing.zoteroBibliographyCurrentPagesEta':
+    'Processing “{title}”: page {done} of {total} · ~{eta} left',
+  'writing.zoteroBibliographySyncReread':
+    'Re-reads the Zotero catalog; it does not restart the processing in course',
   'writing.zoteroBlockedReasonEmbedding': 'configure OpenRouter in Settings',
   'writing.zoteroBlockedReasonOcr': 'configure GLM-OCR in Settings › OCR',
   'writing.zoteroBlockedReasonEmbeddingAndOcr':
@@ -3442,8 +3461,12 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':
     'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal}',
+  'batch.statusBibliographyOcr':
+    'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal}',
   'batch.statusBibliographyWaiting':
     'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · {blocked} waiting',
+  'batch.statusBibliographyWaitingOcr':
+    'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal} · {blocked} waiting',
   'batch.statusBibliographyBlocked': 'Bibliography: {blocked} waiting: {reason}',
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
@@ -3887,6 +3910,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'research.projectLabel': 'Project',
   'research.projectPlaceholder': 'Short project name',
   'research.titlePlaceholder': 'Title of the investigation',
+  'research.modelLabel': 'Model',
   'research.deleteTitle': 'Delete the investigation',
   'research.deleteMessage':
     'The report, the evidence, the judgments and the files all go. This cannot be undone.',

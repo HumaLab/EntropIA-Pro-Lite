@@ -12,6 +12,27 @@ import {
   type OcrRegionResolver,
 } from './ocr-rich-text'
 
+const pdfMock = vi.hoisted(() => ({ getDocument: vi.fn() }))
+
+vi.mock('pdfjs-dist', () => ({
+  getDocument: pdfMock.getDocument,
+  GlobalWorkerOptions: { workerSrc: '' },
+}))
+
+/** Shadows `navigator.userAgentData` on the live navigator; delete restores it. */
+function stubUserAgentData(brands: Array<{ brand: string; version: string }>): () => void {
+  const nav = navigator as unknown as Record<string, unknown>
+  const previous = Object.getOwnPropertyDescriptor(nav, 'userAgentData')
+  Object.defineProperty(nav, 'userAgentData', {
+    configurable: true,
+    value: { brands },
+  })
+  return () => {
+    if (previous) Object.defineProperty(nav, 'userAgentData', previous)
+    else delete nav.userAgentData
+  }
+}
+
 describe('parseOcrRegionReference', () => {
   it('parses zero-based page and left/top/right/bottom bbox values', () => {
     expect(parseOcrRegionReference('page=0,bbox=[536,508,1507,1112]')).toEqual({
@@ -204,6 +225,62 @@ describe('renderOcrHtml', () => {
 })
 
 describe('resolveOcrRegion', () => {
+  it('opens PDF sources through pdfDocumentOptions with the native decoder on Chromium 154', async () => {
+    const context = {
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context)
+    const toDataURL = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toDataURL')
+      .mockReturnValue('data:image/png;base64,AAAA')
+    pdfMock.getDocument.mockReturnValue({
+      promise: Promise.resolve({
+        numPages: 2,
+        getPage: vi.fn(() =>
+          Promise.resolve({
+            getViewport: ({ scale }: { scale: number }) => ({
+              width: 1000 * scale,
+              height: 750 * scale,
+              scale,
+            }),
+            render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
+          })
+        ),
+      }),
+      destroy: vi.fn(() => Promise.resolve()),
+    })
+
+    const restore = stubUserAgentData([
+      { brand: 'Chromium', version: '154' },
+      { brand: 'Microsoft Edge', version: '154' },
+    ])
+    try {
+      await resolveOcrRegion(
+        {
+          token: 'region-0',
+          source: '![](page=0,bbox=[536,508,1507,1112])',
+          page: 0,
+          bbox: { left: 536, top: 508, right: 1507, bottom: 1112 },
+        },
+        {
+          assetUrl: 'asset://pdf-source',
+          sourceType: 'pdf',
+          referenceWidth: 2000,
+          referenceHeight: 1500,
+        }
+      )
+
+      expect(pdfMock.getDocument).toHaveBeenCalledWith({
+        url: 'asset://pdf-source',
+        isImageDecoderSupported: true,
+      })
+    } finally {
+      restore()
+      getContext.mockRestore()
+      toDataURL.mockRestore()
+    }
+  })
+
   it('loads source images with anonymous CORS before drawing a crop', async () => {
     class FakeImage {
       static instances: FakeImage[] = []

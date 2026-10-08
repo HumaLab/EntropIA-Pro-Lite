@@ -232,6 +232,44 @@ fn plan_json_del_job(state: &Path, job_id: &str) -> Option<String> {
     .ok()
 }
 
+/// El modelo con el que este pedido habla con el motor.
+///
+/// Un trabajo ya creado lleva su modelo congelado en `plan_json.model` y ese
+/// es el único que acepta el motor («El modelo cambió respecto del snapshot
+/// del job»). En `create` manda el `modelo` del pedido: el motor lo valida y
+/// lo congela de inmediato, y el desktop no lo toca. Sin ninguno de los dos
+/// vale el ajuste de siempre: `rag_model`, después `openrouter_model`, y por
+/// último el default del cliente.
+fn modelo_del_trabajo(
+    op: &str,
+    request: &Value,
+    plan_json: Option<&str>,
+    rag_model: Option<String>,
+    openrouter_model: Option<String>,
+) -> String {
+    let no_vacio = |m: &str| !m.trim().is_empty();
+    if op != "create" {
+        let congelado = plan_json
+            .and_then(|plan| serde_json::from_str::<Value>(plan).ok())
+            .and_then(|plan| plan["model"].as_str().map(str::to_string))
+            .filter(|modelo| no_vacio(modelo));
+        if let Some(modelo) = congelado {
+            return modelo;
+        }
+    }
+    if let Some(modelo) = request["modelo"]
+        .as_str()
+        .map(str::to_string)
+        .filter(|modelo| no_vacio(modelo))
+    {
+        return modelo;
+    }
+    rag_model
+        .filter(|modelo| no_vacio(modelo))
+        .or_else(|| openrouter_model.filter(|modelo| no_vacio(modelo)))
+        .unwrap_or_else(|| ClienteLlmOpenRouter::MODELO_DEFAULT.into())
+}
+
 /// La fuente bibliográfica que este pedido necesita, o `None` cuando el
 /// alcance del trabajo es solo corpus. Es `procesar_con` el único que la
 /// recibe: con `None` el motor declara la degradación si el alcance la pedía.
@@ -292,13 +330,23 @@ impl ResearchState {
                 let key = crate::settings::get_setting(&conn, crate::settings::OPENROUTER_API_KEY)
                     .filter(|s| !s.trim().is_empty())
                     .ok_or("Configura la credencial OpenRouter en Configuración")?;
-                let model = crate::settings::get_setting(&conn, "rag_model")
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| {
-                        crate::settings::get_setting(&conn, "openrouter_model")
-                            .filter(|s| !s.trim().is_empty())
-                    })
-                    .unwrap_or_else(|| ClienteLlmOpenRouter::MODELO_DEFAULT.into());
+                let model = {
+                    // El modelo de este pedido: el que el trabajo congeló, el
+                    // que el create eligió, o el ajuste de siempre.
+                    let op = request["op"].as_str().unwrap_or("");
+                    let plan = if op == "create" {
+                        None
+                    } else {
+                        plan_json_del_job(&inner.state, request["job_id"].as_str().unwrap_or(""))
+                    };
+                    modelo_del_trabajo(
+                        op,
+                        &request,
+                        plan.as_deref(),
+                        crate::settings::get_setting(&conn, "rag_model"),
+                        crate::settings::get_setting(&conn, "openrouter_model"),
+                    )
+                };
                 let llm = ClienteLlmOpenRouter::new(key.clone(), model);
                 // Same credential drives embeddings and rerank. Without it the
                 // engine falls back to lexical search and says so in the report.
@@ -562,8 +610,8 @@ pub async fn research_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        bibliotecas_del_trabajo, capture_terminal_job, pasaje_del_hallazgo, plan_json_del_job,
-        ref_de_biblioteca, terminal_job_id, uses_model,
+        bibliotecas_del_trabajo, capture_terminal_job, modelo_del_trabajo, pasaje_del_hallazgo,
+        plan_json_del_job, ref_de_biblioteca, terminal_job_id, uses_model,
     };
     use crate::rag::scope::PassageResult;
     use crate::rag::RagBibliographyLocation;
@@ -780,6 +828,89 @@ mod tests {
     #[test]
     fn editing_a_section_by_hand_needs_no_model() {
         assert!(!uses_model("edit_section"));
+    }
+
+    #[test]
+    fn el_modelo_de_un_trabajo_es_el_congelado_en_su_workflow() {
+        // El motor rechaza cualquier modelo que no sea el del snapshot del
+        // job («El modelo cambió respecto del snapshot del job»): el cliente
+        // se arma SIEMPRE con el congelado.
+        let workflow = r#"{"step":3,"collections":["c1"],"model":"meta/llama-3.3-70b"}"#;
+        assert_eq!(
+            modelo_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(workflow),
+                Some("ajuste/rag".into()),
+                Some("ajuste/openrouter".into())
+            ),
+            "meta/llama-3.3-70b"
+        );
+        // La reescritura de una sección es el mismo trabajo y el mismo modelo.
+        assert_eq!(
+            modelo_del_trabajo(
+                "rewrite_section",
+                &json!({"op":"rewrite_section","job_id":"job-1"}),
+                Some(workflow),
+                Some("ajuste/rag".into()),
+                None
+            ),
+            "meta/llama-3.3-70b"
+        );
+    }
+
+    #[test]
+    fn el_create_usa_el_modelo_del_pedido() {
+        // En create manda el `modelo` del pedido: el motor lo valida y lo
+        // congela de inmediato. El desktop no lo toca.
+        assert_eq!(
+            modelo_del_trabajo(
+                "create",
+                &json!({"op":"create","modelo":"google/gemma-4-26b-a4b-it"}),
+                None,
+                Some("ajuste/rag".into()),
+                Some("ajuste/openrouter".into())
+            ),
+            "google/gemma-4-26b-a4b-it"
+        );
+    }
+
+    #[test]
+    fn sin_modelo_congelado_ni_de_pedido_manda_el_ajuste_de_siempre() {
+        // Un workflow con `model: null` todavía no congeló ninguno.
+        let workflow = r#"{"step":0,"collections":["c1"],"model":null}"#;
+        assert_eq!(
+            modelo_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(workflow),
+                Some("ajuste/rag".into()),
+                Some("ajuste/openrouter".into())
+            ),
+            "ajuste/rag"
+        );
+        // Sin rag_model sigue openrouter_model…
+        assert_eq!(
+            modelo_del_trabajo(
+                "create",
+                &json!({"op":"create"}),
+                None,
+                Some("  ".into()),
+                Some("ajuste/openrouter".into())
+            ),
+            "ajuste/openrouter"
+        );
+        // …y sin ninguno de los dos, el default del cliente.
+        assert_eq!(
+            modelo_del_trabajo(
+                "advance",
+                &json!({"op":"advance","job_id":"job-1"}),
+                Some(workflow),
+                None,
+                Some("".into())
+            ),
+            entropia_agent::cliente_llm::ClienteLlmOpenRouter::MODELO_DEFAULT
+        );
     }
 
     fn response(status: &str, id: &str) -> serde_json::Value {

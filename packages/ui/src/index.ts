@@ -1,6 +1,10 @@
 // Design tokens
 export { colors, spacing, typography, radius, shadows } from './tokens/index'
 
+// Shared helpers
+export { pdfDocumentOptions } from './lib/pdf-document-options'
+export type { PdfDocumentOptions } from './lib/pdf-document-options'
+
 // Components — Fase 0
 export { Button } from './components/Button/index'
 export { ActionIcon } from './components/Button/index'

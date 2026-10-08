@@ -10,6 +10,7 @@
 </script>
 
 <button type="button" onclick={() => (page += 1)}>Next page</button>
+<button type="button" onclick={() => (page -= 1)}>Previous page</button>
 <DocumentViewer
   path="/path/to/doc.pdf"
   type="pdf"

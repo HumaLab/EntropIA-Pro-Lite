@@ -7,6 +7,7 @@
   import { getAssetPathLabel } from '$lib/item-metadata'
   import { classifyFileType, getAssetUrl } from '$lib/file-import'
   import {
+    frozenResearchModel,
     frozenResearchScope,
     researchRequest,
     researchAnswer,
@@ -696,6 +697,8 @@
 
   /** El alcance congelado del trabajo: el motor lo fija al crearlo. */
   const frozenScope = $derived(frozenResearchScope(artifacts))
+  /** El modelo congelado del trabajo: el mismo snapshot que el alcance. */
+  const frozenModel = $derived(frozenResearchModel(artifacts))
   const frozenScopeLibraries = $derived(
     (frozenScope?.bibliotecas ?? [])
       .map((ref) => libraryNameOf(ref))
@@ -934,17 +937,28 @@
     <div class="page-header__content">
       <span class="page-header__eyebrow">{$currentLocale && t('investigation.eyebrow')}</span>
       <h1 id="investigation-title-{paneId}">{visibleJobTitle}</h1>
-      {#if frozenScope}
+      {#if frozenScope || frozenModel}
         <div
           class="investigation-view__scope"
           role="group"
           aria-label={$currentLocale && t('ragChat.scopeLabel')}
         >
-          <StatusBadge variant="neutral" size="sm"
-            >{$currentLocale && t(researchScopeKey(frozenScope.alcance))}</StatusBadge
-          >
-          {#if frozenScopeLibraries}
-            <StatusBadge variant="neutral" size="sm">{frozenScopeLibraries}</StatusBadge>
+          {#if frozenScope}
+            <StatusBadge variant="neutral" size="sm"
+              >{$currentLocale && t(researchScopeKey(frozenScope.alcance))}</StatusBadge
+            >
+            {#if frozenScopeLibraries}
+              <StatusBadge variant="neutral" size="sm">{frozenScopeLibraries}</StatusBadge>
+            {/if}
+          {/if}
+          {#if frozenModel}
+            <!-- El modelo que el trabajo congeló al crearse: se muestra junto
+                 al alcance porque los dos son decisiones del job. -->
+            <StatusBadge
+              variant="neutral"
+              size="sm"
+              title={$currentLocale && t('research.modelLabel')}>{frozenModel}</StatusBadge
+            >
           {/if}
         </div>
       {/if}

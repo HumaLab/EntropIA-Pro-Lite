@@ -156,8 +156,24 @@ export interface BibliographySyncStatus {
   /** What each kind's blocked work is parked on; null while that kind has none. */
   profilesBlockedReason: BibliographyBlockedReason | null
   extractionsBlockedReason: BibliographyBlockedReason | null
+  /** The derived unit running right now, named; null while nothing runs. */
+  current: BibliographyCurrentTask | null
   /** What the derived backlog still needs in ms; null while it cannot be estimated. */
   etaMs: number | null
+}
+
+/**
+ * The derived task the scheduler is running right now, named for the
+ * screen: a 1500-page scan OCRs page by page for hours, and this is what
+ * lets the UI say which work and which page instead of a frozen counter.
+ * `pagesDone`/`pagesTotal` are the extraction's own page progress (pages
+ * processed over the pages that need OCR); other kinds carry `0/0`.
+ */
+export interface BibliographyCurrentTask {
+  kind: string
+  title: string
+  pagesDone: number
+  pagesTotal: number
 }
 
 /** Why one kind of blocked work waits: a stable code beside its recorded message. */

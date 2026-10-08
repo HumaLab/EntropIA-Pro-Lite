@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  frozenResearchModel,
   frozenResearchScope,
   type ResearchArtifact,
   type ResearchCreateRequest,
@@ -40,6 +41,39 @@ describe('frozenResearchScope', () => {
   it('has no frozen scope when the job carries no request artifact', () => {
     expect(frozenResearchScope([])).toBeNull()
     expect(frozenResearchScope([artifact('report', {})])).toBeNull()
+  })
+})
+
+describe('frozenResearchModel', () => {
+  it('reads the model the job froze at create, from the same snapshot as the scope', () => {
+    expect(
+      frozenResearchModel([
+        artifact('request', {
+          title: '¿Pregunta?',
+          alcance: 'ambos',
+          bibliotecas: ['user:123'],
+          modelo: 'meta/llama-3.3-70b',
+        }),
+      ])
+    ).toBe('meta/llama-3.3-70b')
+  })
+
+  it('reads the latest live request, never an obsolete one', () => {
+    expect(
+      frozenResearchModel([
+        artifact('request', { modelo: 'viejo/modelo' }, true, 1),
+        artifact('request', { modelo: 'nuevo/modelo' }, false, 2),
+      ])
+    ).toBe('nuevo/modelo')
+  })
+
+  it('is null for jobs that froze no model, and never invents one', () => {
+    expect(frozenResearchModel([])).toBeNull()
+    expect(frozenResearchModel([artifact('report', {})])).toBeNull()
+    // Un job anterior al selector de modelo no trae `modelo`.
+    expect(frozenResearchModel([artifact('request', { alcance: 'corpus' })])).toBeNull()
+    // Un modelo en blanco no es un modelo congelado.
+    expect(frozenResearchModel([artifact('request', { modelo: '   ' })])).toBeNull()
   })
 })
 

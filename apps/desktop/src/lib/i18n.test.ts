@@ -167,6 +167,65 @@ describe('i18n', () => {
     )
   })
 
+  it('exposes the running-work, OCR counter and sync tooltip copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+    const current = { title: 'El problema del yute', done: 117, total: 1537 }
+    const ocr = {
+      worksDone: 13,
+      worksTotal: 13,
+      passagesDone: 10,
+      passagesTotal: 26,
+      pagesDone: 117,
+      pagesTotal: 1537,
+    }
+
+    expect(t('writing.zoteroBibliographyCurrentPages', current)).toBe(
+      'Procesando «El problema del yute»: página 117 de 1537'
+    )
+    expect(t('writing.zoteroBibliographyCurrentPagesEta', { ...current, eta: '3 h 40 min' })).toBe(
+      'Procesando «El problema del yute»: página 117 de 1537 · ~3 h 40 min restantes'
+    )
+    expect(t('writing.zoteroBibliographyCurrent', { title: 'El problema del yute' })).toBe(
+      'Procesando «El problema del yute»'
+    )
+    expect(
+      t('writing.zoteroBibliographyCurrentEta', { title: 'El problema del yute', eta: '12 min' })
+    ).toBe('Procesando «El problema del yute» · ~12 min restantes')
+    expect(t('batch.statusBibliographyOcr', ocr)).toBe(
+      'Bibliografía: fichas 13/13 · pasajes 10/26 · OCR 117/1537'
+    )
+    expect(t('batch.statusBibliographyWaitingOcr', { ...ocr, blocked: 2 })).toBe(
+      'Bibliografía: fichas 13/13 · pasajes 10/26 · OCR 117/1537 · 2 en espera'
+    )
+    expect(t('writing.zoteroBibliographySyncReread')).toBe(
+      'Vuelve a leer el catálogo de Zotero; no reinicia el procesamiento en curso'
+    )
+
+    locale.set('en')
+
+    expect(t('writing.zoteroBibliographyCurrentPages', current)).toBe(
+      'Processing “El problema del yute”: page 117 of 1537'
+    )
+    expect(t('writing.zoteroBibliographyCurrentPagesEta', { ...current, eta: '3 h 40 min' })).toBe(
+      'Processing “El problema del yute”: page 117 of 1537 · ~3 h 40 min left'
+    )
+    expect(t('writing.zoteroBibliographyCurrent', { title: 'El problema del yute' })).toBe(
+      'Processing “El problema del yute”'
+    )
+    expect(
+      t('writing.zoteroBibliographyCurrentEta', { title: 'El problema del yute', eta: '12 min' })
+    ).toBe('Processing “El problema del yute” · ~12 min left')
+    expect(t('batch.statusBibliographyOcr', ocr)).toBe(
+      'Bibliography: works 13/13 · passages 10/26 · OCR 117/1537'
+    )
+    expect(t('batch.statusBibliographyWaitingOcr', { ...ocr, blocked: 2 })).toBe(
+      'Bibliography: works 13/13 · passages 10/26 · OCR 117/1537 · 2 waiting'
+    )
+    expect(t('writing.zoteroBibliographySyncReread')).toBe(
+      'Re-reads the Zotero catalog; it does not restart the processing in course'
+    )
+  })
+
   it('exposes the research scope copy in both locales, reusing the chat keys', async () => {
     const { locale, t } = await import('./i18n')
 
@@ -182,6 +241,20 @@ describe('i18n', () => {
     expect(t('ragChat.scopeBiblioteca')).toBe('Library')
     expect(t('ragChat.scopeBoth')).toBe('Both')
     expect(t('research.needLibrary')).toContain('synced Zotero library')
+  })
+
+  it('exposes the research model copy in both locales', async () => {
+    const { locale, t } = await import('./i18n')
+
+    // El selector de modelo de Investigación reusa el título de sugerencias
+    // de Configuración: es la misma lista de OpenRouter.
+    expect(t('research.modelLabel')).toBe('Modelo')
+    expect(t('settings.suggestedModels')).toBe('Modelos sugeridos desde OpenRouter')
+
+    locale.set('en')
+
+    expect(t('research.modelLabel')).toBe('Model')
+    expect(t('settings.suggestedModels')).toBe('Suggested models from OpenRouter')
   })
 
   it('exposes rag chat copy in both locales', async () => {

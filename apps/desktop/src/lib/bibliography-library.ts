@@ -122,6 +122,8 @@ export interface BibliographyWorkDetailItem {
   creators: BibliographyWorkCreator[] | null
   publicationTitle: string | null
   publisher: string | null
+  /** The CSL `issued` date rendered for reading (`YYYY-MM-DD` / `YYYY-MM` /
+   * `YYYY`, or `raw`/`literal` verbatim), not a raw storage string. */
   date: string | null
   doi: string | null
   isbn: string | null

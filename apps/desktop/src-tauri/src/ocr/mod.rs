@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod glm_ocr;
+pub mod markup;
 pub mod postprocess;
 pub mod provider;
 
@@ -716,6 +717,13 @@ pub(super) fn ensure_selected_cloud_key(conn: &rusqlite::Connection) -> Result<(
     Ok(())
 }
 
+/// The error [`process_with_glm_ocr_provider`] raises when GLM-OCR answers
+/// with no useful content for an asset. Whole-asset corpus OCR keeps this a
+/// failure (the user re-runs the asset); the bibliography page path maps it
+/// to an empty page — the provider answered, there was simply no text.
+pub const GLM_OCR_EMPTY_RESPONSE_MESSAGE: &str =
+    "GLM-OCR devolvió una respuesta vacía para este asset.";
+
 fn encode_bytes_for_glm_ocr(bytes: &[u8]) -> Result<String, String> {
     let mime = if bytes.starts_with(b"%PDF-") {
         "application/pdf"
@@ -758,7 +766,7 @@ pub(crate) async fn process_with_glm_ocr_provider(
     }
 
     if !glm_response_has_useful_content(&response) {
-        return Err("GLM-OCR devolvió una respuesta vacía para este asset.".to_string());
+        return Err(GLM_OCR_EMPTY_RESPONSE_MESSAGE.to_string());
     }
 
     emit_progress(app_handle, asset_id, 92, "parsing_glm_ocr");

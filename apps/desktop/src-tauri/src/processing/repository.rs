@@ -1209,19 +1209,25 @@ const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
 /// open attempt is never a sample: it has no finish stamp. Attempts of tasks
 /// parked `blocked` are not samples either — they record a parking decision,
 /// not work, and their near-zero durations would drag the average into a
-/// lie. A `None` average means nothing of the kind has finished yet.
+/// lie. Neither are the attempts of `exclude_task_id`: the unit running
+/// right now is timed by its own progress, and its attempts (interrupted
+/// hours-long walks of one huge attachment among them) are not what a fresh
+/// attachment costs. A `None` average means nothing of the kind has
+/// finished yet.
 fn finished_attempt_average(
     conn: &Connection,
     anchor: i64,
     kind: &str,
+    exclude_task_id: Option<&str>,
 ) -> Result<(i64, Option<i64>), String> {
     conn.query_row(
         "SELECT COUNT(*), AVG(a.finished_at - a.started_at)
            FROM processing_attempts a
            JOIN processing_tasks t ON t.id = a.task_id
           WHERE t.rowid > ?1 AND t.kind = ?2 AND t.state <> 'blocked'
-            AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at",
-        rusqlite::params![anchor, kind],
+            AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at
+            AND (?3 IS NULL OR a.task_id <> ?3)",
+        rusqlite::params![anchor, kind, exclude_task_id],
         |row| {
             Ok((
                 row.get(0)?,
@@ -1231,6 +1237,194 @@ fn finished_attempt_average(
         },
     )
     .map_err(|error| format!("Failed to average finished attempts of {kind}: {error}"))
+}
+
+/// The derived task the supervisor is executing right now (one unit at a
+/// time), with everything the screen and the ETA need about it: its identity,
+/// the work it belongs to and its page progress. `None` while nothing runs.
+struct RunningDerivedTask {
+    task_id: String,
+    kind: String,
+    input_fingerprint: String,
+    contract_hash: String,
+    /// Pages processed over the pages that need OCR, for extractions only
+    /// (`0/0` for other kinds and before an extraction measures its total).
+    pages_done: i64,
+    pages_total: i64,
+    /// The work's own title (`bibliographic_items.title`), falling back to
+    /// the attachment filename and finally the subject id — the screen says
+    /// «Procesando «…»», never an empty pair of quotes.
+    title: String,
+}
+
+/// Reads the running derived task of the backlog window. The latest running
+/// row wins if history ever holds two; the kinds without a supervisor unit
+/// are never candidates.
+fn running_derived_task(
+    conn: &Connection,
+    anchor: i64,
+) -> Result<Option<RunningDerivedTask>, String> {
+    use rusqlite::OptionalExtension as _;
+    type Row = (String, String, String, String, String, String, i64, i64);
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT t.id, t.kind, t.subject_kind, t.subject_id, t.input_fingerprint,
+                    t.contract_hash, t.progress_done, t.progress_total
+               FROM processing_tasks t
+              WHERE t.rowid > ?1 AND t.domain = 'bibliography'
+                AND t.kind IN ('bibliography_profile', 'bibliography_extract')
+                AND t.state = 'running'
+              ORDER BY t.rowid DESC
+              LIMIT 1",
+            [anchor],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the running bibliography work: {error}"))?;
+    let Some((
+        task_id,
+        kind,
+        subject_kind,
+        subject_id,
+        input_fingerprint,
+        contract_hash,
+        progress_done,
+        progress_total,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    // The title of the work the task belongs to: for an extraction the
+    // attachment's parent item, for a profile the item itself.
+    let title = match subject_kind.as_str() {
+        "attachment" => conn.query_row(
+            "SELECT COALESCE(NULLIF(TRIM(i.title), ''), NULLIF(TRIM(a.filename), ''), ?2)
+               FROM zotero_attachments a
+               LEFT JOIN bibliographic_items i ON i.id = a.item_id
+              WHERE a.id = ?1",
+            rusqlite::params![&subject_id, &subject_id],
+            |row| row.get::<_, String>(0),
+        ),
+        _ => conn.query_row(
+            "SELECT COALESCE(NULLIF(TRIM(title), ''), NULLIF(TRIM(item_key), ''), ?2)
+               FROM bibliographic_items
+              WHERE id = ?1",
+            rusqlite::params![&subject_id, &subject_id],
+            |row| row.get::<_, String>(0),
+        ),
+    }
+    .optional()
+    .map_err(|error| format!("Failed to name the running bibliography work: {error}"))?
+    .unwrap_or_else(|| subject_id.clone());
+    let (pages_done, pages_total) = if kind == "bibliography_extract" {
+        (progress_done, progress_total)
+    } else {
+        (0, 0)
+    };
+    Ok(Some(RunningDerivedTask {
+        task_id,
+        kind,
+        input_fingerprint,
+        contract_hash,
+        pages_done,
+        pages_total,
+        title,
+    }))
+}
+
+/// Pages one landed unit settles: the extraction executor records one page
+/// per `ocr-page:{n}` checkpoint and a whole wave per `ocr-range:{first}-{last}`
+/// one, so the ETA can weigh landings in pages and never in checkpoints.
+/// Anything else counts as one page — a rate must never divide by zero.
+fn checkpoint_unit_pages(unit_key: &str) -> i64 {
+    if let Some(range) = unit_key.strip_prefix("ocr-range:") {
+        if let Some((first, last)) = range.split_once('-') {
+            if let (Ok(first), Ok(last)) = (first.parse::<i64>(), last.parse::<i64>()) {
+                return (last - first + 1).max(1);
+            }
+        }
+    }
+    1
+}
+
+/// Average ms per OCR'd page of a running extraction, measured from its own
+/// progress: the pages that landed inside the open attempt over the time
+/// elapsed since that attempt started, and — while a resumed attempt still
+/// walks cached pages and has landed none — the landing span of the whole
+/// task from its checkpoint timestamps. `None` while nothing measurable
+/// landed: a rate is never invented from someone else's book.
+fn running_page_rate_ms(
+    conn: &Connection,
+    task: &RunningDerivedTask,
+    now_ms: i64,
+) -> Result<Option<i64>, String> {
+    use rusqlite::OptionalExtension as _;
+    let landings = |since_ms: i64| -> Result<Vec<(i64, String)>, String> {
+        let mut statement = conn
+            .prepare(
+                "SELECT created_at, unit_key FROM processing_checkpoints
+                  WHERE task_id = ?1 AND input_fingerprint = ?2 AND contract_hash = ?3
+                    AND created_at >= ?4
+                  ORDER BY created_at",
+            )
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![
+                    task.task_id,
+                    task.input_fingerprint,
+                    task.contract_hash,
+                    since_ms
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))
+    };
+    let attempt_started: Option<i64> = conn
+        .query_row(
+            "SELECT started_at FROM processing_attempts
+              WHERE task_id = ?1 AND finished_at IS NULL
+              ORDER BY started_at DESC LIMIT 1",
+            [&task.task_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the running attempt: {error}"))?;
+    if let Some(started_at) = attempt_started {
+        let pages: i64 = landings(started_at)?
+            .iter()
+            .map(|(_, unit_key)| checkpoint_unit_pages(unit_key))
+            .sum();
+        if pages > 0 && now_ms > started_at {
+            return Ok(Some(((now_ms - started_at) / pages).max(1)));
+        }
+    }
+    let rows = landings(0)?;
+    if rows.len() >= 2 {
+        let total_pages: i64 = rows
+            .iter()
+            .map(|(_, unit_key)| checkpoint_unit_pages(unit_key))
+            .sum();
+        let measured_pages = total_pages - checkpoint_unit_pages(&rows[0].1);
+        let span_ms = rows[rows.len() - 1].0 - rows[0].0;
+        if measured_pages > 0 && span_ms > 0 {
+            return Ok(Some((span_ms / measured_pages).max(1)));
+        }
+    }
+    Ok(None)
 }
 
 /// Durable status of one `bibliography_sync` task, for the manual button.
@@ -1421,6 +1615,15 @@ pub fn bibliography_sync_status(
         .optional()
         .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))
     };
+    // The unit executing right now, named — and the anchor of the one ETA
+    // rule that is not a plain average: a running extraction is timed by its
+    // own page rate, because the per-attachment average of other books says
+    // nothing about a 1500-page scan still walking its pages.
+    let running = running_derived_task(conn, window_anchor)?;
+    let running_extraction = running
+        .as_ref()
+        .filter(|task| task.kind == "bibliography_extract");
+    let running_pages = running_extraction.filter(|task| task.pages_total > 0);
     // P3 ETA: actionable remaining subjects per kind times the average duration
     // of that kind's finished attempts in this window. Blocked subjects are
     // never timed — they wait on the owner, not on the clock — and a kind
@@ -1428,10 +1631,12 @@ pub fn bibliography_sync_status(
     // makes the combined answer honestly unknown instead of zero. One
     // unmeasured kind with actionable work left makes the whole number a
     // guess as well, so the estimate stays `None` — as it does while the
-    // window holds fewer than three finished attempts at all.
+    // window holds fewer than three finished attempts at all, and while the
+    // running extraction has not measured a single page.
     let mut estimate_ms = 0_i64;
     let mut samples_total = 0_i64;
     let mut estimable = true;
+    let mut page_rate_measured = false;
     for (kind, remaining, blocked) in [
         (
             "bibliography_profile",
@@ -1445,7 +1650,14 @@ pub fn bibliography_sync_status(
         ),
     ] {
         let actionable = remaining - blocked;
-        let (samples, average_ms) = finished_attempt_average(conn, window_anchor, kind)?;
+        let (samples, average_ms) = finished_attempt_average(
+            conn,
+            window_anchor,
+            kind,
+            running_extraction
+                .filter(|task| task.kind == kind)
+                .map(|task| task.task_id.as_str()),
+        )?;
         samples_total += samples;
         if remaining <= 0 {
             continue;
@@ -1454,13 +1666,38 @@ pub fn bibliography_sync_status(
             estimable = false;
             break;
         }
+        if kind == "bibliography_extract" {
+            if let Some(task) = running_pages {
+                // Its own pages, its own rate: the remaining pages of the
+                // running book times the ms per page its landings measure.
+                match running_page_rate_ms(conn, task, now_ms())? {
+                    Some(rate_ms) => {
+                        page_rate_measured = true;
+                        estimate_ms += (task.pages_total - task.pages_done).max(0) * rate_ms;
+                    }
+                    None => estimable = false,
+                }
+                // The attachments queued behind it keep the per-attachment
+                // average — with its long attempts out of the sample.
+                let queued = actionable - 1;
+                if queued > 0 && estimable {
+                    if samples < ETA_MIN_FINISHED_ATTEMPTS {
+                        estimable = false;
+                        break;
+                    }
+                    estimate_ms += queued * average_ms.unwrap_or(0);
+                }
+                break;
+            }
+        }
         if samples < ETA_MIN_FINISHED_ATTEMPTS {
             estimable = false;
             break;
         }
         estimate_ms += actionable * average_ms.unwrap_or(0);
     }
-    let eta_ms = (estimable && samples_total >= ETA_MIN_FINISHED_ATTEMPTS).then_some(estimate_ms);
+    let eta_ms = (estimable && (samples_total >= ETA_MIN_FINISHED_ATTEMPTS || page_rate_measured))
+        .then_some(estimate_ms);
     Ok(super::commands::BibliographySyncStatus {
         new_profiles: derived("bibliography_profile")?,
         new_extractions: derived("bibliography_extract")?,
@@ -1472,6 +1709,14 @@ pub fn bibliography_sync_status(
         extractions_blocked,
         profiles_blocked_reason: blocked_reason("bibliography_profile")?,
         extractions_blocked_reason: blocked_reason("bibliography_extract")?,
+        current: running
+            .as_ref()
+            .map(|task| super::commands::BibliographyCurrentTask {
+                kind: task.kind.clone(),
+                title: task.title.clone(),
+                pages_done: task.pages_done,
+                pages_total: task.pages_total,
+            }),
         eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),
@@ -2153,6 +2398,13 @@ pub fn admit_stale_extraction_demands(
 /// always `running` with a complete (empty) snapshot, so admitted units flow
 /// straight to the scheduler without a UI batch around them. Hidden from the
 /// batch history by origin (Unidad 5 lists `user` batches).
+///
+/// `manual` carries the work the user explicitly requests — a clicked OCR, a
+/// requested embedding — so it is interactive (priority 2, the
+/// [`ensure_bibliography_sync_lane`] pattern): every demand re-raises it
+/// because a cancel resets priority, and starvation aging never reaches 2.
+/// The other system origins stay background; aging may promote them to high,
+/// never further.
 pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, String> {
     if origin != "manual" && origin != "repair" && origin != "bibliography" {
         return Err(format!("invalid_selection: unknown system origin {origin}"));
@@ -2162,7 +2414,10 @@ pub fn ensure_system_batch(conn: &Connection, origin: &str) -> Result<String, St
         origin,
         &format!("system-{origin}"),
         &format!("batch-system-{origin}"),
-        None,
+        // Manual demand is interactive and re-raised here on every demand;
+        // repair/bibliography keep the background default and age to high at
+        // most.
+        (origin == "manual").then_some(2),
     )
 }
 
@@ -2210,8 +2465,14 @@ fn ensure_system_batch_row(
             other => Err(format!("Failed to read system batch {origin}: {other}")),
         })?
     {
+        // Demand reopens the long-lived container from a finished run and
+        // from a cancel (system batches never finalize on their own — the
+        // origin guard in `maybe_finalize_batch` — so a cancel parks them
+        // `cancelling`): the next demand is fresh work and must flow straight
+        // to the scheduler. Cancelled links and units stay final; only the
+        // batch row is revived.
         conn.execute(
-            "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors')",
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', finished_at = NULL WHERE id = ?1 AND state IN ('completed','completed_with_errors','cancelling','cancelled')",
             [&id],
         ).map_err(|e| format!("Failed to reopen system batch: {e}"))?;
         if let Some(priority) = priority {
@@ -2239,6 +2500,28 @@ fn ensure_system_batch_row(
         .map_err(|e| format!("Failed to raise system batch {origin}: {e}"))?;
     }
     Ok(new_batch_id.to_string())
+}
+
+/// Startup sweep for the interactive manual lane: re-raises the manual
+/// system batch to priority 2 when its row already exists and is live.
+///
+/// Priority arrives with 0046 and backfills nothing, so an archive whose
+/// `batch-system-manual` predates interactive manual priority would keep the
+/// user's own pending work behind the aged background backlog until the next
+/// demand re-raised it. One UPDATE on the existing row: it never mints a
+/// batch, never touches a cancelled container (a cancel stays final until
+/// fresh demand reopens it), and never raises anything but the manual lane.
+/// Returns whether a row was raised.
+pub fn raise_manual_system_batch(conn: &Connection) -> Result<bool, String> {
+    let raised = conn
+        .execute(
+            "UPDATE processing_batches SET priority = 2
+              WHERE request_id = 'system-manual' AND priority != 2
+                AND state IN ('running', 'ready') AND desired_state = 'run'",
+            [],
+        )
+        .map_err(|e| format!("Failed to raise the manual system batch: {e}"))?;
+    Ok(raised > 0)
 }
 /// A recorded control-plane request: the durable answer to "did this
 /// requestId already run, and with which parameters?". Double-clicks,
@@ -4731,7 +5014,8 @@ pub fn reclaim_free_pages(
 
 /// Declares how many units the task holds in total (pages, chunks). Called
 /// once the manifest is known; `progress_done` only ever comes from saved
-/// checkpoints, never from in-flight provider progress.
+/// checkpoints (or the executor's own [`set_progress_done`] page count for
+/// wave-granular engines), never from in-flight provider progress.
 pub fn set_progress_total(
     conn: &Connection,
     task_id: &str,
@@ -4742,6 +5026,31 @@ pub fn set_progress_total(
         .execute(
             "UPDATE processing_tasks SET progress_total = ?1 WHERE id = ?2 AND state = 'running' AND lease_epoch = ?3",
             rusqlite::params![total, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to set progress of {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    Ok(())
+}
+
+/// Records how many pages the task has processed so far. Ordinary
+/// `progress_done` bookkeeping counts saved checkpoints; an engine whose
+/// units land in waves — whole-document OCR windows settle many pages per
+/// checkpoint — reports its true page count here instead, still fenced on
+/// the running lease like every other executor write.
+pub fn set_progress_done(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    done: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET progress_done = ?1 WHERE id = ?2 AND state = 'running' AND lease_epoch = ?3",
+            rusqlite::params![done, task_id, lease_epoch],
         )
         .map_err(|e| format!("Failed to set progress of {task_id}: {e}"))?;
     if changed == 0 {
@@ -7418,6 +7727,145 @@ mod tests {
         // Idempotent and capped: a second pass promotes nothing, never to 2.
         assert_eq!(apply_priority_aging(&conn, now_ms).expect("age again"), 0);
         assert_eq!(priority("b-old"), 1);
+    }
+
+    #[test]
+    fn manual_system_batch_is_interactive_and_re_raised_on_every_demand() {
+        let (_dir, conn) = batch_db();
+        let priority = |id: &str| -> i64 {
+            conn.query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .expect("priority row")
+        };
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        assert_eq!(
+            priority(&manual),
+            2,
+            "deliberate manual work is interactive by construction"
+        );
+        let repair = ensure_system_batch(&conn, "repair").expect("create repair");
+        let bibliography = ensure_system_batch(&conn, "bibliography").expect("create bibliography");
+        assert_eq!(priority(&repair), 0, "repair stays background");
+        assert_eq!(
+            priority(&bibliography),
+            0,
+            "background system batches stay background; aging caps at high"
+        );
+        // An archive whose manual row predates interactive manual priority
+        // (0046 backfills nothing) — or was reset by a cancel — is re-raised
+        // by the next demand.
+        conn.execute(
+            "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+            [&manual],
+        )
+        .expect("reset priority");
+        assert_eq!(
+            ensure_system_batch(&conn, "manual").expect("reopen"),
+            manual
+        );
+        assert_eq!(
+            priority(&manual),
+            2,
+            "every demand re-raises the manual lane"
+        );
+    }
+
+    #[test]
+    fn manual_demand_reopens_a_cancelled_manual_batch_and_re_raises_it() {
+        let (_dir, conn) = batch_db();
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        let first = admit_or_attach(&conn, &manual, "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("first demand");
+        control_batch(&conn, &manual, BatchAction::Cancel, None).expect("cancel");
+        let (state, priority): (String, i64) = conn
+            .query_row(
+                "SELECT state, priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("cancelled batch row");
+        assert_eq!(state, "cancelling");
+        assert_eq!(priority, 0, "a cancel resets priority");
+
+        // The next demand is fresh work: it reopens the long-lived container
+        // and re-raises it, and only the fresh unit flows.
+        let reopened = ensure_system_batch(&conn, "manual").expect("next demand");
+        assert_eq!(reopened, manual);
+        let (state, desired, priority): (String, String, i64) = conn
+            .query_row(
+                "SELECT state, desired_state, priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("reopened batch row");
+        assert_eq!((state.as_str(), desired.as_str()), ("running", "run"));
+        assert_eq!(
+            priority, 2,
+            "the next demand re-raises interactive priority"
+        );
+        let second = admit_or_attach(&conn, &manual, "ocr", "a1", 0, "", "ocr:light", None)
+            .expect("second demand");
+        assert_ne!(
+            first.task_id, second.task_id,
+            "a fresh demand is a fresh unit"
+        );
+        let claimed = claim_next(&conn, "s", &["ocr"], 1)
+            .expect("claim")
+            .expect("the fresh manual demand must be runnable");
+        assert_eq!(claimed.task_id, second.task_id);
+        let first_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_tasks WHERE id = ?1",
+                [&first.task_id],
+                |row| row.get(0),
+            )
+            .expect("withdrawn demand state");
+        assert_eq!(
+            first_state, "cancelled",
+            "cancelled demand is never resurrected"
+        );
+    }
+
+    #[test]
+    fn startup_sweep_re_raises_an_existing_manual_batch_only() {
+        let (_dir, conn) = batch_db();
+        assert!(
+            !raise_manual_system_batch(&conn).expect("empty sweep"),
+            "an archive with no manual row has nothing to raise"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM processing_batches", [], |row| {
+                row.get(0)
+            })
+            .expect("batch count");
+        assert_eq!(rows, 0, "the sweep never mints a batch row");
+        let manual = ensure_system_batch(&conn, "manual").expect("create manual");
+        // The owner's shape: a manual row created before interactive manual
+        // priority (0046 defaults existing rows to background).
+        conn.execute(
+            "UPDATE processing_batches SET priority = 0 WHERE id = ?1",
+            [&manual],
+        )
+        .expect("reset priority");
+        assert!(raise_manual_system_batch(&conn).expect("startup sweep"));
+        let priority: i64 = conn
+            .query_row(
+                "SELECT priority FROM processing_batches WHERE id = ?1",
+                [&manual],
+                |row| row.get(0),
+            )
+            .expect("priority row");
+        assert_eq!(
+            priority, 2,
+            "an existing manual row is interactive before the next click"
+        );
+        assert!(
+            !raise_manual_system_batch(&conn).expect("idempotent sweep"),
+            "a second sweep changes nothing"
+        );
     }
 
     #[test]

@@ -1432,3 +1432,60 @@ describe('InvestigationView citas bibliográficas', () => {
     expect(sourceCalls()).toHaveLength(0)
   })
 })
+
+describe('InvestigationView modelo congelado', () => {
+  beforeEach(() => {
+    locale.set('es')
+    invokeMock.mockReset()
+    navigateMock.mockClear()
+    storeRef.current = createStore({})
+  })
+
+  function payloadConModelo(modelo?: string) {
+    const base = detailPayload()
+    return {
+      ...base,
+      artifacts: [
+        {
+          id: 'art-request',
+          kind: 'request',
+          version: 1,
+          obsolete: false,
+          content: {
+            title: 'Pregunta',
+            alcance: 'corpus',
+            bibliotecas: [],
+            ...(modelo ? { modelo } : {}),
+          },
+        },
+      ],
+    }
+  }
+
+  function backend(modelo?: string) {
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === 'bibliography_library_status') {
+        return { libraries: [], vectorReady: true }
+      }
+      return payloadConModelo(modelo)
+    }) as typeof invokeMock)
+  }
+
+  it('muestra el modelo congelado junto al alcance del encabezado', async () => {
+    backend('meta/llama-3.3-70b')
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    // El modelo que el trabajo congeló al crearse se lee en el encabezado,
+    // en la misma pastilla que el alcance congelado.
+    expect(await screen.findByText('meta/llama-3.3-70b')).toBeInTheDocument()
+    expect(screen.getAllByText('Corpus').length).toBeGreaterThan(0)
+  })
+
+  it('un trabajo anterior al selector de modelo no muestra la pastilla', async () => {
+    backend()
+    render(InvestigationView, { props: { jobId: 'job-65972-0', title: 'Investigación' } })
+
+    await waitFor(() => expect(screen.getAllByText('Corpus').length).toBeGreaterThan(0))
+    expect(screen.queryByText('meta/llama-3.3-70b')).not.toBeInTheDocument()
+  })
+})

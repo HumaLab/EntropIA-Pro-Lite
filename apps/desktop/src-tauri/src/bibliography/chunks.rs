@@ -27,6 +27,18 @@ pub const CHUNK_OVERLAP_PARAGRAPH_MAX_CHARS: usize = 200;
 /// Versioned chunking contract stamped on every chunk row: changing the
 /// template re-chunks every work instead of mixing chunkings.
 pub const BIBLIOGRAPHY_CHUNKING_CONTRACT_V1: &str = "bibliography-chunk-800-paragraph-v1";
+/// V1 normalized nothing: its spans point into the raw stored page rows.
+pub const BIBLIOGRAPHY_CHUNKING_CONTRACT_V2: &str = "bibliography-chunk-800-paragraph-v2";
+
+/// True when chunks stamped `contract` recorded their spans into page text
+/// normalized through [`crate::ocr::markup::ocr_markup_to_text`] (V2 on):
+/// OCR answers carrying HTML tables chunk as Markdown, so chunk text never
+/// holds tags and the offsets are converted-text offsets. V1 chunks point
+/// into the raw stored rows. Readers pick the text their spans were cut
+/// against, so passage marks land where they were made on both generations.
+pub fn page_text_is_normalized(contract: &str) -> bool {
+    contract != BIBLIOGRAPHY_CHUNKING_CONTRACT_V1
+}
 
 /// One input page in document order.
 #[derive(Debug, Clone, PartialEq, Eq)]
