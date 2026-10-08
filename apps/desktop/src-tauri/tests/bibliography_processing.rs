@@ -10814,6 +10814,47 @@ fn admission_leaves_a_clean_stored_extraction_settled() {
     assert_eq!(created, 0, "clean stored text must stay settled");
 }
 
+/// An empty HTML snapshot is final: OCR never applies to it, so the "empty
+/// until OCR was attempted" retry rule must not re-demand it on every sync
+/// (it did, which also walked the sync progress counter backwards).
+#[test]
+fn admission_leaves_an_empty_html_snapshot_settled() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_catalog(&mut conn, "HTMLW0001", "Obra con captura web", "Resumen.");
+    let path = write_temp_pdf(&dir, "captura.html", b"<html><body></body></html>");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT01",
+        "imported_url",
+        Some(&path),
+        "captura.html",
+        "text/html",
+    );
+    let library: String = conn
+        .query_row("SELECT id FROM zotero_libraries LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("library row");
+    seed_stored_texts(&conn, &attachment_id, &item_id, &path, "", "", "empty");
+
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("html sync");
+    assert_eq!(created, 0, "an empty HTML snapshot has no OCR to wait for");
+}
+
+/// The retry rule still holds for PDFs: an empty PDF whose OCR was never
+/// attempted is re-demanded.
+#[test]
+fn admission_re_demands_an_empty_pdf_until_ocr_was_attempted() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(&conn, &attachment_id, &item_id, &path, "", "", "empty");
+
+    let created =
+        repository::admit_stale_extraction_demands(&conn, &library).expect("empty pdf sync");
+    assert_eq!(created, 1, "an empty PDF waits for an OCR attempt");
+}
+
 /// The re-process must actually run OCR despite the unchanged source
 /// identity (no mtime/bytes short-circuit), replace the page with the OCR
 /// text, keep no glyph code anywhere, and chain the profile re-demand that

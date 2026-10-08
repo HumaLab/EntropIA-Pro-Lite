@@ -2270,7 +2270,19 @@ pub fn extraction_is_settled(
             |row| row.get(0),
         )
         .map_err(|error| BibliographyError::sql("Failed to read extraction quality", error))?;
-    Ok(!unresolved_empty)
+    if !unresolved_empty {
+        return Ok(true);
+    }
+    // "Empty until OCR was attempted" only waits on files OCR can read. An
+    // HTML snapshot never gets OCR, so its empty text is final; without this
+    // it was re-demanded on every sync forever.
+    let html_snapshot = crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
+        .map_err(|message| BibliographyError {
+            code: "attachment_read_failed".to_string(),
+            message,
+        })?
+        .is_some_and(|attachment| crate::bibliography::attachment::is_html_snapshot(&attachment));
+    Ok(html_snapshot)
 }
 
 /// Reads the stored extraction for one attachment, if any.
