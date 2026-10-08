@@ -52,11 +52,29 @@
     batchSummary = next
   })
 
+  /** A new archive opens with the sample collection already there (user
+   *  decision, 2026-10-08), once: deleting it must not bring it back. Claimed
+   *  before loading so a failure leaves the manual button, not a retry loop. */
+  const SAMPLE_AUTOLOAD_KEY = 'entropia.sample-collection.autoloaded'
+  function claimSampleAutoload(): boolean {
+    try {
+      if (localStorage.getItem(SAMPLE_AUTOLOAD_KEY)) return false
+      localStorage.setItem(SAMPLE_AUTOLOAD_KEY, '1')
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function loadSnapshot() {
     loading = true
     error = null
     try {
       snapshot = await loadHomeSnapshot()
+      if (snapshot.isFirstRun && claimSampleAutoload()) {
+        await loadSampleCollection()
+        snapshot = await loadHomeSnapshot()
+      }
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught)
     } finally {

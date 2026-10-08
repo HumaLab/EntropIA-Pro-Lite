@@ -81,6 +81,11 @@ vi.mock('$lib/home', async (importOriginal) => {
   }
 })
 
+const sampleRef = vi.hoisted(() => ({
+  loadSampleCollection: vi.fn(async () => ({ id: 'sample', name: 'Ejemplo' })),
+}))
+vi.mock('$lib/sample-collection', () => sampleRef)
+
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
   getPaneId: () => 'pane-test',
@@ -1174,6 +1179,9 @@ describe('HomeView', () => {
 
   describe('first-run layout', () => {
     beforeEach(() => {
+      // The autoload already happened on this "device"; its own test clears it.
+      localStorage.setItem('entropia.sample-collection.autoloaded', '1')
+      sampleRef.loadSampleCollection.mockClear()
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
           continuar: [],
@@ -1194,6 +1202,18 @@ describe('HomeView', () => {
           },
         })
       )
+    })
+
+    it('loads the sample collection by itself once, never again after', async () => {
+      localStorage.removeItem('entropia.sample-collection.autoloaded')
+      const first = render(HomeView)
+      await vi.waitFor(() => expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1))
+      expect(homeRef.loadHomeSnapshot).toHaveBeenCalledTimes(2)
+      first.unmount()
+
+      render(HomeView)
+      await screen.findByText('Empezá con EntropIA')
+      expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1)
     })
 
     it('shows "Inicio rápido" instead of Continuar', async () => {

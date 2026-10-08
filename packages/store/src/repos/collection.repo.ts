@@ -16,10 +16,13 @@ export class CollectionRepo {
     this.ftsRepo = rawClient ? new FtsRepo(rawClient) : null
   }
 
-  async create(data: Omit<NewCollection, 'id' | 'createdAt' | 'updatedAt'>): Promise<Collection> {
+  /** `id` is normally minted here; the sample collection passes its fixed one. */
+  async create(
+    data: Omit<NewCollection, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  ): Promise<Collection> {
     const now = Date.now()
     const createdCollection: Collection = {
-      id: crypto.randomUUID(),
+      id: data.id ?? crypto.randomUUID(),
       name: data.name,
       description: data.description ?? null,
       createdAt: now,

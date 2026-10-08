@@ -29,6 +29,11 @@ const IMAGE_URLS = import.meta.glob<string>('../assets/sample-collection/*.png',
   eager: true,
 })
 
+/** Fixed so sync can recognise the sample and keep it on this device: the
+ *  push skips every row under this collection (`sync::push::SAMPLE_COLLECTION_ID`,
+ *  keep both in step). */
+export const SAMPLE_COLLECTION_ID = '00000000-0000-4000-8000-000000005a3e'
+
 export const SAMPLE_COLLECTION_NAME = 'Ejemplo — Archivo Bristol 1913-1938 (ficticio)'
 const SAMPLE_DESCRIPTION =
   'Documentos inventados para probar EntropIA. Las personas y los hechos son ficticios. Podés borrar esta colección cuando quieras.'
@@ -56,6 +61,7 @@ export async function loadSampleCollection(): Promise<{ id: string; name: string
   }
 
   const collection = await store.collections.create({
+    id: SAMPLE_COLLECTION_ID,
     name: SAMPLE_COLLECTION_NAME,
     description: SAMPLE_DESCRIPTION,
   })
