@@ -1,47 +1,948 @@
-[
- {
-  "file": "carta-bianchi-1913.png",
-  "title": "Carta de Alfredo Bianchi al Intendente (1913)",
-  "text": "Mar del Plata, 14 de marzo de 1913\n\nSr. Intendente Municipal de General Pueyrredón\nDon Ricardo Ocampo Salas\nS / D\n\nDe mi mayor consideración:\n\nTengo el agrado de dirigirme a Ud. con el objeto de elevar el proyecto de ensanche de la Rambla Bristol, conforme lo conversado en la reunión del 2 del corriente con la Comisión de Obras Públicas.\n\nEl proyecto contempla la construcción de doscientos metros de paseo sobre la playa Bristol, con balaustrada de material y farolas a gas provistas por la Compañía de Gas de Buenos Aires. El presupuesto total asciende a $ 184.500 m/n, de los cuales la Sociedad Anónima Bristol Hotel se compromete a aportar la tercera parte.\n\nSolicito a Ud. tenga a bien someter la propuesta al Honorable Concejo Deliberante en su próxima sesión, a fin de que las obras puedan iniciarse antes de la temporada de 1914.\n\nSin otro particular, saludo a Ud. con mi más distinguida consideración.\n\n\n                              Ing. Alfredo Bianchi\n                              Director Técnico\n                              Sociedad Anónima Bristol Hotel"
+{
+ "places": {
+  "Mar del Plata": [
+   -38.0055,
+   -57.5426
+  ],
+  "General Pueyrredon": [
+   -38.0055,
+   -57.5426
+  ],
+  "Buenos Aires": [
+   -34.6037,
+   -58.3816
+  ],
+  "Balcarce": [
+   -37.846,
+   -58.2556
+  ],
+  "La Plata": [
+   -34.9205,
+   -57.9536
+  ],
+  "Puerto": [
+   -38.0417,
+   -57.5375
+  ],
+  "Rawson 216": [
+   -38.0195527,
+   -57.529741
+  ],
+  "Bernardo de Irigoyen 2899": [
+   -38.020507,
+   -57.531751
+  ],
+  "San Martín 3624": [
+   -37.9942772,
+   -57.5574386
+  ],
+  "Garay 869": [
+   -38.0169627,
+   -57.5366501
+  ],
+  "Gascón 1141": [
+   -38.0131724,
+   -57.537523
+  ],
+  "Rawson 2567": [
+   -38.0075699,
+   -57.5529884
+  ],
+  "LA PLATA": [
+   -34.9205,
+   -57.9536
+  ],
+  "Capital Federal": [
+   -34.6037,
+   -58.3816
+  ]
  },
- {
-  "file": "telegrama-fcs-1926.png",
-  "title": "Telegrama del Ferrocarril del Sud (1926)",
-  "text": "FERROCARRIL DEL SUD — TELEGRAMA\n\nESTACIÓN: Mar del Plata          FECHA: 3 ENE 1926   HORA: 09.40\nDE: Jefe de Estación Mar del Plata\nPARA: Gerencia de Tráfico — Plaza Constitución, Buenos Aires\n\nTREN EXPRESO 118 LLEGADO 08.55 CON 42 MINUTOS DEMORA POR NIEBLA EN DOLORES STOP OCUPACIÓN COMPLETA COCHES PULLMAN STOP SOLICITO REFUERZO DOS COCHES PRIMERA PARA SERVICIO SÁBADO 9 STOP EQUIPAJE HOTEL BRISTOL Y HOTEL ROYAL DESPACHADO SIN NOVEDAD STOP\n\nFIRMADO: Juan Bautista Elizalde\nJEFE ESTACIÓN"
- },
- {
-  "file": "recorte-la-capital-1938.png",
-  "title": "Recorte de La Capital (1938)",
-  "text": "LA CAPITAL — Mar del Plata, martes 8 de febrero de 1938\n\nSE INAUGURÓ EL PABELLÓN NORTE DEL NUEVO CASINO\n\nCon la presencia del gobernador de la Provincia, doctor Manuel Fresco, del intendente municipal señor José Camusso y de numerosas familias de la colonia veraniega, quedó habilitado ayer el pabellón norte del complejo Casino y Hotel Provincial, obra del arquitecto Alejandro Bustillo.\n\nEl acto se inició a las 18 horas con la bendición del edificio a cargo de monseñor Enrique Rau. Habló luego el ingeniero Alfredo Bianchi, en representación de la comisión de vecinos, quien recordó los primeros paseos de madera de la Rambla Bristol y celebró que la ciudad cuente hoy con una obra de piedra destinada a perdurar.\n\nLa Orquesta Sinfónica Municipal, dirigida por el maestro Carlos Passerini, ejecutó el Himno Nacional y piezas de Ginastera. La concurrencia recorrió luego las salas de juego y el hall central, donde se sirvió un lunch.\n\nSegún informó la Dirección de Obras Públicas, el pabellón sur quedará terminado para la temporada de 1940."
- },
- {
-  "file": "acta-concejo-1920.png",
-  "title": "Acta del Concejo Deliberante (1920)",
-  "text": "MUNICIPALIDAD DE GENERAL PUEYRREDÓN — HONORABLE CONCEJO DELIBERANTE\n\nACTA N° 47 — SESIÓN ORDINARIA DEL 21 DE OCTUBRE DE 1920\n\nEn la ciudad de Mar del Plata, a los veintiún días del mes de octubre de mil novecientos veinte, siendo las veintiuna horas, se reúnen en el recinto de sesiones los señores concejales Pedro Luro (h), Fortunato de la Plaza, Domingo Cavallo Ferreyra, Ítalo Cattaneo y Rufino Inda, bajo la presidencia del señor Teodoro Bronzini.\n\nORDEN DEL DÍA:\n\n1°) Nota de la Sociedad Italiana de Socorros Mutuos solicitando eximición de tasas para la construcción de su sede en la calle Rivadavia. Se aprueba por unanimidad.\n\n2°) Proyecto de ordenanza sobre alumbrado eléctrico en el Barrio Puerto, presentado por el concejal Inda. Pasa a Comisión de Obras Públicas.\n\n3°) Contrato con la Compañía Anónima de Tranvías para la extensión de la línea hasta Punta Mogotes. Se aprueba con el voto en contra del concejal Cavallo Ferreyra.\n\nNo habiendo más asuntos que tratar, se levanta la sesión siendo las veintitrés horas y diez minutos.\n\n\n     Teodoro Bronzini                     Aurelio Sánchez\n        Presidente                            Secretario"
- },
- {
-  "file": "inventario-bristol-1931.png",
-  "title": "Inventario del Bristol Hotel (1931)",
-  "text": "BRISTOL HOTEL — MAR DEL PLATA\n\nINVENTARIO GENERAL AL 30 DE ABRIL DE 1931\n\nDEPENDENCIA              CANT.  DETALLE                              VALOR $ m/n\n------------------------------------------------------------------------\nComedor principal         120   Sillas Thonet, respaldo curvo            3.600\nComedor principal          30   Mesas roble 4 cubiertos                  2.100\nSalón de lectura            4   Bibliotecas nogal, 6 estantes            1.280\nSalón de lectura            2   Arañas bronce 12 luces                   1.900\nHabitaciones 1° piso       48   Camas bronce con elástico                5.760\nHabitaciones 1° piso       48   Roperos dos puertas con luna             4.320\nCocina                      3   Cocinas económicas Salamandra            2.700\nCocina                      1   Cámara frigorífica Westinghouse          6.400\nLavadero                    2   Máquinas de lavar a vapor                3.150\nJardín                     14   Bancos hierro forjado                      490\n------------------------------------------------------------------------\n                                             TOTAL GENERAL       31.700\n\nRelevado por: Ernesto Giacometti (mayordomo)\nConforme: Dra. Elena Ferrero, apoderada"
- },
- {
-  "file": "foto-muelle-1924.png",
-  "title": "Fotografía del muelle (1924)",
-  "text": "Muelle de pescadores — Banquina del Puerto, 1924\n\nAl dorso: \"Banquina chica, lanchas de la familia Corbelli. Verano de 1924. Foto de Antonio Vignola.\""
- },
- {
-  "file": "foto-torreon-1929.png",
-  "title": "Fotografía del Torreón (1929)",
-  "text": "Torreón del Monje desde Playa Bristol, 1929\n\nAl dorso: \"Torreón, enero 1929. Foto de Antonio Vignola.\""
- },
- {
-  "file": "acta-concejo-1935-a.png",
-  "title": "Acta del Concejo Deliberante (1935), hoja 1",
-  "text": "MUNICIPALIDAD DE GENERAL PUEYRREDÓN — HONORABLE CONCEJO DELIBERANTE\n\nACTA N° 112 — SESIÓN EXTRAORDINARIA DEL 4 DE MARZO DE 1935\n\nEn Mar del Plata, a cuatro de marzo de mil novecientos treinta y cinco, se reúne el Honorable Concejo en sesión extraordinaria convocada para tratar la cesión de terrenos fiscales frente a Playa Grande a favor de la Dirección de Parques y Paseos.\n\nInforma el concejal Rufino Inda que la Compañía Anónima de Tranvías ha completado la extensión hasta Punta Mogotes autorizada en 1920, y que corresponde ahora resolver el acceso peatonal desde la costa.\n\nSe resuelve por mayoría ceder los lotes 14 al 22 de la manzana 318 y encomendar a la Dirección de Obras Públicas el proyecto de la escalinata de Playa Grande.\n\n\n     Teodoro Bronzini                     Aurelio Sánchez\n        Presidente                            Secretario"
- },
- {
-  "file": "acta-concejo-1935-b.png",
-  "title": "Acta del Concejo Deliberante (1935), hoja 2",
-  "text": "MUNICIPALIDAD DE GENERAL PUEYRREDÓN — HONORABLE CONCEJO DELIBERANTE\n\nACTA N° 118 — SESIÓN ORDINARIA DEL 17 DE JUNIO DE 1935\n\nSe da lectura a la nota de la Sociedad Italiana de Socorros Mutuos agradeciendo la exención de tasas otorgada en 1920 y comunicando la finalización de su sede de la calle Rivadavia.\n\nEl concejal Ítalo Cattaneo propone declarar de interés municipal el Congreso Eucarístico Regional a celebrarse en octubre en la Catedral de los Santos Pedro y Cecilia. Se aprueba por unanimidad.\n\nSe levanta la sesión a las veintidós horas.\n\n\n     Teodoro Bronzini                     Aurelio Sánchez\n        Presidente                            Secretario"
- }
-]
+ "collections": [
+  {
+   "key": "actas",
+   "name": "Ejemplo — Actas del Concejo Deliberante, libro 3 (1891)",
+   "description": "Fotografías de las actas manuscritas del Concejo Deliberante de General Pueyrredon y la transcripción que hizo el propio Departamento Deliberativo. Fuente: Municipalidad de General Pueyrredon (concejomdp.gov.ar). Colección de ejemplo: podés borrarla cuando quieras.",
+   "documents": [
+    {
+     "file": "actas-1891-folios-1-2.jpg",
+     "title": "Libro 3, folios 1 y 2 — sesiones 25ª y 26ª (1 y 2 de abril de 1891)",
+     "text": "Municipalidad del Partido de General Pueyrredon Departamento Deliberativo\nActas Fundacionales de la Corporación Municipal\n\nSesión 25ª\n\nSeñores presentes Presidente Sr. Cayrol\n\nEn la Sala de Sesiones de la Casa Municipal de Mar del Plata, cabeza del Partido General Pueyrredon, á las dos y media de la tarde\n\nVice 2º “ Orellano\n\ndel Miércoles primero de Abril de mil ochocientos noventa y uno ,\n\nConcejal “ Dupuy\n\nreunidos los Sres Municipales al márgen anotados para celebrar\n\nId\n\n“ Goñi\n\nAusentes sin causa justificada\n\nVice 1º Sr. Camet\n\nConcejal “ Dieckman\n\nId\n\n“ Nogues\n\nNo se pasó citacion al\n\nConcejal Sr. Beltrami\n\nsesion pública ordinaria, el Sr. Presidente manifestó que no había quorum. El Sr Orellano dijo que creia llegado el caso de hacer uso de las atribuciones que confiere á las minorias el artículo once de la Ley Orgánica, y por tanto hacía mocion para que el Sr. Presidente ordenase al Sr. Comisario de policia, que haga comparecer á los Sres inasistentes. El Sr. Presidente expuso, que tiene entendido que el Sr Nogues ha trasladado su domicilio á Balcarce, y que el Sr. Camet se\n\nhalla en su estancia á tres leguas de ésta localidad, siendo el Sr. Dieckman el solo concejal que se halla\n\nen condiciones de ser inmediatamente requerido á comparecer. Se acordó de conformidad, pasando el\n\nConcejo en minoría á cuarto intermedio.\n\nA las cinco de la tarde volvieron al recinto los Sres Municipales en minoría, y en vista de lo avanzado de\n\nla hora y de no comparecer el Sr. Dieckman por haberse negado por tres veces á acatar las órdenes del\n\nSr. Presidente, resolvieron celebrar sesion pública extraordinaria á la una de la tarde mañana dos de\n\nAbril. Con lo que el Sr Presidente levantó la sesion en minoria de que Certifico.\n\nC Cayrol\n\nJosé M Gaona\n\nSrio\n\nSeñores presentes\n\nPresidente Sr. Cayrol\n\nVice 2º “ Orellano\n\nConcejal “ Dupuy\n\nId\n\n“ Goñi\n\nAusentes sin causa justificada\n\nVice 1º Sr. Camet\n\nConcejal “ Dieckman\n\nId\n\n“ Nogues\n\nNo se pasó citacion al Concejal Sr.\n\nBeltrami\n\nSesion 26ª En la Sala de Sesiones de la Casa Municipal de Mar del Plata, cabeza del Partido General Pueyrredon á la una y treinta minutos de la tarde del Jueves dos de Abril de mil ochocientos noventa y uno, reunidos los Sres municipales al márgen anotados, para celebrar sesion púbica extraordinaria el Sr. Presidente expuso que en vista de no ser posible reunir quorum quedaban aplazados para otra sesion, los asuntos que se hallan al acuerdo del Concejo. Con asentimiento general, el Sr Presidente levantó la sesion en minoria de que Certifico.\nC Cayrol\n\nJosé M Gaona Srio",
+     "metadata": {
+      "organismo": "Honorable Concejo Deliberante de General Pueyrredon",
+      "libro": "3",
+      "folios": "1-2",
+      "fecha": "1891-04-01/1891-04-02",
+      "tipo": "Acta manuscrita",
+      "soporte": "Libro copiador, tinta ferrogálica",
+      "fuente": "Municipalidad de General Pueyrredon"
+     },
+     "topics": [
+      "Concejo Deliberante",
+      "Falta de quórum",
+      "Actas fundacionales"
+     ],
+     "entities": [
+      [
+       "person",
+       "Cayrol"
+      ],
+      [
+       "person",
+       "Orellano"
+      ],
+      [
+       "person",
+       "Dupuy"
+      ],
+      [
+       "person",
+       "Camet"
+      ],
+      [
+       "person",
+       "Dieckman"
+      ],
+      [
+       "person",
+       "Nogues"
+      ],
+      [
+       "person",
+       "Beltrami"
+      ],
+      [
+       "organization",
+       "Casa Municipal de Mar del Plata"
+      ],
+      [
+       "place",
+       "Mar del Plata"
+      ],
+      [
+       "place",
+       "Balcarce"
+      ],
+      [
+       "place",
+       "General Pueyrredon"
+      ],
+      [
+       "date",
+       "primero de Abril de mil ochocientos noventa y uno"
+      ]
+     ],
+     "triples": [
+      [
+       "Cayrol",
+       "presidía",
+       "el Concejo Deliberante en 1891"
+      ],
+      [
+       "Orellano",
+       "pidió hacer comparecer por la policía a",
+       "los concejales ausentes"
+      ],
+      [
+       "Nogues",
+       "había trasladado su domicilio a",
+       "Balcarce"
+      ],
+      [
+       "Camet",
+       "se hallaba en su estancia a tres leguas de",
+       "Mar del Plata"
+      ]
+     ],
+     "notes": [
+      "El texto es la transcripción oficial del Departamento Deliberativo, no el reconocimiento automático. Sirve para medir cuánto le pega el programa cuando lea la letra manuscrita.",
+      "Las dos sesiones se levantaron sin quórum. Vale la pena contar cuántas sesiones del libro 3 terminaron igual."
+     ],
+     "summary": "Sesiones 25ª y 26ª del Concejo Deliberante de General Pueyrredon, del 1 y 2 de abril de 1891, presididas por el Sr. Cayrol. Ninguna llegó a sesionar: ante la falta de quórum, el Sr. Orellano invocó el artículo 11 de la Ley Orgánica para que la policía hiciera comparecer a los ausentes, pero el Sr. Nogues se había mudado a Balcarce, el Sr. Camet estaba en su estancia y el Sr. Dieckman no se presentó. La sesión del día siguiente también se levantó en minoría."
+    },
+    {
+     "file": "actas-1891-folios-3-4.jpg",
+     "title": "Libro 3, folios 3 y 4 — sin transcribir (1891)",
+     "text": "",
+     "metadata": {
+      "organismo": "Honorable Concejo Deliberante de General Pueyrredon",
+      "libro": "3",
+      "folios": "3-4",
+      "fecha": "1891",
+      "tipo": "Acta manuscrita",
+      "estado": "Sin reconocer",
+      "fuente": "Municipalidad de General Pueyrredon"
+     },
+     "topics": [
+      "Concejo Deliberante",
+      "Actas fundacionales"
+     ],
+     "entities": [],
+     "triples": [],
+     "notes": [
+      "Sin texto a propósito: probá el reconocimiento de letra manuscrita (OCR) y comparalo con la transcripción oficial."
+     ],
+     "summary": ""
+    }
+   ]
+  },
+  {
+   "key": "casas",
+   "name": "Ejemplo — Casas y chalets de Mar del Plata (1941-1946)",
+   "description": "Fichas del catálogo de patrimonio de la Biblioteca de la Universidad Nacional de Mar del Plata: fachadas de casas construidas entre 1941 y 1946, con arquitecto, constructor, propietario y dirección ubicada en el mapa. Colección de ejemplo: podés borrarla cuando quieras.",
+   "documents": [
+    {
+     "file": "casa-rawson-216.jpg",
+     "title": "Chalet en Rawson 216 (1941)",
+     "text": "Chalet en Rawson 216 (1941)\nUbicación: Rawson 216\nAño: 1941\nProyecto: Córsico Piccolini\nConstrucción: Buffoni y Torricella\nPropietario: familia De Lorenzi y Colonello\nChalet diseñado por el arquitecto Córsico Piccolini en 1941, perteneciente a la familia De Lorenzi y Colonello.",
+     "metadata": {
+      "direccion": "Rawson 216",
+      "fecha": "1941",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Córsico Piccolini",
+      "constructor": "Buffoni y Torricella",
+      "propietario": "familia De Lorenzi y Colonello",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Córsico Piccolini"
+      ],
+      [
+       "organization",
+       "Buffoni y Torricella"
+      ],
+      [
+       "person",
+       "familia De Lorenzi y Colonello"
+      ],
+      [
+       "place",
+       "Rawson 216"
+      ],
+      [
+       "date",
+       "1941"
+      ]
+     ],
+     "triples": [
+      [
+       "Córsico Piccolini",
+       "proyectó",
+       "Chalet en Rawson 216 (1941)"
+      ],
+      [
+       "Buffoni y Torricella",
+       "construyó",
+       "Chalet en Rawson 216 (1941)"
+      ],
+      [
+       "familia De Lorenzi y Colonello",
+       "era propietario de",
+       "Chalet en Rawson 216 (1941)"
+      ]
+     ],
+     "notes": [
+      "Córsico Piccolini aparece dos veces en esta colección: acá y en San Martín 3624. Ver si hay más obras suyas en el catálogo de la UNMDP."
+     ],
+     "summary": "Chalet en Rawson 216, de 1941, proyectada por Córsico Piccolini y construida por Buffoni y Torricella, para familia De Lorenzi y Colonello. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    },
+    {
+     "file": "casa-bernardo-de-irigoyen-2899.jpg",
+     "title": "Chalet en Bernardo de Irigoyen 2899 (1941)",
+     "text": "Chalet en Bernardo de Irigoyen 2899 (1941)\nUbicación: Bernardo de Irigoyen 2899\nAño: 1941\nProyecto: Gerardo Perriard\nConstrucción: Zogniotti\nPropietario: Celestino Lanza\nChalet propiedad del Dr. Celestino Lanza, construido por la empresa Zogniotti en 1941.",
+     "metadata": {
+      "direccion": "Bernardo de Irigoyen 2899",
+      "fecha": "1941",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Gerardo Perriard",
+      "constructor": "Zogniotti",
+      "propietario": "Celestino Lanza",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Gerardo Perriard"
+      ],
+      [
+       "organization",
+       "Zogniotti"
+      ],
+      [
+       "person",
+       "Celestino Lanza"
+      ],
+      [
+       "place",
+       "Bernardo de Irigoyen 2899"
+      ],
+      [
+       "date",
+       "1941"
+      ]
+     ],
+     "triples": [
+      [
+       "Gerardo Perriard",
+       "proyectó",
+       "Chalet en Bernardo de Irigoyen 2899 (1941)"
+      ],
+      [
+       "Zogniotti",
+       "construyó",
+       "Chalet en Bernardo de Irigoyen 2899 (1941)"
+      ],
+      [
+       "Celestino Lanza",
+       "era propietario de",
+       "Chalet en Bernardo de Irigoyen 2899 (1941)"
+      ]
+     ],
+     "notes": [
+      "La ficha de Lamadrid 2923 escribe «Zorgniotti»: probablemente es la misma empresa con el apellido mal copiado."
+     ],
+     "summary": "Chalet en Bernardo de Irigoyen 2899, de 1941, proyectada por Gerardo Perriard y construida por Zogniotti, para Celestino Lanza. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    },
+    {
+     "file": "casa-san-martin-3624.jpg",
+     "title": "Casa en San Martín 3624 (1941)",
+     "text": "Casa en San Martín 3624 (1941)\nUbicación: San Martín 3624\nAño: 1941\nProyecto: Córsico Piccolini\nConstrucción: Juan Bauducco\nPropietario: Mateo Venetti\nCasa diseñada por el arquitecto Córsico Piccolini, propiedad de Mateo Venetti, construida por Juan Bauducco.",
+     "metadata": {
+      "direccion": "San Martín 3624",
+      "fecha": "1941",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Córsico Piccolini",
+      "constructor": "Juan Bauducco",
+      "propietario": "Mateo Venetti",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Córsico Piccolini"
+      ],
+      [
+       "organization",
+       "Juan Bauducco"
+      ],
+      [
+       "person",
+       "Mateo Venetti"
+      ],
+      [
+       "place",
+       "San Martín 3624"
+      ],
+      [
+       "date",
+       "1941"
+      ]
+     ],
+     "triples": [
+      [
+       "Córsico Piccolini",
+       "proyectó",
+       "Casa en San Martín 3624 (1941)"
+      ],
+      [
+       "Juan Bauducco",
+       "construyó",
+       "Casa en San Martín 3624 (1941)"
+      ],
+      [
+       "Mateo Venetti",
+       "era propietario de",
+       "Casa en San Martín 3624 (1941)"
+      ]
+     ],
+     "notes": [],
+     "summary": "Casa en San Martín 3624, de 1941, proyectada por Córsico Piccolini y construida por Juan Bauducco, para Mateo Venetti. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    },
+    {
+     "file": "casa-garay-869.jpg",
+     "title": "Casa en Garay 869 (1946)",
+     "text": "Casa en Garay 869 (1946)\nUbicación: Garay 869\nAño: 1946\nProyecto: Edelmiro Lemmi\nPropietario: Alberto Arroz\nChalet propiedad del Dr. Alberto Arroz, construido por Edelmiro Lemmi.",
+     "metadata": {
+      "direccion": "Garay 869",
+      "fecha": "1946",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Edelmiro Lemmi",
+      "constructor": "",
+      "propietario": "Alberto Arroz",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Edelmiro Lemmi"
+      ],
+      [
+       "person",
+       "Alberto Arroz"
+      ],
+      [
+       "place",
+       "Garay 869"
+      ],
+      [
+       "date",
+       "1946"
+      ]
+     ],
+     "triples": [
+      [
+       "Edelmiro Lemmi",
+       "proyectó",
+       "Casa en Garay 869 (1946)"
+      ],
+      [
+       "Alberto Arroz",
+       "era propietario de",
+       "Casa en Garay 869 (1946)"
+      ]
+     ],
+     "notes": [],
+     "summary": "Casa en Garay 869, de 1946, proyectada por Edelmiro Lemmi, para Alberto Arroz. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    },
+    {
+     "file": "casa-gascon-1141.jpg",
+     "title": "Casa en Gascón 1141 (1946)",
+     "text": "Casa en Gascón 1141 (1946)\nUbicación: Gascón 1141\nAño: 1946\nProyecto: Lorenzo Sburlati\nPropietario: Amelia de Bonfanti\nChalet propiedad de Amelia de Bonfanti, diseñado por los arquitectos García Miramón y García Belmont, construido por Lorenzo Sburlati.",
+     "metadata": {
+      "direccion": "Gascón 1141",
+      "fecha": "1946",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Lorenzo Sburlati",
+      "constructor": "",
+      "propietario": "Amelia de Bonfanti",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Lorenzo Sburlati"
+      ],
+      [
+       "person",
+       "Amelia de Bonfanti"
+      ],
+      [
+       "place",
+       "Gascón 1141"
+      ],
+      [
+       "date",
+       "1946"
+      ]
+     ],
+     "triples": [
+      [
+       "Lorenzo Sburlati",
+       "proyectó",
+       "Casa en Gascón 1141 (1946)"
+      ],
+      [
+       "Amelia de Bonfanti",
+       "era propietario de",
+       "Casa en Gascón 1141 (1946)"
+      ]
+     ],
+     "notes": [
+      "La ficha nombra a tres personas en el proyecto; acá quedó solo Sburlati como autor. Revisar el original."
+     ],
+     "summary": "Casa en Gascón 1141, de 1946, proyectada por Lorenzo Sburlati, para Amelia de Bonfanti. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    },
+    {
+     "file": "casa-rawson-2567.jpg",
+     "title": "Casa en Rawson 2567 (1946)",
+     "text": "Casa en Rawson 2567 (1946)\nUbicación: Rawson 2567\nAño: 1946\nProyecto: Auro Tiribelli\nConstrucción: Pascual Sarraino\nPropietario: Francisco Longhi\nChalet propiedad de Francisco Longhi, diseñado por el arquitecto Auro Tiribelli y construido por la empresa de Pascual Sarraino.",
+     "metadata": {
+      "direccion": "Rawson 2567",
+      "fecha": "1946",
+      "tipo": "Ficha de patrimonio",
+      "arquitecto": "Auro Tiribelli",
+      "constructor": "Pascual Sarraino",
+      "propietario": "Francisco Longhi",
+      "fuente": "Biblioteca de la UNMDP — biblio3.mdp.edu.ar"
+     },
+     "topics": [
+      "Arquitectura",
+      "Patrimonio"
+     ],
+     "entities": [
+      [
+       "person",
+       "Auro Tiribelli"
+      ],
+      [
+       "organization",
+       "Pascual Sarraino"
+      ],
+      [
+       "person",
+       "Francisco Longhi"
+      ],
+      [
+       "place",
+       "Rawson 2567"
+      ],
+      [
+       "date",
+       "1946"
+      ]
+     ],
+     "triples": [
+      [
+       "Auro Tiribelli",
+       "proyectó",
+       "Casa en Rawson 2567 (1946)"
+      ],
+      [
+       "Pascual Sarraino",
+       "construyó",
+       "Casa en Rawson 2567 (1946)"
+      ],
+      [
+       "Francisco Longhi",
+       "era propietario de",
+       "Casa en Rawson 2567 (1946)"
+      ]
+     ],
+     "notes": [],
+     "summary": "Casa en Rawson 2567, de 1946, proyectada por Auro Tiribelli y construida por Pascual Sarraino, para Francisco Longhi. Ficha del catálogo de patrimonio de la Biblioteca de la UNMDP con la vista de la fachada."
+    }
+   ]
+  },
+  {
+   "key": "lacapital",
+   "name": "Ejemplo — La Capital 1965, el conflicto del filet",
+   "description": "Páginas del diario La Capital de Mar del Plata de marzo y abril de 1965, durante el conflicto de la industria del pescado: la huelga del filet, los comunicados de la Cámara y de los sindicatos y la intervención de la CGT y del gobierno provincial. Reproducidas con permiso. Colección de ejemplo: podés borrarla cuando quieras.",
+   "documents": [
+    {
+     "file": "la-capital-1965-03-26-0.jpg",
+     "title": "La Capital, 26 de marzo de 1965 — huelga de solidaridad del SOMU",
+     "text": "Fue Reanudada la Actividad Pesquera\n\nLa asamblea de la Intersindical Marítima Centro de Patrones, Sindicato de Conductores Fusionados y SOMU, que el martes último había dispuesto la suspensión de la salida de la flotilla pesquera en razón del conflicto en la rama del fileteado, resolvió ayer levantar esa medida por haberse normalizado la situación. Por consiguiente los tripulantes se reintegraron a sus tareas y la actividad quedó reiniciada. La intersindical dio un comunicado agradeciendo a la Prefectura Nacional Marítima \"por la buena voluntad demostrada al actuar como mediadora\".\n\nNuevas conquistas laborales\n\nEl trabajo en las plantas industrializadoras dedicadas al fileteado quedó reanudado. Simultáneamente la comisión del Sindicato Obrero de la Industria del Pescado que se trasladó a Buenos Aires para homologar el nuevo contrato laboral informó que se han logrado nuevas conquistas, entre ellas el pago de los salarios con un aumento del ciento por ciento los días sábados por la tarde, domingos y feriados. Además se logró la inclusión de una cláusula por la cual ningún jornal vigente a la fecha podrá ser disminuido por el nuevo convenio.",
+     "metadata": {
+      "diario": "La Capital",
+      "ciudad": "Mar del Plata",
+      "fecha": "1965-03-26",
+      "tipo": "Página de diario",
+      "soporte": "Fotografía del ejemplar encuadernado"
+     },
+     "topics": [
+      "Conflicto del filet",
+      "Sindicatos",
+      "Industria pesquera"
+     ],
+     "entities": [
+      [
+       "organization",
+       "Intersindical Marítima"
+      ],
+      [
+       "organization",
+       "Centro de Patrones"
+      ],
+      [
+       "organization",
+       "Sindicato de Conductores Fusionados"
+      ],
+      [
+       "organization",
+       "SOMU"
+      ],
+      [
+       "organization",
+       "Prefectura Nacional Marítima"
+      ],
+      [
+       "organization",
+       "Sindicato Obrero de la Industria del Pescado"
+      ],
+      [
+       "place",
+       "Buenos Aires"
+      ],
+      [
+       "date",
+       "martes último"
+      ]
+     ],
+     "triples": [
+      [
+       "Intersindical Marítima",
+       "levantó",
+       "la suspensión de la salida de la flotilla pesquera"
+      ],
+      [
+       "Prefectura Nacional Marítima",
+       "actuó como",
+       "mediadora"
+      ],
+      [
+       "plantas de fileteado",
+       "reanudaron",
+       "el trabajo"
+      ],
+      [
+       "Sindicato Obrero de la Industria del Pescado",
+       "logró",
+       "aumento del ciento por ciento en sábados por la tarde, domingos y feriados"
+      ]
+     ],
+     "notes": [
+      "La medida de la flota era de solidaridad con los fileteros: fijate en la edición del martes anterior cómo se anunció y cuántos días duró el paro.",
+      "Agradecen a la Prefectura como mediadora: buscá si hay comunicado de Prefectura que confirme ese papel."
+     ],
+     "summary": "La Intersindical Marítima (Centro de Patrones, Conductores Fusionados y SOMU) levantó la suspensión de la salida de la flotilla pesquera que había dispuesto por el conflicto del fileteado, y los tripulantes volvieron a sus tareas. Las plantas de fileteado reanudaron el trabajo. La comisión del Sindicato Obrero de la Industria del Pescado informó desde Buenos Aires mejoras en el nuevo contrato: pago al ciento por ciento de sábados por la tarde, domingos y feriados, y una cláusula que impide bajar los jornales vigentes."
+    },
+    {
+     "file": "la-capital-1965-03-29-1.jpg",
+     "title": "La Capital, 29 de marzo de 1965 — Marini recibió a miembros de la CGT",
+     "text": "Marini Recibió a Miembros de la CGT\nSe Trató la Marcha de un Conflicto Laboral\n\nEl gobernador de la provincia de Buenos Aires, doctor Anselmo Marini, que se encontraba en la ciudad, recibió a una delegación de la Confederación General del Trabajo, integrada por el Sr. Norberto Oscar Centeno y miembros del estado gremial, sobre la marcha del conflicto laboral de la industria del pescado. El gobernador prometió elevar los antecedentes al ministro de Trabajo y Seguridad Social, doctor Fernando Solá.\n\nReúnese el M.A.S.\n\nEl Movimiento de Acción Sindical, con la firma del Sr. Marino Contino, dio a conocer un comunicado. Hace saber que la organización desbordará todo aquello que hace al aumento de las retribuciones que ha tenido el trabajador en la ciudad.\n\nSe Inaugura un Anexo del Instituto Pesquero\n\nEl Instituto Tecnológico Pesquero, dependiente del ministerio de Educación de la Provincia de Buenos Aires, inaugurará su anexo en el Puerto, con la colaboración de las fuerzas vivas.",
+     "metadata": {
+      "diario": "La Capital",
+      "ciudad": "Mar del Plata",
+      "fecha": "1965-03-29",
+      "tipo": "Página de diario",
+      "soporte": "Fotografía del ejemplar encuadernado"
+     },
+     "topics": [
+      "Conflicto del filet",
+      "Sindicatos",
+      "Industria pesquera"
+     ],
+     "entities": [
+      [
+       "person",
+       "Anselmo Marini"
+      ],
+      [
+       "person",
+       "Norberto Oscar Centeno"
+      ],
+      [
+       "person",
+       "Fernando Solá"
+      ],
+      [
+       "person",
+       "Marino Contino"
+      ],
+      [
+       "organization",
+       "Confederación General del Trabajo"
+      ],
+      [
+       "organization",
+       "Movimiento de Acción Sindical"
+      ],
+      [
+       "organization",
+       "Instituto Tecnológico Pesquero"
+      ],
+      [
+       "place",
+       "Buenos Aires"
+      ],
+      [
+       "place",
+       "Puerto"
+      ]
+     ],
+     "triples": [
+      [
+       "Anselmo Marini",
+       "era gobernador de",
+       "Buenos Aires"
+      ],
+      [
+       "Anselmo Marini",
+       "recibió a",
+       "Confederación General del Trabajo"
+      ],
+      [
+       "Marino Contino",
+       "firmó el comunicado de",
+       "Movimiento de Acción Sindical"
+      ]
+     ],
+     "notes": [
+      "Norberto Oscar Centeno, el abogado de la CGT que aparece acá, es el mismo que en 1974 escribió la Ley de Contrato de Trabajo. Vale seguirle el rastro en el resto de la colección."
+     ],
+     "summary": "Página de La Capital del 29 de marzo de 1965. El gobernador bonaerense Anselmo Marini recibió en Mar del Plata a una delegación de la CGT encabezada por Norberto Oscar Centeno por el conflicto de la industria del pescado, y prometió elevar los antecedentes al ministro de Trabajo Fernando Solá. En la misma página, el Movimiento de Acción Sindical difunde un comunicado y se anuncia un anexo del Instituto Tecnológico Pesquero en el Puerto."
+    },
+    {
+     "file": "la-capital-1965-03-30-2.jpg",
+     "title": "La Capital, 30 de marzo de 1965 — inspección sanitaria en las plantas de fileteado",
+     "text": "Una Comisión de Médicos Realizará Inspección Sanitaria en las Plantas Locales de Fileteado\n\nSe Resolvió en La Plata; Sigue el Conflicto\n\nLA PLATA, 29 (C). — Ante las gestiones realizadas por el gobernador, doctor Anselmo Marini, que esta mañana se comunicó a poco de su regreso de Mar del Plata, con el doctor Fernando Solá, para buscar una solución al problema creado en la rama de fileteros de obreros del pescado, el ministro del gabinete nacional encomendó al director nacional de delegaciones del Ministerio de Trabajo y Seguridad Social, doctor Lizarraga para entrevistarse con el secretario de Trabajo de la Provincia, doctor Jorge Bravo e intercambiar ideas acerca del referido conflicto. Ambos funcionarios, doctor Bravo y el señor Lizarraga, se trasladaron luego a la casa de gobierno para realizar una reunión con el gobernador Marini.\n\nDieron a éste una amplia información de lo que hace a sus respectivas esferas del citado problema de los obreros fileteros. Dejaron perfectamente establecido que lo relacionado con el encuadramiento sindical entre el Sindicato de la Alimentación y el Sindicato de la Industria del Pescado de Mar del Plata, debe tramitarse por la vía jurisdiccional y administrativa correspondiente. Asimismo se determinó, y esto es lo importante, que a efectos de verificar la incidencia desfavorable del convenio sobre los salarios que percibían los obreros fileteros antes de la firma del convenio, una comisión conjunta de médicos de los ministerios de Asistencia Social y Salud Pública de la Nación y de la Provincia, funcionarios de la policía del Trabajo y Seguridad Social de la Nación, se trasladarán el miércoles venidero a la ciudad de Mar del Plata, a fin de realizar inspecciones en distintos establecimientos dedicados a la mencionada actividad. La inspección de referencia además de verificar cuestiones salariales, abarcará problemas de higiene y salubridad. En el transcurso de esta reunión con el gobernador doctor Marini, también se dejó establecido que se actuará permanentemente con medidas destinadas a exigir el cumplimiento de las leyes sociales.",
+     "metadata": {
+      "diario": "La Capital",
+      "ciudad": "Mar del Plata",
+      "fecha": "1965-03-30",
+      "tipo": "Página de diario",
+      "soporte": "Fotografía del ejemplar encuadernado"
+     },
+     "topics": [
+      "Conflicto del filet",
+      "Sindicatos",
+      "Industria pesquera"
+     ],
+     "entities": [
+      [
+       "person",
+       "Anselmo Marini"
+      ],
+      [
+       "person",
+       "Fernando Solá"
+      ],
+      [
+       "person",
+       "Lizarraga"
+      ],
+      [
+       "person",
+       "Jorge Bravo"
+      ],
+      [
+       "organization",
+       "Ministerio de Trabajo y Seguridad Social"
+      ],
+      [
+       "organization",
+       "Sindicato de la Alimentación"
+      ],
+      [
+       "organization",
+       "Sindicato de la Industria del Pescado de Mar del Plata"
+      ],
+      [
+       "organization",
+       "Asistencia Social y Salud Pública"
+      ],
+      [
+       "place",
+       "La Plata"
+      ],
+      [
+       "place",
+       "LA PLATA"
+      ],
+      [
+       "place",
+       "Mar del Plata"
+      ],
+      [
+       "date",
+       "miércoles venidero"
+      ]
+     ],
+     "triples": [
+      [
+       "Anselmo Marini",
+       "gestionó ante",
+       "Fernando Solá"
+      ],
+      [
+       "Lizarraga",
+       "se reunió con",
+       "Jorge Bravo"
+      ],
+      [
+       "comisión de médicos",
+       "inspeccionará",
+       "plantas de fileteado de Mar del Plata"
+      ],
+      [
+       "encuadramiento sindical",
+       "se tramitará por",
+       "vía jurisdiccional y administrativa"
+      ]
+     ],
+     "notes": [
+      "El fondo del conflicto es el encuadramiento: Alimentación contra Pescado. Rastreá qué convenio firmó cada uno y cuál bajaba los salarios de los fileteros.",
+      "Chequeá si la inspección anunciada para el miércoles se hizo y si dejó informe."
+     ],
+     "summary": "Desde La Plata se informa que, tras gestiones del gobernador Anselmo Marini ante el ministro Fernando Solá, funcionarios nacionales y provinciales de Trabajo se reunieron con el gobernador por el conflicto de los fileteros. Se resolvió que la disputa de encuadramiento entre el Sindicato de la Alimentación y el Sindicato de la Industria del Pescado siga la vía administrativa, y que una comisión de médicos y funcionarios inspeccione las plantas de fileteado de Mar del Plata por cuestiones salariales, de higiene y salubridad. El conflicto sigue."
+    },
+    {
+     "file": "la-capital-1965-03-31-3.jpg",
+     "title": "La Capital, 31 de marzo de 1965 — fileteros: sin novedades en el conflicto",
+     "text": "Fileteros: No Hubo Novedades en el Conflicto\n\nGestiones del Secretario Regional de la CGT\n\nSe mantuvo sin variantes importantes el grave conflicto que paraliza la actividad en los establecimientos elaboradores de pescado en nuestra ciudad. Durante la jornada de ayer se conoció la existencia de un telegrama remitido por el gobernador de la provincia, Dr Anselmo Marini al secretario de la delegación regional de la Confederación General del Trabajo local, en la que comunicaba haber dado traslado al Ministerio de Trabajo de la Nación de todos los antecedentes relacionados con el conflicto que mantiene inactivo al Sindicato de la Industria del Pescado, rama Fileteros.\n\nInmediatamente después de conocido ese trámite, el señor Pedro Verón se puso en contacto con la Central Obrera en la Capital Federal, reclamando la intervención personal del secretario de organización e interior de la Confederación General del Trabajo, señor Avelino Fernández, en las gestiones ante el citado Ministerio Nacional del Trabajo, donde ahora parecen concentrarse las tramitaciones oficiales.\n\nMarini en Mar del Plata\n\nSegún se ha anunciado el gobernador Marini será huésped de nuestra ciudad durante el día de hoy. Concurre al balneario para asistir a la clausura del II Congreso Vial Municipal.\n\nEn torno al viaje del doctor Anselmo Marini, trascendió que sería aprovechado para tomar contacto personal con las partes en pugna impulsado por el deseo de interiorizarse acabadamente de la situación imperante en la industria del pescado, sometida a una inactividad que amenaza suspender la provisión de ese producto en todo el país, consecuencia por demás riesgosa especialmente cuando se avecinan las celebraciones de Semana Santa, en que la demanda se acrecienta notablemente.",
+     "metadata": {
+      "diario": "La Capital",
+      "ciudad": "Mar del Plata",
+      "fecha": "1965-03-31",
+      "tipo": "Página de diario",
+      "soporte": "Fotografía del ejemplar encuadernado"
+     },
+     "topics": [
+      "Conflicto del filet",
+      "Sindicatos",
+      "Industria pesquera"
+     ],
+     "entities": [
+      [
+       "person",
+       "Anselmo Marini"
+      ],
+      [
+       "person",
+       "Pedro Verón"
+      ],
+      [
+       "person",
+       "Avelino Fernández"
+      ],
+      [
+       "organization",
+       "CGT"
+      ],
+      [
+       "organization",
+       "Confederación General del Trabajo"
+      ],
+      [
+       "organization",
+       "Ministerio de Trabajo de la Nación"
+      ],
+      [
+       "organization",
+       "Sindicato de la Industria del Pescado"
+      ],
+      [
+       "place",
+       "Capital Federal"
+      ],
+      [
+       "place",
+       "Mar del Plata"
+      ],
+      [
+       "date",
+       "Semana Santa"
+      ]
+     ],
+     "triples": [
+      [
+       "Anselmo Marini",
+       "dio traslado de los antecedentes al",
+       "Ministerio de Trabajo de la Nación"
+      ],
+      [
+       "Pedro Verón",
+       "reclamó la intervención de",
+       "Avelino Fernández"
+      ],
+      [
+       "Anselmo Marini",
+       "visita",
+       "Mar del Plata"
+      ],
+      [
+       "conflicto",
+       "paraliza",
+       "establecimientos elaboradores de pescado"
+      ]
+     ],
+     "notes": [
+      "Pedro Verón aparece gestionando ante la CGT central, pero el texto no dice su cargo: confirmá si era el secretario regional que nombra el subtítulo.",
+      "El argumento de Semana Santa vuelve en varias notas: mirá quién lo usa más, si los empresarios o el gobierno."
+     ],
+     "summary": "El conflicto que paraliza las plantas de pescado de Mar del Plata siguió sin cambios. El gobernador Anselmo Marini informó por telegrama a la CGT regional que pasó los antecedentes al Ministerio de Trabajo de la Nación, y Pedro Verón pidió a la CGT central la intervención de Avelino Fernández. Se anuncia la visita de Marini a la ciudad, que podría aprovechar para hablar con las partes ante el riesgo de desabastecimiento en Semana Santa."
+    },
+    {
+     "file": "la-capital-1965-04-08-4.jpg",
+     "title": "La Capital, 8 de abril de 1965 — acuerdo en el conflicto del filet",
+     "text": "Filet: Acuerdo en el Conflicto\n\nSe llevó a cabo ayer en la Dirección Nacional de Delegaciones Regionales del Ministerio de Trabajo y Seguridad Social de la Nación, una reunión a la que asistieron representantes del Sindicato de Obreros del Pescado, de la Cámara Argentina de Productores de Filetes de Pescado y de la Delegación Regional Mar del Plata de la Confederación General del Trabajo. En la referida reunión se suscribió un acuerdo en el que se determinan con claridad los alcances e interpretaciones de distintas cláusulas que habían dado lugar al largo conflicto que amenazaba ya privar de la provisión de pescado en la próxima Semana Santa, prácticamente a todo el país. Del resultado de la gestión, quedó firme la impresión de que el acuerdo ampliatorio pondría fin definitivamente al problema.",
+     "metadata": {
+      "diario": "La Capital",
+      "ciudad": "Mar del Plata",
+      "fecha": "1965-04-08",
+      "tipo": "Página de diario",
+      "soporte": "Fotografía del ejemplar encuadernado"
+     },
+     "topics": [
+      "Conflicto del filet",
+      "Sindicatos",
+      "Industria pesquera"
+     ],
+     "entities": [
+      [
+       "organization",
+       "Dirección Nacional de Delegaciones Regionales"
+      ],
+      [
+       "organization",
+       "Ministerio de Trabajo y Seguridad Social de la Nación"
+      ],
+      [
+       "organization",
+       "Sindicato de Obreros del Pescado"
+      ],
+      [
+       "organization",
+       "Cámara Argentina de Productores de Filetes de Pescado"
+      ],
+      [
+       "organization",
+       "Confederación General del Trabajo"
+      ],
+      [
+       "place",
+       "Mar del Plata"
+      ],
+      [
+       "date",
+       "Semana Santa"
+      ]
+     ],
+     "triples": [
+      [
+       "Sindicato de Obreros del Pescado",
+       "firmó acuerdo con",
+       "Cámara Argentina de Productores de Filetes de Pescado"
+      ],
+      [
+       "acuerdo",
+       "se firmó en",
+       "Ministerio de Trabajo y Seguridad Social de la Nación"
+      ],
+      [
+       "acuerdo ampliatorio",
+       "pondría fin a",
+       "el conflicto"
+      ]
+     ],
+     "notes": [
+      "La nota no da el texto de las cláusulas: buscá el acuerdo ampliatorio en el Ministerio de Trabajo o en el archivo del sindicato.",
+      "El nombre del archivo habla de una huelga del STIA, pero esta nota no la menciona: revisá el resto de la página o la edición siguiente."
+     ],
+     "summary": "En el Ministerio de Trabajo y Seguridad Social de la Nación se reunieron el Sindicato de Obreros del Pescado, la Cámara Argentina de Productores de Filetes de Pescado y la CGT regional Mar del Plata. Firmaron un acuerdo que aclara el alcance de las cláusulas que habían originado el largo conflicto, que amenazaba el abastecimiento de pescado para Semana Santa. Se espera que el acuerdo ampliatorio cierre el problema."
+    }
+   ]
+  }
+ ]
+}

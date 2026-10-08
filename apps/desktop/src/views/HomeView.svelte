@@ -1,5 +1,6 @@
 <script lang="ts">
   import { loadSampleCollection } from '$lib/sample-collection'
+  import { settingsGet, settingsSet } from '$lib/settings'
   /**
    * Inicio (home): the startup overview — what to continue, what to start,
    * how the corpus stands, and where the main workspaces are.
@@ -52,14 +53,15 @@
     batchSummary = next
   })
 
-  /** A new archive opens with the sample collection already there (user
-   *  decision, 2026-10-08), once: deleting it must not bring it back. Claimed
-   *  before loading so a failure leaves the manual button, not a retry loop. */
-  const SAMPLE_AUTOLOAD_KEY = 'entropia.sample-collection.autoloaded'
-  function claimSampleAutoload(): boolean {
+  /** A new archive opens with the sample collections already there (user
+   *  decision, 2026-10-08), once: deleting them must not bring them back. The
+   *  claim lives in this archive's own settings (never synced) and is taken
+   *  before loading, so a failure leaves the manual button, not a retry loop. */
+  const SAMPLE_AUTOLOAD_KEY = 'sample_collection_autoloaded'
+  async function claimSampleAutoload(): Promise<boolean> {
     try {
-      if (localStorage.getItem(SAMPLE_AUTOLOAD_KEY)) return false
-      localStorage.setItem(SAMPLE_AUTOLOAD_KEY, '1')
+      if (await settingsGet(SAMPLE_AUTOLOAD_KEY)) return false
+      await settingsSet(SAMPLE_AUTOLOAD_KEY, '1')
       return true
     } catch {
       return false
@@ -71,7 +73,7 @@
     error = null
     try {
       snapshot = await loadHomeSnapshot()
-      if (snapshot.isFirstRun && claimSampleAutoload()) {
+      if (snapshot.isFirstRun && (await claimSampleAutoload())) {
         await loadSampleCollection()
         snapshot = await loadHomeSnapshot()
       }

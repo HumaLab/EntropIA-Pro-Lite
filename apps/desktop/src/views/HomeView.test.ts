@@ -86,6 +86,12 @@ const sampleRef = vi.hoisted(() => ({
 }))
 vi.mock('$lib/sample-collection', () => sampleRef)
 
+const settingsRef = vi.hoisted(() => ({ values: new Map<string, string>() }))
+vi.mock('$lib/settings', () => ({
+  settingsGet: vi.fn(async (key: string) => settingsRef.values.get(key) ?? null),
+  settingsSet: vi.fn(async (key: string, value: string) => void settingsRef.values.set(key, value)),
+}))
+
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
   getPaneId: () => 'pane-test',
@@ -1179,8 +1185,8 @@ describe('HomeView', () => {
 
   describe('first-run layout', () => {
     beforeEach(() => {
-      // The autoload already happened on this "device"; its own test clears it.
-      localStorage.setItem('entropia.sample-collection.autoloaded', '1')
+      // The autoload already happened in this archive; its own test clears it.
+      settingsRef.values.set('sample_collection_autoloaded', '1')
       sampleRef.loadSampleCollection.mockClear()
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
@@ -1205,7 +1211,7 @@ describe('HomeView', () => {
     })
 
     it('loads the sample collection by itself once, never again after', async () => {
-      localStorage.removeItem('entropia.sample-collection.autoloaded')
+      settingsRef.values.delete('sample_collection_autoloaded')
       const first = render(HomeView)
       await vi.waitFor(() => expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1))
       expect(homeRef.loadHomeSnapshot).toHaveBeenCalledTimes(2)

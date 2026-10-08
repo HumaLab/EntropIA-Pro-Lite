@@ -110,24 +110,25 @@ pub fn coalesce_ops(conn: &Connection, snapshot: i64) -> Result<Vec<CoalescedOp>
     Ok(out)
 }
 
-/// The sample collection (T-37) stays on the device that created it: every row
-/// under it is dropped from the push and its oplog entries purged, so a second
-/// machine never receives a duplicate set of examples. Same id as
-/// `SAMPLE_COLLECTION_ID` in `src/lib/sample-collection.ts`.
-pub const SAMPLE_COLLECTION_ID: &str = "00000000-0000-4000-8000-000000005a3e";
+/// The sample collections (T-37) stay on the device that created them: every
+/// row under one is dropped from the push and its oplog entries purged, so a
+/// second machine never receives a duplicate set of examples. Their ids all
+/// start with this; same value as `SAMPLE_COLLECTION_ID_PREFIX` in
+/// `src/lib/sample-collection.ts`.
+pub const SAMPLE_COLLECTION_ID_PREFIX: &str = "00000000-0000-4000-8000-0000005a3e";
 
 /// True when `row_id` of `table` sits under the sample collection. Tables that
 /// never hang off a collection answer false. A deleted row can no longer be
 /// traced, so its delete still goes out (harmless: the server never had it).
 fn is_sample_row(conn: &Connection, table: &str, row_id: &str) -> Result<bool, String> {
     if table == "collections" {
-        return Ok(row_id == SAMPLE_COLLECTION_ID);
+        return Ok(row_id.starts_with(SAMPLE_COLLECTION_ID_PREFIX));
     }
-    const ITEMS: &str = "SELECT id FROM items WHERE collection_id = ?2";
+    const ITEMS: &str = "SELECT id FROM items WHERE collection_id LIKE ?2";
     const ASSETS: &str =
-        "SELECT a.id FROM assets a JOIN items i ON i.id = a.item_id WHERE i.collection_id = ?2";
+        "SELECT a.id FROM assets a JOIN items i ON i.id = a.item_id WHERE i.collection_id LIKE ?2";
     let owner = match table {
-        "items" => "collection_id = ?2".to_string(),
+        "items" => "collection_id LIKE ?2".to_string(),
         "assets" | "notes" | "entities" | "triples" | "item_topics" | "vec_assets" => {
             format!("item_id IN ({ITEMS})")
         }
@@ -142,7 +143,7 @@ fn is_sample_row(conn: &Connection, table: &str, row_id: &str) -> Result<bool, S
     let sql = format!("SELECT EXISTS(SELECT 1 FROM \"{table}\" WHERE {pk} = ?1 AND ({owner}))");
     conn.query_row(
         &sql,
-        rusqlite::params![row_id, SAMPLE_COLLECTION_ID],
+        rusqlite::params![row_id, format!("{SAMPLE_COLLECTION_ID_PREFIX}%")],
         |row| row.get(0),
     )
     .map_err(|e| format!("[sync] failed to trace {table} {row_id} to the sample: {e}"))
@@ -803,8 +804,8 @@ mod tests {
         let conn = capturing_db();
         seed_collection(&conn);
         conn.execute_batch(&format!(
-            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('{SAMPLE_COLLECTION_ID}','S',1,1);
-             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('s1','S','{SAMPLE_COLLECTION_ID}',1,1);
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('{SAMPLE_COLLECTION_ID_PREFIX}01','S',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('s1','S','{SAMPLE_COLLECTION_ID_PREFIX}01',1,1);
              INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1);"
         ))
         .expect("insert");
