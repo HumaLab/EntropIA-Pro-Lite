@@ -51,8 +51,8 @@
   let openLoading = $state(false)
   let openFailed = $state(false)
   let activeTab = $state<Tab>('original')
-  // Same condition as the PDF branch of the Original tab: only then does the
-  // view need the pane's full height for the viewer.
+  // Same condition as the PDF branch of the Original tab: only while that tab
+  // is visible and showing a PDF does the view need the pane's full height.
   const showsPdf = $derived(
     activeTab === 'original' &&
       !openLoading &&
@@ -191,95 +191,100 @@
       </TabButton>
     </TabList>
 
-    {#if activeTab === 'original'}
-      <section
-        class="work-section work-section--original"
-        aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
-      >
-        {#if attachments.length > 1}
-          <ToolbarMenu
-            label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-            items={attachmentItems}
-            bind:open={attachmentMenuOpen}
-          >
-            {#snippet trigger(props, { open })}
-              <button
-                type="button"
-                class="work-attachment-trigger"
-                class:work-attachment-trigger--open={open}
-                aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
-                {...props}
-              >
-                <span class="work-attachment-trigger__label">
-                  {currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
-                </span>
-                <ActionIcon name="chevron-down" size={12} />
-              </button>
-            {/snippet}
-          </ToolbarMenu>
-        {/if}
-
-        {#if openLoading}
-          <p class="surface-message surface-message--center">
-            {$currentLocale && t('bibliographyWork.opening')}
-          </p>
-        {:else if openFailed || opened?.openError}
-          <p class="surface-message surface-message--error" role="alert">
-            {opened?.openError ?? t('bibliographyWork.error')}
-          </p>
-        {:else if opened?.originalKind === 'pdf' && opened.originalPath}
-          <div class="work-viewer" data-testid="work-original-viewer">
-            <DocumentViewer
-              path={opened.originalPath}
-              assetUrl={convertFileSrc(opened.originalPath)}
-              type="pdf"
-              readOnly
-              labels={viewerLabels}
-              currentPage={page}
-              onPageChange={(next, count) => {
-                total = count
-                page = next
-              }}
-            />
-          </div>
-          {#if total > 1}
-            <div class="work-viewer-pager">
-              <IconButton
-                size="sm"
-                variant="ghost"
-                label={$currentLocale && t('item.previousPage')}
-                title={$currentLocale && t('item.previousPage')}
-                disabled={page <= 1}
-                onclick={() => (page = Math.max(1, page - 1))}
-              >
-                <ActionIcon name="chevron-left" size={14} />
-              </IconButton>
-              <span class="work-viewer-pager__count">
-                {$currentLocale && t('navegador.pdf.page', { page, total })}
+    <!-- The Original tab stays mounted (hidden) while the reading tabs show:
+         unmounting it reopened the 128 MB document on every return. -->
+    <section
+      class="work-section work-section--original"
+      class:is-hidden={activeTab !== 'original'}
+      hidden={activeTab !== 'original'}
+      aria-label={$currentLocale && t('bibliographyWork.tabOriginal')}
+    >
+      {#if attachments.length > 1}
+        <ToolbarMenu
+          label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+          items={attachmentItems}
+          bind:open={attachmentMenuOpen}
+        >
+          {#snippet trigger(props, { open })}
+            <button
+              type="button"
+              class="work-attachment-trigger"
+              class:work-attachment-trigger--open={open}
+              aria-label={$currentLocale && t('bibliographyWork.attachmentMenu')}
+              {...props}
+            >
+              <span class="work-attachment-trigger__label">
+                {currentAttachment?.filename ?? currentAttachment?.attachmentKey ?? ''}
               </span>
-              <IconButton
-                size="sm"
-                variant="ghost"
-                label={$currentLocale && t('item.nextPage')}
-                title={$currentLocale && t('item.nextPage')}
-                disabled={page >= total}
-                onclick={() => (page = Math.min(total, page + 1))}
-              >
-                <ActionIcon name="chevron-right" size={14} />
-              </IconButton>
-            </div>
-          {/if}
-          <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
-        {:else if opened?.originalKind === 'html'}
-          <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
-          <p class="work-snapshot">{opened.snapshotText}</p>
-        {:else}
-          <p class="surface-message surface-message--center">
-            {$currentLocale && t('bibliographyWork.originalEmpty')}
-          </p>
+              <ActionIcon name="chevron-down" size={12} />
+            </button>
+          {/snippet}
+        </ToolbarMenu>
+      {/if}
+
+      {#if openLoading}
+        <p class="surface-message surface-message--center">
+          {$currentLocale && t('bibliographyWork.opening')}
+        </p>
+      {:else if openFailed || opened?.openError}
+        <p class="surface-message surface-message--error" role="alert">
+          {opened?.openError ?? t('bibliographyWork.error')}
+        </p>
+      {:else if opened?.originalKind === 'pdf' && opened.originalPath}
+        <div class="work-viewer" data-testid="work-original-viewer">
+          <DocumentViewer
+            path={opened.originalPath}
+            assetUrl={convertFileSrc(opened.originalPath)}
+            type="pdf"
+            readOnly
+            pauseWhenHidden
+            labels={viewerLabels}
+            currentPage={page}
+            onPageChange={(next, count) => {
+              total = count
+              page = next
+            }}
+          />
+        </div>
+        {#if total > 1}
+          <div class="work-viewer-pager">
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={$currentLocale && t('item.previousPage')}
+              title={$currentLocale && t('item.previousPage')}
+              disabled={page <= 1}
+              onclick={() => (page = Math.max(1, page - 1))}
+            >
+              <ActionIcon name="chevron-left" size={14} />
+            </IconButton>
+            <span class="work-viewer-pager__count">
+              {$currentLocale && t('navegador.pdf.page', { page, total })}
+            </span>
+            <IconButton
+              size="sm"
+              variant="ghost"
+              label={$currentLocale && t('item.nextPage')}
+              title={$currentLocale && t('item.nextPage')}
+              disabled={page >= total}
+              onclick={() => (page = Math.min(total, page + 1))}
+            >
+              <ActionIcon name="chevron-right" size={14} />
+            </IconButton>
+          </div>
         {/if}
-      </section>
-    {:else if activeTab === 'text'}
+        <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+      {:else if opened?.originalKind === 'html'}
+        <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
+        <p class="work-snapshot">{opened.snapshotText}</p>
+      {:else}
+        <p class="surface-message surface-message--center">
+          {$currentLocale && t('bibliographyWork.originalEmpty')}
+        </p>
+      {/if}
+    </section>
+
+    {#if activeTab === 'text'}
       <section class="work-section" aria-label={$currentLocale && t('bibliographyWork.tabText')}>
         <h3 class="work-section__title">{$currentLocale && t('bibliographyWork.textTitle')}</h3>
         {#if openLoading}
@@ -301,7 +306,7 @@
           </p>
         {/if}
       </section>
-    {:else}
+    {:else if activeTab === 'metadata'}
       <section
         class="work-section"
         aria-label={$currentLocale && t('bibliographyWork.tabMetadata')}
@@ -491,6 +496,12 @@
   .work-section--original {
     flex: 1;
     min-height: 0;
+  }
+
+  /* The hidden Original tab must beat `.work-section`'s display: flex (and the
+     UA rule behind the `hidden` attribute) or it would stay laid out. */
+  .work-section--original.is-hidden {
+    display: none;
   }
 
   .work-section__title {

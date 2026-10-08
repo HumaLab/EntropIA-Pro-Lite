@@ -54,6 +54,13 @@ export interface DocumentViewerProps {
   canRedo?: boolean
   readOnly?: boolean
   currentPage?: number
+  /**
+   * Opt-in (Biblioteca): while the viewer's container measures 0×0 (the tab
+   * is hidden but stays mounted), a ResizeObserver notification must not draw
+   * — pdfFitScale falls back to scale 1 there and renders a full-size page
+   * nobody sees. Showing the container again renders exactly once.
+   */
+  pauseWhenHidden?: boolean
   layoutRegions?: ViewerLayoutRegion[]
   showLayoutOverlay?: boolean
   hoveredLayoutRegionId?: string | null

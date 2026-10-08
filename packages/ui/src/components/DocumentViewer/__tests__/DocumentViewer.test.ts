@@ -213,6 +213,15 @@ describe('DocumentViewer', () => {
     await flushRaf()
   }
 
+  /**
+   * Drains the promise chains a queued render travels through before it
+   * reaches `page.render`, so "no render happened" is observable and not just
+   * "not yet". All of them are microtasks; one macrotask tick runs after all.
+   */
+  async function settleRenderWork() {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
   function stubCanvasContext() {
     // Enough of a 2d context for the offscreen -> visible canvas copy.
     return { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D
@@ -259,6 +268,22 @@ describe('DocumentViewer', () => {
       height,
       toJSON: () => ({}),
     }))
+  }
+
+  function stubUserAgentData(brands: Array<{ brand: string; version: string }>): () => void {
+    // Shadow the property on the live navigator instead of stubGlobal: this
+    // file owns several vi.stubGlobal installs that unstubAllGlobals would
+    // wipe together with this one.
+    const nav = navigator as unknown as Record<string, unknown>
+    const previous = Object.getOwnPropertyDescriptor(nav, 'userAgentData')
+    Object.defineProperty(nav, 'userAgentData', {
+      configurable: true,
+      value: { brands },
+    })
+    return () => {
+      if (previous) Object.defineProperty(nav, 'userAgentData', previous)
+      else delete nav.userAgentData
+    }
   }
 
   describe('image mode', () => {
@@ -1481,6 +1506,35 @@ describe('DocumentViewer', () => {
       expect(canvas).toBeInTheDocument()
     })
 
+    it('opens the document through pdfDocumentOptions with the native decoder on Chromium 154', async () => {
+      const restore = stubUserAgentData([
+        { brand: 'Chromium', version: '154' },
+        { brand: 'Microsoft Edge', version: '154' },
+      ])
+      try {
+        render(DocumentViewer, {
+          props: {
+            path: '/path/to/doc.pdf',
+            type: 'pdf',
+            assetUrl: 'asset://localhost/path/to/doc.pdf',
+            annotations: [],
+            selectedAnnotationId: null,
+            annotationTool: 'select',
+            annotationColor: 'var(--color-accent)',
+          },
+        })
+
+        await waitFor(() => {
+          expect(pdfMock.getDocument).toHaveBeenCalledWith({
+            url: 'asset://localhost/path/to/doc.pdf',
+            isImageDecoderSupported: true,
+          })
+        })
+      } finally {
+        restore()
+      }
+    })
+
     it('renders the shared editing toolbar (asset navigation lives in the host view)', () => {
       render(DocumentViewer, {
         props: {
@@ -1575,6 +1629,71 @@ describe('DocumentViewer', () => {
         expect(canvas.height).toBeCloseTo(165)
       })
       expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('110%')
+
+      getContext.mockRestore()
+    })
+
+    it('with pauseWhenHidden, a 0x0 resize does not render and a real size renders exactly once', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+          pauseWhenHidden: true,
+        },
+      })
+
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1))
+
+      // Hiding the tab zeroes the container; the notification must not draw
+      // a full-size page nobody sees.
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 0, 0)
+      await triggerResizeObservers(scrollContainer)
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1)
+
+      // Back to a real size: exactly one redraw, not a backlog.
+      setupContainer(scrollContainer, 400, 300)
+      await triggerResizeObservers(scrollContainer)
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2))
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2)
+
+      getContext.mockRestore()
+    })
+
+    it('without pauseWhenHidden, a 0x0 resize notification still renders', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          annotations: [],
+          selectedAnnotationId: null,
+          annotationTool: 'select',
+          annotationColor: 'var(--color-accent)',
+        },
+      })
+
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(1))
+
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 0, 0)
+      await triggerResizeObservers(scrollContainer)
+      await waitFor(() => expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2))
+      await settleRenderWork()
+      expect(pdfMock.mockPage.render).toHaveBeenCalledTimes(2)
 
       getContext.mockRestore()
     })
@@ -2148,7 +2267,9 @@ describe('DocumentViewer', () => {
       })
 
       await waitFor(() => expect(pdfMock.getDocument).toHaveBeenCalledTimes(2))
-      expect(pdfMock.getDocument).toHaveBeenLastCalledWith('asset://localhost/path/to/doc-b.pdf')
+      expect(pdfMock.getDocument).toHaveBeenLastCalledWith(
+        expect.objectContaining({ url: 'asset://localhost/path/to/doc-b.pdf' })
+      )
       expect(firstTask.destroy).toHaveBeenCalledTimes(1)
     })
 

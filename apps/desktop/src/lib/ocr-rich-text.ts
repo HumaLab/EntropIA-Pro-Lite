@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { pdfDocumentOptions } from '@entropia/ui'
 
 const OCR_REGION_DESTINATION = 'ocr-region:'
 const OCR_REGION_MARKDOWN = /!\[\]\(\s*([^)]*)\)/gi
@@ -466,7 +467,7 @@ async function loadPdfDocument(assetUrl: string): Promise<PDFDocumentProxy> {
     'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
   ).href
-  const pending = pdfjs.getDocument(assetUrl).promise
+  const pending = pdfjs.getDocument(pdfDocumentOptions(assetUrl)).promise
 
   pdfDocumentCache.set(assetUrl, pending)
   return pending

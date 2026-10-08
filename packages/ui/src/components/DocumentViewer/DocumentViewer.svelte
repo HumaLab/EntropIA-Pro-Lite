@@ -4,6 +4,7 @@
   import AudioPlayer from '../AudioPlayer/AudioPlayer.svelte'
   import type { DocumentViewerLabels, DocumentViewerProps } from './DocumentViewer.types'
   import type { AnnotationTool, EditTool, ViewerAnnotation } from './DocumentViewer.types'
+  import { pdfDocumentOptions } from '../../lib/pdf-document-options'
 
   let {
     path: _path,
@@ -22,6 +23,7 @@
     canRedo = false,
     readOnly = false,
     currentPage = 1,
+    pauseWhenHidden = false,
     layoutReferenceWidth = 0,
     layoutReferenceHeight = 0,
     onAnnotationsChange = () => {},
@@ -323,6 +325,12 @@
     )
     if (width <= 0 || height <= 0) return 1
     return Math.min(width / pageW, height / pageH)
+  }
+
+  /** True while the PDF scroll container has no box at all (hidden panel/tab). */
+  function pdfContainerIsEmpty() {
+    const rect = pdfScrollEl?.getBoundingClientRect()
+    return !rect || rect.width <= 0 || rect.height <= 0
   }
 
   /** Convert a viewport PointerEvent to normalized [0,1] coordinates.
@@ -820,7 +828,7 @@
         import.meta.url
       ).href
       if (requestId !== loadRequestId) return
-      const loadingTask = pdfjs.getDocument(url)
+      const loadingTask = pdfjs.getDocument(pdfDocumentOptions(url))
       activeLoadingTask = loadingTask
       const doc = await loadingTask.promise
       if (requestId !== loadRequestId) return
@@ -961,6 +969,9 @@
         if (pdfResizeFrame !== null) cancelAnimationFrame(pdfResizeFrame)
         pdfResizeFrame = requestAnimationFrame(() => {
           pdfResizeFrame = null
+          // Checked at draw time, not notification time: a pending draw whose
+          // container was hidden meanwhile must not fire either.
+          if (pauseWhenHidden && pdfContainerIsEmpty()) return
           void renderPage()
         })
       }

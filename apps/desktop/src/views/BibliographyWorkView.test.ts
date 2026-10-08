@@ -1,12 +1,21 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
 import BibliographyWorkView from './BibliographyWorkView.svelte'
 
 const mockInvoke = vi.mocked(invoke)
+
+const pdfMock = vi.hoisted(() => ({ getDocument: vi.fn() }))
+
+// The viewer must open the PDF exactly once however often the tabs change,
+// so the load is counted here instead of letting real pdf.js fetch.
+vi.mock('pdfjs-dist', () => ({
+  getDocument: pdfMock.getDocument,
+  GlobalWorkerOptions: { workerSrc: '' },
+}))
 
 const props = {
   itemId: 'item-1',
@@ -105,6 +114,22 @@ function callsFor(command: string) {
 beforeEach(() => {
   mockInvoke.mockReset()
   locale.set('es')
+  pdfMock.getDocument.mockReset()
+  pdfMock.getDocument.mockImplementation(() => ({
+    promise: Promise.resolve({
+      numPages: 1,
+      getPage: () =>
+        Promise.resolve({
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 800 * scale,
+            height: 600 * scale,
+            scale,
+          }),
+          render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+        }),
+    }),
+    destroy: () => Promise.resolve(),
+  }))
 })
 
 describe('BibliographyWorkView', () => {
@@ -182,6 +207,59 @@ describe('BibliographyWorkView', () => {
     expect(rule('.work-viewer')).toMatch(/min-height: 0;/)
   })
 
+  it('keeps the Original viewer mounted and does not reopen the PDF across tabs', async () => {
+    backend()
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await waitFor(() => expect(pdfMock.getDocument).toHaveBeenCalledTimes(1))
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+    await fireEvent.click(screen.getByRole('tab', { name: 'Original' }))
+
+    expect(await screen.findByTestId('work-original-viewer')).toBeInTheDocument()
+    expect(pdfMock.getDocument).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides the mounted Original tab from focus and the accessibility tree', async () => {
+    backend()
+    render(BibliographyWorkView, { props })
+
+    const viewer = await screen.findByTestId('work-original-viewer')
+    const section = viewer.closest('section')
+    expect(section).not.toBeNull()
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    // Still mounted (the document stays open) but gone for users, screen
+    // readers and the tab order.
+    expect(document.querySelector('[data-testid="work-original-viewer"]')).not.toBeNull()
+    expect(section).toHaveClass('is-hidden')
+    expect(section).not.toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Original' })).toBeNull()
+    expect(section?.contains(document.activeElement)).toBe(false)
+
+    await fireEvent.click(screen.getByRole('tab', { name: 'Original' }))
+    expect(section).toBeVisible()
+  })
+
+  it('pins the hidden-tab CSS and the paused viewer wiring in the source', () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, 'BibliographyWorkView.svelte'),
+      'utf-8'
+    )
+    // The hidden tab must actually be invisible: `.work-section` sets
+    // display: flex, which would beat the UA rule behind the `hidden`
+    // attribute without this rule.
+    const hiddenRule = source.match(
+      new RegExp('\\n {2}\\.work-section--original\\.is-hidden \\{([^}]*)\\}')
+    )?.[1]
+    expect(hiddenRule ?? '').toMatch(/display: none;/)
+    // Only the Biblioteca viewer opts into paused rendering while hidden.
+    const viewerTag = source.match(/<DocumentViewer[\s\S]*?\/>/)?.[0] ?? ''
+    expect(viewerTag).toContain('pauseWhenHidden')
+  })
+
   it('lists the extracted page texts in the Texto tab', async () => {
     backend()
     render(BibliographyWorkView, { props })
@@ -255,9 +333,12 @@ describe('BibliographyWorkView', () => {
     await screen.findByTestId('work-original-viewer')
     await fireEvent.click(screen.getByRole('tab', { name: 'Metadatos' }))
 
-    expect(screen.getByText('10.0000/synth')).toBeInTheDocument()
-    expect(screen.getByText('oficio.pdf')).toBeInTheDocument()
-    expect(screen.getByText('apendice.pdf')).toBeInTheDocument()
+    // Scoped to the Metadatos region: the now-mounted (hidden) Original tab
+    // also names the current attachment.
+    const metadata = within(screen.getByRole('region', { name: 'Metadatos' }))
+    expect(metadata.getByText('10.0000/synth')).toBeInTheDocument()
+    expect(metadata.getByText('oficio.pdf')).toBeInTheDocument()
+    expect(metadata.getByText('apendice.pdf')).toBeInTheDocument()
 
     await fireEvent.click(screen.getAllByRole('button', { name: 'Ver en Original' })[1]!)
     await waitFor(() => {
