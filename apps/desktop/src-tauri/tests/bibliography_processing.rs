@@ -5725,6 +5725,407 @@ fn oversized_pages_record_unreadable_without_failing_siblings() {
     );
 }
 
+// ── Native text part A: PDFium page reader, pages-joined document text ────
+
+/// A synthetic PDF whose lopdf read glues two positioned runs — `(Arroz) Tj`,
+/// a 40pt `Td` jump, `(Elcultivo …) Tj` — into `ArrozElcultivo…`, the exact
+/// shape of the stored glitch (`ArrozElcultivodelarrozaligualqueeldelgí.r'asoL…`).
+/// PDFium's spacing heuristics keep the word gap. Pure lopdf synthesis.
+fn glued_runs_pdf() -> Vec<u8> {
+    make_text_pdf(&[
+        (50.0, 750.0, "Arroz"),
+        (40.0, 0.0, "Elcultivo del arroz es largo"),
+    ])
+}
+
+/// The per-page row keeps the word spacing PDFium sees — the glued lopdf read
+/// (`ArrozElcultivo`) is what produced the stored glitch this work repairs.
+#[test]
+fn page_text_keeps_the_word_spacing_pdfium_sees() {
+    if !entropia_desktop_lib::bibliography::processing::pdfium_page_reader_available() {
+        eprintln!("REPORTED SKIP: pdfium unavailable here — the spaced-word assertion did not run");
+        return;
+    }
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SPACEPG1", "Obra con espacios", "Resumen.");
+    let path = write_temp_pdf(&dir, "pegado.pdf", &glued_runs_pdf());
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SPACEATT1",
+        "linked_file",
+        Some(&path),
+        "pegado.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert!(
+        text.contains("Arroz Elcultivo"),
+        "the stored page text keeps the word gap instead of gluing: {text:?}"
+    );
+}
+
+/// The whole-document text is the union of the published pages, joined in
+/// page order with the separator the rebuild path already uses (`\n\n`) —
+/// not the `pdf-extract`/`richer_native_text` choice.
+#[test]
+fn document_text_is_the_union_of_the_published_pages() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "UNIONW01", "Obra de tres paginas", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(50.0, 750.0, "ALFA primera pagina del documento")],
+        &[(50.0, 750.0, "BETA segunda pagina del documento")],
+        &[(50.0, 750.0, "GAMMA tercera pagina del documento")],
+    ]);
+    let path = write_temp_pdf(&dir, "unida.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "UNIONATT1",
+        "linked_file",
+        Some(&path),
+        "unida.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    let pages: Vec<String> = conn
+        .prepare(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| row.get::<_, String>(0))
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages");
+    let joined = pages
+        .iter()
+        .map(|page| page.trim())
+        .filter(|page| !page.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_eq!(
+        text, joined,
+        "the document text is the published pages joined in page order"
+    );
+    let (alfa, beta, gamma) = (
+        text.find("ALFA").expect("first page word"),
+        text.find("BETA").expect("second page word"),
+        text.find("GAMMA").expect("third page word"),
+    );
+    assert!(alfa < beta && beta < gamma, "pages join in order: {text:?}");
+}
+
+/// The whole-document text carries the same word spacing as the pages even
+/// where `pdf-extract`/lopdf would glue the positioned runs.
+#[test]
+fn whole_document_text_has_spaces_where_the_word_runs_would_glue() {
+    if !entropia_desktop_lib::bibliography::processing::pdfium_page_reader_available() {
+        eprintln!("REPORTED SKIP: pdfium unavailable here — the spaced-word assertion did not run");
+        return;
+    }
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SPACEDOC", "Obra con espacios", "Resumen.");
+    let path = write_temp_pdf(&dir, "pegadodoc.pdf", &glued_runs_pdf());
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SPACEDOC1",
+        "linked_file",
+        Some(&path),
+        "pegadodoc.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    assert!(
+        text.contains("Arroz Elcultivo"),
+        "the document text keeps the word gap: {text:?}"
+    );
+}
+
+fn page_rows_with_hashes(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+) -> Vec<(i64, String, String)> {
+    conn.prepare(
+        "SELECT page_number, text_content, text_hash FROM bibliographic_page_texts
+         WHERE attachment_id = ?1 ORDER BY page_number",
+    )
+    .expect("pages query")
+    .query_map([attachment_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })
+    .expect("pages map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("pages")
+}
+
+use entropia_desktop_lib::bibliography::processing::{
+    pdfium_instances_alive, read_native_page_texts, PageTextDecoder,
+};
+
+/// Forced lopdf fallback (the resolver reported no library): the reader
+/// returns the glued text lopdf produces, unconditionally — no library has
+/// to exist for this path to hold.
+#[test]
+fn the_page_reader_falls_back_to_lopdf_when_pdfium_is_absent() {
+    let pdf = glued_runs_pdf();
+    let pages = read_native_page_texts(&pdf, 1, PageTextDecoder::Lopdf).expect("read pages");
+
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].text_content.contains("ArrozElcultivo"),
+        "the lopdf fallback is the glued read: {:?}",
+        pages[0].text_content
+    );
+    assert_eq!(
+        pages[0].method, "native",
+        "the fallback page is still a native read"
+    );
+}
+
+/// A long document reads in batches of at most 20 pages — and every Pdfium
+/// instance the batches bound is gone when the read returns: none may be
+/// alive inside `maybe_ocr_pages`, whose renders bind their own (the library
+/// lock is not reentrant).
+#[test]
+fn the_page_reader_batches_long_documents_and_releases_every_instance() {
+    let lines: Vec<(f32, f32, String)> = (1..=25)
+        .map(|number| {
+            (
+                50.0,
+                750.0,
+                format!("Pagina {number} con contenido nativo verificable"),
+            )
+        })
+        .collect();
+    let triples: Vec<(f32, f32, &str)> = lines
+        .iter()
+        .map(|(x, y, text)| (*x, *y, text.as_str()))
+        .collect();
+    let page_lines: Vec<&[(f32, f32, &str)]> = triples.iter().map(std::slice::from_ref).collect();
+    let pdf = make_text_pdf_pages(&page_lines);
+
+    let pages = read_native_page_texts(&pdf, 25, PageTextDecoder::Pdfium).expect("read pages");
+
+    assert_eq!(pages.len(), 25, "one row per document page");
+    assert!(pages[19].text_content.contains("Pagina 20"));
+    assert!(
+        pages[24].text_content.contains("Pagina 25"),
+        "the page past the first batch is read too"
+    );
+    assert_eq!(
+        pdfium_instances_alive(),
+        0,
+        "every batch released its Pdfium instance"
+    );
+}
+
+/// The batch-lifecycle invariant at its sharpest point: when the selective
+/// OCR pass renders a page, no Pdfium instance from the page reader may still
+/// be alive (pdfium-render's global lock is not reentrant — a live instance
+/// here deadlocks the render).
+#[test]
+fn no_pdfium_instance_is_alive_when_the_ocr_pass_renders() {
+    struct LockWatchingRenderer {
+        rendered_pages: Mutex<Vec<u32>>,
+    }
+
+    impl PageRenderer for LockWatchingRenderer {
+        fn render_page(&self, _pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+            assert_eq!(
+                pdfium_instances_alive(),
+                0,
+                "no Pdfium instance may be alive when the OCR pass renders page {page_number}"
+            );
+            self.rendered_pages
+                .lock()
+                .expect("renders")
+                .push(page_number);
+            Ok(vec![9, 9, 9])
+        }
+
+        fn name(&self) -> &'static str {
+            "lock-watching-renderer"
+        }
+    }
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "LOCKWORK1", "Obra con candado", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con contenido nativo suficiente para superar el umbral de calidad",
+        )],
+        &[(50.0, 750.0, "ok")],
+    ]);
+    let path = write_temp_pdf(&dir, "candado.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "LOCKATT01",
+        "linked_file",
+        Some(&path),
+        "candado.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(LockWatchingRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido completo de la segunda pagina con suficiente longitud para ser rico",
+    );
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
+        renderer.clone(),
+        provider,
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the extraction must succeed: {other:?}"),
+    }
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[2],
+        "only the sparse page reaches the renderer"
+    );
+    assert_eq!(
+        pdfium_instances_alive(),
+        0,
+        "no Pdfium instance outlives the extraction"
+    );
+}
+
+/// A 3-page file replaced by a 2-page one with identical first pages: the
+/// rows beyond the new `page_count` are deleted on publish, and the deletion
+/// counts as a page move — the profile is re-demanded so stale passages go.
+#[test]
+fn replacing_a_file_with_fewer_pages_drops_stale_page_rows_and_re_demands_the_profile() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SHRINKW1", "Obra que se encoge", "Resumen.");
+    let page_one = "Pagina uno con contenido nativo suficiente para superar el umbral de calidad";
+    let page_two = "Pagina dos con contenido nativo suficiente para superar el umbral de calidad";
+    let page_three =
+        "Pagina tres con contenido nativo suficiente para superar el umbral de calidad";
+    let three = make_text_pdf_pages(&[
+        &[(50.0, 750.0, page_one)],
+        &[(50.0, 750.0, page_two)],
+        &[(50.0, 750.0, page_three)],
+    ]);
+    let path = write_temp_pdf(&dir, "encoge.pdf", &three);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SHRINKATT1",
+        "linked_file",
+        Some(&path),
+        "encoge.pdf",
+        "application/pdf",
+    );
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+
+    let before = page_rows_with_hashes(&conn, &attachment_id);
+    assert_eq!(before.len(), 3, "the three-page file lands three page rows");
+
+    // The chained profile demand runs to terminal history, so the chain after
+    // the shrink must mint a fresh task to be observable at all.
+    let profile = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(profile, RunOneOutcome::Succeeded { .. }),
+        "the chained profile run must succeed: {profile:?}"
+    );
+
+    let two = make_text_pdf_pages(&[&[(50.0, 750.0, page_one)], &[(50.0, 750.0, page_two)]]);
+    std::fs::write(&path, two).expect("replace with the smaller file");
+    let second = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &second);
+
+    let after = page_rows_with_hashes(&conn, &attachment_id);
+    let numbers: Vec<i64> = after.iter().map(|row| row.0).collect();
+    assert_eq!(
+        numbers,
+        vec![1, 2],
+        "the rows beyond the new page_count are deleted"
+    );
+    assert_eq!(
+        (&after[0].1, &after[0].2),
+        (&before[0].1, &before[0].2),
+        "an identical page keeps its text and hash"
+    );
+    assert_eq!(
+        (&after[1].1, &after[1].2),
+        (&before[1].1, &before[1].2),
+        "an identical page keeps its text and hash"
+    );
+
+    let profile_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'bibliography_profile'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("profile count");
+    assert_eq!(
+        profile_tasks, 2,
+        "the deletion counts as a page move: the profile is demanded again"
+    );
+}
+
 // ── E4b-WU3: selective OCR with injected renderer/provider ─────────────────
 
 use entropia_desktop_lib::bibliography::selective_ocr::{PageOcrProvider, PageRenderer};
