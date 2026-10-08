@@ -590,11 +590,19 @@ mod tests {
         a_document(&conn, "d1");
 
         auto_snapshot_after_save(&conn, "d1").expect("first");
-        assert_eq!(list(&conn, "d1").expect("list").len(), 1, "no history yet: take one");
+        assert_eq!(
+            list(&conn, "d1").expect("list").len(),
+            1,
+            "no history yet: take one"
+        );
 
         save(&mut conn, "d1", 0, r#"{"v":1}"#);
         auto_snapshot_after_save(&conn, "d1").expect("too soon");
-        assert_eq!(list(&conn, "d1").expect("list").len(), 1, "inside the interval");
+        assert_eq!(
+            list(&conn, "d1").expect("list").len(),
+            1,
+            "inside the interval"
+        );
 
         conn.execute(
             "UPDATE writing_document_versions SET created_at = created_at - ?1",
