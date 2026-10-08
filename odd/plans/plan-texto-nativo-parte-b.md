@@ -1,6 +1,6 @@
 # Plan: texto nativo, parte B — reparar lo ya guardado
 
-Estado: **revisión 2, para re-juicio acotado. No hay nada implementado.**
+Estado: **revisión 2, aprobada por el juicio 7. Lista para implementar.**
 Fecha: 2026-10-08. Rama `feat/native-text-reprocess`, desde main `49a5f42`.
 
 Parte de `odd/plans/plan-texto-nativo.md` (revisión 3, secciones 3.2 a 3.4). La parte A ya está en main
@@ -91,9 +91,13 @@ ninguna regla de OCR.
     `cancelled` para el **mismo archivo**.
   - "Mismo archivo" se compara con el prefijo `attachment|<id>|mtime:<m>|` de su `input_fingerprint`, sin
     mirar la versión del catálogo (`JD7-A-002`).
-  - Solo cuentan las fallas del OCR (`provider_transient`, `rate_limited`, fatales del proveedor) y las
-    cancelaciones. Una falla de lectura o de almacenamiento se sigue reintentando como hoy.
-  - El owner recupera el adjunto con "Reprocesar texto" o con "Reintentar".
+  - Cuentan las fallas del OCR (`provider_transient`, `rate_limited`, fatales del proveedor), las
+    cancelaciones y `source_changed` cuando el prefijo con el `mtime` sigue igual. Este último caso es una
+    edición de metadatos durante la primera extracción (`JD7-B`, re-juicio). Una falla de lectura o de
+    almacenamiento se sigue reintentando como hoy.
+  - El owner recupera el adjunto con "Reprocesar texto", que lo lista (2.4) y muestra el costo.
+    "Reintentar" no está a su alcance: la tarea automática vive en el lote `bibliography`, que no se lista
+    (`JD7-B`, re-juicio).
 - **La versión del catálogo no dispara nada** (`JD7-A-002`). Con la primera regla, una edición de metadatos
   con el mismo archivo deja la extracción resuelta.
   - `attachment_extraction_fingerprint` **no cambia** (`JD5-A-002`). Sigue siendo la llave de los puntos de
@@ -373,3 +377,7 @@ Ninguna entrega necesita migración. Cada tarea cierra con su commit en la rama.
 | B: sin barra de progreso | Sugerencia | 2.5: progreso en texto |
 | B: no se puede cancelar | Sugerencia | 2.3: lote propio cancelable |
 | B: texto ilegible clasificado `empty` todavía se reencolaba | Sugerencia | 2.1: lo publicado nunca se reencola |
+| Re-juicio B: "Reintentar" no está al alcance de las tareas automáticas | Aviso | 2.1: la recuperación es "Reprocesar texto" |
+| Re-juicio B: `source_changed` por una edición de metadatos en curso | Aviso | 2.1: cuenta como intento si el `mtime` sigue igual |
+
+Veredicto del juicio 7: **APROBADO** en la primera ronda de corrección (revisión 2, `1bf1be0`).
