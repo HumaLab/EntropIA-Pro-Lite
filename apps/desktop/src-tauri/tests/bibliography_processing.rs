@@ -11489,3 +11489,208 @@ fn p3_sync_status_names_the_running_derived_task_and_its_pages() {
         "its own page progress travels with the name"
     );
 }
+
+// ── OCR markup pages (GLM-OCR HTML tables) ─────────────────────────────────
+//
+// GLM-OCR answers statistical tables as HTML and the rest as plain lines.
+// The owner's real shape: one `<table class="table table-bordered">` with a
+// thead of `th` cells, a colspan caption row, and numeric rows, followed by
+// plain footnote lines. Stored as-is, the tag soup grades garbled to the
+// letter statistics (`ocr::pdf::is_garbled_text`), so every sync re-demanded
+// the extraction and paid for OCR again, and the chunker indexed the tags.
+
+const OCR_TABLE_HTML: &str = concat!(
+    r#"<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th><th>Marzo</th><th>Abril</th><th>Mayo</th><th>Junio</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td><td>21,5</td><td>22,0</td><td>22,5</td><td>23,0</td></tr><tr><td>1927</td><td>24,5</td><td>25,0</td><td>25,5</td><td>26,0</td><td>26,5</td><td>27,0</td></tr></tbody></table>"#,
+    "\nFuente: Boletín Mensual de Estadística, Buenos Aires.",
+    "\na) Cifras correspondientes a los primeros quince días del mes."
+);
+
+/// The Markdown the OCR answer must become before it is stored.
+const OCR_TABLE_MARKDOWN: &str = concat!(
+    "| Mio | Enero | Febrero | Marzo | Abril | Mayo | Junio |\n",
+    "| --- | --- | --- | --- | --- | --- | --- |\n",
+    "| - en centavos de dólar norteamericano - |  |  |  |  |  |  |\n",
+    "| 1926 | 20,5 | 21,0 | 21,5 | 22,0 | 22,5 | 23,0 |\n",
+    "| 1927 | 24,5 | 25,0 | 25,5 | 26,0 | 26,5 | 27,0 |\n",
+    "\n",
+    "Fuente: Boletín Mensual de Estadística, Buenos Aires.\n",
+    "a) Cifras correspondientes a los primeros quince días del mes."
+);
+
+/// The same table without its footnote lines: one line of tags with almost
+/// no word separation — the shape the garbled detector reports.
+const OCR_TABLE_SOUP_HTML: &str = r#"<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th><th>Marzo</th><th>Abril</th><th>Mayo</th><th>Junio</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td><td>21,5</td><td>22,0</td><td>22,5</td><td>23,0</td></tr><tr><td>1927</td><td>24,5</td><td>25,0</td><td>25,5</td><td>26,0</td><td>26,5</td><td>27,0</td></tr></tbody></table>"#;
+
+/// The OCR path stores Markdown: a page whose provider answered with an HTML
+/// table lands in the page row as its pipe-table form, never as tags.
+#[test]
+fn ocr_answers_are_stored_as_markdown_not_html() {
+    use entropia_desktop_lib::bibliography::processing::{settled_page_row, ExtractPageText};
+    let page = ExtractPageText {
+        page_number: 42,
+        method: "native".to_string(),
+        text_content: "texto nativo disperso".to_string(),
+        text_hash: "native-hash".to_string(),
+        text_chars: 21,
+        quality: "sparse".to_string(),
+    };
+    let settled = settled_page_row(page, OCR_TABLE_HTML.to_string());
+    assert_eq!(settled.method, "ocr");
+    assert_eq!(
+        settled.text_content, OCR_TABLE_MARKDOWN,
+        "the stored page text must be the Markdown form"
+    );
+    assert!(!settled.text_content.contains("<td"), "no tags survive");
+    assert_ne!(
+        settled.quality, "empty",
+        "a table page is real text and must never grade empty"
+    );
+}
+
+/// The quality verdict of an HTML table page is decided on the text a reader
+/// gets, not on the tag soup.
+#[test]
+fn an_html_table_page_never_grades_empty() {
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_SOUP_HTML),
+        "empty",
+        "the raw tag-soup page must grade on its converted text"
+    );
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_HTML),
+        "empty",
+        "the raw HTML page must grade on its converted text"
+    );
+    assert_ne!(
+        entropia_desktop_lib::bibliography::processing::extraction_quality(OCR_TABLE_MARKDOWN),
+        "empty"
+    );
+}
+
+/// The stored extraction the owner already has: pages full of GLM-OCR HTML
+/// graded `empty` by the old letter statistics. With the source identity
+/// unchanged it must stay settled — the bug re-OCRed those pages every sync.
+#[test]
+fn admission_leaves_an_ocr_html_table_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        OCR_TABLE_HTML,
+        OCR_TABLE_HTML,
+        "empty",
+    );
+    let source_bytes = std::fs::metadata(&path).expect("source metadata").len() as i64;
+    assert!(
+        entropia_desktop_lib::bibliography::repository::extraction_is_settled(
+            &conn,
+            &attachment_id,
+            Some(1_700_000_000),
+            source_bytes
+        )
+        .expect("settled"),
+        "an HTML table page must settle on its converted text"
+    );
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("sync");
+    assert_eq!(
+        created, 0,
+        "the HTML table pages must not be re-demanded (no more paid OCR)"
+    );
+}
+
+/// The same page graded `rich` (an earlier build that saw it clearly): the
+/// garbled detector alone must not un-settle it either.
+#[test]
+fn admission_leaves_a_rich_graded_ocr_html_table_extraction_settled() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    seed_stored_texts(
+        &conn,
+        &attachment_id,
+        &item_id,
+        &path,
+        OCR_TABLE_SOUP_HTML,
+        OCR_TABLE_SOUP_HTML,
+        "rich",
+    );
+    let created = repository::admit_stale_extraction_demands(&conn, &library).expect("sync");
+    assert_eq!(
+        created, 0,
+        "markup is not garbled text and must stay settled"
+    );
+}
+
+/// Chunking never carries HTML tags into passages or embeddings: the pages
+/// the chunker reads are the converted text, and spans stay exact against it.
+#[test]
+fn chunking_never_carries_html_tags_into_passages() {
+    use entropia_desktop_lib::bibliography::repository::{
+        upsert_page_text_in_transaction, PageTextRow,
+    };
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "HTMLTAB1", "Obra con tablas", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "HTMLATT1",
+        "linked_file",
+        None,
+        "tabla.pdf",
+        "application/pdf",
+    );
+    upsert_page_text_in_transaction(
+        &conn,
+        &PageTextRow {
+            attachment_id,
+            page_number: 1,
+            method: "ocr".to_string(),
+            text_hash: format!("{:x}", Sha256::digest(OCR_TABLE_HTML.as_bytes())),
+            text_chars: OCR_TABLE_HTML.chars().count() as i64,
+            quality: "empty".to_string(),
+            text_content: OCR_TABLE_HTML.to_string(),
+        },
+        repository::now_ms(),
+    )
+    .expect("seed page text");
+
+    let chunkable =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(&conn, &item_id)
+            .expect("chunkable pages");
+    assert_eq!(chunkable.len(), 1);
+    assert_eq!(
+        chunkable[0].text_content, OCR_TABLE_MARKDOWN,
+        "the chunker reads the converted page text"
+    );
+    let chunks = entropia_desktop_lib::bibliography::chunks::segment_pages(&[
+        entropia_desktop_lib::bibliography::chunks::PageInput {
+            page_number: 1,
+            text: chunkable[0].text_content.clone(),
+        },
+    ]);
+    let joined = chunks
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!joined.contains("<td"), "no tags in passages: {joined}");
+    assert!(!joined.contains('<'), "no tags in passages: {joined}");
+    assert!(joined.contains("1926 | 20,5"), "the table is in the text");
+    for chunk in &chunks {
+        for span in &chunk.spans {
+            let slice: String = chunkable[0]
+                .text_content
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect();
+            assert!(
+                chunk.text.contains(&slice),
+                "span slice {slice:?} must sit inside the chunk text"
+            );
+        }
+    }
+}

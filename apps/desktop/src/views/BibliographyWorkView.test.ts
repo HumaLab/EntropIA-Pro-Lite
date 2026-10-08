@@ -111,6 +111,18 @@ function callsFor(command: string) {
   return mockInvoke.mock.calls.filter(([name]) => name === command)
 }
 
+/** The owner's real GLM-OCR shape: a statistical table as HTML plus footnotes. */
+const OWNER_HTML_PAGE =
+  '<table class="table table-bordered"><thead><tr><th>Mio</th><th>Enero</th><th>Febrero</th></tr></thead><tbody><tr><td colspan="7">- en centavos de dólar norteamericano -</td></tr><tr><td>1926</td><td>20,5</td><td>21,0</td></tr></tbody></table>\nFuente: Boletín Mensual de Estadística, Buenos Aires.'
+
+/** The same page as the backend now stores it: a Markdown pipe table. */
+const OWNER_MARKDOWN_PAGE =
+  '| Mio | Enero | Febrero |\n| --- | --- | --- |\n| - en centavos de dólar norteamericano - |  |  |\n| 1926 | 20,5 | 21,0 |\n\nFuente: Boletín Mensual de Estadística, Buenos Aires.'
+
+/** Hostile markup riding along with an OCR page. */
+const INJECTION_HTML_PAGE =
+  '<p onclick="steal()">Intro</p><script>alert(1)</script><table><tr><td onclick="steal()">A</td><td><img src="x" onerror="alert(2)"></td></tr></table><a href="javascript:alert(3)">enlace</a>'
+
 beforeEach(() => {
   mockInvoke.mockReset()
   locale.set('es')
@@ -269,6 +281,74 @@ describe('BibliographyWorkView', () => {
 
     expect(screen.getByText('Página 1')).toBeInTheDocument()
     expect(screen.getByText('Primera página.')).toBeInTheDocument()
+  })
+
+  it('renders a legacy HTML page table as a real table in the Texto tab', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: OWNER_HTML_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    const table = region.querySelector('table')
+    expect(table).not.toBeNull()
+    expect(within(table as HTMLElement).getByText('Mio')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('Enero')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('1926')).toBeInTheDocument()
+    // The colspan caption row keeps its text; the footnotes stay plain.
+    expect(within(region).getByText('- en centavos de dólar norteamericano -')).toBeInTheDocument()
+    expect(
+      within(region).getByText('Fuente: Boletín Mensual de Estadística, Buenos Aires.')
+    ).toBeInTheDocument()
+  })
+
+  it('renders a Markdown table page as a real table in the Texto tab', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: OWNER_MARKDOWN_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    const table = region.querySelector('table')
+    expect(table).not.toBeNull()
+    expect(within(table as HTMLElement).getByText('Mio')).toBeInTheDocument()
+    expect(within(table as HTMLElement).getByText('1926')).toBeInTheDocument()
+  })
+
+  it('renders page text with no script or attribute injection surviving', async () => {
+    backend({
+      open: opened({
+        pages: [{ pageNumber: 7, method: 'ocr', quality: 'rich', text: INJECTION_HTML_PAGE }],
+      }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('tab', { name: 'Texto' }))
+
+    const region = screen.getByRole('region', { name: 'Texto' })
+    // The table part still reads as a table…
+    expect(region.querySelector('table')).not.toBeNull()
+    expect(within(region).getByText('A')).toBeInTheDocument()
+    // …but nothing executable survives the sanitizer.
+    expect(region.querySelector('script')).toBeNull()
+    expect(region.querySelector('img')).toBeNull()
+    expect(region.querySelector('a[href]')).toBeNull()
+    for (const element of region.querySelectorAll('*')) {
+      for (const name of element.getAttributeNames()) {
+        expect(name.startsWith('on'), `${element.tagName} keeps ${name}`).toBe(false)
+      }
+    }
   })
 
   it('says the text is pending when nothing was extracted yet', async () => {

@@ -11,6 +11,7 @@
     type BibliographyWorkOpen,
   } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
+  import { renderOcrMarkup, sanitizeOcrHtml } from '$lib/ocr-rich-text'
   import {
     ActionIcon,
     Button,
@@ -139,6 +140,17 @@
       pdfZoomIn: t('item.toolbar.zoomIn'),
     }
   })
+
+  /**
+   * One page's stored text as safe rich HTML: new pages are Markdown (pipe
+   * tables), legacy GLM-OCR pages raw HTML tables — the shared OCR renderer
+   * turns both into tables and its sanitizer drops anything executable.
+   * No region images: bibliography pages carry no region references. The
+   * raw text is never rendered unsanitized.
+   */
+  function pageRichHtml(text: string): string {
+    return sanitizeOcrHtml(renderOcrMarkup(text).html)
+  }
 
   function creatorName(creator: BibliographyWorkCreator): string {
     if (creator.name?.trim()) return creator.name.trim()
@@ -296,7 +308,10 @@
             <h4 class="work-page__title">
               {$currentLocale && t('bibliographyWork.textPage', { page: page.pageNumber })}
             </h4>
-            <p class="work-page__text">{page.text}</p>
+            <div class="work-page__rich">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderOcrMarkup output passes sanitizeOcrHtml -->
+              {@html pageRichHtml(page.text)}
+            </div>
           {/each}
         {:else if opened?.extracted && opened.snapshotText}
           <p class="work-page__text">{opened.snapshotText}</p>
@@ -598,6 +613,73 @@
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  /* The same reading surface the Colecciones OCR text has (OcrRichText's
+     .ocr-rich-text): pages render through the shared safe renderer, so a
+     legacy GLM-OCR HTML table and a new Markdown pipe table show the same
+     table. {@html} content is unscoped, hence :global. */
+  .work-page__rich {
+    min-width: 0;
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .work-page__rich :global(p),
+  .work-page__rich :global(ul),
+  .work-page__rich :global(ol),
+  .work-page__rich :global(blockquote),
+  .work-page__rich :global(table),
+  .work-page__rich :global(pre) {
+    margin: 0 0 var(--space-3);
+  }
+
+  .work-page__rich :global(h1),
+  .work-page__rich :global(h2),
+  .work-page__rich :global(h3),
+  .work-page__rich :global(h4),
+  .work-page__rich :global(h5),
+  .work-page__rich :global(h6) {
+    margin: var(--space-4) 0 var(--space-2);
+    color: var(--color-text-primary);
+    line-height: 1.25;
+  }
+
+  .work-page__rich :global(ul),
+  .work-page__rich :global(ol) {
+    padding-inline-start: var(--space-6);
+  }
+
+  .work-page__rich :global(blockquote) {
+    padding-inline-start: var(--space-3);
+    border-inline-start: 2px solid var(--border-subtle);
+    color: var(--color-text-secondary);
+  }
+
+  .work-page__rich :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: inherit;
+  }
+
+  .work-page__rich :global(th),
+  .work-page__rich :global(td) {
+    padding: var(--space-2);
+    border: 1px solid var(--border-subtle);
+    text-align: start;
+    vertical-align: top;
+  }
+
+  .work-page__rich :global(code),
+  .work-page__rich :global(pre) {
+    font-family: var(--font-mono);
+  }
+
+  .work-page__rich :global(a) {
+    color: var(--color-accent);
   }
 
   .work-page__text {

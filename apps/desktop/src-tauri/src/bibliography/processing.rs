@@ -2374,7 +2374,7 @@ pub fn publish_bibliography_profile_output(
             ordinal: chunk.ordinal,
             text_content: chunk.text_content.clone(),
             text_hash: chunk.input_hash.clone(),
-            chunking_contract: crate::bibliography::chunks::BIBLIOGRAPHY_CHUNKING_CONTRACT_V1
+            chunking_contract: crate::bibliography::chunks::BIBLIOGRAPHY_CHUNKING_CONTRACT_V2
                 .to_string(),
             spans: chunk.spans.clone(),
         })
@@ -2494,14 +2494,19 @@ fn extraction_text_hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
-fn extraction_quality(text: &str) -> &'static str {
-    if text.trim().is_empty() {
+/// The verdict over the text a reader gets: GLM-OCR answers tables as HTML,
+/// and the raw `td/tr/th` soup grades garbled (`ocr::pdf::is_garbled_text`
+/// sees almost no vowels), so every sync re-demanded the extraction and
+/// re-OCRed the page. Grading on the converted Markdown stops that loop.
+pub fn extraction_quality(text: &str) -> &'static str {
+    let converted = crate::ocr::markup::ocr_markup_to_text(text);
+    if converted.trim().is_empty() {
         "empty"
-    } else if crate::ocr::pdf::is_garbled_text(text) {
+    } else if crate::ocr::pdf::is_garbled_text(&converted) {
         // Raw glyph codes from a custom font encoding: not text a reader can
         // use, and nothing to protect. Graded `empty` so OCR owns the page.
         "empty"
-    } else if crate::ocr::pdf::is_quality_text(text) {
+    } else if crate::ocr::pdf::is_quality_text(&converted) {
         "rich"
     } else {
         "sparse"
@@ -2917,9 +2922,11 @@ impl BibliographyExtractExecutor {
         // Garbled native text (raw glyph codes) is not text: when the OCR
         // pass replaced or dropped any page, the whole-document row is
         // rebuilt from the published pages so no glyph code survives in it.
-        let had_garbled_native = pages
-            .iter()
-            .any(|page| crate::ocr::pdf::is_garbled_text(&page.text_content));
+        let had_garbled_native = pages.iter().any(|page| {
+            crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
+                &page.text_content,
+            ))
+        });
         let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) =
             self.maybe_ocr_pages(ctx, task, stop, bytes, pages, quality == "empty")?;
         // A scan has no native text, so the whole-document verdict above is
@@ -3342,16 +3349,22 @@ fn record_page_progress(
 
 /// One OCR answer's place in the page layer: a non-empty answer replaces the
 /// page text (method `ocr`) with a fresh hash — never appended, so native
-/// fragments cannot duplicate. An empty one keeps the native row untouched —
-/// unless the native text is garbled raw glyph codes, which OCR owns: the
-/// page is then recorded empty and the codes are never kept.
-fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText {
+/// fragments cannot duplicate. The answer is stored as Markdown: GLM-OCR
+/// returns HTML tables and the tags poison grading, chunking and reading
+/// (see [`crate::ocr::markup::ocr_markup_to_text`]). An empty one keeps the
+/// native row untouched — unless the native text is garbled raw glyph codes,
+/// which OCR owns: the page is then recorded empty and the codes are never
+/// kept.
+pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText {
+    let text = crate::ocr::markup::ocr_markup_to_text(&text);
     if text.trim().is_empty() {
         eprintln!(
             "[bibliography] page {}: no text recognized",
             page.page_number
         );
-        if crate::ocr::pdf::is_garbled_text(&page.text_content) {
+        if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
+            &page.text_content,
+        )) {
             return ExtractPageText {
                 page_number: page.page_number,
                 method: "ocr".to_string(),
