@@ -23,11 +23,23 @@ Branch `feat/pdfium-page-text`, worktree `G:/EntropIA-Stack/EntropIA-Pro-Lite-wo
   - in app setup;
   - before the bibliography page reader;
   - in place of `init_pdfium_path` in `ProductionSelectiveOcr::render_page`
-    (`bibliography/processing.rs:3190`; JD5-A-001, JD5-B-002).
+    (`bibliography/processing.rs:3190`; JD5-A-001, JD5-B-002), with one render-only fallback: where
+    nothing is bundled, an ALREADY-HYDRATED managed runtime copy of the library may be used
+    (`ensure_pdfium_path_with_hydrated_runtime`, JD6-B-001) — resolved from disk as it already is,
+    never by bootstrapping.
 
   Bundled candidates must cover the real installer layouts (JD5-B-005): Lite `resources/pdfium/…`,
   Pro Windows `resources/lib/pdfium.dll`, Pro Linux `resources/lib/linux-x86_64/libpdfium.so`, and dev
   `target/debug/resources/lib`. Where nothing is bundled (Pro macOS), log it and fall back to lopdf.
+  The runtime-free resolver probes only the host's own OS/arch layouts (JD6-A-005) — a
+  foreign-architecture library must never shadow a host-compatible one — while the shared
+  `bundled_pdfium_candidate_paths` used by `init_pdfium_path` (corpus/Pro) keeps its pre-part-A
+  candidate list and order.
+
+  The no-bootstrap guarantee covers **PDFium resolution only**. The Pro local Paddle OCR path
+  resolves its models through `resolve_paddle_model_dir` → `managed_runtime_root_for_ocr`, which does
+  call `RuntimeManager::ensure_ready_or_bootstrap`; that is pre-existing behavior and outside part A
+  (JD6-A-002).
 - [x] A2 — PDFium per-page reader. `read_native_page_texts` uses PDFium (`page.text().all()`), with lopdf
   as the per-page fallback.
   - Remove the soft-hyphen markers `\u{2}` and `\u{FFFE}` (and a following line break) so the word is
@@ -55,3 +67,17 @@ Branch `feat/pdfium-page-text`, worktree `G:/EntropIA-Stack/EntropIA-Pro-Lite-wo
   the OCR-candidacy input (`native_blank`) intentionally keeps its pre-A3 basis, per the scope rules.
 - 2026-10-08: A4 done — `delete_page_texts_beyond` on publish; deletions count as page moves and
   re-demand the profile (3-page → 2-page replacement test green).
+- 2026-10-08: Judgment Day 6 regressions fixed test-first. Per-page choice now prefers PDFium only
+  where its read is at least as complete as lopdf's in alphanumeric content (ties to PDFium for its
+  spacing) or lopdf's is glued/garbled — zero-size runs and other dropped PDFium runs no longer lose
+  text (JD6-A-001); `native_blank` is computed again on pdf-extract + the lopdf rows, so a recovered
+  page beside an unreadable one keeps the baseline OCR candidates (JD6-A-003, JD6-B-004); the
+  bomb-safe bound is decided per page from the lopdf decompressed-content check before any PDFium
+  read, which also caps its strings per batch (JD6-A-004); the bundled resolver probes only the
+  host's OS/arch layouts while the corpus candidate list keeps its pre-part-A shape (JD6-A-005);
+  the page render falls back to an already-hydrated managed runtime copy without bootstrapping
+  (JD6-B-001); an empty page union no longer flips a rich pdf-extract text to `empty` (JD6-B-002);
+  the PDFium-gated tests fail on a missing library under `ENTROPIA_REQUIRE_PDFIUM=1` (set in the
+  Windows CI test leg) and the batch-lifecycle test proves PDFium really ran (JD6-A-006,
+  JD6-B-003); the Pdfium instance counters are thread-scoped so parallel tests cannot move each
+  other's assertions (JD6-A-007); the off-page text policy is pinned (JD6-B-005).

@@ -722,8 +722,10 @@ pub fn run() {
             // The bundled Pdfium library resolves once at startup, without
             // ever touching the ML runtime: a background bibliography
             // extraction must never trigger a runtime bootstrap (JD4-B-001).
-            // Nothing bundled (Pro macOS) is logged here; the page reader then
-            // falls back to lopdf.
+            // The guarantee covers PDFium resolution only — the Pro local
+            // Paddle OCR model path still bootstraps the runtime (JD6-A-002,
+            // pre-existing). Nothing bundled (Pro macOS) is logged here; the
+            // page reader then falls back to lopdf.
             crate::ocr::pdf::ensure_pdfium_path_without_runtime(app.handle());
 
             // Where the app decided its files live, in the log rather than on

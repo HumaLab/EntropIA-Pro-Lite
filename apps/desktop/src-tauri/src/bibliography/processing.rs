@@ -1651,6 +1651,88 @@ mod tests {
         assert_eq!(pdfium_page_batches(45), vec![1..=20, 21..=40, 41..=45]);
     }
 
+    /// JD6-A-001: PDFium's read wins only where it is at least as complete as
+    /// lopdf's in alphanumeric content (ties to PDFium — its spacing is
+    /// better) or where lopdf's read is glued/garbled; anything else keeps
+    /// lopdf's read so a dropped PDFium run can never lose text.
+    #[test]
+    fn the_page_text_choice_keeps_the_more_complete_read() {
+        // PDFium dropped the long zero-size run: lopdf's read is strictly
+        // richer and stays.
+        let lopdf = "CortoEl texto oculto del tamaño cero sigue siendo texto";
+        assert_eq!(
+            choose_native_page_text(Some("Corto".to_string()), lopdf),
+            lopdf
+        );
+        // The tie goes to PDFium: same alphanumeric content, better spacing.
+        assert_eq!(
+            choose_native_page_text(Some("Arroz Elcultivo".to_string()), "ArrozElcultivo"),
+            "Arroz Elcultivo"
+        );
+        // lopdf's read is glued/garbled (raw glyph codes): PDFium wins even
+        // with less content.
+        assert_eq!(
+            choose_native_page_text(
+                Some("una cosecha".to_string()),
+                "@QDK@BHlMDMSQDBK@RDNAQDQ@XONKgSHB@",
+            ),
+            "una cosecha"
+        );
+        // No PDFium read at all: lopdf's read stands.
+        assert_eq!(
+            choose_native_page_text(None, "texto de lopdf"),
+            "texto de lopdf"
+        );
+    }
+
+    /// JD6-A-003 / JD6-B-004: the `native_blank` basis is the pre-part-A one —
+    /// `pdf-extract` plus the lopdf rows. A PDFium-recovered page beside an
+    /// unreadable one must not flip the verdict and drop the unreadable page
+    /// out of OCR.
+    #[test]
+    fn the_candidacy_basis_is_computed_on_the_lopdf_rows_not_the_pdfium_ones() {
+        let blank = ExtractPageText {
+            page_number: 1,
+            method: "native".to_string(),
+            text_hash: extraction_text_hash(""),
+            text_chars: 0,
+            quality: "empty".to_string(),
+            text_content: String::new(),
+        };
+        let mut recovered = blank.clone();
+        recovered.text_content = "Hola mundo recuperado del formulario".to_string();
+        recovered.text_hash = extraction_text_hash(&recovered.text_content);
+        recovered.text_chars = recovered.text_content.chars().count() as i64;
+        recovered.quality = "sparse".to_string();
+        let unreadable = ExtractPageText {
+            page_number: 2,
+            method: "native".to_string(),
+            text_hash: extraction_text_hash(""),
+            text_chars: 0,
+            quality: "unreadable".to_string(),
+            text_content: String::new(),
+        };
+
+        // Baseline (pre-part-A) rows — blank + unreadable — with an empty
+        // pdf-extract text: the document grades `empty`, so `native_blank` is
+        // true and the unreadable page goes to OCR exactly as before part A.
+        assert_eq!(
+            extraction_quality(&richer_native_text(
+                String::new(),
+                &[blank, unreadable.clone()]
+            )),
+            "empty",
+            "the lopdf basis keeps the pre-part-A verdict"
+        );
+        // The PDFium-improved rows would say `sparse` — which is exactly why
+        // the basis must never be computed on them (JD6-A-003).
+        assert_eq!(
+            extraction_quality(&richer_native_text(String::new(), &[recovered, unreadable])),
+            "sparse",
+            "the PDFium-improved rows would flip the verdict"
+        );
+    }
+
     fn row(key: &str, version: u64, csl: &str) -> serde_json::Value {
         serde_json::json!({ "key": key, "version": version, "csljson": csl })
     }
@@ -2959,7 +3041,7 @@ impl BibliographyExtractExecutor {
             None => crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None),
         }
         .is_some();
-        let pages = read_native_page_texts(
+        let reads = read_native_page_texts_with_lopdf_basis(
             bytes,
             page_count,
             if pdfium_resolved {
@@ -2970,14 +3052,18 @@ impl BibliographyExtractExecutor {
         )?;
         // The whole-document parser still proves one thing for the OCR pass:
         // whether the file has any native text at all (`native_blank`). That
-        // candidacy input is computed on the same basis as before part A —
-        // this work may not change when anything goes to OCR. Its own text
-        // output is no longer stored: since A3 the document text is the
-        // union of the published pages.
+        // candidacy input is computed EXACTLY as before part A — on the
+        // `pdf-extract` text plus the LO PDF rows, never on the PDFium-improved
+        // ones (JD6-A-003, JD6-B-004): a recovered page beside an unreadable
+        // one must not flip the unreadable page out of OCR. This work may not
+        // change when anything goes to OCR. The parser's own text output is
+        // only the basis: since A3 the document text is the union of the
+        // published pages.
         let legacy_text = match crate::ocr::pdf::extract_pdf_text(bytes) {
             Ok(text) => text,
             Err(error) => {
-                let joined = pages
+                let joined = reads
+                    .lopdf_pages
                     .iter()
                     .map(|page| page.text_content.as_str())
                     .filter(|text| !text.trim().is_empty())
@@ -2992,21 +3078,29 @@ impl BibliographyExtractExecutor {
                 joined
             }
         };
-        let legacy_text = richer_native_text(legacy_text, &pages);
+        let legacy_text = richer_native_text(legacy_text, &reads.lopdf_pages);
         let native_blank = extraction_quality(&legacy_text) == "empty";
         let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) =
-            self.maybe_ocr_pages(ctx, task, stop, bytes, pages, native_blank)?;
+            self.maybe_ocr_pages(ctx, task, stop, bytes, reads.pages, native_blank)?;
         // A3: the document text is the union of the published pages, joined
         // in page order with the separator the rebuild path already used —
         // replacing the `pdf-extract`/`richer_native_text` choice, whose
         // alphanumeric tie kept glued words in the stored text.
-        let text = pages
+        let mut text = pages
             .iter()
             .map(|page| page.text_content.trim())
             .filter(|page_text| !page_text.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        let quality = extraction_quality(&text);
+        let mut quality = extraction_quality(&text);
+        // JD6-B-002: when the page union grades `empty` but the pre-part-A
+        // text grades `rich`, the previous behavior stands — the pdf-extract
+        // text and its quality are stored. Nothing previously settled may
+        // flip to `empty` and get re-demanded over a reader disagreement.
+        if quality == "empty" && extraction_quality(&legacy_text) == "rich" {
+            text = legacy_text;
+            quality = "rich";
+        }
         Ok(ExtractedDocument {
             page_count,
             text,
@@ -3256,9 +3350,14 @@ impl crate::bibliography::selective_ocr::PageRenderer for ProductionSelectiveOcr
         // pdfium resolves its library from a path cached at startup of the
         // first OCR command; the queue worker never runs one, so without this
         // every page failed to render and a scan ended up with no text. The
-        // runtime-free resolver only: an extraction must never bootstrap the
-        // ML runtime (JD5-A-001, JD4-B-001).
-        crate::ocr::pdf::ensure_pdfium_path_without_runtime(&self.app);
+        // runtime-free resolver first: an extraction must never bootstrap the
+        // ML runtime (JD5-A-001, JD4-B-001). Where nothing is bundled (Pro
+        // macOS) the render may still use an ALREADY-HYDRATED managed runtime
+        // copy of the library (JD6-B-001) — found on disk as it already is,
+        // never by bootstrapping.
+        if crate::ocr::pdf::ensure_pdfium_path_without_runtime(&self.app).is_none() {
+            crate::ocr::pdf::ensure_pdfium_path_with_hydrated_runtime(&self.app);
+        }
         crate::ocr::pdf::render_pdf_page_to_image(pdf_bytes, page_number.saturating_sub(1) as usize)
     }
 
@@ -3557,12 +3656,32 @@ fn bounded_decoded_page_text(raw: String) -> Option<String> {
     Some(join_soft_hyphen_breaks(&raw))
 }
 
-/// Live Pdfium instances in this process. A test and diagnostic seam: the
+/// Live Pdfium instances on this thread. A test and diagnostic seam: the
 /// reader holds at most one at a time and releases every batch before the
 /// selective OCR pass binds its own — pdfium-render's global lock is not
-/// reentrant.
+/// reentrant. Thread-scoped (JD6-A-007) so concurrently running tests cannot
+/// move each other's assertions.
 pub fn pdfium_instances_alive() -> usize {
     crate::ocr::pdf::pdfium_instances_alive()
+}
+
+/// Successful Pdfium binds on this thread (JD6-A-006): before/after deltas
+/// prove a test exercised the real library instead of the lopdf fallback.
+pub fn pdfium_bind_count() -> u64 {
+    crate::ocr::pdf::pdfium_bind_count()
+}
+
+/// Page numbers this thread asked PDFium for (JD6-A-004): a page the bomb-safe
+/// bound already refused must never be requested.
+pub fn pdfium_text_pages_requested() -> u64 {
+    crate::ocr::pdf::pdfium_text_pages_requested()
+}
+
+/// The whole-document `pdf-extract` read behind the `native_blank` basis. A
+/// test seam: fixtures verify here what the parser actually sees before a
+/// candidacy assertion builds on it (JD6-A-003).
+pub fn pdf_extract_text(bytes: &[u8]) -> Result<String, String> {
+    crate::ocr::pdf::extract_pdf_text(bytes)
 }
 
 /// Whether the per-page reader can bind PDFium at all: false means it reads
@@ -3573,30 +3692,139 @@ pub fn pdfium_page_reader_available() -> bool {
     crate::ocr::pdf::pdfium_loads()
 }
 
-/// Reads every page's native text — one entry per page in page order. PDFium
-/// reads in batches of at most 20 pages, one instance per batch released
-/// between batches and never alive while `maybe_ocr_pages` runs; a page it
-/// cannot read falls back to lopdf's bounded per-page decoder. A page no
-/// decoder can read records `unreadable` with empty text instead of failing
-/// its siblings.
+/// JD6-A-001: PDFium's read wins only where it is at least as complete as
+/// lopdf's in alphanumeric content — ties go to PDFium, whose spacing is
+/// better — or where lopdf's read is glued/garbled (raw glyph codes). Anything
+/// else keeps lopdf's read: PDFium silently drops some text runs (a zero font
+/// size `Tj` is one producer quirk), and the reader must never lose text the
+/// old decoder kept. Trade-off (JD6-B-005): when PDFium wins, its text may
+/// include off-page content (kept on purpose via `PdfRect::MAX` in
+/// `read_pdfium_page_texts`, so nothing lopdf reads is dropped); when lopdf is
+/// strictly richer in alphanumeric content the on-page read wins and the page
+/// keeps everything both decoders saw.
+fn choose_native_page_text(pdfium_text: Option<String>, lopdf_text: &str) -> String {
+    let Some(pdfium) = pdfium_text else {
+        return lopdf_text.to_string();
+    };
+    let lopdf_glued =
+        crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(lopdf_text));
+    let alphanumeric = |value: &str| value.chars().filter(|c| c.is_alphanumeric()).count();
+    if lopdf_glued || alphanumeric(&pdfium) >= alphanumeric(lopdf_text) {
+        pdfium
+    } else {
+        lopdf_text.to_string()
+    }
+}
+
+/// The per-page reads in both shapes the pipeline needs (JD6-A-003): the
+/// published rows (the better of PDFium and lopdf per page) and the lopdf-only
+/// rows the pre-part-A candidacy basis is computed on.
+pub struct NativePageReads {
+    /// One row per page, as published: the better of PDFium's and lopdf's read.
+    pub pages: Vec<ExtractPageText>,
+    /// The lopdf-only rows. `native_blank` is computed on these plus the
+    /// `pdf-extract` text, exactly as before part A — PDFium must never move
+    /// that basis: a recovered page would flip an `unreadable` sibling out of
+    /// OCR (JD6-A-003, JD6-B-004).
+    pub lopdf_pages: Vec<ExtractPageText>,
+}
+
+/// Reads every page's native text — the published rows only. See
+/// [`read_native_page_texts_with_lopdf_basis`] for the full read.
 pub fn read_native_page_texts(
     bytes: &[u8],
     page_count: i64,
     decoder: PageTextDecoder,
 ) -> Result<Vec<ExtractPageText>, crate::processing::scheduler::ExecOutput> {
+    read_native_page_texts_with_lopdf_basis(bytes, page_count, decoder).map(|reads| reads.pages)
+}
+
+/// Reads every page's native text — one entry per page in page order.
+///
+/// Per page, in order:
+/// 1. lopdf's bounded decoder runs FIRST (JD6-A-004): its decompressed-content
+///    check decides "over limit / unreadable" exactly as before part A, and
+///    only pages within the bound are ever read with PDFium — a bomb page is
+///    refused before PDFium decompresses it.
+/// 2. PDFium reads the in-bound pages in batches of at most 20, one instance
+///    per batch released between batches and never alive while
+///    `maybe_ocr_pages` runs. A PDFium string is capped before it is kept per
+///    batch (JD6-A-004); empty or garbled answers are failed reads.
+/// 3. The published row keeps the more complete read (JD6-A-001): PDFium's
+///    only where it is at least as complete in alphanumeric content (ties to
+///    PDFium, its spacing is better) or lopdf's is glued/garbled; otherwise
+///    lopdf's. An unreadable page records `unreadable` with empty text instead
+///    of failing its siblings.
+///
+/// The lopdf-only rows are returned beside the published ones: the
+/// pre-part-A `native_blank` basis is computed on them (JD6-A-003).
+pub fn read_native_page_texts_with_lopdf_basis(
+    bytes: &[u8],
+    page_count: i64,
+    decoder: PageTextDecoder,
+) -> Result<NativePageReads, crate::processing::scheduler::ExecOutput> {
     use crate::processing::scheduler::ExecOutput;
+    let mut document: Option<lopdf::Document> = None;
+    let mut lopdf_reads: Vec<(String, bool)> = Vec::with_capacity(page_count.max(0) as usize);
+    for number in 1..=page_count.max(0) as u32 {
+        if document.is_none() {
+            document =
+                Some(
+                    lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
+                        code: "extraction_failed".to_string(),
+                        message: format!("Failed to parse PDF for per-page text: {error}"),
+                    })?,
+                );
+        }
+        let document = document.as_ref().expect("lopdf document loaded above");
+        let chunks = document
+            .extract_text_chunks_with_limit(&[number], BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES);
+        let mut text = String::new();
+        let mut readable = true;
+        for chunk in chunks {
+            match chunk {
+                Ok(fragment) => text.push_str(&fragment),
+                Err(_) => readable = false,
+            }
+        }
+        lopdf_reads.push((text, readable));
+    }
+
     let mut pdfium_texts: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     if decoder == PageTextDecoder::Pdfium {
         // Callers without an app handle (direct reads, native-only executors)
         // resolve here as a last resort; a populated cache answers as-is.
         crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None);
         for batch in pdfium_page_batches(page_count) {
-            let numbers: Vec<u32> = batch.collect();
+            // Only pages the lopdf bound accepted are read (JD6-A-004): an
+            // over-limit page is never requested from PDFium.
+            let numbers: Vec<u32> = batch
+                .filter(|number| {
+                    lopdf_reads
+                        .get(number.saturating_sub(1) as usize)
+                        .is_some_and(|(_, readable)| *readable)
+                })
+                .collect();
+            if numbers.is_empty() {
+                continue;
+            }
             match crate::ocr::pdf::read_pdfium_page_texts(bytes, &numbers) {
                 Ok(texts) => {
                     for (number, text) in texts {
                         if let Some(text) = text {
-                            pdfium_texts.insert(number, text);
+                            // Cap the string before keeping it per batch
+                            // (JD6-A-004): a giant PDFium string must not sit
+                            // in memory — and over the per-page bound it is a
+                            // failed read anyway.
+                            if let Some(text) = bounded_decoded_page_text(text) {
+                                if !text.trim().is_empty()
+                                    && !crate::ocr::pdf::is_garbled_text(
+                                        &crate::ocr::markup::ocr_markup_to_text(&text),
+                                    )
+                                {
+                                    pdfium_texts.insert(number, text);
+                                }
+                            }
                         }
                     }
                 }
@@ -3609,64 +3837,50 @@ pub fn read_native_page_texts(
             }
         }
     }
-    let mut document: Option<lopdf::Document> = None;
+
     let mut pages = Vec::with_capacity(page_count.max(0) as usize);
-    for number in 1..=page_count.max(0) as u32 {
-        // PDFium's read wins only where it holds real text: an empty or
-        // garbled (raw glyph codes) answer is a failed read of that page, and
-        // lopdf's bounded decoder takes it — the fallback must never lose
-        // text the old reader kept.
-        let pdfium_text = pdfium_texts.remove(&number).and_then(|raw| {
-            let text = bounded_decoded_page_text(raw)?;
-            if text.trim().is_empty()
-                || crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(&text))
-            {
-                return None;
+    let mut lopdf_pages = Vec::with_capacity(page_count.max(0) as usize);
+    for (index, (raw, readable)) in lopdf_reads.into_iter().enumerate() {
+        let number = index + 1;
+        if !readable {
+            for rows in [&mut pages, &mut lopdf_pages] {
+                rows.push(ExtractPageText {
+                    page_number: number as i64,
+                    method: "native".to_string(),
+                    text_hash: extraction_text_hash(""),
+                    text_chars: 0,
+                    quality: "unreadable".to_string(),
+                    text_content: String::new(),
+                });
             }
-            Some(text)
+            continue;
+        }
+        // The pre-part-A basis row: the raw lopdf read exactly as the old
+        // reader recorded it (markers included — `native_blank` must not
+        // move on the A2 cleanup either).
+        let lopdf_quality = extraction_quality(&raw);
+        lopdf_pages.push(ExtractPageText {
+            page_number: number as i64,
+            method: "native".to_string(),
+            text_hash: extraction_text_hash(&raw),
+            text_chars: raw.chars().count() as i64,
+            quality: lopdf_quality.to_string(),
+            text_content: raw.clone(),
         });
-        let (quality, text_content) = match pdfium_text {
-            Some(text) => (extraction_quality(&text).to_string(), text),
-            None => {
-                if document.is_none() {
-                    document = Some(lopdf::Document::load_mem(bytes).map_err(|error| {
-                        ExecOutput::Fatal {
-                            code: "extraction_failed".to_string(),
-                            message: format!("Failed to parse PDF for per-page text: {error}"),
-                        }
-                    })?);
-                }
-                let document = document.as_ref().expect("lopdf document loaded above");
-                let chunks = document.extract_text_chunks_with_limit(
-                    &[number],
-                    BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES,
-                );
-                let mut text = String::new();
-                let mut readable = true;
-                for chunk in chunks {
-                    match chunk {
-                        Ok(fragment) => text.push_str(&fragment),
-                        Err(_) => readable = false,
-                    }
-                }
-                if readable {
-                    let text = join_soft_hyphen_breaks(&text);
-                    (extraction_quality(&text).to_string(), text)
-                } else {
-                    ("unreadable".to_string(), String::new())
-                }
-            }
-        };
+        let lopdf_text = join_soft_hyphen_breaks(&raw);
+        let text_content =
+            choose_native_page_text(pdfium_texts.remove(&(number as u32)), &lopdf_text);
+        let quality = extraction_quality(&text_content);
         pages.push(ExtractPageText {
             page_number: number as i64,
             method: "native".to_string(),
             text_hash: extraction_text_hash(&text_content),
             text_chars: text_content.chars().count() as i64,
-            quality,
+            quality: quality.to_string(),
             text_content,
         });
     }
-    Ok(pages)
+    Ok(NativePageReads { pages, lopdf_pages })
 }
 
 /// Scheduler publisher for one native extraction. Runs inside the commit
