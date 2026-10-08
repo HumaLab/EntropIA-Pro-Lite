@@ -16,6 +16,7 @@
   import {
     bibliographyDerivedProgress,
     writingZotero,
+    type BibliographyCurrentTask,
     type BibliographyDerivedProgress,
   } from '$lib/writing-zotero'
   import { requestSettingsTab } from '$lib/settings-tab-request'
@@ -28,10 +29,14 @@
   // not a generic "running". Blocked work is counted separately: parked on
   // the owner is not progress.
   let bibliography = $state<BibliographyDerivedProgress | null>(null)
+  // The derived unit running right now: its page counter is what shows one
+  // huge attachment still moving while the two subject counts stand still.
+  let currentWork = $state<BibliographyCurrentTask | null>(null)
   const unsubscribeZotero = writingZotero.subscribe((next) => {
     const status = next.bibliographyProgress?.status ?? null
     const derived = status ? bibliographyDerivedProgress(status) : null
     bibliography = derived && derived.remaining > 0 ? derived : null
+    currentWork = bibliography !== null ? (status?.current ?? null) : null
   })
 
   // Which batch work the footer has already reacted to. A bibliography sync
@@ -94,21 +99,33 @@
   const label = $derived.by(() => {
     $currentLocale
     const derived = bibliography
+    // An extraction mid-OCR carries its own page counter; kinds without
+    // pages never borrow it.
+    const ocr = currentWork && currentWork.pagesTotal > 0 ? currentWork : null
     if (derived && derived.remainingActive > 0) {
-      return derived.blocked > 0
-        ? t('batch.statusBibliographyWaiting', {
-            worksDone: derived.worksDone,
-            worksTotal: derived.worksTotal,
-            passagesDone: derived.passagesDone,
-            passagesTotal: derived.passagesTotal,
-            blocked: derived.blocked,
+      const counts = {
+        worksDone: derived.worksDone,
+        worksTotal: derived.worksTotal,
+        passagesDone: derived.passagesDone,
+        passagesTotal: derived.passagesTotal,
+      }
+      if (derived.blocked > 0) {
+        return ocr
+          ? t('batch.statusBibliographyWaitingOcr', {
+              ...counts,
+              pagesDone: ocr.pagesDone,
+              pagesTotal: ocr.pagesTotal,
+              blocked: derived.blocked,
+            })
+          : t('batch.statusBibliographyWaiting', { ...counts, blocked: derived.blocked })
+      }
+      return ocr
+        ? t('batch.statusBibliographyOcr', {
+            ...counts,
+            pagesDone: ocr.pagesDone,
+            pagesTotal: ocr.pagesTotal,
           })
-        : t('batch.statusBibliography', {
-            worksDone: derived.worksDone,
-            worksTotal: derived.worksTotal,
-            passagesDone: derived.passagesDone,
-            passagesTotal: derived.passagesTotal,
-          })
+        : t('batch.statusBibliography', counts)
     }
     if (failedCount > 0) return t('batch.statusAttention', { count: failedCount })
     if (derived && derived.blocked > 0) {

@@ -339,6 +339,51 @@
   const syncActive = $derived(
     ['pending', 'running'].includes(snapshot.bibliographyProgress?.status?.state ?? '')
   )
+
+  /**
+   * The derived unit running right now, said out loud. A book of 1500 pages
+   * OCRs page by page for hours while the counts line stands still; this
+   * second line names the work and its page so nothing looks stuck.
+   */
+  const currentLine = $derived.by(() => {
+    $currentLocale
+    const status = snapshot.bibliographyProgress?.status ?? null
+    const current = status?.current ?? null
+    if (!current) return null
+    const etaMs = status?.etaMs ?? null
+    const eta = etaMs == null ? null : formatEtaMs(etaMs)
+    if (current.pagesTotal > 0) {
+      return eta == null
+        ? t('writing.zoteroBibliographyCurrentPages', {
+            title: current.title,
+            done: current.pagesDone,
+            total: current.pagesTotal,
+          })
+        : t('writing.zoteroBibliographyCurrentPagesEta', {
+            title: current.title,
+            done: current.pagesDone,
+            total: current.pagesTotal,
+            eta,
+          })
+    }
+    return eta == null
+      ? t('writing.zoteroBibliographyCurrent', { title: current.title })
+      : t('writing.zoteroBibliographyCurrentEta', { title: current.title, eta })
+  })
+
+  /**
+   * While the derived backlog drains, another press of «Sincronizar
+   * biblioteca» only re-reads the Zotero catalog — it does not restart the
+   * processing in course — and the button says so where the press happens.
+   */
+  const backlogDraining = $derived.by(() => {
+    const status = snapshot.bibliographyProgress?.status ?? null
+    return status != null && bibliographyDerivedProgress(status).remaining > 0
+  })
+  const syncRereadTitle = $derived.by(() => {
+    $currentLocale
+    return t('writing.zoteroBibliographySyncReread')
+  })
   const zoteroReachable = $derived(snapshot.status?.state === 'available')
 
   function cite(entry: (typeof snapshot.entries)[number]) {
@@ -478,6 +523,7 @@
           size="sm"
           loading={snapshot.bibliographySync.loading}
           disabled={!zoteroReachable || syncActive}
+          title={backlogDraining ? syncRereadTitle : undefined}
           onclick={() => void store.requestBibliographySync()}
         >
           {t('writing.zoteroBibliographySync')}
@@ -504,6 +550,11 @@
           </p>
         {:else if !zoteroReachable}
           <p class="zotero__notice">{t('writing.zoteroBibliographySyncNeedsZotero')}</p>
+        {/if}
+        {#if currentLine}
+          <!-- The second line, beside the status it qualifies: the work the
+             scheduler is running and the page it is on. -->
+          <p class="zotero__notice" role="status">{currentLine}</p>
         {/if}
       </div>
     </div>

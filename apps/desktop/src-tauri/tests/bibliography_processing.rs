@@ -11014,3 +11014,478 @@ fn an_empty_glm_page_response_records_empty_text_not_a_failure() {
         "the empty page is not a failed page: {receipt}"
     );
 }
+
+// ── Honest page progress and a page-rate ETA for long extractions ─────────
+//
+// A 1500-page scanned book OCRs page by page for hours. The task row has to
+// say which page it is on (done over the pages that need OCR) and the ETA has
+// to be measured from that progress — never from the per-attachment average
+// of other books.
+
+/// Reads the running extraction's progress row the way the screen does, at
+/// every provider call: `progress_done` must already count the pages that
+/// landed and `progress_total` the pages that need OCR.
+struct ProgressRecordingProvider {
+    db_path: std::path::PathBuf,
+    window_pages: Option<usize>,
+    seen: Mutex<Vec<(i64, i64)>>,
+}
+
+impl ProgressRecordingProvider {
+    fn per_page(db_path: std::path::PathBuf) -> Arc<Self> {
+        Arc::new(Self {
+            db_path,
+            window_pages: None,
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn pdf_windows(db_path: std::path::PathBuf, window_pages: usize) -> Arc<Self> {
+        Arc::new(Self {
+            db_path,
+            window_pages: Some(window_pages),
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The (done, total) the extraction task carries right now.
+    fn progress_now(&self) -> (i64, i64) {
+        let conn = rusqlite::Connection::open(&self.db_path).expect("open progress db");
+        conn.query_row(
+            "SELECT progress_done, progress_total FROM processing_tasks
+              WHERE kind = 'bibliography_extract'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("progress row")
+    }
+
+    fn record(&self) {
+        let progress = self.progress_now();
+        self.seen.lock().expect("seen").push(progress);
+    }
+}
+
+impl PageOcrProvider for ProgressRecordingProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        self.record();
+        Ok("Texto reconocido por pagina con progreso, suficientemente largo para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        self.window_pages
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.record();
+        Ok((first_page..=last_page)
+            .map(|page| format!("Contenido reconocido de la pagina {page} del escaneo"))
+            .collect())
+    }
+
+    fn name(&self) -> &str {
+        "progress-recorder"
+    }
+}
+
+fn extract_progress_row(conn: &rusqlite::Connection) -> (i64, i64) {
+    conn.query_row(
+        "SELECT progress_done, progress_total FROM processing_tasks
+          WHERE kind = 'bibliography_extract'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("progress row")
+}
+
+/// The extraction task records honest page progress as OCR pages land:
+/// `progress_total` is the pages that need OCR, `progress_done` counts the
+/// pages processed so far — updated per page, and durable in the task row.
+#[test]
+fn extraction_progress_counts_ocr_pages_as_they_land() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PROGPAGE1", "Obra con progreso", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank, blank, blank]);
+    let path = write_temp_pdf(&dir, "progreso.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PROGATT01",
+        "linked_file",
+        Some(&path),
+        "progreso.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let provider = ProgressRecordingProvider::per_page(dir.path().join("entropia.sqlite"));
+    let renderer = fresh_renderer();
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.seen.lock().expect("seen").as_slice(),
+        &[(0, 3), (1, 3), (2, 3)],
+        "every provider call sees the pages already processed over the pages that need OCR"
+    );
+    assert_eq!(
+        extract_progress_row(&conn),
+        (3, 3),
+        "a finished extraction reads every OCR page processed"
+    );
+}
+
+/// The same progress when recognition lands in whole-document waves: one
+/// window settles every page it covers, never one checkpoint per window.
+#[test]
+fn extraction_progress_counts_whole_windows_when_ocr_lands_by_wave() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "PROGWAVE1", "Obra escaneada", "Resumen.");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank, blank, blank, blank, blank]);
+    let path = write_temp_pdf(&dir, "olas.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PROGATT02",
+        "linked_file",
+        Some(&path),
+        "olas.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let provider = ProgressRecordingProvider::pdf_windows(dir.path().join("entropia.sqlite"), 2);
+    let renderer = fresh_renderer();
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.seen.lock().expect("seen").as_slice(),
+        &[(0, 5), (2, 5), (4, 5)],
+        "waves land 2, 2 and 1 pages; one window is never one page"
+    );
+    assert_eq!(extract_progress_row(&conn), (5, 5));
+}
+
+/// The durable state of a running extraction the tests plant: the task
+/// row's page progress, the open attempt it measures itself against, the
+/// landings that attempt confirmed, and the long finished attempts that
+/// must stay out of every average the status computes.
+struct RunningExtractionFixture<'a> {
+    task_id: &'a str,
+    attachment_id: &'a str,
+    pages_done: i64,
+    pages_total: i64,
+    attempt_started_at: i64,
+    landings: &'a [(&'a str, i64)],
+    long_finished_attempts: usize,
+}
+
+/// One derived extraction planted as `running`, exactly as a supervisor
+/// mid-OCR leaves it.
+fn plant_running_extraction(conn: &rusqlite::Connection, fixture: RunningExtractionFixture<'_>) {
+    let RunningExtractionFixture {
+        task_id,
+        attachment_id,
+        pages_done,
+        pages_total,
+        attempt_started_at,
+        landings,
+        long_finished_attempts,
+    } = fixture;
+    let batch = repository::ensure_system_batch(conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        conn,
+        &batch,
+        task_id,
+        "bibliography_extract",
+        "attachment",
+        attachment_id,
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    conn.execute(
+        "UPDATE processing_tasks
+            SET state = 'running', progress_done = ?2, progress_total = ?3
+          WHERE id = ?1",
+        rusqlite::params![task_id, pages_done, pages_total],
+    )
+    .expect("mark extraction running");
+    conn.execute(
+        "INSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, outcome)
+         VALUES (?1, 1, 0, ?2, 'open')",
+        rusqlite::params![task_id, attempt_started_at],
+    )
+    .expect("open attempt");
+    for (index, (unit_key, created_at)) in landings.iter().enumerate() {
+        let payload = format!("\"pagina landing {index}\"");
+        let checksum = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+             VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                task_id,
+                unit_key,
+                repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+                payload,
+                checksum,
+                created_at
+            ],
+        )
+        .expect("landing checkpoint");
+    }
+    for attempt in 0..long_finished_attempts {
+        conn.execute(
+            "INSERT INTO processing_attempts
+               (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+             VALUES (?1, ?2, 0, 0, 10000000, 'interrupted')",
+            rusqlite::params![task_id, attempt as i64 + 2],
+        )
+        .expect("long past attempt");
+    }
+}
+
+/// The ETA of a running long extraction is its own page rate — pages done
+/// over the elapsed time of its attempt times the pages left — and the queued
+/// attachments keep the per-attachment average of finished attempts with the
+/// running task's own long attempts excluded from that average.
+#[test]
+fn p3_sync_eta_uses_the_running_extraction_page_rate_and_excludes_its_attempt() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-1", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN1", "El problema del yute", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT1",
+        "linked_file",
+        None,
+        "yute.pdf",
+        "application/pdf",
+    );
+    // 3 of 10 pages processed inside an attempt that started 60 s ago, with a
+    // landing every ~5 s: 20 000 ms per page.
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-running",
+            attachment_id: &attachment_id,
+            pages_done: 3,
+            pages_total: 10,
+            attempt_started_at: now - 60_000,
+            landings: &[
+                ("ocr-page:1", now - 40_000),
+                ("ocr-page:2", now - 35_000),
+                ("ocr-page:3", now - 30_000),
+            ],
+            long_finished_attempts: 3,
+        },
+    );
+
+    // One queued attachment and one settled one (three 1000 ms attempts):
+    // the queued average is 1000 ms only when the running task is excluded.
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-queued",
+        "bibliography_extract",
+        "attachment",
+        "att-queued",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-done",
+        "bibliography_extract",
+        "attachment",
+        "att-done",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(
+        &conn,
+        "eta-done",
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let eta = status
+        .eta_ms
+        .expect("the running extraction measures its own page rate");
+    // 7 remaining pages × 20 000 ms/page plus 1 queued attachment × 1000 ms.
+    assert!(
+        (141_000..=143_000).contains(&eta),
+        "page-rate ETA plus the queued average, got {eta}"
+    );
+}
+
+/// Wave landings weigh in pages, never in checkpoints: one `ocr-range` of
+/// 200 pages is 200 pages of rate evidence, not one sample of unknown size.
+#[test]
+fn p3_sync_eta_weighs_wave_landings_in_pages_not_checkpoints() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-3", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN3", "Obra escaneada", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT3",
+        "linked_file",
+        None,
+        "escaneado.pdf",
+        "application/pdf",
+    );
+    // 200 of 300 pages landed in ONE wave, 200 s into an attempt that started
+    // 200 s ago: 1000 ms per page even though only one checkpoint exists.
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-waves",
+            attachment_id: &attachment_id,
+            pages_done: 200,
+            pages_total: 300,
+            attempt_started_at: now - 200_000,
+            landings: &[("ocr-range:1-200", now - 150_000)],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let eta = status.eta_ms.expect("a landed wave measures pages");
+    assert!(
+        (100_000..=101_500).contains(&eta),
+        "100 remaining pages × 1000 ms/page, got {eta}"
+    );
+}
+
+/// Until the running extraction has processed a page, its rate is unmeasured
+/// and the ETA is honestly unknown: no samples, no number.
+#[test]
+fn p3_sync_eta_stays_null_until_the_running_extraction_measures_a_page() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-eta-run-2", "user", "0").expect("request");
+    let now = repository::now_ms();
+
+    let item_id = seed_catalog(&mut conn, "P3ETARUN2", "Obra sin muestras", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3ETAATT2",
+        "linked_file",
+        None,
+        "sin-muestras.pdf",
+        "application/pdf",
+    );
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "eta-unmeasured",
+            attachment_id: &attachment_id,
+            pages_done: 0,
+            pages_total: 10,
+            attempt_started_at: now - 60_000,
+            landings: &[],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let batch = repository::ensure_system_batch(&conn, "bibliography").expect("system batch");
+    insert_derived_task(
+        &conn,
+        &batch,
+        "eta-done-2",
+        "bibliography_extract",
+        "attachment",
+        "att-done-2",
+        repository::BIBLIOGRAPHY_EXTRACT_CONTRACT,
+    );
+    settle_task_with_attempts(
+        &conn,
+        "eta-done-2",
+        &[(1_000, 2_000), (3_000, 4_000), (5_000, 6_000)],
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert!(
+        status.eta_ms.is_none(),
+        "no page landed yet: the estimate is unknown, never a guess, got {:?}",
+        status.eta_ms
+    );
+}
+
+/// The status names the derived task the supervisor is running right now:
+/// its kind, the work it belongs to (the attachment's work title) and its
+/// page progress, so the screen can say «Procesando «…»: página 117 de
+/// 1537» instead of a counter that never moves.
+#[test]
+fn p3_sync_status_names_the_running_derived_task_and_its_pages() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let requested =
+        apply_bibliography_sync_request(&conn, "p3-current-1", "user", "0").expect("request");
+
+    let queued = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    assert!(queued.current.is_none(), "nothing is running yet: no name");
+
+    let item_id = seed_catalog(&mut conn, "P3CURRUN1", "El problema del yute", "Resumen.");
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "P3CURATT1",
+        "linked_file",
+        None,
+        "yute.pdf",
+        "application/pdf",
+    );
+    plant_running_extraction(
+        &conn,
+        RunningExtractionFixture {
+            task_id: "current-running",
+            attachment_id: &attachment_id,
+            pages_done: 117,
+            pages_total: 1537,
+            attempt_started_at: repository::now_ms(),
+            landings: &[],
+            long_finished_attempts: 0,
+        },
+    );
+
+    let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let current = status.current.expect("a running derived task is named");
+    assert_eq!(current.kind, "bibliography_extract");
+    assert_eq!(
+        current.title, "El problema del yute",
+        "the running extraction is named by its work"
+    );
+    assert_eq!(
+        (current.pages_done, current.pages_total),
+        (117, 1537),
+        "its own page progress travels with the name"
+    );
+}

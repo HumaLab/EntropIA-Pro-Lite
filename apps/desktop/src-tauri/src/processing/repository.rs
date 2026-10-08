@@ -1195,19 +1195,25 @@ const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
 /// open attempt is never a sample: it has no finish stamp. Attempts of tasks
 /// parked `blocked` are not samples either — they record a parking decision,
 /// not work, and their near-zero durations would drag the average into a
-/// lie. A `None` average means nothing of the kind has finished yet.
+/// lie. Neither are the attempts of `exclude_task_id`: the unit running
+/// right now is timed by its own progress, and its attempts (interrupted
+/// hours-long walks of one huge attachment among them) are not what a fresh
+/// attachment costs. A `None` average means nothing of the kind has
+/// finished yet.
 fn finished_attempt_average(
     conn: &Connection,
     anchor: i64,
     kind: &str,
+    exclude_task_id: Option<&str>,
 ) -> Result<(i64, Option<i64>), String> {
     conn.query_row(
         "SELECT COUNT(*), AVG(a.finished_at - a.started_at)
            FROM processing_attempts a
            JOIN processing_tasks t ON t.id = a.task_id
           WHERE t.rowid > ?1 AND t.kind = ?2 AND t.state <> 'blocked'
-            AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at",
-        rusqlite::params![anchor, kind],
+            AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at
+            AND (?3 IS NULL OR a.task_id <> ?3)",
+        rusqlite::params![anchor, kind, exclude_task_id],
         |row| {
             Ok((
                 row.get(0)?,
@@ -1217,6 +1223,194 @@ fn finished_attempt_average(
         },
     )
     .map_err(|error| format!("Failed to average finished attempts of {kind}: {error}"))
+}
+
+/// The derived task the supervisor is executing right now (one unit at a
+/// time), with everything the screen and the ETA need about it: its identity,
+/// the work it belongs to and its page progress. `None` while nothing runs.
+struct RunningDerivedTask {
+    task_id: String,
+    kind: String,
+    input_fingerprint: String,
+    contract_hash: String,
+    /// Pages processed over the pages that need OCR, for extractions only
+    /// (`0/0` for other kinds and before an extraction measures its total).
+    pages_done: i64,
+    pages_total: i64,
+    /// The work's own title (`bibliographic_items.title`), falling back to
+    /// the attachment filename and finally the subject id — the screen says
+    /// «Procesando «…»», never an empty pair of quotes.
+    title: String,
+}
+
+/// Reads the running derived task of the backlog window. The latest running
+/// row wins if history ever holds two; the kinds without a supervisor unit
+/// are never candidates.
+fn running_derived_task(
+    conn: &Connection,
+    anchor: i64,
+) -> Result<Option<RunningDerivedTask>, String> {
+    use rusqlite::OptionalExtension as _;
+    type Row = (String, String, String, String, String, String, i64, i64);
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT t.id, t.kind, t.subject_kind, t.subject_id, t.input_fingerprint,
+                    t.contract_hash, t.progress_done, t.progress_total
+               FROM processing_tasks t
+              WHERE t.rowid > ?1 AND t.domain = 'bibliography'
+                AND t.kind IN ('bibliography_profile', 'bibliography_extract')
+                AND t.state = 'running'
+              ORDER BY t.rowid DESC
+              LIMIT 1",
+            [anchor],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the running bibliography work: {error}"))?;
+    let Some((
+        task_id,
+        kind,
+        subject_kind,
+        subject_id,
+        input_fingerprint,
+        contract_hash,
+        progress_done,
+        progress_total,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    // The title of the work the task belongs to: for an extraction the
+    // attachment's parent item, for a profile the item itself.
+    let title = match subject_kind.as_str() {
+        "attachment" => conn.query_row(
+            "SELECT COALESCE(NULLIF(TRIM(i.title), ''), NULLIF(TRIM(a.filename), ''), ?2)
+               FROM zotero_attachments a
+               LEFT JOIN bibliographic_items i ON i.id = a.item_id
+              WHERE a.id = ?1",
+            rusqlite::params![&subject_id, &subject_id],
+            |row| row.get::<_, String>(0),
+        ),
+        _ => conn.query_row(
+            "SELECT COALESCE(NULLIF(TRIM(title), ''), NULLIF(TRIM(item_key), ''), ?2)
+               FROM bibliographic_items
+              WHERE id = ?1",
+            rusqlite::params![&subject_id, &subject_id],
+            |row| row.get::<_, String>(0),
+        ),
+    }
+    .optional()
+    .map_err(|error| format!("Failed to name the running bibliography work: {error}"))?
+    .unwrap_or_else(|| subject_id.clone());
+    let (pages_done, pages_total) = if kind == "bibliography_extract" {
+        (progress_done, progress_total)
+    } else {
+        (0, 0)
+    };
+    Ok(Some(RunningDerivedTask {
+        task_id,
+        kind,
+        input_fingerprint,
+        contract_hash,
+        pages_done,
+        pages_total,
+        title,
+    }))
+}
+
+/// Pages one landed unit settles: the extraction executor records one page
+/// per `ocr-page:{n}` checkpoint and a whole wave per `ocr-range:{first}-{last}`
+/// one, so the ETA can weigh landings in pages and never in checkpoints.
+/// Anything else counts as one page — a rate must never divide by zero.
+fn checkpoint_unit_pages(unit_key: &str) -> i64 {
+    if let Some(range) = unit_key.strip_prefix("ocr-range:") {
+        if let Some((first, last)) = range.split_once('-') {
+            if let (Ok(first), Ok(last)) = (first.parse::<i64>(), last.parse::<i64>()) {
+                return (last - first + 1).max(1);
+            }
+        }
+    }
+    1
+}
+
+/// Average ms per OCR'd page of a running extraction, measured from its own
+/// progress: the pages that landed inside the open attempt over the time
+/// elapsed since that attempt started, and — while a resumed attempt still
+/// walks cached pages and has landed none — the landing span of the whole
+/// task from its checkpoint timestamps. `None` while nothing measurable
+/// landed: a rate is never invented from someone else's book.
+fn running_page_rate_ms(
+    conn: &Connection,
+    task: &RunningDerivedTask,
+    now_ms: i64,
+) -> Result<Option<i64>, String> {
+    use rusqlite::OptionalExtension as _;
+    let landings = |since_ms: i64| -> Result<Vec<(i64, String)>, String> {
+        let mut statement = conn
+            .prepare(
+                "SELECT created_at, unit_key FROM processing_checkpoints
+                  WHERE task_id = ?1 AND input_fingerprint = ?2 AND contract_hash = ?3
+                    AND created_at >= ?4
+                  ORDER BY created_at",
+            )
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![
+                    task.task_id,
+                    task.input_fingerprint,
+                    task.contract_hash,
+                    since_ms
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Failed to read extraction landings: {error}"))
+    };
+    let attempt_started: Option<i64> = conn
+        .query_row(
+            "SELECT started_at FROM processing_attempts
+              WHERE task_id = ?1 AND finished_at IS NULL
+              ORDER BY started_at DESC LIMIT 1",
+            [&task.task_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read the running attempt: {error}"))?;
+    if let Some(started_at) = attempt_started {
+        let pages: i64 = landings(started_at)?
+            .iter()
+            .map(|(_, unit_key)| checkpoint_unit_pages(unit_key))
+            .sum();
+        if pages > 0 && now_ms > started_at {
+            return Ok(Some(((now_ms - started_at) / pages).max(1)));
+        }
+    }
+    let rows = landings(0)?;
+    if rows.len() >= 2 {
+        let total_pages: i64 = rows
+            .iter()
+            .map(|(_, unit_key)| checkpoint_unit_pages(unit_key))
+            .sum();
+        let measured_pages = total_pages - checkpoint_unit_pages(&rows[0].1);
+        let span_ms = rows[rows.len() - 1].0 - rows[0].0;
+        if measured_pages > 0 && span_ms > 0 {
+            return Ok(Some((span_ms / measured_pages).max(1)));
+        }
+    }
+    Ok(None)
 }
 
 /// Durable status of one `bibliography_sync` task, for the manual button.
@@ -1407,6 +1601,15 @@ pub fn bibliography_sync_status(
         .optional()
         .map_err(|error| format!("Failed to read why bibliography work is blocked: {error}"))
     };
+    // The unit executing right now, named — and the anchor of the one ETA
+    // rule that is not a plain average: a running extraction is timed by its
+    // own page rate, because the per-attachment average of other books says
+    // nothing about a 1500-page scan still walking its pages.
+    let running = running_derived_task(conn, window_anchor)?;
+    let running_extraction = running
+        .as_ref()
+        .filter(|task| task.kind == "bibliography_extract");
+    let running_pages = running_extraction.filter(|task| task.pages_total > 0);
     // P3 ETA: actionable remaining subjects per kind times the average duration
     // of that kind's finished attempts in this window. Blocked subjects are
     // never timed — they wait on the owner, not on the clock — and a kind
@@ -1414,10 +1617,12 @@ pub fn bibliography_sync_status(
     // makes the combined answer honestly unknown instead of zero. One
     // unmeasured kind with actionable work left makes the whole number a
     // guess as well, so the estimate stays `None` — as it does while the
-    // window holds fewer than three finished attempts at all.
+    // window holds fewer than three finished attempts at all, and while the
+    // running extraction has not measured a single page.
     let mut estimate_ms = 0_i64;
     let mut samples_total = 0_i64;
     let mut estimable = true;
+    let mut page_rate_measured = false;
     for (kind, remaining, blocked) in [
         (
             "bibliography_profile",
@@ -1431,7 +1636,14 @@ pub fn bibliography_sync_status(
         ),
     ] {
         let actionable = remaining - blocked;
-        let (samples, average_ms) = finished_attempt_average(conn, window_anchor, kind)?;
+        let (samples, average_ms) = finished_attempt_average(
+            conn,
+            window_anchor,
+            kind,
+            running_extraction
+                .filter(|task| task.kind == kind)
+                .map(|task| task.task_id.as_str()),
+        )?;
         samples_total += samples;
         if remaining <= 0 {
             continue;
@@ -1440,13 +1652,38 @@ pub fn bibliography_sync_status(
             estimable = false;
             break;
         }
+        if kind == "bibliography_extract" {
+            if let Some(task) = running_pages {
+                // Its own pages, its own rate: the remaining pages of the
+                // running book times the ms per page its landings measure.
+                match running_page_rate_ms(conn, task, now_ms())? {
+                    Some(rate_ms) => {
+                        page_rate_measured = true;
+                        estimate_ms += (task.pages_total - task.pages_done).max(0) * rate_ms;
+                    }
+                    None => estimable = false,
+                }
+                // The attachments queued behind it keep the per-attachment
+                // average — with its long attempts out of the sample.
+                let queued = actionable - 1;
+                if queued > 0 && estimable {
+                    if samples < ETA_MIN_FINISHED_ATTEMPTS {
+                        estimable = false;
+                        break;
+                    }
+                    estimate_ms += queued * average_ms.unwrap_or(0);
+                }
+                break;
+            }
+        }
         if samples < ETA_MIN_FINISHED_ATTEMPTS {
             estimable = false;
             break;
         }
         estimate_ms += actionable * average_ms.unwrap_or(0);
     }
-    let eta_ms = (estimable && samples_total >= ETA_MIN_FINISHED_ATTEMPTS).then_some(estimate_ms);
+    let eta_ms = (estimable && (samples_total >= ETA_MIN_FINISHED_ATTEMPTS || page_rate_measured))
+        .then_some(estimate_ms);
     Ok(super::commands::BibliographySyncStatus {
         new_profiles: derived("bibliography_profile")?,
         new_extractions: derived("bibliography_extract")?,
@@ -1458,6 +1695,14 @@ pub fn bibliography_sync_status(
         extractions_blocked,
         profiles_blocked_reason: blocked_reason("bibliography_profile")?,
         extractions_blocked_reason: blocked_reason("bibliography_extract")?,
+        current: running
+            .as_ref()
+            .map(|task| super::commands::BibliographyCurrentTask {
+                kind: task.kind.clone(),
+                title: task.title.clone(),
+                pages_done: task.pages_done,
+                pages_total: task.pages_total,
+            }),
         eta_ms,
         items_seen: receipt_number("itemsSeen"),
         remote_total: receipt_number("remoteTotal"),
@@ -4749,7 +4994,8 @@ pub fn reclaim_free_pages(
 
 /// Declares how many units the task holds in total (pages, chunks). Called
 /// once the manifest is known; `progress_done` only ever comes from saved
-/// checkpoints, never from in-flight provider progress.
+/// checkpoints (or the executor's own [`set_progress_done`] page count for
+/// wave-granular engines), never from in-flight provider progress.
 pub fn set_progress_total(
     conn: &Connection,
     task_id: &str,
@@ -4760,6 +5006,31 @@ pub fn set_progress_total(
         .execute(
             "UPDATE processing_tasks SET progress_total = ?1 WHERE id = ?2 AND state = 'running' AND lease_epoch = ?3",
             rusqlite::params![total, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to set progress of {task_id}: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    Ok(())
+}
+
+/// Records how many pages the task has processed so far. Ordinary
+/// `progress_done` bookkeeping counts saved checkpoints; an engine whose
+/// units land in waves — whole-document OCR windows settle many pages per
+/// checkpoint — reports its true page count here instead, still fenced on
+/// the running lease like every other executor write.
+pub fn set_progress_done(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    done: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET progress_done = ?1 WHERE id = ?2 AND state = 'running' AND lease_epoch = ?3",
+            rusqlite::params![done, task_id, lease_epoch],
         )
         .map_err(|e| format!("Failed to set progress of {task_id}: {e}"))?;
     if changed == 0 {

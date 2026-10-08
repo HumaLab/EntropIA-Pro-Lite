@@ -240,6 +240,20 @@ pub struct BibliographyBlockedReason {
     pub message: Option<String>,
 }
 
+/// The derived task the scheduler is running right now, named for the
+/// screen: its kind, the work it belongs to (the work's title, never an id)
+/// and its page progress. Pages belong to `bibliography_extract` alone (the
+/// pages processed over the pages that need OCR); other kinds carry `0/0`,
+/// and so does an extraction whose page total is not measured yet.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BibliographyCurrentTask {
+    pub kind: String,
+    pub title: String,
+    pub pages_done: i64,
+    pub pages_total: i64,
+}
+
 /// What one requested bibliography sync has actually done so far, read from
 /// the task the scheduler owns. `state` is the task's own state vocabulary
 /// (`pending`, `running`, `retry_wait`, `blocked`, `interrupted`, `succeeded`,
@@ -291,15 +305,26 @@ pub struct BibliographySyncStatus {
     /// blocked.
     pub profiles_blocked_reason: Option<BibliographyBlockedReason>,
     pub extractions_blocked_reason: Option<BibliographyBlockedReason>,
-    /// What the derived backlog still needs, in ms: the *actionable* remaining
-    /// subjects of each kind times the average duration of that kind's finished
-    /// attempts inside the backlog window. Blocked subjects are never timed —
-    /// they wait on the owner, not on the clock — and when every remaining
-    /// subject of a kind is blocked that kind has no estimate at all, so the
-    /// answer is `None`. `None` as well while the window holds fewer than
-    /// three finished attempts, or while any kind with actionable work left
-    /// has fewer than three to average — an honest unknown, never a made-up
-    /// number.
+    /// The derived unit executing right now, named — the supervisor runs one
+    /// unit at a time, so this is the work the owner is watching (its page
+    /// counter moving) or `None` while nothing runs. Never inferred from the
+    /// counts: it is the task row the scheduler holds `running`.
+    pub current: Option<BibliographyCurrentTask>,
+    /// What the derived backlog still needs, in ms. A running extraction is
+    /// timed by its own page rate — its remaining pages times the ms per OCR
+    /// page measured from its own landed pages — because the average of
+    /// other attachments says nothing about a 1500-page book; its long
+    /// attempts are excluded from the per-attachment average that times the
+    /// attachments queued behind it. Everything else is the *actionable*
+    /// remaining subjects of the kind times the average duration of that
+    /// kind's finished attempts inside the backlog window. Blocked subjects
+    /// are never timed — they wait on the owner, not on the clock — and when
+    /// every remaining subject of a kind is blocked that kind has no estimate
+    /// at all, so the answer is `None`. `None` as well while the window holds
+    /// fewer than three finished attempts, while any kind with actionable
+    /// work left has fewer than three to average, or while the running
+    /// extraction has not measured a single page — an honest unknown, never a
+    /// made-up number.
     pub eta_ms: Option<i64>,
 }
 

@@ -560,6 +560,7 @@ describe('a backlog parked blocked on configuration', () => {
       message: 'OpenRouter API key no configurada.',
     },
     extractionsBlockedReason: null,
+    current: null,
     etaMs: null,
     ...overrides,
   })
@@ -1831,6 +1832,7 @@ describe('P3 derived work of a library sync', () => {
     extractionsBlocked: 0,
     profilesBlockedReason: null,
     extractionsBlockedReason: null,
+    current: null,
     etaMs: 720_000,
   }
 

@@ -28,6 +28,7 @@ type SyncStatus = {
   extractionsBlocked: number
   profilesBlockedReason: { code: string | null; message: string | null } | null
   extractionsBlockedReason: { code: string | null; message: string | null } | null
+  current: { kind: string; title: string; pagesDone: number; pagesTotal: number } | null
   etaMs: number | null
 }
 
@@ -50,6 +51,7 @@ function syncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
     extractionsBlocked: 0,
     profilesBlockedReason: null,
     extractionsBlockedReason: null,
+    current: null,
     etaMs: null,
     ...overrides,
   }
@@ -181,6 +183,85 @@ describe('BatchStatusIndicator', () => {
     render(BatchStatusIndicator)
 
     expect(screen.getByText('Bibliografía: fichas 120/450 · pasajes 30/400')).toBeInTheDocument()
+  })
+
+  it('appends the running extraction OCR pages to the compact line', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 13,
+        newExtractions: 16,
+        profilesDone: 13,
+        profilesTotal: 13,
+        extractionsDone: 10,
+        extractionsTotal: 26,
+        current: {
+          kind: 'bibliography_extract',
+          title: 'El problema del yute',
+          pagesDone: 117,
+          pagesTotal: 1537,
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: fichas 13/13 · pasajes 10/26 · OCR 117/1537')
+    ).toBeInTheDocument()
+  })
+
+  it('keeps the OCR counter beside the waiting count when both are true', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 13,
+        profilesTotal: 13,
+        extractionsDone: 10,
+        extractionsTotal: 26,
+        extractionsBlocked: 2,
+        extractionsBlockedReason: {
+          code: 'configuration_required_ocr',
+          message: 'configuration: GLM-OCR no está configurado.',
+        },
+        profilesBlockedReason: null,
+        current: {
+          kind: 'bibliography_extract',
+          title: 'El problema del yute',
+          pagesDone: 117,
+          pagesTotal: 1537,
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: fichas 13/13 · pasajes 10/26 · OCR 117/1537 · 2 en espera')
+    ).toBeInTheDocument()
+  })
+
+  it('leaves the OCR counter off the line while no extraction is running', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 13,
+        profilesTotal: 13,
+        extractionsDone: 10,
+        extractionsTotal: 26,
+        current: {
+          kind: 'bibliography_profile',
+          title: 'Los orígenes',
+          pagesDone: 0,
+          pagesTotal: 0,
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(screen.getByText('Bibliografía: fichas 13/13 · pasajes 10/26')).toBeInTheDocument()
+    expect(screen.queryByText(/OCR/)).not.toBeInTheDocument()
   })
 
   it('keeps the generic batch badge for user batches with no bibliography backlog', () => {

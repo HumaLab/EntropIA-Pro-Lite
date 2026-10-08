@@ -305,6 +305,92 @@ describe('E2b-4 selected-library synchronization', () => {
       ).toBeInTheDocument()
     })
 
+    it('names the work being OCRd, its page and the humane ETA on a second line', async () => {
+      await renderWith({
+        state: 'succeeded',
+        newProfiles: 13,
+        newExtractions: 16,
+        profilesDone: 13,
+        profilesTotal: 13,
+        extractionsDone: 10,
+        extractionsTotal: 26,
+        etaMs: 13_200_000,
+        current: {
+          kind: 'bibliography_extract',
+          title: 'El problema del yute',
+          pagesDone: 117,
+          pagesTotal: 1537,
+        },
+      })
+
+      expect(
+        screen.getByText('Fichas 13/13 · Pasajes 10/26 · ~3 h 40 min restantes')
+      ).toHaveAttribute('role', 'status')
+      expect(
+        screen.getByText(
+          'Procesando «El problema del yute»: página 117 de 1537 · ~3 h 40 min restantes'
+        )
+      ).toHaveAttribute('role', 'status')
+    })
+
+    it('keeps the second line useful while the ETA cannot be known', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 13,
+        profilesTotal: 13,
+        extractionsDone: 10,
+        extractionsTotal: 26,
+        etaMs: null,
+        current: {
+          kind: 'bibliography_extract',
+          title: 'El problema del yute',
+          pagesDone: 117,
+          pagesTotal: 1537,
+        },
+      })
+
+      expect(
+        screen.getByText('Procesando «El problema del yute»: página 117 de 1537')
+      ).toBeInTheDocument()
+    })
+
+    it('names a running work without pages as a bare sentence', async () => {
+      await renderWith({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 2,
+        etaMs: null,
+        current: {
+          kind: 'bibliography_profile',
+          title: 'Los orígenes',
+          pagesDone: 0,
+          pagesTotal: 0,
+        },
+      })
+
+      expect(screen.getByText('Procesando «Los orígenes»')).toBeInTheDocument()
+    })
+
+    it('tells what a second press does while the derived work drains', async () => {
+      const button = await renderWith({
+        state: 'succeeded',
+        profilesDone: 0,
+        profilesTotal: 2,
+        etaMs: null,
+      })
+
+      expect(button).toHaveAttribute(
+        'data-tooltip',
+        'Vuelve a leer el catálogo de Zotero; no reinicia el procesamiento en curso'
+      )
+    })
+
+    it('says nothing extra on the button when no backlog is draining', async () => {
+      const button = await renderWith({ state: 'succeeded', itemsSeen: 2812 })
+
+      expect(button).not.toHaveAttribute('data-tooltip')
+    })
+
     it('says it is paused when Zotero stopped answering, never that it continues', async () => {
       await renderWith({ state: 'retry_wait', errorCode: 'zotero_unreachable' })
 
