@@ -22,15 +22,20 @@ type ConfirmDialogBaseProps = {
   confirmFirst?: boolean
   confirmTitle?: string
   oncancel: () => void
-  onconfirm: () => void
+  /** Required whenever a confirm action is rendered; omit it with the label. */
+  onconfirm?: () => void
   children?: Snippet
   errorContent?: Snippet
 }
 
+/**
+ * The confirm action is optional: a dialog with neither `confirmLabel` nor
+ * `confirmIcon` renders the cancel/close action alone (informational phases).
+ */
 export type ConfirmDialogProps = ConfirmDialogBaseProps &
   (
     | {
-        confirmLabel: string
+        confirmLabel?: string
         confirmIcon?: never
         confirmAriaLabel?: string
       }

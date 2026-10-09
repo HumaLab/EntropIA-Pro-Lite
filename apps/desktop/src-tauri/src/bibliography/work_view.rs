@@ -967,6 +967,9 @@ mod tests {
         assert_eq!(detail.item.tags, ["metodología"]);
         assert_eq!(detail.item.attachments.len(), 1);
         let first = &detail.item.attachments[0];
+        // The reprocess action names the attachment by its catalog id, so the
+        // wire carries it (plan-texto-nativo-parte-b 2.5, work detail).
+        assert_eq!(first.attachment_id, saved_attachment.id);
         assert_eq!(first.attachment_key, "ATT1");
         assert_eq!(first.content_type.as_deref(), Some("application/pdf"));
         assert_eq!(first.filename.as_deref(), Some("oficio.pdf"));

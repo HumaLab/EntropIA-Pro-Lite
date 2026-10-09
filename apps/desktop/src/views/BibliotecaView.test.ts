@@ -56,6 +56,7 @@ function backend(
       | ((offset: number) => { works: unknown[]; total: number })
     pageError?: boolean
     search?: unknown
+    reprocessCandidates?: unknown[]
   } = {}
 ) {
   mockInvoke.mockImplementation(async (command: string, payload?: unknown) => {
@@ -81,6 +82,25 @@ function backend(
             librarySynced: true,
           }
         )
+      case 'bibliography_reprocess_candidates':
+        return options.reprocessCandidates ?? []
+      case 'bibliography_reprocess_preview':
+        return {
+          attachments: [],
+          totals: {
+            attachments: 0,
+            pages: 0,
+            ocrPages: 0,
+            reusedOcrPages: 0,
+            fixedWithoutOcr: 0,
+            estimatedUsd: 0,
+          },
+          cancelled: false,
+        }
+      case 'bibliography_reprocess_preview_cancel':
+        return undefined
+      case 'bibliography_reprocess_confirm':
+        return { batchId: 'batch-1', results: [] }
       default:
         throw new Error(`unexpected command ${command}`)
     }
@@ -279,5 +299,19 @@ describe('BibliotecaView', () => {
     await waitFor(() => {
       expect(callsFor('bibliography_list_works').length).toBeGreaterThan(1)
     })
+  })
+
+  it('offers the text reprocess action in the toolbar and opens the dialog', async () => {
+    backend({ reprocessCandidates: [] })
+    render(BibliotecaView)
+
+    await screen.findByText('El oficio de historiador')
+    await fireEvent.click(screen.getByRole('button', { name: 'Reprocesar texto' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(callsFor('bibliography_reprocess_candidates').length).toBe(1)
+    })
+    expect(await screen.findByText('No hay obras con texto dañado.')).toBeInTheDocument()
   })
 })

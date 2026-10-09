@@ -12,6 +12,8 @@
   } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
   import { renderOcrMarkup, sanitizeOcrHtml } from '$lib/ocr-rich-text'
+  import { isPdfAttachment } from '$lib/bibliography-reprocess'
+  import BibliographyReprocessDialog from '../components/BibliographyReprocessDialog.svelte'
   import {
     ActionIcon,
     Button,
@@ -64,6 +66,8 @@
   )
   let activeKey = $state<string | null>(null)
   let attachmentMenuOpen = $state(false)
+  /** The owner's text reprocess dialog over the work's PDF attachments. */
+  let reprocessOpen = $state(false)
   /** The page shown and how many there are, as the viewer reports them. */
   let page = $state(1)
   let total = $state(1)
@@ -71,6 +75,10 @@
   const displayTitle = $derived(detail?.title || title)
   const metaLine = $derived(detail ? workLine({ authors: detail.authors, year: detail.year }) : '')
   const attachments = $derived(detail?.item.attachments ?? [])
+  /** PDFs only, by the backend's own rule: the reprocess action names these. */
+  const pdfAttachments = $derived(
+    attachments.filter((entry) => isPdfAttachment(entry.contentType, entry.filename))
+  )
   const currentAttachment = $derived(
     attachments.find((entry) => entry.attachmentKey === activeKey) ?? null
   )
@@ -187,6 +195,12 @@
         {/if}
         {#if detail.libraryName}
           <span class="work-header__chip">{detail.libraryName}</span>
+        {/if}
+        {#if pdfAttachments.length > 0}
+          <Button variant="secondary" onclick={() => (reprocessOpen = true)}>
+            <ActionIcon name="refresh" size={16} />
+            {$currentLocale && t('bibliography.reprocess.action')}
+          </Button>
         {/if}
       </div>
     </header>
@@ -434,6 +448,14 @@
         {/if}
       </section>
     {/if}
+  {/if}
+
+  {#if reprocessOpen}
+    <BibliographyReprocessDialog
+      mode="work"
+      attachmentIds={pdfAttachments.map((entry) => entry.attachmentId)}
+      onclose={() => (reprocessOpen = false)}
+    />
   {/if}
 </div>
 

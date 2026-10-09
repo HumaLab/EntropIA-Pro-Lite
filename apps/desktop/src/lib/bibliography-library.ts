@@ -107,6 +107,8 @@ export interface BibliographyWorkCreator {
 
 /** Attachment metadata only: names to list, never paths to open. */
 export interface BibliographyWorkAttachmentRef {
+  /** The catalog id of the attachment row (what the reprocess commands name). */
+  attachmentId: string
   attachmentKey: string
   contentType?: string | null
   linkMode?: string | null

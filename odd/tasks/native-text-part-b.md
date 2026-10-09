@@ -26,7 +26,7 @@ Branch `feat/native-text-reprocess`, worktree
   cancel) and the USD estimate (plan 2.3, 2.4).
 - [x] B4 — Reprocess contract, `bibliography_reprocess_confirm` (own user batch, own admission, busy on
   conflict) and executor reprocess mode (plan-hash gate, converted reuse, page-only OCR) (plan 2.3).
-- [ ] B5 — UI: Biblioteca toolbar button, work detail button, preview/confirm dialog (plan 2.5).
+- [x] B5 — UI: Biblioteca toolbar button, work detail button, preview/confirm dialog (plan 2.5).
 - [ ] B6 — Local verification, CI green incl. Pro, Judgment Day on the code, merge.
 
 ## Progress
@@ -66,3 +66,11 @@ Branch `feat/native-text-reprocess`, worktree
   bibliography_reprocess 19, acl_manifest_guard 6 passed; clippy and fmt clean. The reprocess plan reads
   PDFium through the path app setup resolves (`lib.rs:729`). Batch tab renders the batch by id with
   "OCR ✓ / Embeddings —" and task-count progress (static check; B5 checks it live).
+- 2026-10-09: B5 done — `BibliographyReprocessDialog` (library and work modes; loading, text progress with
+  Cancel, summary with estimated USD, no candidates, after confirm), "Reprocesar texto" in the Biblioteca
+  toolbar and the work header (only with a PDF), `refresh` icon, 27 i18n keys es/en. `ConfirmDialog`'s
+  confirm action is optional (backward compatible); the work detail carries `attachmentId` so the work
+  action previews every PDF. RED observed (desktop, ui, Rust); focused 44, ui 835, full desktop Pro 3468 and
+  Lite 3447 passed (`--maxWorkers=2`), typecheck both variants 0 errors, lint 0 errors, Rust lib
+  bibliography 197 and bibliography_processing 165, clippy clean. Known environmental flake:
+  `src/lib/ocr-export.test.ts` (untouched) times out at 5 s under default full-suite parallelism.

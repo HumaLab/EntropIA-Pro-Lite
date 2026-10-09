@@ -26,6 +26,7 @@ const props = {
 
 function attachment(over: Record<string, unknown> = {}) {
   return {
+    attachmentId: 'att-1',
     attachmentKey: 'ATT1',
     contentType: 'application/pdf',
     linkMode: 'imported_file',
@@ -90,6 +91,7 @@ function backend(
     detail?: unknown
     detailError?: boolean
     open?: Record<string, unknown> | ((attachmentKey: string) => Record<string, unknown>)
+    reprocessPreview?: unknown
   } = {}
 ) {
   mockInvoke.mockImplementation(async (command: string, payload?: unknown) => {
@@ -101,6 +103,25 @@ function backend(
         const key = (payload as { attachmentKey: string }).attachmentKey
         return typeof options.open === 'function' ? options.open(key) : (options.open ?? opened())
       }
+      case 'bibliography_reprocess_preview':
+        return (
+          options.reprocessPreview ?? {
+            attachments: [],
+            totals: {
+              attachments: 0,
+              pages: 0,
+              ocrPages: 0,
+              reusedOcrPages: 0,
+              fixedWithoutOcr: 0,
+              estimatedUsd: 0,
+            },
+            cancelled: false,
+          }
+        )
+      case 'bibliography_reprocess_preview_cancel':
+        return undefined
+      case 'bibliography_reprocess_confirm':
+        return { batchId: 'batch-1', results: [] }
       default:
         throw new Error(`unexpected command ${command}`)
     }
@@ -465,5 +486,61 @@ describe('BibliographyWorkView', () => {
     await waitFor(() => {
       expect(callsFor('bibliography_work_detail').length).toBeGreaterThan(1)
     })
+  })
+
+  it('opens the text reprocess dialog with the work PDF attachments only', async () => {
+    backend({
+      detail: detail({
+        item: {
+          ...detail().item,
+          attachments: [
+            attachment(),
+            attachment({
+              attachmentId: 'att-2',
+              attachmentKey: 'ATT2',
+              contentType: 'text/html',
+              filename: 'snap.html',
+            }),
+            attachment({ attachmentId: 'att-3', attachmentKey: 'ATT3', filename: 'apendice.pdf' }),
+          ],
+        },
+      }),
+      open: (key: string) => opened({ attachmentKey: key }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByTestId('work-original-viewer')
+    await fireEvent.click(screen.getByRole('button', { name: 'Reprocesar texto' }))
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith('bibliography_reprocess_preview', {
+        attachmentIds: ['att-1', 'att-3'],
+      })
+    })
+  })
+
+  it('hides the text reprocess action when the work has no PDF attachment', async () => {
+    backend({
+      detail: detail({
+        item: {
+          ...detail().item,
+          attachments: [
+            attachment({
+              attachmentId: 'att-2',
+              attachmentKey: 'ATT2',
+              contentType: 'text/html',
+              filename: 'snap.html',
+            }),
+          ],
+        },
+      }),
+      open: (key: string) =>
+        opened({ attachmentKey: key, originalKind: 'html', originalPath: null }),
+    })
+    render(BibliographyWorkView, { props })
+
+    await screen.findByText('El oficio de historiador')
+    expect(screen.queryByRole('button', { name: 'Reprocesar texto' })).toBeNull()
   })
 })

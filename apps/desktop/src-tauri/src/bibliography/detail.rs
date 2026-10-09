@@ -35,9 +35,11 @@ pub struct Creator {
 
 /// Attachment metadata only. `native_path` is deliberately absent: the detail
 /// never resolves a file, it only describes what the catalog remembers.
+/// `attachment_id` is the catalog id the reprocess action names (B5).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentDetail {
+    pub attachment_id: String,
     pub attachment_key: String,
     pub content_type: Option<String>,
     pub link_mode: Option<String>,
@@ -392,7 +394,7 @@ pub(crate) fn project_item(
 
     let mut attachments_statement = conn
         .prepare(
-            "SELECT attachment_key, content_type, link_mode, filename, url
+            "SELECT id, attachment_key, content_type, link_mode, filename, url
                FROM zotero_attachments
               WHERE item_id = ?1
               ORDER BY attachment_key ASC",
@@ -406,11 +408,12 @@ pub(crate) fn project_item(
     let attachments: Vec<AttachmentDetail> = attachments_statement
         .query_map([&item.id], |row| {
             Ok(AttachmentDetail {
-                attachment_key: row.get(0)?,
-                content_type: row.get(1)?,
-                link_mode: row.get(2)?,
-                filename: row.get(3)?,
-                url: row.get(4)?,
+                attachment_id: row.get(0)?,
+                attachment_key: row.get(1)?,
+                content_type: row.get(2)?,
+                link_mode: row.get(3)?,
+                filename: row.get(4)?,
+                url: row.get(5)?,
             })
         })
         .map_err(|error| {
@@ -1227,6 +1230,7 @@ mod tests {
                 collections: vec!["Alpha collection".to_string()],
                 tags: vec![],
                 attachments: vec![AttachmentDetail {
+                    attachment_id: "ATTACH01".to_string(),
                     attachment_key: "PDF01".to_string(),
                     content_type: Some("application/pdf".to_string()),
                     link_mode: None,
@@ -1261,6 +1265,7 @@ mod tests {
                     "tags": [],
                     "attachments": [
                         {
+                            "attachmentId": "ATTACH01",
                             "attachmentKey": "PDF01",
                             "contentType": "application/pdf",
                             "linkMode": null,

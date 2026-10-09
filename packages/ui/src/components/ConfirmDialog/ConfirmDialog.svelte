@@ -126,7 +126,7 @@
     >
       <ActionIcon name={confirmIcon} size={16} />
     </button>
-  {:else}
+  {:else if confirmLabel !== undefined}
     <Button
       variant={isDestructive ? 'danger' : 'primary'}
       onclick={onconfirm}

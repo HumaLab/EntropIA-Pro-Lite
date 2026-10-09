@@ -17,6 +17,7 @@
   } from '$lib/bibliography-library'
   import { workLine } from '$lib/rag-scope'
   import { ActionIcon, Button, SearchBar, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
+  import BibliographyReprocessDialog from '../components/BibliographyReprocessDialog.svelte'
 
   /**
    * Biblioteca (P2): the works of the synced Zotero libraries, as a paged
@@ -59,6 +60,8 @@
   /** The remembered listing order, like other view preferences. */
   let sort = $state<BibliotecaSort>(readBibliotecaSort())
   let sortMenuOpen = $state(false)
+  /** The owner's text reprocess dialog (plan-texto-nativo-parte-b 2.5). */
+  let reprocessOpen = $state(false)
 
   const rows = $derived(searchHits ?? works)
   const countsLabel = $derived.by(() => {
@@ -314,6 +317,10 @@
             </button>
           {/snippet}
         </ToolbarMenu>
+        <Button variant="secondary" onclick={() => (reprocessOpen = true)}>
+          <ActionIcon name="refresh" size={16} />
+          {$currentLocale && t('bibliography.reprocess.action')}
+        </Button>
       </div>
     {/if}
   </section>
@@ -378,6 +385,10 @@
     {#if loadingMore}
       <p class="page-continuation">{$currentLocale && t('biblioteca.loadingMore')}</p>
     {/if}
+  {/if}
+
+  {#if reprocessOpen}
+    <BibliographyReprocessDialog mode="library" onclose={() => (reprocessOpen = false)} />
   {/if}
 </div>
 

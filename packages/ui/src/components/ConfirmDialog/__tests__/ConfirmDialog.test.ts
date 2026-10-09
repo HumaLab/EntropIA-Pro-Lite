@@ -124,6 +124,40 @@ describe('ConfirmDialog', () => {
     trigger.remove()
   })
 
+  it('renders no confirm button when no confirm action is given', () => {
+    const oncancel = vi.fn()
+    render(ConfirmDialog, {
+      props: {
+        title: 'Reprocesar texto',
+        cancelLabel: 'Cerrar',
+        oncancel,
+      },
+    })
+
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Cerrar' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+    expect(oncancel).toHaveBeenCalledOnce()
+  })
+
+  it('renders the confirm button whenever confirmLabel is given', async () => {
+    const onconfirm = vi.fn()
+    render(ConfirmDialog, {
+      props: {
+        title: 'Delete item',
+        cancelLabel: 'Cancel',
+        confirmLabel: 'Delete',
+        oncancel: vi.fn(),
+        onconfirm,
+      },
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(onconfirm).toHaveBeenCalledOnce()
+  })
+
   it('supports destructive icon-only confirmation', () => {
     render(ConfirmDialog, {
       props: {
