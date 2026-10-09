@@ -17,7 +17,7 @@ use crate::db::state::AppDbState;
 use crate::sync::engine::{engine_snapshot, SyncEngine, SyncRequest, SyncStatus};
 use crate::sync::http::{
     DeleteAccountRequest, DeviceInfo, HttpSyncApi, NotificationItem, PlanCatalogItem,
-    PlanChangeRequestResponse, SyncApi, UsageResponse,
+    PlanChangeRequestResponse, SyncApi, UsageResponse, WritingShare,
 };
 use crate::sync::open_sync_connection;
 use crate::sync::session::{clear_sync_state, delete_token, meta_get, meta_set, read_token};
@@ -101,6 +101,29 @@ pub async fn sync_full_resync(
     tokio::task::spawn_blocking(move || engine_snapshot(&handle, &db_path))
         .await
         .map_err(|e| format!("[sync] full_resync task failed: {e}"))
+}
+
+/// The auto-sync toggle and interval as stored, defaults included, so the
+/// Settings card and Escritura show what the engine will actually do.
+#[derive(serde::Serialize)]
+pub struct AutoSync {
+    pub enabled: bool,
+    pub interval_min: u64,
+}
+
+#[tauri::command]
+pub async fn sync_get_auto(db: State<'_, AppDbState>) -> Result<AutoSync, String> {
+    crate::dev_profile::require_sync()?;
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || -> Result<AutoSync, String> {
+        let conn = open_sync_connection(&db_path)?;
+        Ok(AutoSync {
+            enabled: super::engine::auto_enabled(&conn),
+            interval_min: super::engine::auto_interval(&conn).as_secs() / 60,
+        })
+    })
+    .await
+    .map_err(|e| format!("[sync] get_auto task failed: {e}"))?
 }
 
 /// Sets the auto-sync toggle + interval (DESIGN §11). Persists to `sync_meta`
@@ -343,6 +366,70 @@ pub async fn sync_request_plan_change(
         ),
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// Shared Escritura documents (EntropIA-Cloud PROTOCOL "Documentos compartidos")
+// ---------------------------------------------------------------------------
+
+fn check_document_id(document_id: &str) -> Result<(), String> {
+    if document_id.is_empty()
+        || !document_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("invalid document id {document_id:?}"));
+    }
+    Ok(())
+}
+
+/// Lists shared documents, or `None` when the server predates sharing (the UI
+/// then hides the Share button).
+#[tauri::command]
+pub async fn sync_writing_shares(
+    db: State<'_, AppDbState>,
+) -> Result<Option<Vec<WritingShare>>, String> {
+    let (url, token) = session_creds(db.db_path.clone()).await?;
+    let api = HttpSyncApi::new(&url).map_err(String::from)?;
+    match api.list_writing_shares(&token).await {
+        Ok(shares) => Ok(Some(shares)),
+        Err(error) if error.status() == Some(404) => Ok(None),
+        Err(error) => Err(String::from(error)),
+    }
+}
+
+#[tauri::command]
+pub async fn sync_writing_share(
+    document_id: String,
+    email: String,
+    db: State<'_, AppDbState>,
+) -> Result<WritingShare, String> {
+    check_document_id(&document_id)?;
+    let (url, token) = session_creds(db.db_path.clone()).await?;
+    let api = HttpSyncApi::new(&url).map_err(String::from)?;
+    api.share_writing(&token, &document_id, email.trim())
+        .await
+        .map_err(|error| match error.api_code() {
+            Some("not_found") => {
+                "Ese documento todavía no llegó al servidor: sincronizá y volvé a probar."
+                    .to_string()
+            }
+            _ => String::from(error),
+        })
+}
+
+#[tauri::command]
+pub async fn sync_writing_unshare(
+    document_id: String,
+    email: String,
+    db: State<'_, AppDbState>,
+) -> Result<(), String> {
+    check_document_id(&document_id)?;
+    let (url, token) = session_creds(db.db_path.clone()).await?;
+    let api = HttpSyncApi::new(&url).map_err(String::from)?;
+    api.unshare_writing(&token, &document_id, email.trim())
+        .await
+        .map_err(String::from)
 }
 
 /// Lists the user's in-app notifications (PROTOCOL `GET /v1/notifications`).

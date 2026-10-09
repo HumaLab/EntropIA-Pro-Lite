@@ -54,6 +54,15 @@ export interface WritingDocumentRow {
   updated_at: number
 }
 
+/** One entry of a manuscript's history (`writing_list_versions`). */
+export interface WritingVersionSummary {
+  version_number: number
+  /** `auto` every ten minutes of saves; `checkpoint` before a sync receive;
+   *  `restore` before a restore; `close`/`migration` are not written today. */
+  reason: string
+  created_at: number
+}
+
 /** The shape `WritingError` serialises as. Branch on `code`, show `message`. */
 /**
  * Where a piece of the manuscript came from (§9.6).
@@ -343,6 +352,70 @@ export class WritingStore {
     } catch (error) {
       this.#set({ loading: false, error: asCommandError(error), status: 'error' })
     }
+  }
+
+  /**
+   * Re-reads the open manuscript after a sync pass and swaps its content in
+   * place: the editor applies an external change without remounting, so the
+   * page does not blank the way `openDocument` does. Only when the stored
+   * revision moved and nothing local is pending — a pending edit is never
+   * overwritten; its save meets the new revision as a conflict instead.
+   */
+  async refreshOpen(): Promise<boolean> {
+    const open = this.#state.open
+    if (!open || this.#state.status !== 'saved') return false
+    const row = await invoke<WritingDocumentRow>('writing_load_document', { id: open.id })
+    const state = this.#state
+    if (state.open?.id !== open.id || state.status !== 'saved' || row.revision === state.revision) {
+      return false
+    }
+    const parsed = parseCanonical(row.current_content_json)
+    if (!parsed.ok) return false
+    this.#set({ open: row, content: parsed.document, revision: row.revision })
+    return true
+  }
+
+  /** The open manuscript's history, newest first. */
+  async listVersions(): Promise<WritingVersionSummary[]> {
+    const open = this.#state.open
+    if (!open) return []
+    return invoke<WritingVersionSummary[]>('writing_list_versions', { documentId: open.id })
+  }
+
+  /** One version of the open manuscript, parsed for a read-only preview. */
+  async readVersion(versionNumber: number): Promise<CanonicalDocument | null> {
+    const open = this.#state.open
+    if (!open) return null
+    const version = await invoke<{ content_json: string }>('writing_read_version', {
+      documentId: open.id,
+      versionNumber,
+    })
+    const parsed = parseCanonical(version.content_json)
+    return parsed.ok ? parsed.document : null
+  }
+
+  /**
+   * Brings back an earlier version as a new revision. Never destructive: the
+   * backend keeps what it replaces as a version of its own (§16.4). Flushes
+   * first so the revision it checks against is the one on disk.
+   */
+  async restoreVersion(versionNumber: number): Promise<void> {
+    await this.flush()
+    const open = this.#state.open
+    if (!open) return
+    const content = await this.readVersion(versionNumber)
+    if (!content) return
+    await invoke<number>('writing_restore_version', {
+      restore: {
+        document_id: open.id,
+        version_number: versionNumber,
+        expected_revision: this.#state.revision,
+        citations: citationProjection(content),
+        zotero_citations: zoteroCitationProjection(content),
+        provenance: [],
+      },
+    })
+    await this.refreshOpen()
   }
 
   /**

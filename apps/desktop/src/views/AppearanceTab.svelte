@@ -130,9 +130,9 @@
   )
 </script>
 
-<section class="appearance-tab">
-  <div class="appearance-tab__grid">
-    <Card padding="sm">
+<Card>
+  <section class="appearance-tab">
+    <div class="appearance-tab__grid">
       <div class="appearance-tab__field">
         <span class="appearance-tab__label" id="appearance-theme-label">
           {t('settings.appearance.themeLabel')}
@@ -152,9 +152,7 @@
           {/snippet}
         </ToolbarMenu>
       </div>
-    </Card>
 
-    <Card padding="sm">
       <div class="appearance-tab__field">
         <span class="appearance-tab__label" id="appearance-contrast-label">
           {t('settings.appearance.contrastLabel')}
@@ -174,9 +172,7 @@
           {/snippet}
         </ToolbarMenu>
       </div>
-    </Card>
 
-    <Card padding="sm">
       <div class="appearance-tab__field">
         <span class="appearance-tab__label" id="appearance-language-label">
           {t('settings.languageLabel')}
@@ -196,9 +192,7 @@
           {/snippet}
         </ToolbarMenu>
       </div>
-    </Card>
 
-    <Card padding="sm">
       <div class="appearance-tab__field">
         <span class="appearance-tab__label" id="appearance-zoom-label">
           {t('topbar.zoomTitle')}
@@ -235,9 +229,7 @@
           </button>
         </div>
       </div>
-    </Card>
 
-    <Card padding="sm">
       <div class="appearance-tab__field">
         <span class="appearance-tab__label" id="appearance-font-label">
           {t('typography.title')}
@@ -264,9 +256,9 @@
           {/snippet}
         </ToolbarMenu>
       </div>
-    </Card>
-  </div>
-</section>
+    </div>
+  </section>
+</Card>
 
 <style>
   /* The preset cards need room for their previews; the menu floats in <body>,
@@ -281,15 +273,12 @@
     flex-direction: column;
   }
 
-  /* Sized from the grid's own box, not the viewport — the Configuración
-     sidebar sits beside the panels, so a media query would measure the wrong
-     thing. `align-items: start` stops a short card being stretched to a tall
-     neighbour's height. */
+  /* A plain settings list: no cards, no surface, rows split by a hairline
+     (user decision, 2026-10-08), inside one full-width panel like the other
+     Configuración tabs. */
   .appearance-tab__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
-    gap: var(--space-4);
-    align-items: start;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Label and control on one line, the control hard right. */
@@ -299,6 +288,11 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
+    padding: var(--space-3) 0;
+  }
+
+  .appearance-tab__field + .appearance-tab__field {
+    border-top: 1px solid var(--color-hairline);
   }
 
   .appearance-tab__label {
@@ -315,17 +309,21 @@
     gap: var(--space-1);
     min-height: var(--control-height-sm);
     padding: 0 var(--space-2);
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-control);
-    background: color-mix(in srgb, var(--color-surface-glass) 78%, transparent);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
     color: var(--color-text-primary);
     font-family: var(--font-ui);
     font-size: var(--font-size-sm);
     cursor: pointer;
   }
 
+  /* No box at rest, only the chevron says it opens (user decision,
+     2026-10-08); the surface shows on hover and while open, like the zoom
+     steps. */
+  .appearance-tab__select:hover,
   .appearance-tab__select--open {
-    border-color: var(--color-border-hover);
+    background: var(--surface-toolbar);
   }
 
   .appearance-tab__zoom {

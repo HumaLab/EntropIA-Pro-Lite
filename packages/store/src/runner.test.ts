@@ -2790,7 +2790,6 @@ describe('web captures migration (0057)', () => {
     }))
 
     expect(names.map((n) => n.name)).toContain('0057_web_captures')
-    expect(names.at(-1)?.name).toBe('0057_web_captures')
     const numbers = names.map((n) => n.number)
     expect(new Set(numbers).size).toBe(numbers.length)
   })
@@ -2922,6 +2921,65 @@ describe('web captures migration (0057)', () => {
           )
           .all()
       ).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('batch NER tasks migration (0058)', () => {
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  it('has a standalone .sql mirror that matches the registry', () => {
+    const flat = (text: string) => text.replaceAll('\r', '').trim()
+    const mirror = flat(
+      readFileSync(resolve(here, 'migrations/0058_processing_ner_tasks.sql'), 'utf8')
+    )
+    expect(flat(buildSchemaFixture())).toContain(mirror)
+  })
+
+  it('admits ner and triples tasks and keeps the settle trigger', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await runMigrations(shim(db))
+      for (const kind of ['ner', 'triples', 'schema_extract']) {
+        db.prepare(
+          `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+           VALUES (?, ?, 'a1', 'pending', 1, 1)`
+        ).run(`t-${kind}`, kind)
+      }
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+             VALUES ('t-x', 'unknown', 'a1', 'pending', 1, 1)`
+          )
+          .run()
+      ).toThrow()
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name='processing_tasks_settle_dependents'"
+          )
+          .all()
+      ).toHaveLength(1)
     } finally {
       db.close()
     }

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { loadSampleCollection } from '$lib/sample-collection'
+  import { settingsGet, settingsSet } from '$lib/settings'
   /**
    * Inicio (home): the startup overview — what to continue, what to start,
    * how the corpus stands, and where the main workspaces are.
@@ -51,11 +53,30 @@
     batchSummary = next
   })
 
+  /** A new archive opens with the sample collections already there (user
+   *  decision, 2026-10-08), once: deleting them must not bring them back. The
+   *  claim lives in this archive's own settings (never synced) and is taken
+   *  before loading, so a failure leaves the manual button, not a retry loop. */
+  const SAMPLE_AUTOLOAD_KEY = 'sample_collection_autoloaded'
+  async function claimSampleAutoload(): Promise<boolean> {
+    try {
+      if (await settingsGet(SAMPLE_AUTOLOAD_KEY)) return false
+      await settingsSet(SAMPLE_AUTOLOAD_KEY, '1')
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function loadSnapshot() {
     loading = true
     error = null
     try {
       snapshot = await loadHomeSnapshot()
+      if (snapshot.isFirstRun && (await claimSampleAutoload())) {
+        await loadSampleCollection()
+        snapshot = await loadHomeSnapshot()
+      }
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught)
     } finally {
@@ -150,6 +171,24 @@
    */
   function openCreateCollection() {
     requestCreateCollection(false)
+  }
+
+  /** T-37: nine invented documents with their text, to try the app on. */
+  let loadingSample = $state(false)
+  async function openSampleCollection() {
+    if (loadingSample) return
+    loadingSample = true
+    actionError = null
+    try {
+      const sample = await loadSampleCollection()
+      navigation.navigate({ name: 'collection', id: sample.id, collectionName: sample.name })
+    } catch (failure) {
+      actionError = t('home.firstRun.sampleFailed', {
+        error: failure instanceof Error ? failure.message : String(failure),
+      })
+    } finally {
+      loadingSample = false
+    }
   }
 
   function openCollections() {
@@ -378,6 +417,10 @@
             </Button>
             <Button variant="secondary" onclick={openCreateCollection}>
               {$currentLocale && t('home.firstRun.createCollection')}
+            </Button>
+            <Button variant="ghost" disabled={loadingSample} onclick={openSampleCollection}>
+              {$currentLocale &&
+                t(loadingSample ? 'home.firstRun.sampleLoading' : 'home.firstRun.sample')}
             </Button>
           </div>
         </div>

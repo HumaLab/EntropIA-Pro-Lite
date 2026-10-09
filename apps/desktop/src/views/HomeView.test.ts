@@ -81,6 +81,17 @@ vi.mock('$lib/home', async (importOriginal) => {
   }
 })
 
+const sampleRef = vi.hoisted(() => ({
+  loadSampleCollection: vi.fn(async () => ({ id: 'sample', name: 'Ejemplo' })),
+}))
+vi.mock('$lib/sample-collection', () => sampleRef)
+
+const settingsRef = vi.hoisted(() => ({ values: new Map<string, string>() }))
+vi.mock('$lib/settings', () => ({
+  settingsGet: vi.fn(async (key: string) => settingsRef.values.get(key) ?? null),
+  settingsSet: vi.fn(async (key: string, value: string) => void settingsRef.values.set(key, value)),
+}))
+
 vi.mock('$lib/pane-context', () => ({
   getNavigation: () => navigationRef,
   getPaneId: () => 'pane-test',
@@ -1174,6 +1185,9 @@ describe('HomeView', () => {
 
   describe('first-run layout', () => {
     beforeEach(() => {
+      // The autoload already happened in this archive; its own test clears it.
+      settingsRef.values.set('sample_collection_autoloaded', '1')
+      sampleRef.loadSampleCollection.mockClear()
       homeRef.loadHomeSnapshot.mockResolvedValue(
         makeSnapshot({
           continuar: [],
@@ -1194,6 +1208,18 @@ describe('HomeView', () => {
           },
         })
       )
+    })
+
+    it('loads the sample collection by itself once, never again after', async () => {
+      settingsRef.values.delete('sample_collection_autoloaded')
+      const first = render(HomeView)
+      await vi.waitFor(() => expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1))
+      expect(homeRef.loadHomeSnapshot).toHaveBeenCalledTimes(2)
+      first.unmount()
+
+      render(HomeView)
+      await screen.findByText('Empezá con EntropIA')
+      expect(sampleRef.loadSampleCollection).toHaveBeenCalledTimes(1)
     })
 
     it('shows "Inicio rápido" instead of Continuar', async () => {

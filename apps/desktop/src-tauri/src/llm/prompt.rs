@@ -170,6 +170,41 @@ Texto:
     )
 }
 
+/// Extraction with a user-defined schema (T-51). `fields` are
+/// `(name, description, repeatable)`; a repeatable field holds a list (one
+/// ship, many cargoes).
+pub fn raw_schema_extraction(text: &str, fields: &[(String, String, bool)]) -> String {
+    let field_lines = fields
+        .iter()
+        .map(|(name, description, repeatable)| {
+            let shape = if *repeatable {
+                "lista de strings"
+            } else {
+                "string o null"
+            };
+            format!("- \"{name}\" ({shape}): {description}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        r#"Extraé información estructurada de un documento histórico según este esquema.
+
+Campos:
+{field_lines}
+
+Reglas:
+- Devolvé SOLO un array JSON válido: un objeto por cada caso distinto que el texto describa (por ejemplo, un objeto por barco).
+- Cada objeto lleva exactamente las claves del esquema.
+- Copiá los valores como aparecen en el texto, sin inventar ni completar lo que no está.
+- Si un campo no aparece, usá null (o [] si es una lista).
+- Si el texto no describe ningún caso, devolvé [].
+- No agregues texto fuera del JSON.
+
+Texto:
+{text}"#
+    )
+}
+
 pub fn raw_consolidate_entities(text: &str, candidate_entities_json: &str) -> String {
     format!(
         r#"Sos una capa de validación y mejora para un pipeline NER histórico.

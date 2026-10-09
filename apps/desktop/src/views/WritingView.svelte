@@ -27,6 +27,9 @@
   import { importWritingImage } from '$lib/writing-images'
   import { imageSize } from '$lib/image-dimensions'
   import WritingDownloadMenu from './WritingDownloadMenu.svelte'
+  import WritingSharePanel from './WritingSharePanel.svelte'
+  import WritingHistoryPanel from './WritingHistoryPanel.svelte'
+  import { articleHtml, listWritingShares } from '$lib/writing-publish'
   import WritingExportNotice from './WritingExportNotice.svelte'
   import {
     exportPreferences,
@@ -61,7 +64,8 @@
     type WritingSyncNoticeView,
   } from '$lib/writing'
   import { getStore } from '$lib/db'
-  import { syncStore } from '$lib/sync-store'
+  import { syncAndWait, syncStore } from '$lib/sync-store'
+  import { describeSyncError, syncGetAuto, type SyncState } from '$lib/sync'
   import { createSyncCompletedWatcher } from '$lib/writing-sync-refresh'
   import { resolveCitationTarget, type CitationTarget } from '$lib/citation-target'
   import { writingNotes } from '$lib/writing-notes'
@@ -167,9 +171,74 @@
   /** The sync-completion refresh; created per mount, released on destroy. */
   let unsubscribeSync: (() => void) | null = null
 
+  /** Documents shared with another account, marked in the list (T-33). */
+  let sharedIds = $state(new Set<string>())
+
+  /** The sync button here mirrors «Sincronizar ahora» in Settings. */
+  let syncState = $state<SyncState>(syncStore.status.state)
+  let syncing = $state(false)
+  let syncError = $state<string | null>(null)
+  let unsubscribeSyncState: (() => void) | null = null
+  /** Settings › Sincronización › «Sincronizar automáticamente», read on mount. */
+  let autoSync = $state(false)
+
+  /** Pause after a save before sending it, so a burst of typing goes once. */
+  const PUSH_DELAY_MS = 5_000
+  /** How often an open Escritura looks for the other side's changes. */
+  const PULL_EVERY_MS = 30_000
+
+  /**
+   * Sends local changes and brings the other side's. Flushes first, like the
+   * Settings button (W-GUARD1), then waits for the pass to actually run —
+   * `sync_now` only queues it. The list refresh is the completion watcher's;
+   * the open manuscript takes the new content in place.
+   */
+  async function syncHere() {
+    if (syncing) return
+    syncing = true
+    syncError = null
+    try {
+      await store.flush()
+      await syncAndWait()
+      await store.refreshOpen()
+    } catch (error) {
+      syncError = describeSyncError(error)
+    } finally {
+      syncing = false
+    }
+  }
+
+  const autoOn = $derived(autoSync && syncState !== 'disabled')
+
+  // Pull: every so often, unless something local is in flight.
+  $effect(() => {
+    if (!autoOn) return
+    const timer = setInterval(() => {
+      if (!syncing && snapshot.status === 'saved') void syncHere()
+    }, PULL_EVERY_MS)
+    return () => clearInterval(timer)
+  })
+
+  // Push: a local save ends in saving -> saved; a pass that brought the other
+  // side's content goes saved -> saved and must not echo back as a push.
+  let lastStatus: string = 'saved'
+  let pushTimer: ReturnType<typeof setTimeout> | undefined
+  $effect(() => {
+    const status = snapshot.status
+    const was = lastStatus
+    lastStatus = status
+    if (!autoOn || was !== 'saving' || status !== 'saved') return
+    clearTimeout(pushTimer)
+    pushTimer = setTimeout(() => void syncHere(), PUSH_DELAY_MS)
+  })
+
   onMount(async () => {
     // Idempotent: the store memoizes its own bootstrap + listener attach.
     void syncStore.initialize()
+    // Best effort: without sync or on an older server nothing is marked.
+    listWritingShares()
+      .then((shares) => (sharedIds = new Set((shares ?? []).map((s) => s.document_id))))
+      .catch(() => {})
 
     // The sync store pushes its current snapshot synchronously to a fresh
     // subscriber, so the watcher's first snapshot is a baseline, not a
@@ -188,6 +257,10 @@
         void refreshSyncNotices()
       })
     )
+    unsubscribeSyncState = syncStore.subscribe((status) => (syncState = status.state))
+    syncGetAuto()
+      .then((auto) => (autoSync = auto.enabled))
+      .catch(() => {})
 
     // Only the gate and the list. Which document is open is the effect's
     // business, including on a remount that arrives with one still held: the
@@ -219,6 +292,8 @@
     unsubscribe()
     unsubscribeNav()
     unsubscribeSync?.()
+    unsubscribeSyncState?.()
+    clearTimeout(pushTimer)
     unlistenDragDrop?.()
     // Persist whatever is pending. The document stays open in the store on
     // purpose: navigating away and back should return to it, and onMount
@@ -470,6 +545,21 @@
    */
   let downloading = $state(false)
   let exportOutcome = $state<Exclude<DownloadOutcome, { kind: 'cancelled' }> | null>(null)
+
+  let sharePanelOpen = $state(false)
+  let historyPanelOpen = $state(false)
+
+  /** What "Enviar a hlab.com.ar" sends: what is on screen, as in `download`. */
+  function currentArticleHtml(): Promise<string> {
+    const content = snapshot.content
+    if (!content) return Promise.reject(new Error(t('writing.untitled')))
+    return articleHtml(
+      content.doc,
+      $exportPreferences,
+      DEFAULT_STYLE,
+      t('writing.exportBibliography')
+    )
+  }
 
   async function download(format: ExportFormat) {
     // Reads `snapshot.content`, which every keystroke already updates, so the
@@ -1068,6 +1158,31 @@
   )
 </script>
 
+{#snippet syncButton(size: 'sm' | 'md')}
+  {#if syncState !== 'disabled'}
+    {@const busy = syncing || syncState === 'syncing'}
+    <IconButton
+      {size}
+      variant="ghost"
+      class={busy ? 'writing__sync--spinning' : ''}
+      label={busy ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      title={busy ? t('sync.statusbar.syncing') : t('sync.card.syncNow')}
+      disabled={busy}
+      onclick={() => void syncHere()}
+    >
+      <ActionIcon name="refresh" size={size === 'sm' ? 14 : 20} />
+    </IconButton>
+  {/if}
+{/snippet}
+
+{#snippet syncErrorPanel()}
+  {#if syncError}
+    <Panel padding="md">
+      <p class="writing__error" role="alert">{syncError}</p>
+    </Panel>
+  {/if}
+{/snippet}
+
 <section class="writing" bind:this={writingRootEl}>
   {#if !snapshot.ready}
     <Panel padding="lg">
@@ -1110,7 +1225,30 @@
       </IconButton>
       {#if snapshot.content}
         <WritingDownloadMenu ondownload={download} busy={downloading} />
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={t('writing.shareToggle')}
+          title={t('writing.shareToggle')}
+          active={sharePanelOpen}
+          onclick={() => (sharePanelOpen = !sharePanelOpen)}
+        >
+          <ActionIcon name="send" size={14} />
+        </IconButton>
       {/if}
+      {#if snapshot.content}
+        <IconButton
+          size="sm"
+          variant="ghost"
+          label={t('writing.historyTitle')}
+          title={t('writing.historyTitle')}
+          active={historyPanelOpen}
+          onclick={() => (historyPanelOpen = !historyPanelOpen)}
+        >
+          <ActionIcon name="history" size={14} />
+        </IconButton>
+      {/if}
+      {@render syncButton('sm')}
       <div class="writing__bar-end">
         <span class="writing__revision">
           {t('writing.revision', { revision: String(snapshot.revision) })}
@@ -1120,6 +1258,23 @@
         </StatusBadge>
       </div>
     </header>
+
+    {@render syncErrorPanel()}
+
+    {#if historyPanelOpen && openDocument}
+      {#key openDocument.id}
+        <WritingHistoryPanel onclose={() => (historyPanelOpen = false)} />
+      {/key}
+    {/if}
+
+    {#if sharePanelOpen && openDocument}
+      <WritingSharePanel
+        documentId={openDocument.id}
+        title={openDocument.title || t('writing.untitled')}
+        articleHtml={currentArticleHtml}
+        onclose={() => (sharePanelOpen = false)}
+      />
+    {/if}
 
     {#if exportOutcome}
       <WritingExportNotice outcome={exportOutcome} ondismiss={() => (exportOutcome = null)} />
@@ -1405,17 +1560,22 @@
         <h1 class="writing__title">{t('writing.title')}</h1>
         <p class="writing__subtitle">{t('writing.subtitle')}</p>
       </div>
-      <Button
-        variant="primary"
-        size="md"
-        iconOnly
-        aria-label={t('writing.newDocument')}
-        title={t('writing.newDocument')}
-        onclick={createDocument}
-      >
-        <ActionIcon name="file-plus" size={20} />
-      </Button>
+      <div class="writing__header-actions">
+        {@render syncButton('md')}
+        <Button
+          variant="primary"
+          size="md"
+          iconOnly
+          aria-label={t('writing.newDocument')}
+          title={t('writing.newDocument')}
+          onclick={createDocument}
+        >
+          <ActionIcon name="file-plus" size={20} />
+        </Button>
+      </div>
     </header>
+
+    {@render syncErrorPanel()}
 
     {#if snapshot.error}
       <Panel padding="md">
@@ -1453,6 +1613,9 @@
             <button type="button" class="writing__card" onclick={() => open(doc.id)}>
               <span class="writing__card-title" use:tooltip={doc.title}>{doc.title}</span>
               <span class="writing__card-meta">{formatDate(doc.updated_at)}</span>
+              {#if sharedIds.has(doc.id)}
+                <span class="writing__card-cue">{t('writing.shared')}</span>
+              {/if}
               {#if notice?.cue}
                 <span class="writing__card-cue">{t(notice.cue)}</span>
               {/if}
@@ -1517,6 +1680,28 @@
     justify-content: space-between;
     gap: var(--space-4);
     flex-wrap: wrap;
+  }
+
+  :global(.writing__sync--spinning svg) {
+    animation: writing-sync-spin 1s linear infinite;
+  }
+
+  @keyframes writing-sync-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.writing__sync--spinning svg) {
+      animation: none;
+    }
+  }
+
+  .writing__header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .writing__eyebrow {

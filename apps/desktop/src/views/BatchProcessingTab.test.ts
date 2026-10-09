@@ -188,6 +188,68 @@ describe('BatchProcessingTab batch controls', () => {
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
   })
 
+  it('sends entities when asked and says how many documents will go through it', async () => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') {
+        expect(args?.['operations']).toEqual(['ocr', 'embeddings', 'ner'])
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch')
+        return {
+          ...draftSnapshot(),
+          operations: ['embeddings', 'ner', 'ocr'],
+          planningDone: true,
+          tasksByKind: [{ name: 'ner', count: 3 }],
+        }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    const ner = screen.getByRole('checkbox', { name: 'Entidades' })
+    expect(ner).not.toBeChecked()
+    await fireEvent.click(ner)
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    expect(
+      await screen.findByText(/3 documentos pasan por la búsqueda de entidades\./)
+    ).toBeInTheDocument()
+  })
+
+  it('sends triples when asked and says how many documents will go through it', async () => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') {
+        expect(args?.['operations']).toEqual(['ocr', 'embeddings', 'triples'])
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch')
+        return {
+          ...draftSnapshot(),
+          operations: ['embeddings', 'ocr', 'triples'],
+          planningDone: true,
+          tasksByKind: [{ name: 'triples', count: 2 }],
+        }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    const triples = screen.getByRole('checkbox', { name: 'Tripletes' })
+    expect(triples).not.toBeChecked()
+    await fireEvent.click(triples)
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    expect(
+      await screen.findByText(/2 documentos pasan por la extracción de tripletes\./)
+    ).toBeInTheDocument()
+  })
+
   it('keeps watching the draft until background planning finishes', async () => {
     // processing_prepare returns as soon as the batch row exists; classifying
     // its members and flipping planning_done happens on the supervisor thread

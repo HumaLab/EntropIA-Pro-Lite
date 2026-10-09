@@ -110,6 +110,68 @@ pub fn coalesce_ops(conn: &Connection, snapshot: i64) -> Result<Vec<CoalescedOp>
     Ok(out)
 }
 
+/// The sample collections (T-37) stay on the device that created them: every
+/// row under one is dropped from the push and its oplog entries purged, so a
+/// second machine never receives a duplicate set of examples. Their ids all
+/// start with this; same value as `SAMPLE_COLLECTION_ID_PREFIX` in
+/// `src/lib/sample-collection.ts`.
+pub const SAMPLE_COLLECTION_ID_PREFIX: &str = "00000000-0000-4000-8000-0000005a3e";
+
+/// True when `row_id` of `table` sits under the sample collection. Tables that
+/// never hang off a collection answer false. A deleted row can no longer be
+/// traced, so its delete still goes out (harmless: the server never had it).
+fn is_sample_row(conn: &Connection, table: &str, row_id: &str) -> Result<bool, String> {
+    if table == "collections" {
+        return Ok(row_id.starts_with(SAMPLE_COLLECTION_ID_PREFIX));
+    }
+    const ITEMS: &str = "SELECT id FROM items WHERE collection_id LIKE ?2";
+    const ASSETS: &str =
+        "SELECT a.id FROM assets a JOIN items i ON i.id = a.item_id WHERE i.collection_id LIKE ?2";
+    let owner = match table {
+        "items" => "collection_id LIKE ?2".to_string(),
+        "assets" | "notes" | "entities" | "triples" | "item_topics" | "vec_assets" => {
+            format!("item_id IN ({ITEMS})")
+        }
+        "annotations" | "extractions" | "transcriptions" | "layouts" => {
+            format!("asset_id IN ({ASSETS})")
+        }
+        "llm_results" => format!("target_id IN ({ITEMS}) OR target_id IN ({ASSETS})"),
+        _ => return Ok(false),
+    };
+    // Identifiers come from the compile-time allowlist — safe to interpolate.
+    let pk = crate::sync::capture::pk_column(table);
+    let sql = format!("SELECT EXISTS(SELECT 1 FROM \"{table}\" WHERE {pk} = ?1 AND ({owner}))");
+    conn.query_row(
+        &sql,
+        rusqlite::params![row_id, format!("{SAMPLE_COLLECTION_ID_PREFIX}%")],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("[sync] failed to trace {table} {row_id} to the sample: {e}"))
+}
+
+/// Drops the sample collection's rows from `ops` and purges their oplog entries
+/// up to `snapshot`, so they neither travel nor linger as pending.
+pub fn drop_sample_ops(
+    conn: &Connection,
+    ops: &mut Vec<CoalescedOp>,
+    snapshot: i64,
+) -> Result<(), String> {
+    let mut kept = Vec::with_capacity(ops.len());
+    for op in ops.drain(..) {
+        if is_sample_row(conn, &op.table, &op.row_id)? {
+            conn.execute(
+                "DELETE FROM sync_oplog WHERE table_name = ?1 AND row_id = ?2 AND seq <= ?3",
+                rusqlite::params![op.table, op.row_id, snapshot],
+            )
+            .map_err(|e| format!("[sync] failed to purge sample row {}: {e}", op.row_id))?;
+        } else {
+            kept.push(op);
+        }
+    }
+    *ops = kept;
+    Ok(())
+}
+
 /// The non-generated column names of `table`, intersected with what the payload
 /// reader needs (PROTOCOL "Semántica de apply" step 2 — `PRAGMA table_xinfo`,
 /// `hidden = 0`). Excludes generated columns such as `items.search_text`.
@@ -735,6 +797,34 @@ mod tests {
         let change = build_change(&conn, &ops[0], 0).unwrap();
         assert_eq!(change.op, "upsert");
         assert_eq!(change.payload.as_ref().unwrap()["title"], "B");
+    }
+
+    #[test]
+    fn sample_collection_rows_never_travel_and_leave_the_oplog() {
+        let conn = capturing_db();
+        seed_collection(&conn);
+        conn.execute_batch(&format!(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('{SAMPLE_COLLECTION_ID_PREFIX}01','S',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('s1','S','{SAMPLE_COLLECTION_ID_PREFIX}01',1,1);
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','A','c1',1,1);"
+        ))
+        .expect("insert");
+
+        let snap = snapshot_oplog(&conn).unwrap();
+        let mut ops = coalesce_ops(&conn, snap).unwrap();
+        drop_sample_ops(&conn, &mut ops, snap).unwrap();
+
+        let ids: Vec<&str> = ops.iter().map(|op| op.row_id.as_str()).collect();
+        // Adding an item also touches its collection, so `c1` rides along.
+        assert_eq!(ids, vec!["c1", "i1"], "only the user's own rows are pushed");
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_oplog WHERE row_id NOT IN ('c1','i1')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "sample entries are purged, not left pending");
     }
 
     #[test]

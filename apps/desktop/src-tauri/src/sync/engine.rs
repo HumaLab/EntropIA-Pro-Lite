@@ -39,7 +39,7 @@ use crate::sync::blobs::{drain_pending_blobs, prepare_asset_push, AssetPushOutco
 use crate::sync::http::{HttpSyncApi, SyncApi, SyncError};
 use crate::sync::pull::{pull_loop, seed_account};
 use crate::sync::push::{
-    apply_push_results, batching, build_changes, clock_offset, coalesce_ops,
+    apply_push_results, batching, build_changes, clock_offset, coalesce_ops, drop_sample_ops,
     journal_and_purge_oversized, snapshot_oplog, split_into_batches, update_clock_offset,
     DEFAULT_MAX_PUSH_BYTES,
 };
@@ -537,7 +537,7 @@ fn is_gated_open(conn: &Connection) -> bool {
 }
 
 /// Auto-sync enabled flag (DESIGN §3.1: default ON when unset).
-fn auto_enabled(conn: &Connection) -> bool {
+pub(crate) fn auto_enabled(conn: &Connection) -> bool {
     meta_get(conn, "auto_sync_enabled")
         .ok()
         .flatten()
@@ -546,7 +546,7 @@ fn auto_enabled(conn: &Connection) -> bool {
 }
 
 /// Configured auto-sync interval (DESIGN §3.1: default 5 min, floor 1 min).
-fn auto_interval(conn: &Connection) -> Duration {
+pub(crate) fn auto_interval(conn: &Connection) -> Duration {
     let mins = meta_get_i64(conn, "auto_sync_interval_min")
         .ok()
         .filter(|m| *m > 0)
@@ -757,6 +757,7 @@ async fn push_cycle<A: SyncApi>(
         return Ok(()); // Nothing dirty; skip the empty push.
     }
     let mut ops = coalesce_ops(conn, snapshot).map_err(|e| CycleError::Fatal { message: e })?;
+    drop_sample_ops(conn, &mut ops, snapshot).map_err(|e| CycleError::Fatal { message: e })?;
     // Web capture rows travel only once the server advertised `web-capture-v1`
     // for this epoch: a legacy server rejects the whole batch (and with it the
     // corpus rows). Held rows keep their oplog entries and go out later.

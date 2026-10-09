@@ -553,6 +553,13 @@ pub enum LlmJob {
     ExtractTriplesAsset {
         asset_id: String,
     },
+    /// Batch-only (T-51): fields are `(name, description, repeatable)`.
+    ExtractSchemaAsset {
+        asset_id: String,
+        fields: Vec<(String, String, bool)>,
+        /// OpenRouter model chosen for the schema (T-26); None uses the general one.
+        model: Option<String>,
+    },
     SummarizeAsset {
         asset_id: String,
     },
@@ -572,6 +579,7 @@ impl LlmJob {
             LlmJob::ExtractEntitiesAsset { .. } => "extract_entities",
             LlmJob::ConsolidateEntitiesAsset { .. } => "consolidate_entities",
             LlmJob::ExtractTriplesAsset { .. } => "extract_triples",
+            LlmJob::ExtractSchemaAsset { .. } => "extract_schema",
             LlmJob::SummarizeAsset { .. } => "summarize",
         }
     }
@@ -591,6 +599,7 @@ impl LlmJob {
             | LlmJob::ExtractEntitiesAsset { asset_id }
             | LlmJob::ConsolidateEntitiesAsset { asset_id, .. }
             | LlmJob::ExtractTriplesAsset { asset_id }
+            | LlmJob::ExtractSchemaAsset { asset_id, .. }
             | LlmJob::SummarizeAsset { asset_id } => asset_id,
         }
     }
@@ -608,6 +617,7 @@ impl LlmJob {
             | LlmJob::ExtractEntitiesAsset { .. }
             | LlmJob::ConsolidateEntitiesAsset { .. }
             | LlmJob::ExtractTriplesAsset { .. }
+            | LlmJob::ExtractSchemaAsset { .. }
             | LlmJob::SummarizeAsset { .. } => LLM_TARGET_ASSET,
         }
     }
@@ -994,14 +1004,14 @@ pub fn ensure_llm_results_schema(conn: &rusqlite::Connection) -> Result<(), Stri
 /// Fields use `#[serde(default)]` so incomplete triples (missing object, etc.)
 /// deserialize with empty strings instead of failing the entire array.
 /// Incomplete triples are filtered out after parsing.
-#[derive(Clone, serde::Deserialize)]
-struct LlmTriple {
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct LlmTriple {
     #[serde(default, alias = "sujeto")]
-    subject: String,
+    pub subject: String,
     #[serde(default, alias = "predicado")]
-    predicate: String,
+    pub predicate: String,
     #[serde(default, alias = "objeto")]
-    object: String,
+    pub object: String,
 }
 
 static TRAILING_COMMA_RE: Lazy<Regex> =
@@ -1258,16 +1268,25 @@ fn store_triples_for_asset(
     log_prefix: &str,
 ) -> Result<usize, String> {
     let triples = parse_triples_json(raw_json, log_prefix);
+    replace_triples_for_asset(conn, item_id, asset_id, &triples)?;
+    Ok(triples.len())
+}
 
-    // Delete old triples for this specific asset only
+/// Delete+insert of one asset's triples with no transaction of its own, for
+/// callers that already hold one (the batch queue commit).
+pub(crate) fn replace_triples_for_asset(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    asset_id: &str,
+    triples: &[LlmTriple],
+) -> Result<(), String> {
     conn.execute(
         "DELETE FROM triples WHERE item_id = ?1 AND asset_id = ?2",
         params![item_id, asset_id],
     )
     .map_err(|e| format!("Failed to delete old triples for asset: {e}"))?;
 
-    let mut count = 0;
-    for triple in &triples {
+    for triple in triples {
         conn.execute(
             "INSERT INTO triples (id, item_id, asset_id, subject, predicate, object, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1282,9 +1301,100 @@ fn store_triples_for_asset(
             ],
         )
         .map_err(|e| format!("Failed to insert triple: {e}"))?;
-        count += 1;
     }
-    Ok(count)
+    Ok(())
+}
+
+/// Runs the per-asset triple extraction outside the LLM queue (the batch
+/// executor's thread). Returns the parsed triples; storing them is the
+/// caller's job. Blocks: never call it from inside the async runtime.
+pub(crate) fn extract_triples_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+) -> Result<Vec<LlmTriple>, String> {
+    let job = LlmJob::ExtractTriplesAsset {
+        asset_id: asset_id.to_string(),
+    };
+    let (output, prefix) = run_asset_job_blocking(app_handle, db_path, &job)?;
+    Ok(parse_triples_json(&output, prefix))
+}
+
+/// The same for a user-defined schema (T-51): returns the model's raw
+/// output; parsing is the caller's.
+pub(crate) fn extract_schema_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+    fields: Vec<(String, String, bool)>,
+    model: Option<String>,
+) -> Result<String, String> {
+    let job = LlmJob::ExtractSchemaAsset {
+        asset_id: asset_id.to_string(),
+        fields,
+        model,
+    };
+    run_asset_job_blocking(app_handle, db_path, &job).map(|(output, _)| output)
+}
+
+/// Runs one asset job outside the LLM queue, choosing the local engine or
+/// OpenRouter the same way the queue worker does. Returns the raw output and
+/// the log prefix of the engine that produced it.
+fn run_asset_job_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    job: &LlmJob,
+) -> Result<(String, &'static str), String> {
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    let api_key = settings::get_setting(&conn, "openrouter_api_key").unwrap_or_default();
+    #[cfg(feature = "local-ml")]
+    {
+        let llm_mode =
+            settings::get_setting(&conn, "llm_mode").unwrap_or_else(|| "local".to_string());
+        let try_local = match llm_mode.as_str() {
+            "openrouter" => false,
+            "auto" => local_model_can_initialize_from_conn(&conn, db_path) || api_key.is_empty(),
+            _ => true,
+        };
+        if try_local {
+            let local =
+                get_or_init_local_gemma_engine(&conn, db_path, app_handle).and_then(|engine| {
+                    let engine = engine
+                        .lock()
+                        .map_err(|error| format!("Local LLM engine lock poisoned: {error}"))?;
+                    process_job(&engine, &conn, job)
+                });
+            match local {
+                Ok(generated) => return Ok((generated.output, LLM_LOCAL_PREFIX)),
+                // Same fallback as the worker: only "auto" with a key goes remote.
+                Err(error) if llm_mode != "auto" || api_key.is_empty() => {
+                    return Err(format!("Local LLM unavailable: {error}"))
+                }
+                Err(error) => eprintln!(
+                    "{LLM_LOCAL_PREFIX}[{}] local engine failed, falling back to remote: {error}",
+                    job.job_name()
+                ),
+            }
+        }
+    }
+    if api_key.trim().is_empty() {
+        return Err(
+            "OpenRouter API key no configurada. Configure OpenRouter API key/model.".to_string(),
+        );
+    }
+    let request = prepare_remote_job_request(
+        &conn,
+        job,
+        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+        db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
+    drop(conn);
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let generated =
+        tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
+    Ok((generated.output, LLM_CLOUD_PREFIX))
 }
 
 // ---------------------------------------------------------------------------
@@ -1662,6 +1772,7 @@ fn max_tokens_for(job: &LlmJob) -> i32 {
         | LlmJob::ConsolidateEntities { .. }
         | LlmJob::ConsolidateEntitiesAsset { .. } => 1024,
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => 1024,
+        LlmJob::ExtractSchemaAsset { .. } => 2048,
         LlmJob::Summarize { .. } | LlmJob::SummarizeAsset { .. } => 512,
         LlmJob::Classify { .. } => 256,
         LlmJob::Ask { .. } => 512,
@@ -1944,6 +2055,18 @@ fn process_job(
             engine.generate_triples(&p, max_tokens_for(job), &log_prefix)
         }
 
+        LlmJob::ExtractSchemaAsset {
+            asset_id, fields, ..
+        } => {
+            let text = text_provider::get_asset_text(conn, asset_id)?;
+            if text.is_empty() {
+                return Err("No text available for schema extraction on this asset".to_string());
+            }
+            let truncated = truncate_text_for_context(n_ctx, max_tokens_for(job), &text);
+            let p = prompt::gemma_wrap(&prompt::raw_schema_extraction(&truncated, fields));
+            engine.generate(&p, max_tokens_for(job), &log_prefix)
+        }
+
         LlmJob::SummarizeAsset { asset_id } => {
             let text = text_provider::get_asset_text(conn, asset_id)?;
             if text.is_empty() {
@@ -2061,7 +2184,7 @@ fn generation_flow_for_job(job: &LlmJob) -> Option<GenerationFlow> {
         LlmJob::ExtractTriples { .. } | LlmJob::ExtractTriplesAsset { .. } => {
             Some(GenerationFlow::Triplets)
         }
-        LlmJob::Classify { .. } | LlmJob::Ask { .. } => None,
+        LlmJob::Classify { .. } | LlmJob::Ask { .. } | LlmJob::ExtractSchemaAsset { .. } => None,
     }
 }
 
@@ -2073,7 +2196,12 @@ fn remote_generation_config_for_job(
         return generation_config_from_settings(conn, flow);
     }
 
-    let model = settings::get_setting(conn, "openrouter_model")
+    let chosen = match job {
+        LlmJob::ExtractSchemaAsset { model, .. } => model.clone(),
+        _ => None,
+    };
+    let model = chosen
+        .or_else(|| settings::get_setting(conn, "openrouter_model"))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| settings::DEFAULT_OPENROUTER_MODEL.to_string());
@@ -2351,6 +2479,22 @@ fn prepare_remote_job_request(
             let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
             Ok(PreparedRemotePrompt {
                 prompt: render_prompt_from_settings(conn, GenerationFlow::Triplets, &truncated),
+                max_tokens,
+                truncate_to_sentence_boundary: false,
+            })
+        }
+
+        LlmJob::ExtractSchemaAsset {
+            asset_id, fields, ..
+        } => {
+            let text = text_provider::get_asset_text(conn, asset_id)?;
+            if text.is_empty() {
+                return Err("No text available for schema extraction on this asset".to_string());
+            }
+            let max_tokens = max_tokens.max(max_tokens_for(job));
+            let truncated = truncate_text_for_context(n_ctx, max_tokens, &text);
+            Ok(PreparedRemotePrompt {
+                prompt: prompt::raw_schema_extraction(&truncated, fields),
                 max_tokens,
                 truncate_to_sentence_boundary: false,
             })

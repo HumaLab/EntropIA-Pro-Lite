@@ -18,6 +18,7 @@ use super::sync_receive::{
     AttachmentInstallReceipt, ReceiveAuthorization, ReceiveDeferred, ReceiveOutcome, ReceivePlan,
     ValidatedReceiveEnvelope,
 };
+use super::sync_shared::is_shared_document;
 
 const CONFLICT_MARKER_KIND: &str = "writing_sync_conflict_copy";
 const CONFLICT_MARKER_VERSION: u32 = 1;
@@ -152,11 +153,13 @@ pub(crate) fn preserve_loser_then_receive_winner(
     require_receive_schema(conn)?;
 
     with_receive_savepoint(conn, || {
+        let park = is_shared_document(conn, &source.source_document_id)?;
         let plan = plan_receive_inside_savepoint(
             conn,
             &source.source_document_id,
             &winner.envelope,
             &authorization,
+            park,
         )?;
 
         match plan {
@@ -270,11 +273,13 @@ fn preserve_validated_inside_savepoint(
     let mut copy = validated.envelope.clone();
     copy.id.clone_from(&validated.conflict_document_id);
     copy.title.clone_from(&validated.conflict_title);
+    let park = is_shared_document(conn, &validated.source.source_document_id)?;
     let plan = plan_receive_inside_savepoint(
         conn,
         &validated.conflict_document_id,
         &copy,
         &ReceiveAuthorization::CreateOnly,
+        park,
     )?;
 
     match plan {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
-import { badgeVariantForState, SyncStore } from './sync-store'
+import { badgeVariantForState, syncAndWait, SyncStore, syncStore } from './sync-store'
 import type { SyncStatus } from './sync'
 
 const mockInvoke = vi.mocked(invoke)
@@ -150,5 +150,35 @@ describe('badgeVariantForState', () => {
     expect(badgeVariantForState('idle', 0, true)).toBe('warning')
     expect(badgeVariantForState('error', 0, true)).toBe('warning')
     expect(badgeVariantForState('idle', 1, true)).toBe('danger')
+  })
+})
+
+describe('syncAndWait', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset()
+    syncStore.reset()
+    syncStore.setStatus(status({ last_sync_at: 1 }))
+  })
+
+  it('resolves only when the pass ends, not when sync_now answers', async () => {
+    mockInvoke.mockResolvedValue(status({ last_sync_at: 1 }))
+    let done = false
+    const waiting = syncAndWait().then(() => (done = true))
+    await Promise.resolve()
+    expect(mockInvoke).toHaveBeenCalledWith('sync_now')
+    expect(done).toBe(false)
+
+    syncStore.setStatus(status({ state: 'syncing', last_sync_at: 1 }))
+    syncStore.setStatus(status({ last_sync_at: 2 }))
+    await waiting
+    expect(done).toBe(true)
+  })
+
+  it('rejects when the pass ends in error', async () => {
+    mockInvoke.mockResolvedValue(status({ last_sync_at: 1 }))
+    const waiting = syncAndWait()
+    syncStore.setStatus(status({ state: 'syncing', last_sync_at: 1 }))
+    syncStore.setStatus(status({ state: 'error', last_sync_at: 1, message: 'offline_server' }))
+    await expect(waiting).rejects.toThrow('offline_server')
   })
 })

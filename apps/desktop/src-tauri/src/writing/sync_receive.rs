@@ -19,6 +19,7 @@ use super::sync_envelope::{
     snapshot_document, AttachmentManifestV1, CorpusCitationV1, WritingEnvelopeV1, ZoteroCitationV1,
     INVALID_SYNC_ENVELOPE,
 };
+use super::sync_shared::{is_shared_document, store_parked_collections};
 
 const JOURNAL_MIGRATION_NAME: &str = "0036_writing_journal";
 const RECEIVE_SAVEPOINT: &str = "writing_sync_receive";
@@ -278,18 +279,24 @@ fn receive_inside_savepoint(
     envelope: &WritingEnvelopeV1,
     authorization: &ReceiveAuthorization,
 ) -> WritingResult<ReceiveOutcome> {
-    let plan = plan_receive_inside_savepoint(conn, document_id, envelope, authorization)?;
+    let park = is_shared_document(conn, document_id)?;
+    let plan = plan_receive_inside_savepoint(conn, document_id, envelope, authorization, park)?;
     apply_receive_plan(conn, document_id, plan)
 }
 
 /// Resolves all overwrite guards and dependencies without writing. A caller
 /// may perform another bounded mutation before passing an `Apply` plan back to
 /// [`apply_receive_plan`] in the same savepoint.
+///
+/// `park_foreign_collections` is set for documents shared with another
+/// account: links to collections missing here are parked instead of deferring
+/// the document, because they will never arrive on this device.
 pub(super) fn plan_receive_inside_savepoint(
     conn: &Connection,
     document_id: &str,
     envelope: &WritingEnvelopeV1,
     authorization: &ReceiveAuthorization,
+    park_foreign_collections: bool,
 ) -> WritingResult<ReceivePlan> {
     let existing_revision = load_local_revision(conn, document_id)?;
     let mut stored_shape = resolve_child_ids(conn, envelope)?;
@@ -298,7 +305,7 @@ pub(super) fn plan_receive_inside_savepoint(
 
     let Some(local_revision) = existing_revision else {
         let missing = missing_collection_ids(conn, &stored_shape)?;
-        if !missing.is_empty() {
+        if !missing.is_empty() && !park_foreign_collections {
             return Ok(ReceivePlan::Outcome(ReceiveOutcome::Deferred {
                 document_id: document_id.to_string(),
                 reason: ReceiveDeferred::MissingCollections {
@@ -345,7 +352,7 @@ pub(super) fn plan_receive_inside_savepoint(
     }
 
     let missing = missing_collection_ids(conn, &stored_shape)?;
-    if !missing.is_empty() {
+    if !missing.is_empty() && !park_foreign_collections {
         return Ok(ReceivePlan::Outcome(ReceiveOutcome::Deferred {
             document_id: document_id.to_string(),
             reason: ReceiveDeferred::MissingCollections {
@@ -405,6 +412,13 @@ pub(super) fn apply_receive_plan(
             stored_shape,
             prior_local_revision: Some(local_revision),
         } => {
+            // What this device had, kept in the history before the other
+            // side's content replaces it.
+            super::versions::snapshot_if_changed(
+                conn,
+                document_id,
+                super::versions::BEFORE_RECEIVE_REASON,
+            )?;
             update_document_aggregate(conn, &stored_shape, local_revision)?;
             applied_outcome(conn, document_id, local_revision + 1, false)
         }
@@ -567,7 +581,15 @@ fn replace_children(
     )
     .map_err(|error| WritingError::sql("Failed to clear Zotero citation projection", error))?;
 
+    let missing: HashSet<String> = missing_collection_ids(conn, envelope)?
+        .into_iter()
+        .collect();
+    let mut parked = Vec::new();
     for association in &envelope.collection_associations {
+        if missing.contains(&association.collection_id) {
+            parked.push(association.clone());
+            continue;
+        }
         conn.execute(
             "INSERT INTO writing_document_collections
                (document_id, collection_id, is_primary, created_at)
@@ -581,6 +603,7 @@ fn replace_children(
         )
         .map_err(|error| WritingError::sql("Failed to insert collection association", error))?;
     }
+    store_parked_collections(conn, &envelope.id, &parked)?;
 
     for citation in &envelope.citation_projections.corpus {
         insert_corpus_citation(conn, &envelope.id, citation, now)?;

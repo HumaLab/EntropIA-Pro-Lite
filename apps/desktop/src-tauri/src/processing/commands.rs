@@ -511,12 +511,15 @@ pub async fn processing_prepare(
     }
     let mut ops: Vec<String> = operations
         .into_iter()
-        .filter(|op| op == "ocr" || op == "embeddings")
+        .filter(|op| {
+            matches!(op.as_str(), "ocr" | "embeddings" | "ner" | "triples")
+                || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+        })
         .collect();
     ops.sort();
     ops.dedup();
     if ops.is_empty() {
-        return Err("invalid_selection: select OCR, embeddings, or both".to_string());
+        return Err("invalid_selection: select OCR, embeddings, entities or triples".to_string());
     }
     let mut scope = collection_ids.clone();
     scope.sort();
@@ -552,6 +555,18 @@ pub async fn processing_prepare(
             .map_err(|e| format!("Failed to validate collections: {e}"))?;
         if found as usize != scope.len() {
             return Err("invalid_selection: one or more collections do not exist".to_string());
+        }
+        for schema_id in ops.iter().filter_map(|op| op.strip_prefix("schema:")) {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM extraction_schemas WHERE id = ?1)",
+                    [schema_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to validate schema: {e}"))?;
+            if !exists {
+                return Err(format!("invalid_selection: schema {schema_id} does not exist"));
+            }
         }
         let batch_id = format!("batch-{}", uuid::Uuid::new_v4());
         let ops_json = serde_json::to_string(&ops).map_err(|e| format!("Failed to encode operations: {e}"))?;

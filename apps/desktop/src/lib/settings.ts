@@ -118,6 +118,7 @@ export const SETTINGS_KEYS = {
   STT_MODE: 'stt_mode',
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   ZOTERO_API_KEY: 'zotero_api_key',
+  HLAB_PUBLISH_KEY: 'hlab_publish_key',
   OCRH_MODE: 'ocrh_mode',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',

@@ -494,6 +494,23 @@ impl PullResponse {
     }
 }
 
+/// One shared Escritura document (PROTOCOL "Documentos compartidos de Escritura").
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WritingShare {
+    pub document_id: String,
+    pub owner_email: String,
+    #[serde(default)]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub is_owner: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct WritingSharesResponse {
+    #[serde(default)]
+    shares: Vec<WritingShare>,
+}
+
 /// Checks the web capture token exactly, case-sensitively.
 pub fn supports_web_capture_v1(capabilities: &[String]) -> bool {
     capabilities
@@ -644,6 +661,18 @@ pub trait SyncApi {
     fn health(&self)
         -> impl std::future::Future<Output = Result<HealthResponse, SyncError>> + Send;
 
+    /// Lists the Escritura documents this account owns or joined (EntropIA-Cloud
+    /// PROTOCOL `GET /v1/writing/shares`). Fails by default so test doubles keep
+    /// the stored list untouched.
+    fn list_writing_shares(
+        &self,
+        _token: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<WritingShare>, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not list writing shares".to_string(),
+        )))
+    }
+
     fn push(
         &self,
         token: &str,
@@ -770,6 +799,44 @@ pub struct HttpSyncApi {
 }
 
 impl HttpSyncApi {
+    /// Shares one owned Escritura document with another account's email.
+    pub async fn share_writing(
+        &self,
+        token: &str,
+        document_id: &str,
+        email: &str,
+    ) -> Result<WritingShare, SyncError> {
+        let response = self
+            .client
+            .post(self.url("/v1/writing/shares"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "document_id": document_id, "email": email }))
+            .send()
+            .await
+            .map_err(|e| Self::network_err("share writing request", e))?;
+        let mut share: WritingShare = parse_json(response).await?;
+        share.is_owner = true;
+        Ok(share)
+    }
+
+    /// Removes a member (owner) or leaves the document (member).
+    pub async fn unshare_writing(
+        &self,
+        token: &str,
+        document_id: &str,
+        email: &str,
+    ) -> Result<(), SyncError> {
+        let response = self
+            .client
+            .delete(self.url(&format!("/v1/writing/shares/{document_id}")))
+            .bearer_auth(token)
+            .query(&[("email", email)])
+            .send()
+            .await
+            .map_err(|e| Self::network_err("unshare writing request", e))?;
+        ensure_success(response).await.map(|_| ())
+    }
+
     /// Builds a client for `server_url`. Re-validates the TLS rule at use-time
     /// (PROTOCOL "Transporte") so a stored URL can never be used over cleartext.
     pub fn new(server_url: &str) -> Result<Self, SyncError> {
@@ -1052,6 +1119,18 @@ impl SyncApi for HttpSyncApi {
             .await
             .map_err(|e| Self::network_err("delete notification request", e))?;
         ensure_success(response).await.map(|_| ())
+    }
+
+    async fn list_writing_shares(&self, token: &str) -> Result<Vec<WritingShare>, SyncError> {
+        let response = self
+            .client
+            .get(self.url("/v1/writing/shares"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| Self::network_err("list writing shares request", e))?;
+        let body: WritingSharesResponse = parse_json(response).await?;
+        Ok(body.shares)
     }
 
     async fn health(&self) -> Result<HealthResponse, SyncError> {
