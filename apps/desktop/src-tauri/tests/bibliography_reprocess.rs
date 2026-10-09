@@ -18,6 +18,7 @@ use entropia_desktop_lib::bibliography::repository::{
     BibliographicItemInput, ExtractionRow, LibraryType, PageTextRow, SourceOrigin,
     UpsertConnection, UpsertLibrary,
 };
+use entropia_desktop_lib::bibliography::processing::read_native_extraction_basis_with_cancel;
 use entropia_desktop_lib::bibliography::reprocess::{
     estimated_usd, reprocess_candidates, run_reprocess_preview, ReprocessCandidate,
     REASON_EMPTY_WITHOUT_OCR, REASON_FAILED_OCR_ATTEMPT, REASON_GARBLED_STORED_PAGES,
@@ -766,14 +767,24 @@ fn preview_totals_count_ocr_reused_and_fixed_pages() {
         &conn,
         std::slice::from_ref(&attachment_id),
         &cancel,
-        |done, total| progress.push((done, total)),
+        |update| progress.push(update),
     )
     .expect("preview");
 
+    let units_total = 2 * 3 + 1;
     assert_eq!(
-        progress,
-        vec![(1, 1)],
-        "progress fires after each attachment"
+        progress
+            .first()
+            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        Some((1, 1, 0, 0)),
+        "the unit counter resets at the attachment boundary"
+    );
+    assert_eq!(
+        progress
+            .last()
+            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        Some((1, 1, units_total, units_total)),
+        "progress ends at the attachment's full unit count"
     );
     assert!(!preview.cancelled);
     assert_eq!(preview.attachments.len(), 1);
@@ -835,7 +846,7 @@ fn preview_marks_attachments_with_a_live_task_busy() {
         &conn,
         std::slice::from_ref(&attachment_id),
         &cancel,
-        |_, _| {},
+        |_| {},
     )
     .expect("preview");
     assert!(preview.attachments[0].busy, "a pending task is a live task");
@@ -846,7 +857,7 @@ fn preview_marks_attachments_with_a_live_task_busy() {
         &conn,
         std::slice::from_ref(&attachment_id),
         &cancel,
-        |_, _| {},
+        |_| {},
     )
     .expect("preview");
     assert!(
@@ -874,7 +885,7 @@ fn preview_reports_a_missing_file_unreadable() {
         &conn,
         std::slice::from_ref(&attachment_id),
         &cancel,
-        |_, _| {},
+        |_| {},
     )
     .expect("preview");
     let entry = &preview.attachments[0];
@@ -888,6 +899,157 @@ fn preview_reports_a_missing_file_unreadable() {
     assert_eq!(preview.totals.attachments, 1);
     assert_eq!(preview.totals.pages, 0);
     assert_eq!(preview.totals.estimated_usd, 0.0);
+}
+
+/// The work-unit stream inside one attachment: `2 × pages + 1` units (lopdf
+/// pass pages + PDFium pass pages + the whole-document extract), never
+/// decreasing and settled at the full count even where a pass is skipped or
+/// falls back to lopdf.
+#[test]
+fn preview_reports_work_units_inside_the_current_attachment() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "UNITS00001", "O obra con unidades");
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, CLEAN)],
+        &[(72.0, 700.0, "hi")],
+        &[(72.0, 700.0, "yo")],
+    ]);
+    let path = write_pdf(&dir, "units.pdf", &pdf);
+    let attachment_id = seed_attachment(&mut conn, &item_id, "UNITSATT1", Some(&path), "units.pdf");
+
+    let cancel = AtomicBool::new(false);
+    let mut progress = Vec::new();
+    let preview = run_reprocess_preview(
+        &conn,
+        std::slice::from_ref(&attachment_id),
+        &cancel,
+        |update| progress.push(update),
+    )
+    .expect("preview");
+
+    assert!(!preview.cancelled);
+    let units_total = 2 * 3 + 1;
+    assert_eq!(
+        progress
+            .first()
+            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        Some((1, 1, 0, 0)),
+        "the unit counter resets at the attachment boundary"
+    );
+    assert!(
+        progress
+            .iter()
+            .all(|update| (update.done, update.total) == (1, 1)),
+        "every event names the one attachment: {progress:?}"
+    );
+    let units: Vec<(i64, i64)> = progress
+        .iter()
+        .filter(|update| update.units_total > 0)
+        .map(|update| (update.units_done, update.units_total))
+        .collect();
+    assert!(
+        units.iter().all(|(_, total)| *total == units_total),
+        "the total is 2 × pages + 1 at every report: {units:?}"
+    );
+    assert!(
+        units.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+        "units never move backwards: {units:?}"
+    );
+    for page in 1..=3 {
+        assert!(
+            units.contains(&(page, units_total)),
+            "the lopdf pass reports every page: {units:?}"
+        );
+    }
+    assert_eq!(
+        units.last().copied(),
+        Some((units_total, units_total)),
+        "the read ends at the full unit count"
+    );
+}
+
+/// The basis reader's unit callback, driven directly on a multi-page PDF:
+/// every report carries the attachment total `2 × pages + 1`, the counts
+/// never decrease, and the stream ends on the total.
+#[test]
+fn native_basis_units_cover_both_passes_and_the_document_extract() {
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, CLEAN)],
+        &[(72.0, 700.0, "hi")],
+        &[(72.0, 700.0, "yo")],
+    ]);
+    let mut units: Vec<(i64, i64)> = Vec::new();
+    read_native_extraction_basis_with_cancel(
+        &pdf,
+        None,
+        None,
+        Some(&mut |done: i64, total: i64| units.push((done, total))),
+    )
+    .expect("basis");
+
+    let units_total = 2 * 3 + 1;
+    assert!(!units.is_empty(), "the callback fires");
+    assert!(
+        units.iter().all(|(_, total)| *total == units_total),
+        "every report carries the attachment total: {units:?}"
+    );
+    assert!(
+        units.windows(2).all(|pair| pair[0].0 <= pair[1].0),
+        "units never move backwards: {units:?}"
+    );
+    assert_eq!(
+        units.last().copied(),
+        Some((units_total, units_total)),
+        "the whole-document extract lands the last unit"
+    );
+}
+
+/// Cancel mid-attachment stops the read between pages exactly as before the
+/// units existed: the preview reports `cancelled`, keeps nothing of the
+/// abandoned attachment, and the unit stream stops where the flag fired.
+#[test]
+fn preview_cancel_stops_mid_attachment_between_pages() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "STOP00001", "P obra cancelada");
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, CLEAN)],
+        &[(72.0, 700.0, "hi")],
+        &[(72.0, 700.0, "yo")],
+    ]);
+    let path = write_pdf(&dir, "stop.pdf", &pdf);
+    let attachment_id = seed_attachment(&mut conn, &item_id, "STOPATT1", Some(&path), "stop.pdf");
+
+    let cancel = AtomicBool::new(false);
+    let mut progress = Vec::new();
+    let preview = run_reprocess_preview(
+        &conn,
+        std::slice::from_ref(&attachment_id),
+        &cancel,
+        |update| {
+            // Fire once the first page lands: the stop hits mid-file.
+            if update.units_done >= 1 {
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            progress.push(update);
+        },
+    )
+    .expect("preview");
+
+    assert!(preview.cancelled, "the cancel flag stops the run");
+    assert!(
+        preview.attachments.is_empty(),
+        "the abandoned attachment reports no plan"
+    );
+    assert!(
+        progress.iter().any(|update| update.units_done >= 1),
+        "the stop happened mid-read: {progress:?}"
+    );
+    assert!(
+        progress
+            .iter()
+            .all(|update| update.units_done < 2 * 3 + 1),
+        "the read never finished its units: {progress:?}"
+    );
 }
 
 // ── Measurements on a read-only database copy ──────────────────────────────
@@ -1059,8 +1221,11 @@ fn measure_reprocess_preview_on_db_copy() {
     }
     let cancel = AtomicBool::new(false);
     let started = std::time::Instant::now();
-    let preview = run_reprocess_preview(&conn, &ids, &cancel, |done, total| {
-        eprintln!("progress: {done}/{total}");
+    let preview = run_reprocess_preview(&conn, &ids, &cancel, |update| {
+        eprintln!(
+            "progress: {}/{} (units {}/{})",
+            update.done, update.total, update.units_done, update.units_total
+        );
     })
     .expect("preview");
     let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -1420,7 +1585,7 @@ fn the_previewed_ocr_page_set_is_exactly_what_the_executor_sends() {
         &conn,
         std::slice::from_ref(&attachment_id),
         &AtomicBool::new(false),
-        |_, _| {},
+        |_| {},
     )
     .expect("preview");
     let shown = &preview.attachments[0];

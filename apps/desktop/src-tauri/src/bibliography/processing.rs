@@ -2824,12 +2824,17 @@ pub fn read_native_extraction_basis(
     bytes: &[u8],
     app: Option<&tauri::AppHandle>,
 ) -> Result<NativeExtractionBasis, crate::processing::scheduler::ExecOutput> {
-    read_native_extraction_basis_with_cancel(bytes, app, None)
+    read_native_extraction_basis_with_cancel(bytes, app, None, None)
 }
 
 /// Reads the pre-OCR basis of one PDF, with the caller's cancellation flag
 /// checked between page batches when there is one (the reprocess preview may
 /// stop mid-file; the executor passes none and keeps its own stop contract).
+/// `on_units`, when there is one, reports the read's work units as
+/// `(units_done, units_total)` with `units_total = 2 × pages + 1`: one unit
+/// per lopdf page, one per PDFium batch and one for the whole-document
+/// extract below. The count is always settled, so a skipped or aborted
+/// PDFium pass leaves no gap.
 ///
 /// A PDF with `/Encrypt` is only locked when it needs a real user
 /// password. Permissions-only protection (owner password, empty user
@@ -2859,6 +2864,7 @@ pub fn read_native_extraction_basis_with_cancel(
     bytes: &[u8],
     app: Option<&tauri::AppHandle>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    mut on_units: Option<&mut dyn FnMut(i64, i64)>,
 ) -> Result<NativeExtractionBasis, crate::processing::scheduler::ExecOutput> {
     use crate::processing::scheduler::ExecOutput;
     let readable =
@@ -2872,6 +2878,14 @@ pub fn read_native_extraction_basis_with_cancel(
         message: format!("Failed to parse PDF: {error}"),
     })?;
     let page_count = document.get_pages().len() as i64;
+    // The attachment's unit budget: one per page in each of the two per-page
+    // passes, plus the whole-document extract below.
+    let units_total = 2 * page_count + 1;
+    let mut report_units = |units_done: i64, _reader_total: i64| {
+        if let Some(callback) = on_units.as_deref_mut() {
+            callback(units_done, units_total);
+        }
+    };
     let pdfium_resolved = match app {
         Some(app) => crate::ocr::pdf::ensure_pdfium_path_without_runtime(app),
         None => crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None),
@@ -2886,6 +2900,7 @@ pub fn read_native_extraction_basis_with_cancel(
             PageTextDecoder::Lopdf
         },
         cancel,
+        Some(&mut report_units),
     )?;
     let legacy_text = match crate::ocr::pdf::extract_pdf_text(bytes) {
         Ok(text) => text,
@@ -2906,6 +2921,10 @@ pub fn read_native_extraction_basis_with_cancel(
             joined
         }
     };
+    // The whole-document extract lands the last unit, however it resolved.
+    if let Some(callback) = on_units {
+        callback(units_total, units_total);
+    }
     let legacy_text = richer_native_text(legacy_text, &reads.lopdf_pages);
     let native_blank = extraction_quality(&legacy_text) == "empty";
     Ok(NativeExtractionBasis {
@@ -3311,7 +3330,7 @@ impl BibliographyExtractExecutor {
         // no-app basis reader — so the pages the hash covers are exactly the
         // pages this run publishes.
         let planned = crate::bibliography::reprocess::plan_reprocess_for_attachment_cancellable(
-            &conn, attachment, path, bytes, None,
+            &conn, attachment, path, bytes, None, None,
         )
         .map_err(|error| match error {
             crate::bibliography::reprocess::PlanError::Cancelled => ExecOutput::Stopped,
@@ -4161,19 +4180,32 @@ pub fn read_native_page_texts_with_lopdf_basis(
     page_count: i64,
     decoder: PageTextDecoder,
 ) -> Result<NativePageReads, crate::processing::scheduler::ExecOutput> {
-    read_native_page_texts_with_cancel(bytes, page_count, decoder, None)
+    read_native_page_texts_with_cancel(bytes, page_count, decoder, None, None)
 }
 
 /// The same read with an optional cancellation flag checked between lopdf
 /// pages and between PDFium batches (B3: the reprocess preview may stop
-/// mid-file; `ExecOutput::Stopped` is the answer when it fires).
+/// mid-file; `ExecOutput::Stopped` is the answer when it fires) and an
+/// optional unit-progress callback reporting `(units_done, units_total)`
+/// with `units_total = 2 × page_count` — one unit per lopdf page and one per
+/// PDFium batch (its whole page span, skipped pages included). The count is
+/// settled before every successful return, so a lopdf-only read or an
+/// aborted PDFium bind never leaves the stream short.
 pub fn read_native_page_texts_with_cancel(
     bytes: &[u8],
     page_count: i64,
     decoder: PageTextDecoder,
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    mut on_units: Option<&mut dyn FnMut(i64, i64)>,
 ) -> Result<NativePageReads, crate::processing::scheduler::ExecOutput> {
     use crate::processing::scheduler::ExecOutput;
+    let units_total = 2 * page_count.max(0);
+    let mut units_done = 0i64;
+    let mut report = |done: i64| {
+        if let Some(callback) = on_units.as_deref_mut() {
+            callback(done, units_total);
+        }
+    };
     let mut document: Option<lopdf::Document> = None;
     let mut lopdf_reads: Vec<(String, bool)> = Vec::with_capacity(page_count.max(0) as usize);
     for number in 1..=page_count.max(0) as u32 {
@@ -4201,6 +4233,8 @@ pub fn read_native_page_texts_with_cancel(
             }
         }
         lopdf_reads.push((text, readable));
+        units_done += 1;
+        report(units_done);
     }
 
     let mut pdfium_texts: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
@@ -4212,6 +4246,7 @@ pub fn read_native_page_texts_with_cancel(
             if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
                 return Err(ExecOutput::Stopped);
             }
+            let batch_units = (batch.end() - batch.start() + 1) as i64;
             // Only pages the lopdf bound accepted are read (JD6-A-004): an
             // over-limit page is never requested from PDFium.
             let numbers: Vec<u32> = batch
@@ -4221,37 +4256,47 @@ pub fn read_native_page_texts_with_cancel(
                         .is_some_and(|(_, readable)| *readable)
                 })
                 .collect();
-            if numbers.is_empty() {
-                continue;
-            }
-            match crate::ocr::pdf::read_pdfium_page_texts(bytes, &numbers) {
-                Ok(texts) => {
-                    for (number, text) in texts {
-                        if let Some(text) = text {
-                            // Cap the string before keeping it per batch
-                            // (JD6-A-004): a giant PDFium string must not sit
-                            // in memory — and over the per-page bound it is a
-                            // failed read anyway.
-                            if let Some(text) = bounded_decoded_page_text(text) {
-                                if !text.trim().is_empty()
-                                    && !crate::ocr::pdf::is_garbled_text(
-                                        &crate::ocr::markup::ocr_markup_to_text(&text),
-                                    )
-                                {
-                                    pdfium_texts.insert(number, text);
+            if !numbers.is_empty() {
+                match crate::ocr::pdf::read_pdfium_page_texts(bytes, &numbers) {
+                    Ok(texts) => {
+                        for (number, text) in texts {
+                            if let Some(text) = text {
+                                // Cap the string before keeping it per batch
+                                // (JD6-A-004): a giant PDFium string must not sit
+                                // in memory — and over the per-page bound it is a
+                                // failed read anyway.
+                                if let Some(text) = bounded_decoded_page_text(text) {
+                                    if !text.trim().is_empty()
+                                        && !crate::ocr::pdf::is_garbled_text(
+                                            &crate::ocr::markup::ocr_markup_to_text(&text),
+                                        )
+                                    {
+                                        pdfium_texts.insert(number, text);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                Err(error) => {
-                    eprintln!(
-                        "[bibliography] PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
-                    );
-                    break;
+                    Err(error) => {
+                        eprintln!(
+                            "[bibliography] PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
+                        );
+                        break;
+                    }
                 }
             }
+            // The batch's pages are concluded either way — read, refused by
+            // the bound, or left to lopdf — so the count moves by the whole
+            // batch.
+            units_done += batch_units;
+            report(units_done);
         }
+    }
+
+    // Settle the pass total: a lopdf-only read or an aborted PDFium bind
+    // must not leave the unit stream short.
+    if units_done < units_total {
+        report(units_total);
     }
 
     let mut pages = Vec::with_capacity(page_count.max(0) as usize);

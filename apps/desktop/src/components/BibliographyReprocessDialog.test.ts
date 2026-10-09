@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { locale } from '$lib/i18n'
+import type { ReprocessPreviewProgress } from '$lib/bibliography-reprocess'
 import BibliographyReprocessDialog from './BibliographyReprocessDialog.svelte'
 
 // Mocks are set up in test-setup.ts:
@@ -103,10 +104,10 @@ function summaryValue(label: string): string | null | undefined {
   return screen.getByText(label).parentElement?.querySelector('dd')?.textContent
 }
 
-function progressHandler(): (event: { payload: { done: number; total: number } }) => void {
+function progressHandler(): (event: { payload: ReprocessPreviewProgress }) => void {
   const handler = mockListen.mock.calls.at(-1)?.[1]
   expect(typeof handler).toBe('function')
-  return handler as unknown as (event: { payload: { done: number; total: number } }) => void
+  return handler as unknown as (event: { payload: ReprocessPreviewProgress }) => void
 }
 
 beforeEach(() => {
@@ -219,9 +220,25 @@ describe('BibliographyReprocessDialog', () => {
     })
 
     await waitFor(() => expect(callsFor('bibliography_reprocess_preview').length).toBe(1))
-    progressHandler()({ payload: { done: 2, total: 5 } })
+    progressHandler()({ payload: { done: 2, total: 5, unitsDone: 0, unitsTotal: 0 } })
 
     expect(await screen.findByText('Leyendo 2 de 5 adjuntos')).toBeInTheDocument()
+  })
+
+  it('adds the percentage of the attachment being read while its units are known', async () => {
+    backend({ preview: () => new Promise(() => {}) })
+    render(BibliographyReprocessDialog, {
+      mode: 'work',
+      attachmentIds: ['att-1'],
+      onclose: vi.fn(),
+    })
+
+    await waitFor(() => expect(callsFor('bibliography_reprocess_preview').length).toBe(1))
+    progressHandler()({ payload: { done: 1, total: 103, unitsDone: 37, unitsTotal: 100 } })
+
+    expect(
+      await screen.findByText('Leyendo 1 de 103 adjuntos · 37 % del actual')
+    ).toBeInTheDocument()
   })
 
   it('says so and offers no confirm button when there are no candidates', async () => {

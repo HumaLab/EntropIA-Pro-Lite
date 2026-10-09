@@ -8,6 +8,7 @@
     bibliographyReprocessPreviewCancel,
     formatEstimatedUsd,
     onBibliographyReprocessPreviewProgress,
+    previewUnitPercent,
     type ReprocessConfirm,
     type ReprocessPreview,
     type ReprocessPreviewProgress,
@@ -40,7 +41,12 @@
   // svelte-ignore state_referenced_locally
   let phase = $state<Phase>(mode === 'work' ? 'previewing' : 'loading')
   // svelte-ignore state_referenced_locally
-  let progress = $state<ReprocessPreviewProgress>({ done: 0, total: attachmentIds.length })
+  let progress = $state<ReprocessPreviewProgress>({
+    done: 0,
+    total: attachmentIds.length,
+    unitsDone: 0,
+    unitsTotal: 0,
+  })
   let preview = $state<ReprocessPreview | null>(null)
   let doneReport = $state<ReprocessConfirm | null>(null)
   let errorMessage = $state<string | null>(null)
@@ -70,6 +76,22 @@
     return phase === 'previewing'
       ? t('bibliography.reprocess.cancel')
       : t('bibliography.reprocess.close')
+  })
+  // The counter of the attachment being read; its percentage appears only
+  // while the reader knows that attachment's unit total.
+  const previewProgressLabel = $derived.by(() => {
+    $currentLocale
+    if (progress.unitsTotal > 0) {
+      return t('bibliography.reprocess.previewProgressUnits', {
+        done: progress.done,
+        total: progress.total,
+        percent: previewUnitPercent(progress),
+      })
+    }
+    return t('bibliography.reprocess.previewProgress', {
+      done: progress.done,
+      total: progress.total,
+    })
   })
   const queuedCount = $derived(
     (doneReport?.results ?? []).filter((result) => result.status === 'queued').length
@@ -132,7 +154,7 @@
 
   async function runPreview(ids: string[]): Promise<void> {
     phase = 'previewing'
-    progress = { done: 0, total: ids.length }
+    progress = { done: 0, total: ids.length, unitsDone: 0, unitsTotal: 0 }
     const unlisten = await onBibliographyReprocessPreviewProgress((next) => {
       if (alive) progress = next
     })
@@ -203,11 +225,7 @@
     </p>
   {:else if phase === 'previewing'}
     <p class="reprocess-dialog__note" role="status" aria-live="polite">
-      {$currentLocale &&
-        t('bibliography.reprocess.previewProgress', {
-          done: progress.done,
-          total: progress.total,
-        })}
+      {$currentLocale && previewProgressLabel}
     </p>
   {:else if phase === 'summary' && preview}
     <dl class="reprocess-dialog__summary">

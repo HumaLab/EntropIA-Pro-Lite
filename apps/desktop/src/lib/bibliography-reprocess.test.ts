@@ -8,7 +8,9 @@ import {
   formatEstimatedUsd,
   isPdfAttachment,
   onBibliographyReprocessPreviewProgress,
+  previewUnitPercent,
   REPROCESS_PREVIEW_PROGRESS_EVENT,
+  type ReprocessPreviewProgress,
 } from './bibliography-reprocess'
 
 // Mocks are set up in test-setup.ts:
@@ -83,11 +85,25 @@ describe('bibliography reprocess wrappers', () => {
 
     expect(mockListen).toHaveBeenCalledWith(REPROCESS_PREVIEW_PROGRESS_EVENT, expect.any(Function))
     const listener = mockListen.mock.calls[0]![1] as (event: {
-      payload: { done: number; total: number }
+      payload: ReprocessPreviewProgress
     }) => void
-    listener({ payload: { done: 2, total: 5 } })
-    expect(handler).toHaveBeenCalledWith({ done: 2, total: 5 })
+    listener({ payload: { done: 2, total: 5, unitsDone: 7, unitsTotal: 21 } })
+    expect(handler).toHaveBeenCalledWith({ done: 2, total: 5, unitsDone: 7, unitsTotal: 21 })
     expect(dispose).toBe(unlisten)
+  })
+})
+
+describe('previewUnitPercent', () => {
+  it('floors the share of the attachment being read', () => {
+    expect(previewUnitPercent({ done: 1, total: 1, unitsDone: 37, unitsTotal: 100 })).toBe(37)
+    expect(previewUnitPercent({ done: 1, total: 1, unitsDone: 38, unitsTotal: 103 })).toBe(36)
+    expect(previewUnitPercent({ done: 1, total: 1, unitsDone: 7, unitsTotal: 7 })).toBe(100)
+  })
+
+  it('clamps to 0..100 and reads 0 while the unit total is unknown', () => {
+    expect(previewUnitPercent({ done: 1, total: 1, unitsDone: 9, unitsTotal: 7 })).toBe(100)
+    expect(previewUnitPercent({ done: 1, total: 1, unitsDone: -2, unitsTotal: 10 })).toBe(0)
+    expect(previewUnitPercent({ done: 0, total: 3, unitsDone: 0, unitsTotal: 0 })).toBe(0)
   })
 })
 

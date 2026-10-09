@@ -284,6 +284,8 @@ const es = {
   'bibliography.reprocess.title': 'Reprocesar texto',
   'bibliography.reprocess.loadingCandidates': 'Buscando obras con texto dañado…',
   'bibliography.reprocess.previewProgress': 'Leyendo {done} de {total} adjuntos',
+  'bibliography.reprocess.previewProgressUnits':
+    'Leyendo {done} de {total} adjuntos · {percent} % del actual',
   'bibliography.reprocess.summaryAttachments': 'Adjuntos',
   'bibliography.reprocess.summaryPages': 'Páginas',
   'bibliography.reprocess.summaryOcrPages': 'Páginas para GLM-OCR',
@@ -3388,6 +3390,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.reprocess.title': 'Reprocess text',
   'bibliography.reprocess.loadingCandidates': 'Looking for works with damaged text…',
   'bibliography.reprocess.previewProgress': 'Reading {done} of {total} attachments',
+  'bibliography.reprocess.previewProgressUnits':
+    'Reading {done} of {total} attachments · {percent} % of current',
   'bibliography.reprocess.summaryAttachments': 'Attachments',
   'bibliography.reprocess.summaryPages': 'Pages',
   'bibliography.reprocess.summaryOcrPages': 'Pages for GLM-OCR',
