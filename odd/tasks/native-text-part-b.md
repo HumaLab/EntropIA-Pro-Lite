@@ -27,7 +27,7 @@ Branch `feat/native-text-reprocess`, worktree
 - [x] B4 — Reprocess contract, `bibliography_reprocess_confirm` (own user batch, own admission, busy on
   conflict) and executor reprocess mode (plan-hash gate, converted reuse, page-only OCR) (plan 2.3).
 - [x] B5 — UI: Biblioteca toolbar button, work detail button, preview/confirm dialog (plan 2.5).
-- [ ] B6 — Local verification, CI green incl. Pro, Judgment Day on the code, merge.
+- [x] B6 — Local verification, CI green incl. Pro, Judgment Day on the code, merge.
 
 ## Progress
 
@@ -99,3 +99,10 @@ Branch `feat/native-text-reprocess`, worktree
 - 2026-10-09: JD8 final scoped re-judgment of `42fd799`: both judges verify B-002. Info (judge B): retained
   checkpoints of failed/cancelled extractions are never retired, even after a later successful reprocess
   (bounded by the previewed pages per attempt). JUDGMENT: APPROVED.
+- 2026-10-09: B6 done — CI green on 42fd799 (Windows Pro rerun after the pre-existing wall-clock flake
+  `p3_sync_eta_uses_the_running_extraction_page_rate_and_excludes_its_attempt`). main had moved to fcc65fe;
+  merged it (ec3aa9a1), fixed main's new extraction admission loop for the skippable admit result
+  (4e1cf47a) and formatted `sample-collection/documents.json`, which was failing format:check on main
+  (3cb129b1). Local full verification green (lib 2437, every integration binary, clippy, fmt, desktop Pro
+  3480 / Lite 3459, ui 847, store 374). PR #20 CI run 37955186188 fully green incl. the Windows Pro
+  contract. Fast-forwarded to main.
