@@ -17,4 +17,11 @@ dedupe/indexes, so the Rust repair only matters for legacy archives that already
 ## Tasks
 
 - [x] T1 — Skip `ensure_layouts_schema` while `assets` does not exist (regression test first).
-- [ ] T2 — Verify: Lite Rust tests, and the half-initialized dev profile boots again under `tauri dev`.
+  Commit `70005f6f`. RED: 2 of 3 new tests failed with `no such table: main.assets`; GREEN after the guard.
+- [x] T2 — Verify: Lite Rust tests, and the half-initialized dev profile boots again under `tauri dev`.
+  Lite `cargo test --lib`: 2439 passed, 1 failed (the pre-existing Linux-only failure fixed in T3), 12 ignored;
+  clippy `-D warnings` and fmt clean. Dev profile `lite-ubuntu`, which panicked before, now boots and the store
+  applies all 58 migrations with an empty `foreign_key_check`.
+- [x] T3 — Make `a_finished_folder_download_is_found_by_its_file_name_alone` portable: its
+  `Z:\elsewhere\data.zip` path has no file name separator on Linux, so it only passed on Windows.
+  Commit `a64ba4f2`; `navegador::download` 88/88 green on Linux.
