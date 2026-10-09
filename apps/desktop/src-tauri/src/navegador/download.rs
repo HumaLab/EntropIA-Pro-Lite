@@ -2054,7 +2054,7 @@ mod tests {
             .unwrap();
         // The OS reports another directory and another case: same file name.
         assert_eq!(
-            registry.take_by_path(Path::new("Z:\\elsewhere\\data.zip")),
+            registry.take_by_path(&Path::new("Z:\\elsewhere").join("data.zip")),
             Some(pending)
         );
     }
