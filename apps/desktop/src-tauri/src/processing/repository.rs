@@ -5977,7 +5977,11 @@ pub fn classify_batch_page(
                     } else {
                         None
                     },
-                )?;
+                )?
+                .ok_or_else(|| {
+                    "unsupported_subject: a corpus classification admission can never be skipped"
+                        .to_string()
+                })?;
                 if out.created {
                     admitted += 1;
                 }
