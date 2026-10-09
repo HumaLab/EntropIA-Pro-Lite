@@ -2483,6 +2483,26 @@ pub fn page_texts_for_attachment(
     Ok(rows)
 }
 
+/// Deletes the page-text rows beyond a document's new page count: the file
+/// shrank and those pages no longer exist. Returns how many rows went away —
+/// the publisher counts each as a page move, so the profile re-demands and
+/// the stale passages go with it.
+pub fn delete_page_texts_beyond(
+    conn: &Connection,
+    attachment_id: &str,
+    page_count: i64,
+) -> BibliographyResult<usize> {
+    require_non_empty(attachment_id, "attachment id")?;
+    let deleted = conn
+        .execute(
+            "DELETE FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number > ?2",
+            rusqlite::params![attachment_id, page_count],
+        )
+        .map_err(|error| BibliographyError::sql("Failed to delete stale page texts", error))?;
+    Ok(deleted)
+}
+
 // ── Structural chunks (E4c-WU2) ────────────────────────────────────────────
 
 /// One `bibliographic_chunks` row with its spans, as the publisher writes

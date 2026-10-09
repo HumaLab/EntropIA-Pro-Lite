@@ -5728,6 +5728,933 @@ fn oversized_pages_record_unreadable_without_failing_siblings() {
     );
 }
 
+// ── Native text part A: PDFium page reader, pages-joined document text ────
+
+/// A synthetic PDF whose lopdf read glues two positioned runs — `(Arroz) Tj`,
+/// a 40pt `Td` jump, `(Elcultivo …) Tj` — into `ArrozElcultivo…`, the exact
+/// shape of the stored glitch (`ArrozElcultivodelarrozaligualqueeldelgí.r'asoL…`).
+/// PDFium's spacing heuristics keep the word gap. Pure lopdf synthesis.
+fn glued_runs_pdf() -> Vec<u8> {
+    make_text_pdf(&[
+        (50.0, 750.0, "Arroz"),
+        (40.0, 0.0, "Elcultivo del arroz es largo"),
+    ])
+}
+
+/// The per-page row keeps the word spacing PDFium sees — the glued lopdf read
+/// (`ArrozElcultivo`) is what produced the stored glitch this work repairs.
+#[test]
+fn page_text_keeps_the_word_spacing_pdfium_sees() {
+    if !require_pdfium_or_skip("the spaced-word assertion") {
+        return;
+    }
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SPACEPG1", "Obra con espacios", "Resumen.");
+    let path = write_temp_pdf(&dir, "pegado.pdf", &glued_runs_pdf());
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SPACEATT1",
+        "linked_file",
+        Some(&path),
+        "pegado.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert!(
+        text.contains("Arroz Elcultivo"),
+        "the stored page text keeps the word gap instead of gluing: {text:?}"
+    );
+}
+
+/// The whole-document text is the union of the published pages, joined in
+/// page order with the separator the rebuild path already uses (`\n\n`) —
+/// not the `pdf-extract`/`richer_native_text` choice.
+#[test]
+fn document_text_is_the_union_of_the_published_pages() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "UNIONW01", "Obra de tres paginas", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(50.0, 750.0, "ALFA primera pagina del documento")],
+        &[(50.0, 750.0, "BETA segunda pagina del documento")],
+        &[(50.0, 750.0, "GAMMA tercera pagina del documento")],
+    ]);
+    let path = write_temp_pdf(&dir, "unida.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "UNIONATT1",
+        "linked_file",
+        Some(&path),
+        "unida.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    let pages: Vec<String> = conn
+        .prepare(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("pages query")
+        .query_map([&attachment_id], |row| row.get::<_, String>(0))
+        .expect("pages map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("pages");
+    let joined = pages
+        .iter()
+        .map(|page| page.trim())
+        .filter(|page| !page.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert_eq!(
+        text, joined,
+        "the document text is the published pages joined in page order"
+    );
+    let (alfa, beta, gamma) = (
+        text.find("ALFA").expect("first page word"),
+        text.find("BETA").expect("second page word"),
+        text.find("GAMMA").expect("third page word"),
+    );
+    assert!(alfa < beta && beta < gamma, "pages join in order: {text:?}");
+}
+
+/// The whole-document text carries the same word spacing as the pages even
+/// where `pdf-extract`/lopdf would glue the positioned runs.
+#[test]
+fn whole_document_text_has_spaces_where_the_word_runs_would_glue() {
+    if !require_pdfium_or_skip("the spaced-word document assertion") {
+        return;
+    }
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SPACEDOC", "Obra con espacios", "Resumen.");
+    let path = write_temp_pdf(&dir, "pegadodoc.pdf", &glued_runs_pdf());
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SPACEDOC1",
+        "linked_file",
+        Some(&path),
+        "pegadodoc.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extraction row");
+    assert!(
+        text.contains("Arroz Elcultivo"),
+        "the document text keeps the word gap: {text:?}"
+    );
+}
+
+fn page_rows_with_hashes(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+) -> Vec<(i64, String, String)> {
+    conn.prepare(
+        "SELECT page_number, text_content, text_hash FROM bibliographic_page_texts
+         WHERE attachment_id = ?1 ORDER BY page_number",
+    )
+    .expect("pages query")
+    .query_map([attachment_id], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })
+    .expect("pages map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("pages")
+}
+
+use entropia_desktop_lib::bibliography::processing::{
+    pdfium_bind_count, pdfium_instances_alive, pdfium_text_pages_requested, read_native_page_texts,
+    read_native_page_texts_with_lopdf_basis, PageTextDecoder,
+};
+
+/// PDFium-gated tests must not pass vacuously in CI (JD6-A-006, JD6-B-003):
+/// with `ENTROPIA_REQUIRE_PDFIUM=1` a missing Pdfium library is a FAILURE,
+/// not a skip. Without the env the skip is reported and the test returns.
+fn require_pdfium_or_skip(test: &str) -> bool {
+    if entropia_desktop_lib::bibliography::processing::pdfium_page_reader_available() {
+        return true;
+    }
+    if matches!(std::env::var("ENTROPIA_REQUIRE_PDFIUM").as_deref(), Ok("1")) {
+        panic!("ENTROPIA_REQUIRE_PDFIUM=1 pero Pdfium no está disponible: {test} no debe pasar en vacío");
+    }
+    eprintln!("REPORTED SKIP: pdfium unavailable here — {test} did not run");
+    false
+}
+
+/// Forced lopdf fallback (the resolver reported no library): the reader
+/// returns the glued text lopdf produces, unconditionally — no library has
+/// to exist for this path to hold.
+#[test]
+fn the_page_reader_falls_back_to_lopdf_when_pdfium_is_absent() {
+    let pdf = glued_runs_pdf();
+    let pages = read_native_page_texts(&pdf, 1, PageTextDecoder::Lopdf).expect("read pages");
+
+    assert_eq!(pages.len(), 1);
+    assert!(
+        pages[0].text_content.contains("ArrozElcultivo"),
+        "the lopdf fallback is the glued read: {:?}",
+        pages[0].text_content
+    );
+    assert_eq!(
+        pages[0].method, "native",
+        "the fallback page is still a native read"
+    );
+}
+
+/// A long document reads in batches of at most 20 pages — and every Pdfium
+/// instance the batches bound is gone when the read returns: none may be
+/// alive inside `maybe_ocr_pages`, whose renders bind their own (the library
+/// lock is not reentrant).
+#[test]
+fn the_page_reader_batches_long_documents_and_releases_every_instance() {
+    if !require_pdfium_or_skip("the batch lifecycle over a long document") {
+        return;
+    }
+    let lines: Vec<(f32, f32, String)> = (1..=25)
+        .map(|number| {
+            (
+                50.0,
+                750.0,
+                format!("Pagina {number} con contenido nativo verificable"),
+            )
+        })
+        .collect();
+    let triples: Vec<(f32, f32, &str)> = lines
+        .iter()
+        .map(|(x, y, text)| (*x, *y, text.as_str()))
+        .collect();
+    let page_lines: Vec<&[(f32, f32, &str)]> = triples.iter().map(std::slice::from_ref).collect();
+    let pdf = make_text_pdf_pages(&page_lines);
+
+    let binds_before = pdfium_bind_count();
+    let requested_before = pdfium_text_pages_requested();
+    let pages = read_native_page_texts(&pdf, 25, PageTextDecoder::Pdfium).expect("read pages");
+
+    assert_eq!(pages.len(), 25, "one row per document page");
+    assert!(
+        pdfium_text_pages_requested() - requested_before >= 25,
+        "PDFium actually read the pages — the lifecycle assertion must not pass vacuously"
+    );
+    assert!(
+        pdfium_bind_count() > binds_before,
+        "the batches must bind the real library, not fall back silently"
+    );
+    assert!(pages[19].text_content.contains("Pagina 20"));
+    assert!(
+        pages[24].text_content.contains("Pagina 25"),
+        "the page past the first batch is read too"
+    );
+    assert_eq!(
+        pdfium_instances_alive(),
+        0,
+        "every batch released its Pdfium instance"
+    );
+}
+
+/// The batch-lifecycle invariant at its sharpest point: when the selective
+/// OCR pass renders a page, no Pdfium instance from the page reader may still
+/// be alive (pdfium-render's global lock is not reentrant — a live instance
+/// here deadlocks the render).
+#[test]
+fn no_pdfium_instance_is_alive_when_the_ocr_pass_renders() {
+    struct LockWatchingRenderer {
+        rendered_pages: Mutex<Vec<u32>>,
+    }
+
+    impl PageRenderer for LockWatchingRenderer {
+        fn render_page(&self, _pdf_bytes: &[u8], page_number: u32) -> Result<Vec<u8>, String> {
+            assert_eq!(
+                pdfium_instances_alive(),
+                0,
+                "no Pdfium instance may be alive when the OCR pass renders page {page_number}"
+            );
+            self.rendered_pages
+                .lock()
+                .expect("renders")
+                .push(page_number);
+            Ok(vec![9, 9, 9])
+        }
+
+        fn name(&self) -> &'static str {
+            "lock-watching-renderer"
+        }
+    }
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "LOCKWORK1", "Obra con candado", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con contenido nativo suficiente para superar el umbral de calidad",
+        )],
+        &[(50.0, 750.0, "ok")],
+    ]);
+    let path = write_temp_pdf(&dir, "candado.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "LOCKATT01",
+        "linked_file",
+        Some(&path),
+        "candado.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(LockWatchingRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido completo de la segunda pagina con suficiente longitud para ser rico",
+    );
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
+        renderer.clone(),
+        provider,
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    match outcome {
+        RunOneOutcome::Succeeded { task_id: done } => assert_eq!(done, task_id),
+        other => panic!("the extraction must succeed: {other:?}"),
+    }
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[2],
+        "only the sparse page reaches the renderer"
+    );
+    assert_eq!(
+        pdfium_instances_alive(),
+        0,
+        "no Pdfium instance outlives the extraction"
+    );
+}
+
+/// A 3-page file replaced by a 2-page one with identical first pages: the
+/// rows beyond the new `page_count` are deleted on publish, and the deletion
+/// counts as a page move — the profile is re-demanded so stale passages go.
+#[test]
+fn replacing_a_file_with_fewer_pages_drops_stale_page_rows_and_re_demands_the_profile() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "SHRINKW1", "Obra que se encoge", "Resumen.");
+    let page_one = "Pagina uno con contenido nativo suficiente para superar el umbral de calidad";
+    let page_two = "Pagina dos con contenido nativo suficiente para superar el umbral de calidad";
+    let page_three =
+        "Pagina tres con contenido nativo suficiente para superar el umbral de calidad";
+    let three = make_text_pdf_pages(&[
+        &[(50.0, 750.0, page_one)],
+        &[(50.0, 750.0, page_two)],
+        &[(50.0, 750.0, page_three)],
+    ]);
+    let path = write_temp_pdf(&dir, "encoge.pdf", &three);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "SHRINKATT1",
+        "linked_file",
+        Some(&path),
+        "encoge.pdf",
+        "application/pdf",
+    );
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+
+    let before = page_rows_with_hashes(&conn, &attachment_id);
+    assert_eq!(before.len(), 3, "the three-page file lands three page rows");
+
+    // The chained profile demand runs to terminal history, so the chain after
+    // the shrink must mint a fresh task to be observable at all.
+    let profile = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &profile_only_registry(),
+        "profile-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(profile, RunOneOutcome::Succeeded { .. }),
+        "the chained profile run must succeed: {profile:?}"
+    );
+
+    let two = make_text_pdf_pages(&[&[(50.0, 750.0, page_one)], &[(50.0, 750.0, page_two)]]);
+    std::fs::write(&path, two).expect("replace with the smaller file");
+    let second = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &second);
+
+    let after = page_rows_with_hashes(&conn, &attachment_id);
+    let numbers: Vec<i64> = after.iter().map(|row| row.0).collect();
+    assert_eq!(
+        numbers,
+        vec![1, 2],
+        "the rows beyond the new page_count are deleted"
+    );
+    assert_eq!(
+        (&after[0].1, &after[0].2),
+        (&before[0].1, &before[0].2),
+        "an identical page keeps its text and hash"
+    );
+    assert_eq!(
+        (&after[1].1, &after[1].2),
+        (&before[1].1, &before[1].2),
+        "an identical page keeps its text and hash"
+    );
+
+    let profile_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_tasks WHERE kind = 'bibliography_profile'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("profile count");
+    assert_eq!(
+        profile_tasks, 2,
+        "the deletion counts as a page move: the profile is demanded again"
+    );
+}
+
+// ── Judgment Day 6: regression fixes over the part-A reader ───────────────
+
+/// A minimal one-font PDF whose pages carry the given content streams in
+/// page order. `page_form` receives each page index and the shared font
+/// object id and may return one Form XObject the page exposes as `/Fm1`.
+/// Pure lopdf synthesis — no fixture files.
+fn make_pdf_with_contents<F>(page_streams: Vec<Stream>, mut page_form: F) -> Vec<u8>
+where
+    F: FnMut(usize, lopdf::ObjectId) -> Option<Stream>,
+{
+    let mut document = Document::with_version("1.7");
+    let font_id = document.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let pages_id = document.new_object_id();
+    let page_count = page_streams.len() as i64;
+    let mut page_ids = Vec::with_capacity(page_streams.len());
+    for (index, content) in page_streams.into_iter().enumerate() {
+        let mut resources = dictionary! { "Font" => dictionary! { "F1" => font_id } };
+        if let Some(form) = page_form(index, font_id) {
+            let form_id = document.add_object(form);
+            resources.set("XObject", dictionary! { "Fm1" => form_id });
+        }
+        let content_id = document.add_object(content);
+        let page_id = document.new_object_id();
+        document.objects.insert(
+            page_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Resources" => resources,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                "Contents" => content_id,
+            }),
+        );
+        page_ids.push(Object::Reference(page_id));
+    }
+    document.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => page_ids,
+            "Count" => page_count,
+        }),
+    );
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document
+        .save_to(&mut bytes)
+        .expect("serialize synthetic PDF");
+    bytes
+}
+
+/// A page content stream of plain text ops.
+fn text_page_stream(content: &str) -> Stream {
+    Stream::new(dictionary! {}, content.as_bytes().to_vec())
+}
+
+/// A one-page PDF whose runs carry explicit font sizes at absolute positions
+/// (`Tm`). A zero-size run is the producer quirk PDFium drops (`0 Tf` shows
+/// nothing) while lopdf's decoder keeps the string (JD6-A-001).
+fn make_sized_runs_pdf(runs: &[(f32, f32, f32, &str)]) -> Vec<u8> {
+    let mut content = String::from("BT ");
+    for (x, y, size, text) in runs {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
+        content.push_str(&format!("/F1 {size} Tf 1 0 0 1 {x} {y} Tm ({escaped}) Tj "));
+    }
+    content.push_str("ET");
+    make_pdf_with_contents(vec![text_page_stream(&content)], |_, _| None)
+}
+
+/// A decompression bomb content stream: tiny compressed, over the per-page
+/// bound inflated (JD6-A-004). With `text`, one `Tj` run sits at the end so
+/// `pdf-extract` (which has no bound) still reads it.
+fn bomb_page_stream(text: Option<&str>) -> Stream {
+    let mut content = Vec::new();
+    while content.len()
+        <= entropia_desktop_lib::bibliography::processing::BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES
+    {
+        content.extend_from_slice(b"0 0 m 595 842 l S 595 0 m 0 842 l S ");
+    }
+    if let Some(text) = text {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('(', "\\(")
+            .replace(')', "\\)");
+        content.extend_from_slice(format!("BT /F1 12 Tf 50 750 Td ({escaped}) Tj ET ").as_bytes());
+    }
+    let mut stream = Stream::new(dictionary! {}, content);
+    stream.compress().expect("compress the bomb");
+    stream
+}
+
+/// JD6-A-003's scenario. Page 1 hides its text where only PDFium finds it: an
+/// inline image first (pdf-extract silently drops everything after it) and
+/// then a Form XObject (lopdf's per-page extractor never recurses into `Do`),
+/// while PDFium reads the form's text. Page 2 is a decompression bomb: the
+/// unreadable sibling whose OCR candidacy must not move.
+fn pdf_with_recovered_page_and_bomb_page() -> Vec<u8> {
+    let page_one = "q BI /W 1 /H 1 /CS /G /BPC 8 ID \u{80} EI Q /Fm1 Do";
+    make_pdf_with_contents(
+        vec![text_page_stream(page_one), bomb_page_stream(None)],
+        |index, font_id| {
+            (index == 0).then(|| {
+                Stream::new(
+                    dictionary! {
+                        "Type" => "XObject",
+                        "Subtype" => "Form",
+                        "BBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                        "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
+                    },
+                    b"BT /F1 12 Tf 50 700 Td (Hola mundo recuperado del formulario) Tj ET".to_vec(),
+                )
+            })
+        },
+    )
+}
+
+/// JD6-A-001: PDFium drops some text runs (a zero font size `Tj` shows
+/// nothing), so a page whose PDFium read is less complete than lopdf's keeps
+/// the lopdf read — the long zero-size run stays in the stored text and the
+/// page stays rich, so the OCR calls are unchanged (none).
+#[test]
+fn zero_font_size_runs_keep_the_long_run_and_leave_the_ocr_calls_unchanged() {
+    if !require_pdfium_or_skip("the zero-font-size completeness comparison") {
+        return;
+    }
+    let long_run =
+        "El texto oculto del tamano cero sigue siendo texto que el lector recupera entero";
+    let pdf = make_sized_runs_pdf(&[(50.0, 750.0, 12.0, "Corto"), (50.0, 700.0, 0.0, long_run)]);
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "ZEROSIZE",
+        "Obra con texto invisible",
+        "Resumen.",
+    );
+    let path = write_temp_pdf(&dir, "cero.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "ZEROATT1",
+        "linked_file",
+        Some(&path),
+        "cero.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::with_text("no deberia usarse");
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(ocr_executor(
+        Arc::clone(&renderer),
+        Arc::clone(&provider),
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the run must succeed: {outcome:?}"
+    );
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert!(
+        text.contains("El texto oculto del tamano cero"),
+        "the stored page keeps the long zero-size run lopdf read: {text:?}"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "the page stays rich: no OCR call, exactly as before part A"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        0,
+        "no provider call on a rich page"
+    );
+}
+
+/// JD6-A-003 / JD6-B-004: a page PDFium recovers beside an unreadable one
+/// must yield the SAME OCR candidate list as the baseline. The candidacy
+/// basis (`native_blank`) stays on `pdf-extract` + the lopdf rows: with it
+/// the list is `[1, 2]` — page 1 is a sparse candidate and page 2 is
+/// unreadable under a blank document, exactly the pre-part-A decision.
+/// Computing the basis on the PDFium-improved pages would make the document
+/// non-blank and silently drop the unreadable page out of OCR.
+#[test]
+fn a_pdfium_recovered_page_beside_an_unreadable_one_keeps_the_baseline_ocr_candidates() {
+    if !require_pdfium_or_skip("the recovered-page candidacy comparison") {
+        return;
+    }
+    let pdf = pdf_with_recovered_page_and_bomb_page();
+    // The construction IS the verdict: pdf-extract reads nothing (the inline
+    // image eats the page) and lopdf reads nothing from page 1 (its extractor
+    // never recurses into a Form XObject), so the pre-part-A basis is blank
+    // and the unreadable page is an OCR candidate exactly as before part A.
+    let whole = entropia_desktop_lib::bibliography::processing::pdf_extract_text(&pdf)
+        .expect("pdf-extract runs");
+    assert!(
+        whole.trim().is_empty(),
+        "pdf-extract must read nothing here (the inline-image quirk): {whole:?}"
+    );
+    let lopdf_only = read_native_page_texts(&pdf, 2, PageTextDecoder::Lopdf).expect("lopdf reads");
+    assert!(
+        lopdf_only[0].text_content.trim().is_empty(),
+        "lopdf must read nothing from the form page: {:?}",
+        lopdf_only[0].text_content
+    );
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "RECOVW1",
+        "Obra con pagina recuperada",
+        "Resumen.",
+    );
+    let path = write_temp_pdf(&dir, "recuperada.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "RECOVATT1",
+        "linked_file",
+        Some(&path),
+        "recuperada.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = Arc::new(FakeRenderer {
+        rendered_pages: Mutex::new(Vec::new()),
+    });
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido suficientemente largo para reemplazar la pagina entera",
+    );
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(ocr_executor(
+        Arc::clone(&renderer),
+        Arc::clone(&provider),
+    )));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "extract-session",
+        repository::now_ms(),
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("extract run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the run must succeed: {outcome:?}"
+    );
+
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[1, 2],
+        "the candidate list is the baseline one: page 1 (sparse) and page 2 (unreadable under a blank document)"
+    );
+}
+
+/// The same file without any OCR pass: the page PDFium recovered carries its
+/// text (sparse but real) while the unreadable page records `unreadable` with
+/// no text — the rows whose candidacy the test above pins.
+#[test]
+fn pdfium_recovers_the_form_page_while_the_unreadable_page_stays_unreadable() {
+    if !require_pdfium_or_skip("the recovered-page read") {
+        return;
+    }
+    let pdf = pdf_with_recovered_page_and_bomb_page();
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "RECOVROW",
+        "Obra con pagina recuperada",
+        "Resumen.",
+    );
+    let path = write_temp_pdf(&dir, "recuperadarow.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "RECOVROW1",
+        "linked_file",
+        Some(&path),
+        "recuperadarow.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let rows = page_rows_with_hashes(&conn, &attachment_id);
+    assert_eq!(rows.len(), 2);
+    let first: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page 1");
+    assert!(
+        first.contains("Hola mundo recuperado del formulario"),
+        "PDFium recovers the form page: {first:?}"
+    );
+    let (quality, text): (String, String) = conn
+        .query_row(
+            "SELECT quality, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 2",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page 2");
+    assert_eq!((quality.as_str(), text.as_str()), ("unreadable", ""));
+}
+
+/// JD6-A-004: the bomb-safe bound is decided per page from lopdf's
+/// decompressed-content check FIRST — exactly as before part A — and only
+/// pages within the bound may be read with PDFium. An oversized compressed
+/// stream records `unreadable` (the baseline decision) and is never requested
+/// from PDFium, whose unbounded read could sneak a short text past the cap.
+#[test]
+fn an_oversized_compressed_stream_stays_unreadable_and_never_reaches_pdfium() {
+    if !require_pdfium_or_skip("the bomb-bound PDFium exclusion") {
+        return;
+    }
+    let pdf = make_pdf_with_contents(
+        vec![
+            text_page_stream(
+                "BT /F1 12 Tf 50 750 Td (Pagina primera con contenido nativo suficiente para superar el umbral de calidad) Tj ET",
+            ),
+            bomb_page_stream(Some("una linea cortita")),
+        ],
+        |_, _| None,
+    );
+
+    let requested_before = pdfium_text_pages_requested();
+    let reads = read_native_page_texts_with_lopdf_basis(&pdf, 2, PageTextDecoder::Pdfium)
+        .expect("read pages");
+    let baseline = read_native_page_texts(&pdf, 2, PageTextDecoder::Lopdf).expect("baseline rows");
+
+    assert_eq!(
+        reads
+            .pages
+            .iter()
+            .map(|page| (page.page_number, page.quality.as_str()))
+            .collect::<Vec<_>>(),
+        baseline
+            .iter()
+            .map(|page| (page.page_number, page.quality.as_str()))
+            .collect::<Vec<_>>(),
+        "the unreadable decision is the baseline one"
+    );
+    assert_eq!(
+        (
+            reads.pages[1].quality.as_str(),
+            reads.pages[1].text_content.as_str()
+        ),
+        ("unreadable", ""),
+        "the bomb page records unreadable with no partial lie"
+    );
+    assert_eq!(
+        pdfium_text_pages_requested() - requested_before,
+        1,
+        "only the healthy page is requested from PDFium — the bomb page never is"
+    );
+}
+
+/// JD6-B-002: the stored document text is the union of the published pages,
+/// but when the union grades `empty` while `pdf-extract`'s text grades `rich`
+/// the previous behavior stands: the pdf-extract text and its quality are
+/// stored. Nothing previously settled may flip to `empty` and get re-demanded
+/// over a reader disagreement.
+#[test]
+fn document_text_keeps_the_pdf_extract_text_when_the_page_union_is_empty() {
+    let bomb_text =
+        "linea repetida de relleno con palabras suficientes para que el verificador la considere rica";
+    let pdf = make_pdf_with_contents(vec![bomb_page_stream(Some(bomb_text))], |_, _| None);
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "UNIONEMP", "Obra con union vacia", "Resumen.");
+    let path = write_temp_pdf(&dir, "unionvacia.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "UNIONEMP1",
+        "linked_file",
+        Some(&path),
+        "unionvacia.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let (text, quality): (String, String) = conn
+        .query_row(
+            "SELECT text_content, quality FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("extraction row");
+    assert_eq!(quality, "rich", "the pdf-extract quality is kept");
+    assert!(
+        text.contains("linea repetida de relleno"),
+        "the pdf-extract text is stored, not the empty page union: {text:?}"
+    );
+}
+
+/// JD6-B-005 (informational): the off-page text policy. A page whose only
+/// PDFium text is off-page while lopdf reads on-page text keeps the lopdf read
+/// — the comparison finds lopdf strictly richer in alphanumeric content. The
+/// trade-off, documented at `choose_native_page_text`: when PDFium is at least
+/// as complete its text wins, and that text keeps off-page content too (kept
+/// on purpose via `PdfRect::MAX`), so nothing either decoder read is lost.
+#[test]
+fn a_page_whose_only_pdfium_text_is_off_page_keeps_the_lopdf_read() {
+    if !require_pdfium_or_skip("the off-page text policy") {
+        return;
+    }
+    // On-page words in a zero-size run (PDFium omits them) plus a normal
+    // off-page run PDFium keeps: lopdf reads BOTH, so the stored page must
+    // carry the on-page words and the off-page ones.
+    let pdf = make_sized_runs_pdf(&[
+        (
+            50.0,
+            750.0,
+            0.0,
+            "palabras dentro de la pagina que solo lopdf ve",
+        ),
+        (
+            50.0,
+            -700.0,
+            12.0,
+            "texto colocado fuera del area imprimible que pdfium conserva igual",
+        ),
+    ]);
+
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "OFFPAGE1", "Obra con texto fuera", "Resumen.");
+    let path = write_temp_pdf(&dir, "fuera.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "OFFPAGEA1",
+        "linked_file",
+        Some(&path),
+        "fuera.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    let text: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert!(
+        text.contains("dentro de la pagina"),
+        "the on-page words lopdf read are kept: {text:?}"
+    );
+    assert!(
+        text.contains("fuera del area imprimible"),
+        "the off-page words both decoders read are kept: {text:?}"
+    );
+}
+
 // ── E4b-WU3: selective OCR with injected renderer/provider ─────────────────
 
 use entropia_desktop_lib::bibliography::selective_ocr::{PageOcrProvider, PageRenderer};

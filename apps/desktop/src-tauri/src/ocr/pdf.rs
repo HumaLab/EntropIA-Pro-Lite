@@ -29,6 +29,20 @@
 //! Call `init_pdfium_path()` once during app startup (from OCR worker or command
 //! handler) to cache the resolved path. If never called, falls back to current
 //! directory + system library (original pdfium-render behavior).
+//!
+//! The bibliography pipeline resolves differently: [`ensure_pdfium_path_without_runtime`]
+//! fills the same cache from the bundled library only — never from the ML
+//! runtime — so a background sync cannot trigger a runtime bootstrap
+//! (JD4-B-001). Where nothing is bundled the caller logs it and reads with
+//! lopdf. The page RENDER may additionally fall back to an already-hydrated
+//! managed runtime copy of the library ([`ensure_pdfium_path_with_hydrated_runtime`],
+//! JD6-B-001) — still without bootstrapping.
+//!
+//! The no-bootstrap guarantee covers **PDFium resolution only**. The Pro
+//! local Paddle OCR path resolves its model directory through
+//! `resolve_paddle_model_dir` → `managed_runtime_root_for_ocr`, which does
+//! call `RuntimeManager::ensure_ready_or_bootstrap`: that is pre-existing
+//! behavior and outside part A (JD6-A-002).
 
 #[cfg(feature = "local-ml")]
 use crate::runtime::{managed_resource_path, RuntimeManager};
@@ -47,6 +61,117 @@ use std::sync::{Mutex, OnceLock};
 /// - `Some(None)` = initialized, but DLL not found in bundled paths (use system library)
 /// - `None` = not yet initialized (fall back to CWD + system library)
 static PDFIUM_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+thread_local! {
+    /// How many live Pdfium instances THIS thread holds right now. The
+    /// `thread_safe` bindings hold one global, non-reentrant lock from bind to
+    /// drop, so the batch lifecycle asserts on this: at most one instance at a
+    /// time on the reading thread, and none alive while the selective OCR pass
+    /// binds its own. The counter is thread-scoped on purpose (JD6-A-007): a
+    /// concurrently running test binding its own instance must not move the
+    /// assertions of another. Instances are created and dropped on the same
+    /// thread (they hold the global lock across their whole life).
+    static PDFIUM_INSTANCES_ALIVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Successful binds on this thread — the seam that proves PDFium was
+    /// actually used instead of silently falling back to lopdf (JD6-A-006).
+    static PDFIUM_BIND_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Page numbers this thread asked PDFium to read text from. A page the
+    /// bomb-safe bound already refused must never appear here (JD6-A-004).
+    static PDFIUM_TEXT_PAGES_REQUESTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One bound Pdfium, counted while alive. Derefs to [`Pdfium`]; the counter
+/// drops when the instance (and the library lock it holds) goes.
+pub(crate) struct GuardedPdfium {
+    inner: Pdfium,
+}
+
+impl GuardedPdfium {
+    fn new(inner: Pdfium) -> Self {
+        PDFIUM_INSTANCES_ALIVE.with(|count| count.set(count.get() + 1));
+        Self { inner }
+    }
+}
+
+impl std::ops::Deref for GuardedPdfium {
+    type Target = Pdfium;
+
+    fn deref(&self) -> &Pdfium {
+        &self.inner
+    }
+}
+
+impl Drop for GuardedPdfium {
+    fn drop(&mut self) {
+        PDFIUM_INSTANCES_ALIVE.with(|count| count.set(count.get().saturating_sub(1)));
+    }
+}
+
+/// Live Pdfium instances on this thread. A diagnostic seam: the bibliography
+/// reader's batches and the OCR pass's page renders must never overlap. The
+/// count is thread-scoped (JD6-A-007) so concurrently running tests cannot
+/// move each other's assertions.
+pub(crate) fn pdfium_instances_alive() -> usize {
+    PDFIUM_INSTANCES_ALIVE.with(std::cell::Cell::get)
+}
+
+/// Successful binds on this thread (JD6-A-006): before/after deltas prove a
+/// test exercised the real library instead of the lopdf fallback.
+pub(crate) fn pdfium_bind_count() -> u64 {
+    PDFIUM_BIND_COUNT.with(std::cell::Cell::get)
+}
+
+/// Page numbers this thread asked PDFium for (JD6-A-004): a page refused by
+/// the bomb-safe bound must never be requested.
+pub(crate) fn pdfium_text_pages_requested() -> u64 {
+    PDFIUM_TEXT_PAGES_REQUESTED.with(std::cell::Cell::get)
+}
+
+/// Whether a Pdfium instance binds at all right now — false means every
+/// reader falls back to lopdf.
+pub(crate) fn pdfium_loads() -> bool {
+    get_pdfium().is_ok()
+}
+
+/// One batch of per-page texts (1-based page numbers) through ONE Pdfium
+/// instance: `None` marks the pages Pdfium itself could not read (the caller
+/// falls back to lopdf for those). The instance — and the global lock it
+/// holds — is released before this returns, so a long read neither
+/// monopolizes the lock nor survives into `maybe_ocr_pages`, whose page
+/// renders bind their own instance (the lock is not reentrant).
+pub(crate) const PDFIUM_TEXT_BATCH_PAGES: usize = 20;
+
+pub(crate) fn read_pdfium_page_texts(
+    bytes: &[u8],
+    page_numbers: &[u32],
+) -> Result<Vec<(u32, Option<String>)>, String> {
+    PDFIUM_TEXT_PAGES_REQUESTED.with(|count| count.set(count.get() + page_numbers.len() as u64));
+    let pdfium = get_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(bytes, None)
+        .map_err(|e| format!("Failed to load PDF for per-page text: {e}"))?;
+    let pages = document.pages();
+    let mut out = Vec::with_capacity(page_numbers.len());
+    for &number in page_numbers {
+        let index = number.saturating_sub(1);
+        let text = if index > u32::from(u16::MAX) {
+            None
+        } else {
+            match pages.get(PdfPageIndex::from(index as u16)) {
+                // `all()` clips to the page rect and silently drops text a
+                // producer placed outside it — lopdf reads that text, and the
+                // reader must never lose what the fallback finds. The full
+                // coordinate space keeps every character.
+                Ok(page) => page.text().ok().map(|text| text.inside_rect(PdfRect::MAX)),
+                Err(_) => None,
+            }
+        };
+        out.push((number, text));
+    }
+    drop(document);
+    drop(pdfium);
+    Ok(out)
+}
 
 /// GLM-OCR rejects page images larger than 10 decimal megabytes.
 pub const MAX_RENDERED_PAGE_IMAGE_BYTES: usize = 10_000_000;
@@ -212,10 +337,14 @@ fn resolve_pdfium_dll_path_from_roots(
         }
     }
 
+    // The corpus/Pro chain keeps its pre-part-A candidate list and order
+    // (JD6-A-005): one bundled layout for the current OS, then the dev
+    // candidates. The runtime-free resolver probes the broader host-filtered
+    // list instead (`resolve_bundled_pdfium_path`).
     if let Some(resource_dir) = bundled_resource_dir {
         for bundled in bundled_pdfium_candidate_paths(resource_dir, &dll_name) {
             if bundled.exists() {
-                return Some(bundled);
+                return Some(strip_windows_prefix(bundled));
             }
         }
     }
@@ -229,8 +358,107 @@ fn resolve_pdfium_dll_path_from_roots(
     None
 }
 
-/// Where the macOS and Linux Lite bundles put Pdfium, relative to the resource
-/// directory Tauri reports for the installed app:
+/// The bundled/dev part of the lookup, with the resource dir injectable: the
+/// app's resource dir at runtime, a fake installer layout in the tests. This
+/// is the whole of the runtime-free resolver (`ensure_pdfium_path_without_runtime`)
+/// used by the bibliography page reader — it must never reach the ML runtime
+/// module, pinned by `the_bundled_resolver_never_calls_the_ml_runtime_bootstrap`.
+/// It probes [`host_pdfium_candidate_paths`] — the host's own layouts only
+/// (JD6-A-005).
+fn resolve_bundled_pdfium_path(
+    resource_dir: Option<&std::path::Path>,
+    manifest_dir: &std::path::Path,
+) -> Option<PathBuf> {
+    for candidate in host_pdfium_candidate_paths(resource_dir, manifest_dir) {
+        if candidate.exists() {
+            return Some(strip_windows_prefix(candidate));
+        }
+    }
+
+    None
+}
+
+/// The candidates [`resolve_bundled_pdfium_path`] may probe: the current
+/// host's layouts only (JD6-A-005). A `<os>-<arch>` resource subdir for a
+/// DIFFERENT host is never probed — a foreign-architecture library must not
+/// shadow a host-compatible one (or the system-library fallback behind it).
+/// The untagged layout dirs carry the host library's own name in every
+/// installer that uses them:
+/// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
+///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
+/// - Lite Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
+///   (`bundle.resources` in tauri.lite.linux.conf.json);
+/// - Pro/Lite Windows installers, the Store MSIX repack and `tauri dev`
+///   (whose resource dir is `target/debug`): `resources/lib/<dll>`
+///   (`bundle.resources` in tauri.windows.conf.json / tauri.lite.windows.conf.json);
+/// - Pro Linux: `resources/lib/linux-x86_64/libpdfium.so`
+///   (`bundle.resources` in tauri.linux.conf.json) — the host's own
+///   `<os>-<arch>` subdir.
+///
+/// The dev candidates follow exactly where the pre-part-A code had them and
+/// in its order (the flat host path first): `CARGO_MANIFEST_DIR/resources/lib`
+/// plus the Linux-only per-arch and runtime-pack extras.
+fn host_pdfium_candidate_paths(resource_dir: Option<&Path>, manifest_dir: &Path) -> Vec<PathBuf> {
+    let dll_name = Pdfium::pdfium_platform_library_name();
+    let mut candidates = Vec::new();
+
+    if let Some(resource_dir) = resource_dir {
+        // The .app's Frameworks dir sits beside the Contents/Resources dir
+        // Tauri reports; for any other layout the parent probe just misses.
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = resource_dir.parent() {
+            candidates.push(contents.join("Frameworks").join(&dll_name));
+        }
+        // Lite resources: `resources/pdfium/<dll>`.
+        candidates.push(
+            resource_dir
+                .join("resources")
+                .join("pdfium")
+                .join(&dll_name),
+        );
+        // Pro/Lite Windows, the MSIX repack and the dev resource dir:
+        // `resources/lib/<dll>`.
+        candidates.push(resource_dir.join("resources").join("lib").join(&dll_name));
+        // Pro Linux (and any per-arch pack): `resources/lib/<os>-<arch>/<dll>`
+        // — the HOST subdir only.
+        if let Some(platform) = host_platform_resource_dir() {
+            candidates.push(
+                resource_dir
+                    .join("resources")
+                    .join("lib")
+                    .join(platform)
+                    .join(&dll_name),
+            );
+        }
+    }
+
+    candidates.extend(dev_pdfium_candidate_paths(
+        manifest_dir,
+        dll_name.to_string_lossy().as_ref(),
+    ));
+    candidates
+}
+
+/// The `<os>-<arch>` resource subdir that matches this host, when the host is
+/// one of the layouts the installers ship. Foreign-architecture subdirs are
+/// never candidates (JD6-A-005).
+fn host_platform_resource_dir() -> Option<&'static str> {
+    const PLATFORM_DIRS: &[&str] = &[
+        "windows-x86_64",
+        "windows-aarch64",
+        "linux-x86_64",
+        "linux-aarch64",
+        "macos-x86_64",
+        "macos-aarch64",
+    ];
+    let current = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    PLATFORM_DIRS.iter().copied().find(|dir| *dir == current)
+}
+
+/// Where the installers put the Pdfium library for THIS OS, relative to the
+/// resource directory Tauri reports — the shared candidate list of
+/// [`init_pdfium_path`] (the corpus/Pro chain). Pinned to its pre-part-A
+/// shape by `the_corpus_candidate_list_keeps_its_pre_part_a_shape` (JD6-A-005):
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
 /// - Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
@@ -310,6 +538,132 @@ fn strip_windows_prefix(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Answers from the cache when it already holds a resolved path; otherwise
+/// runs `resolve` exactly once and records the decision. A populated cache is
+/// never re-resolved: the app setup decides once and every later reader
+/// (bibliography page reader, OCR page renders) trusts it.
+fn ensure_cached_pdfium_path(
+    cache: &Mutex<Option<PathBuf>>,
+    resolve: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let cached = cache.lock().expect("pdfium path cache poisoned");
+    if let Some(path) = cached.as_ref() {
+        return Some(path.clone());
+    }
+    drop(cached);
+    let resolved = resolve();
+    let mut cached = cache.lock().expect("pdfium path cache poisoned");
+    if cached.is_none() {
+        *cached = resolved.clone();
+    }
+    resolved
+}
+
+/// Resolves the Pdfium library the bundle carries — and nothing else. Unlike
+/// [`init_pdfium_path`] it never reaches the ML runtime: no background sync
+/// and no bibliography extraction may trigger
+/// `RuntimeManager::ensure_ready_or_bootstrap` (JD4-B-001). Used by the app
+/// setup, before the bibliography page reader, and by
+/// `ProductionSelectiveOcr::render_page` (which may follow it with
+/// [`ensure_pdfium_path_with_hydrated_runtime`], JD6-B-001).
+///
+/// The guarantee covers PDFium resolution only: the Pro local Paddle OCR
+/// model path still bootstraps the runtime (JD6-A-002, pre-existing).
+///
+/// Returns the resolved path, or `None` where nothing is bundled (Pro macOS):
+/// the caller logs it and reads with lopdf instead.
+pub fn ensure_pdfium_path_without_runtime(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    ensure_pdfium_path_without_runtime_dir(bundled_resource_dir(app_handle).as_deref())
+}
+
+/// [`ensure_pdfium_path_without_runtime`] with the resource dir injected: the
+/// test seam for the resolver, and the reader's own last resort when no app
+/// handle is available (native-only executors, direct reads).
+pub(crate) fn ensure_pdfium_path_without_runtime_dir(
+    resource_dir: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    let cache = PDFIUM_PATH.get_or_init(|| Mutex::new(None));
+    ensure_cached_pdfium_path(cache, || {
+        let resolved = resolve_bundled_pdfium_path(
+            resource_dir,
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        );
+        match &resolved {
+            Some(path) => eprintln!(
+                "[pdf] ✅ Pdfium incluida resuelta sin runtime de ML: {}",
+                path.display()
+            ),
+            None => eprintln!(
+                "[pdf] ℹ️ Sin Pdfium incluida ({}) ni en el checkout de desarrollo; la lectura por página usa lopdf",
+                dll_name_display()
+            ),
+        }
+        resolved
+    })
+}
+
+/// [`ensure_pdfium_path_without_runtime`] plus the one fallback the page
+/// RENDER may take and the readers may not (JD6-B-001): an ALREADY-HYDRATED
+/// managed runtime copy of the library, when one is on disk. Like the bundled
+/// resolver this never calls `RuntimeManager::ensure_ready_or_bootstrap` — it
+/// asks the runtime only for the root it has already hydrated
+/// (`hydrated_runtime_root`) and keeps only a library file that exists there.
+/// A missing copy is honest absence: the caller logs it and falls back.
+pub fn ensure_pdfium_path_with_hydrated_runtime(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    let cache = PDFIUM_PATH.get_or_init(|| Mutex::new(None));
+    ensure_cached_pdfium_path(cache, || {
+        let resolved = resolve_bundled_pdfium_path(
+            bundled_resource_dir(app_handle).as_deref(),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        );
+        // The managed runtime copy only exists when local inference is
+        // compiled in; the lean build has only the bundled library.
+        #[cfg(feature = "local-ml")]
+        let resolved = resolved.or_else(|| existing_managed_pdfium_path(app_handle));
+        match &resolved {
+            Some(path) => eprintln!(
+                "[pdf] ✅ Pdfium resuelta para el render de páginas: {}",
+                path.display()
+            ),
+            None => eprintln!(
+                "[pdf] ℹ️ Sin Pdfium incluida ni copia hidratada del runtime ({})",
+                dll_name_display()
+            ),
+        }
+        resolved
+    })
+}
+
+/// The managed-runtime half of the render fallback (JD6-B-001): the library
+/// `init_pdfium_path` would use, but only when an already-hydrated managed
+/// runtime root answers and the file is already on disk.
+#[cfg(feature = "local-ml")]
+fn existing_managed_pdfium_path(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    existing_managed_pdfium_path_with(|| RuntimeManager::new().hydrated_runtime_root(app_handle))
+}
+
+/// [`existing_managed_pdfium_path`] with the hydrated-root lookup injected:
+/// one test proves a fixture runtime copy is resolved, another that absence
+/// stays absence. The injected closure is the ONLY runtime call — nothing in
+/// here may bootstrap (JD6-B-001), pinned by the source scan in
+/// `the_bundled_resolver_never_calls_the_ml_runtime_bootstrap`.
+#[cfg(any(feature = "local-ml", test))]
+fn existing_managed_pdfium_path_with<H>(hydrated_runtime_root: H) -> Option<PathBuf>
+where
+    H: FnOnce() -> Result<Option<PathBuf>, String>,
+{
+    let root = hydrated_runtime_root().ok().flatten()?;
+    let dll_name = Pdfium::pdfium_platform_library_name();
+    // Same `<root>/resources/lib` layout `init_pdfium_path` uses (see
+    // `resolve_pdfium_dll_path_from_roots`); the join is inlined so the lean
+    // build compiles it too.
+    #[cfg(feature = "local-ml")]
+    let managed = managed_resource_path(&root, "lib").join(&dll_name);
+    #[cfg(not(feature = "local-ml"))]
+    let managed = root.join("resources").join("lib").join(&dll_name);
+    managed.exists().then(|| strip_windows_prefix(managed))
+}
+
 /// Initialize a Pdfium instance without panicking.
 ///
 /// Uses the cached DLL path if `init_pdfium_path()` was called, otherwise
@@ -318,7 +672,7 @@ fn strip_windows_prefix(path: PathBuf) -> PathBuf {
 /// # Errors
 /// Returns `Err` with a human-readable message if the Pdfium native
 /// library cannot be loaded (missing DLL/so/dylib, wrong architecture, etc.).
-fn get_pdfium() -> Result<Pdfium, String> {
+fn get_pdfium() -> Result<GuardedPdfium, String> {
     let cached_path = PDFIUM_PATH
         .get()
         .and_then(|cache| cache.lock().ok().and_then(|path| path.clone()));
@@ -365,7 +719,8 @@ fn get_pdfium() -> Result<Pdfium, String> {
         )
     })?;
 
-    Ok(Pdfium::new(bindings))
+    PDFIUM_BIND_COUNT.with(|count| count.set(count.get() + 1));
+    Ok(GuardedPdfium::new(Pdfium::new(bindings)))
 }
 
 /// Returns the platform-specific Pdfium library filename for error messages.
@@ -2174,6 +2529,440 @@ mod tests {
         );
 
         assert_eq!(resolved, Some(managed));
+    }
+
+    // ── A1: bundled resolution without the ML runtime ────────────────────
+
+    /// The shared candidate list of the corpus/Pro chain (`init_pdfium_path`
+    /// → `resolve_pdfium_dll_path_from_roots` → [`bundled_pdfium_candidate_paths`])
+    /// must keep exactly its pre-part-A shape and order (JD6-A-005): one
+    /// bundled layout for the current OS. The broader installer probing lives
+    /// in the runtime-free resolver's own [`host_pdfium_candidate_paths`].
+    #[test]
+    fn the_corpus_candidate_list_keeps_its_pre_part_a_shape() {
+        let dll = Pdfium::pdfium_platform_library_name();
+
+        // macOS bundles put the library in `Contents/Frameworks`, beside the
+        // `Contents/Resources` dir Tauri reports.
+        #[cfg(target_os = "macos")]
+        {
+            let contents = PathBuf::from("install-root")
+                .join("EntropIA Lite.app")
+                .join("Contents");
+            let mac_resource_dir = contents.join("Resources");
+            assert_eq!(
+                bundled_pdfium_candidate_paths(&mac_resource_dir, &dll),
+                vec![contents.join("Frameworks").join(&dll)],
+                "the macOS corpus list is the Frameworks layout, unchanged"
+            );
+        }
+        // Lite Linux deb: `resources/pdfium/<dll>` under `/usr/lib/<productName>`.
+        #[cfg(target_os = "linux")]
+        {
+            let flat_resource_dir = PathBuf::from("install-root");
+            assert_eq!(
+                bundled_pdfium_candidate_paths(&flat_resource_dir, &dll),
+                vec![flat_resource_dir
+                    .join("resources")
+                    .join("pdfium")
+                    .join(&dll)],
+                "the Linux corpus list is the Lite layout, unchanged"
+            );
+        }
+        // Pro + Lite Windows installers and the Store MSIX repack:
+        // `resources/lib/<dll>` beside the exe.
+        #[cfg(target_os = "windows")]
+        {
+            let flat_resource_dir = PathBuf::from("install-root");
+            assert_eq!(
+                bundled_pdfium_candidate_paths(&flat_resource_dir, &dll),
+                vec![flat_resource_dir.join("resources").join("lib").join(&dll)],
+                "the Windows corpus list is the resources/lib layout, unchanged"
+            );
+        }
+    }
+
+    /// The runtime-free resolver's own candidate list covers the layouts the
+    /// installers ship for THIS host (JD5-B-005) — untagged dirs every host
+    /// probes (`resources/pdfium/<dll>` Lite, `resources/lib/<dll>` Pro
+    /// Windows + `tauri dev`), the host's own `<os>-<arch>` subdir (Pro
+    /// Linux), and the macOS Frameworks dir beside `Contents/Resources`.
+    #[test]
+    fn the_bundled_resolver_covers_the_host_layouts() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let contents = PathBuf::from("install-root")
+            .join("EntropIA Lite.app")
+            .join("Contents");
+        let resource_dir = contents.join("Resources");
+        let candidates = host_pdfium_candidate_paths(Some(&resource_dir), Path::new("manifest"));
+
+        // Lite: `resources/pdfium/<dll>`.
+        assert!(
+            candidates.contains(&resource_dir.join("resources").join("pdfium").join(&dll)),
+            "Lite layout resources/pdfium missing from {candidates:?}"
+        );
+        // Pro + Lite Windows installers and `tauri dev` (where the resource
+        // dir is `target/debug`): `resources/lib/<dll>`.
+        assert!(
+            candidates.contains(&resource_dir.join("resources").join("lib").join(&dll)),
+            "Pro Windows / dev layout resources/lib missing from {candidates:?}"
+        );
+        // Pro Linux deb: `resources/lib/<host os>-<arch>/<dll>` — the host's
+        // own subdir only.
+        if let Some(platform) = host_platform_resource_dir() {
+            assert!(
+                candidates.contains(
+                    &resource_dir
+                        .join("resources")
+                        .join("lib")
+                        .join(platform)
+                        .join(&dll)
+                ),
+                "Pro Linux layout resources/lib/{platform} missing from {candidates:?}"
+            );
+        }
+        // macOS bundles put the library in `Contents/Frameworks`, beside the
+        // `Contents/Resources` dir Tauri reports.
+        #[cfg(target_os = "macos")]
+        assert!(
+            candidates.contains(&contents.join("Frameworks").join(&dll)),
+            "macOS frameworks layout missing from {candidates:?}"
+        );
+    }
+
+    /// One fake installer layout per host variant, injected as the resource
+    /// dir: the resolver must return the library this host's variant ships.
+    /// Nothing real is loaded — the fake files only need to exist.
+    #[test]
+    fn the_bundled_resolver_finds_the_host_layout_from_an_injected_resource_dir() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+
+        // Lite: resources/pdfium/<dll> under the resource dir.
+        let lite = tempdir().expect("lite install");
+        let lite_lib = lite.path().join("resources").join("pdfium").join(&dll);
+        std::fs::create_dir_all(lite_lib.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&lite_lib, b"fake").expect("write");
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(lite.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(lite_lib)),
+            "Lite layout"
+        );
+
+        // Pro Windows / dev (target/debug/resources/lib): resources/lib/<dll>.
+        let windows = tempdir().expect("windows install");
+        let windows_lib = windows.path().join("resources").join("lib").join(&dll);
+        std::fs::create_dir_all(windows_lib.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&windows_lib, b"fake").expect("write");
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(windows.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(windows_lib)),
+            "Pro Windows / dev layout"
+        );
+
+        // Pro Linux: resources/lib/<host os>-<arch>/<dll>.
+        if let Some(platform) = host_platform_resource_dir() {
+            let linux = tempdir().expect("per-arch install");
+            let linux_lib = linux
+                .path()
+                .join("resources")
+                .join("lib")
+                .join(platform)
+                .join(&dll);
+            std::fs::create_dir_all(linux_lib.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&linux_lib, b"fake").expect("write");
+            assert_eq!(
+                resolve_bundled_pdfium_path(Some(linux.path()), manifest_dir.path()),
+                Some(strip_windows_prefix(linux_lib)),
+                "Pro Linux layout"
+            );
+        }
+
+        // Dev checkout: CARGO_MANIFEST_DIR/resources/lib/<dll>.
+        let dev = tempdir().expect("dev checkout");
+        let dev_lib = dev.path().join("resources").join("lib").join(&dll);
+        std::fs::create_dir_all(dev_lib.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&dev_lib, b"fake").expect("write");
+        assert_eq!(
+            resolve_bundled_pdfium_path(None, dev.path()),
+            Some(strip_windows_prefix(dev_lib)),
+            "dev checkout layout"
+        );
+    }
+
+    /// JD6-A-005: the runtime-free resolver must not shadow host-compatible
+    /// libraries with foreign-architecture ones. In a mixed layout — an
+    /// x86_64 platform-subdir lib beside the host's own — the host lib wins;
+    /// where only the foreign lib exists the resolver reports absence (and
+    /// the system library behind it), never the foreign path.
+    #[test]
+    fn the_bundled_resolver_prefers_the_host_lib_over_an_x86_64_one() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let host_platform = host_platform_resource_dir().expect("a host the installers ship");
+        // A foreign platform dir that says x86_64: literally `linux-x86_64`
+        // where the host is not that (the repo ships one), else
+        // `windows-x86_64`.
+        let foreign_platform = if host_platform == "linux-x86_64" {
+            "windows-x86_64"
+        } else {
+            "linux-x86_64"
+        };
+
+        let mixed = tempdir().expect("mixed layout");
+        let host_lib = mixed
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(host_platform)
+            .join(&dll);
+        let foreign_lib = mixed
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(foreign_platform)
+            .join(&dll);
+        for lib in [&host_lib, &foreign_lib] {
+            std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
+            std::fs::write(lib, b"fake").expect("write");
+        }
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(mixed.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(host_lib)),
+            "the host-architecture lib must win over the foreign x86_64 one"
+        );
+
+        let foreign_only = tempdir().expect("foreign-only layout");
+        let foreign_only_lib = foreign_only
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(foreign_platform)
+            .join(&dll);
+        std::fs::create_dir_all(foreign_only_lib.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&foreign_only_lib, b"fake").expect("write");
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(foreign_only.path()), manifest_dir.path()),
+            None,
+            "a foreign-architecture lib alone must not resolve: it would shadow the system library"
+        );
+    }
+
+    /// Nothing bundled (Pro macOS ships no Pdfium): the resolver reports the
+    /// absence — the reader then falls back to lopdf and logs it.
+    #[test]
+    fn the_resolver_reports_absence_when_nothing_is_bundled() {
+        let install = tempdir().expect("install dir");
+        let manifest_dir = tempdir().expect("manifest dir");
+        let resource_dir = install.path().join("Contents").join("Resources");
+        std::fs::create_dir_all(&resource_dir).expect("mkdir");
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(&resource_dir), manifest_dir.path()),
+            None,
+            "an empty install must report absence, not invent a path"
+        );
+        assert_eq!(
+            resolve_bundled_pdfium_path(None, manifest_dir.path()),
+            None,
+            "an empty dev checkout must report absence too"
+        );
+    }
+
+    /// JD6-B-001: where nothing is bundled the page render may fall back to
+    /// an already-hydrated managed runtime copy of the library — and only
+    /// that: the injected lookup is the single runtime call, the library must
+    /// already be on disk, and nothing may bootstrap.
+    #[test]
+    fn the_page_render_falls_back_to_an_existing_managed_runtime_copy_without_bootstrapping() {
+        let runtime_root = tempdir().expect("runtime root");
+        let managed = runtime_root
+            .path()
+            .join("resources")
+            .join("lib")
+            .join(Pdfium::pdfium_platform_library_name());
+        std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&managed, b"fake").expect("write");
+
+        let calls = RefCell::new(Vec::new());
+        let resolved = existing_managed_pdfium_path_with(|| {
+            calls.borrow_mut().push("hydrated_runtime_root");
+            Ok(Some(runtime_root.path().to_path_buf()))
+        });
+        assert_eq!(resolved, Some(strip_windows_prefix(managed)));
+        assert_eq!(
+            calls.borrow().as_slice(),
+            &["hydrated_runtime_root"],
+            "the hydrated root is the only runtime call — no bootstrap (JD6-B-001)"
+        );
+
+        // A runtime root without the library on disk: absence, not a path.
+        let empty_root = tempdir().expect("empty runtime root");
+        assert_eq!(
+            existing_managed_pdfium_path_with(|| Ok(Some(empty_root.path().to_path_buf()))),
+            None,
+            "a runtime root without the library is absence"
+        );
+        assert_eq!(
+            existing_managed_pdfium_path_with(|| Ok(None)),
+            None,
+            "no hydrated runtime at all is absence"
+        );
+        assert_eq!(
+            existing_managed_pdfium_path_with(|| Err("runtime lookup failed".to_string())),
+            None,
+            "a runtime lookup error is absence, never a failure of the render path"
+        );
+    }
+
+    /// The runtime-free resolver must never reach the ML runtime bootstrap:
+    /// no background sync may trigger `RuntimeManager::ensure_ready_or_bootstrap`
+    /// (JD4-B-001). Enforced by a source scan of the resolver chains.
+    #[test]
+    fn the_bundled_resolver_never_calls_the_ml_runtime_bootstrap() {
+        let source =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ocr/pdf.rs"))
+                .expect("read pdf.rs");
+
+        // The bundled resolver is strict: it does not reference the ML
+        // runtime module at all.
+        for fn_name in [
+            "ensure_pdfium_path_without_runtime(",
+            "ensure_pdfium_path_without_runtime_dir(",
+            "ensure_cached_pdfium_path(",
+            "resolve_bundled_pdfium_path(",
+            "host_pdfium_candidate_paths(",
+        ] {
+            let body = rust_fn_body(&source, fn_name)
+                .unwrap_or_else(|| panic!("{fn_name} must exist in ocr/pdf.rs"));
+            for forbidden in ["RuntimeManager", "ensure_ready_or_bootstrap"] {
+                assert!(
+                    !body.contains(forbidden),
+                    "{fn_name} must not reference {forbidden}:\n{body}"
+                );
+            }
+        }
+        // The page-render fallback may consult the ML runtime for an
+        // already-hydrated copy, but never bootstrap (JD6-B-001).
+        for fn_name in [
+            "ensure_pdfium_path_with_hydrated_runtime(",
+            "existing_managed_pdfium_path(",
+            // No `(`: this one is generic (`<H>(...)`), and `rust_fn_body`
+            // matches the signature prefix.
+            "existing_managed_pdfium_path_with",
+        ] {
+            let body = rust_fn_body(&source, fn_name)
+                .unwrap_or_else(|| panic!("{fn_name} must exist in ocr/pdf.rs"));
+            assert!(
+                !body.contains("ensure_ready_or_bootstrap"),
+                "{fn_name} must not bootstrap the ML runtime:\n{body}"
+            );
+        }
+
+        // The bibliography call sites must use the runtime-free resolver: the
+        // selective OCR page renderer keeps its old pdfium path only through
+        // the new resolver (JD5-A-001), with the hydrated-runtime fallback
+        // (JD6-B-001) and never the runtime-bootstrapping one; app setup
+        // resolves once at boot.
+        let processing = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/bibliography/processing.rs"
+        ))
+        .expect("read processing.rs");
+        let renderer = rust_fn_body(&processing, "render_page(&self")
+            .expect("ProductionSelectiveOcr::render_page must exist");
+        assert!(
+            renderer.contains("ensure_pdfium_path_without_runtime"),
+            "render_page must resolve pdfium through the runtime-free resolver:\n{renderer}"
+        );
+        assert!(
+            renderer.contains("ensure_pdfium_path_with_hydrated_runtime"),
+            "render_page may fall back to the hydrated managed runtime copy (JD6-B-001):\n{renderer}"
+        );
+        assert!(
+            !renderer.contains("init_pdfium_path"),
+            "render_page must not reach the runtime-bootstrapping resolver:\n{renderer}"
+        );
+        assert!(
+            !renderer.contains("ensure_ready_or_bootstrap"),
+            "render_page must never bootstrap the ML runtime:\n{renderer}"
+        );
+
+        let lib = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        assert!(
+            lib.contains("ensure_pdfium_path_without_runtime"),
+            "app setup must resolve the bundled pdfium library at startup"
+        );
+    }
+
+    /// A populated cache is answered as-is: the resolution runs once (app
+    /// setup), and every later reader — the bibliography page reader, each
+    /// rendered OCR page — trusts the cached decision without re-resolving.
+    #[test]
+    fn a_populated_pdfium_cache_is_never_resolved_again() {
+        let cached_path = PathBuf::from("bundled").join("pdfium");
+        let cache = Mutex::new(Some(cached_path.clone()));
+
+        let resolved =
+            ensure_cached_pdfium_path(&cache, || panic!("a populated cache must not re-resolve"));
+
+        assert_eq!(resolved, Some(cached_path));
+    }
+
+    /// A cold cache resolves exactly once once a path is found and records
+    /// it; where nothing exists the answer is honest absence, and the reader
+    /// falls back.
+    #[test]
+    fn a_cold_pdfium_cache_resolves_once_and_reports_absence() {
+        let calls = std::cell::Cell::new(0usize);
+        let cache: Mutex<Option<PathBuf>> = Mutex::new(None);
+        let found = PathBuf::from("bundled").join("pdfium");
+
+        let first = ensure_cached_pdfium_path(&cache, || {
+            calls.set(calls.get() + 1);
+            Some(found.clone())
+        });
+        let second = ensure_cached_pdfium_path(&cache, || {
+            calls.set(calls.get() + 1);
+            Some(found.clone())
+        });
+
+        assert_eq!(first, Some(found.clone()));
+        assert_eq!(second, Some(found), "the cached decision is answered");
+        assert_eq!(calls.get(), 1, "the second read must not re-resolve");
+
+        // Nothing bundled anywhere: absence is the answer, not an invented path.
+        let empty: Mutex<Option<PathBuf>> = Mutex::new(None);
+        assert_eq!(
+            ensure_cached_pdfium_path(&empty, || None),
+            None,
+            "absence is the honest answer"
+        );
+    }
+
+    /// Extracts the body of a top-level `fn` by brace depth. Good enough for
+    /// rustfmt'd sources with no unbalanced braces in literals.
+    fn rust_fn_body(source: &str, fn_signature: &str) -> Option<String> {
+        let start = source.find(&format!("fn {fn_signature}"))?;
+        let mut depth = 0usize;
+        let mut opened = false;
+        for (offset, ch) in source[start..].char_indices() {
+            match ch {
+                '{' => {
+                    opened = true;
+                    depth += 1;
+                }
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if opened && depth == 0 {
+                        return Some(source[start..start + offset + 1].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     /// Loads the real library a bundle ships and renders a page with it. Opt-in:

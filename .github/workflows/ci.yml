@@ -92,6 +92,12 @@ jobs:
 
       - name: Test (Pro, local-ml)
         shell: pwsh
+        # The PDFium-gated bibliography tests must not pass vacuously in CI:
+        # ENTROPIA_REQUIRE_PDFIUM=1 turns a missing Pdfium into a failure
+        # (JD6-A-006, JD6-B-003). The DLL is committed for Windows
+        # (apps/desktop/src-tauri/resources/lib/pdfium.dll).
+        env:
+          ENTROPIA_REQUIRE_PDFIUM: "1"
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml
 
   rust-quality-report:
