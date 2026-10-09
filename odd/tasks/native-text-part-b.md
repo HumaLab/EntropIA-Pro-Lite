@@ -20,7 +20,7 @@ Branch `feat/native-text-reprocess`, worktree
   admission skips a failed/cancelled OCR attempt for the same file (fingerprint `mtime` prefix, incl.
   `source_changed`); `bibliography_extract` checkpoints survive terminal failure; empty GLM answer
   checkpointed as `Ok("")`.
-- [ ] B2 — `is_garbled_bibliography_text` + `ocr_candidate_pages` + threshold measurement on a read-only copy
+- [x] B2 — `is_garbled_bibliography_text` + `ocr_candidate_pages` + threshold measurement on a read-only copy
   of `prueba-sync` (plan 2.2).
 - [ ] B3 — `plan_reprocess`, `bibliography_reprocess_candidates`, `bibliography_reprocess_preview` (progress,
   cancel) and the USD estimate (plan 2.3, 2.4).
@@ -41,3 +41,10 @@ Branch `feat/native-text-reprocess`, worktree
   `source_changed` never lands on a `failed` row today (`record_source_change` requeues the same task
   with a re-pinned fingerprint, so its old-fingerprint checkpoints are not reused); a cancelled task
   still wipes its checkpoints (`cancel_running_task`).
+- 2026-10-08: B2 done — `is_garbled_bibliography_text` (v1) in `ocr/pdf.rs`, wired into
+  `ocr_candidate_pages`; RED on 4 new positives, lib 2415 passed, bibliography_processing 165 passed,
+  clippy and fmt clean. Measurement on a backup copy of `prueba-sync`
+  (`odd/reports/native-text-detector-measurement.md`): PDFium text rule 1 = 0 pages, rule 2 = 421
+  (418 in the scanned Abulafia 1950 book); stored text flagged = 1,610 rows in 82 attachments; FP upper
+  bound 3/18,576 (0.016 %) < 0.5 %. Thresholds unchanged. Known flake outside scope:
+  `navegador::zotero_copy::run::tests::only_one_drain_runs_at_a_time_and_the_guard_lets_go` under load.

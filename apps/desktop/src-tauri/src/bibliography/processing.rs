@@ -1579,6 +1579,32 @@ mod tests {
         assert!(ocr_candidate_pages(&all_unreadable, false).is_empty());
     }
 
+    /// Verbatim prefix of the stored `bibliographic_page_texts` row for
+    /// Abulafia 1950, p. 309: lopdf glued every word. The bibliography
+    /// detector flags it even though its quality verdict is `rich`.
+    const GARBLED_BIBLIOGRAPHY_P309: &str =
+        "ArrozElcultivodelarrozaligualqueeldelg\u{ed}.r'asoL haadquiridounincrementoe\
+        xtraordinarioara\u{ed}zdela\u{fa}ltimaguerr-amundial;no a.l canaandolaproduc\
+        ci\u{f3}nnacionalparacubrirlasnecesidadesdelconsumoin-terno,deb.\u{ed}.endo \
+        r-ecur-r\u{ed}.r-ae\u{e9}l.laLmpor-tac\u{ed}.\u{f3}nparacu-br-\u{ed}.rlosd\
+        \u{e9}ficitequeseproducen.Lasuperfi~iemediacultiv\u{e9}ldaconarrozparaelquin\
+        quenio1939/40-1943/44fu\u{e9}de38.234Ha.";
+
+    /// A `rich` page the bibliography detector flags goes to OCR like a
+    /// `sparse` one (B2, plan-texto-nativo-parte-b 2.2): glue is not
+    /// readable text even when the quality verdict says `rich`.
+    #[test]
+    fn garbled_bibliography_rich_pages_reach_ocr() {
+        let pages = [
+            native_page(1, "rich", GARBLED_BIBLIOGRAPHY_P309),
+            native_page(2, "rich", &"palabra ".repeat(20)),
+            native_page(3, "unreadable", ""),
+        ];
+        assert_eq!(ocr_candidate_pages(&pages, false), vec![1]);
+        // The native_blank rule for unreadable pages is untouched.
+        assert_eq!(ocr_candidate_pages(&pages, true), vec![1, 3]);
+    }
+
     /// The page layer replaces a blank or poorer whole-document text, and
     /// never a rich one.
     #[test]
@@ -3554,19 +3580,25 @@ pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText 
     }
 }
 
-/// Pages the OCR pass must read: sparse and empty ones always. A page the
-/// native decoder could not read is `unreadable`; it stays out of OCR while
-/// the document as a whole has native text, but when the document has none at
-/// all (`native_blank`) there is nothing native left to protect, so it goes
-/// to OCR too instead of the file settling as `empty` without a single
-/// recognition attempt.
+/// Pages the OCR pass must read: sparse and empty ones always, and a page
+/// whose text the bibliography detector flags (B2, plan-texto-nativo-parte-b
+/// 2.2) like a `sparse` one — glue is not readable text even when the
+/// quality verdict says `rich`. The detector runs on the converted markup
+/// (`ocr_markup_to_text`), the native text the extraction would publish.
+/// A page the native decoder could not read is `unreadable`; it stays out of
+/// OCR while the document as a whole has native text, but when the document
+/// has none at all (`native_blank`) there is nothing native left to protect,
+/// so it goes to OCR too instead of the file settling as `empty` without a
+/// single recognition attempt.
 fn ocr_candidate_pages(pages: &[ExtractPageText], native_blank: bool) -> Vec<i64> {
     pages
         .iter()
         .filter(|page| match page.quality.as_str() {
             "sparse" | "empty" => true,
             "unreadable" => native_blank,
-            _ => false,
+            _ => crate::ocr::pdf::is_garbled_bibliography_text(
+                &crate::ocr::markup::ocr_markup_to_text(&page.text_content),
+            ),
         })
         .map(|page| page.page_number)
         .collect()
@@ -3695,6 +3727,35 @@ pub fn pdfium_page_reader_available() -> bool {
     crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None);
     crate::ocr::pdf::pdfium_loads()
 }
+
+/// The RAW PDFium per-page read behind the part-A reader, in the reader's
+/// own batches (one Pdfium instance per [`PDFIUM_TEXT_BATCH_PAGES`] pages,
+/// released between batches). One entry per requested page number, `None`
+/// where PDFium itself could not read the page. A measurement seam for the
+/// bibliography detector's validation on a read-only database copy
+/// (`tests/bibliography_detector_measurement.rs`): the measurement compares
+/// this text against the stored rows page by page. The extraction pipeline
+/// never calls it.
+pub fn pdfium_page_texts_raw(
+    bytes: &[u8],
+    page_numbers: &[u32],
+) -> Result<Vec<(u32, Option<String>)>, String> {
+    crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None);
+    let mut out = Vec::with_capacity(page_numbers.len());
+    for batch in page_numbers.chunks(crate::ocr::pdf::PDFIUM_TEXT_BATCH_PAGES) {
+        out.extend(crate::ocr::pdf::read_pdfium_page_texts(bytes, batch)?);
+    }
+    Ok(out)
+}
+
+/// The bibliography garble detector (B2), re-exported for the measurement
+/// test (`tests/bibliography_detector_measurement.rs`): the crate's `ocr`
+/// module is private. The definitions live in [`crate::ocr::pdf`], beside
+/// [`is_garbled_text`].
+pub use crate::ocr::pdf::{
+    garbled_bibliography_flags, is_garbled_bibliography_text, GarbledBibliographyFlags,
+    BIBLIOGRAPHY_DETECTOR_VERSION,
+};
 
 /// JD6-A-001: PDFium's read wins only where it is at least as complete as
 /// lopdf's in alphanumeric content — ties go to PDFium, whose spacing is

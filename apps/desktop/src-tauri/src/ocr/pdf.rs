@@ -1098,6 +1098,233 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
     *run_digits = 0;
 }
 
+/// Version of the bibliography garble detector. Bumped whenever a rule or a
+/// threshold changes, so a stored measurement names the rules that produced
+/// it (B2, plan-texto-nativo-parte-b 2.2).
+pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 1;
+
+/// Which of the two bibliography-garble rules flag a text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GarbledBibliographyFlags {
+    /// Rule 1, glued words: at least half the Latin letters sit in tokens
+    /// whose longest Latin-letter run is longer than 24 characters.
+    pub glued_words: bool,
+    /// Rule 2, old OCR noise: at least 8 % of the eligible 4+-letter tokens
+    /// carry an intrusive `.`, `~` or `·` between two letters.
+    pub old_ocr_noise: bool,
+}
+
+/// True when the bibliography detector flags the text as garbled (B2). Used
+/// to pick OCR candidates among pages whose native text LOOKS rich: the
+/// lopdf page layer of old books glues every word together
+/// ("ArrozElcultivodelarroz…"), and old recognizers leave dotted noise in
+/// text that is otherwise spaced. Sibling of [`is_garbled_text`] (raw glyph
+/// codes), not a replacement: the corpus rules of `is_garbled_text` and
+/// [`is_quality_text`] are untouched.
+///
+/// Two independent rules over the eligible tokens (whitespace split minus
+/// URL/DOI/email/domain tokens, punctuation stripped at the edges):
+///
+/// 1. **Glued words.** Needs 80 Latin letters (ASCII, Latin-1 Supplement,
+///    Latin Extended-A/B — so spaceless scripts are never judged). Flags
+///    when >= 50 % of those letters lie in tokens whose longest Latin-letter
+///    run is longer than 24.
+/// 2. **Old OCR noise.** Needs 40 eligible tokens of 4+ Latin letters. Flags
+///    when >= 8 % of them contain `.`, `~` or `·` between two letters.
+///    Hyphens and apostrophes never count, the Catalan geminate `l·l` is
+///    not noise, and dotted abbreviations (`U.S.`, `U.S.A.`, `e.g.`, `i.e.`)
+///    are not noise either.
+pub fn is_garbled_bibliography_text(text: &str) -> bool {
+    let flags = garbled_bibliography_flags(text);
+    flags.glued_words || flags.old_ocr_noise
+}
+
+/// The per-rule verdict behind [`is_garbled_bibliography_text`]: the
+/// measurement report shows which rule flagged each page.
+pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
+    let tokens = eligible_bibliography_tokens(text);
+    GarbledBibliographyFlags {
+        glued_words: glued_words_flag(&tokens),
+        old_ocr_noise: old_ocr_noise_flag(&tokens),
+    }
+}
+
+/// Rule 1 needs this many Latin letters before it judges a page: below it
+/// there is no evidence either way (spaceless scripts never reach it).
+const BIBLIOGRAPHY_GLUED_MIN_LETTERS: usize = 80;
+/// A Latin-letter run longer than this is a glued word.
+const BIBLIOGRAPHY_GLUED_RUN: usize = 24;
+/// Rule 2 needs this many eligible tokens of 4+ Latin letters.
+const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 40;
+/// A token enters rule 2's judgement from this many Latin letters.
+const BIBLIOGRAPHY_NOISE_MIN_TOKEN_LETTERS: usize = 4;
+
+/// The letters rule 1 counts: ASCII, Latin-1 Supplement and Latin
+/// Extended-A/B. `×` (U+00D7) and `÷` (U+00F7) sit inside Latin-1 but are
+/// operators, not letters.
+fn is_latin_letter(c: char) -> bool {
+    c.is_ascii_alphabetic()
+        || matches!(
+            c,
+            '\u{00C0}'..='\u{00D6}' | '\u{00D8}'..='\u{00F6}' | '\u{00F8}'..='\u{00FF}'
+        )
+        || matches!(c, '\u{0100}'..='\u{024F}')
+}
+
+/// Punctuation a producer hangs on token edges; stripped before the token
+/// is classified, so "(U.S.A)," and "«riego»." keep their identity.
+const BIBLIOGRAPHY_EDGE_PUNCT: &[char] = &[
+    '.', ',', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '\'', '"', '-', '_', '`', '~', '*',
+    '+', '=', '<', '>', '/', '\\', '|', '@', '#', '$', '%', '^', '&', '\u{2018}', '\u{2019}',
+    '\u{201C}', '\u{201D}', '\u{00AB}', '\u{00BB}', '\u{2013}', '\u{2014}', '\u{2026}',
+];
+
+fn starts_with_ascii_ignore_case(token: &str, prefix: &str) -> bool {
+    token.len() >= prefix.len()
+        && token.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+/// Whether the token is a URL, DOI, email or domain (with or without a
+/// path): those are references, not words, and their long dotted runs must
+/// never move either rule. Everything else is classified on the
+/// punctuation-stripped token.
+fn is_reference_token(token: &str) -> bool {
+    if starts_with_ascii_ignore_case(token, "http://")
+        || starts_with_ascii_ignore_case(token, "https://")
+        || starts_with_ascii_ignore_case(token, "www.")
+        || starts_with_ascii_ignore_case(token, "doi:")
+    {
+        return true;
+    }
+    if token.as_bytes().contains(&b'@') {
+        return true;
+    }
+    // A DOI registrant prefix: `10.<digits>/…`.
+    if starts_with_ascii_ignore_case(token, "10.") {
+        let rest = &token[3..];
+        if let Some((prefix, _)) = rest.split_once('/') {
+            if prefix.len() >= 4 && prefix.bytes().all(|b| b.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    // A domain, path suffix or not: `something.tld` where the TLD is one
+    // of the usual ones or any two letters.
+    let host = token.split('/').next().unwrap_or(token);
+    if let Some(dot) = host.rfind('.') {
+        if dot > 0 && dot + 1 < host.len() {
+            let tld = &host[dot + 1..];
+            if tld.bytes().all(|b| b.is_ascii_alphabetic()) {
+                let tld_lower = tld.to_ascii_lowercase();
+                if tld.len() == 2
+                    || matches!(
+                        tld_lower.as_str(),
+                        "com" | "org" | "net" | "edu" | "gov" | "io"
+                    )
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The tokens both rules judge: whitespace split, edge punctuation
+/// stripped, references dropped.
+fn eligible_bibliography_tokens(text: &str) -> Vec<&str> {
+    text.split_whitespace()
+        .map(|raw| raw.trim_matches(|c: char| BIBLIOGRAPHY_EDGE_PUNCT.contains(&c)))
+        .filter(|token| !token.is_empty() && !is_reference_token(token))
+        .collect()
+}
+
+/// Rule 1, glued words: at least half the Latin letters sit in tokens whose
+/// longest Latin-letter run is longer than 24 — the shape of a page layer
+/// that never saw a space. Exact integer arithmetic at the 50 % line.
+fn glued_words_flag(tokens: &[&str]) -> bool {
+    let mut total = 0usize;
+    let mut glued = 0usize;
+    for token in tokens {
+        let letters = token.chars().filter(|c| is_latin_letter(*c)).count();
+        total += letters;
+        let mut run = 0usize;
+        let mut longest = 0usize;
+        for c in token.chars() {
+            if is_latin_letter(c) {
+                run += 1;
+                longest = longest.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        if longest > BIBLIOGRAPHY_GLUED_RUN {
+            glued += letters;
+        }
+    }
+    total >= BIBLIOGRAPHY_GLUED_MIN_LETTERS && glued * 2 >= total
+}
+
+/// Rule 2, old OCR noise: at least 8 % of the judged tokens carry an
+/// intrusive `.`, `~` or `·` between two letters. Exact integer arithmetic
+/// at the 8 % line (4 of 50 flags; 3 of 50 does not).
+fn old_ocr_noise_flag(tokens: &[&str]) -> bool {
+    let mut judged = 0usize;
+    let mut noisy = 0usize;
+    for token in tokens {
+        if token.chars().filter(|c| is_latin_letter(*c)).count()
+            < BIBLIOGRAPHY_NOISE_MIN_TOKEN_LETTERS
+        {
+            continue;
+        }
+        judged += 1;
+        if token_has_old_ocr_noise(token) {
+            noisy += 1;
+        }
+    }
+    judged >= BIBLIOGRAPHY_NOISE_MIN_TOKENS && noisy * 100 >= judged * 8
+}
+
+/// Whether the token carries one non-excluded noise occurrence. Hyphens
+/// and apostrophes are not in the separator set at all: real spelling
+/// ("state-of-the-art", "l'adquisició") never counts.
+fn token_has_old_ocr_noise(token: &str) -> bool {
+    let chars: Vec<char> = token.chars().collect();
+    for index in 1..chars.len().saturating_sub(1) {
+        let sep = chars[index];
+        if !matches!(sep, '.' | '~' | '\u{00B7}') {
+            continue;
+        }
+        let before = chars[index - 1];
+        let after = chars[index + 1];
+        if !(is_latin_letter(before) && is_latin_letter(after)) {
+            continue;
+        }
+        // The Catalan geminate "l·l" ("paral·lel", case-insensitive).
+        if sep == '\u{00B7}'
+            && before.eq_ignore_ascii_case(&'l')
+            && after.eq_ignore_ascii_case(&'l')
+        {
+            continue;
+        }
+        // Dotted abbreviations: "U.S.", "U.S.A.", "N.A.T.O." — and the
+        // lowercase scholarly pair "e.g." / "i.e." wherever it appears.
+        if sep == '.' {
+            if before.is_uppercase() && after.is_uppercase() {
+                continue;
+            }
+            if matches!(
+                (before.to_ascii_lowercase(), after.to_ascii_lowercase()),
+                ('e', 'g') | ('i', 'e')
+            ) {
+                continue;
+            }
+        }
+        return true;
+    }
+    false
+}
+
 /// Build a conservative per-page profile for a PDF, synchronously.
 ///
 /// Pro has no Pdfium render actor (unlike Lite); this binds the engine via the
@@ -3082,6 +3309,177 @@ mod tests {
     fn garbled_text_is_never_quality_text() {
         assert!(!is_quality_text(GARBLED_SHIFTED_PAGE));
         assert!(!is_quality_text(GARBLED_SYMBOL_PAGE));
+    }
+
+    // ── Bibliography garble detector (B2, plan-texto-nativo 3.4) ──────────
+    //
+    // Two rules, both pure text statistics. Rule 1 (glued words) catches
+    // the lopdf page layer that never saw a space; rule 2 (old OCR noise)
+    // catches the dotted artifacts of old recognizers in SPACED text. The
+    // p. 309 fixtures are verbatim from one user library (Abulafia 1950,
+    // stored row and PDFium read); the rest pin every false-positive shape
+    // the plan names. `is_garbled_text`/`is_quality_text` above are a
+    // different detector for raw glyph codes and must not change.
+
+    /// Verbatim prefix of the stored `bibliographic_page_texts` row for
+    /// Abulafia 1950, p. 309 (353 chars): lopdf glued the words.
+    const GARBLED_BIBLIOGRAPHY_STORED_P309: &str =
+        "ArrozElcultivodelarrozaligualqueeldelg\u{ed}.r'asoL haadquiridounincrementoe\
+        xtraordinarioara\u{ed}zdela\u{fa}ltimaguerr-amundial;no a.l canaandolaproduc\
+        ci\u{f3}nnacionalparacubrirlasnecesidadesdelconsumoin-terno,deb.\u{ed}.endo \
+        r-ecur-r\u{ed}.r-ae\u{e9}l.laLmpor-tac\u{ed}.\u{f3}nparacu-br-\u{ed}.rlosd\
+        \u{e9}ficitequeseproducen.Lasuperfi~iemediacultiv\u{e9}ldaconarrozparaelquin\
+        quenio1939/40-1943/44fu\u{e9}de38.234Ha.";
+
+    /// Verbatim 600-char excerpt of PDFium's read of the same page: the
+    /// words are spaced again, but the old OCR layer leaves dotted noise
+    /// behind ("g \u{ed}.r'as oL", "superfi~ie", "1943/4~\u{b7}").
+    const GARBLED_BIBLIOGRAPHY_PDFIUM_P309: &str =
+        "Arroz\u{a}El cultivo del arroz al igual que el del g \u{ed}.r'as oL\
+        \u{a}ha adquirido un incremento extraordinario a ra\u{ed}z de\u{a}la \
+        \u{fa}ltima gue rr-a mundial; no a.l canaando la producci\u{f3}n\u{a}n\
+        acional para cubrir las necesidades del consumo in\u{2}terno, de b.\
+        \u{ed}.endo r-ecur-r\u{ed}.r-ae \u{e9}l. la Lmpor-t ac \u{ed}.\u{f3}n \
+        para cu\u{2}br-\u{ed}.r los d\u{e9}ficite que se producen.\u{a}La supe\
+        rfi~ie media cultiv\u{e9}lda con arroz para el\u{a}quinquenio 1939/40 \
+        - 1943/44 fu\u{e9} de 38.234 Ha ., y p_-\u{a}r a la cose cha 1943/44 d\
+        e 52.272 hect\u{e1}reas; el rendi\u{2}miento medio del quinquenio indi\
+        cado fu\u{e9} de 3.122 ki\u{2}logramos por hect\u{e1}rea, siendo del d\
+        e le c os e cha 1943/4~\u{b7},\u{a}de 3.";
+
+    /// Old OCR noise in text that still has its spaces: dotted and tilde
+    /// artifacts inside words, on a real Spanish page shape.
+    const OLD_OCR_NOISE_PARAGRAPH: &str = "Arroz El cultivo del arroz al igual que el del girasol ha adquirido un incremento extraordinario a raiz de la ultima guerra mundial; no al.cana.ndo la pro.ducc.ion nacional para cubrir las necesidades del consumo interno, deb.\u{ed}.endo r.ecu.rrir a la impor.tac.ion para cubrir los deficit que se producen. La superfi~ie media cultiv.ada con arroz para el quinquenio indicado fue de 38.234 Ha., y para la cosecha de 52.272 hectareas; el rendi.mien.to medio del quinquenio fue de 3.122 kilogramos por hectarea, siendodel de la cosecha 4~\u{b7}, de 3.340 kg. La produccion media fue de 104.230 toneladas, correspondiendo a la cosecha maxima de 161.000 toneladas. Ese volumen con alguna variacion se mantiene para las campafias siguientes, donde se ve que la campana siguientellega a 139,6 mil toneladas; en la 1945/46 el 157,9 mil toneladas; en la 1946/47 a 160,6 miltoneladas";
+
+    #[test]
+    fn the_stored_p309_page_is_flagged_by_the_glued_words_rule() {
+        let flags = garbled_bibliography_flags(GARBLED_BIBLIOGRAPHY_STORED_P309);
+        assert!(
+            flags.glued_words,
+            "rule 1 must flag the stored p. 309 text: {GARBLED_BIBLIOGRAPHY_STORED_P309}"
+        );
+        assert!(
+            !flags.old_ocr_noise,
+            "rule 2 is not what flags the stored p. 309 text"
+        );
+        assert!(is_garbled_bibliography_text(
+            GARBLED_BIBLIOGRAPHY_STORED_P309
+        ));
+    }
+
+    #[test]
+    fn the_pdfium_read_of_p309_is_flagged_by_the_old_ocr_noise_rule() {
+        // The plan's contract on the real pair: rule 1 flags the stored
+        // glued text, rule 2 flags the same page once PDFium spaces it.
+        let flags = garbled_bibliography_flags(GARBLED_BIBLIOGRAPHY_PDFIUM_P309);
+        assert!(
+            flags.old_ocr_noise,
+            "rule 2 must flag the PDFium read of p. 309"
+        );
+        assert!(!flags.glued_words, "PDFium already spaced the words");
+        assert!(is_garbled_bibliography_text(
+            GARBLED_BIBLIOGRAPHY_PDFIUM_P309
+        ));
+    }
+
+    #[test]
+    fn old_ocr_noise_is_flagged_in_text_that_still_has_spaces() {
+        let flags = garbled_bibliography_flags(OLD_OCR_NOISE_PARAGRAPH);
+        assert!(
+            flags.old_ocr_noise,
+            "rule 2 must flag the dotted old-OCR paragraph"
+        );
+        assert!(!flags.glued_words, "the words here are not glued");
+        assert!(is_garbled_bibliography_text(OLD_OCR_NOISE_PARAGRAPH));
+    }
+
+    #[test]
+    fn clean_english_prose_with_compounds_and_contractions_is_not_flagged() {
+        // Hyphens and apostrophes never count as noise, and no word run is
+        // anywhere near 24 letters.
+        let prose = "This state-of-the-art review examines how bilingual readers don't just translate words; they negotiate meaning across two lexical systems. Well-established findings -- e.g. the interaction between vocabulary size and reading fluency -- hold across the L1 and the L2, and it's been shown repeatedly that a reader's self-efficacy matters as much as raw comprehension. Section 3.2 discusses the trade-off between speed and accuracy; readers who slow down at clause boundaries make fewer inference errors, but they also report higher fatigue. The counter-argument, i.e. that speed drills damage comprehension, isn't supported by the controlled studies surveyed here. Overall, the evidence points to a balanced approach: extensive reading, targeted vocabulary work, and metacognitive strategy training, each contributing independently to the outcome measures.";
+        assert!(!is_garbled_bibliography_text(prose), "{prose}");
+    }
+
+    #[test]
+    fn reference_lists_with_links_dois_and_domains_are_not_flagged() {
+        // Without the URL/DOI/email/domain drop the long link tokens would
+        // drag rule 2 up past its threshold (the dotted host names).
+        let references = "Garcia, J. R., and Perez, M. (2019). Aprendizaje automatico en contextos educativos. Revista de Educacion, 45(2), 123-145. https://doi.org/10.1016/j.edurev.2019.05.003\nSmith, A. B., and Jones, C. D. (2021). Bilingual reading comprehension revisited. Journal of Applied Linguistics, 33(4), 512-530. https://doi.org/10.1080/02664623.2021.1876543\nKumar, R. (2018). Archives and readers. Available at www.jstor.org/stable/26612345 (accessed 4 May 2022). doi:10.1086/26612345. Correspondence: a.garcia@csic.es.\nFurther data at https://dataverse.harvard.edu/dataset.xhtml?persistentId=hdl:1902.1/12345 and mirrored on en.wikipedia.org/wiki/Reading_comprehension; see also the repository at github.com/open-science/reading-corpus (documentation under docs/).";
+        assert!(!is_garbled_bibliography_text(references), "{references}");
+    }
+
+    #[test]
+    fn markdown_tables_are_not_flagged() {
+        let table = "| Region | Yield (kg/ha) | Source |\n| --- | --- | --- |\n| Delta | 3.122 | jstor.org |\n| Coast | 3.340 | doi.org |\n| Valley | 2.980 | nara.gov |\n\nThe table above reports the survey averages; the row for Valley combines two seasons, 1939/40 and 1943/44, so the figures are not directly comparable with the others.";
+        assert!(!is_garbled_bibliography_text(table), "{table}");
+    }
+
+    #[test]
+    fn cjk_prose_without_spaces_is_not_flagged() {
+        // Spaceless scripts have almost no Latin letters, so rule 1's
+        // 80-letter floor keeps the detector away from them.
+        let cjk = "\u{6c34}\u{7a3b}\u{683d}\u{57f9}\u{7684}\u{5386}\u{53f2}\u{53ef}\u{4ee5}\u{8ffd}\u{6eaf}\u{5230}\u{6570}\u{5343}\u{5e74}\u{524d}\u{3002}\u{957f}\u{6c5f}\u{4e2d}\u{4e0b}\u{6e38}\u{5730}\u{533a}\u{7684}\u{8003}\u{53e4}\u{8bc1}\u{636e}\u{8868}\u{660e}\u{ff0c}\u{53e4}\u{4eba}\u{5df2}\u{7ecf}\u{638c}\u{63e1}\u{4e86}\u{704c}\u{6e89}\u{4e0e}\u{80b2}\u{79cd}\u{6280}\u{672f}\u{3002}\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{6587}\u{732e}\u{306b}\u{3088}\u{308c}\u{3070}\u{3001}\u{6c34}\u{7530}\u{306e}\u{7ba1}\u{7406}\u{306b}\u{306f}\u{7d30}\u{5fc3}\u{306e}\u{6ce8}\u{610f}\u{304c}\u{6c42}\u{3081}\u{3089}\u{308c}\u{308b}\u{3002}modern varieties \u{3068} traditional landraces \u{306f}\u{7523}\u{91cf}\u{3001}\u{6297}\u{75c5}\u{6027}\u{3068}\u{53e3}\u{611f}\u{306b}\u{660e}\u{697a}\u{306a}\u{5dee}\u{7570}\u{304c}\u{3042}\u{308b}\u{3002}";
+        assert!(!is_garbled_bibliography_text(cjk), "{cjk}");
+    }
+
+    #[test]
+    fn catalan_geminate_l_dot_l_is_not_flagged() {
+        // Every l·l here is a Catalan geminate, not OCR noise; without that
+        // exclusion this paragraph would flag rule 2.
+        let catalan = "La confer\u{e8}ncia paral\u{b7}lela va presentar un excel\u{b7}lent treball sobre el paral\u{b7}lelisme cultural entre les comunitats costaneres. Els autors van argumentar que la traducci\u{f3} no \u{e9}s una operaci\u{f3} mec\u{e0}nica, sin\u{f3} un proc\u{e9}s de negociaci\u{f3} entre lleng\u{fc}es. La seva an\u{e0}lisi del paral\u{b7}lelisme textual va mostrar com els lectors catalans resolen les ambig\u{fc}itats l\u{e8}xiques amb estrat\u{e8}gies diferents de les dels castellans. Aquesta conclusi\u{f3} refor\u{e7}a la hip\u{f2}tesi inicial i obre noves l\u{ed}nies de recerca sobre l'adquisici\u{f3} l\u{e8}xica en entorns bilingues, on el contacte ling\u{fc}\u{ed}stic \u{e9}s constant i la interfer\u{e8}ncia es veu en paraules com col\u{b7}laboraci\u{f3}, il\u{b7}lustraci\u{f3}, paral\u{b7}lelament, excel\u{b7}lentment i col\u{b7}lecci\u{f3}.";
+        assert!(!is_garbled_bibliography_text(catalan), "{catalan}");
+    }
+
+    #[test]
+    fn dotted_abbreviations_are_not_flagged() {
+        // Uppercase dotted abbreviations and e.g./i.e. never count as noise;
+        // without those exclusions this page would flag rule 2.
+        let abbreviations = "The N.A.T.O. council met in the U.S.A. to review the joint programme, e.g. the coastal survey, i.e. the 1952 transect, and the U.S. Navy archive kept in the capital. Delegations from the U.S.A., the N.A.T.O. offices and the E.U. commission attended. Notes were taken by the O.A.S. secretariat and the O.E.C.D. observers, who visited the U.S.A. again in June. The final report, circulated to the N.A.T.O. archives and the U.S. Navy library, summarises the programme, e.g. the survey results, i.e. the 1952 transect data. The U.S.A. delegation praised the O.E.C.D. review and the E.U. commission's contribution to the N.A.T.O. meeting held in the U.S.A. that autumn.";
+        assert!(
+            !is_garbled_bibliography_text(abbreviations),
+            "{abbreviations}"
+        );
+    }
+
+    #[test]
+    fn each_rule_needs_its_minimum_evidence() {
+        // Rule 1 below 80 Latin letters: silence.
+        let short_glued = "ArrozElcultivodelarrozaligualqueeldelgirasoL";
+        assert!(!garbled_bibliography_flags(short_glued).glued_words);
+        // Rule 2 below 40 eligible tokens of 4+ letters: silence.
+        let sparse_noise =
+            "deb.\u{ed}.endo superfi~ie cultiv.ada r.ecu.rrir impor.tac.ion defi.cit cober.tura";
+        assert!(!garbled_bibliography_flags(sparse_noise).old_ocr_noise);
+    }
+
+    #[test]
+    fn the_rules_flag_exactly_at_their_thresholds() {
+        // Rule 1: exactly half the Latin letters in a >24-letter run flags;
+        // one letter less does not.
+        let suffix = ["ab"; 25].join(" "); // 50 letters in short words
+        assert!(garbled_bibliography_flags(&format!("{} {suffix}", "a".repeat(50))).glued_words);
+        assert!(!garbled_bibliography_flags(&format!("{} {suffix} x", "a".repeat(49))).glued_words);
+        // Rule 2: exactly 8 % noisy tokens flags; one noisy token less does
+        // not (4/50 vs 3/50).
+        let clean = (0..46)
+            .map(|n| format!("palabra{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let noisy = ["pq.rstu"; 4].join(" ");
+        assert!(
+            garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
+            "4 of 50 is exactly 8 %"
+        );
+        let clean = (0..47)
+            .map(|n| format!("palabra{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let noisy = ["pq.rstu"; 3].join(" ");
+        assert!(
+            !garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
+            "3 of 50 is below 8 %"
+        );
     }
 
     /// get_pdfium() must never panic — it should return Err when the native
