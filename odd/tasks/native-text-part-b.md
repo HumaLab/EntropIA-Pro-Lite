@@ -96,3 +96,6 @@ Branch `feat/native-text-reprocess`, worktree
   the unit and the restart integration test; lib 2426, bibliography_processing 166, bibliography_reprocess
   24 passed; clippy and fmt clean. Retained checkpoints of a failed task stay until it is retried (bounded
   page text).
+- 2026-10-09: JD8 final scoped re-judgment of `42fd799`: both judges verify B-002. Info (judge B): retained
+  checkpoints of failed/cancelled extractions are never retired, even after a later successful reprocess
+  (bounded by the previewed pages per attempt). JUDGMENT: APPROVED.
