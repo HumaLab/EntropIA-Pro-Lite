@@ -924,7 +924,7 @@ fn preview_totals_count_ocr_reused_and_fixed_pages() {
     )
     .expect("preview");
 
-    let units_total = 2 * 3 + 1;
+    let units_total = 3 * 3;
     assert_eq!(
         progress.first().map(|update| (
             update.done,
@@ -1048,8 +1048,8 @@ fn preview_reports_a_missing_file_unreadable() {
     assert_eq!(preview.totals.estimated_usd, 0.0);
 }
 
-/// The work-unit stream inside one attachment: `2 × pages + 1` units (lopdf
-/// pass pages + PDFium pass pages + the whole-document extract), never
+/// The work-unit stream inside one attachment: `3 × pages` units (lopdf
+/// pass pages + PDFium pass pages + whole-document extract pages), never
 /// decreasing and settled at the full count even where a pass is skipped or
 /// falls back to lopdf.
 #[test]
@@ -1075,7 +1075,7 @@ fn preview_reports_work_units_inside_the_current_attachment() {
     .expect("preview");
 
     assert!(!preview.cancelled);
-    let units_total = 2 * 3 + 1;
+    let units_total = 3 * 3;
     assert_eq!(
         progress.first().map(|update| (
             update.done,
@@ -1099,7 +1099,7 @@ fn preview_reports_work_units_inside_the_current_attachment() {
         .collect();
     assert!(
         units.iter().all(|(_, total)| *total == units_total),
-        "the total is 2 × pages + 1 at every report: {units:?}"
+        "the total is 3 × pages at every report: {units:?}"
     );
     assert!(
         units.windows(2).all(|pair| pair[0].0 <= pair[1].0),
@@ -1110,6 +1110,10 @@ fn preview_reports_work_units_inside_the_current_attachment() {
             units.contains(&(page, units_total)),
             "the lopdf pass reports every page: {units:?}"
         );
+        assert!(
+            units.contains(&(2 * 3 + page, units_total)),
+            "the extract pass contributes one unit per page: {units:?}"
+        );
     }
     assert_eq!(
         units.last().copied(),
@@ -1119,8 +1123,9 @@ fn preview_reports_work_units_inside_the_current_attachment() {
 }
 
 /// The basis reader's unit callback, driven directly on a multi-page PDF:
-/// every report carries the attachment total `2 × pages + 1`, the counts
-/// never decrease, and the stream ends on the total.
+/// every report carries the attachment total `3 × pages`, the counts never
+/// decrease, the extract pass contributes one unit per page, and the stream
+/// ends on the total.
 #[test]
 fn native_basis_units_cover_both_passes_and_the_document_extract() {
     let pdf = make_text_pdf_pages(&[
@@ -1137,7 +1142,7 @@ fn native_basis_units_cover_both_passes_and_the_document_extract() {
     )
     .expect("basis");
 
-    let units_total = 2 * 3 + 1;
+    let units_total = 3 * 3;
     assert!(!units.is_empty(), "the callback fires");
     assert!(
         units.iter().all(|(_, total)| *total == units_total),
@@ -1147,10 +1152,54 @@ fn native_basis_units_cover_both_passes_and_the_document_extract() {
         units.windows(2).all(|pair| pair[0].0 <= pair[1].0),
         "units never move backwards: {units:?}"
     );
+    for page in 1..=3 {
+        assert!(
+            units.contains(&(2 * 3 + page, units_total)),
+            "the extract pass contributes one unit per page: {units:?}"
+        );
+    }
     assert_eq!(
         units.last().copied(),
         Some((units_total, units_total)),
-        "the whole-document extract lands the last unit"
+        "the extract pass lands the final unit"
+    );
+}
+
+/// Cancel set DURING the whole-document extract stops the pass at the next
+/// page boundary and answers the cancelled outcome: the T3 stall at 99 %
+/// (the extract counted as one unit) must be interruptible like every
+/// per-page pass.
+#[test]
+fn native_basis_cancel_during_the_document_extract_stops_with_cancelled() {
+    use entropia_desktop_lib::processing::scheduler::ExecOutput;
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, CLEAN)],
+        &[(72.0, 700.0, "hi")],
+        &[(72.0, 700.0, "yo")],
+    ]);
+    let cancel = AtomicBool::new(false);
+    let mut units: Vec<(i64, i64)> = Vec::new();
+    let outcome = read_native_extraction_basis_with_cancel(
+        &pdf,
+        None,
+        Some(&cancel),
+        Some(&mut |done: i64, total: i64| {
+            units.push((done, total));
+            // The extract pass starts at 2 × pages + 1: fire on its first page.
+            if done == 2 * 3 + 1 {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }),
+    );
+
+    assert!(
+        matches!(outcome, Err(ExecOutput::Stopped)),
+        "the cancelled extract maps to the Stopped path"
+    );
+    assert_eq!(
+        units.last().copied(),
+        Some((2 * 3 + 1, 3 * 3)),
+        "the pass stops at the page boundary where the flag fired: {units:?}"
     );
 }
 
@@ -1195,8 +1244,60 @@ fn preview_cancel_stops_mid_attachment_between_pages() {
         "the stop happened mid-read: {progress:?}"
     );
     assert!(
-        progress.iter().all(|update| update.units_done < 2 * 3 + 1),
+        progress.iter().all(|update| update.units_done < 3 * 3),
         "the read never finished its units: {progress:?}"
+    );
+}
+
+/// Cerrar during the whole-document extract cancels the preview run: the
+/// dialog's stop must reach the slow pass too, not only the per-page ones.
+#[test]
+fn preview_cancel_stops_inside_the_document_extract() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "STOPXTR1", "Q obra cancelada en extracto");
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, CLEAN)],
+        &[(72.0, 700.0, "hi")],
+        &[(72.0, 700.0, "yo")],
+    ]);
+    let path = write_pdf(&dir, "stop-extract.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "STOPXATT1",
+        Some(&path),
+        "stop-extract.pdf",
+    );
+
+    let cancel = AtomicBool::new(false);
+    let mut progress = Vec::new();
+    let preview = run_reprocess_preview(
+        &conn,
+        std::slice::from_ref(&attachment_id),
+        &cancel,
+        |update| {
+            // Past the per-page passes (2 × pages): the extract's first page
+            // fires there.
+            if update.units_done > 2 * 3 {
+                cancel.store(true, Ordering::SeqCst);
+            }
+            progress.push(update);
+        },
+    )
+    .expect("preview");
+
+    assert!(preview.cancelled, "the flag reaches the extract pass");
+    assert!(
+        preview.attachments.is_empty(),
+        "the abandoned attachment reports no plan"
+    );
+    assert!(
+        progress.iter().any(|update| update.units_done > 2 * 3),
+        "the stop happened inside the extract: {progress:?}"
+    );
+    assert!(
+        progress.iter().all(|update| update.units_done < 3 * 3),
+        "the extract never finished its pages: {progress:?}"
     );
 }
 

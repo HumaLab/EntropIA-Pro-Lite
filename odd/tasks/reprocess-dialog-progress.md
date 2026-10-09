@@ -19,7 +19,7 @@ console); real paid reprocess (owner runs it).
 - [x] T2 — Candidates scan with progress and cancel. The scan reports
   attachments checked / total through an event and stops on a cancel flag; the
   dialog shows the count in the loading phase and Cerrar cancels the scan.
-- [ ] T4 — Per-page progress and cancel inside the whole-document pdf-extract
+- [x] T4 — Per-page progress and cancel inside the whole-document pdf-extract
   pass. Observed in T3: Abulafia (1537 pages) sits at 99 % for 124 s because
   the extract counts as one unit and cannot be cancelled. Wrap pdf-extract's
   PlainTextOutput in a delegating OutputDev that reports end_page and stops on
@@ -47,3 +47,8 @@ console); real paid reprocess (owner runs it).
   adjuntos", scan 28 s, close mid-scan closes the dialog; preview percent
   9/18/43 % inside the first attachment, cancel closes; Abulafia work mode
   climbs 6 -> 99 % in 173 s, then holds 99 % until 297 s (pdf-extract) -> T4.
+- T4: RED observed (3 unit-assertion failures, 2 cancel failures, 8 compile
+  errors). GREEN: bibliography_reprocess 31 passed / 3 ignored,
+  bibliography_processing 167 passed, cargo test --lib 2441 passed, clippy
+  -D warnings and fmt clean; byte-identity with pdf_extract::extract_text_from_mem
+  proven on 5 fixtures + 2 synthetic multi-page PDFs.

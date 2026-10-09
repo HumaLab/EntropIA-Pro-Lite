@@ -2828,13 +2828,13 @@ pub fn read_native_extraction_basis(
 }
 
 /// Reads the pre-OCR basis of one PDF, with the caller's cancellation flag
-/// checked between page batches when there is one (the reprocess preview may
-/// stop mid-file; the executor passes none and keeps its own stop contract).
-/// `on_units`, when there is one, reports the read's work units as
-/// `(units_done, units_total)` with `units_total = 2 × pages + 1`: one unit
-/// per lopdf page, one per PDFium batch and one for the whole-document
-/// extract below. The count is always settled, so a skipped or aborted
-/// PDFium pass leaves no gap.
+/// checked between page batches and between the extract's pages when there
+/// is one (the reprocess preview may stop mid-file; the executor passes none
+/// and keeps its own stop contract). `on_units`, when there is one, reports
+/// the read's work units as `(units_done, units_total)` with
+/// `units_total = 3 × pages`: one unit per lopdf page, one per PDFium batch
+/// page and one per page of the whole-document extract below. The count is
+/// always settled, so a skipped or aborted pass leaves no gap.
 ///
 /// A PDF with `/Encrypt` is only locked when it needs a real user
 /// password. Permissions-only protection (owner password, empty user
@@ -2878,9 +2878,9 @@ pub fn read_native_extraction_basis_with_cancel(
         message: format!("Failed to parse PDF: {error}"),
     })?;
     let page_count = document.get_pages().len() as i64;
-    // The attachment's unit budget: one per page in each of the two per-page
-    // passes, plus the whole-document extract below.
-    let units_total = 2 * page_count + 1;
+    // The attachment's unit budget: one per page in each of the three passes
+    // below — lopdf pages, PDFium batches, whole-document extract pages.
+    let units_total = 3 * page_count;
     let mut report_units = |units_done: i64, _reader_total: i64| {
         if let Some(callback) = on_units.as_deref_mut() {
             callback(units_done, units_total);
@@ -2902,9 +2902,26 @@ pub fn read_native_extraction_basis_with_cancel(
         cancel,
         Some(&mut report_units),
     )?;
-    let legacy_text = match crate::ocr::pdf::extract_pdf_text(bytes) {
+    // The extract pass lands one unit per page it finishes — the tail of the
+    // budget the two per-page passes did not cover — and its page boundaries
+    // are where a cancel can stop it.
+    let mut report_extract_units = |pages_done: i64, _pages_total: i64| {
+        if let Some(callback) = on_units.as_deref_mut() {
+            callback((2 * page_count + pages_done).min(units_total), units_total);
+        }
+    };
+    let legacy_text = match crate::ocr::pdf::extract_pdf_text_with_progress(
+        bytes,
+        cancel,
+        Some(&mut report_extract_units),
+    ) {
         Ok(text) => text,
-        Err(error) => {
+        Err(crate::ocr::pdf::ExtractPdfTextError::Cancelled) => {
+            // The extract is cancellable too: a flag set during it stops the
+            // read like every other pass.
+            return Err(ExecOutput::Stopped);
+        }
+        Err(crate::ocr::pdf::ExtractPdfTextError::Failed(error)) => {
             let joined = reads
                 .lopdf_pages
                 .iter()
@@ -2921,7 +2938,7 @@ pub fn read_native_extraction_basis_with_cancel(
             joined
         }
     };
-    // The whole-document extract lands the last unit, however it resolved.
+    // The read settles at the full count, however each pass resolved.
     if let Some(callback) = on_units {
         callback(units_total, units_total);
     }

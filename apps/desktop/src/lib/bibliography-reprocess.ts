@@ -147,7 +147,7 @@ export interface ReprocessPreviewProgress {
   total: number
   /** Work units finished inside the attachment being read. */
   unitsDone: number
-  /** `2 × pages + 1` for that attachment; 0 while its size is unknown. */
+  /** `3 × pages` for that attachment; 0 while its size is unknown. */
   unitsTotal: number
 }
 
