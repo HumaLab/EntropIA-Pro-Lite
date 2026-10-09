@@ -19,6 +19,11 @@ console); real paid reprocess (owner runs it).
 - [x] T2 — Candidates scan with progress and cancel. The scan reports
   attachments checked / total through an event and stops on a cancel flag; the
   dialog shows the count in the loading phase and Cerrar cancels the scan.
+- [ ] T4 — Per-page progress and cancel inside the whole-document pdf-extract
+  pass. Observed in T3: Abulafia (1537 pages) sits at 99 % for 124 s because
+  the extract counts as one unit and cannot be cancelled. Wrap pdf-extract's
+  PlainTextOutput in a delegating OutputDev that reports end_page and stops on
+  cancel; units become 3 x pages; extracted text must stay byte-identical.
 - [ ] T3 — Drive the dialog in tauri dev over CDP and confirm both behaviours
   with screenshots; never click confirm.
 
@@ -37,3 +42,8 @@ console); real paid reprocess (owner runs it).
   typecheck 0 errors, lint and format:check clean. build.rs APP_COMMANDS gains
   the new command (ACL guard keeps build.rs, generate_handler! and the default
   capability in sync).
+- T2 commit: 145824b5.
+- T3 (partial, tauri dev over CDP): candidates count "Revisando 555 de 1704
+  adjuntos", scan 28 s, close mid-scan closes the dialog; preview percent
+  9/18/43 % inside the first attachment, cancel closes; Abulafia work mode
+  climbs 6 -> 99 % in 173 s, then holds 99 % until 297 s (pdf-extract) -> T4.
