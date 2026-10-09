@@ -4638,6 +4638,36 @@ fn validate_corpus_claim_input(
         })?;
         return Ok(Some((source_revision(conn, asset_id)?, fingerprint)));
     }
+    if matches!(kind, "ner" | "triples" | "schema_extract") {
+        // Text extractions re-check their own rule; the embedding freshness
+        // rule below would skip them as soon as the asset was embedded. They
+        // pin only the source revision (admission stores no fingerprint).
+        use super::eligibility::ExtractionDecision;
+        let decision = match kind {
+            "ner" => super::eligibility::ner_decision(conn, asset_id)?,
+            "triples" => super::eligibility::triples_decision(conn, asset_id)?,
+            _ => match super::schema_extract::schema_id_from_contract(contract_hash) {
+                Some(schema_id) => super::eligibility::schema_decision(conn, asset_id, schema_id)?,
+                None => {
+                    mark_skipped(conn, task_id, "schema_missing")?;
+                    return Ok(None);
+                }
+            },
+        };
+        return match decision {
+            ExtractionDecision::Eligible => {
+                Ok(Some((source_revision(conn, asset_id)?, String::new())))
+            }
+            ExtractionDecision::AlreadyDone => {
+                mark_skipped(conn, task_id, "already_satisfied")?;
+                Ok(None)
+            }
+            ExtractionDecision::NoSourceText => {
+                mark_skipped(conn, task_id, "no_source_text")?;
+                Ok(None)
+            }
+        };
+    }
     let force = contract_hash.starts_with("force:");
     let contract_hash = contract_hash
         .strip_prefix("force:")
@@ -8195,6 +8225,30 @@ mod tests {
         assert_eq!((state.as_str(), dependency), ("blocked", Some(ocr_id)));
         // Audio has no OCR and no text: nothing to run.
         assert!(ner("a3").is_none());
+    }
+
+    #[test]
+    fn a_text_extraction_task_is_claimed_not_judged_by_the_embedding_rule() {
+        // Field bug 2026-10-08: every schema task of an embedded collection
+        // ended skipped/already_satisfied before reaching the model.
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE entities (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, asset_id TEXT,
+               entity_type TEXT NOT NULL, value TEXT NOT NULL, source TEXT);",
+        )
+        .expect("entities");
+        insert_batch(&conn, "b1", "req-1", r#"["ner"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        control_batch(&conn, "b1", BatchAction::Resume, None).expect("start");
+        advance_planning(&conn, "b1", 10, 200).expect("plan");
+        assert!(live_task(&conn, "corpus", "asset", "a2", "ner")
+            .unwrap()
+            .is_some());
+
+        let claimed = claim_next(&conn, "s", &["ner"], 1)
+            .unwrap()
+            .expect("the task reaches the motor");
+        assert_eq!(claimed.kind, "ner");
     }
 
     #[test]

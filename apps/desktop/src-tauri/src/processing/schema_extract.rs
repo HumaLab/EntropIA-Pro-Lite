@@ -28,7 +28,7 @@ pub fn contract_for(schema_id: &str) -> String {
     format!("{CONTRACT_PREFIX}{schema_id}")
 }
 
-fn schema_id_from_contract(contract: &str) -> Option<&str> {
+pub(crate) fn schema_id_from_contract(contract: &str) -> Option<&str> {
     contract.strip_prefix(CONTRACT_PREFIX)
 }
 
