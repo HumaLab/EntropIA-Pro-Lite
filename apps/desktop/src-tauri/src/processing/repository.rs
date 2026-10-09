@@ -241,6 +241,59 @@ pub const BIBLIOGRAPHY_SYNC_CONTRACT: &str = "bibliography_sync/v1";
 /// (whole-document pdf-extract text, E4a-WU2). Versioned so a future
 /// extractor change re-evaluates queued work instead of mixing outputs.
 pub const BIBLIOGRAPHY_EXTRACT_CONTRACT: &str = "bibliography-extract-v1";
+/// Pinned contract of every EXPLICIT reprocess task (B4, plan-texto-nativo-
+/// parte-b 2.3 "Modo durable sin migración"): the same `bibliography_extract`
+/// task with another contract, `prefix + <plan hash>`. The durable mode lives
+/// in the task row and survives restarts, retries and `processing_retry`;
+/// reprocess checkpoints never mix with automatic ones because the checkpoint
+/// key includes the contract.
+pub const BIBLIOGRAPHY_EXTRACT_REPROCESS_CONTRACT_PREFIX: &str =
+    "bibliography-extract-reprocess-v1|";
+
+/// How one extraction task may spend provider budget (2.3 "Modo durable").
+/// Decided ONLY by the task's `contract_hash`, through
+/// [`parse_extract_contract`], at the three contract sites (claim, commit
+/// gate, executor).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtractMode {
+    /// The ordinary sync-demanded extraction.
+    Automatic,
+    /// The owner-approved repair: exactly the pages of the plan whose hash
+    /// the contract pins. Nothing outside that plan may be charged.
+    Reprocess { plan_hash: String },
+}
+
+/// The contract string a reprocess task pins: the prefix plus the approved
+/// plan hash (2.3). Built here so the builder and the parser cannot drift.
+pub fn reprocess_contract_hash(plan_hash: &str) -> String {
+    format!("{BIBLIOGRAPHY_EXTRACT_REPROCESS_CONTRACT_PREFIX}{plan_hash}")
+}
+
+/// The ONE contract parser of `bibliography_extract` (2.3 "Las tres
+/// comparaciones de contrato"): `Automatic` for the plain extractor
+/// contract, `Reprocess` for the reprocess prefix followed by exactly 64
+/// lowercase hex characters, and `None` for anything else — which every
+/// gate treats exactly as it treated a foreign contract before (claim parks
+/// `configuration_changed`, commit refuses, executor blocks).
+pub fn parse_extract_contract(contract_hash: &str) -> Option<ExtractMode> {
+    if contract_hash == BIBLIOGRAPHY_EXTRACT_CONTRACT {
+        return Some(ExtractMode::Automatic);
+    }
+    let plan_hash = contract_hash.strip_prefix(BIBLIOGRAPHY_EXTRACT_REPROCESS_CONTRACT_PREFIX)?;
+    // The approved hash is the canonical SHA-256 hex: exactly 64 lowercase
+    // hex characters. Any other shape parses as nothing — a hand-edited or
+    // truncated contract may never authorize a paid run.
+    if plan_hash.len() == 64
+        && plan_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Some(ExtractMode::Reprocess {
+            plan_hash: plan_hash.to_string(),
+        });
+    }
+    None
+}
 
 /// Explicit subject identity for one work unit (E2a-3 wrapper/core, E2b-1 bibliography arm).
 ///
@@ -280,7 +333,7 @@ impl TaskSubject {
     }
 }
 
-fn live_task(
+pub(crate) fn live_task(
     conn: &Connection,
     domain: &str,
     subject_kind: &str,
@@ -334,8 +387,10 @@ fn link_batch_task(
 /// Subject-explicit link (E2b-1): the corpus wrapper above delegates with
 /// `corpus`/`asset` literals; bibliography admission passes its own subject
 /// with the library row id as the opaque `asset_id_snapshot` compat value.
+/// Also the link helper of the B4 reprocess confirm, which owns its own
+/// admission but shares the link shape.
 #[allow(clippy::too_many_arguments)]
-fn link_batch_task_subject(
+pub(crate) fn link_batch_task_subject(
     conn: &Connection,
     batch_id: &str,
     task_id: &str,
@@ -667,7 +722,7 @@ fn admit_bibliography_library_or_attach(
 /// colliding on the primary key.
 static DERIVED_TASK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn derived_task_id(now_ms: i64) -> String {
+pub(crate) fn derived_task_id(now_ms: i64) -> String {
     let seq = DERIVED_TASK_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 1_000_000;
     format!("z{now_ms:013}{seq:06}-{}", uuid::Uuid::new_v4())
 }
@@ -780,8 +835,9 @@ fn admit_bibliography_attachment_extract_or_attach(
 
 /// Source file identity pinned on extraction tasks: the catalog's mtime
 /// and native version. The commit gate re-reads both, so a replaced file
-/// surfaces as `source_changed` instead of a stale text.
-fn attachment_extraction_fingerprint(
+/// surfaces as `source_changed` instead of a stale text. The B4 reprocess
+/// confirm pins the SAME fingerprint on its own admission rows.
+pub(crate) fn attachment_extraction_fingerprint(
     attachment: &crate::bibliography::attachment::AttachmentRef,
 ) -> String {
     format!(
@@ -800,17 +856,16 @@ fn attachment_extraction_fingerprint(
 
 /// The file identity every extraction attempt on the same file shares: the
 /// `attachment_extraction_fingerprint` prefix without the catalog version —
-/// a metadata edit must never look like a different file (JD7-A-002).
-fn attachment_extraction_identity_prefix(
-    attachment: &crate::bibliography::attachment::AttachmentRef,
+/// a metadata edit must never look like a different file (JD7-A-002). One
+/// format for admission and for the reprocess candidate scan.
+pub(crate) fn attachment_extraction_identity_prefix(
+    attachment_id: &str,
+    mtime: Option<i64>,
 ) -> String {
     format!(
         "attachment|{}|mtime:{}|",
-        attachment.attachment_id,
-        attachment
-            .mtime
-            .map(|mtime| mtime.to_string())
-            .unwrap_or_default()
+        attachment_id,
+        mtime.map(|mtime| mtime.to_string()).unwrap_or_default()
     )
 }
 
@@ -822,7 +877,7 @@ fn attachment_extraction_identity_prefix(
 /// first extraction records. Read and storage failures (`extraction_io`,
 /// `storage_unavailable`, `publish_failed`, ...) are absent on purpose: they
 /// never reached a provider and must still be re-demanded.
-const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
+pub(crate) const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
     "provider_transient",
     RATE_LIMITED_CODE,
     "ocr_failed",
@@ -830,16 +885,30 @@ const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
     "source_changed",
 ];
 
+/// The spent-attempt verdict over one terminal task row (2.1): a cancelled
+/// attempt counts whatever its code — the owner stopped a paid run and
+/// nothing may restart it behind their back — and a failure counts only
+/// when its verdict was one of [`TERMINAL_OCR_ATTEMPT_CODES`]. Read and
+/// storage failures are absent on purpose: they never reached a provider.
+/// One rule behind the admission query and the reprocess candidate scan.
+pub(crate) fn is_terminal_ocr_attempt(state: &str, last_error_code: Option<&str>) -> bool {
+    if state == "cancelled" {
+        return true;
+    }
+    state == "failed"
+        && last_error_code.is_some_and(|code| TERMINAL_OCR_ATTEMPT_CODES.contains(&code))
+}
+
 /// True when a terminal `bibliography_extract` task already finished this
 /// exact file — a `failed` OCR verdict or a `cancelled` attempt whose
 /// `input_fingerprint` carries the file identity prefix. Such an attempt is
 /// spent: the sync must not silently re-queue and re-pay it (JD7-A-001);
 /// the owner recovers it with the explicit reprocess action.
-fn terminal_extraction_attempt_for(
+pub(crate) fn terminal_extraction_attempt_for(
     conn: &Connection,
     attachment: &crate::bibliography::attachment::AttachmentRef,
 ) -> Result<bool, String> {
-    let prefix = attachment_extraction_identity_prefix(attachment);
+    let prefix = attachment_extraction_identity_prefix(&attachment.attachment_id, attachment.mtime);
     let mut stmt = conn
         .prepare(
             "SELECT state, last_error_code FROM processing_tasks
@@ -857,15 +926,7 @@ fn terminal_extraction_attempt_for(
         .map_err(|e| format!("Failed to list extraction attempts: {e}"))?;
     for row in rows {
         let (state, code) = row.map_err(|e| format!("Failed to list extraction attempts: {e}"))?;
-        // A cancelled attempt counts whatever its code: the owner stopped a
-        // paid run and no sync may restart it behind their back.
-        if state == "cancelled" {
-            return Ok(true);
-        }
-        if code
-            .as_deref()
-            .is_some_and(|code| TERMINAL_OCR_ATTEMPT_CODES.contains(&code))
-        {
+        if is_terminal_ocr_attempt(&state, code.as_deref()) {
             return Ok(true);
         }
     }
@@ -4581,7 +4642,7 @@ fn validate_bibliography_attachment_claim_input(
             "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_extract only)"
         ));
     }
-    if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+    if parse_extract_contract(contract_hash).is_none() {
         mark_blocked(
             conn,
             task_id,
@@ -5258,8 +5319,10 @@ pub fn commit_success_with(
             // Extraction tasks pin the extractor identity and the source
             // file identity: a new extractor is a configuration change, a
             // replaced file is a source change. The publisher is the only
-            // writer of the extraction row.
-            if contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
+            // writer of the extraction row. Both admitted contract shapes
+            // (automatic, reprocess-with-plan-hash) pass this gate; an
+            // unparsable one refuses exactly as a moved contract did.
+            if parse_extract_contract(&contract_hash).is_none() {
                 return Err("configuration_changed: extraction contract changed".to_string());
             }
             let attachment_id = subject_id.as_str();
@@ -10297,5 +10360,47 @@ mod tests {
         assert_eq!(latest.state, "succeeded");
         assert_eq!((latest.profiles_done, latest.profiles_total), (1, 1));
         assert_eq!((latest.extractions_done, latest.extractions_total), (0, 1));
+    }
+
+    /// B4 (2.3 "Las tres comparaciones de contrato"): ONE parser decides the
+    /// durable extraction mode. The plain contract is `Automatic`; the
+    /// reprocess prefix plus exactly 64 lowercase hex characters is
+    /// `Reprocess`; everything else parses as nothing and keeps the blocked/
+    /// refused behavior every gate already had.
+    #[test]
+    fn the_extract_contract_parses_to_automatic_reprocess_or_nothing() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            parse_extract_contract(BIBLIOGRAPHY_EXTRACT_CONTRACT),
+            Some(ExtractMode::Automatic)
+        );
+        assert_eq!(
+            parse_extract_contract(&reprocess_contract_hash(hash)),
+            Some(ExtractMode::Reprocess {
+                plan_hash: hash.to_string()
+            })
+        );
+        for foreign in [
+            "",
+            "bibliography-extract-v2",
+            // Right prefix, wrong hash shape.
+            "bibliography-extract-reprocess-v1|",
+            "bibliography-extract-reprocess-v1|deadbeef",
+            &format!("bibliography-extract-reprocess-v1|{}", &hash[..63]),
+            &format!("bibliography-extract-reprocess-v1|{}0", &hash[..62]),
+            // Uppercase hex is not the approved canonical form.
+            &format!(
+                "bibliography-extract-reprocess-v1|{}",
+                hash.to_ascii_uppercase()
+            ),
+            // Suffix noise.
+            &format!("bibliography-extract-reprocess-v1|{hash}x"),
+        ] {
+            assert_eq!(
+                parse_extract_contract(foreign),
+                None,
+                "{foreign:?} must parse as no extraction mode"
+            );
+        }
     }
 }

@@ -38,6 +38,7 @@ const APP_COMMANDS: &[&str] = &[
     "bibliography_reprocess_candidates",
     "bibliography_reprocess_preview",
     "bibliography_reprocess_preview_cancel",
+    "bibliography_reprocess_confirm",
     "processing_list_batches",
     "processing_get_batch",
     "processing_list_tasks",

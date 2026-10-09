@@ -2605,7 +2605,7 @@ pub fn publish_bibliography_profile_output(
 // never minting corpus assets. Quality verdicts (rich/sparse/empty) tell
 // E4b's selective OCR exactly where native text runs out.
 
-use crate::processing::repository::BIBLIOGRAPHY_EXTRACT_CONTRACT;
+use crate::processing::repository::{parse_extract_contract, ExtractMode};
 
 /// Setting key for the user-configured Zotero profile directory. Stored
 /// copies resolve under `<dir>/storage/<key>/<filename>`; no UI binds it
@@ -2721,6 +2721,50 @@ struct ExtractedDocument {
     /// The pages the OCR pass had to read (0 when it never ran): the honest
     /// `progress_total` of the task and the denominator of its page counter.
     ocr_pages: i64,
+}
+
+/// The receipt fields only a reprocess carries (2.3): the approved plan hash
+/// beside the detector version, and the file identity the 2.4 "Una sola vez"
+/// exclusion compares against the current file.
+struct ReprocessReceipt {
+    plan_hash: String,
+    source_sha256: String,
+}
+
+/// Which pages the selective OCR pass may read (2.3 "El ejecutor no vuelve a
+/// elegir páginas").
+enum OcrPageSelection<'a> {
+    /// Automatic extraction: the candidacy rule picks the pages, and
+    /// whole-PDF windows are allowed when the provider offers them.
+    Automatic,
+    /// Reprocess: exactly these plan pages, page only — never a window — so
+    /// the approved plan is the whole spend.
+    Exactly(&'a [i64]),
+}
+
+/// The document text of one extraction (A3): the union of the published
+/// pages, joined in page order with the separator the rebuild path already
+/// used — replacing the `pdf-extract`/`richer_native_text` choice, whose
+/// alphanumeric tie kept glued words in the stored text. JD6-B-002: when
+/// the page union grades `empty` but the pre-part-A text grades `rich`, the
+/// previous behavior stands — nothing previously settled may flip to `empty`
+/// over a reader disagreement.
+fn document_text_from_pages(
+    pages: &[ExtractPageText],
+    legacy_text: String,
+) -> (String, &'static str) {
+    let mut text = pages
+        .iter()
+        .map(|page| page.text_content.trim())
+        .filter(|page_text| !page_text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut quality = extraction_quality(&text);
+    if quality == "empty" && extraction_quality(&legacy_text) == "rich" {
+        text = legacy_text;
+        quality = "rich";
+    }
+    (text, quality)
 }
 
 /// An HTML snapshot is one "page": its block paragraphs, blank-line
@@ -2941,14 +2985,21 @@ impl BibliographyExtractExecutor {
                 ),
             });
         }
-        if task.contract_hash != BIBLIOGRAPHY_EXTRACT_CONTRACT {
-            return Err(ExecOutput::Blocked {
-                code: "configuration_required_extract_contract".to_string(),
-                message:
-                    "the bibliography extraction contract changed; resume with the current configuration to re-evaluate"
-                        .to_string(),
-            });
-        }
+        // 2.3 "Las tres comparaciones de contrato": the pinned contract is
+        // the ONE durable mode switch — `Automatic` or `Reprocess` with the
+        // approved plan hash. An unknown contract blocks exactly as a moved
+        // contract always did.
+        let mode = match parse_extract_contract(&task.contract_hash) {
+            Some(mode) => mode,
+            None => {
+                return Err(ExecOutput::Blocked {
+                    code: "configuration_required_extract_contract".to_string(),
+                    message:
+                        "the bibliography extraction contract changed; resume with the current configuration to re-evaluate"
+                            .to_string(),
+                })
+            }
+        };
         let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
             code: "storage_unavailable".to_string(),
             message: error,
@@ -3038,8 +3089,10 @@ impl BibliographyExtractExecutor {
         }
         // A duplicate demand for a source the stored extraction already
         // reflects finishes here: no read, no extraction, no OCR, no rewrite
-        // of the page rows and no profile re-chain.
-        {
+        // of the page rows and no profile re-chain. Reprocess mode NEVER
+        // takes this shortcut (2.3 "No usa el atajo"): its whole point is to
+        // re-read and repair what is already settled.
+        if matches!(mode, ExtractMode::Automatic) {
             let conn =
                 open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
                     code: "storage_unavailable".to_string(),
@@ -3097,10 +3150,42 @@ impl BibliographyExtractExecutor {
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
+        // 2.3 "Ejecutor en modo reproceso": the approved plan is recomputed
+        // from the bytes just read and must hash to the authorization BEFORE
+        // any provider call. The automatic path is unchanged.
+        let mut reprocess_receipt: Option<ReprocessReceipt> = None;
         let document = if is_pdf {
-            self.extract_pdf_document(ctx, task, stop, &bytes)?
+            match &mode {
+                ExtractMode::Automatic => self.extract_pdf_document(ctx, task, stop, &bytes)?,
+                ExtractMode::Reprocess { plan_hash } => {
+                    let (document, receipt) = self.reprocess_pdf_document(
+                        ctx,
+                        task,
+                        stop,
+                        &attachment,
+                        &path,
+                        &bytes,
+                        plan_hash,
+                    )?;
+                    reprocess_receipt = Some(receipt);
+                    document
+                }
+            }
         } else {
-            extract_html_document(&bytes)
+            match &mode {
+                ExtractMode::Automatic => extract_html_document(&bytes),
+                ExtractMode::Reprocess { plan_hash } => {
+                    // A web snapshot has no approved plan: the authorization
+                    // cannot be re-proven, exactly like a replaced file.
+                    return Err(ExecOutput::Fatal {
+                        code: "reprocess_authorization_stale".to_string(),
+                        message: format!(
+                            "plan {plan_hash} covers a PDF, but attachment {} is a web snapshot; run the preview again",
+                            task.subject_id
+                        ),
+                    });
+                }
+            }
         };
         let ExtractedDocument {
             page_count,
@@ -3125,7 +3210,7 @@ impl BibliographyExtractExecutor {
             source_bytes: bytes.len() as i64,
             already_current: false,
         };
-        let receipt = serde_json::json!({
+        let mut receipt = serde_json::json!({
             "attachmentId": output.attachment_id,
             "itemId": output.item_id,
             "quality": output.quality,
@@ -3133,8 +3218,18 @@ impl BibliographyExtractExecutor {
             "textHash": output.text_hash,
             "ocrFailedPages": ocr_failed_pages,
             "ocrAttempted": ocr_attempted,
-        })
-        .to_string();
+            "sourceMtime": output.source_mtime,
+            "sourceBytes": output.source_bytes,
+        });
+        if let Some(extra) = reprocess_receipt {
+            receipt["sourceSha256"] = serde_json::json!(extra.source_sha256);
+            // The 2.4 "Una sola vez" exclusion reads exactly these fields.
+            receipt["reprocess"] = serde_json::json!({
+                "planHash": extra.plan_hash,
+                "detectorVersion": crate::ocr::pdf::BIBLIOGRAPHY_DETECTOR_VERSION,
+            });
+        }
+        let receipt = receipt.to_string();
         Ok(ExecResult {
             checkpoints: Vec::new(),
             // The page total of the OCR pass it ran (the same number the
@@ -3166,27 +3261,16 @@ impl BibliographyExtractExecutor {
             native_blank,
         } = read_native_extraction_basis(bytes, self.app.as_ref())?;
         let bytes: &[u8] = &readable;
-        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) =
-            self.maybe_ocr_pages(ctx, task, stop, bytes, pages, native_blank)?;
-        // A3: the document text is the union of the published pages, joined
-        // in page order with the separator the rebuild path already used —
-        // replacing the `pdf-extract`/`richer_native_text` choice, whose
-        // alphanumeric tie kept glued words in the stored text.
-        let mut text = pages
-            .iter()
-            .map(|page| page.text_content.trim())
-            .filter(|page_text| !page_text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let mut quality = extraction_quality(&text);
-        // JD6-B-002: when the page union grades `empty` but the pre-part-A
-        // text grades `rich`, the previous behavior stands — the pdf-extract
-        // text and its quality are stored. Nothing previously settled may
-        // flip to `empty` and get re-demanded over a reader disagreement.
-        if quality == "empty" && extraction_quality(&legacy_text) == "rich" {
-            text = legacy_text;
-            quality = "rich";
-        }
+        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) = self.maybe_ocr_pages(
+            ctx,
+            task,
+            stop,
+            bytes,
+            pages,
+            native_blank,
+            OcrPageSelection::Automatic,
+        )?;
+        let (text, quality) = document_text_from_pages(&pages, legacy_text);
         Ok(ExtractedDocument {
             page_count,
             text,
@@ -3196,6 +3280,113 @@ impl BibliographyExtractExecutor {
             ocr_attempted,
             ocr_pages,
         })
+    }
+
+    /// 2.3 "Ejecutor en modo reproceso", PDF branch: recompute the ONE plan
+    /// the preview showed from the bytes just read, refuse the run when the
+    /// hash misses the authorization BEFORE any provider call, reuse the
+    /// stored OCR rows the plan settled (converted to Markdown), and send
+    /// EXACTLY `plan.ocr_pages` to the provider — page only, never a
+    /// whole-PDF window. The result publishes through the part-A publisher.
+    // One argument per concern of one claimed unit; bundling them would move
+    // the same fields somewhere else and add a type with exactly one caller.
+    #[allow(clippy::too_many_arguments)]
+    fn reprocess_pdf_document(
+        &self,
+        ctx: &crate::processing::scheduler::ExecCtx,
+        task: &crate::processing::scheduler::ClaimedTask,
+        stop: &crate::processing::scheduler::StopFlag,
+        attachment: &crate::bibliography::attachment::AttachmentRef,
+        path: &std::path::Path,
+        bytes: &[u8],
+        authorized_plan_hash: &str,
+    ) -> Result<(ExtractedDocument, ReprocessReceipt), crate::processing::scheduler::ExecOutput>
+    {
+        use crate::processing::scheduler::ExecOutput;
+        let conn = open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+            code: "storage_unavailable".to_string(),
+            message: error,
+        })?;
+        // The EXACT planning read the preview ran — same function, same
+        // no-app basis reader — so the pages the hash covers are exactly the
+        // pages this run publishes.
+        let planned = crate::bibliography::reprocess::plan_reprocess_for_attachment_cancellable(
+            &conn, attachment, path, bytes, None,
+        )
+        .map_err(|error| match error {
+            crate::bibliography::reprocess::PlanError::Cancelled => ExecOutput::Stopped,
+            crate::bibliography::reprocess::PlanError::Failed(message) => ExecOutput::Fatal {
+                code: "reprocess_authorization_stale".to_string(),
+                message: format!(
+                    "the approved reprocess plan cannot be re-proven from the current file ({message}); run the preview again"
+                ),
+            },
+        })?;
+        drop(conn);
+        if planned.plan.plan_hash != authorized_plan_hash {
+            return Err(ExecOutput::Fatal {
+                code: "reprocess_authorization_stale".to_string(),
+                message: format!(
+                    "the file or the stored text changed since plan {authorized_plan_hash} was approved; run the preview again"
+                ),
+            });
+        }
+        let crate::bibliography::reprocess::ReprocessPlanning {
+            basis,
+            plan,
+            stored_pages,
+            source_sha256,
+        } = planned;
+        // 2.3: the reused pages take the stored text converted with
+        // `ocr_markup_to_text` (JD4-B-006), method `ocr`, and a fresh hash of
+        // the converted text — never re-sent to a provider.
+        let mut pages = basis.pages;
+        for reused in &plan.reused_ocr_pages {
+            let converted = stored_pages
+                .iter()
+                .find(|row| row.page_number == reused.page)
+                .map(|row| crate::ocr::markup::ocr_markup_to_text(&row.text_content))
+                .unwrap_or_default();
+            let row = ExtractPageText {
+                page_number: reused.page,
+                method: "ocr".to_string(),
+                text_hash: extraction_text_hash(&converted),
+                text_chars: converted.chars().count() as i64,
+                quality: extraction_quality(&converted).to_string(),
+                text_content: converted,
+            };
+            if let Some(slot) = pages
+                .iter_mut()
+                .find(|page| page.page_number == reused.page)
+            {
+                *slot = row;
+            }
+        }
+        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) = self.maybe_ocr_pages(
+            ctx,
+            task,
+            stop,
+            &basis.bytes,
+            pages,
+            basis.native_blank,
+            OcrPageSelection::Exactly(&plan.ocr_pages),
+        )?;
+        let (text, quality) = document_text_from_pages(&pages, basis.legacy_text);
+        Ok((
+            ExtractedDocument {
+                page_count: basis.page_count,
+                text,
+                quality,
+                pages,
+                ocr_failed_pages,
+                ocr_attempted,
+                ocr_pages,
+            },
+            ReprocessReceipt {
+                plan_hash: plan.plan_hash,
+                source_sha256,
+            },
+        ))
     }
 
     /// Runs the selective OCR pass over pages whose native layer is
@@ -3209,6 +3400,9 @@ impl BibliographyExtractExecutor {
     /// then recorded empty and the codes are never kept. A non-empty
     /// one replaces the page text (method `ocr`) with a fresh hash —
     /// never appended, so native fragments cannot duplicate.
+    // One argument per concern of one claimed unit; bundling them would move
+    // the same fields somewhere else and add a type with exactly one caller.
+    #[allow(clippy::too_many_arguments)]
     fn maybe_ocr_pages(
         &self,
         ctx: &crate::processing::scheduler::ExecCtx,
@@ -3217,6 +3411,7 @@ impl BibliographyExtractExecutor {
         bytes: &[u8],
         pages: Vec<ExtractPageText>,
         native_blank: bool,
+        selection: OcrPageSelection<'_>,
     ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool, i64), crate::processing::scheduler::ExecOutput>
     {
         use crate::processing::scheduler::ExecOutput;
@@ -3232,7 +3427,12 @@ impl BibliographyExtractExecutor {
         // the document is mostly scan: one request per window of pages, no
         // page rendering. A window the provider rejects (not a rate limit or
         // a credential problem) drops back to the per-page path below.
-        let needing = ocr_candidate_pages(&pages, native_blank);
+        let needing = match &selection {
+            OcrPageSelection::Automatic => ocr_candidate_pages(&pages, native_blank),
+            // 2.3 "El ejecutor no vuelve a elegir páginas": the approved plan
+            // is the page list, without recomputation.
+            OcrPageSelection::Exactly(list) => list.to_vec(),
+        };
         // Honest page progress before the first provider call: the task row
         // reads 0 over the pages that need OCR, and every settled page — a
         // cached checkpoint re-walked after a restart included — advances it.
@@ -3244,7 +3444,11 @@ impl BibliographyExtractExecutor {
             record_page_progress(ctx, task, 0, pages_needed)?;
         }
         let mut windowed: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
-        if let Some(per_request) = provider.pdf_pages_per_request() {
+        // Reprocess is page-only (2.3 "OCR solo por página"): the approved
+        // plan is the whole spend, so the whole-PDF window path never runs
+        // for it — even when most of the document needs OCR.
+        let allow_windows = matches!(selection, OcrPageSelection::Automatic);
+        if let Some(per_request) = provider.pdf_pages_per_request().filter(|_| allow_windows) {
             if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
                 for (first, last) in crate::bibliography::selective_ocr::plan_pdf_windows(
                     &needing,

@@ -24,12 +24,18 @@ use crate::bibliography::attachment::{
 };
 use crate::bibliography::processing::{
     is_pdf_attachment, ocr_candidate_pages, read_native_extraction_basis_with_cancel,
-    ExtractPageText, BIBLIOGRAPHY_EXTRACT_MAX_BYTES, ZOTERO_DATA_DIR_SETTING_KEY,
+    ExtractPageText, NativeExtractionBasis, BIBLIOGRAPHY_EXTRACT_MAX_BYTES,
+    ZOTERO_DATA_DIR_SETTING_KEY,
 };
 use crate::bibliography::repository::{extraction_matches_source, page_texts_for_attachment};
 use crate::ocr::markup::ocr_markup_to_text;
 use crate::ocr::pdf::{
     is_garbled_bibliography_text, is_garbled_text, BIBLIOGRAPHY_DETECTOR_VERSION,
+};
+use crate::processing::repository::{
+    attachment_extraction_fingerprint, attachment_extraction_identity_prefix, derived_task_id,
+    is_terminal_ocr_attempt, link_batch_task_subject, live_task, now_ms, parse_extract_contract,
+    reprocess_contract_hash,
 };
 
 // ── Cost estimate (2.3 "Monto estimado") ───────────────────────────────────
@@ -258,9 +264,25 @@ pub enum PlanError {
     Failed(String),
 }
 
+/// Everything one planning read produced (2.3 "El plan, una sola función
+/// para la vista previa y el ejecutor"): the pre-OCR basis the B4 executor
+/// publishes from, the plan itself, and the stored rows the plan decided
+/// over. Preview and executor go through THIS function, so the pages the
+/// hash covers are exactly the pages the executor publishes.
+pub struct ReprocessPlanning {
+    /// The native page rows of the part-A reader on the current bytes.
+    pub basis: NativeExtractionBasis,
+    pub plan: ReprocessPlan,
+    /// The stored `bibliographic_page_texts` rows the plan decided over —
+    /// the text the executor reuses for `reused_ocr_pages`.
+    pub stored_pages: Vec<StoredPageInput>,
+    /// SHA-256 (hex) of the file bytes as read (the plan's `sourceSha256`).
+    pub source_sha256: String,
+}
+
 /// Computes the plan of one attachment from its current file bytes and the
 /// stored rows — the entry point the B3 preview uses and the B4 executor
-/// will reuse on the bytes it read. `path` names the file for error
+/// reuses on the bytes it read. `path` names the file for error
 /// messages only; the bytes are the source of truth.
 pub fn plan_reprocess_for_attachment(
     conn: &Connection,
@@ -269,7 +291,7 @@ pub fn plan_reprocess_for_attachment(
     bytes: &[u8],
 ) -> Result<ReprocessPlan, String> {
     match plan_reprocess_for_attachment_cancellable(conn, attachment, path, bytes, None) {
-        Ok(plan) => Ok(plan),
+        Ok(planning) => Ok(planning.plan),
         Err(PlanError::Failed(message)) => Err(message),
         Err(PlanError::Cancelled) => Err("reprocess planning cancelled mid-file".to_string()),
     }
@@ -278,13 +300,16 @@ pub fn plan_reprocess_for_attachment(
 /// [`plan_reprocess_for_attachment`] with the preview's cancellation flag:
 /// checked between page batches inside the shared basis reader
 /// ([`crate::bibliography::processing::read_native_extraction_basis_with_cancel`]).
+/// The reader is called with NO app handle on purpose: the preview and the
+/// executor must resolve the SAME decoder or their plan hashes would drift
+/// (the resolver caches process-wide, so both sides see one answer).
 pub fn plan_reprocess_for_attachment_cancellable(
     conn: &Connection,
     attachment: &AttachmentRef,
     path: &std::path::Path,
     bytes: &[u8],
     cancel: Option<&AtomicBool>,
-) -> Result<ReprocessPlan, PlanError> {
+) -> Result<ReprocessPlanning, PlanError> {
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
     let basis = read_native_extraction_basis_with_cancel(bytes, None, cancel).map_err(
         |output| match output {
@@ -305,7 +330,7 @@ pub fn plan_reprocess_for_attachment_cancellable(
             text_hash: row.text_hash,
             text_content: row.text_content,
         })
-        .collect();
+        .collect::<Vec<_>>();
     let matches_source = extraction_matches_source(
         conn,
         &attachment.attachment_id,
@@ -313,14 +338,20 @@ pub fn plan_reprocess_for_attachment_cancellable(
         bytes.len() as i64,
     )
     .map_err(|error| PlanError::Failed(format!("{}: {}", error.code, error.message)))?;
-    Ok(plan_reprocess(&ReprocessPlanInput {
+    let plan = plan_reprocess(&ReprocessPlanInput {
         attachment_id: attachment.attachment_id.clone(),
-        source_sha256,
-        native_pages: basis.pages,
+        source_sha256: source_sha256.clone(),
+        native_pages: basis.pages.clone(),
         native_blank: basis.native_blank,
-        stored_pages,
+        stored_pages: stored_pages.clone(),
         extraction_matches_source: matches_source,
-    }))
+    });
+    Ok(ReprocessPlanning {
+        basis,
+        plan,
+        stored_pages,
+        source_sha256,
+    })
 }
 
 fn exec_output_message(output: &crate::processing::scheduler::ExecOutput) -> String {
@@ -463,29 +494,6 @@ pub fn reprocess_candidates(conn: &Connection) -> Result<Vec<ReprocessCandidate>
     Ok(out)
 }
 
-/// The file identity prefix every extraction attempt on the same file
-/// shares: `attachment|<id>|mtime:<m>|` — the
-/// `processing::repository::attachment_extraction_identity_prefix` format
-/// (private there; this module may not edit that file). Keep in sync with it.
-fn extraction_identity_prefix(attachment_id: &str, mtime: Option<i64>) -> String {
-    format!(
-        "attachment|{}|mtime:{}|",
-        attachment_id,
-        mtime.map(|value| value.to_string()).unwrap_or_default()
-    )
-}
-
-/// Terminal failure codes that count as one spent OCR attempt on a file —
-/// the `processing::repository::TERMINAL_OCR_ATTEMPT_CODES` set (private
-/// there). Keep in sync with it.
-const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
-    "provider_transient",
-    crate::processing::repository::RATE_LIMITED_CODE,
-    "ocr_failed",
-    "configuration_required_ocr",
-    "source_changed",
-];
-
 /// One `bibliography_extract` task row as the candidate scan reads it.
 struct ExtractTaskRow {
     state: String,
@@ -540,26 +548,16 @@ impl ExtractTaskIndex {
             .unwrap_or(&[])
     }
 
-    /// The B1 rule (2.1), duplicated from
-    /// `processing::repository::terminal_extraction_attempt_for` (private
-    /// there; this module may not edit that file): a terminal
+    /// The B1 rule (2.1), ONE predicate over the row:
+    /// [`is_terminal_ocr_attempt`] in `processing::repository` — a terminal
     /// `bibliography_extract` task whose `input_fingerprint` carries the file
-    /// identity prefix and whose verdict was a failed OCR attempt or any
-    /// cancellation. Keep in sync with it.
+    /// identity prefix and whose verdict was a spent OCR attempt. The index
+    /// keeps the one-pass scan; the rule itself lives in one place.
     fn terminal_ocr_attempt(&self, attachment_id: &str, mtime: Option<i64>) -> bool {
-        let prefix = extraction_identity_prefix(attachment_id, mtime);
+        let prefix = attachment_extraction_identity_prefix(attachment_id, mtime);
         self.for_attachment(attachment_id).iter().any(|task| {
-            if !task.input_fingerprint.starts_with(&prefix) {
-                return false;
-            }
-            // A cancelled attempt counts whatever its code: the owner stopped
-            // a paid run and nothing may restart it behind their back.
-            if task.state == "cancelled" {
-                return true;
-            }
-            task.last_error_code
-                .as_deref()
-                .is_some_and(|code| TERMINAL_OCR_ATTEMPT_CODES.contains(&code))
+            task.input_fingerprint.starts_with(&prefix)
+                && is_terminal_ocr_attempt(&task.state, task.last_error_code.as_deref())
         })
     }
 
@@ -568,7 +566,7 @@ impl ExtractTaskIndex {
     /// current file (`mtime` prefix). Then the `empty` verdict is what the
     /// OCR really saw — a blank scan — and nothing is wrong.
     fn succeeded_ocr_attempted(&self, attachment_id: &str, mtime: Option<i64>) -> bool {
-        let prefix = extraction_identity_prefix(attachment_id, mtime);
+        let prefix = attachment_extraction_identity_prefix(attachment_id, mtime);
         self.for_attachment(attachment_id).iter().any(|task| {
             task.state == "succeeded"
                 && task.input_fingerprint.starts_with(&prefix)
@@ -652,23 +650,17 @@ fn current_file_identity(
 }
 
 /// Whether a live `bibliography_extract` task exists for the attachment —
-/// the preview's `busy` flag. "Live" is `processing::repository::TERMINAL_TASK_STATES`'s
-/// complement: pending, blocked, running, retry_wait or interrupted.
+/// the preview's `busy` flag and the confirm's own admission gate. ONE
+/// lookup: `processing::repository::live_task` on the full subject identity.
 fn live_extract_task_exists(conn: &Connection, attachment_id: &str) -> Result<bool, String> {
-    let found: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM processing_tasks
-             WHERE kind = 'bibliography_extract'
-               AND domain = 'bibliography' AND subject_kind = 'attachment'
-               AND subject_id = ?1
-               AND state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')
-             LIMIT 1",
-            [attachment_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| format!("Failed to look up extraction tasks: {error}"))?;
-    Ok(found.is_some())
+    Ok(live_task(
+        conn,
+        "bibliography",
+        "attachment",
+        attachment_id,
+        "bibliography_extract",
+    )?
+    .is_some())
 }
 
 // ── Preview (2.3 "Comandos nuevos" 2) ──────────────────────────────────────
@@ -905,12 +897,247 @@ fn preview_attachment(
     };
     match plan_reprocess_for_attachment_cancellable(conn, &attachment, &path, &bytes, Some(cancel))
     {
-        Ok(plan) => Ok(PreviewStep::Entry(entry(None, Some(&plan)))),
+        Ok(planning) => Ok(PreviewStep::Entry(entry(None, Some(&planning.plan)))),
         Err(PlanError::Cancelled) => Ok(PreviewStep::Cancelled),
         Err(PlanError::Failed(_)) => Ok(PreviewStep::Entry(entry(
             Some(UNREADABLE_READ_FAILED),
             None,
         ))),
+    }
+}
+
+// ── Confirm (2.3 "Comandos nuevos" 3: admisión propia) ─────────────────
+
+/// One owner-approved entry of the confirm call: the attachment and the
+/// `plan_hash` the preview showed (B5 sends exactly `{attachmentId,
+/// planHash}`).
+#[derive(Debug, Clone)]
+pub struct ReprocessConfirmEntry {
+    pub attachment_id: String,
+    pub plan_hash: String,
+}
+
+/// What happened to one confirm entry. Stable machine strings; the UI
+/// renders them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReprocessEntryStatus {
+    /// The entry owns a fresh reprocess task in the new batch.
+    Queued,
+    /// A live `bibliography_extract` task already owns the attachment: the
+    /// confirm NEVER attaches to it and never charges outside its plan.
+    Busy,
+    /// No PDF attachment row for the id (vanished, or never a PDF).
+    UnknownAttachment,
+}
+
+/// One per-entry answer of the confirm.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReprocessConfirmResult {
+    pub attachment_id: String,
+    pub status: ReprocessEntryStatus,
+}
+
+/// The confirm answer: the new user batch when anything was queued, and one
+/// status per entry in request order.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReprocessConfirm {
+    pub batch_id: Option<String>,
+    pub results: Vec<ReprocessConfirmResult>,
+}
+
+/// What one plain task INSERT did (2.3 "Si no la hay, hace un INSERT sin
+/// `OR IGNORE`. Un choque con el índice único también da `busy`"). The
+/// seam the race test drives directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertOutcome {
+    Inserted(String),
+    Busy,
+}
+
+/// The confirm's own INSERT: a plain `INSERT` (never `OR IGNORE`, never
+/// `admit_subject_or_attach`) of one `bibliography_extract` task pinning the
+/// unchanged [`attachment_extraction_fingerprint`] and the reprocess
+/// contract `prefix + <plan hash>`. The partial unique
+/// `idx_processing_tasks_subject_active_unique` is the single-flight
+/// authority: a live row inserted between the caller's check and this INSERT
+/// collides and answers [`InsertOutcome::Busy`], and the caller must never
+/// link such a task to the batch.
+pub fn insert_reprocess_extract_task(
+    conn: &Connection,
+    attachment: &AttachmentRef,
+    plan_hash: &str,
+) -> Result<InsertOutcome, String> {
+    let contract_hash = reprocess_contract_hash(plan_hash);
+    if parse_extract_contract(&contract_hash).is_none() {
+        return Err(format!(
+            "invalid_selection: {plan_hash:?} is not an approved reprocess plan hash"
+        ));
+    }
+    let task_id = derived_task_id(now_ms());
+    let now = now_ms();
+    let inserted = conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+            input_revision, input_fingerprint, contract_hash, state, created_at, updated_at)
+         VALUES (?1, 'bibliography_extract', ?2, 'bibliography', 'attachment', ?2,
+            0, ?3, ?4, 'pending', ?5, ?5)",
+        rusqlite::params![
+            task_id,
+            attachment.attachment_id,
+            attachment_extraction_fingerprint(attachment),
+            contract_hash,
+            now
+        ],
+    );
+    match inserted {
+        Ok(_) => Ok(InsertOutcome::Inserted(task_id)),
+        Err(error) if is_unique_constraint(&error) => {
+            // A live task landed between the check and this INSERT (JD7-B-001):
+            // one `busy` answer, never an attach and never a second writer.
+            Ok(InsertOutcome::Busy)
+        }
+        Err(error) => Err(format!(
+            "Failed to queue the reprocess of {}: {error}",
+            attachment.attachment_id
+        )),
+    }
+}
+
+/// A UNIQUE violation of `processing_tasks`: the partial unique index is the
+/// race authority the plain INSERT collides against.
+fn is_unique_constraint(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if inner.code == rusqlite::ErrorCode::ConstraintViolation
+    ) && error.to_string().contains("UNIQUE constraint")
+}
+
+/// `bibliography_reprocess_confirm`'s transactional core (2.3): ONE
+/// `BEGIN IMMEDIATE` transaction creates ONE user batch (visible and
+/// cancelable like any user batch) and admits each entry on its own — a live
+/// task is `busy`, a UNIQUE collision is `busy`, everything else is a plain
+/// INSERT linked to the batch. The confirm NEVER attaches to an existing
+/// task and NEVER reuses [`crate::processing::repository::admit_subject_or_attach`].
+/// A batch with nothing queued is deleted inside the same transaction and
+/// answers `batchId: null`.
+pub fn confirm_reprocess(
+    conn: &Connection,
+    entries: &[ReprocessConfirmEntry],
+) -> Result<ReprocessConfirm, String> {
+    if entries.is_empty() {
+        return Err(
+            "invalid_selection: confirm at least one attachment of the preview".to_string(),
+        );
+    }
+    // The whole call fails before the queue is touched when any approval is
+    // not the shape the preview produces.
+    for entry in entries {
+        if parse_extract_contract(&reprocess_contract_hash(&entry.plan_hash)).is_none() {
+            return Err(format!(
+                "invalid_selection: plan hash {:?} of attachment {} is not 64 lowercase hex characters",
+                entry.plan_hash, entry.attachment_id
+            ));
+        }
+    }
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| format!("Failed to begin the reprocess confirm: {error}"))?;
+    let applied = (|| -> Result<ReprocessConfirm, String> {
+        let now = now_ms();
+        let batch_id = format!("batch-{}", uuid::Uuid::new_v4());
+        let request_id = format!("bibliography-reprocess-{}", uuid::Uuid::new_v4());
+        // The operations list is what the batch tab renders: `"ocr"` shows
+        // the batch in its OCR column, exactly what these tasks spend.
+        conn.execute(
+            "INSERT INTO processing_batches
+               (id, request_id, origin, state, desired_state, operations, planning_done, priority, created_at, updated_at)
+             VALUES (?1, ?2, 'user', 'running', 'run', '[\"ocr\"]', 1, 2, ?3, ?3)",
+            rusqlite::params![batch_id, request_id, now],
+        )
+        .map_err(|error| format!("Failed to create the reprocess batch: {error}"))?;
+        let mut results = Vec::with_capacity(entries.len());
+        let mut queued = 0usize;
+        for entry in entries {
+            let Some(attachment) = attachment_ref_for(conn, &entry.attachment_id)
+                .map_err(|error| format!("Failed to check bibliography attachment: {error}"))?
+            else {
+                results.push(ReprocessConfirmResult {
+                    attachment_id: entry.attachment_id.clone(),
+                    status: ReprocessEntryStatus::UnknownAttachment,
+                });
+                continue;
+            };
+            // Reprocess covers PDF attachments exactly like the preview
+            // (which reports `not_a_pdf` and no plan for anything else).
+            if !is_pdf_attachment(
+                attachment.content_type.as_deref(),
+                attachment.filename.as_deref(),
+            ) {
+                results.push(ReprocessConfirmResult {
+                    attachment_id: entry.attachment_id.clone(),
+                    status: ReprocessEntryStatus::UnknownAttachment,
+                });
+                continue;
+            }
+            // The busy check is the fast path, never the authority: the plain
+            // INSERT below is the race-proof admission.
+            if live_extract_task_exists(conn, &entry.attachment_id)? {
+                results.push(ReprocessConfirmResult {
+                    attachment_id: entry.attachment_id.clone(),
+                    status: ReprocessEntryStatus::Busy,
+                });
+                continue;
+            }
+            match insert_reprocess_extract_task(conn, &attachment, &entry.plan_hash)? {
+                InsertOutcome::Inserted(task_id) => {
+                    link_batch_task_subject(
+                        conn,
+                        &batch_id,
+                        &task_id,
+                        "bibliography_extract",
+                        &entry.attachment_id,
+                        "bibliography",
+                        "attachment",
+                        &entry.attachment_id,
+                        None,
+                    )?;
+                    queued += 1;
+                    results.push(ReprocessConfirmResult {
+                        attachment_id: entry.attachment_id.clone(),
+                        status: ReprocessEntryStatus::Queued,
+                    });
+                }
+                InsertOutcome::Busy => {
+                    results.push(ReprocessConfirmResult {
+                        attachment_id: entry.attachment_id.clone(),
+                        status: ReprocessEntryStatus::Busy,
+                    });
+                }
+            }
+        }
+        let batch_id = if queued == 0 {
+            // Nothing was queued: the empty batch never reaches the world.
+            conn.execute("DELETE FROM processing_batches WHERE id = ?1", [&batch_id])
+                .map_err(|error| format!("Failed to drop the empty reprocess batch: {error}"))?;
+            None
+        } else {
+            Some(batch_id)
+        };
+        Ok(ReprocessConfirm { batch_id, results })
+    })();
+    match applied {
+        Ok(response) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|error| format!("Failed to commit the reprocess confirm: {error}"))?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
     }
 }
 

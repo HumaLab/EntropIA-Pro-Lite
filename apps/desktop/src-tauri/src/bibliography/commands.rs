@@ -695,3 +695,47 @@ pub async fn bibliography_reprocess_preview_cancel() -> Result<(), String> {
     crate::bibliography::reprocess::cancel_reprocess_preview();
     Ok(())
 }
+
+/// One owner-approved confirm entry as the UI sends it: exactly
+/// `{attachmentId, planHash}` (2.3 "Comandos nuevos" 3).
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReprocessConfirmEntryDto {
+    pub attachment_id: String,
+    pub plan_hash: String,
+}
+
+/// Queues the approved reprocess: ONE user batch (visible and cancelable in
+/// the batch tab) plus one fresh `bibliography_extract` task per entry, each
+/// pinning the reprocess contract `prefix + <planHash>`. Its own admission:
+/// a live task for the attachment answers `busy` and is never attached to.
+/// Returns the batch id (or `null` when nothing was queued) and one status
+/// per entry.
+#[tauri::command]
+pub async fn bibliography_reprocess_confirm(
+    entries: Vec<ReprocessConfirmEntryDto>,
+    db: State<'_, AppDbState>,
+) -> Result<crate::bibliography::reprocess::ReprocessConfirm, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        if !crate::processing::repository::is_schema_ready(&conn)? {
+            return Err(format!(
+                "{}: {} is not applied yet",
+                crate::processing::repository::SCHEMA_NOT_READY,
+                crate::processing::repository::MIGRATION_NAME
+            ));
+        }
+        let entries: Vec<crate::bibliography::reprocess::ReprocessConfirmEntry> = entries
+            .into_iter()
+            .map(
+                |entry| crate::bibliography::reprocess::ReprocessConfirmEntry {
+                    attachment_id: entry.attachment_id,
+                    plan_hash: entry.plan_hash,
+                },
+            )
+            .collect();
+        crate::bibliography::reprocess::confirm_reprocess(&conn, &entries)
+    })
+    .await
+}

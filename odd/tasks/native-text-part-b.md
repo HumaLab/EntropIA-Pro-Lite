@@ -24,7 +24,7 @@ Branch `feat/native-text-reprocess`, worktree
   of `prueba-sync` (plan 2.2).
 - [x] B3 — `plan_reprocess`, `bibliography_reprocess_candidates`, `bibliography_reprocess_preview` (progress,
   cancel) and the USD estimate (plan 2.3, 2.4).
-- [ ] B4 — Reprocess contract, `bibliography_reprocess_confirm` (own user batch, own admission, busy on
+- [x] B4 — Reprocess contract, `bibliography_reprocess_confirm` (own user batch, own admission, busy on
   conflict) and executor reprocess mode (plan-hash gate, converted reuse, page-only OCR) (plan 2.3).
 - [ ] B5 — UI: Biblioteca toolbar button, work detail button, preview/confirm dialog (plan 2.5).
 - [ ] B6 — Local verification, CI green incl. Pro, Judgment Day on the code, merge.
@@ -57,3 +57,12 @@ Branch `feat/native-text-reprocess`, worktree
   Follow-ups: B4 removes the duplicated B1 attempt rule in `reprocess.rs` by exposing the
   `processing/repository.rs` helpers; B5 shows candidates loading as a running state; release timing
   unmeasured.
+- 2026-10-09: B4 done — `parse_extract_contract` at the three contract sites; `bibliography_reprocess_confirm`
+  (own `origin='user'` batch, `operations=["ocr"]`, priority 2, `BEGIN IMMEDIATE`, plain INSERT, UNIQUE
+  collision = busy, never attaches); executor reprocess mode (plan recomputed from the re-read bytes,
+  `reprocess_authorization_stale` before any provider call, converted OCR reuse, page-only OCR); receipts
+  carry `sourceMtime`/`sourceBytes` (+ `sourceSha256` and `reprocess` block); B1 rule duplicates removed.
+  RED on 12 integration tests + the contract parse test; lib 2425, bibliography_processing 165,
+  bibliography_reprocess 19, acl_manifest_guard 6 passed; clippy and fmt clean. The reprocess plan reads
+  PDFium through the path app setup resolves (`lib.rs:729`). Batch tab renders the batch by id with
+  "OCR ✓ / Embeddings —" and task-count progress (static check; B5 checks it live).

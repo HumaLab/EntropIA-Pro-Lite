@@ -35,6 +35,7 @@
     "allow-bibliography-reprocess-candidates",
     "allow-bibliography-reprocess-preview",
     "allow-bibliography-reprocess-preview-cancel",
+    "allow-bibliography-reprocess-confirm",
     "allow-processing-list-batches",
     "allow-processing-get-batch",
     "allow-processing-list-tasks",
