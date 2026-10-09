@@ -3,12 +3,15 @@
   import { locale, t } from '$lib/i18n'
   import {
     bibliographyReprocessCandidates,
+    bibliographyReprocessCandidatesCancel,
     bibliographyReprocessConfirm,
     bibliographyReprocessPreview,
     bibliographyReprocessPreviewCancel,
     formatEstimatedUsd,
+    onBibliographyReprocessCandidatesProgress,
     onBibliographyReprocessPreviewProgress,
     previewUnitPercent,
+    type ReprocessCandidatesProgress,
     type ReprocessConfirm,
     type ReprocessPreview,
     type ReprocessPreviewProgress,
@@ -48,6 +51,8 @@
     unitsTotal: 0,
   })
   let preview = $state<ReprocessPreview | null>(null)
+  // The scan counter; the plain loading line stands until the first event.
+  let candidatesProgress = $state<ReprocessCandidatesProgress>({ done: 0, total: 0 })
   let doneReport = $state<ReprocessConfirm | null>(null)
   let errorMessage = $state<string | null>(null)
   let confirming = $state(false)
@@ -93,6 +98,17 @@
       total: progress.total,
     })
   })
+  // The scan counter, once the scan has told the dialog its total.
+  const candidatesProgressLabel = $derived.by(() => {
+    $currentLocale
+    if (candidatesProgress.total > 0) {
+      return t('bibliography.reprocess.candidatesProgress', {
+        done: candidatesProgress.done,
+        total: candidatesProgress.total,
+      })
+    }
+    return t('bibliography.reprocess.loadingCandidates')
+  })
   const queuedCount = $derived(
     (doneReport?.results ?? []).filter((result) => result.status === 'queued').length
   )
@@ -136,9 +152,16 @@
     try {
       let ids = attachmentIds
       if (mode === 'library') {
-        const candidates = await bibliographyReprocessCandidates()
-        if (!alive) return
-        ids = candidates.map((entry) => entry.attachmentId)
+        const unlisten = await onBibliographyReprocessCandidatesProgress((next) => {
+          if (alive) candidatesProgress = next
+        })
+        try {
+          const candidates = await bibliographyReprocessCandidates()
+          if (!alive) return
+          ids = candidates.map((entry) => entry.attachmentId)
+        } finally {
+          unlisten()
+        }
       }
       if (ids.length === 0) {
         phase = 'no-candidates'
@@ -190,10 +213,13 @@
     }
   }
 
-  /** Closing drops any in-flight result; a running preview is stopped too. */
+  /** Closing drops any in-flight result; a running preview or scan is stopped too. */
   function handleCancel(): void {
     if (phase === 'previewing') {
       void bibliographyReprocessPreviewCancel()
+    }
+    if (phase === 'loading') {
+      void bibliographyReprocessCandidatesCancel()
     }
     onclose()
   }
@@ -221,7 +247,7 @@
 >
   {#if phase === 'loading'}
     <p class="reprocess-dialog__note" role="status">
-      {$currentLocale && t('bibliography.reprocess.loadingCandidates')}
+      {$currentLocale && candidatesProgressLabel}
     </p>
   {:else if phase === 'previewing'}
     <p class="reprocess-dialog__note" role="status" aria-live="polite">

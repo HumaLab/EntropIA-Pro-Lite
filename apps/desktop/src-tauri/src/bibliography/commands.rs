@@ -642,17 +642,55 @@ pub async fn bibliography_open_work_attachment(
 /// The PDF attachments the "Reprocesar texto" action should consider: garbled
 /// stored pages, an `empty` extraction with no OCR answer for the current
 /// file, or one spent failed/cancelled OCR attempt on it (2.4's successful
-/// reprocess excludes). Ordered by work title; no file is read.
+/// reprocess excludes). Ordered by work title; no file is read. The scan
+/// reports progress as `bibliography-reprocess-candidates-progress`
+/// `{done, total}` after each checked attachment, throttled to at most four
+/// emits per second. Cancel with [`bibliography_reprocess_candidates_cancel`];
+/// a cancelled scan answers `Err("cancelled")` (the candidates' analogue of
+/// the preview's typed `cancelled` — a user stop, never a failure to render).
 #[tauri::command]
 pub async fn bibliography_reprocess_candidates(
+    app: tauri::AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<Vec<crate::bibliography::reprocess::ReprocessCandidate>, String> {
+    use tauri::Emitter;
+    crate::bibliography::reprocess::reset_reprocess_candidates_cancel();
     let db_path = db.db_path.clone();
-    blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let conn = open_archive_connection(&db_path)?;
-        crate::bibliography::reprocess::reprocess_candidates(&conn)
+        // One report per checked attachment, cheap on small archives and
+        // seconds apart on big ones: at most four emits per second, and the
+        // settled final state is never dropped.
+        let mut last_emit: Option<std::time::Instant> = None;
+        crate::bibliography::reprocess::reprocess_candidates_with(
+            &conn,
+            crate::bibliography::reprocess::candidates_cancel_flag(),
+            |done, total| {
+                let now = std::time::Instant::now();
+                let settled = done >= total;
+                let due = last_emit.is_none_or(|last| {
+                    now.duration_since(last) >= std::time::Duration::from_millis(250)
+                });
+                if settled || due {
+                    last_emit = Some(now);
+                    let _ = app.emit(
+                        "bibliography-reprocess-candidates-progress",
+                        crate::bibliography::reprocess::CandidatesProgress { done, total },
+                    );
+                }
+            },
+        )
     })
     .await
+    .map_err(|error| format!("candidates scan task failed: {error}"))?
+}
+
+/// Stops the running candidates scan between attachments. The scan answers
+/// with `Err("cancelled")` and whatever it checked so far is dropped.
+#[tauri::command]
+pub async fn bibliography_reprocess_candidates_cancel() -> Result<(), String> {
+    crate::bibliography::reprocess::cancel_reprocess_candidates();
+    Ok(())
 }
 
 /// The read-only reprocess preview over the given attachments: reads each

@@ -65,7 +65,7 @@ function previewAnswer(
 /** Answers each command on its own, as the real backend does. */
 function backend(
   options: {
-    candidates?: unknown[]
+    candidates?: unknown[] | (() => Promise<unknown>)
     preview?: unknown | (() => Promise<unknown>)
     confirm?: unknown
   } = {}
@@ -73,7 +73,10 @@ function backend(
   mockInvoke.mockImplementation(async (command: string, payload?: unknown) => {
     switch (command) {
       case 'bibliography_reprocess_candidates':
+        if (typeof options.candidates === 'function') return options.candidates()
         return options.candidates ?? [candidate()]
+      case 'bibliography_reprocess_candidates_cancel':
+        return undefined
       case 'bibliography_reprocess_preview': {
         if (typeof options.preview === 'function') return options.preview()
         return options.preview ?? previewAnswer([previewAttachment()])
@@ -108,6 +111,14 @@ function progressHandler(): (event: { payload: ReprocessPreviewProgress }) => vo
   const handler = mockListen.mock.calls.at(-1)?.[1]
   expect(typeof handler).toBe('function')
   return handler as unknown as (event: { payload: ReprocessPreviewProgress }) => void
+}
+
+function candidatesProgressHandler(): (event: {
+  payload: { done: number; total: number }
+}) => void {
+  const handler = mockListen.mock.calls.at(-1)?.[1]
+  expect(typeof handler).toBe('function')
+  return handler as unknown as (event: { payload: { done: number; total: number } }) => void
 }
 
 beforeEach(() => {
@@ -209,6 +220,50 @@ describe('BibliographyReprocessDialog', () => {
 
     expect(mockInvoke).toHaveBeenCalledWith('bibliography_reprocess_preview_cancel')
     expect(onclose).toHaveBeenCalledOnce()
+  })
+
+  it('shows the candidates count while the scan runs', async () => {
+    backend({ candidates: () => new Promise(() => {}) })
+    render(BibliographyReprocessDialog, { mode: 'library', onclose: vi.fn() })
+
+    expect(await screen.findByText('Buscando obras con texto dañado…')).toBeInTheDocument()
+    candidatesProgressHandler()({ payload: { done: 3, total: 12 } })
+
+    expect(await screen.findByText('Revisando 3 de 12 adjuntos')).toBeInTheDocument()
+  })
+
+  it('closing during the scan stops the candidates scan', async () => {
+    backend({ candidates: () => new Promise(() => {}) })
+    const onclose = vi.fn()
+    render(BibliographyReprocessDialog, { mode: 'library', onclose })
+
+    expect(await screen.findByText('Buscando obras con texto dañado…')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_reprocess_candidates_cancel')
+    expect(onclose).toHaveBeenCalledOnce()
+  })
+
+  it('a scan stopped by closing never shows its error', async () => {
+    const scan: { reject?: (error: unknown) => void } = {}
+    backend({
+      candidates: () =>
+        new Promise((_resolve, reject) => {
+          scan.reject = reject
+        }),
+    })
+    const onclose = vi.fn()
+    const { unmount } = render(BibliographyReprocessDialog, { mode: 'library', onclose })
+
+    expect(await screen.findByText('Buscando obras con texto dañado…')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+    // The dialog is gone when the cancelled scan rejects: no error anywhere.
+    unmount()
+    scan.reject?.('cancelled')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onclose).toHaveBeenCalledOnce()
+    expect(document.body.textContent).not.toContain('No se pudo completar la operación')
   })
 
   it('reports preview progress from the progress event', async () => {

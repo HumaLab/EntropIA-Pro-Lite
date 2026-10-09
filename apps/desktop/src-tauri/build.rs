@@ -40,6 +40,7 @@ const APP_COMMANDS: &[&str] = &[
     "bibliography_work_detail",
     "bibliography_open_work_attachment",
     "bibliography_reprocess_candidates",
+    "bibliography_reprocess_candidates_cancel",
     "bibliography_reprocess_preview",
     "bibliography_reprocess_preview_cancel",
     "bibliography_reprocess_confirm",

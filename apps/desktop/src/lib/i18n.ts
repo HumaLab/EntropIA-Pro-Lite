@@ -283,6 +283,7 @@ const es = {
   'bibliography.reprocess.action': 'Reprocesar texto',
   'bibliography.reprocess.title': 'Reprocesar texto',
   'bibliography.reprocess.loadingCandidates': 'Buscando obras con texto dañado…',
+  'bibliography.reprocess.candidatesProgress': 'Revisando {done} de {total} adjuntos',
   'bibliography.reprocess.previewProgress': 'Leyendo {done} de {total} adjuntos',
   'bibliography.reprocess.previewProgressUnits':
     'Leyendo {done} de {total} adjuntos · {percent} % del actual',
@@ -3389,6 +3390,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.reprocess.action': 'Reprocess text',
   'bibliography.reprocess.title': 'Reprocess text',
   'bibliography.reprocess.loadingCandidates': 'Looking for works with damaged text…',
+  'bibliography.reprocess.candidatesProgress': 'Checking {done} of {total} attachments',
   'bibliography.reprocess.previewProgress': 'Reading {done} of {total} attachments',
   'bibliography.reprocess.previewProgressUnits':
     'Reading {done} of {total} attachments · {percent} % of current',
