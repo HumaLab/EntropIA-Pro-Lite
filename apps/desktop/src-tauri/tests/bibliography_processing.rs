@@ -6623,6 +6623,27 @@ fn document_text_keeps_the_pdf_extract_text_when_the_page_union_is_empty() {
     );
 }
 
+/// T4: the per-page progress pass behind the whole-document read must not
+/// move one byte of the persisted text: the new path answers exactly what
+/// `pdf_extract::extract_text_from_mem` produced before it, on a multi-page
+/// text PDF.
+#[test]
+fn the_whole_document_read_stays_byte_identical_to_pdf_extract() {
+    let pdf = make_text_pdf_pages(&[
+        &[(72.0, 700.0, "Primera pagina con texto.")],
+        &[(72.0, 700.0, "Segunda pagina, otra linea.")],
+        &[(72.0, 700.0, "Tercera pagina.")],
+    ]);
+    let expected = pdf_extract::extract_text_from_mem(&pdf).expect("pdf-extract reads");
+    let text = entropia_desktop_lib::bibliography::processing::pdf_extract_text(&pdf)
+        .expect("the progress path reads");
+
+    assert_eq!(
+        text, expected,
+        "the progress pass must be byte-identical to pdf-extract"
+    );
+}
+
 /// JD6-B-005 (informational): the off-page text policy. A page whose only
 /// PDFium text is off-page while lopdf reads on-page text keeps the lopdf read
 /// — the comparison finds lopdf strictly richer in alphanumeric content. The

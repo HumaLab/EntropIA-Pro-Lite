@@ -743,6 +743,245 @@ fn dll_name_display() -> &'static str {
     }
 }
 
+/// Why the progress-reporting whole-document extract
+/// ([`extract_pdf_text_with_progress`]) stopped.
+#[derive(Debug)]
+pub enum ExtractPdfTextError {
+    /// The caller's cancel flag fired at a page boundary: the pass stopped
+    /// early and no text is kept.
+    Cancelled,
+    /// The read failed (locked file, parser error or panic): the same
+    /// message [`extract_pdf_text`] has always returned.
+    Failed(String),
+}
+
+/// How one whole-document pass over the parser ended. Text exists only on
+/// `Text`; `Cancelled` and the failures carry no partial output.
+#[derive(Debug)]
+enum ExtractPassOutcome {
+    Text(String),
+    Cancelled,
+    Failed(pdf_extract::OutputError),
+    Panicked,
+}
+
+/// A delegating [`pdf_extract::OutputDev`] around
+/// [`pdf_extract::PlainTextOutput`]: every method forwards unchanged — the
+/// text must stay byte-identical to `pdf_extract::extract_text_from_mem` —
+/// and `end_page` additionally reports the finished page and checks the
+/// cancel flag, the only per-page boundary `output_doc` offers. On cancel it
+/// answers an [`pdf_extract::OutputError`] so `output_doc` stops walking
+/// pages at once.
+struct PageProgressOutput<'a, 'b, 'c> {
+    inner: pdf_extract::PlainTextOutput<&'a mut String>,
+    page_total: i64,
+    pages_done: i64,
+    cancel: Option<&'b std::sync::atomic::AtomicBool>,
+    on_page: Option<&'c mut dyn FnMut(i64, i64)>,
+    cancelled: bool,
+}
+
+impl<'a, 'b, 'c> PageProgressOutput<'a, 'b, 'c> {
+    fn new(
+        writer: &'a mut String,
+        page_total: i64,
+        cancel: Option<&'b std::sync::atomic::AtomicBool>,
+        on_page: Option<&'c mut dyn FnMut(i64, i64)>,
+    ) -> Self {
+        Self {
+            inner: pdf_extract::PlainTextOutput::new(writer),
+            page_total,
+            pages_done: 0,
+            cancel,
+            on_page,
+            cancelled: false,
+        }
+    }
+}
+
+impl pdf_extract::OutputDev for PageProgressOutput<'_, '_, '_> {
+    fn begin_page(
+        &mut self,
+        page_num: u32,
+        media_box: &pdf_extract::MediaBox,
+        art_box: Option<(f64, f64, f64, f64)>,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner.begin_page(page_num, media_box, art_box)
+    }
+
+    fn end_page(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_page()?;
+        self.pages_done += 1;
+        if let Some(on_page) = self.on_page.as_mut() {
+            on_page(self.pages_done, self.page_total);
+        }
+        if self
+            .cancel
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            self.cancelled = true;
+            return Err(cancelled_output_error());
+        }
+        Ok(())
+    }
+
+    fn output_character(
+        &mut self,
+        trm: &pdf_extract::Transform,
+        width: f64,
+        spacing: f64,
+        font_size: f64,
+        char: &str,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner
+            .output_character(trm, width, spacing, font_size, char)
+    }
+
+    fn begin_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.begin_word()
+    }
+
+    fn end_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_word()
+    }
+
+    fn end_line(&mut self) -> Result<(), pdf_extract::OutputError> {
+        self.inner.end_line()
+    }
+
+    fn stroke(
+        &mut self,
+        ctm: &pdf_extract::Transform,
+        colorspace: &pdf_extract::ColorSpace,
+        color: &[f64],
+        path: &pdf_extract::Path,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner.stroke(ctm, colorspace, color, path)
+    }
+
+    fn fill(
+        &mut self,
+        ctm: &pdf_extract::Transform,
+        colorspace: &pdf_extract::ColorSpace,
+        color: &[f64],
+        path: &pdf_extract::Path,
+    ) -> Result<(), pdf_extract::OutputError> {
+        self.inner.fill(ctm, colorspace, color, path)
+    }
+}
+
+/// The sentinel `end_page` answers on cancel: any
+/// [`pdf_extract::OutputError`] stops `output_doc`; which outcome it was is
+/// read from the wrapper's `cancelled` flag, never parsed back out of the
+/// error.
+fn cancelled_output_error() -> pdf_extract::OutputError {
+    pdf_extract::OutputError::IoError(std::io::Error::new(
+        std::io::ErrorKind::Interrupted,
+        "text extraction cancelled",
+    ))
+}
+
+/// pdf-extract 0.7.12 keeps `maybe_decrypt` private; this is that step
+/// verbatim: a permissions-only file opens with the empty user password, and
+/// a real user password fails with the crate's own hint on stderr.
+fn maybe_decrypt_pdf_extract(
+    doc: &mut pdf_extract::Document,
+) -> Result<(), pdf_extract::OutputError> {
+    if !doc.is_encrypted() {
+        return Ok(());
+    }
+    if let Err(error) = doc.decrypt("") {
+        if let pdf_extract::Error::Decryption(
+            pdf_extract::encryption::DecryptionError::IncorrectPassword,
+        ) = error
+        {
+            eprintln!(
+                "Encrypted documents must be decrypted with a password using \
+                 {{extract_text|extract_text_from_mem|output_doc}}_encrypted"
+            );
+        }
+        return Err(pdf_extract::OutputError::PdfError(error));
+    }
+    Ok(())
+}
+
+/// Mirrors pdf-extract 0.7.12's `extract_text_from_mem` exactly — same
+/// [`pdf_extract::Document::load_mem`], same decrypt step
+/// ([`maybe_decrypt_pdf_extract`]), same [`pdf_extract::output_doc`] over
+/// [`pdf_extract::PlainTextOutput`] — with [`PageProgressOutput`] around the
+/// writer. Progress and cancel ride on `end_page`; the text itself must come
+/// out byte-identical. The panic containment callers rely on lives here too.
+fn extract_text_from_mem_reported(
+    bytes: &[u8],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    on_page: Option<&mut dyn FnMut(i64, i64)>,
+) -> ExtractPassOutcome {
+    let mut text = String::new();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut doc = match pdf_extract::Document::load_mem(bytes) {
+            Ok(doc) => doc,
+            Err(error) => {
+                return ExtractPassOutcome::Failed(pdf_extract::OutputError::PdfError(error))
+            }
+        };
+        if let Err(error) = maybe_decrypt_pdf_extract(&mut doc) {
+            return ExtractPassOutcome::Failed(error);
+        }
+        let page_total = doc.get_pages().len() as i64;
+        let mut output = PageProgressOutput::new(&mut text, page_total, cancel, on_page);
+        match pdf_extract::output_doc(&doc, &mut output) {
+            Ok(()) => {}
+            Err(_) if output.cancelled => return ExtractPassOutcome::Cancelled,
+            Err(error) => return ExtractPassOutcome::Failed(error),
+        }
+        ExtractPassOutcome::Text(std::mem::take(&mut text))
+    })) {
+        Ok(outcome) => outcome,
+        Err(_) => ExtractPassOutcome::Panicked,
+    }
+}
+
+/// [`extract_pdf_text`] with the reprocess preview's hooks: `on_page`, when
+/// there is one, receives `(pages_done, pages_total)` after every finished
+/// page of the whole-document parser, and `cancel`, when there is one, is
+/// checked at the same boundaries — a flag set mid-extract stops the pass
+/// with [`ExtractPdfTextError::Cancelled`] instead of running to the end.
+/// With neither hook the read is exactly [`extract_pdf_text`].
+pub fn extract_pdf_text_with_progress(
+    bytes: &[u8],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    on_page: Option<&mut dyn FnMut(i64, i64)>,
+) -> Result<String, ExtractPdfTextError> {
+    let bytes = open_with_empty_password(bytes).map_err(ExtractPdfTextError::Failed)?;
+    // `pdf-extract` parses the file with its own, stricter lopdf: it reads the
+    // header line as UTF-8 and wants `%PDF-` at byte 0.
+    let normalized = normalize_pdf_header(&bytes);
+    let bytes: &[u8] = normalized.as_deref().unwrap_or(&bytes);
+    let text = match extract_text_from_mem_reported(bytes, cancel, on_page) {
+        ExtractPassOutcome::Text(text) => text,
+        ExtractPassOutcome::Cancelled => return Err(ExtractPdfTextError::Cancelled),
+        ExtractPassOutcome::Failed(error) => {
+            return Err(ExtractPdfTextError::Failed(format!(
+                "PDF text extraction failed: {error}"
+            )))
+        }
+        ExtractPassOutcome::Panicked => {
+            return Err(ExtractPdfTextError::Failed(
+                UNREADABLE_PDF_TEXT_MESSAGE.to_string(),
+            ))
+        }
+    };
+    // `pdf-extract` also fails silently: a page with an inline image
+    // ahead of its text comes back as `Ok("")`. That is not "no text
+    // layer", so ask the page layer before any caller treats the file as
+    // a scan. An honest blank stays the original answer.
+    Ok(if text.trim().is_empty() {
+        page_layer_text(bytes).unwrap_or(text)
+    } else {
+        text
+    })
+}
+
 /// Extract text from the native text layer of a PDF byte slice.
 /// Returns the raw extracted text or an error message.
 ///
@@ -753,24 +992,11 @@ fn dll_name_display() -> &'static str {
 /// corpus import, OCR fallback — receives an ordinary `Err`. Containment
 /// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
 pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
-    let bytes = open_with_empty_password(bytes)?;
-    // `pdf-extract` parses the file with its own, stricter lopdf: it reads the
-    // header line as UTF-8 and wants `%PDF-` at byte 0.
-    let normalized = normalize_pdf_header(&bytes);
-    let bytes: &[u8] = normalized.as_deref().unwrap_or(&bytes);
-    let parsed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        pdf_extract::extract_text_from_mem(bytes)
-    })) {
-        Ok(result) => result.map_err(|e| format!("PDF text extraction failed: {e}")),
-        Err(_) => Err(UNREADABLE_PDF_TEXT_MESSAGE.to_string()),
-    };
-    match parsed {
-        // `pdf-extract` also fails silently: a page with an inline image
-        // ahead of its text comes back as `Ok("")`. That is not "no text
-        // layer", so ask the page layer before any caller treats the file as
-        // a scan. An honest blank stays the original answer.
-        Ok(text) if text.trim().is_empty() => Ok(page_layer_text(bytes).unwrap_or(text)),
-        other => other,
+    match extract_pdf_text_with_progress(bytes, None, None) {
+        Ok(text) => Ok(text),
+        Err(ExtractPdfTextError::Failed(message)) => Err(message),
+        // Unreachable: no cancel flag travels this path.
+        Err(ExtractPdfTextError::Cancelled) => Err("PDF text extraction cancelled".to_string()),
     }
 }
 
@@ -2256,6 +2482,144 @@ mod tests {
     fn extract_pdf_text_keeps_the_protected_error_for_a_real_user_password() {
         let error = extract_pdf_text(USER_PASSWORD_PDF).expect_err("locked");
         assert_eq!(error, ENCRYPTED_PDF_MESSAGE);
+    }
+
+    /// A multi-page PDF with real text per page — the shape the byte-identity
+    /// assertions need: several `end_page` boundaries and stable output.
+    fn text_pdf_pages(count: u32) -> Vec<u8> {
+        use lopdf::Stream;
+        let mut document = Document::with_version("1.5");
+        let font_id = document.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Helvetica",
+        });
+        let resources_id = document.add_object(dictionary! {
+            "Font" => dictionary! { "F1" => font_id },
+        });
+        let pages_id = document.new_object_id();
+        let page_ids = (0..count)
+            .map(|index| {
+                let content = document.add_object(Stream::new(
+                    dictionary! {},
+                    format!("BT /F1 12 Tf 20 100 Td (Page {index} text) Tj ET").into_bytes(),
+                ));
+                document.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+                    "Resources" => resources_id,
+                    "Contents" => content,
+                })
+            })
+            .collect::<Vec<_>>();
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Count" => count as i64,
+                "Kids" => page_ids.iter().map(|id| (*id).into()).collect::<Vec<Object>>(),
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        document.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        document.save_to(&mut bytes).expect("serialize text PDF");
+        bytes
+    }
+
+    /// The bytes the whole-document pass actually consumes: decrypted and
+    /// header-normalized exactly as [`extract_pdf_text`] prepares them.
+    fn preprocessed_pdf_bytes(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+        let plain = open_with_empty_password(bytes).expect("opens");
+        match normalize_pdf_header(&plain) {
+            Some(normalized) => std::borrow::Cow::Owned(normalized),
+            None => plain,
+        }
+    }
+
+    /// T4: the progress pass must not move one byte of the persisted text —
+    /// same input, same output as `pdf_extract::extract_text_from_mem`, hook
+    /// or no hook. The fixtures cover the multi-page and encrypted shapes.
+    #[test]
+    fn the_progress_pass_matches_pdf_extract_byte_for_byte() {
+        let multi = text_pdf_pages(4);
+        for (name, raw) in [
+            ("owner", OWNER_PASSWORD_PDF.to_vec()),
+            ("rc4", RC4_EMPTY_USER_TEXT_PDF.to_vec()),
+            ("aes", AES_EMPTY_USER_TEXT_PDF.to_vec()),
+            ("inline-image", RC4_40_INLINE_IMAGE_TEXT_PDF.to_vec()),
+            ("multi-page", multi),
+        ] {
+            let plain = preprocessed_pdf_bytes(&raw);
+            let expected = pdf_extract::extract_text_from_mem(&plain)
+                .unwrap_or_else(|error| panic!("{name}: pdf-extract failed: {error}"));
+            let mut pages: Vec<(i64, i64)> = Vec::new();
+            let outcome = extract_text_from_mem_reported(
+                &plain,
+                None,
+                Some(&mut |done: i64, total: i64| pages.push((done, total))),
+            );
+            let text = match outcome {
+                ExtractPassOutcome::Text(text) => text,
+                other => panic!("{name}: the progress pass failed: {other:?}"),
+            };
+            assert_eq!(text, expected, "{name}: the text must stay byte-identical");
+        }
+    }
+
+    #[test]
+    fn the_progress_pass_reports_one_unit_per_page() {
+        let pdf = text_pdf_pages(4);
+        let mut pages: Vec<(i64, i64)> = Vec::new();
+        let outcome = extract_text_from_mem_reported(
+            &pdf,
+            None,
+            Some(&mut |done: i64, total: i64| pages.push((done, total))),
+        );
+
+        assert!(matches!(outcome, ExtractPassOutcome::Text(_)));
+        assert_eq!(pages, vec![(1, 4), (2, 4), (3, 4), (4, 4)]);
+    }
+
+    #[test]
+    fn the_progress_pass_stops_on_cancel_at_the_next_page_boundary() {
+        let pdf = text_pdf_pages(4);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut pages: Vec<i64> = Vec::new();
+        let outcome = extract_text_from_mem_reported(
+            &pdf,
+            Some(&cancel),
+            Some(&mut |done: i64, _total: i64| {
+                pages.push(done);
+                if done == 1 {
+                    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }),
+        );
+
+        assert!(
+            matches!(&outcome, ExtractPassOutcome::Cancelled),
+            "the flag set inside the pass stops it: {outcome:?}"
+        );
+        assert_eq!(
+            pages,
+            vec![1],
+            "the pass stops at the first page boundary after the flag: {pages:?}"
+        );
+    }
+
+    #[test]
+    fn the_progress_pass_contains_the_parser_panic_like_the_plain_path() {
+        let outcome = extract_text_from_mem_reported(TYPE4_TINT_PDF, None, None);
+
+        assert!(
+            matches!(outcome, ExtractPassOutcome::Panicked),
+            "a parser panic must not cross the boundary"
+        );
     }
 
     #[test]

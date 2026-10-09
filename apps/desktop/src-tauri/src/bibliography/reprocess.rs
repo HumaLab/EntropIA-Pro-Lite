@@ -300,11 +300,12 @@ pub fn plan_reprocess_for_attachment(
 
 /// [`plan_reprocess_for_attachment`] with the preview's cancellation flag
 /// and an optional unit-progress callback: the flag is checked between page
-/// batches inside the shared basis reader
+/// batches and between the whole-document extract's pages inside the shared
+/// basis reader
 /// ([`crate::bibliography::processing::read_native_extraction_basis_with_cancel`]),
 /// and `on_units`, when there is one, reports the read's work units as
-/// `(units_done, units_total)` with `units_total = 2 × pages + 1` (one per
-/// lopdf page, one per PDFium batch, one for the whole-document extract).
+/// `(units_done, units_total)` with `units_total = 3 × pages` (one per lopdf
+/// page, one per PDFium batch page, one per whole-document extract page).
 /// The reader is called with NO app handle on purpose: the preview and the
 /// executor must resolve the SAME decoder or their plan hashes would drift
 /// (the resolver caches process-wide, so both sides see one answer).
@@ -846,14 +847,15 @@ pub fn reset_reprocess_preview_cancel() {
     PREVIEW_CANCEL.store(false, Ordering::SeqCst);
 }
 
-/// Stops the running preview between attachments or page batches.
+/// Stops the running preview between attachments, page batches or extract
+/// pages.
 pub fn cancel_reprocess_preview() {
     PREVIEW_CANCEL.store(true, Ordering::SeqCst);
 }
 
 /// One preview progress report: the attachment counter plus the work units
 /// inside the attachment being read. `units_done`/`units_total` describe
-/// ONLY the attachment named by `done` (`2 × pages + 1` units, see
+/// ONLY the attachment named by `done` (`3 × pages` units, see
 /// [`plan_reprocess_for_attachment_cancellable`]) and reset to 0 at every
 /// attachment boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -872,7 +874,7 @@ pub struct PreviewProgress {
 /// attachment boundary (`units_*` reset to 0), after every work unit of the
 /// attachment being read, and after each finished attachment; `cancel` is
 /// checked between attachments and, inside the shared reader, between page
-/// batches.
+/// batches and between the extract's pages.
 pub fn run_reprocess_preview(
     conn: &Connection,
     attachment_ids: &[String],
