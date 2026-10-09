@@ -23,6 +23,7 @@ use entropia_desktop_lib::bibliography::reprocess::{
     REASON_EMPTY_WITHOUT_OCR, REASON_FAILED_OCR_ATTEMPT, REASON_GARBLED_STORED_PAGES,
     UNREADABLE_FILE_MISSING,
 };
+use entropia_desktop_lib::processing::recovery::run_checkpoint_cleanup;
 use entropia_desktop_lib::processing::repository::{self as processing_repository, TaskSubject};
 use lopdf::{dictionary, Document, Object, Stream};
 
@@ -2080,6 +2081,105 @@ fn cancelling_and_reconfirming_the_same_plan_never_resends_the_paid_page() {
         first.calls() + second.calls(),
         plan.ocr_pages.len() as usize,
         "one approved plan costs at most its page count, even across a cancel"
+    );
+}
+
+/// JD8-B-002 round 2 (2.3 "Garantía de costo"): the STARTUP checkpoint GC
+/// (`run_checkpoint_cleanup`, what every app restart runs first) must not
+/// undo the paid-page retention. The page the owner paid before cancelling
+/// a plan survives the restart, so re-confirming the SAME plan after it
+/// never re-sends the page and the plan still costs at most
+/// `plan.ocr_pages` in total.
+#[test]
+fn the_restart_checkpoint_gc_keeps_the_paid_pages_of_a_cancelled_plan() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B4GC00001", "Z obra con reinicio");
+    let sparse: &[(f32, f32, &str)] = &[(72.0, 700.0, "hi")];
+    let pdf = make_text_pdf_pages(&[sparse, sparse]);
+    let path = write_pdf(&dir, "reinicio.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "B4GCATT01",
+        Some(&path),
+        "reinicio.pdf",
+    );
+    let attachment = attachment(&conn, &attachment_id);
+    let plan = plan_reprocess_for_attachment(&conn, &attachment, std::path::Path::new(&path), &pdf)
+        .expect("plan");
+    assert_eq!(plan.ocr_pages, vec![1, 2]);
+
+    // Confirm, pay page 1, interrupt the run.
+    let response =
+        confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)]).expect("confirm");
+    let batch_id = response.batch_id.expect("queued");
+    let first_task = queued_reprocess_task(&conn, &attachment_id);
+    let task = processing_repository::claim_next(
+        &conn,
+        "b4-gc-session",
+        &["bibliography_extract"],
+        processing_repository::now_ms(),
+    )
+    .expect("claim")
+    .expect("claimable");
+    assert_eq!(task.task_id, first_task);
+    let stop = Arc::new(StopFlag::new());
+    let first = RecordingProvider::with_options(OCR_TEXT, [], None, Some((1, Arc::clone(&stop))));
+    let result = BibliographyExtractExecutor::with_selective_ocr(
+        Arc::new(RecordingRenderer::default()) as Arc<dyn PageRenderer>,
+        Arc::clone(&first) as Arc<dyn PageOcrProvider>,
+    )
+    .run(&ctx_of(&dir), &task, &stop);
+    assert!(
+        matches!(result.output, ExecOutput::Stopped),
+        "{:?}",
+        result.output
+    );
+    assert_eq!(first.calls(), 1, "one paid page before the interrupt");
+    assert_eq!(checkpoint_rows(&conn, &first_task), 1);
+    processing_repository::requeue_task(&conn, &task.task_id, task.lease_epoch).expect("requeue");
+
+    // The owner cancels the batch; the paid page survives the cancel.
+    processing_repository::control_batch(
+        &conn,
+        &batch_id,
+        processing_repository::BatchAction::Cancel,
+        None,
+    )
+    .expect("cancel");
+    assert_eq!(task_state(&conn, &first_task).0, "cancelled");
+
+    // The restart: the archive's connections close and the startup
+    // checkpoint GC runs over the file.
+    drop(conn);
+    let db_path = dir.path().join("entropia.sqlite");
+    run_checkpoint_cleanup(&db_path).expect("restart checkpoint GC");
+    let conn = entropia_desktop_lib::db_open_for_tests(&db_path);
+    assert_eq!(
+        checkpoint_rows(&conn, &first_task),
+        1,
+        "the paid page survives the restart GC"
+    );
+
+    // Re-confirming the SAME plan adopts the paid page: only page 2 reaches
+    // the provider.
+    let response = confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)])
+        .expect("confirm the same plan again");
+    assert!(response.batch_id.is_some());
+    let renderer = Arc::new(RecordingRenderer::default());
+    let second = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &second);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(second.calls(), 1, "the adopted checkpoint is never re-paid");
+    assert!(
+        first.calls() + second.calls() <= plan.ocr_pages.len(),
+        "the plan costs at most its page count across a restart: {} + {} > {}",
+        first.calls(),
+        second.calls(),
+        plan.ocr_pages.len()
     );
 }
 

@@ -5048,6 +5048,15 @@ pub fn save_checkpoint(
 /// States after which a task never resumes: its checkpoints have no reader.
 const TERMINAL_STATES_SQL: &str = "'succeeded', 'failed', 'cancelled', 'skipped'";
 
+/// Terminal tasks whose checkpoints are KEPT by every sweep (JD8-B-002): a
+/// `bibliography_extract` in `failed` or `cancelled` still owns paid provider
+/// pages — its checkpoints are what the owner's re-confirm of the SAME plan
+/// adopts ([`adopt_reprocess_checkpoints`]) or what `processing_retry` resumes
+/// from, so dropping them after a restart would silently re-bill pages the
+/// user already paid for. Must be qualified with the `t` alias.
+const PAID_EXTRACTION_RETENTION_SQL: &str =
+    "t.kind = 'bibliography_extract' AND t.state IN ('failed', 'cancelled')";
+
 /// Result of one retention sweep over terminal tasks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CheckpointPurge {
@@ -5166,6 +5175,15 @@ fn in_savepoint<T>(
 /// lock for long. Only terminal tasks (`succeeded`, `failed`, `cancelled`,
 /// `skipped`) and checkpoints whose task row no longer exists are touched:
 /// everything a resume can still read stays.
+///
+/// The paid pages of a `bibliography_extract` in `failed` or `cancelled` are
+/// kept across the sweep (JD8-B-002): they are provider work the owner
+/// already paid for, waiting for the owner's re-confirm of the SAME plan or
+/// for `processing_retry`, so a startup sweep that dropped them would make a
+/// restart silently re-bill every paid page. A succeeded or skipped
+/// extraction has published its text and needs no reader anymore, so it is
+/// purged like every other terminal task, as are orphaned rows (checkpoints
+/// whose task row is gone) and every other kind exactly as before.
 pub fn purge_terminal_checkpoints(
     conn: &Connection,
     tasks_per_batch: usize,
@@ -5179,7 +5197,9 @@ pub fn purge_terminal_checkpoints(
                 "SELECT DISTINCT c.task_id
                  FROM processing_checkpoints c
                  LEFT JOIN processing_tasks t ON t.id = c.task_id
-                 WHERE t.id IS NULL OR t.state IN ({TERMINAL_STATES_SQL})
+                 WHERE t.id IS NULL
+                    OR (t.state IN ({TERMINAL_STATES_SQL})
+                        AND NOT ({PAID_EXTRACTION_RETENTION_SQL}))
                  LIMIT ?1"
             ))
             .map_err(|e| format!("Failed to scan terminal checkpoints: {e}"))?
@@ -5197,12 +5217,15 @@ pub fn purge_terminal_checkpoints(
             let mut bytes = 0_i64;
             for id in &ids {
                 // Re-check under the write lock: the task may have been
-                // reopened (retry) between the scan and now.
+                // reopened (retry) — or settled into a paid extraction the
+                // sweep keeps — between the scan and now.
                 let still_dead: bool = conn
                     .query_row(
                         &format!(
-                            "SELECT NOT EXISTS (SELECT 1 FROM processing_tasks
-                                                WHERE id = ?1 AND state NOT IN ({TERMINAL_STATES_SQL}))"
+                            "SELECT NOT EXISTS (SELECT 1 FROM processing_tasks t
+                                                WHERE t.id = ?1
+                                                  AND (t.state NOT IN ({TERMINAL_STATES_SQL})
+                                                       OR ({PAID_EXTRACTION_RETENTION_SQL})))"
                         ),
                         [id],
                         |row| row.get(0),
@@ -10197,6 +10220,50 @@ mod tests {
         let again = purge_terminal_checkpoints(&conn, 2, std::time::Duration::ZERO).unwrap();
         assert_eq!(again, CheckpointPurge::default());
     }
+
+    /// JD8-B-002 round 2: the startup sweep must not undo the paid-page
+    /// retention. The checkpoints of a `bibliography_extract` in `failed` or
+    /// `cancelled` are paid provider pages waiting for the owner's re-confirm
+    /// ([`adopt_reprocess_checkpoints`]) or `processing_retry`, so a restart
+    /// keeps them; a succeeded extraction, a failed corpus task and orphan
+    /// rows are still purged exactly as before.
+    #[test]
+    fn startup_purge_keeps_the_paid_pages_of_failed_and_cancelled_extractions() {
+        let (_dir, conn) = batch_db();
+        for (id, kind, state) in [
+            ("paid-failed", "bibliography_extract", "failed"),
+            ("paid-cancelled", "bibliography_extract", "cancelled"),
+            ("done-extract", "bibliography_extract", "succeeded"),
+            ("failed-ocr", "ocr", "failed"),
+        ] {
+            conn.execute(
+                "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, subject_id, state, created_at, updated_at)
+                 VALUES (?1, ?2, ?1, ?1, ?3, 1, 1)",
+                rusqlite::params![id, kind, state],
+            )
+            .unwrap();
+            seed_checkpoint(&conn, id, 1_000);
+        }
+
+        let purge = purge_terminal_checkpoints(&conn, 8, std::time::Duration::ZERO).unwrap();
+        assert_eq!(purge.rows, 2, "succeeded extraction + failed ocr");
+        assert_eq!(purge.bytes, 2_000);
+        let left: Vec<String> = conn
+            .prepare("SELECT task_id FROM processing_checkpoints ORDER BY task_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(left, vec!["paid-cancelled", "paid-failed"]);
+        let again = purge_terminal_checkpoints(&conn, 8, std::time::Duration::ZERO).unwrap();
+        assert_eq!(
+            again,
+            CheckpointPurge::default(),
+            "a second start leaves the paid pages alone"
+        );
+    }
+
     #[test]
     fn free_pages_return_to_the_os_only_with_incremental_auto_vacuum() {
         let dir = tempfile::tempdir().expect("tempdir");

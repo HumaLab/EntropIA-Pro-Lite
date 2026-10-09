@@ -89,3 +89,10 @@ Branch `feat/native-text-reprocess`, worktree
   bibliography_processing 166, bibliography_reprocess 23, acl 6, dialog 7 passed; clippy, fmt, typecheck
   (both variants), lint and format:check clean. Plan 2.3 amended (automatic admission no longer joins a
   live reprocess; cost guarantee covers cancel and re-confirm).
+- 2026-10-09: JD8 scoped re-judgment: judge B resolved all but B-002 (the startup GC
+  `purge_terminal_checkpoints` erased the paid pages of failed/cancelled extractions on restart); judge A
+  marked A-001 a regression twice without proof, none found by the parent; owner accepted A-001 as resolved.
+  Round 2 (last): the startup purge keeps `bibliography_extract` checkpoints in `failed`/`cancelled`. RED on
+  the unit and the restart integration test; lib 2426, bibliography_processing 166, bibliography_reprocess
+  24 passed; clippy and fmt clean. Retained checkpoints of a failed task stay until it is retried (bounded
+  page text).
