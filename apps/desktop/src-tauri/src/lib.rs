@@ -2237,6 +2237,14 @@ fn migrate_extractions_method_check(conn: &Connection) -> Result<(), String> {
 }
 
 fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
+    // `layouts.asset_id` references `assets`, which only the store migrations create. Until
+    // they have run, store migration 0020 owns `layouts`; touching it here would leave a
+    // table whose writes fail with `no such table: main.assets` while foreign keys are on.
+    if !table_exists(conn, "assets") {
+        eprintln!("[setup] assets table not found — leaving layouts to the store migrations");
+        return Ok(());
+    }
+
     let has_layouts_table: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='layouts' LIMIT 1",
@@ -2333,6 +2341,54 @@ fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fk_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn
+    }
+
+    #[test]
+    fn ensure_layouts_schema_waits_for_the_store_to_create_assets() {
+        let conn = fk_connection();
+
+        ensure_layouts_schema(&conn).unwrap();
+
+        assert!(!table_exists(&conn, "layouts"));
+    }
+
+    #[test]
+    fn ensure_layouts_schema_survives_a_half_bootstrapped_archive() {
+        // A previous launch created `layouts` but the store never created `assets`.
+        let conn = fk_connection();
+        conn.execute_batch(
+            "CREATE TABLE layouts (
+                id TEXT PRIMARY KEY,
+                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+                regions TEXT NOT NULL,
+                blocks TEXT NOT NULL,
+                model TEXT NOT NULL,
+                image_width INTEGER NOT NULL,
+                image_height INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        ensure_layouts_schema(&conn).unwrap();
+    }
+
+    #[test]
+    fn ensure_layouts_schema_creates_layouts_once_assets_exists() {
+        let conn = fk_connection();
+        conn.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        ensure_layouts_schema(&conn).unwrap();
+        ensure_layouts_schema(&conn).unwrap();
+
+        assert!(table_exists(&conn, "layouts"));
+    }
 
     #[test]
     fn product_name_matches_the_variant_tauri_config() {
