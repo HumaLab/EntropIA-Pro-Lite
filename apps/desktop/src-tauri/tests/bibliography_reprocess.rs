@@ -11,18 +11,18 @@
 //!   cargo test --test bibliography_reprocess -- --ignored --nocapture
 //! ```
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use entropia_desktop_lib::bibliography::processing::read_native_extraction_basis_with_cancel;
 use entropia_desktop_lib::bibliography::repository::{
     upsert_attachment, upsert_connection, upsert_item, upsert_library, AttachmentInput,
     BibliographicItemInput, ExtractionRow, LibraryType, PageTextRow, SourceOrigin,
     UpsertConnection, UpsertLibrary,
 };
-use entropia_desktop_lib::bibliography::processing::read_native_extraction_basis_with_cancel;
 use entropia_desktop_lib::bibliography::reprocess::{
-    estimated_usd, reprocess_candidates, run_reprocess_preview, ReprocessCandidate,
-    REASON_EMPTY_WITHOUT_OCR, REASON_FAILED_OCR_ATTEMPT, REASON_GARBLED_STORED_PAGES,
-    UNREADABLE_FILE_MISSING,
+    estimated_usd, reprocess_candidates, reprocess_candidates_with, run_reprocess_preview,
+    ReprocessCandidate, CANDIDATES_CANCELLED, REASON_EMPTY_WITHOUT_OCR, REASON_FAILED_OCR_ATTEMPT,
+    REASON_GARBLED_STORED_PAGES, UNREADABLE_FILE_MISSING,
 };
 use entropia_desktop_lib::processing::recovery::run_checkpoint_cleanup;
 use entropia_desktop_lib::processing::repository::{self as processing_repository, TaskSubject};
@@ -727,6 +727,159 @@ fn a_successful_reprocess_with_failed_pages_stays_a_candidate() {
     );
 }
 
+/// The scan reports one `(done, total)` step after every checked attachment:
+/// the total is known from the first SELECT, the counter reaches it exactly
+/// and never goes backwards.
+#[test]
+fn candidates_scan_reports_progress_per_checked_attachment() {
+    let (dir, mut conn) = migrated_db();
+    let garbled_item = seed_item(&mut conn, "PROG00001", "A obra con dano");
+    let garbled_path = write_pdf(
+        &dir,
+        "prog-garbled.pdf",
+        &make_text_pdf_pages(&[&[(72.0, 700.0, CLEAN)]]),
+    );
+    let garbled = seed_attachment(
+        &mut conn,
+        &garbled_item,
+        "PROGATT1",
+        Some(&garbled_path),
+        "prog-garbled.pdf",
+    );
+    plant_extraction(&conn, &garbled, &garbled_item, "rich", Some(TEST_MTIME), 10);
+    plant_page(&conn, &garbled, 1, "native", "rich", GARBLED);
+    for index in 0..2 {
+        let item_id = seed_item(
+            &mut conn,
+            &format!("PROGC{index:03}"),
+            &format!("B obra limpia {index}"),
+        );
+        let path = write_pdf(
+            &dir,
+            &format!("prog-clean-{index}.pdf"),
+            &make_text_pdf_pages(&[&[(72.0, 700.0, CLEAN)]]),
+        );
+        let attachment_id = seed_attachment(
+            &mut conn,
+            &item_id,
+            &format!("PROGCAT{index}"),
+            Some(&path),
+            &format!("prog-clean-{index}.pdf"),
+        );
+        plant_extraction(
+            &conn,
+            &attachment_id,
+            &item_id,
+            "rich",
+            Some(TEST_MTIME),
+            10,
+        );
+        plant_page(&conn, &attachment_id, 1, "native", "rich", CLEAN);
+    }
+
+    let reports = std::cell::RefCell::new(Vec::new());
+    let candidates = reprocess_candidates_with(&conn, &AtomicBool::new(false), |done, total| {
+        reports.borrow_mut().push((done, total));
+    })
+    .expect("scan");
+    let reports = reports.into_inner();
+
+    assert!(
+        candidate_for(&candidates, &garbled).is_some(),
+        "the garbled attachment is still listed: {candidates:?}"
+    );
+    assert_eq!(
+        reports.len(),
+        3,
+        "one report per checked attachment: {reports:?}"
+    );
+    assert!(
+        reports.iter().all(|&(_, total)| total == 3),
+        "the total is known up front: {reports:?}"
+    );
+    assert_eq!(
+        reports.last().copied(),
+        Some((3, 3)),
+        "the counter reaches the total: {reports:?}"
+    );
+    assert!(
+        reports.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "done never goes backwards: {reports:?}"
+    );
+}
+
+/// The cancel flag stops the scan between attachments and answers the
+/// cancelled outcome: a flag set before the first attachment checks nothing,
+/// a flag set from inside the callback after the first report stops there.
+#[test]
+fn candidates_scan_stops_on_the_cancel_flag_with_the_cancelled_outcome() {
+    let (dir, mut conn) = migrated_db();
+    for index in 0..3 {
+        let item_id = seed_item(
+            &mut conn,
+            &format!("STOP{index:04}"),
+            &format!("C obra {index}"),
+        );
+        let path = write_pdf(
+            &dir,
+            &format!("stop-{index}.pdf"),
+            &make_text_pdf_pages(&[&[(72.0, 700.0, GARBLED)]]),
+        );
+        let attachment_id = seed_attachment(
+            &mut conn,
+            &item_id,
+            &format!("STOPATT{index}"),
+            Some(&path),
+            &format!("stop-{index}.pdf"),
+        );
+        plant_extraction(
+            &conn,
+            &attachment_id,
+            &item_id,
+            "rich",
+            Some(TEST_MTIME),
+            10,
+        );
+        plant_page(&conn, &attachment_id, 1, "native", "rich", GARBLED);
+    }
+
+    let pre_set = AtomicBool::new(true);
+    let reports = std::cell::RefCell::new(Vec::new());
+    let outcome = reprocess_candidates_with(&conn, &pre_set, |done, total| {
+        reports.borrow_mut().push((done, total));
+    });
+    assert_eq!(
+        outcome.unwrap_err(),
+        CANDIDATES_CANCELLED,
+        "a pre-set flag answers the cancelled outcome"
+    );
+    assert!(
+        reports.into_inner().is_empty(),
+        "nothing is checked past a set flag"
+    );
+
+    let cancel = AtomicBool::new(false);
+    let reports = std::cell::RefCell::new(Vec::new());
+    let outcome = {
+        let reports = &reports;
+        reprocess_candidates_with(&conn, &cancel, |done, total| {
+            reports.borrow_mut().push((done, total));
+            // Fire once the first report lands: the stop hits between rows.
+            cancel.store(true, Ordering::SeqCst);
+        })
+    };
+    assert_eq!(
+        outcome.unwrap_err(),
+        CANDIDATES_CANCELLED,
+        "a flag set mid-scan answers the cancelled outcome"
+    );
+    assert_eq!(
+        reports.into_inner(),
+        vec![(1, 3)],
+        "exactly one attachment is checked before the stop"
+    );
+}
+
 // ── Preview (2.3 "Comandos nuevos" 2) ──────────────────────────────────────
 
 /// A three-page synthetic PDF: page 1 rich and clean (its STORED row is
@@ -773,16 +926,22 @@ fn preview_totals_count_ocr_reused_and_fixed_pages() {
 
     let units_total = 2 * 3 + 1;
     assert_eq!(
-        progress
-            .first()
-            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        progress.first().map(|update| (
+            update.done,
+            update.total,
+            update.units_done,
+            update.units_total
+        )),
         Some((1, 1, 0, 0)),
         "the unit counter resets at the attachment boundary"
     );
     assert_eq!(
-        progress
-            .last()
-            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        progress.last().map(|update| (
+            update.done,
+            update.total,
+            update.units_done,
+            update.units_total
+        )),
         Some((1, 1, units_total, units_total)),
         "progress ends at the attachment's full unit count"
     );
@@ -842,24 +1001,16 @@ fn preview_marks_attachments_with_a_live_task_busy() {
     let task_id = admit_extract_task(&conn, &attachment_id);
 
     let cancel = AtomicBool::new(false);
-    let preview = run_reprocess_preview(
-        &conn,
-        std::slice::from_ref(&attachment_id),
-        &cancel,
-        |_| {},
-    )
-    .expect("preview");
+    let preview =
+        run_reprocess_preview(&conn, std::slice::from_ref(&attachment_id), &cancel, |_| {})
+            .expect("preview");
     assert!(preview.attachments[0].busy, "a pending task is a live task");
     assert!(preview.attachments[0].unreadable.is_none());
 
     settle_task(&conn, &task_id, "succeeded", None);
-    let preview = run_reprocess_preview(
-        &conn,
-        std::slice::from_ref(&attachment_id),
-        &cancel,
-        |_| {},
-    )
-    .expect("preview");
+    let preview =
+        run_reprocess_preview(&conn, std::slice::from_ref(&attachment_id), &cancel, |_| {})
+            .expect("preview");
     assert!(
         !preview.attachments[0].busy,
         "a settled task is not a live task"
@@ -881,13 +1032,9 @@ fn preview_reports_a_missing_file_unreadable() {
     );
 
     let cancel = AtomicBool::new(false);
-    let preview = run_reprocess_preview(
-        &conn,
-        std::slice::from_ref(&attachment_id),
-        &cancel,
-        |_| {},
-    )
-    .expect("preview");
+    let preview =
+        run_reprocess_preview(&conn, std::slice::from_ref(&attachment_id), &cancel, |_| {})
+            .expect("preview");
     let entry = &preview.attachments[0];
     assert_eq!(entry.unreadable.as_deref(), Some(UNREADABLE_FILE_MISSING));
     assert!(
@@ -930,9 +1077,12 @@ fn preview_reports_work_units_inside_the_current_attachment() {
     assert!(!preview.cancelled);
     let units_total = 2 * 3 + 1;
     assert_eq!(
-        progress
-            .first()
-            .map(|update| (update.done, update.total, update.units_done, update.units_total)),
+        progress.first().map(|update| (
+            update.done,
+            update.total,
+            update.units_done,
+            update.units_total
+        )),
         Some((1, 1, 0, 0)),
         "the unit counter resets at the attachment boundary"
     );
@@ -1045,9 +1195,7 @@ fn preview_cancel_stops_mid_attachment_between_pages() {
         "the stop happened mid-read: {progress:?}"
     );
     assert!(
-        progress
-            .iter()
-            .all(|update| update.units_done < 2 * 3 + 1),
+        progress.iter().all(|update| update.units_done < 2 * 3 + 1),
         "the read never finished its units: {progress:?}"
     );
 }

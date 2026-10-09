@@ -397,12 +397,63 @@ pub struct ReprocessCandidate {
     pub flagged_pages: i64,
 }
 
+/// The scan's cancelled outcome: [`reprocess_candidates_with`] answers
+/// `Err(CANDIDATES_CANCELLED)` when the cancel flag stops it — the same
+/// meaning as the preview's typed `cancelled: true`, a user stop that is
+/// never a failure to render. The UI drops it silently: its dialog is
+/// already closed when the flag fires.
+pub const CANDIDATES_CANCELLED: &str = "cancelled";
+
+/// The candidate scan's cancellation flag, process-wide:
+/// `bibliography_reprocess_candidates_cancel` sets it, every new scan call
+/// resets it (`reset_reprocess_candidates_cancel`).
+static CANDIDATES_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// The flag the candidates command checks and the cancel command sets.
+pub fn candidates_cancel_flag() -> &'static AtomicBool {
+    &CANDIDATES_CANCEL
+}
+
+/// A new scan call resets the flag (same contract as the preview's:
+/// a fresh scan always starts uncancelled).
+pub fn reset_reprocess_candidates_cancel() {
+    CANDIDATES_CANCEL.store(false, Ordering::SeqCst);
+}
+
+/// Stops the running scan between attachments.
+pub fn cancel_reprocess_candidates() {
+    CANDIDATES_CANCEL.store(true, Ordering::SeqCst);
+}
+
+/// One candidates scan progress report: the attachments checked / total
+/// counter the dialog shows while the scan runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidatesProgress {
+    /// The attachment just checked, 1-based; `total` once the scan is over.
+    pub done: i64,
+    pub total: i64,
+}
+
 /// The read-only, cheap candidate scan (2.3 "Comandos nuevos" 1): PDF
 /// attachments whose stored text needs the owner's repair action, ordered by
 /// work title. No file contents are read; the file length behind the
 /// "already reprocessed" exclusion is the stored extraction identity (see
 /// [`current_file_identity`]).
 pub fn reprocess_candidates(conn: &Connection) -> Result<Vec<ReprocessCandidate>, String> {
+    reprocess_candidates_with(conn, &AtomicBool::new(false), |_, _| {})
+}
+
+/// [`reprocess_candidates`] with the scan's cancellation flag and a
+/// per-attachment progress callback: `on_progress(done, total)` reports
+/// after every checked attachment (`total` is the row count of the first
+/// SELECT, known before any row is checked) and `cancel` is checked between
+/// attachments; a set flag stops the scan with [`CANDIDATES_CANCELLED`].
+pub fn reprocess_candidates_with(
+    conn: &Connection,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(i64, i64),
+) -> Result<Vec<ReprocessCandidate>, String> {
     // ONE pass over the extraction tasks: the real archive carries tens of
     // thousands of task rows and no terminal-state index, so per-attachment
     // lookups would full-scan the table once per attachment (measured on the
@@ -430,75 +481,108 @@ pub fn reprocess_candidates(conn: &Connection) -> Result<Vec<ReprocessCandidate>
                 row.get::<_, Option<String>>(6)?,
             ))
         })
+        .map_err(|error| format!("Failed to list PDF attachments: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Failed to list PDF attachments: {error}"))?;
+    // The total is known before the first row is checked, so every report
+    // carries a real denominator.
+    let total = rows.len() as i64;
     let mut out = Vec::new();
-    for row in rows {
-        let (attachment_id, item_id, content_type, filename, mtime, title, extraction_quality) =
-            row.map_err(|error| format!("Failed to list PDF attachments: {error}"))?;
-        if !is_pdf_attachment(content_type.as_deref(), filename.as_deref()) {
-            continue;
+    for (index, row) in rows.into_iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(CANDIDATES_CANCELLED.to_string());
         }
-        // (a): scan the STORED page texts — no file is read — for text the
-        // detectors flag after markup conversion, and note `empty` rows for
-        // (b). The scan streams one attachment at a time.
-        let mut flagged_pages: i64 = 0;
-        let mut any_empty_page = false;
-        {
-            let mut pages = conn
-                .prepare(
-                    "SELECT quality, text_content FROM bibliographic_page_texts
-                     WHERE attachment_id = ?1 ORDER BY page_number",
-                )
-                .map_err(|error| format!("Failed to read stored pages: {error}"))?;
-            let pages = pages
-                .query_map([&attachment_id], |page| {
-                    Ok((page.get::<_, String>(0)?, page.get::<_, String>(1)?))
-                })
-                .map_err(|error| format!("Failed to read stored pages: {error}"))?;
-            for page in pages {
-                let (quality, text_content) =
-                    page.map_err(|error| format!("Failed to read stored pages: {error}"))?;
-                if quality == "empty" {
-                    any_empty_page = true;
-                }
-                let converted = ocr_markup_to_text(&text_content);
-                if is_garbled_bibliography_text(&converted) || is_garbled_text(&converted) {
-                    flagged_pages += 1;
-                }
-            }
+        if let Some(candidate) = candidate_from_row(conn, &tasks, row)? {
+            out.push(candidate);
         }
-        let mut reasons: Vec<&str> = Vec::new();
-        if flagged_pages > 0 {
-            reasons.push(REASON_GARBLED_STORED_PAGES);
-        }
-        if (extraction_quality.as_deref() == Some("empty") || any_empty_page)
-            && !tasks.succeeded_ocr_attempted(&attachment_id, mtime)
-        {
-            reasons.push(REASON_EMPTY_WITHOUT_OCR);
-        }
-        if tasks.terminal_ocr_attempt(&attachment_id, mtime) {
-            reasons.push(REASON_FAILED_OCR_ATTEMPT);
-        }
-        if reasons.is_empty() {
-            continue;
-        }
-        // 2.4: a COMPLETE successful reprocess of this exact file at the
-        // current detector version has already repaired it — once is enough.
-        // A repair with failed pages is not complete (JD8-B-001).
-        let identity = current_file_identity(conn, &attachment_id, mtime)?;
-        if tasks.reprocessed_current_file(&attachment_id, identity) {
-            continue;
-        }
-        out.push(ReprocessCandidate {
-            attachment_id,
-            item_id,
-            title,
-            filename,
-            reasons: reasons.into_iter().map(String::from).collect(),
-            flagged_pages,
-        });
+        on_progress(index as i64 + 1, total);
     }
     Ok(out)
+}
+
+/// One attachment row as the candidate scan's first SELECT reads it: the
+/// attachment identity plus the joined work title and extraction quality.
+type CandidateScanRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    String,
+    Option<String>,
+);
+
+/// One attachment row's candidate decision: the stored-page scan of rule
+/// (a) plus the reason rules and the 2.4 exclusion. `None` when the
+/// attachment needs no repair action.
+fn candidate_from_row(
+    conn: &Connection,
+    tasks: &ExtractTaskIndex,
+    row: CandidateScanRow,
+) -> Result<Option<ReprocessCandidate>, String> {
+    let (attachment_id, item_id, content_type, filename, mtime, title, extraction_quality) = row;
+    if !is_pdf_attachment(content_type.as_deref(), filename.as_deref()) {
+        return Ok(None);
+    }
+    // (a): scan the STORED page texts — no file is read — for text the
+    // detectors flag after markup conversion, and note `empty` rows for
+    // (b). The scan streams one attachment at a time.
+    let mut flagged_pages: i64 = 0;
+    let mut any_empty_page = false;
+    {
+        let mut pages = conn
+            .prepare(
+                "SELECT quality, text_content FROM bibliographic_page_texts
+                     WHERE attachment_id = ?1 ORDER BY page_number",
+            )
+            .map_err(|error| format!("Failed to read stored pages: {error}"))?;
+        let pages = pages
+            .query_map([&attachment_id], |page| {
+                Ok((page.get::<_, String>(0)?, page.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Failed to read stored pages: {error}"))?;
+        for page in pages {
+            let (quality, text_content) =
+                page.map_err(|error| format!("Failed to read stored pages: {error}"))?;
+            if quality == "empty" {
+                any_empty_page = true;
+            }
+            let converted = ocr_markup_to_text(&text_content);
+            if is_garbled_bibliography_text(&converted) || is_garbled_text(&converted) {
+                flagged_pages += 1;
+            }
+        }
+    }
+    let mut reasons: Vec<&str> = Vec::new();
+    if flagged_pages > 0 {
+        reasons.push(REASON_GARBLED_STORED_PAGES);
+    }
+    if (extraction_quality.as_deref() == Some("empty") || any_empty_page)
+        && !tasks.succeeded_ocr_attempted(&attachment_id, mtime)
+    {
+        reasons.push(REASON_EMPTY_WITHOUT_OCR);
+    }
+    if tasks.terminal_ocr_attempt(&attachment_id, mtime) {
+        reasons.push(REASON_FAILED_OCR_ATTEMPT);
+    }
+    if reasons.is_empty() {
+        return Ok(None);
+    }
+    // 2.4: a COMPLETE successful reprocess of this exact file at the
+    // current detector version has already repaired it — once is enough.
+    // A repair with failed pages is not complete (JD8-B-001).
+    let identity = current_file_identity(conn, &attachment_id, mtime)?;
+    if tasks.reprocessed_current_file(&attachment_id, identity) {
+        return Ok(None);
+    }
+    Ok(Some(ReprocessCandidate {
+        attachment_id,
+        item_id,
+        title,
+        filename,
+        reasons: reasons.into_iter().map(String::from).collect(),
+        flagged_pages,
+    }))
 }
 
 /// One `bibliography_extract` task row as the candidate scan reads it.

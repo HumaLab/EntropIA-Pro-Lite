@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import {
   bibliographyReprocessCandidates,
+  bibliographyReprocessCandidatesCancel,
   bibliographyReprocessConfirm,
   bibliographyReprocessPreview,
   bibliographyReprocessPreviewCancel,
   formatEstimatedUsd,
   isPdfAttachment,
+  onBibliographyReprocessCandidatesProgress,
   onBibliographyReprocessPreviewProgress,
   previewUnitPercent,
+  REPROCESS_CANDIDATES_PROGRESS_EVENT,
   REPROCESS_PREVIEW_PROGRESS_EVENT,
+  type ReprocessCandidatesProgress,
   type ReprocessPreviewProgress,
 } from './bibliography-reprocess'
 
@@ -59,6 +63,30 @@ describe('bibliography reprocess wrappers', () => {
   it('cancels the running preview', async () => {
     await bibliographyReprocessPreviewCancel()
     expect(mockInvoke).toHaveBeenCalledWith('bibliography_reprocess_preview_cancel')
+  })
+
+  it('cancels the running candidates scan', async () => {
+    await bibliographyReprocessCandidatesCancel()
+    expect(mockInvoke).toHaveBeenCalledWith('bibliography_reprocess_candidates_cancel')
+  })
+
+  it('subscribes to the candidates progress event and passes its payload on', async () => {
+    const handler = vi.fn()
+    const unlisten = vi.fn() as unknown as UnlistenFn
+    mockListen.mockResolvedValueOnce(unlisten)
+
+    const dispose = await onBibliographyReprocessCandidatesProgress(handler)
+
+    expect(mockListen).toHaveBeenCalledWith(
+      REPROCESS_CANDIDATES_PROGRESS_EVENT,
+      expect.any(Function)
+    )
+    const listener = mockListen.mock.calls[0]![1] as (event: {
+      payload: ReprocessCandidatesProgress
+    }) => void
+    listener({ payload: { done: 3, total: 12 } })
+    expect(handler).toHaveBeenCalledWith({ done: 3, total: 12 })
+    expect(dispose).toBe(unlisten)
   })
 
   it('confirms entries as exactly {attachmentId, planHash}', async () => {

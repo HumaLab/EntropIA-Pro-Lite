@@ -32,6 +32,11 @@ export function bibliographyReprocessCandidates(): Promise<ReprocessCandidate[]>
   return invoke<ReprocessCandidate[]>('bibliography_reprocess_candidates')
 }
 
+/** Stops the running candidates scan between attachments. */
+export function bibliographyReprocessCandidatesCancel(): Promise<void> {
+  return invoke<void>('bibliography_reprocess_candidates_cancel')
+}
+
 /** Why a previewed attachment cannot be read; stable machine strings. */
 export type ReprocessUnreadableReason =
   | 'attachment_missing'
@@ -115,6 +120,24 @@ export function bibliographyReprocessConfirm(
   entries: ReprocessConfirmEntry[]
 ): Promise<ReprocessConfirm> {
   return invoke<ReprocessConfirm>('bibliography_reprocess_confirm', { entries })
+}
+
+/** Candidates scan progress, as the backend reports it. */
+export interface ReprocessCandidatesProgress {
+  /** Attachments checked so far; `total` once every one is checked. */
+  done: number
+  total: number
+}
+
+export const REPROCESS_CANDIDATES_PROGRESS_EVENT = 'bibliography-reprocess-candidates-progress'
+
+/** Subscribes to the scan progress; dispose with the returned unlisten. */
+export function onBibliographyReprocessCandidatesProgress(
+  handler: (progress: ReprocessCandidatesProgress) => void
+): Promise<UnlistenFn> {
+  return listen<ReprocessCandidatesProgress>(REPROCESS_CANDIDATES_PROGRESS_EVENT, (event) =>
+    handler(event.payload)
+  )
 }
 
 /** Preview progress, as the backend reports it. */

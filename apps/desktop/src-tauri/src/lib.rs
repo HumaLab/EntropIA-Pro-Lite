@@ -1312,6 +1312,7 @@ pub fn run() {
             bibliography::commands::bibliography_work_detail,
             bibliography::commands::bibliography_open_work_attachment,
             bibliography::commands::bibliography_reprocess_candidates,
+            bibliography::commands::bibliography_reprocess_candidates_cancel,
             bibliography::commands::bibliography_reprocess_preview,
             bibliography::commands::bibliography_reprocess_preview_cancel,
             bibliography::commands::bibliography_reprocess_confirm,
