@@ -24,7 +24,7 @@ console); real paid reprocess (owner runs it).
   the extract counts as one unit and cannot be cancelled. Wrap pdf-extract's
   PlainTextOutput in a delegating OutputDev that reports end_page and stops on
   cancel; units become 3 x pages; extracted text must stay byte-identical.
-- [ ] T3 — Drive the dialog in tauri dev over CDP and confirm both behaviours
+- [x] T3 — Drive the dialog in tauri dev over CDP and confirm both behaviours
   with screenshots; never click confirm.
 
 ## Evidence
@@ -52,3 +52,8 @@ console); real paid reprocess (owner runs it).
   bibliography_processing 167 passed, cargo test --lib 2441 passed, clippy
   -D warnings and fmt clean; byte-identity with pdf_extract::extract_text_from_mem
   proven on 5 fixtures + 2 synthetic multi-page PDFs.
+- T4 commit: 34ce17bc.
+- T3 (after T4, tauri dev over CDP, prueba-sync): Abulafia work mode climbs
+  0 -> 100 % in 318 s with at most 9 s between percent changes (was 124 s at
+  99 %); cancel at 70 % (inside the extract pass) closes the dialog and the
+  backend log stops (0 new lines in 20 s). Confirm never clicked.
