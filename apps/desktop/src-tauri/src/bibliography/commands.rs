@@ -632,3 +632,66 @@ pub async fn bibliography_open_work_attachment(
     })
     .await
 }
+
+// ── B3: explicit text reprocess (plan-texto-nativo-parte-b 2.3, 2.4) ───────
+//
+// Read-only end of the owner's repair action: the candidate list and the
+// preview (with progress and cancellation). Nothing here spends money — the
+// confirm command belongs to B4.
+
+/// The PDF attachments the "Reprocesar texto" action should consider: garbled
+/// stored pages, an `empty` extraction with no OCR answer for the current
+/// file, or one spent failed/cancelled OCR attempt on it (2.4's successful
+/// reprocess excludes). Ordered by work title; no file is read.
+#[tauri::command]
+pub async fn bibliography_reprocess_candidates(
+    db: State<'_, AppDbState>,
+) -> Result<Vec<crate::bibliography::reprocess::ReprocessCandidate>, String> {
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        crate::bibliography::reprocess::reprocess_candidates(&conn)
+    })
+    .await
+}
+
+/// The read-only reprocess preview over the given attachments: reads each
+/// PDF on a blocking thread (size-gated like the executor), plans through
+/// the shared planner and reports progress as
+/// `bibliography-reprocess-preview-progress` `{done, total}` after each
+/// attachment. Cancel with [`bibliography_reprocess_preview_cancel`]; a new
+/// preview resets the flag.
+#[tauri::command]
+pub async fn bibliography_reprocess_preview(
+    attachment_ids: Vec<String>,
+    app: tauri::AppHandle,
+    db: State<'_, AppDbState>,
+) -> Result<crate::bibliography::reprocess::ReprocessPreview, String> {
+    use tauri::Emitter;
+    crate::bibliography::reprocess::reset_reprocess_preview_cancel();
+    let db_path = db.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        crate::bibliography::reprocess::run_reprocess_preview(
+            &conn,
+            &attachment_ids,
+            crate::bibliography::reprocess::preview_cancel_flag(),
+            |done, total| {
+                let _ = app.emit(
+                    "bibliography-reprocess-preview-progress",
+                    serde_json::json!({ "done": done, "total": total }),
+                );
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("reprocess preview task failed: {error}"))?
+}
+
+/// Stops the running preview between attachments or page batches. The
+/// preview answers with `cancelled: true` and whatever it processed.
+#[tauri::command]
+pub async fn bibliography_reprocess_preview_cancel() -> Result<(), String> {
+    crate::bibliography::reprocess::cancel_reprocess_preview();
+    Ok(())
+}

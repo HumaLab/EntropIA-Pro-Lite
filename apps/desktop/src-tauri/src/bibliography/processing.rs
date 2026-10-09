@@ -2680,7 +2680,10 @@ pub fn extraction_quality(text: &str) -> &'static str {
     }
 }
 
-fn is_pdf_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool {
+/// Whether an attachment catalogs a PDF (content type or file extension).
+/// Shared with the reprocess planner (B3), which must refuse other formats
+/// exactly like the extractor does.
+pub fn is_pdf_attachment(content_type: Option<&str>, filename: Option<&str>) -> bool {
     let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
     if content_type.contains("pdf") {
         return true;
@@ -2751,6 +2754,123 @@ fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
         ocr_attempted: false,
         ocr_pages: 0,
     }
+}
+
+/// The pre-OCR basis of one PDF extraction: the decrypted bytes, the page
+/// count, the native page rows exactly as the part-A reader builds them and
+/// the `native_blank` candidacy basis. ONE code path behind the extraction
+/// executor and behind reprocess planning (`super::reprocess`): the B3
+/// preview and the B4 executor must see the same pages on the same bytes, or
+/// the recomputed plan hash would drift from the previewed one.
+pub struct NativeExtractionBasis {
+    /// The file bytes after the one decryption the pipeline performs (the
+    /// input itself when the file carries no real password).
+    pub bytes: Vec<u8>,
+    pub page_count: i64,
+    /// The native page rows the extraction would publish, before any OCR.
+    pub pages: Vec<ExtractPageText>,
+    /// The pre-part-A whole-document text `native_blank` is computed on.
+    pub legacy_text: String,
+    pub native_blank: bool,
+}
+
+/// Reads the pre-OCR basis of one PDF. See
+/// [`read_native_extraction_basis_with_cancel`].
+pub fn read_native_extraction_basis(
+    bytes: &[u8],
+    app: Option<&tauri::AppHandle>,
+) -> Result<NativeExtractionBasis, crate::processing::scheduler::ExecOutput> {
+    read_native_extraction_basis_with_cancel(bytes, app, None)
+}
+
+/// Reads the pre-OCR basis of one PDF, with the caller's cancellation flag
+/// checked between page batches when there is one (the reprocess preview may
+/// stop mid-file; the executor passes none and keeps its own stop contract).
+///
+/// A PDF with `/Encrypt` is only locked when it needs a real user
+/// password. Permissions-only protection (owner password, empty user
+/// password) is common on journal articles and opens freely, so it is
+/// decrypted once here and every later step — per-page text, the
+/// whole-document parser, page rendering for OCR — reads plain bytes.
+/// A genuinely locked file fails with unlock guidance, not with a
+/// complaint about damage: re-importing an unlocked copy mints fresh
+/// demand through the file-identity gate, so terminal is correct.
+///
+/// A1: the bundled Pdfium library resolves before the page reader,
+/// without ever touching the ML runtime (JD4-B-001). Where nothing is
+/// bundled the absence is logged and the reader falls back to lopdf. With
+/// no app handle (direct reads, reprocess planning) the reader's own last
+/// resort resolves — the same fallback the measurement seams use.
+///
+/// The whole-document parser still proves one thing for the OCR pass:
+/// whether the file has any native text at all (`native_blank`). That
+/// candidacy input is computed EXACTLY as before part A — on the
+/// `pdf-extract` text plus the LO PDF rows, never on the PDFium-improved
+/// ones (JD6-A-003, JD6-B-004): a recovered page beside an unreadable
+/// one must not flip the unreadable page out of OCR. This work may not
+/// change when anything goes to OCR. The parser's own text output is
+/// only the basis: since A3 the document text is the union of the
+/// published pages.
+pub fn read_native_extraction_basis_with_cancel(
+    bytes: &[u8],
+    app: Option<&tauri::AppHandle>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<NativeExtractionBasis, crate::processing::scheduler::ExecOutput> {
+    use crate::processing::scheduler::ExecOutput;
+    let readable =
+        crate::ocr::pdf::open_with_empty_password(bytes).map_err(|message| ExecOutput::Fatal {
+            code: "extraction_failed".to_string(),
+            message,
+        })?;
+    let bytes: &[u8] = &readable;
+    let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
+        code: "extraction_failed".to_string(),
+        message: format!("Failed to parse PDF: {error}"),
+    })?;
+    let page_count = document.get_pages().len() as i64;
+    let pdfium_resolved = match app {
+        Some(app) => crate::ocr::pdf::ensure_pdfium_path_without_runtime(app),
+        None => crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None),
+    }
+    .is_some();
+    let reads = read_native_page_texts_with_cancel(
+        bytes,
+        page_count,
+        if pdfium_resolved {
+            PageTextDecoder::Pdfium
+        } else {
+            PageTextDecoder::Lopdf
+        },
+        cancel,
+    )?;
+    let legacy_text = match crate::ocr::pdf::extract_pdf_text(bytes) {
+        Ok(text) => text,
+        Err(error) => {
+            let joined = reads
+                .lopdf_pages
+                .iter()
+                .map(|page| page.text_content.as_str())
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if joined.is_empty() {
+                return Err(ExecOutput::Fatal {
+                    code: "extraction_failed".to_string(),
+                    message: error,
+                });
+            }
+            joined
+        }
+    };
+    let legacy_text = richer_native_text(legacy_text, &reads.lopdf_pages);
+    let native_blank = extraction_quality(&legacy_text) == "empty";
+    Ok(NativeExtractionBasis {
+        bytes: readable.into_owned(),
+        page_count,
+        pages: reads.pages,
+        legacy_text,
+        native_blank,
+    })
 }
 
 /// The E4a-WU2 native extraction engine: resolve, read, extract the text
@@ -3038,76 +3158,16 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
     ) -> Result<ExtractedDocument, crate::processing::scheduler::ExecOutput> {
-        use crate::processing::scheduler::ExecOutput;
-        // A PDF with `/Encrypt` is only locked when it needs a real user
-        // password. Permissions-only protection (owner password, empty user
-        // password) is common on journal articles and opens freely, so it is
-        // decrypted once here and every later step — per-page text, the
-        // whole-document parser, page rendering for OCR — reads plain bytes.
-        // A genuinely locked file fails with unlock guidance, not with a
-        // complaint about damage: re-importing an unlocked copy mints fresh
-        // demand through the file-identity gate, so terminal is correct.
-        let readable = crate::ocr::pdf::open_with_empty_password(bytes).map_err(|message| {
-            ExecOutput::Fatal {
-                code: "extraction_failed".to_string(),
-                message,
-            }
-        })?;
-        let bytes: &[u8] = &readable;
-        let document = lopdf::Document::load_mem(bytes).map_err(|error| ExecOutput::Fatal {
-            code: "extraction_failed".to_string(),
-            message: format!("Failed to parse PDF: {error}"),
-        })?;
-        let page_count = document.get_pages().len() as i64;
-        // A1: the bundled Pdfium library resolves before the page reader,
-        // without ever touching the ML runtime (JD4-B-001). Where nothing is
-        // bundled the absence is logged and the reader falls back to lopdf.
-        let pdfium_resolved = match &self.app {
-            Some(app) => crate::ocr::pdf::ensure_pdfium_path_without_runtime(app),
-            None => crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None),
-        }
-        .is_some();
-        let reads = read_native_page_texts_with_lopdf_basis(
-            bytes,
+        let NativeExtractionBasis {
+            bytes: readable,
             page_count,
-            if pdfium_resolved {
-                PageTextDecoder::Pdfium
-            } else {
-                PageTextDecoder::Lopdf
-            },
-        )?;
-        // The whole-document parser still proves one thing for the OCR pass:
-        // whether the file has any native text at all (`native_blank`). That
-        // candidacy input is computed EXACTLY as before part A — on the
-        // `pdf-extract` text plus the LO PDF rows, never on the PDFium-improved
-        // ones (JD6-A-003, JD6-B-004): a recovered page beside an unreadable
-        // one must not flip the unreadable page out of OCR. This work may not
-        // change when anything goes to OCR. The parser's own text output is
-        // only the basis: since A3 the document text is the union of the
-        // published pages.
-        let legacy_text = match crate::ocr::pdf::extract_pdf_text(bytes) {
-            Ok(text) => text,
-            Err(error) => {
-                let joined = reads
-                    .lopdf_pages
-                    .iter()
-                    .map(|page| page.text_content.as_str())
-                    .filter(|text| !text.trim().is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                if joined.is_empty() {
-                    return Err(ExecOutput::Fatal {
-                        code: "extraction_failed".to_string(),
-                        message: error,
-                    });
-                }
-                joined
-            }
-        };
-        let legacy_text = richer_native_text(legacy_text, &reads.lopdf_pages);
-        let native_blank = extraction_quality(&legacy_text) == "empty";
+            pages,
+            legacy_text,
+            native_blank,
+        } = read_native_extraction_basis(bytes, self.app.as_ref())?;
+        let bytes: &[u8] = &readable;
         let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) =
-            self.maybe_ocr_pages(ctx, task, stop, bytes, reads.pages, native_blank)?;
+            self.maybe_ocr_pages(ctx, task, stop, bytes, pages, native_blank)?;
         // A3: the document text is the union of the published pages, joined
         // in page order with the separator the rebuild path already used —
         // replacing the `pdf-extract`/`richer_native_text` choice, whose
@@ -3590,7 +3650,7 @@ pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText 
 /// has none at all (`native_blank`) there is nothing native left to protect,
 /// so it goes to OCR too instead of the file settling as `empty` without a
 /// single recognition attempt.
-fn ocr_candidate_pages(pages: &[ExtractPageText], native_blank: bool) -> Vec<i64> {
+pub fn ocr_candidate_pages(pages: &[ExtractPageText], native_blank: bool) -> Vec<i64> {
     pages
         .iter()
         .filter(|page| match page.quality.as_str() {
@@ -3751,10 +3811,13 @@ pub fn pdfium_page_texts_raw(
 /// The bibliography garble detector (B2), re-exported for the measurement
 /// test (`tests/bibliography_detector_measurement.rs`): the crate's `ocr`
 /// module is private. The definitions live in [`crate::ocr::pdf`], beside
-/// [`is_garbled_text`].
+/// [`is_garbled_text`]. The markup converter and the plain garble detector
+/// ride along for the B3 scan measurements
+/// (`tests/bibliography_reprocess.rs`).
+pub use crate::ocr::markup::ocr_markup_to_text;
 pub use crate::ocr::pdf::{
-    garbled_bibliography_flags, is_garbled_bibliography_text, GarbledBibliographyFlags,
-    BIBLIOGRAPHY_DETECTOR_VERSION,
+    garbled_bibliography_flags, is_garbled_bibliography_text, is_garbled_text,
+    GarbledBibliographyFlags, BIBLIOGRAPHY_DETECTOR_VERSION,
 };
 
 /// JD6-A-001: PDFium's read wins only where it is at least as complete as
@@ -3828,10 +3891,25 @@ pub fn read_native_page_texts_with_lopdf_basis(
     page_count: i64,
     decoder: PageTextDecoder,
 ) -> Result<NativePageReads, crate::processing::scheduler::ExecOutput> {
+    read_native_page_texts_with_cancel(bytes, page_count, decoder, None)
+}
+
+/// The same read with an optional cancellation flag checked between lopdf
+/// pages and between PDFium batches (B3: the reprocess preview may stop
+/// mid-file; `ExecOutput::Stopped` is the answer when it fires).
+pub fn read_native_page_texts_with_cancel(
+    bytes: &[u8],
+    page_count: i64,
+    decoder: PageTextDecoder,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<NativePageReads, crate::processing::scheduler::ExecOutput> {
     use crate::processing::scheduler::ExecOutput;
     let mut document: Option<lopdf::Document> = None;
     let mut lopdf_reads: Vec<(String, bool)> = Vec::with_capacity(page_count.max(0) as usize);
     for number in 1..=page_count.max(0) as u32 {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(ExecOutput::Stopped);
+        }
         if document.is_none() {
             document =
                 Some(
@@ -3861,6 +3939,9 @@ pub fn read_native_page_texts_with_lopdf_basis(
         // resolve here as a last resort; a populated cache answers as-is.
         crate::ocr::pdf::ensure_pdfium_path_without_runtime_dir(None);
         for batch in pdfium_page_batches(page_count) {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(ExecOutput::Stopped);
+            }
             // Only pages the lopdf bound accepted are read (JD6-A-004): an
             // over-limit page is never requested from PDFium.
             let numbers: Vec<u32> = batch

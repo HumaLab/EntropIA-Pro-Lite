@@ -22,7 +22,7 @@ Branch `feat/native-text-reprocess`, worktree
   checkpointed as `Ok("")`.
 - [x] B2 — `is_garbled_bibliography_text` + `ocr_candidate_pages` + threshold measurement on a read-only copy
   of `prueba-sync` (plan 2.2).
-- [ ] B3 — `plan_reprocess`, `bibliography_reprocess_candidates`, `bibliography_reprocess_preview` (progress,
+- [x] B3 — `plan_reprocess`, `bibliography_reprocess_candidates`, `bibliography_reprocess_preview` (progress,
   cancel) and the USD estimate (plan 2.3, 2.4).
 - [ ] B4 — Reprocess contract, `bibliography_reprocess_confirm` (own user batch, own admission, busy on
   conflict) and executor reprocess mode (plan-hash gate, converted reuse, page-only OCR) (plan 2.3).
@@ -48,3 +48,12 @@ Branch `feat/native-text-reprocess`, worktree
   (418 in the scanned Abulafia 1950 book); stored text flagged = 1,610 rows in 82 attachments; FP upper
   bound 3/18,576 (0.016 %) < 0.5 %. Thresholds unchanged. Known flake outside scope:
   `navegador::zotero_copy::run::tests::only_one_drain_runs_at_a_time_and_the_guard_lets_go` under load.
+- 2026-10-09: B3 done — `bibliography/reprocess.rs` (pure `plan_reprocess`, canonical `plan_hash` without the
+  contract, USD estimate), shared pre-OCR basis `read_native_extraction_basis` in `processing.rs`, commands
+  `bibliography_reprocess_candidates` / `_preview` / `_preview_cancel` (+ APP_COMMANDS and capability).
+  RED on 7 unit + 7 integration stubs; lib bibliography 197, bibliography_processing 165,
+  bibliography_reprocess 7, acl_manifest_guard 6 passed; clippy and fmt clean. Measured on the copy (debug):
+  103 candidates (84 garbled stored pages, 19 empty without OCR) in 25-35 s; preview ~3 s per attachment.
+  Follow-ups: B4 removes the duplicated B1 attempt rule in `reprocess.rs` by exposing the
+  `processing/repository.rs` helpers; B5 shows candidates loading as a running state; release timing
+  unmeasured.

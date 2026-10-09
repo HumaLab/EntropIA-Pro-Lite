@@ -19,6 +19,7 @@ pub mod processing;
 pub mod profile;
 pub mod reconciliation;
 pub mod repository;
+pub mod reprocess;
 pub mod retrieval;
 pub mod selective_ocr;
 pub mod validate;
