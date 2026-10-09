@@ -291,16 +291,20 @@ pub fn plan_reprocess_for_attachment(
     path: &std::path::Path,
     bytes: &[u8],
 ) -> Result<ReprocessPlan, String> {
-    match plan_reprocess_for_attachment_cancellable(conn, attachment, path, bytes, None) {
+    match plan_reprocess_for_attachment_cancellable(conn, attachment, path, bytes, None, None) {
         Ok(planning) => Ok(planning.plan),
         Err(PlanError::Failed(message)) => Err(message),
         Err(PlanError::Cancelled) => Err("reprocess planning cancelled mid-file".to_string()),
     }
 }
 
-/// [`plan_reprocess_for_attachment`] with the preview's cancellation flag:
-/// checked between page batches inside the shared basis reader
-/// ([`crate::bibliography::processing::read_native_extraction_basis_with_cancel`]).
+/// [`plan_reprocess_for_attachment`] with the preview's cancellation flag
+/// and an optional unit-progress callback: the flag is checked between page
+/// batches inside the shared basis reader
+/// ([`crate::bibliography::processing::read_native_extraction_basis_with_cancel`]),
+/// and `on_units`, when there is one, reports the read's work units as
+/// `(units_done, units_total)` with `units_total = 2 × pages + 1` (one per
+/// lopdf page, one per PDFium batch, one for the whole-document extract).
 /// The reader is called with NO app handle on purpose: the preview and the
 /// executor must resolve the SAME decoder or their plan hashes would drift
 /// (the resolver caches process-wide, so both sides see one answer).
@@ -310,9 +314,10 @@ pub fn plan_reprocess_for_attachment_cancellable(
     path: &std::path::Path,
     bytes: &[u8],
     cancel: Option<&AtomicBool>,
+    on_units: Option<&mut dyn FnMut(i64, i64)>,
 ) -> Result<ReprocessPlanning, PlanError> {
     let source_sha256 = format!("{:x}", Sha256::digest(bytes));
-    let basis = read_native_extraction_basis_with_cancel(bytes, None, cancel).map_err(
+    let basis = read_native_extraction_basis_with_cancel(bytes, None, cancel, on_units).map_err(
         |output| match output {
             crate::processing::scheduler::ExecOutput::Stopped => PlanError::Cancelled,
             other => PlanError::Failed(format!(
@@ -762,29 +767,71 @@ pub fn cancel_reprocess_preview() {
     PREVIEW_CANCEL.store(true, Ordering::SeqCst);
 }
 
+/// One preview progress report: the attachment counter plus the work units
+/// inside the attachment being read. `units_done`/`units_total` describe
+/// ONLY the attachment named by `done` (`2 × pages + 1` units, see
+/// [`plan_reprocess_for_attachment_cancellable`]) and reset to 0 at every
+/// attachment boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewProgress {
+    /// The attachment being processed, 1-based; `total` once the run is over.
+    pub done: i64,
+    pub total: i64,
+    pub units_done: i64,
+    pub units_total: i64,
+}
+
 /// Runs the read-only preview over `attachment_ids`, in order: per
 /// attachment it reads the file (size-gated like the executor), hashes the
-/// bytes and plans through [`plan_reprocess`]. `on_progress` fires after
-/// each finished attachment; `cancel` is checked between attachments and,
-/// inside the shared reader, between page batches.
+/// bytes and plans through [`plan_reprocess`]. `on_progress` fires at every
+/// attachment boundary (`units_*` reset to 0), after every work unit of the
+/// attachment being read, and after each finished attachment; `cancel` is
+/// checked between attachments and, inside the shared reader, between page
+/// batches.
 pub fn run_reprocess_preview(
     conn: &Connection,
     attachment_ids: &[String],
     cancel: &AtomicBool,
-    mut on_progress: impl FnMut(i64, i64),
+    mut on_progress: impl FnMut(PreviewProgress),
 ) -> Result<ReprocessPreview, String> {
     let total = attachment_ids.len() as i64;
     let mut attachments: Vec<ReprocessPreviewAttachment> = Vec::new();
     let mut cancelled = false;
-    for attachment_id in attachment_ids {
+    for (index, attachment_id) in attachment_ids.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
             cancelled = true;
             break;
         }
-        match preview_attachment(conn, attachment_id, cancel)? {
+        let done = index as i64 + 1;
+        on_progress(PreviewProgress {
+            done,
+            total,
+            units_done: 0,
+            units_total: 0,
+        });
+        let mut units = (0i64, 0i64);
+        let step = {
+            let mut on_units = |units_done: i64, units_total: i64| {
+                units = (units_done, units_total);
+                on_progress(PreviewProgress {
+                    done,
+                    total,
+                    units_done,
+                    units_total,
+                });
+            };
+            preview_attachment(conn, attachment_id, cancel, &mut on_units)?
+        };
+        match step {
             PreviewStep::Entry(entry) => {
                 attachments.push(entry);
-                on_progress(attachments.len() as i64, total);
+                on_progress(PreviewProgress {
+                    done,
+                    total,
+                    units_done: units.0,
+                    units_total: units.1,
+                });
             }
             PreviewStep::Cancelled => {
                 cancelled = true;
@@ -817,11 +864,13 @@ pub fn run_reprocess_preview(
     })
 }
 
-/// One attachment's preview entry. `Cancelled` stops the caller's loop.
+/// One attachment's preview entry. `Cancelled` stops the caller's loop;
+/// `on_units` receives the attachment's work units while its file is read.
 fn preview_attachment(
     conn: &Connection,
     attachment_id: &str,
     cancel: &AtomicBool,
+    on_units: &mut dyn FnMut(i64, i64),
 ) -> Result<PreviewStep, String> {
     let Some(attachment) = attachment_ref_for(conn, attachment_id)? else {
         return Ok(PreviewStep::Entry(ReprocessPreviewAttachment {
@@ -908,8 +957,14 @@ fn preview_attachment(
             )));
         }
     };
-    match plan_reprocess_for_attachment_cancellable(conn, &attachment, &path, &bytes, Some(cancel))
-    {
+    match plan_reprocess_for_attachment_cancellable(
+        conn,
+        &attachment,
+        &path,
+        &bytes,
+        Some(cancel),
+        Some(on_units),
+    ) {
         Ok(planning) => Ok(PreviewStep::Entry(entry(None, Some(&planning.plan)))),
         Err(PlanError::Cancelled) => Ok(PreviewStep::Cancelled),
         Err(PlanError::Failed(_)) => Ok(PreviewStep::Entry(entry(

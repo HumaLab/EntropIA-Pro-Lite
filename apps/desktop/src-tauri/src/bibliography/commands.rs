@@ -658,9 +658,11 @@ pub async fn bibliography_reprocess_candidates(
 /// The read-only reprocess preview over the given attachments: reads each
 /// PDF on a blocking thread (size-gated like the executor), plans through
 /// the shared planner and reports progress as
-/// `bibliography-reprocess-preview-progress` `{done, total}` after each
-/// attachment. Cancel with [`bibliography_reprocess_preview_cancel`]; a new
-/// preview resets the flag.
+/// `bibliography-reprocess-preview-progress`
+/// `{done, total, unitsDone, unitsTotal}` — the attachment counter plus the
+/// work units inside the attachment being read, throttled to at most four
+/// emits per second. Cancel with [`bibliography_reprocess_preview_cancel`];
+/// a new preview resets the flag.
 #[tauri::command]
 pub async fn bibliography_reprocess_preview(
     attachment_ids: Vec<String>,
@@ -672,15 +674,25 @@ pub async fn bibliography_reprocess_preview(
     let db_path = db.db_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_archive_connection(&db_path)?;
+        // The unit stream is dense on big PDFs (two per-page passes plus the
+        // whole-document extract): at most four emits per second, and an
+        // attachment boundary or the settled final state is never dropped.
+        let mut last_emit: Option<std::time::Instant> = None;
         crate::bibliography::reprocess::run_reprocess_preview(
             &conn,
             &attachment_ids,
             crate::bibliography::reprocess::preview_cancel_flag(),
-            |done, total| {
-                let _ = app.emit(
-                    "bibliography-reprocess-preview-progress",
-                    serde_json::json!({ "done": done, "total": total }),
-                );
+            |progress| {
+                let now = std::time::Instant::now();
+                let settled =
+                    progress.units_total == 0 || progress.units_done >= progress.units_total;
+                let due = last_emit.is_none_or(|last| {
+                    now.duration_since(last) >= std::time::Duration::from_millis(250)
+                });
+                if settled || due {
+                    last_emit = Some(now);
+                    let _ = app.emit("bibliography-reprocess-preview-progress", progress);
+                }
             },
         )
     })

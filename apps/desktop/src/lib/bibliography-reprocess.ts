@@ -117,10 +117,15 @@ export function bibliographyReprocessConfirm(
   return invoke<ReprocessConfirm>('bibliography_reprocess_confirm', { entries })
 }
 
-/** Per-attachment preview step, as the backend reports it. */
+/** Preview progress, as the backend reports it. */
 export interface ReprocessPreviewProgress {
+  /** The attachment being read, 1-based; `total` once every one is read. */
   done: number
   total: number
+  /** Work units finished inside the attachment being read. */
+  unitsDone: number
+  /** `2 × pages + 1` for that attachment; 0 while its size is unknown. */
+  unitsTotal: number
 }
 
 export const REPROCESS_PREVIEW_PROGRESS_EVENT = 'bibliography-reprocess-preview-progress'
@@ -132,6 +137,15 @@ export function onBibliographyReprocessPreviewProgress(
   return listen<ReprocessPreviewProgress>(REPROCESS_PREVIEW_PROGRESS_EVENT, (event) =>
     handler(event.payload)
   )
+}
+
+/**
+ * The percentage of the attachment currently being read: floored and clamped
+ * to 0..100, and 0 while its unit total is unknown.
+ */
+export function previewUnitPercent(progress: ReprocessPreviewProgress): number {
+  if (progress.unitsTotal <= 0) return 0
+  return Math.min(100, Math.max(0, Math.floor((progress.unitsDone / progress.unitsTotal) * 100)))
 }
 
 const ESTIMATED_USD_NUMBER_LOCALE = { es: 'es-AR', en: 'en-US' } as const
