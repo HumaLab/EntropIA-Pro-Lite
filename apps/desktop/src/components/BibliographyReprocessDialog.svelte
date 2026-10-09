@@ -80,6 +80,11 @@
     (doneReport?.results ?? []).filter((result) => result.status === 'busy').length +
       (preview?.attachments ?? []).filter((entry) => entry.busy).length
   )
+  // Entries the confirm could not even look up (the attachment vanished or
+  // is not a PDF anymore) are their own count, never dropped silently.
+  const notQueuedCount = $derived(
+    (doneReport?.results ?? []).filter((result) => result.status === 'unknown_attachment').length
+  )
 
   function errorText(error: unknown): string {
     if (typeof error === 'string') return error
@@ -266,6 +271,9 @@
     </p>
     <p class="reprocess-dialog__note">
       {$currentLocale && t('bibliography.reprocess.doneBusy', { busy: busyCount })}
+    </p>
+    <p class="reprocess-dialog__note">
+      {$currentLocale && t('bibliography.reprocess.doneNotQueued', { notQueued: notQueuedCount })}
     </p>
     <p class="reprocess-dialog__note">
       {$currentLocale && t('bibliography.reprocess.doneBatch', { tab: t('settings.batchTab') })}

@@ -221,8 +221,8 @@ ninguna regla de OCR.
    - **Nunca** se suma a una tarea existente.
    - Un lote sin ninguna entrada encolada se borra dentro de la misma transacción.
    - Devuelve, por entrada, `queued` o `busy`.
-   - Una admisión automática que encuentra un reproceso vivo se suma a él, como hoy; no cobra fuera de lo
-     autorizado, porque el ejecutor sigue el plan.
+   - Una admisión automática que encuentra un reproceso vivo **no se suma a él**: saltea el adjunto. Así,
+     pausar o cancelar el lote del reproceso lo frena de verdad (juicio 8, `A-003`).
 
 #### Ejecutor en modo reproceso
 
@@ -241,12 +241,16 @@ ninguna regla de OCR.
 
 #### Garantía de costo
 
-- **El total de páginas enviadas a GLM-OCR** por un reproceso, sumando reinicios, reintentos del ciclo y
-  `processing_retry`, es **como mucho** `ocr_pages` del plan.
-- **Cómo se cumple:**
-  - cada página tiene su punto de control;
-  - los puntos de control sobreviven a la falla (2.1);
-  - las respuestas vacías también quedan guardadas.
+- **El total de páginas enviadas a GLM-OCR** por un plan aprobado, sumando reinicios, reintentos del ciclo,
+  `processing_retry`, cancelaciones y nuevas confirmaciones del mismo plan, es **como mucho** `ocr_pages`.
+- **Cómo se cumple** (juicio 8):
+  - cada página tiene su punto de control, también las respuestas vacías y los fallos definitivos de una
+    página (`A-002`);
+  - los puntos de control sobreviven a la falla y a la cancelación (2.1, `B-002`);
+  - la huella de un reproceso no incluye la versión del catálogo, así que editar metadatos no invalida lo
+    pagado (`A-001`);
+  - una nueva confirmación del mismo plan adopta los puntos de control de las tareas anteriores con el mismo
+    contrato y la misma huella (`B-002`).
 - **La excepción:** una página cuya llamada falla sin respuesta (timeout o 5xx) se vuelve a pedir. Si el
   proveedor la procesó igual, puede cobrarla dos veces (sección 5).
 

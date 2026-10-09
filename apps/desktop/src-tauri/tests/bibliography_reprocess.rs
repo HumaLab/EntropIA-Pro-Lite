@@ -282,6 +282,7 @@ fn admit_extract_task(conn: &rusqlite::Connection, attachment_id: &str) -> Strin
         None,
     )
     .expect("admit extraction task")
+    .expect("no live reprocess reserves the attachment in this test")
     .task_id
 }
 
@@ -639,6 +640,7 @@ fn candidates_exclude_a_successful_reprocess_of_the_current_file() {
             "reprocess": { "planHash": "cafebabe", "detectorVersion": detector_version },
             "sourceMtime": TEST_MTIME,
             "sourceBytes": source_bytes,
+            "ocrFailedPages": [],
         })
     };
 
@@ -671,6 +673,53 @@ fn candidates_exclude_a_successful_reprocess_of_the_current_file() {
     assert_eq!(
         candidate_for(&candidates, &attachment_id)
             .expect("the changed file is listed again")
+            .reasons,
+        vec![REASON_GARBLED_STORED_PAGES]
+    );
+}
+
+/// JD8-B-001 (2.4): the exclusion is only for a COMPLETE repair. A reprocess
+/// that succeeded with failed pages — its `ocrFailedPages` is not empty —
+/// left the damaged text standing, so the attachment must stay a candidate.
+#[test]
+fn a_successful_reprocess_with_failed_pages_stays_a_candidate() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "REPRFAIL1", "KA obra a medias");
+    let path = write_pdf(
+        &dir,
+        "parcial.pdf",
+        &make_text_pdf_pages(&[&[(72.0, 700.0, CLEAN)]]),
+    );
+    let attachment_id =
+        seed_attachment(&mut conn, &item_id, "REPRFAILA", Some(&path), "parcial.pdf");
+    plant_extraction(
+        &conn,
+        &attachment_id,
+        &item_id,
+        "rich",
+        Some(TEST_MTIME),
+        4242,
+    );
+    plant_page(&conn, &attachment_id, 1, "native", "rich", GARBLED);
+
+    let task = admit_extract_task(&conn, &attachment_id);
+    settle_task(&conn, &task, "succeeded", None);
+    plant_receipt(
+        &conn,
+        &task,
+        serde_json::json!({
+            "attachmentId": attachment_id,
+            "reprocess": { "planHash": "cafebabe", "detectorVersion": 1 },
+            "sourceMtime": TEST_MTIME,
+            "sourceBytes": 4242,
+            "ocrFailedPages": [1],
+        }),
+    );
+
+    let candidates = reprocess_candidates(&conn).expect("candidates");
+    assert_eq!(
+        candidate_for(&candidates, &attachment_id)
+            .expect("a repair that failed on some pages is no completed repair")
             .reasons,
         vec![REASON_GARBLED_STORED_PAGES]
     );
@@ -1933,12 +1982,192 @@ fn the_cost_guarantee_holds_across_an_interrupt_a_failure_and_processing_retry()
     );
 }
 
-/// 2.3 "Una admisión automática que encuentra un reproceso vivo se suma a él…
-/// el ejecutor sigue el plan": the sync attaches to the live reprocess task
-/// and the executor honors its reprocess contract — the receipt carries the
-/// plan hash and the source identity 2.4 compares.
+/// JD8-B-002 (2.3 "Garantía de costo"): the cumulative provider sends for
+/// ONE approved plan never exceed `plan.ocr_pages`, even across a cancel and
+/// a re-confirm. The paid page checkpoint survives the cancel (a cancelled
+/// extraction keeps its checkpoints like a terminal failure) and the fresh
+/// task of the SAME plan adopts it before the OCR pass.
 #[test]
-fn automatic_admission_attaches_to_a_live_reprocess_task_and_the_executor_follows_the_plan() {
+fn cancelling_and_reconfirming_the_same_plan_never_resends_the_paid_page() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B4CXL0001", "X obra cancelada");
+    let sparse: &[(f32, f32, &str)] = &[(72.0, 700.0, "hi")];
+    let pdf = make_text_pdf_pages(&[sparse, sparse]);
+    let path = write_pdf(&dir, "cancelada.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "B4CXLATT1",
+        Some(&path),
+        "cancelada.pdf",
+    );
+    let attachment = attachment(&conn, &attachment_id);
+    let plan = plan_reprocess_for_attachment(&conn, &attachment, std::path::Path::new(&path), &pdf)
+        .expect("plan");
+    assert_eq!(plan.ocr_pages, vec![1, 2]);
+
+    // Confirm, pay page 1, interrupt the run.
+    let response =
+        confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)]).expect("confirm");
+    let batch_id = response.batch_id.expect("queued");
+    let first_task = queued_reprocess_task(&conn, &attachment_id);
+    let task = processing_repository::claim_next(
+        &conn,
+        "b4-session",
+        &["bibliography_extract"],
+        processing_repository::now_ms(),
+    )
+    .expect("claim")
+    .expect("claimable");
+    assert_eq!(task.task_id, first_task);
+    let stop = Arc::new(StopFlag::new());
+    let first = RecordingProvider::with_options(OCR_TEXT, [], None, Some((1, Arc::clone(&stop))));
+    let result = BibliographyExtractExecutor::with_selective_ocr(
+        Arc::new(RecordingRenderer::default()) as Arc<dyn PageRenderer>,
+        Arc::clone(&first) as Arc<dyn PageOcrProvider>,
+    )
+    .run(&ctx_of(&dir), &task, &stop);
+    assert!(
+        matches!(result.output, ExecOutput::Stopped),
+        "{:?}",
+        result.output
+    );
+    assert_eq!(first.calls(), 1, "one paid page before the interrupt");
+    assert_eq!(checkpoint_rows(&conn, &first_task), 1);
+    processing_repository::requeue_task(&conn, &task.task_id, task.lease_epoch).expect("requeue");
+
+    // The owner cancels the batch; the paid page survives the cancel.
+    processing_repository::control_batch(
+        &conn,
+        &batch_id,
+        processing_repository::BatchAction::Cancel,
+        None,
+    )
+    .expect("cancel");
+    assert_eq!(task_state(&conn, &first_task).0, "cancelled");
+    assert_eq!(
+        checkpoint_rows(&conn, &first_task),
+        1,
+        "the paid page survives the cancel"
+    );
+
+    // Re-confirming the SAME plan creates a fresh task that adopts the paid
+    // page: only page 2 reaches the provider.
+    let response = confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)])
+        .expect("confirm the same plan again");
+    assert!(response.batch_id.is_some());
+    let second_task: String = conn
+        .query_row(
+            "SELECT id FROM processing_tasks
+              WHERE kind = 'bibliography_extract' AND subject_id = ?1
+                AND contract_hash LIKE 'bibliography-extract-reprocess-v1|%'
+                AND state != 'cancelled'
+              ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("second reprocess task");
+    assert_ne!(second_task, first_task);
+    let renderer = Arc::new(RecordingRenderer::default());
+    let second = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &second);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(second.calls(), 1, "the adopted checkpoint is never re-paid");
+    assert_eq!(
+        first.calls() + second.calls(),
+        plan.ocr_pages.len() as usize,
+        "one approved plan costs at most its page count, even across a cancel"
+    );
+}
+
+/// JD8-A-001 (2.3 "Garantía de costo"): a metadata-only catalog edit
+/// (same file, same `mtime` and size, new `native_version`) during a
+/// reprocess must NOT re-pin the extraction fingerprint and re-send the paid
+/// pages. A reprocess task pins the file identity WITHOUT the catalog
+/// version — the plan hash in the contract, which covers `sourceSha256`, is
+/// the content binding — so the page-1 checkpoint survives the edit and the
+/// resumed run recognizes only page 2.
+#[test]
+fn a_metadata_only_edit_during_a_reprocess_never_resends_the_paid_page() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B4META001", "W obra con edicion");
+    let sparse: &[(f32, f32, &str)] = &[(72.0, 700.0, "hi")];
+    let pdf = make_text_pdf_pages(&[sparse, sparse]);
+    let path = write_pdf(&dir, "edicion.pdf", &pdf);
+    let attachment_id =
+        seed_attachment(&mut conn, &item_id, "B4METAATT", Some(&path), "edicion.pdf");
+    let attachment = attachment(&conn, &attachment_id);
+    let plan = plan_reprocess_for_attachment(&conn, &attachment, std::path::Path::new(&path), &pdf)
+        .expect("plan");
+    assert_eq!(plan.ocr_pages, vec![1, 2]);
+    let response =
+        confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)]).expect("confirm");
+    assert!(response.batch_id.is_some());
+    let task_id = queued_reprocess_task(&conn, &attachment_id);
+
+    // Attempt 1 pays page 1, checkpoints it, then the run is interrupted.
+    let task = processing_repository::claim_next(
+        &conn,
+        "b4-session",
+        &["bibliography_extract"],
+        processing_repository::now_ms(),
+    )
+    .expect("claim")
+    .expect("claimable");
+    assert_eq!(task.task_id, task_id);
+    let stop = Arc::new(StopFlag::new());
+    let first = RecordingProvider::with_options(OCR_TEXT, [], None, Some((1, Arc::clone(&stop))));
+    let result = BibliographyExtractExecutor::with_selective_ocr(
+        Arc::new(RecordingRenderer::default()) as Arc<dyn PageRenderer>,
+        Arc::clone(&first) as Arc<dyn PageOcrProvider>,
+    )
+    .run(&ctx_of(&dir), &task, &stop);
+    assert!(
+        matches!(result.output, ExecOutput::Stopped),
+        "{:?}",
+        result.output
+    );
+    assert_eq!(first.calls(), 1, "one paid page before the interrupt");
+    assert_eq!(checkpoint_rows(&conn, &task_id), 1);
+    processing_repository::requeue_task(&conn, &task.task_id, task.lease_epoch).expect("requeue");
+
+    // A metadata-only edit: the same file, a new catalog version.
+    conn.execute(
+        "UPDATE zotero_attachments SET native_version = 4 WHERE id = ?1",
+        [&attachment_id],
+    )
+    .expect("metadata edit");
+
+    // The resume recognizes only page 2: page 1 comes from its checkpoint.
+    let renderer = Arc::new(RecordingRenderer::default());
+    let second = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &second);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        second.calls(),
+        1,
+        "the paid page is never re-sent after a metadata-only edit"
+    );
+    assert_eq!(
+        first.calls() + second.calls(),
+        plan.ocr_pages.len() as usize,
+        "the plan's page count is the whole cost of the reprocess"
+    );
+}
+
+/// JD8-A-003: the automatic sync admission must NOT attach to a live
+/// reprocess task. A system-batch link keeps the task wanted after the owner
+/// pauses or cancels the reprocess batch, and paid OCR continues behind their
+/// back: the attachment is SKIPPED instead. Cancelling the user batch then
+/// cancels the task and the executor never calls the provider.
+#[test]
+fn automatic_admission_skips_a_live_reprocess_task_and_the_cancel_stops_it() {
     let (dir, mut conn) = migrated_db();
     let item_id = seed_item(&mut conn, "B4AUTO001", "V obra compartida");
     let pdf = make_text_pdf_pages(&[&[(72.0, 700.0, "hi")]]);
@@ -1956,12 +2185,17 @@ fn automatic_admission_attaches_to_a_live_reprocess_task_and_the_executor_follow
     let response =
         confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)]).expect("confirm");
     let task_id = queued_reprocess_task(&conn, &attachment_id);
-    assert!(response.batch_id.is_some());
+    let batch_id = response.batch_id.expect("a queued entry mints a batch");
 
-    // The sync's own admission finds the live task and attaches — never a
-    // second writer.
-    let attached = admit_extract_task(&conn, &attachment_id);
-    assert_eq!(attached, task_id, "one physical task, two demands");
+    // The sync's own admission finds the live reprocess task and skips the
+    // attachment: no demand is counted and NO link is created.
+    let created =
+        processing_repository::admit_stale_extraction_demands(&conn, &library_row_id(&conn))
+            .expect("sync admission");
+    assert_eq!(
+        created, 0,
+        "nothing is admitted while an owner-approved reprocess owns the attachment"
+    );
     let tasks: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM processing_tasks WHERE subject_id = ?1",
@@ -1969,9 +2203,63 @@ fn automatic_admission_attaches_to_a_live_reprocess_task_and_the_executor_follow
             |row| row.get(0),
         )
         .expect("task count");
-    assert_eq!(tasks, 1);
+    assert_eq!(tasks, 1, "still one physical task");
+    let links: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_batch_tasks WHERE task_id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("link count");
+    assert_eq!(
+        links, 1,
+        "the reprocess task keeps only its user-batch link"
+    );
 
-    // The attached task runs under its pinned REPROCESS contract.
+    // Cancelling the reprocess batch reaches the task — nothing else wants
+    // it — and the executor never spends anything.
+    processing_repository::control_batch(
+        &conn,
+        &batch_id,
+        processing_repository::BatchAction::Cancel,
+        None,
+    )
+    .expect("cancel");
+    assert_eq!(
+        task_state(&conn, &task_id).0,
+        "cancelled",
+        "the cancel reaches the task the moment no batch wants it"
+    );
+    let renderer = Arc::new(RecordingRenderer::default());
+    let provider = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &provider);
+    assert_eq!(
+        outcome,
+        RunOneOutcome::Idle,
+        "nothing is left to run: {outcome:?}"
+    );
+    assert_eq!(provider.calls(), 0, "zero provider calls");
+}
+
+/// 2.3: the executor honors its reprocess contract — the receipt carries the
+/// plan hash, the detector version and the source identity 2.4 compares.
+#[test]
+fn the_reprocess_receipt_carries_the_plan_and_the_source_identity() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B4RECEIPT", "W obra con recibo");
+    let pdf = make_text_pdf_pages(&[&[(72.0, 700.0, "hi")]]);
+    let path = write_pdf(&dir, "recibo.pdf", &pdf);
+    let attachment_id =
+        seed_attachment(&mut conn, &item_id, "B4RECATT1", Some(&path), "recibo.pdf");
+    let attachment = attachment(&conn, &attachment_id);
+    let plan = plan_reprocess_for_attachment(&conn, &attachment, std::path::Path::new(&path), &pdf)
+        .expect("plan");
+    let response =
+        confirm_reprocess(&conn, &[entry(&attachment_id, &plan.plan_hash)]).expect("confirm");
+    let task_id = queued_reprocess_task(&conn, &attachment_id);
+    assert!(response.batch_id.is_some());
+
+    // The task runs under its pinned REPROCESS contract.
     let renderer = Arc::new(RecordingRenderer::default());
     let provider = RecordingProvider::with_text(OCR_TEXT);
     let outcome = run_one_extract(&dir, &conn, &renderer, &provider);

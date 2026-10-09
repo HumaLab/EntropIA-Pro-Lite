@@ -447,7 +447,11 @@ pub fn admit_subject_or_attach(
     input_fingerprint: &str,
     contract_hash: &str,
     dependency_task_id: Option<&str>,
-) -> Result<AdmitOutcome, String> {
+) -> Result<Option<AdmitOutcome>, String> {
+    // `Ok(None)` means the demand was SKIPPED without admitting or
+    // attaching: a live owner-approved reprocess task owns a bibliography
+    // attachment and nothing may join it (JD8-A-003). Every other arm
+    // always answers `Some`.
     if subject.domain == "bibliography" {
         if subject.subject_kind == "attachment" {
             return admit_bibliography_attachment_extract_or_attach(
@@ -459,21 +463,21 @@ pub fn admit_subject_or_attach(
             );
         }
         if subject.subject_kind == "item" {
-            return admit_bibliography_item_profile_or_attach(
+            return Ok(Some(admit_bibliography_item_profile_or_attach(
                 conn,
                 batch_id,
                 kind,
                 subject,
                 dependency_task_id,
-            );
+            )?));
         }
-        return admit_bibliography_library_or_attach(
+        return Ok(Some(admit_bibliography_library_or_attach(
             conn,
             batch_id,
             kind,
             subject,
             dependency_task_id,
-        );
+        )?));
     }
     subject.check_admittable()?;
     if kind != "ocr" && kind != "embedding" {
@@ -506,10 +510,10 @@ pub fn admit_subject_or_attach(
         link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
         requeue_interrupted_system_tasks(conn, Some(&task_id))?;
         requeue_interrupted_system_tasks(conn, Some(&task_id))?;
-        return Ok(AdmitOutcome {
+        return Ok(Some(AdmitOutcome {
             task_id,
             created: false,
-        });
+        }));
     }
     // Terminal attempts remain immutable history; a new demand gets a new identity.
     let task_id = uuid::Uuid::new_v4().to_string();
@@ -550,20 +554,20 @@ pub fn admit_subject_or_attach(
                 dependency_task_id,
             )?;
             requeue_interrupted_system_tasks(conn, Some(&existing))?;
-            return Ok(AdmitOutcome {
+            return Ok(Some(AdmitOutcome {
                 task_id: existing,
                 created: false,
-            });
+            }));
         }
         return Err(format!(
             "A terminal {kind} task already exists for {asset_id}; requeue it through an explicit retry"
         ));
     }
     link_batch_task(conn, batch_id, &task_id, kind, asset_id, dependency_task_id)?;
-    Ok(AdmitOutcome {
+    Ok(Some(AdmitOutcome {
         task_id,
         created: true,
-    })
+    }))
 }
 
 /// Bibliography library admission arm (E2b-1).
@@ -728,13 +732,19 @@ pub(crate) fn derived_task_id(now_ms: i64) -> String {
 }
 
 /// Bibliography attachment admission arm (E4a-WU2).
+///
+/// Returns `Ok(None)` when the demand must be SKIPPED: a live task with a
+/// reprocess contract owns the attachment (JD8-A-003). Its plan is the only
+/// authorized spend, so no batch may attach to it — a system-batch link
+/// would keep it wanted behind a paused or cancelled user batch and paid
+/// OCR would continue behind the owner's back.
 fn admit_bibliography_attachment_extract_or_attach(
     conn: &Connection,
     batch_id: &str,
     kind: &str,
     subject: &TaskSubject,
     dependency_task_id: Option<&str>,
-) -> Result<AdmitOutcome, String> {
+) -> Result<Option<AdmitOutcome>, String> {
     if kind != "bibliography_extract" {
         return Err(format!(
             "unsupported_subject: domain='bibliography' subject_kind='attachment' kind='{kind}' is not admittable (bibliography_extract only)"
@@ -754,6 +764,9 @@ fn admit_bibliography_attachment_extract_or_attach(
         })?;
     let fingerprint = attachment_extraction_fingerprint(&attachment);
     if let Some(task_id) = live_task(conn, "bibliography", "attachment", attachment_id, kind)? {
+        if live_task_runs_reprocess(conn, &task_id)? {
+            return Ok(None);
+        }
         link_batch_task_subject(
             conn,
             batch_id,
@@ -766,10 +779,10 @@ fn admit_bibliography_attachment_extract_or_attach(
             dependency_task_id,
         )?;
         requeue_interrupted_system_tasks(conn, Some(&task_id))?;
-        return Ok(AdmitOutcome {
+        return Ok(Some(AdmitOutcome {
             task_id,
             created: false,
-        });
+        }));
     }
     let task_id = derived_task_id(now_ms());
     let state = if dependency_task_id.is_some() {
@@ -795,6 +808,9 @@ fn admit_bibliography_attachment_extract_or_attach(
     if inserted == 0 {
         if let Some(existing) = live_task(conn, "bibliography", "attachment", attachment_id, kind)?
         {
+            if live_task_runs_reprocess(conn, &existing)? {
+                return Ok(None);
+            }
             link_batch_task_subject(
                 conn,
                 batch_id,
@@ -807,10 +823,10 @@ fn admit_bibliography_attachment_extract_or_attach(
                 dependency_task_id,
             )?;
             requeue_interrupted_system_tasks(conn, Some(&existing))?;
-            return Ok(AdmitOutcome {
+            return Ok(Some(AdmitOutcome {
                 task_id: existing,
                 created: false,
-            });
+            }));
         }
         return Err(format!(
             "A terminal {kind} task already exists for attachment {attachment_id}; requeue it through an explicit retry"
@@ -827,16 +843,31 @@ fn admit_bibliography_attachment_extract_or_attach(
         attachment_id,
         dependency_task_id,
     )?;
-    Ok(AdmitOutcome {
+    Ok(Some(AdmitOutcome {
         task_id,
         created: true,
-    })
+    }))
+}
+
+/// True when the live task is an owner-approved reprocess (its contract
+/// parses as [`ExtractMode::Reprocess`]): no automatic demand may attach to
+/// it (JD8-A-003), because only its plan authorizes its spend.
+fn live_task_runs_reprocess(conn: &Connection, task_id: &str) -> Result<bool, String> {
+    let contract_hash: String = conn
+        .query_row(
+            "SELECT contract_hash FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to read contract of live task {task_id}: {e}"))?;
+    Ok(parse_extract_contract(&contract_hash)
+        .is_some_and(|mode| matches!(mode, ExtractMode::Reprocess { .. })))
 }
 
 /// Source file identity pinned on extraction tasks: the catalog's mtime
 /// and native version. The commit gate re-reads both, so a replaced file
-/// surfaces as `source_changed` instead of a stale text. The B4 reprocess
-/// confirm pins the SAME fingerprint on its own admission rows.
+/// surfaces as `source_changed` instead of a stale text. Reprocess tasks
+/// pin [`attachment_extraction_reprocess_fingerprint`] instead (JD8-A-001).
 pub(crate) fn attachment_extraction_fingerprint(
     attachment: &crate::bibliography::attachment::AttachmentRef,
 ) -> String {
@@ -852,6 +883,36 @@ pub(crate) fn attachment_extraction_fingerprint(
             .map(|version| version.to_string())
             .unwrap_or_default()
     )
+}
+
+/// Source identity pinned on REPROCESS-contract extraction tasks (JD8-A-001):
+/// the file identity prefix plus a fixed reprocess marker, WITHOUT the
+/// catalog version. A metadata-only edit bumps `native_version` without
+/// touching the file; re-pinning the claim on it orphaned the paid page
+/// checkpoints and re-sent them mid-reprocess. The content binding for a
+/// reprocess is the plan hash in its contract (which covers `sourceSha256`),
+/// not the catalog version. The automatic format above stays unchanged.
+pub(crate) fn attachment_extraction_reprocess_fingerprint(
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> String {
+    format!(
+        "{}reprocess",
+        attachment_extraction_identity_prefix(&attachment.attachment_id, attachment.mtime)
+    )
+}
+
+/// The fingerprint one extraction task pins, decided per its contract
+/// (JD8-A-001): the full catalog identity for an automatic task (unchanged),
+/// the version-less reprocess identity for a reprocess task. ONE rule behind
+/// the claim re-pin and the commit gate.
+pub(crate) fn extraction_fingerprint_for_mode(
+    mode: &ExtractMode,
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> String {
+    match mode {
+        ExtractMode::Automatic => attachment_extraction_fingerprint(attachment),
+        ExtractMode::Reprocess { .. } => attachment_extraction_reprocess_fingerprint(attachment),
+    }
 }
 
 /// The file identity every extraction attempt on the same file shares: the
@@ -874,15 +935,18 @@ pub(crate) fn attachment_extraction_identity_prefix(
 /// [`crate::bibliography::selective_ocr::map_page_ocr_error`] produces
 /// (transient exhaustion, rate limit, provider failure, configuration) plus
 /// `source_changed` — the commit-gate verdict a metadata edit during the
-/// first extraction records. Read and storage failures (`extraction_io`,
-/// `storage_unavailable`, `publish_failed`, ...) are absent on purpose: they
-/// never reached a provider and must still be re-demanded.
+/// first extraction records — plus `publish_failed`: the OCR pages were
+/// already paid for when the publish failed, so the next sync must not
+/// re-pay them. Read and storage failures (`extraction_io`,
+/// `storage_unavailable`, ...) are absent on purpose: they never reached a
+/// provider and must still be re-demanded.
 pub(crate) const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
     "provider_transient",
     RATE_LIMITED_CODE,
     "ocr_failed",
     "configuration_required_ocr",
     "source_changed",
+    "publish_failed",
 ];
 
 /// The spent-attempt verdict over one terminal task row (2.1): a cancelled
@@ -1255,7 +1319,10 @@ pub fn admit_bibliography_sync_demand(
             "",
             "",
             None,
-        )?;
+        )?
+        .ok_or_else(|| {
+            "unsupported_subject: a library sync demand can never be skipped".to_string()
+        })?;
         // Attaching already resumes an interrupted system task.
         let requeued = !admitted.created
             && (was_interrupted
@@ -1900,6 +1967,7 @@ pub fn admit_or_attach(
     contract_hash: &str,
     dependency_task_id: Option<&str>,
 ) -> Result<AdmitOutcome, String> {
+    // Corpus admission is never skipped: `None` would be a contradiction.
     admit_subject_or_attach(
         conn,
         batch_id,
@@ -1909,7 +1977,8 @@ pub fn admit_or_attach(
         input_fingerprint,
         contract_hash,
         dependency_task_id,
-    )
+    )?
+    .ok_or_else(|| "unsupported_subject: a corpus admission can never be skipped".to_string())
 }
 
 /// Repair core over an explicit subject (E2a-3): same validation as
@@ -1965,7 +2034,6 @@ pub fn admit_repair_subject_or_attach(
         contract_hash,
         None,
     )
-    .map(Some)
 }
 
 /// Admits automatic embedding repair only when the same source revision was
@@ -2387,7 +2455,7 @@ pub fn admit_stale_profile_demands(
             "",
             None,
         )?;
-        if outcome.created {
+        if outcome.is_some_and(|outcome| outcome.created) {
             created += 1;
             // A chained item that has never landed in this generation
             // grows the eligible set; re-chains of already published
@@ -2499,6 +2567,10 @@ pub fn admit_stale_extraction_demands(
         if terminal_extraction_attempt_for(conn, &attachment)? {
             continue;
         }
+        // A live owner-approved reprocess task makes the admission skip the
+        // attachment (`None`): its plan alone is the authorized spend and
+        // nothing may keep it wanted behind a paused/cancelled user batch
+        // (JD8-A-003).
         let outcome = admit_subject_or_attach(
             conn,
             &batch_id,
@@ -2513,7 +2585,7 @@ pub fn admit_stale_extraction_demands(
             "",
             None,
         )?;
-        if outcome.created {
+        if outcome.is_some_and(|outcome| outcome.created) {
             created += 1;
         }
     }
@@ -2827,17 +2899,19 @@ pub fn open_batches(conn: &Connection) -> Result<Vec<String>, String> {
 /// links go `cancelled` (attempts closed as cancelled). Running units stay
 /// for the supervisor, which revokes them at a checkpoint boundary — yanking
 /// a lease mid-inference would orphan provider-side work and lie about it.
+/// A cancelled `bibliography_extract` keeps its checkpoints (the paid pages,
+/// JD8-B-002); every other kind wipes them as before.
 pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
-    let orphans: Vec<String> = conn
+    let orphans: Vec<(String, String)> = conn
         .prepare(
-            "SELECT id FROM processing_tasks
+            "SELECT id, kind FROM processing_tasks
              WHERE state IN ('pending', 'blocked', 'retry_wait', 'interrupted')
                AND NOT EXISTS (
                  SELECT 1 FROM processing_batch_tasks l
                  WHERE l.task_id = processing_tasks.id AND l.request_state IN ('active', 'paused'))",
         )
         .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
-        .query_map([], |row| row.get(0))
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?
         .collect::<Result<_, _>>()
         .map_err(|e| format!("Failed to scan orphaned tasks: {e}"))?;
@@ -2853,8 +2927,8 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
                 [],
             )
             .map_err(|e| format!("Failed to cancel orphaned tasks: {e}"))?;
-        for id in &orphans {
-            delete_task_checkpoints(conn, id)?;
+        for (id, kind) in &orphans {
+            delete_checkpoints_unless_paid_extraction(conn, id, kind)?;
         }
         Ok(changed)
     })?;
@@ -2871,7 +2945,8 @@ pub fn cancel_orphaned_tasks(conn: &Connection) -> Result<usize, String> {
 
 /// Cancels a running unit the supervisor no longer owns the demand for
 /// (commit-time `demand_lost`). The task is terminal, so its checkpoints go
-/// with it; the attempt closes as cancelled, never as failed.
+/// with it — except a `bibliography_extract`, which keeps its paid pages
+/// (JD8-B-002) — and the attempt closes as cancelled, never as failed.
 pub fn cancel_running_task(
     conn: &Connection,
     task_id: &str,
@@ -2887,7 +2962,14 @@ pub fn cancel_running_task(
             )
             .map_err(|e| format!("Failed to cancel running {task_id}: {e}"))?;
         if changed > 0 {
-            delete_task_checkpoints(conn, task_id)?;
+            let kind: String = conn
+                .query_row(
+                    "SELECT kind FROM processing_tasks WHERE id = ?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to read kind of {task_id}: {e}"))?;
+            delete_checkpoints_unless_paid_extraction(conn, task_id, &kind)?;
         }
         Ok(changed)
     })?;
@@ -4642,15 +4724,21 @@ fn validate_bibliography_attachment_claim_input(
             "unsupported_subject: task {task_id} domain='bibliography' kind='{kind}' is not claimable (bibliography_extract only)"
         ));
     }
-    if parse_extract_contract(contract_hash).is_none() {
-        mark_blocked(
-            conn,
-            task_id,
-            "configuration_changed",
-            "the bibliography extraction contract changed while this task waited; resume with the current configuration to re-evaluate",
-        )?;
-        return Ok(None);
-    }
+    // The contract is also the mode switch: the reprocess tasks pin their
+    // version-less identity (JD8-A-001), the automatic ones the full catalog
+    // identity.
+    let mode = match parse_extract_contract(contract_hash) {
+        Some(mode) => mode,
+        None => {
+            mark_blocked(
+                conn,
+                task_id,
+                "configuration_changed",
+                "the bibliography extraction contract changed while this task waited; resume with the current configuration to re-evaluate",
+            )?;
+            return Ok(None);
+        }
+    };
     let item_id: String = conn
         .query_row(
             "SELECT subject_id FROM processing_tasks WHERE id = ?1",
@@ -4664,7 +4752,10 @@ fn validate_bibliography_attachment_claim_input(
         mark_skipped(conn, task_id, "attachment_missing")?;
         return Ok(None);
     };
-    Ok(Some((0, attachment_extraction_fingerprint(&attachment))))
+    Ok(Some((
+        0,
+        extraction_fingerprint_for_mode(&mode, &attachment),
+    )))
 }
 
 /// E3b-WU2 item profile claim validation: re-proves the work still exists,
@@ -4973,6 +5064,76 @@ pub fn delete_task_checkpoints(conn: &Connection, task_id: &str) -> Result<usize
         [task_id],
     )
     .map_err(|e| format!("Failed to delete checkpoints of {task_id}: {e}"))
+}
+
+/// Drops the checkpoints of a CANCELLED task unless it is a
+/// `bibliography_extract` (JD8-B-002): its checkpoints are paid provider
+/// pages, and the owner's re-confirm of the SAME plan adopts them (see
+/// [`adopt_reprocess_checkpoints`]) instead of re-paying. Every other kind
+/// wipes them exactly as before.
+fn delete_checkpoints_unless_paid_extraction(
+    conn: &Connection,
+    task_id: &str,
+    task_kind: &str,
+) -> Result<(), String> {
+    if task_kind == "bibliography_extract" {
+        return Ok(());
+    }
+    delete_task_checkpoints(conn, task_id).map(|_| ())
+}
+
+/// JD8-B-002: copies the checkpoints of prior TERMINAL
+/// `bibliography_extract` tasks of the same subject onto `task` before its
+/// OCR pass, inside one transaction, so the cumulative provider sends for
+/// ONE approved plan never exceed `plan.ocr_pages` across cancels and
+/// re-confirms. Narrow by construction: only a REPROCESS task may adopt
+/// (its contract is the plan authorization — an automatic task never does),
+/// and only rows whose `contract_hash` AND `input_fingerprint` are IDENTICAL
+/// to this task's pinned ones are copied, so a different plan or a different
+/// file can never inherit a paid page. Rows the task already owns win the
+/// `(task_id, unit_key)` key (`DO NOTHING`).
+pub(crate) fn adopt_reprocess_checkpoints(
+    conn: &Connection,
+    task: &ClaimedTask,
+) -> Result<usize, String> {
+    if !matches!(
+        parse_extract_contract(&task.contract_hash),
+        Some(ExtractMode::Reprocess { .. })
+    ) {
+        return Err(
+            "unsupported_subject: only a reprocess task adopts prior paid checkpoints".to_string(),
+        );
+    }
+    in_savepoint(conn, || {
+        conn.execute(
+            "INSERT INTO processing_checkpoints
+               (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
+             SELECT ?1, c.unit_key, c.input_fingerprint, c.contract_hash, c.payload,
+                    c.payload_checksum, c.created_at
+             FROM processing_checkpoints c
+             JOIN processing_tasks t ON t.id = c.task_id
+             WHERE t.kind = 'bibliography_extract'
+               AND t.domain = 'bibliography' AND t.subject_kind = 'attachment'
+               AND t.subject_id = ?2
+               AND t.id != ?1
+               AND t.state IN ('failed', 'cancelled')
+               AND c.contract_hash = ?3
+               AND c.input_fingerprint = ?4
+             ON CONFLICT(task_id, unit_key) DO NOTHING",
+            rusqlite::params![
+                task.task_id,
+                task.subject_id,
+                task.contract_hash,
+                task.input_fingerprint
+            ],
+        )
+        .map_err(|e| {
+            format!(
+                "Failed to adopt paid extraction checkpoints into {}: {e}",
+                task.task_id
+            )
+        })
+    })
 }
 
 /// Runs `body` under a savepoint so a state change and the checkpoint
@@ -5316,15 +5477,20 @@ pub fn commit_success_with(
         // its documentary revision/fingerprint gates unchanged; bibliography
         // re-proves the library pin and contract before its own publisher.
         if bibliography_extract_route {
-            // Extraction tasks pin the extractor identity and the source
-            // file identity: a new extractor is a configuration change, a
-            // replaced file is a source change. The publisher is the only
-            // writer of the extraction row. Both admitted contract shapes
-            // (automatic, reprocess-with-plan-hash) pass this gate; an
-            // unparsable one refuses exactly as a moved contract did.
-            if parse_extract_contract(&contract_hash).is_none() {
-                return Err("configuration_changed: extraction contract changed".to_string());
-            }
+            // Extraction tasks pin the source
+            // file identity — the full catalog identity for an automatic task,
+            // the version-less one for a reprocess task (JD8-A-001) — so a
+            // replaced file is a source change while a metadata-only edit is
+            // not. The publisher is the only writer of the extraction row.
+            // Both admitted contract shapes (automatic, reprocess-with-plan-hash)
+            // pass this gate; an unparsable one refuses exactly as a moved
+            // contract did.
+            let extract_mode = match parse_extract_contract(&contract_hash) {
+                Some(mode) => mode,
+                None => {
+                    return Err("configuration_changed: extraction contract changed".to_string())
+                }
+            };
             let attachment_id = subject_id.as_str();
             let attachment =
                 crate::bibliography::attachment::attachment_ref_for(conn, attachment_id)
@@ -5332,7 +5498,7 @@ pub fn commit_success_with(
                     .ok_or_else(|| {
                         format!("source_changed: bibliography attachment {attachment_id} vanished")
                     })?;
-            let fresh = attachment_extraction_fingerprint(&attachment);
+            let fresh = extraction_fingerprint_for_mode(&extract_mode, &attachment);
             if fresh != input_fingerprint {
                 return Err(format!(
                     "source_changed: source file of bibliography attachment {attachment_id} moved mid-computation"
@@ -5680,7 +5846,11 @@ pub fn classify_batch_page(
                     fingerprint,
                     contract,
                     None,
-                )?;
+                )?
+                .ok_or_else(|| {
+                    "unsupported_subject: a corpus classification admission can never be skipped"
+                        .to_string()
+                })?;
                 ocr_id = Some(out.task_id.clone());
                 if out.created {
                     admitted += 1;
@@ -5702,7 +5872,11 @@ pub fn classify_batch_page(
                     } else {
                         None
                     },
-                )?;
+                )?
+                .ok_or_else(|| {
+                    "unsupported_subject: a corpus classification admission can never be skipped"
+                        .to_string()
+                })?;
                 if out.created {
                     admitted += 1;
                 }
@@ -9056,7 +9230,8 @@ mod tests {
             "ch-a1",
             None,
         )
-        .unwrap();
+        .unwrap()
+        .expect("corpus admission is never skipped");
         assert!(created.created);
         let attached =
             admit_or_attach(&conn, "b1", "ocr", "a1", 0, "fp-a1", "ch-a1", None).unwrap();
@@ -9492,7 +9667,8 @@ mod tests {
             "caller-contract",
             None,
         )
-        .expect("existing library admission");
+        .expect("existing library admission")
+        .expect("library admission is never skipped");
         assert!(admitted.created);
 
         let row: (
@@ -9554,7 +9730,8 @@ mod tests {
             "different",
             None,
         )
-        .expect("attach existing bibliography task");
+        .expect("attach existing bibliography task")
+        .expect("library admission is never skipped");
         assert!(!attached.created);
         assert_eq!(attached.task_id, admitted.task_id);
 
@@ -9618,6 +9795,7 @@ mod tests {
         };
         admit_subject_or_attach(conn, &batch, "bibliography_sync", &subject, 0, "", "", None)
             .expect("admit bibliography sync task")
+            .expect("library admission is never skipped")
             .task_id
     }
 

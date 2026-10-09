@@ -265,6 +265,7 @@ const es = {
   'bibliography.reprocess.noCandidates': 'No hay obras con texto dañado.',
   'bibliography.reprocess.doneQueued': 'Encolados: {queued} adjuntos.',
   'bibliography.reprocess.doneBusy': 'En proceso, no encolados: {busy} adjuntos.',
+  'bibliography.reprocess.doneNotQueued': 'No encolados: {notQueued} adjuntos.',
   'bibliography.reprocess.doneBatch':
     'El avance, la pausa y la cancelación están en la pestaña «{tab}» de Configuración.',
   'bibliography.reprocess.error': 'No se pudo completar la operación: {reason}',
@@ -3264,6 +3265,7 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliography.reprocess.noCandidates': 'There are no works with damaged text.',
   'bibliography.reprocess.doneQueued': 'Queued: {queued} attachments.',
   'bibliography.reprocess.doneBusy': 'Busy, not queued: {busy} attachments.',
+  'bibliography.reprocess.doneNotQueued': 'Not queued: {notQueued} attachments.',
   'bibliography.reprocess.doneBatch':
     'Progress, pause and cancellation live in the "{tab}" tab in Settings.',
   'bibliography.reprocess.error': 'The operation could not be completed: {reason}',

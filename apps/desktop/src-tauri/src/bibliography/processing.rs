@@ -3362,6 +3362,25 @@ impl BibliographyExtractExecutor {
                 *slot = row;
             }
         }
+        // JD8-B-002: a prior run of THIS plan that the owner cancelled (or
+        // that failed terminally) already paid some pages. Adopt their
+        // checkpoints before the OCR pass, so the plan's page count stays the
+        // whole cost of the reprocess across cancels and re-confirms. Only
+        // identical contract and file identity rows are adopted — the
+        // plan-hash gate right above has already proven the authorization.
+        {
+            let conn =
+                open_archive_connection(&ctx.db_path).map_err(|error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: error,
+                })?;
+            crate::processing::repository::adopt_reprocess_checkpoints(&conn, task).map_err(
+                |error| ExecOutput::Fatal {
+                    code: "storage_unavailable".to_string(),
+                    message: error,
+                },
+            )?;
+        }
         let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) = self.maybe_ocr_pages(
             ctx,
             task,
@@ -3393,7 +3412,8 @@ impl BibliographyExtractExecutor {
     /// sparse or empty. Rich and unreadable pages never reach a
     /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
     /// `ctx.unit`, so resume reuses confirmed texts — including a blank
-    /// answer — without re-sending content, and demand loss stops before
+    /// answer and a DEFINITIVE failure verdict (JD8-A-002) — without
+    /// re-sending content, and demand loss stops before
     /// the next provider call.
     /// An empty OCR answer keeps the native row untouched — unless the
     /// native text is garbled raw glyph codes, which OCR owns: the page is
@@ -3523,49 +3543,76 @@ impl BibliographyExtractExecutor {
                     }
                     let unit_key = format!("ocr-page:{}", page.page_number);
                     match ctx.unit(task, &unit_key, || {
-                        let image = renderer
-                            .render_page(bytes, page.page_number as u32)
-                            .map_err(|error| format!("render failed: {error}"))?;
-                        provider.recognize_page(&image).or_else(|error| {
-                            // A GLM-OCR answer with no content is a blank
-                            // page, not a page failure: the provider
-                            // answered, the page simply holds no text
-                            // (whole-asset corpus OCR keeps it an error).
-                            // Mapped inside the unit, so the blank answer
-                            // lands in the checkpoint and resume never
-                            // re-pays the page (JD7-A-004).
-                            if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
-                                &error,
-                            ) {
-                                Ok(String::new())
-                            } else {
-                                Err(error)
-                            }
-                        })
+                        let image = match renderer.render_page(bytes, page.page_number as u32) {
+                            Ok(image) => image,
+                            // A page that cannot be rendered is a DEFINITIVE
+                            // verdict about this page (published exactly as
+                            // the old `extraction_failed` page failure):
+                            // recorded below, never re-attempted on resume.
+                            Err(error) => return Ok(PageOcrOutcome::Failed { message: error }),
+                        };
+                        provider
+                            .recognize_page(&image)
+                            .or_else(|error| {
+                                // A GLM-OCR answer with no content is a blank
+                                // page, not a page failure: the provider
+                                // answered, the page simply holds no text
+                                // (whole-asset corpus OCR keeps it an error).
+                                // Mapped inside the unit, so the blank answer
+                                // lands in the checkpoint and resume never
+                                // re-pays the page (JD7-A-004).
+                                if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
+                                    &error,
+                                ) {
+                                    Ok(String::new())
+                                } else {
+                                    Err(error)
+                                }
+                            })
+                            .map(PageOcrOutcome::Text)
+                            .or_else(|error| {
+                                // Only a DEFINITIVE verdict becomes a result
+                                // (JD8-A-002): it lands in the checkpoint, so a
+                                // later interruption or transient failure never
+                                // re-sends the paid page. Transient and
+                                // configuration verdicts stay errors — the
+                                // whole task backs off or waits for the user —
+                                // and are never checkpointed.
+                                match crate::bibliography::selective_ocr::map_page_ocr_error(&error)
+                                {
+                                    ExecOutput::Fatal { message, .. } => {
+                                        Ok(PageOcrOutcome::Failed { message })
+                                    }
+                                    _ => Err(error),
+                                }
+                            })
                     }) {
-                        Ok(text) => {
+                        Ok(PageOcrOutcome::Text(text)) => {
                             ocr_attempted = true;
                             Some(text)
+                        }
+                        // E4b-WU4 incomplete handling: a page whose OCR
+                        // hard-failed keeps its native row and is named in
+                        // the receipt. Transient and configuration verdicts
+                        // stay whole-task: backoff and user fixes must not
+                        // masquerade as partial success.
+                        Ok(PageOcrOutcome::Failed { message }) => {
+                            eprintln!(
+                                "[bibliography] OCR of page {} failed: {message}",
+                                page.page_number
+                            );
+                            ocr_failed_pages.push(page.page_number);
+                            None
                         }
                         Err(error) => {
                             if error.starts_with("lease_lost") || error.starts_with("demand_lost") {
                                 return Err(ExecOutput::Stopped);
                             }
-                            let verdict =
-                                if let Some(detail) = error.strip_prefix("render failed: ") {
-                                    ExecOutput::Fatal {
-                                        code: "extraction_failed".to_string(),
-                                        message: detail.to_string(),
-                                    }
-                                } else {
-                                    crate::bibliography::selective_ocr::map_page_ocr_error(&error)
-                                };
-                            match verdict {
-                                // E4b-WU4 incomplete handling: a page whose OCR
-                                // hard-failed keeps its native row and is named in
-                                // the receipt. Transient and configuration verdicts
-                                // stay whole-task: backoff and user fixes must not
-                                // masquerade as partial success.
+                            // What is left is not a provider verdict but the
+                            // checkpoint machinery itself failing; it keeps the
+                            // page unsettled (nothing is recorded) and fails
+                            // exactly as before.
+                            match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
                                 ExecOutput::Fatal { message, .. } => {
                                     eprintln!(
                                         "[bibliography] OCR of page {} failed: {message}",
@@ -3590,6 +3637,25 @@ impl BibliographyExtractExecutor {
         }
         Ok((out, ocr_failed_pages, ocr_attempted, pages_needed))
     }
+}
+
+/// The settled fate of one OCR page (JD8-A-002): recognized text — a blank
+/// answer included — or a definitive failure whose verdict is just as final
+/// as a text. Both land in the `ocr-page:{n}` checkpoint through
+/// [`crate::processing::scheduler::ExecCtx::unit`], so a resume never
+/// re-sends a page whose fate is already decided. Transient and
+/// configuration failures are NOT this type: they stay errors so the whole
+/// task backs off or waits, uncheckpointed.
+///
+/// `untagged` keeps already-paid checkpoints readable: `Text` serializes to
+/// the same bare JSON string the pre-JD8 payload was, and a stored string
+/// deserializes back into `Text` — a confirmed page written by a previous
+/// build is never re-sent. Only the new `Failed` verdict is an object.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum PageOcrOutcome {
+    Text(String),
+    Failed { message: String },
 }
 
 /// Production selective OCR: pdfium page rendering plus the configured

@@ -9,8 +9,9 @@
 //! and the estimated USD; every paid OCR is approved by the owner.
 //!
 //! 2.4 "Una sola vez": the candidate list excludes an attachment whose
-//! current file already went through a successful reprocess at the current
-//! detector version; the sync never reads that mark.
+//! current file already went through a COMPLETE successful reprocess (no
+//! failed pages) at the current detector version; the sync never reads that
+//! mark.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,9 +34,9 @@ use crate::ocr::pdf::{
     is_garbled_bibliography_text, is_garbled_text, BIBLIOGRAPHY_DETECTOR_VERSION,
 };
 use crate::processing::repository::{
-    attachment_extraction_fingerprint, attachment_extraction_identity_prefix, derived_task_id,
-    is_terminal_ocr_attempt, link_batch_task_subject, live_task, now_ms, parse_extract_contract,
-    reprocess_contract_hash,
+    attachment_extraction_identity_prefix, attachment_extraction_reprocess_fingerprint,
+    derived_task_id, is_terminal_ocr_attempt, link_batch_task_subject, live_task, now_ms,
+    parse_extract_contract, reprocess_contract_hash,
 };
 
 // ── Cost estimate (2.3 "Monto estimado") ───────────────────────────────────
@@ -476,8 +477,9 @@ pub fn reprocess_candidates(conn: &Connection) -> Result<Vec<ReprocessCandidate>
         if reasons.is_empty() {
             continue;
         }
-        // 2.4: a successful reprocess of this exact file at the current
-        // detector version has already repaired it — once is enough.
+        // 2.4: a COMPLETE successful reprocess of this exact file at the
+        // current detector version has already repaired it — once is enough.
+        // A repair with failed pages is not complete (JD8-B-001).
         let identity = current_file_identity(conn, &attachment_id, mtime)?;
         if tasks.reprocessed_current_file(&attachment_id, identity) {
             continue;
@@ -577,10 +579,13 @@ impl ExtractTaskIndex {
         })
     }
 
-    /// 2.4 "Una sola vez": true when a succeeded task already carries a
-    /// reprocess receipt for THIS file identity at the CURRENT detector
-    /// version. The receipt is written by the B4 confirm/executor path;
-    /// compared fields are `reprocess.detectorVersion` plus
+    /// 2.4 "Una sola vez" + JD8-B-001: true when a succeeded task already
+    /// carries a COMPLETE reprocess receipt for THIS file identity at the
+    /// CURRENT detector version — one whose `ocrFailedPages` is empty. A
+    /// repair that left failed pages behind did not repair the text and must
+    /// never exclude the attachment. The receipt is written by the B4
+    /// confirm/executor path; compared fields are
+    /// `reprocess.detectorVersion`, `ocrFailedPages` plus
     /// `sourceMtime`/`sourceBytes`.
     fn reprocessed_current_file(
         &self,
@@ -602,6 +607,14 @@ impl ExtractTaskIndex {
             };
             if reprocess.get("detectorVersion").and_then(|v| v.as_u64())
                 != Some(u64::from(BIBLIOGRAPHY_DETECTOR_VERSION))
+            {
+                return false;
+            }
+            // Only a repair with NO failed pages is a completed repair.
+            if !value
+                .get("ocrFailedPages")
+                .and_then(|pages| pages.as_array())
+                .is_some_and(Vec::is_empty)
             {
                 return false;
             }
@@ -959,8 +972,9 @@ pub enum InsertOutcome {
 
 /// The confirm's own INSERT: a plain `INSERT` (never `OR IGNORE`, never
 /// `admit_subject_or_attach`) of one `bibliography_extract` task pinning the
-/// unchanged [`attachment_extraction_fingerprint`] and the reprocess
-/// contract `prefix + <plan hash>`. The partial unique
+/// version-less [`attachment_extraction_reprocess_fingerprint`] (JD8-A-001)
+/// and the reprocess contract `prefix + <plan hash>`, which binds the
+/// content through `sourceSha256`. The partial unique
 /// `idx_processing_tasks_subject_active_unique` is the single-flight
 /// authority: a live row inserted between the caller's check and this INSERT
 /// collides and answers [`InsertOutcome::Busy`], and the caller must never
@@ -987,7 +1001,7 @@ pub fn insert_reprocess_extract_task(
         rusqlite::params![
             task_id,
             attachment.attachment_id,
-            attachment_extraction_fingerprint(attachment),
+            attachment_extraction_reprocess_fingerprint(attachment),
             contract_hash,
             now
         ],

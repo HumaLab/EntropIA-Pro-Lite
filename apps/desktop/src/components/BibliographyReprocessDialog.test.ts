@@ -170,6 +170,27 @@ describe('BibliographyReprocessDialog', () => {
     ).toBeInTheDocument()
   })
 
+  it('reports unknown attachments as a third not-queued count', async () => {
+    backend({
+      preview: previewAnswer([previewAttachment()]),
+      confirm: {
+        batchId: 'batch-1',
+        results: [
+          { attachmentId: 'att-1', status: 'queued' },
+          { attachmentId: 'att-2', status: 'unknown_attachment' },
+          { attachmentId: 'att-3', status: 'unknown_attachment' },
+        ],
+      },
+    })
+    render(BibliographyReprocessDialog, { mode: 'library', onclose: vi.fn() })
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Reprocesar (≈ USD 0,24)' }))
+
+    expect(await screen.findByText('Encolados: 1 adjuntos.')).toBeInTheDocument()
+    expect(screen.getByText('No encolados: 2 adjuntos.')).toBeInTheDocument()
+    expect(screen.getByText('En proceso, no encolados: 0 adjuntos.')).toBeInTheDocument()
+  })
+
   it('cancelling during the preview stops the preview', async () => {
     backend({ preview: () => new Promise(() => {}) })
     const onclose = vi.fn()

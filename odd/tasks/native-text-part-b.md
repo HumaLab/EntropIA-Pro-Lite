@@ -74,3 +74,18 @@ Branch `feat/native-text-reprocess`, worktree
   Lite 3447 passed (`--maxWorkers=2`), typecheck both variants 0 errors, lint 0 errors, Rust lib
   bibliography 197 and bibliography_processing 165, clippy clean. Known environmental flake:
   `src/lib/ocr-export.test.ts` (untouched) times out at 5 s under default full-suite parallelism.
+- 2026-10-09: B6 in progress — CI run 37895054660 failed on `pnpm format:check` (3 new B5 files); fixed in a
+  prettier-only commit; run 37895653179 green but its Rust legs (quality report, Windows Pro contract) were
+  skipped because the head commit had no Rust change — a Rust-touching head must run them before merge.
+  Judgment Day 8 on `49a5f42..a655f73`: no finding confirmed by both judges; judge A (Codex) needed two
+  retries for provider credit. Owner authorized fixing A-001..A-004, B-001, B-002, B-004 (B-003, B-005
+  info); `jd-fix-agent` only accepts BLOCKER/CRITICAL rows, so the bounded worker applies them.
+- 2026-10-09: JD8 correction round 1 applied test-first (one observed RED per ID): A-001 reprocess
+  fingerprint without the catalog version (mode-aware claim and commit gates); A-002 definitive page
+  verdicts checkpointed (`PageOcrOutcome`, untagged so old checkpoints stay readable); A-003 automatic
+  admission skips a live reprocess task; A-004 `publish_failed` counts as a spent attempt; B-001 the
+  candidates exclusion needs an empty `ocrFailedPages`; B-002 extract checkpoints survive cancel and a
+  re-confirmed plan adopts them; B-004 the dialog reports not-queued entries. lib 2425,
+  bibliography_processing 166, bibliography_reprocess 23, acl 6, dialog 7 passed; clippy, fmt, typecheck
+  (both variants), lint and format:check clean. Plan 2.3 amended (automatic admission no longer joins a
+  live reprocess; cost guarantee covers cancel and re-confirm).

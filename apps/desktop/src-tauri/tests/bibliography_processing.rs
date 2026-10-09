@@ -178,6 +178,7 @@ fn admit_bibliography_task(conn: &rusqlite::Connection, row_id: &str) -> String 
         None,
     )
     .expect("admit bibliography sync")
+    .expect("a library sync demand is never skipped")
     .task_id
 }
 
@@ -1940,6 +1941,7 @@ fn admit_ocr_task(conn: &rusqlite::Connection, asset_id: &str) -> String {
         None,
     )
     .expect("admit corpus OCR task")
+    .expect("a corpus admission is never skipped")
     .task_id
 }
 
@@ -2560,6 +2562,7 @@ fn e2b5_wu3_recovery_resumes_both_domains_without_duplicate_publication() {
         None,
     )
     .expect("admit user-batch OCR task")
+    .expect("a corpus admission is never skipped")
     .task_id;
     let initial_bibliography = repository::admit_bibliography_sync_demand(&conn, "user", "0")
         .expect("admit bibliography system demand");
@@ -3705,6 +3708,7 @@ fn admit_profile_demand(conn: &rusqlite::Connection, item_id: &str) -> String {
         None,
     )
     .expect("admit profile demand")
+    .expect("a profile demand is never skipped")
     .task_id
 }
 
@@ -4622,6 +4626,7 @@ fn admit_extract_demand(conn: &rusqlite::Connection, attachment_id: &str) -> Str
         None,
     )
     .expect("admit extract demand")
+    .expect("no live reprocess reserves the attachment in this test")
     .task_id
 }
 
@@ -12993,8 +12998,9 @@ fn plant_extract_task(
     .expect("plant extraction task");
 }
 
-/// The terminal-attempt gate reads the verdict honestly: OCR-provider codes
-/// (and `source_changed` on the same file) count as one spent attempt;
+/// The terminal-attempt gate reads the verdict honestly: OCR-provider codes,
+/// `source_changed` on the same file and `publish_failed` (the OCR was
+/// already paid for when the publish failed) count as one spent attempt;
 /// cancelled counts whatever its code; read and storage failures are
 /// re-demanded. The gate matches the file identity prefix without the
 /// catalog version — the same file only while the `mtime` holds.
@@ -13010,7 +13016,7 @@ fn terminal_attempt_codes_decide_whether_the_sync_re_demands() {
         ("cancelled", "extraction_io", true, false),
         ("failed", "extraction_io", true, true),
         ("failed", "storage_unavailable", true, true),
-        ("failed", "publish_failed", true, true),
+        ("failed", "publish_failed", true, false),
         // A terminal attempt on another file identity never hides the
         // current one.
         ("failed", "ocr_failed", false, true),
@@ -13222,4 +13228,112 @@ fn an_empty_page_answer_is_checkpointed_and_recognized_once() {
         .expect("page 1 row");
     assert_eq!(method, "native");
     assert!(text.contains("ok"), "the native row is untouched: {text}");
+}
+
+/// JD8-A-002: a definitive per-page OCR verdict (here a malformed GLM
+/// success response, `ocr/glm_ocr.rs`) is a RESULT of the page and lands in
+/// its checkpoint exactly like a text answer, so a later interruption or
+/// transient failure never re-sends the page. Two pages: page 1 answers with
+/// a non-transient parse error, page 2 times out; after the retry only page 2
+/// reaches the provider. Published behavior is unchanged: the failed page
+/// keeps its native row and is named in the receipt's `ocrFailedPages`.
+#[test]
+fn a_definitive_page_verdict_is_checkpointed_and_the_page_is_sent_once() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "PARSEFAIL1",
+        "Obra con respuesta ilegible",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")], &[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "ilegible.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "PARSEATT1",
+        "linked_file",
+        Some(&path),
+        "ilegible.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let first_provider = Arc::new(ScriptedOcrProvider::new([
+        Err(
+            "provider_error: failed to parse GLM-OCR response: EOF while parsing a value"
+                .to_string(),
+        ),
+        Err("request timed out after 30s".to_string()),
+    ]));
+    let base = repository::now_ms();
+    let outcome =
+        run_extract_with_provider_at(&dir, &conn, &renderer, first_provider.clone(), base);
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        first_provider.calls(),
+        2,
+        "page 1 answered with a parse error, page 2 timed out"
+    );
+    assert_eq!(
+        checkpoint_rows(&conn, &task_id),
+        1,
+        "the definitive page verdict is a checkpointed result"
+    );
+
+    // Resume: page 1 comes back from its checkpoint, page 2 is recognized.
+    let second_provider = Arc::new(ScriptedOcrProvider::new([Ok(
+        "Texto reconocido de la segunda pagina con suficiente longitud".to_string(),
+    )]));
+    let outcome = run_extract_with_provider_at(
+        &dir,
+        &conn,
+        &renderer,
+        second_provider.clone(),
+        base + 120_000,
+    );
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        second_provider.calls(),
+        1,
+        "the definitively failed page is recognized exactly once in total"
+    );
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[1, 2, 2],
+        "the resumed run renders only page 2"
+    );
+    // Published behavior is unchanged: the hard-failed page keeps its native
+    // row, untouched, and is listed in the receipt.
+    let (method, text): (String, String) = conn
+        .query_row(
+            "SELECT method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page 1 row");
+    assert_eq!(method, "native");
+    assert!(text.contains("ok"), "the native row is untouched: {text}");
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+    assert_eq!(
+        receipt["ocrFailedPages"],
+        serde_json::json!([1]),
+        "page 1 stays named in ocrFailedPages: {receipt}"
+    );
 }
