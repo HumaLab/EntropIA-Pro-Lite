@@ -128,11 +128,11 @@ describe('BibliographyReprocessDialog', () => {
     expect(summaryValue('Páginas corregidas sin OCR')).toBe('1')
     expect(screen.getByText('≈ USD 0,24 (estimado)')).toBeInTheDocument()
     expect(
-      screen.getByText(/GLM-OCR: USD 0,03 por millón de tokens · supuesto: ~3000 tokens por página\./)
+      screen.getByText(
+        /GLM-OCR: USD 0,03 por millón de tokens · supuesto: ~3000 tokens por página\./
+      )
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: 'Reprocesar (≈ USD 0,24)' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reprocesar (≈ USD 0,24)' })).toBeInTheDocument()
   })
 
   it('confirms exactly the confirmable entries and reports queued and busy', async () => {
@@ -224,8 +224,6 @@ describe('BibliographyReprocessDialog', () => {
 
     expect(await screen.findByText('sin costo de OCR')).toBeInTheDocument()
     expect(screen.queryByText('≈ USD 0,00 (estimado)')).toBeNull()
-    expect(
-      screen.getByRole('button', { name: 'Reprocesar (≈ USD 0,00)' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reprocesar (≈ USD 0,00)' })).toBeInTheDocument()
   })
 })

@@ -186,7 +186,7 @@
   cancelLabel={$currentLocale && cancelLabel}
   confirmLabel={phase === 'summary' ? confirmLabel : undefined}
   confirmDisabled={confirmable.length === 0}
-  confirming={confirming}
+  {confirming}
   dismissOnOverlay={false}
   error={errorMessage}
   oncancel={handleCancel}
@@ -268,8 +268,7 @@
       {$currentLocale && t('bibliography.reprocess.doneBusy', { busy: busyCount })}
     </p>
     <p class="reprocess-dialog__note">
-      {$currentLocale &&
-        t('bibliography.reprocess.doneBatch', { tab: t('settings.batchTab') })}
+      {$currentLocale && t('bibliography.reprocess.doneBatch', { tab: t('settings.batchTab') })}
     </p>
   {:else if phase === 'no-candidates'}
     <p class="reprocess-dialog__note" role="status">

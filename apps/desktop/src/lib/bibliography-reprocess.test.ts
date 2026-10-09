@@ -81,10 +81,7 @@ describe('bibliography reprocess wrappers', () => {
 
     const dispose = await onBibliographyReprocessPreviewProgress(handler)
 
-    expect(mockListen).toHaveBeenCalledWith(
-      REPROCESS_PREVIEW_PROGRESS_EVENT,
-      expect.any(Function)
-    )
+    expect(mockListen).toHaveBeenCalledWith(REPROCESS_PREVIEW_PROGRESS_EVENT, expect.any(Function))
     const listener = mockListen.mock.calls[0]![1] as (event: {
       payload: { done: number; total: number }
     }) => void
