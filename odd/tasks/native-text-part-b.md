@@ -16,7 +16,7 @@ Branch `feat/native-text-reprocess`, worktree
 ## Tasks
 
 - [x] B0 — Write the part B plan and run Judgment Day on it before implementing.
-- [ ] B1 — No automatic re-demand of stored text (plan 2.1): `extraction_is_settled` = matches source only;
+- [x] B1 — No automatic re-demand of stored text (plan 2.1): `extraction_is_settled` = matches source only;
   admission skips a failed/cancelled OCR attempt for the same file (fingerprint `mtime` prefix, incl.
   `source_changed`); `bibliography_extract` checkpoints survive terminal failure; empty GLM answer
   checkpointed as `Ok("")`.
@@ -34,3 +34,10 @@ Branch `feat/native-text-reprocess`, worktree
 - 2026-10-08: tasks opened; worktree created from main 49a5f42.
 - 2026-10-08: B0 done — plan `e69242b` judged (JD7: 2 confirmed HIGH, 4 single-judge HIGH, info), revised
   in `1bf1be0`, scoped re-judgment approved with two warnings folded in. JUDGMENT: APPROVED.
+- 2026-10-08: B1 done — settled = source identity only; admission skips failed (OCR codes +
+  source_changed) or cancelled attempts on the same `mtime` prefix; extract checkpoints survive terminal
+  failure; empty GLM answer checkpointed. RED observed on 9 tests; lib bibliography 187 passed,
+  bibliography_processing 165 passed, clippy and fmt clean. Residuals for the code judgment:
+  `source_changed` never lands on a `failed` row today (`record_source_change` requeues the same task
+  with a re-pinned fingerprint, so its old-fingerprint checkpoints are not reused); a cancelled task
+  still wipes its checkpoints (`cancel_running_task`).

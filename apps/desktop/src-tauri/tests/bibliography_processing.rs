@@ -5377,25 +5377,50 @@ fn seed_attachment_with_mtime(
     path: &str,
     mtime: i64,
 ) {
+    seed_attachment_identity(
+        conn,
+        item_id,
+        "DEMANDA01",
+        path,
+        "demanda.pdf",
+        "application/pdf",
+        mtime,
+        4,
+    );
+}
+
+/// Re-seeds one attachment row under a fresh catalog identity (mtime and
+/// native version): a file Zotero re-synced, or a metadata edit.
+#[allow(clippy::too_many_arguments)]
+fn seed_attachment_identity(
+    conn: &mut rusqlite::Connection,
+    item_id: &str,
+    attachment_key: &str,
+    path: &str,
+    filename: &str,
+    content_type: &str,
+    mtime: i64,
+    native_version: i64,
+) {
     use entropia_desktop_lib::bibliography::repository::{upsert_attachment, AttachmentInput};
     upsert_attachment(
         conn,
         item_id,
         AttachmentInput {
-            attachment_key: "DEMANDA01".to_string(),
-            content_type: Some("application/pdf".to_string()),
+            attachment_key: attachment_key.to_string(),
+            content_type: Some(content_type.to_string()),
             link_mode: Some("linked_file".to_string()),
-            filename: Some("demanda.pdf".to_string()),
+            filename: Some(filename.to_string()),
             native_path: Some(path.to_string()),
             url: None,
             md5: None,
             mtime: Some(mtime),
             native_json_snapshot: serde_json::json!({
-                "key": "DEMANDA01", "itemType": "attachment",
-                "linkMode": "linked_file", "contentType": "application/pdf",
+                "key": attachment_key, "itemType": "attachment",
+                "linkMode": "linked_file", "contentType": content_type,
             })
             .to_string(),
-            native_version: Some(4),
+            native_version: Some(native_version),
         },
     )
     .expect("update attachment");
@@ -7051,6 +7076,42 @@ struct FailingNthOcrProvider {
     calls: Mutex<usize>,
     fail_on_call: usize,
     text: String,
+}
+
+/// A provider that answers from a script: every call takes the next answer.
+/// The call log is what the resume contract is asserted on — one paid
+/// recognition per page across all attempts.
+struct ScriptedOcrProvider {
+    answers: Mutex<VecDeque<Result<String, String>>>,
+    calls: Mutex<usize>,
+}
+
+impl ScriptedOcrProvider {
+    fn new(answers: impl IntoIterator<Item = Result<String, String>>) -> Self {
+        Self {
+            answers: Mutex::new(answers.into_iter().collect()),
+            calls: Mutex::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        *self.calls.lock().expect("calls")
+    }
+}
+
+impl PageOcrProvider for ScriptedOcrProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        *self.calls.lock().expect("calls") += 1;
+        self.answers
+            .lock()
+            .expect("answers")
+            .pop_front()
+            .unwrap_or_else(|| Err("script exhausted".to_string()))
+    }
+
+    fn name(&self) -> &str {
+        "scripted-ocr"
+    }
 }
 
 impl PageOcrProvider for FailingNthOcrProvider {
@@ -9742,6 +9803,18 @@ fn run_extract_with_provider(
     renderer: &Arc<FakeRenderer>,
     provider: Arc<dyn PageOcrProvider>,
 ) -> RunOneOutcome {
+    run_extract_with_provider_at(dir, conn, renderer, provider, repository::now_ms())
+}
+
+/// The same run at an explicit clock reading, so parked `retry_wait` tasks
+/// can be claimed again without sleeping.
+fn run_extract_with_provider_at(
+    dir: &tempfile::TempDir,
+    conn: &rusqlite::Connection,
+    renderer: &Arc<FakeRenderer>,
+    provider: Arc<dyn PageOcrProvider>,
+    now_ms: i64,
+) -> RunOneOutcome {
     let mut registry = ExecutorRegistry::new();
     let renderer: Arc<dyn PageRenderer> = renderer.clone();
     registry.register(Arc::new(BibliographyExtractExecutor::with_selective_ocr(
@@ -9752,11 +9825,20 @@ fn run_extract_with_provider(
         &ctx_of(dir),
         &registry,
         "extract-session",
-        repository::now_ms(),
+        now_ms,
         &|_, _| {},
         &|_, _, _, _| {},
     )
     .expect("extract run")
+}
+
+fn checkpoint_rows(conn: &rusqlite::Connection, task_id: &str) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM processing_checkpoints WHERE task_id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )
+    .expect("checkpoint count")
 }
 
 fn fresh_renderer() -> Arc<FakeRenderer> {
@@ -9992,11 +10074,12 @@ fn a_mostly_native_pdf_stays_on_page_level_ocr() {
     assert_eq!(renderer.rendered_pages.lock().unwrap().as_slice(), &[4]);
 }
 
-/// An extraction stored as `empty` before OCR could read it is demanded
-/// again by the next sync, exactly once: after an OCR pass that really ran
-/// it is settled.
+/// An extraction stored as `empty` is settled like any other: a published
+/// row is never re-demanded by itself, empty or not. No automatic
+/// content-based re-demand exists — repairing stored text is the owner's
+/// explicit reprocess action, with its cost visible first (plan 2.1).
 #[test]
-fn an_empty_extraction_is_readmitted_once_for_ocr() {
+fn an_empty_extraction_is_never_readmitted_for_ocr() {
     let (dir, mut conn) = migrated_db();
     let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
     // The extraction as the old build left it: a plain native run, no OCR.
@@ -10011,25 +10094,25 @@ fn an_empty_extraction_is_readmitted_once_for_ocr() {
         .unwrap();
     assert_eq!(quality, "empty");
 
-    assert_eq!(
-        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 1"),
-        1,
-        "an empty extraction that never went through OCR is demanded again"
-    );
-    let renderer = fresh_renderer();
-    let provider = PdfModeProvider::new(None);
-    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
-    assert!(
-        matches!(outcome, RunOneOutcome::Succeeded { .. }),
-        "{outcome:?}"
-    );
-    assert_eq!(provider.pdf_calls.lock().unwrap().len(), 1);
-
-    assert_eq!(
-        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 2"),
-        0,
-        "recognized text settles the extraction"
-    );
+    for sync in 1..=2 {
+        let created = repository::admit_stale_extraction_demands(&conn, &library)
+            .unwrap_or_else(|e| panic!("sync {sync}: {e}"));
+        assert_eq!(
+            created, 0,
+            "sync {sync} must not re-demand a stored extraction, empty or not"
+        );
+    }
+    // The executor agrees: a queued duplicate for it is already current.
+    let second = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &second);
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&second],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(receipt.contains("\"alreadyCurrent\":true"), "{receipt}");
 }
 
 /// A scan whose OCR ran and found nothing is settled too: the sync must not
@@ -11676,10 +11759,11 @@ fn seed_stored_texts(
     .expect("seed page text");
 }
 
-/// A stored extraction whose text is garbled raw glyph codes is re-demanded
-/// although the source identity (catalog mtime + file bytes) never moved.
+/// A stored extraction is settled by its source identity alone: garbled raw
+/// glyph codes never re-demand themselves. Repairing them is the owner's
+/// reprocess action (plan 2.1), never an automatic paid OCR.
 #[test]
-fn admission_re_demands_a_garbled_stored_extraction_with_unchanged_source_identity() {
+fn admission_leaves_a_garbled_stored_extraction_settled() {
     let (dir, mut conn) = migrated_db();
     let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
     seed_stored_texts(
@@ -11695,15 +11779,38 @@ fn admission_re_demands_a_garbled_stored_extraction_with_unchanged_source_identi
     let created =
         repository::admit_stale_extraction_demands(&conn, &library).expect("garbled sync");
     assert_eq!(
-        created, 1,
-        "garbled stored text must be re-demanded despite the unchanged source identity"
+        created, 0,
+        "garbled stored text must stay settled while the source identity holds"
+    );
+    // The executor agrees: a queued demand finishes `alreadyCurrent`.
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(receipt.contains("\"alreadyCurrent\":true"), "{receipt}");
+    let stored: String = conn
+        .query_row(
+            "SELECT text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("page row");
+    assert!(
+        stored.contains("3FWJTUB"),
+        "the stored row is left untouched: {stored}"
     );
 }
 
-/// One garbled page row poisons the whole stored extraction: admission
-/// checks the page texts too, not just the joined document text.
+/// One garbled page row does not un-settle the extraction either: the
+/// source identity alone decides, page rows never re-demand themselves.
 #[test]
-fn admission_re_demands_when_only_a_stored_page_text_is_garbled() {
+fn admission_leaves_a_garbled_stored_page_settled() {
     let (dir, mut conn) = migrated_db();
     let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
     seed_stored_texts(
@@ -11718,7 +11825,7 @@ fn admission_re_demands_when_only_a_stored_page_text_is_garbled() {
 
     let created =
         repository::admit_stale_extraction_demands(&conn, &library).expect("garbled page sync");
-    assert_eq!(created, 1, "a garbled stored page must be re-demanded");
+    assert_eq!(created, 0, "a garbled stored page must stay settled");
 }
 
 /// The negative control: a clean stored extraction of the same shape stays
@@ -11769,25 +11876,36 @@ fn admission_leaves_an_empty_html_snapshot_settled() {
     assert_eq!(created, 0, "an empty HTML snapshot has no OCR to wait for");
 }
 
-/// The retry rule still holds for PDFs: an empty PDF whose OCR was never
-/// attempted is re-demanded.
+/// The settled rule holds for PDFs too: an empty stored extraction of an
+/// unchanged PDF is final, never an open OCR demand.
 #[test]
-fn admission_re_demands_an_empty_pdf_until_ocr_was_attempted() {
+fn admission_leaves_an_empty_pdf_extraction_settled() {
     let (dir, mut conn) = migrated_db();
     let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
     seed_stored_texts(&conn, &attachment_id, &item_id, &path, "", "", "empty");
 
     let created =
         repository::admit_stale_extraction_demands(&conn, &library).expect("empty pdf sync");
-    assert_eq!(created, 1, "an empty PDF waits for an OCR attempt");
+    assert_eq!(created, 0, "an empty PDF extraction is settled too");
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    assert!(receipt.contains("\"alreadyCurrent\":true"), "{receipt}");
 }
 
-/// The re-process must actually run OCR despite the unchanged source
-/// identity (no mtime/bytes short-circuit), replace the page with the OCR
-/// text, keep no glyph code anywhere, and chain the profile re-demand that
-/// re-embeds the moved passages.
+/// The re-process must actually run OCR, replace the page with the OCR text,
+/// keep no glyph code anywhere, and chain the profile re-demand that
+/// re-embeds the moved passages. A changed file is what re-extracts now:
+/// garbled stored text of an unchanged file is the owner's reprocess action,
+/// never an automatic re-demand (plan 2.1).
 #[test]
-fn garbled_pages_are_re_processed_and_ocr_owns_the_page() {
+fn a_changed_file_re_extracts_and_ocr_owns_the_garbled_page() {
     let (dir, mut conn) = migrated_db();
     seed_library(&conn, "lib-1", Some(7));
     let item_id = seed_catalog(
@@ -11821,6 +11939,18 @@ fn garbled_pages_are_re_processed_and_ocr_owns_the_page() {
             row.get(0)
         })
         .expect("library row");
+    // The file identity moves (a replacement Zotero re-synced), so the stored
+    // extraction is stale and the sync re-demands it exactly once.
+    seed_attachment_identity(
+        &mut conn,
+        &item_id,
+        "GARBATT01",
+        &path,
+        "garabatos.pdf",
+        "application/pdf",
+        1_800_000_000,
+        4,
+    );
     assert_eq!(
         repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
         1
@@ -11836,7 +11966,7 @@ fn garbled_pages_are_re_processed_and_ocr_owns_the_page() {
     assert_eq!(
         provider.calls.lock().expect("calls").len(),
         1,
-        "the executor must OCR the garbled page despite the unchanged source identity"
+        "the executor must OCR the garbled page once the file moved"
     );
     let (method, text): (String, String) = conn
         .query_row(
@@ -12620,4 +12750,476 @@ fn chunking_never_carries_html_tags_into_passages() {
             );
         }
     }
+}
+
+// ── Part B 2.1: a stored extraction is never re-demanded by itself ─────────
+//
+// One rule decides a settled extraction: the stored row matches the source
+// identity. Garbled text, an `empty` verdict and a failed OCR pass never
+// re-demand anything automatically; the owner repairs with "Reprocesar
+// texto" (plan 2.1). A terminal paid attempt on the same file counts the
+// same way: the sync must not silently re-queue and re-pay it (JD7-A-001).
+
+/// The catalog version alone — same mtime, same file bytes — never re-demands
+/// an extraction: the file did not move (JD7-A-002).
+#[test]
+fn a_catalog_version_only_change_is_not_re_admitted() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id, item_id, path) = seed_readable_pdf(&dir, &mut conn);
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &task_id);
+
+    // A metadata edit: the catalog version moves, the file does not.
+    seed_attachment_identity(
+        &mut conn,
+        &item_id,
+        "DEMANDA01",
+        &path,
+        "demanda.pdf",
+        "application/pdf",
+        1_700_000_000,
+        4,
+    );
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("version sync"),
+        0,
+        "a catalog version alone must not re-demand the extraction"
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 1);
+}
+
+/// Two syncs around a definitive OCR failure: the second creates no tasks.
+/// A spent paid attempt on this exact file is not silently repeated
+/// (JD7-A-001); recovery is the owner's explicit reprocess.
+#[test]
+fn the_sync_after_a_definitive_ocr_failure_creates_no_tasks() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    // One extraction is already published — for the previous file identity,
+    // so the sync demands the moved file once and only once.
+    let first = admit_extract_demand(&conn, &attachment_id);
+    run_extract(&dir, &conn, &first);
+    let item_id: String = conn
+        .query_row(
+            "SELECT item_id FROM zotero_attachments WHERE id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("item id");
+    let pdf_path = dir
+        .path()
+        .join("escaneado.pdf")
+        .to_string_lossy()
+        .to_string();
+    seed_attachment_identity(
+        &mut conn,
+        &item_id,
+        "SCANATT001",
+        &pdf_path,
+        "escaneado.pdf",
+        "application/pdf",
+        1_800_000_000,
+        4,
+    );
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 1"),
+        1,
+        "the moved file is demanded once"
+    );
+
+    // The definitive provider failure the queue records for a fatal OCR
+    // verdict: ExecOutput::Fatal reaches fail_attempt with retryable = false.
+    let task = repository::claim_next(
+        &conn,
+        "extract-session",
+        &["bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim")
+    .expect("claimable");
+    let outcome = repository::fail_attempt(
+        &conn,
+        &task.task_id,
+        task.lease_epoch,
+        task.attempt_number,
+        "ocr_failed",
+        "GLM-OCR API error (400): bad input",
+        false,
+        None,
+        repository::now_ms(),
+    )
+    .expect("fail");
+    assert!(matches!(outcome, repository::FailOutcome::Failed));
+    let code: String = conn
+        .query_row(
+            "SELECT last_error_code FROM processing_tasks WHERE id = ?1",
+            [&task.task_id],
+            |row| row.get(0),
+        )
+        .expect("error code");
+    assert_eq!(code, "ocr_failed");
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync 2"),
+        0,
+        "a definitive OCR failure must not be silently re-queued and re-paid"
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 2);
+}
+
+/// A first extraction whose OCR exhausts the transient retries publishes
+/// nothing — and the next sync still must not re-queue and re-pay it
+/// (JD7-A-001). Only the owner's reprocess recovers the attachment.
+#[test]
+fn a_first_extraction_that_exhausts_transient_retries_is_not_re_demanded() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+
+    let base = repository::now_ms();
+    for round in 0..3i64 {
+        let outcome = run_extract_with_provider_at(
+            &dir,
+            &conn,
+            &fresh_renderer(),
+            FakeOcrProvider::failing("request timed out after 30s"),
+            base + round * 60_000,
+        );
+        if round < 2 {
+            assert!(
+                matches!(outcome, RunOneOutcome::Waiting { .. }),
+                "round {round}: {outcome:?}"
+            );
+        } else {
+            assert!(
+                matches!(outcome, RunOneOutcome::Failed { .. }),
+                "round {round}: {outcome:?}"
+            );
+        }
+    }
+    let code: String = conn
+        .query_row(
+            "SELECT last_error_code FROM processing_tasks
+             WHERE kind = 'bibliography_extract' AND subject_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("error code");
+    assert_eq!(code, "provider_transient");
+    let extractions: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_extractions WHERE attachment_id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("extractions");
+    assert_eq!(
+        extractions, 0,
+        "a failed first extraction publishes nothing"
+    );
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("second sync"),
+        0,
+        "a spent paid attempt must not be silently re-queued"
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 1);
+}
+
+/// The negative control: a read failure never reached a provider, so the
+/// sync re-demands it exactly as before (plan 2.1).
+#[test]
+fn a_read_failure_is_still_re_demanded_by_the_next_sync() {
+    let (dir, mut conn) = migrated_db();
+    let (library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    admit_extract_demand(&conn, &attachment_id);
+
+    // The exhausted read failure exactly as run_one records it: extraction_io
+    // parks in retry_wait twice and fails the cycle on the third strike.
+    let base = repository::now_ms();
+    for round in 0..3i64 {
+        let task = repository::claim_next(
+            &conn,
+            "extract-session",
+            &["bibliography_extract"],
+            base + round * 60_000,
+        )
+        .expect("claim")
+        .expect("claimable");
+        let outcome = repository::fail_attempt(
+            &conn,
+            &task.task_id,
+            task.lease_epoch,
+            task.attempt_number,
+            "extraction_io",
+            "Failed to read attachment file: Access is denied",
+            true,
+            None,
+            base + round * 60_000,
+        )
+        .expect("fail");
+        if round < 2 {
+            assert!(matches!(outcome, repository::FailOutcome::RetryWait { .. }));
+        } else {
+            assert!(matches!(outcome, repository::FailOutcome::Failed));
+        }
+    }
+
+    assert_eq!(
+        repository::admit_stale_extraction_demands(&conn, &library).expect("sync"),
+        1,
+        "a read failure never reached a provider: the sync re-demands it"
+    );
+    assert_eq!(extract_task_count(&conn, &attachment_id), 2);
+}
+
+/// Plants one terminal `bibliography_extract` task row with the given
+/// identity and verdict — the queue state the scheduler leaves behind.
+fn plant_extract_task(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+    fingerprint: &str,
+    state: &str,
+    code: Option<&str>,
+) {
+    conn.execute(
+        "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+           input_revision, input_fingerprint, contract_hash, state, last_error_code, created_at, updated_at)
+         VALUES ('planted-extract', 'bibliography_extract', ?1, 'bibliography', 'attachment', ?1,
+           0, ?2, 'bibliography-extract-v1', ?3, ?4, 1, 1)",
+        rusqlite::params![attachment_id, fingerprint, state, code],
+    )
+    .expect("plant extraction task");
+}
+
+/// The terminal-attempt gate reads the verdict honestly: OCR-provider codes
+/// (and `source_changed` on the same file) count as one spent attempt;
+/// cancelled counts whatever its code; read and storage failures are
+/// re-demanded. The gate matches the file identity prefix without the
+/// catalog version — the same file only while the `mtime` holds.
+#[test]
+fn terminal_attempt_codes_decide_whether_the_sync_re_demands() {
+    for (state, code, same_identity, re_demanded) in [
+        ("failed", "provider_transient", true, false),
+        ("failed", repository::RATE_LIMITED_CODE, true, false),
+        ("failed", "ocr_failed", true, false),
+        ("failed", "configuration_required_ocr", true, false),
+        ("failed", "source_changed", true, false),
+        ("cancelled", "ocr_failed", true, false),
+        ("cancelled", "extraction_io", true, false),
+        ("failed", "extraction_io", true, true),
+        ("failed", "storage_unavailable", true, true),
+        ("failed", "publish_failed", true, true),
+        // A terminal attempt on another file identity never hides the
+        // current one.
+        ("failed", "ocr_failed", false, true),
+    ] {
+        let (dir, mut conn) = migrated_db();
+        let (library, attachment_id, _item, _path) = seed_readable_pdf(&dir, &mut conn);
+        let fingerprint = if same_identity {
+            format!("attachment|{attachment_id}|mtime:1700000000|version:3")
+        } else {
+            format!("attachment|{attachment_id}|mtime:1800000000|version:3")
+        };
+        plant_extract_task(&conn, &attachment_id, &fingerprint, state, Some(code));
+        let created = repository::admit_stale_extraction_demands(&conn, &library)
+            .unwrap_or_else(|e| panic!("{state}/{code}: {e}"));
+        assert_eq!(
+            created,
+            if re_demanded { 1 } else { 0 },
+            "{state}/{code} same_identity={same_identity}"
+        );
+    }
+}
+
+/// JD7-B: the paid pages of a terminally failed extraction survive for
+/// `processing_retry`, which reuses them instead of re-sending. The provider
+/// is called at most once per candidate page across every attempt and the
+/// retry.
+#[test]
+fn processing_retry_reuses_checkpoints_and_never_resends_the_paid_pages() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "RETRYWORK1", "Obra con reintento", "Resumen.");
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")], &[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "reintentar.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "RETRYATT01",
+        "linked_file",
+        Some(&path),
+        "reintentar.pdf",
+        "application/pdf",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+
+    // Attempt 1 pays both candidate pages; each settled page checkpoints as
+    // it lands, before any verdict about the attempt.
+    let task = repository::claim_next(
+        &conn,
+        "extract-session",
+        &["bibliography_extract"],
+        repository::now_ms(),
+    )
+    .expect("claim")
+    .expect("claimable");
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido de pagina con longitud suficiente para ser rico",
+    );
+    let result = ocr_executor(fresh_renderer(), Arc::clone(&provider)).run(
+        &ctx_of(&dir),
+        &task,
+        &StopFlag::new(),
+    );
+    assert!(
+        matches!(result.output, ExecOutput::Success { .. }),
+        "{:?}",
+        result.output
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        2,
+        "both candidate pages are paid once"
+    );
+    assert_eq!(
+        checkpoint_rows(&conn, &task.task_id),
+        2,
+        "each page checkpoints"
+    );
+
+    // The queue closes the attempt terminally — the seam run_one uses for a
+    // fatal verdict. The paid pages must survive it for the owner's retry.
+    let outcome = repository::fail_attempt(
+        &conn,
+        &task.task_id,
+        task.lease_epoch,
+        task.attempt_number,
+        "extraction_io",
+        "Failed to read attachment file: Access is denied",
+        false,
+        None,
+        repository::now_ms(),
+    )
+    .expect("fail");
+    assert!(matches!(outcome, repository::FailOutcome::Failed));
+    assert_eq!(
+        checkpoint_rows(&conn, &task.task_id),
+        2,
+        "terminal failure keeps the paid pages for the retry"
+    );
+
+    // `processing_retry` reopens the same task — same fingerprint, same
+    // contract — and the retry sends nothing new to the provider.
+    let batch: String = conn
+        .query_row(
+            "SELECT batch_id FROM processing_batch_tasks WHERE task_id = ?1",
+            [&task.task_id],
+            |row| row.get(0),
+        )
+        .expect("batch link");
+    assert_eq!(
+        repository::retry_failed(&conn, &batch, Some(&task.task_id)).expect("retry"),
+        1
+    );
+    let outcome = run_extract_with_provider_at(
+        &dir,
+        &conn,
+        &fresh_renderer(),
+        provider.clone(),
+        repository::now_ms(),
+    );
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        2,
+        "total provider calls across attempts stay at the candidate pages"
+    );
+}
+
+/// JD7-A-004: an empty GLM answer is a result, not a failure. It lands in
+/// its page checkpoint, so resume never re-pays it: page 1 answered empty,
+/// page 2 timed out, and after the resume page 1 is recognized exactly once.
+#[test]
+fn an_empty_page_answer_is_checkpointed_and_recognized_once() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "EMPTYANSW1", "Obra con pagina vacia", "Resumen.");
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")], &[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "vacio.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "EMPTYANS01",
+        "linked_file",
+        Some(&path),
+        "vacio.pdf",
+        "application/pdf",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let first_provider = Arc::new(ScriptedOcrProvider::new([
+        Err(entropia_desktop_lib::bibliography::selective_ocr::EMPTY_OCR_PAGE_RESPONSE.to_string()),
+        Err("request timed out after 30s".to_string()),
+    ]));
+    let base = repository::now_ms();
+    let outcome =
+        run_extract_with_provider_at(&dir, &conn, &renderer, first_provider.clone(), base);
+    assert!(
+        matches!(outcome, RunOneOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        first_provider.calls(),
+        2,
+        "page 1 answered, page 2 timed out"
+    );
+    assert_eq!(
+        checkpoint_rows(&conn, &task_id),
+        1,
+        "the empty answer is a checkpointed result"
+    );
+
+    // Resume: page 1 comes back from its checkpoint, page 2 is recognized.
+    let second_provider = Arc::new(ScriptedOcrProvider::new([Ok(
+        "Texto reconocido de la segunda pagina con suficiente longitud".to_string(),
+    )]));
+    let outcome = run_extract_with_provider_at(
+        &dir,
+        &conn,
+        &renderer,
+        second_provider.clone(),
+        base + 120_000,
+    );
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        second_provider.calls(),
+        1,
+        "page 1 is recognized exactly once in total"
+    );
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[1, 2, 2],
+        "the resumed run renders only page 2"
+    );
+    // The published rows are unchanged: an empty answer keeps the native row
+    // of a non-garbled page (settled_page_row decides on the text).
+    let (method, text): (String, String) = conn
+        .query_row(
+            "SELECT method, text_content FROM bibliographic_page_texts
+             WHERE attachment_id = ?1 AND page_number = 1",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page 1 row");
+    assert_eq!(method, "native");
+    assert!(text.contains("ok"), "the native row is untouched: {text}");
 }

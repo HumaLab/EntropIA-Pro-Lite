@@ -3115,8 +3115,9 @@ impl BibliographyExtractExecutor {
     /// Runs the selective OCR pass over pages whose native layer is
     /// sparse or empty. Rich and unreadable pages never reach a
     /// provider. Each OCR page checkpoints under `ocr-page:{n}` through
-    /// `ctx.unit`, so resume reuses confirmed texts without re-sending
-    /// content, and demand loss stops before the next provider call.
+    /// `ctx.unit`, so resume reuses confirmed texts — including a blank
+    /// answer — without re-sending content, and demand loss stops before
+    /// the next provider call.
     /// An empty OCR answer keeps the native row untouched — unless the
     /// native text is garbled raw glyph codes, which OCR owns: the page is
     /// then recorded empty and the codes are never kept. A non-empty
@@ -3235,23 +3236,26 @@ impl BibliographyExtractExecutor {
                         let image = renderer
                             .render_page(bytes, page.page_number as u32)
                             .map_err(|error| format!("render failed: {error}"))?;
-                        provider.recognize_page(&image)
+                        provider.recognize_page(&image).or_else(|error| {
+                            // A GLM-OCR answer with no content is a blank
+                            // page, not a page failure: the provider
+                            // answered, the page simply holds no text
+                            // (whole-asset corpus OCR keeps it an error).
+                            // Mapped inside the unit, so the blank answer
+                            // lands in the checkpoint and resume never
+                            // re-pays the page (JD7-A-004).
+                            if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
+                                &error,
+                            ) {
+                                Ok(String::new())
+                            } else {
+                                Err(error)
+                            }
+                        })
                     }) {
                         Ok(text) => {
                             ocr_attempted = true;
                             Some(text)
-                        }
-                        // A GLM-OCR answer with no content is a blank page, not
-                        // a page failure: the provider answered, the page simply
-                        // holds no text (whole-asset corpus OCR keeps it an
-                        // error). Recorded as empty text below.
-                        Err(error)
-                            if crate::bibliography::selective_ocr::is_empty_ocr_page_response(
-                                &error,
-                            ) =>
-                        {
-                            ocr_attempted = true;
-                            Some(String::new())
                         }
                         Err(error) => {
                             if error.starts_with("lease_lost") || error.starts_with("demand_lost") {

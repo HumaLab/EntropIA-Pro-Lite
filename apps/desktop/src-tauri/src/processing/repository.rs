@@ -798,6 +798,80 @@ fn attachment_extraction_fingerprint(
     )
 }
 
+/// The file identity every extraction attempt on the same file shares: the
+/// `attachment_extraction_fingerprint` prefix without the catalog version —
+/// a metadata edit must never look like a different file (JD7-A-002).
+fn attachment_extraction_identity_prefix(
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> String {
+    format!(
+        "attachment|{}|mtime:{}|",
+        attachment.attachment_id,
+        attachment
+            .mtime
+            .map(|mtime| mtime.to_string())
+            .unwrap_or_default()
+    )
+}
+
+/// Terminal failure codes that count as one spent OCR attempt on a file.
+/// They are exactly the OCR-provider verdicts
+/// [`crate::bibliography::selective_ocr::map_page_ocr_error`] produces
+/// (transient exhaustion, rate limit, provider failure, configuration) plus
+/// `source_changed` — the commit-gate verdict a metadata edit during the
+/// first extraction records. Read and storage failures (`extraction_io`,
+/// `storage_unavailable`, `publish_failed`, ...) are absent on purpose: they
+/// never reached a provider and must still be re-demanded.
+const TERMINAL_OCR_ATTEMPT_CODES: &[&str] = &[
+    "provider_transient",
+    RATE_LIMITED_CODE,
+    "ocr_failed",
+    "configuration_required_ocr",
+    "source_changed",
+];
+
+/// True when a terminal `bibliography_extract` task already finished this
+/// exact file — a `failed` OCR verdict or a `cancelled` attempt whose
+/// `input_fingerprint` carries the file identity prefix. Such an attempt is
+/// spent: the sync must not silently re-queue and re-pay it (JD7-A-001);
+/// the owner recovers it with the explicit reprocess action.
+fn terminal_extraction_attempt_for(
+    conn: &Connection,
+    attachment: &crate::bibliography::attachment::AttachmentRef,
+) -> Result<bool, String> {
+    let prefix = attachment_extraction_identity_prefix(attachment);
+    let mut stmt = conn
+        .prepare(
+            "SELECT state, last_error_code FROM processing_tasks
+             WHERE kind = 'bibliography_extract'
+               AND domain = 'bibliography' AND subject_kind = 'attachment'
+               AND subject_id = ?1
+               AND state IN ('failed', 'cancelled')
+               AND instr(input_fingerprint, ?2) = 1",
+        )
+        .map_err(|e| format!("Failed to list extraction attempts: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![attachment.attachment_id, prefix], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|e| format!("Failed to list extraction attempts: {e}"))?;
+    for row in rows {
+        let (state, code) = row.map_err(|e| format!("Failed to list extraction attempts: {e}"))?;
+        // A cancelled attempt counts whatever its code: the owner stopped a
+        // paid run and no sync may restart it behind their back.
+        if state == "cancelled" {
+            return Ok(true);
+        }
+        if code
+            .as_deref()
+            .is_some_and(|code| TERMINAL_OCR_ATTEMPT_CODES.contains(&code))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// E3b-WU2: per-work profile demand. Single-flight on
 /// (bibliography, item, <item row id>, bibliography_profile); the input pin
 /// is the profile hash at admission time and the contract is the effective
@@ -2355,6 +2429,13 @@ pub fn admit_stale_extraction_demands(
                 error.code, error.message
             )
         })? {
+            continue;
+        }
+        // A terminal OCR attempt already spent on this exact file is not
+        // silently repeated (JD7-A-001): no sync may re-queue and re-pay it.
+        // The owner recovers the attachment with the explicit reprocess
+        // action, which shows the cost first.
+        if terminal_extraction_attempt_for(conn, &attachment)? {
             continue;
         }
         let outcome = admit_subject_or_attach(
@@ -5336,6 +5417,8 @@ pub enum FailOutcome {
 /// task in `retry_wait` with a persisted wake-up time (the slot is freed —
 /// nobody sleeps holding a worker); anything else, or the third strike in
 /// a cycle, fails the task terminally with its code and message preserved.
+/// A terminal `bibliography_extract` failure keeps its checkpoints (the
+/// paid pages); every other kind wipes them as before.
 // One argument per column, which is what a persistence function for this row
 // looks like. Bundling them into a struct would move the same fields somewhere
 // else and add a type with exactly one caller, so the lint is acknowledged and
@@ -5352,18 +5435,18 @@ pub fn fail_attempt(
     provider_request_id: Option<&str>,
     now_ms: i64,
 ) -> Result<FailOutcome, String> {
-    let row: Option<(String, i64, i64)> = conn
+    let row: Option<(String, i64, i64, String)> = conn
         .query_row(
-            "SELECT state, lease_epoch, retry_count FROM processing_tasks WHERE id = ?1",
+            "SELECT state, lease_epoch, retry_count, kind FROM processing_tasks WHERE id = ?1",
             [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map(Some)
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),
             other => Err(format!("Failed to read {task_id} for failure: {other}")),
         })?;
-    let Some((state, epoch, retry_count)) = row else {
+    let Some((state, epoch, retry_count, task_kind)) = row else {
         return Err(format!("lease_lost: {task_id} vanished mid-attempt"));
     };
     if state != "running" || epoch != lease_epoch {
@@ -5413,7 +5496,13 @@ pub fn fail_attempt(
             rusqlite::params![error_code, error_message, now_ms, task_id],
         )
         .map_err(|e| format!("Failed to fail {task_id}: {e}"))?;
-        delete_task_checkpoints(conn, task_id)?;
+        // A terminal extraction failure keeps its checkpoints: the pages the
+        // provider already answered for are paid and the owner's
+        // `processing_retry` must reuse them (JD7-A-001, JD7-B). Every other
+        // kind keeps today's wipe.
+        if task_kind != "bibliography_extract" {
+            delete_task_checkpoints(conn, task_id)?;
+        }
         Ok(())
     })?;
     Ok(FailOutcome::Failed)
@@ -9706,6 +9795,66 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, FailOutcome::Failed));
         assert_eq!(checkpoint_count(&conn, &other.task_id), 0);
+    }
+
+    // B1 (JD7-B): the paid pages of an extraction survive its terminal
+    // failure, so the owner's `processing_retry` reuses them instead of
+    // paying the provider again. Only `bibliography_extract` keeps them.
+    #[test]
+    fn terminal_failure_keeps_the_checkpoints_of_a_bibliography_extract() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b-bib", "req-bib", r#"["bibliography_extract"]"#);
+        conn.execute(
+            "UPDATE processing_batches SET state='running', desired_state='run', planning_done=1 WHERE id='b-bib'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_tasks (id, kind, asset_id_snapshot, domain, subject_kind, subject_id,
+               input_revision, input_fingerprint, contract_hash, state, owner_session, lease_epoch, created_at, updated_at)
+             VALUES ('t-bib-extract', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1',
+               0, 'attachment|att-1|mtime:1|version:1', 'bibliography-extract-v1', 'running', 's1', 7, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, domain, subject_kind, subject_id, request_state)
+             VALUES ('b-bib', 't-bib-extract', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1', 'active')",
+            [],
+        )
+        .unwrap();
+        save_checkpoint(
+            &conn,
+            "t-bib-extract",
+            7,
+            &NewCheckpoint {
+                unit_key: "ocr-page:1".to_string(),
+                input_fingerprint: "attachment|att-1|mtime:1|version:1".to_string(),
+                contract_hash: "bibliography-extract-v1".to_string(),
+                payload: r#""paid page text""#.to_string(),
+                payload_checksum: "sum".to_string(),
+            },
+            now_ms(),
+        )
+        .expect("checkpoint");
+        let outcome = fail_attempt(
+            &conn,
+            "t-bib-extract",
+            7,
+            1,
+            "provider_transient",
+            "timeout",
+            false,
+            None,
+            now_ms(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, FailOutcome::Failed));
+        assert_eq!(
+            checkpoint_count(&conn, "t-bib-extract"),
+            1,
+            "the paid pages of an extraction survive for the owner's retry"
+        );
     }
 
     #[test]
