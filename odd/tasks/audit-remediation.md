@@ -158,7 +158,27 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     the Tiptap 3 migration (major: custom footnote, image and citation extensions in
     `packages/ui`). It is the only advisory left in `pnpm audit --prod`, so the plan's
     `--audit-level high` gate passes.
-  - [ ] 2.3 (D-08) — Rust advisories (`cargo audit`).
+  - [x] 2.3 (D-08) — Rust advisories (`cargo audit`). Branch `fix/d08-rust-advisories`. Baseline
+    (cargo-audit 0.22.2): 6 vulnerabilities, 12 warnings. Now 0 vulnerabilities from
+    `apps/desktop/src-tauri`, 6 warnings (5 crates), all from third-party crates.
+    - `fee1634f`: lockfile rustls 0.23.45, crossbeam-epoch 0.9.21, quinn-proto 0.11.19, plist
+      1.10.1 (Tauri's plist moves to quick-xml 0.42).
+    - `e1415527`: pdf-extract 0.7 → 0.12, so lopdf 0.34 (RUSTSEC-2026-0187, stack overflow
+      that aborts the process) leaves the tree; no subprocess isolation needed. RED: a page
+      with an array nested 100 000 deep aborts the test binary (SIGABRT) on 0.7; GREEN on
+      0.12. 0.12 now reads the type-4 tint and inline-image fixtures, so the panic-containment
+      tests use a generated missing-colour-space PDF. RDD `review-af34c0532f9aa22b` approved
+      (both commits).
+    - `2580a114`: lockfile imageproc 0.25.1 (3 bounds-check warnings), anyhow 1.0.104, rand
+      0.8.8, aes 0.9.3 (0.9.0 yanked). New `.cargo/audit.toml` ignores RUSTSEC-2026-0194/0195
+      (quick-xml 0.38.4 via hayagriva → citationberg 0.7.0, latest releases; user decision,
+      exposure: custom .csl ≤ 2 MB on a blocking thread) and documents, without ignoring, the
+      5 remaining crates: glib + proc-macro-error (Tauri GTK3), core2 (image AVIF), paste
+      (hayagriva, rav1e), ttf-parser (lopdf 0.42, imageproc). cargo-audit reads the file from
+      the working directory only (C-03 must run it from `apps/desktop/src-tauri`).
+    - Checks: fmt; Lite clippy `-D warnings` and `cargo test` 2724 passed / 0 failed / 34
+      ignored; Pro clippy no new findings (9 known in `deps/uv.rs`, `llm/download.rs`), Pro
+      `ocr::` 216 and `image_edit` 18 passed.
   - [ ] 2.4 (D-03) — unused/duplicated deps.
   - [ ] 2.5 (D-04) — test tooling (vitest, happy-dom, vite).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
