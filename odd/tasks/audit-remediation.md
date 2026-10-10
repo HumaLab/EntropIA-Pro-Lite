@@ -27,7 +27,11 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   Note: the plan's step "ACL test" is n/a here (the guard is in the command body, covered by unit
   tests). `db_execute*` can still write `app_settings` until S-02 (Phase 3); release precedence is
   what neutralizes that path meanwhile.
-- [ ] P1.3 (S-04) — `prosemirror-view` >= 1.42.3.
+- [x] P1.3 (S-04) — `prosemirror-view` >= 1.42.3. Branch `fix/s04-prosemirror-view`, commit `58dcfa53`.
+  Root `pnpm.overrides` → 1.42.6; `pnpm dedupe` leaves one `prosemirror-model` (1.25.12). RED:
+  `pnpm audit --prod` listed prosemirror-view (high); GREEN: gone (high 9 → 8). Frozen install ok;
+  UI 847/847 (incl. writing-image-paste); desktop Pro 3488 passed / Lite 3467 passed (247 files
+  each); typechecks clean. Manual paste from a web page / Word still pending (user).
 - [ ] P1.2 (S-01) — narrow the `fs` plugin scope (inventory first).
 
 ## Later phases
@@ -41,6 +45,10 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
+
+- Local Node is v26: its experimental `localStorage` global shadows happy-dom's and fails 18 desktop
+  test files. Run desktop tests with `NODE_OPTIONS=--no-experimental-webstorage` (or Node 22). Under
+  heavy machine load a few tests (e.g. `route-loader.test.ts`) can time out at 5 s; rerun alone.
 
 - Pro on Linux: `cargo clippy --features local-ml --all-targets -D warnings` fails with 9
   pre-existing errors in `src/deps/uv.rs` (dead Windows-only consts, unneeded `mut`/`return`) and
