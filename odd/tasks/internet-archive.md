@@ -164,7 +164,12 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       shared state (production client, `JobStore` at
       `<data_dir>/staging/internet-archive`), read-only commands `ia_search`,
       `ia_list_collection`, `ia_get_item`, `ia_resolve_identifier`.
-- [ ] 21. SQLite `ProvenanceLookup` over `items.metadata` key
+- [ ] 21. (21a crate: `ItemSnapshot` kept in the job, `build_provenance` /
+      `parse_provenance`; 21b app: lookup and command.) Decisions: Rust builds
+      the compact provenance record and the frontend passes it unchanged as
+      `extraMetadata`; a job always targets an existing collection (the
+      frontend creates a new one first with the existing store service).
+      SQLite `ProvenanceLookup` over `items.metadata` key
       `__entropia_internet_archive`, compact provenance record (≤ 64 KB, T3.8),
       and `ia_prepare_import` (creates a `Draft` job and returns its summary).
 - [ ] 22. Job runner: `ia_start_import`, `ia_cancel_import`,
@@ -208,6 +213,14 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   verifier: fmt, clippy `-D warnings`, `internet_archive` 9, `acl_manifest_guard`
   6, `ocr::pdf` 92; `Cargo.lock` only gained the `internet-archive` entry and the
   `entropia-agent` source line is intact.
+- 2026-10-10, task 21a: crate `provenance.rs`: `ItemSnapshot` stored in the job
+  (`#[serde(default)]`, old `job.json` still loads), `build_provenance` (requires
+  `sha256_local` and `page_count`; URLs built with path segments; capped at
+  64 KB by truncating `rights`, `title`, then list fields with `…[truncado]`,
+  identity fields never touched; errors instead of returning an oversized value),
+  `parse_provenance` and `ProvenanceRecord::from_row`. RED: 4 tests on `todo!()`.
+  GREEN: 143. Parent re-ran fmt, clippy and tests, plus `cargo check --locked
+  --tests` for the app.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

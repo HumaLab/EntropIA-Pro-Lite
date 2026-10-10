@@ -30,6 +30,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::item::{Availability, FileSource, PdfFile};
+use crate::provenance::ItemSnapshot;
 
 /// Schema version stored in every [`Job`]; bump on incompatible change.
 pub const JOB_SCHEMA_VERSION: u32 = 1;
@@ -102,6 +103,8 @@ pub struct Job {
     pub target: ImportTarget,
     pub state: JobState,
     pub files: Vec<JobFile>,
+    #[serde(default)]
+    pub items: Vec<ItemSnapshot>,
 }
 
 /// Invalid per-file transition.
@@ -321,7 +324,14 @@ impl Job {
             target,
             state: JobState::Draft,
             files,
+            items: Vec::new(),
         })
+    }
+
+    /// Snapshot for `identifier`, if the job carries item metadata.
+    #[must_use]
+    pub fn item(&self, identifier: &str) -> Option<&ItemSnapshot> {
+        self.items.iter().find(|s| s.identifier == identifier)
     }
 
     /// Validated per-file transition; updates `updated_at` on success,
@@ -583,6 +593,7 @@ mod spec_tests {
             },
             state: job_state,
             files,
+            items: Vec::new(),
         }
     }
 
@@ -956,6 +967,7 @@ mod spec_tests {
             },
             state: JobState::Running,
             files: vec![f],
+            items: Vec::new(),
         };
         let json = serde_json::to_string(&job).unwrap();
         assert!(json.contains("\"skipped_duplicate\""), "json: {json}");

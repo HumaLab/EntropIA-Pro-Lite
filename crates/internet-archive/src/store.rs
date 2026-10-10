@@ -443,6 +443,7 @@ mod tests {
             },
             state: job_state,
             files: vec![file],
+            items: Vec::new(),
         }
     }
 

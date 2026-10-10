@@ -18,6 +18,7 @@ pub mod job;
 pub mod name;
 pub mod policy;
 pub mod prepare;
+pub mod provenance;
 pub mod resolve;
 pub mod search;
 pub mod store;
@@ -35,6 +36,10 @@ pub use item::{
 };
 pub use name::display_file_name;
 pub use policy::{is_public_ip, FetchPolicy};
+pub use provenance::{
+    build_provenance, parse_provenance, ItemSnapshot, ProvenanceError, ProvenanceRecordParts,
+    MAX_PROVENANCE_BYTES, PROVENANCE_KEY,
+};
 pub use resolve::resolve_identifier;
 pub use search::{Endpoints, SearchItem, SearchPage, SearchQuery};
 pub use verify::{

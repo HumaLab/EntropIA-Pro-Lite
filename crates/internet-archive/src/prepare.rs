@@ -209,6 +209,8 @@ pub struct ProvenanceRecord {
     pub sha1: Option<String>,
     pub size: Option<u64>,
     pub mtime: Option<u64>,
+    pub sha256_local: Option<String>,
+    pub page_count: Option<u32>,
 }
 
 impl ProvenanceRecord {
@@ -520,6 +522,8 @@ mod tests {
             sha1: sha1.map(str::to_string),
             size,
             mtime,
+            sha256_local: None,
+            page_count: None,
         }
     }
 
@@ -543,6 +547,8 @@ mod tests {
             sha1: sha1.map(str::to_string),
             size,
             mtime,
+            sha256_local: None,
+            page_count: None,
         }
     }
 
