@@ -128,6 +128,28 @@ installed (via `pkexec`), so `src-tauri` builds and tests here in Lite. Always
       importer contract are unchanged. The existing in-memory
       `split_pdf_to_single_page_bytes` stays as is for `processing/ocr.rs`.
 
+## Phase 3 remaining crate tasks (download and verify; no Tauri commands)
+
+T3.0 is done in `src-tauri`. The download and verification stay in
+`crates/internet-archive` so they test here. The app wires the data dir and
+commands in Phase 4.
+
+- [ ] 17. Streaming download (T3.2, §7 points 1, 3, 5, 6, 9): GET
+      `/download/{identifier}/{file}` through the existing fetch policy, write to
+      a caller-supplied staging path ending in `.pdf`, refuse to overwrite an
+      existing file, stream with a hard cap (default 500 MB, absolute max 2 GB,
+      never disabled), abort with marker `archivo demasiado grande`, delete the
+      partial on any failure, no `.part` kept. Bounded retries for transient
+      failures; never retry 401/403/404. MVP resume is a full re-download by the
+      caller.
+- [ ] 18. Verification (T3.3, §7 point 7): `%PDF` header, remote md5 or sha1 when
+      published, always local SHA-256, page count via `lopdf` (accepted parse
+      risk, input already capped), reject over the page cap with
+      `demasiadas páginas`, unreadable PDF with `verificación fallida`. Result
+      carries `sha256` and `page_count` for later confirmation.
+- [ ] 19. Display-name sanitizer (§7 point 1): last path segment, same rules as
+      `navegador-copy.ts` `safeStem`, always `.pdf`, fallback to the identifier.
+
 ## Evidence
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
