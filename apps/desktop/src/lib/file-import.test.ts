@@ -299,38 +299,40 @@ describe('readSourceFingerprint', () => {
 })
 
 describe('deleteAssetFile', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    resetDataDirCache()
+    await primeDataDir()
   })
 
   it('successfully removes an existing file', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockResolvedValue(undefined)
 
-    await expect(deleteAssetFile('/path/to/file.pdf')).resolves.toBeUndefined()
-    expect(remove).toHaveBeenCalledWith('/path/to/file.pdf')
+    await expect(deleteAssetFile('/mock/app-data/assets/file.pdf')).resolves.toBeUndefined()
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/file.pdf')
   })
 
   it('continues silently when file does not exist (ENOENT)', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockRejectedValue(new Error('ENOENT: no such file or directory'))
 
-    await expect(deleteAssetFile('/path/to/missing.pdf')).resolves.toBeUndefined()
-    expect(remove).toHaveBeenCalledWith('/path/to/missing.pdf')
+    await expect(deleteAssetFile('/mock/app-data/assets/missing.pdf')).resolves.toBeUndefined()
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/missing.pdf')
   })
 
   it('continues silently when file is not found (NotFound variant)', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockRejectedValue(new Error('NotFound: file not found'))
 
-    await expect(deleteAssetFile('/path/to/missing.pdf')).resolves.toBeUndefined()
+    await expect(deleteAssetFile('/mock/app-data/assets/missing.pdf')).resolves.toBeUndefined()
   })
 
   it('throws on permission errors', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockRejectedValue(new Error('Permission denied'))
 
-    await expect(deleteAssetFile('/path/to/locked.pdf')).rejects.toThrow(
+    await expect(deleteAssetFile('/mock/app-data/assets/locked.pdf')).rejects.toThrow(
       'Failed to delete asset file: Permission denied'
     )
   })
@@ -339,7 +341,7 @@ describe('deleteAssetFile', () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockRejectedValue(new Error('Unknown IO error'))
 
-    await expect(deleteAssetFile('/path/to/file.pdf')).rejects.toThrow(
+    await expect(deleteAssetFile('/mock/app-data/assets/file.pdf')).rejects.toThrow(
       'Failed to delete asset file: Unknown IO error'
     )
   })
@@ -575,6 +577,15 @@ describe('deleteAssetFile never touches files outside the archive', () => {
     await primeDataDir()
   })
 
+  it('deletes nothing before the data directory is primed', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    resetDataDirCache()
+
+    await expect(deleteAssetFile('/mock/app-data/assets/col/item/a.pdf')).resolves.toBeUndefined()
+
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   it('skips an external absolute path without calling remove', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
 
@@ -605,8 +616,10 @@ describe('isOutsideDataDir', () => {
     resetDataDirCache()
   })
 
-  it('cannot tell before the data directory is primed', () => {
-    expect(isOutsideDataDir('/home/ana/a.pdf')).toBe(false)
+  it('treats every path as external before the data directory is primed', () => {
+    expect(isOutsideDataDir('/home/ana/a.pdf')).toBe(true)
+    expect(isOutsideDataDir('/mock/app-data/assets/a.pdf')).toBe(true)
+    expect(isOutsideDataDir('assets/a.pdf')).toBe(true)
   })
 
   it('tells archive paths from external ones, including a lookalike prefix', async () => {

@@ -12,7 +12,7 @@ import { workspace } from '$lib/workspace'
 import { locale } from '$lib/i18n'
 import type { View } from '$lib/navigation'
 import { citationsForAsset } from '$lib/writing'
-import { resolveStoredAssetPath } from '$lib/file-import'
+import { primeDataDir, resetDataDirCache, resolveStoredAssetPath } from '$lib/file-import'
 import {
   DOCUMENT_ASSET_DELETED_EVENT,
   DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
@@ -469,9 +469,15 @@ describe('WorkPane', () => {
   // `handleDeleteAssetConfirm`, but its dedicated coverage did not move with
   // it. `invoke`/`remove` are the global mocks from `test-setup.ts`; the real
   // `$lib/file-import` helpers run for real on top of them, the same way
-  // production code does.
+  // production code does. The data directory is primed as at startup: an
+  // unprimed cache deletes nothing.
   describe('asset delete (single pane)', () => {
+    beforeEach(async () => {
+      await primeDataDir()
+    })
+
     afterEach(() => {
+      resetDataDirCache()
       vi.restoreAllMocks()
     })
 
