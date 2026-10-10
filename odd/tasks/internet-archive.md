@@ -89,6 +89,30 @@ unify later.
       `acl_manifest_guard.rs`, `Cargo.lock`). Replaced by a manual live smoke test,
       `crates/internet-archive/examples/live_smoke.rs`.
 
+## Phase 2 tasks (collections, manifests, job state; crate level)
+
+Still in `crates/internet-archive`. The app-side pieces (SQLite provenance
+lookup, data-dir wiring, commands) arrive in Phases 3-4 through a trait the
+crate defines. MVP browsing is page by page with explicit selection, so no full
+collection inventory is persisted (plan §1, D5).
+
+- [ ] 12. Collection browsing (T2.1): page through a collection with Advanced
+      Search, `collection:<id>`, stable `sort[]=identifier asc`, reusing the
+      search builder and limits.
+- [ ] 13. Job and manifest model (plan §4.2, T2.4): job and file states,
+      validated transitions, idempotent terminal states, and the restart
+      normalization rules (`running`→`ready`, `downloading`/`verifying`→`queued`,
+      `importing`→`verified`, `cancelling`→`cancelled`). Pure, no I/O.
+- [ ] 14. Job store (T2.2, T2.5, D3): `<staging>/<job_id>/job.json` with atomic
+      writes (temp file, fsync, rename), a schema version, listing and
+      reloading jobs after a restart, and corrupt files quarantined instead of
+      crashing.
+- [ ] 15. Size estimate and duplicate classification (T2.3, T2.4): totals with
+      unknown sizes counted apart; per selected file `AlreadyInTarget`,
+      `InOtherCollection`, `NewVersion` (same remote key, different fingerprint:
+      md5, else sha1, else size+mtime) or `New`, against provenance records
+      supplied through a trait.
+
 ## Evidence
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
