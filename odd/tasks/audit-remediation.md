@@ -128,7 +128,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     errors (UI, desktop Pro and Lite); lint clean. Audit: high 6 → 3, moderate 10 → 3, low
     1 → 0; no svelte/devalue advisory left. The verifier subagent failed twice before any tool
     call, so these checks ran inline.
-  - [ ] 2.2.2 (D-02) — `markdown-it` >= 14.3.1, `linkify-it` >= 5.0.2 (override).
+  - [x] 2.2.2 (D-02) — `markdown-it` >= 14.3.1, `linkify-it` >= 5.0.2 (override). Branch
+    `fix/d02-markdown-it`: desktop dep and root override `^14.3.1` (caret keeps the breaking
+    15.x out); resolves markdown-it 14.3.2 and linkify-it 5.0.2 (required by markdown-it 14.3,
+    no own override). 14.2/14.3 changes are parse/security fixes; our only direct use
+    (`ocr-rich-text.ts`) runs with `linkify: false`. Checks: frozen install ok; desktop Pro
+    3507 / Lite 3486, UI 847 passed; both typechecks 0 errors; lint clean. Audit: high 3 → 1
+    (drizzle-orm), moderate 3 → 1 (@tiptap/core).
   - [ ] 2.2.3 (D-02) — `drizzle-orm` 0.40 → >= 0.45.2.
   - [ ] 2.2.4 (D-02) — Tiptap 2 → 3: own PR or documented accepted risk (moderate).
   - [ ] 2.3 (D-08) — Rust advisories (`cargo audit`).
