@@ -1,6 +1,7 @@
 mod app_logs;
 mod archive_close;
 mod asset_integrity;
+mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
 pub mod bibliography;
@@ -746,30 +747,13 @@ pub fn run() {
                 eprintln!("[setup] cache move skipped: {error}");
             }
 
-            // Grant the asset protocol the two directories it must serve, from
-            // the same functions that resolved them.
-            //
-            // The configs declare the equivalent `$DATA`/`$LOCALDATA` scopes,
-            // but those are three copies of a path spelled by hand: rename the
-            // shared directory in `path_utils` and they silently point at
-            // nothing, which surfaces as an image that will not load. Deriving
-            // the grant here keeps one definition of where the files are.
-            {
-                use tauri::Manager;
-                let scope = app.asset_protocol_scope();
-                scope.allow_directory(&app_dir, true).map_err(|e| {
-                    fail(
-                        "No se pudo habilitar el acceso a la carpeta de datos.",
-                        e.to_string(),
-                    )
-                })?;
-                scope.allow_directory(&cache_dir, true).map_err(|e| {
-                    fail(
-                        "No se pudo habilitar el acceso a la carpeta de caché.",
-                        e.to_string(),
-                    )
-                })?;
-            }
+            // The asset protocol serves exactly the subdirectories the webview
+            // loads files from; the list and the database deny live in
+            // `asset_scope`, mirroring `app.security.assetProtocol.scope` in
+            // the three `tauri*.conf.json` files (keep both in step).
+            asset_scope::grant_asset_protocol_scope(app.handle(), &app_dir, &cache_dir).map_err(
+                |e| fail("No se pudo habilitar el acceso a los archivos de la app.", e),
+            )?;
 
             // The renderer's file-system scope: only the archive directories
             // it works in, never the database (S-01).
@@ -3102,18 +3086,31 @@ mod tests {
     // Security scope.
     // ------------------------------------------------------------------
 
-    /// The only path any shipped configuration may expose.
+    /// The only paths any shipped configuration may expose.
     ///
     /// Turns "do not widen the scope" into something the build enforces instead
-    /// of something an audit has to notice. `$DATA` is the parent of every
-    /// variant directory, so this entry is exactly as narrow as the
-    /// `$APPDATA/**/*` it replaced — it just names a directory no identifier
-    /// owns.
+    /// of something an audit has to notice: the asset protocol reaches exactly
+    /// the subdirectories the webview loads files from (`asset_scope` grants
+    /// the same ones at runtime from the resolved directories) and refuses the
+    /// database and the saved capture HTML anywhere under the shared roots.
     #[test]
-    fn every_config_exposes_only_the_shared_directory() {
-        let expected = vec![
-            format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
-            format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+    fn every_config_exposes_only_the_served_subdirectories() {
+        let expected_allow: Vec<String> = asset_scope::ASSET_DATA_DIRS
+            .iter()
+            .map(|dir| format!("$DATA/{}/{dir}/**", path_utils::SHARED_DIR_NAME))
+            .chain(
+                asset_scope::ASSET_CACHE_DIRS
+                    .iter()
+                    .map(|dir| format!("$LOCALDATA/{}/{dir}/**", path_utils::SHARED_DIR_NAME)),
+            )
+            .collect();
+        let expected_deny = vec![
+            format!("$DATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+            format!("$LOCALDATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+            format!(
+                "$DATA/{}/**/web-captures/**/*.html",
+                path_utils::SHARED_DIR_NAME
+            ),
         ];
 
         for config in [
@@ -3126,20 +3123,30 @@ mod tests {
                 serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {config}: {e}"));
             let scope = parsed
                 .pointer("/app/security/assetProtocol/scope")
-                .unwrap_or_else(|| panic!("{config} has no assetProtocol scope"))
-                .as_array()
-                .unwrap_or_else(|| panic!("{config} scope is not an array"));
+                .unwrap_or_else(|| panic!("{config} has no assetProtocol scope"));
 
-            let entries: Vec<String> = scope
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(str::to_string)
-                .collect();
+            let allow = string_array(scope.get("allow"), config, "allow");
+            let deny = string_array(scope.get("deny"), config, "deny");
             assert_eq!(
-                entries, expected,
-                "{config} must expose the shared data and cache directories, and nothing else"
+                allow, expected_allow,
+                "{config} must serve the archive subdirectories and nothing else"
+            );
+            assert_eq!(
+                deny, expected_deny,
+                "{config} must deny the database and the saved capture HTML"
             );
         }
+    }
+
+    /// The string values of one field of a config scope entry.
+    fn string_array(value: Option<&serde_json::Value>, config: &str, field: &str) -> Vec<String> {
+        value
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("{config} scope.{field} is not an array"))
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect()
     }
 
     #[test]
