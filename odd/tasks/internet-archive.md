@@ -70,7 +70,7 @@ unify later.
       connection, response body caps (16 MB metadata, 4 MB search) enforced while
       streaming. The policy is injectable so tests can target the local
       `test_server`; production code cannot build the relaxed policy.
-- [ ] 8. Advanced Search (T1.2): clause-based query builder with Lucene
+- [x] 8. Advanced Search (T1.2): clause-based query builder with Lucene
       escaping, validated dates, empty or invalid filters rejected, `rows`
       clamped; request with `fl[]` including `access-restricted-item`; tolerant
       parsing of `numFound`/`docs`.
@@ -96,6 +96,13 @@ unify later.
   `target/` and `Cargo.lock` ignored. Parent review of host rule, redirect loop,
   address pinning and streaming cap: no issues. Follow-up: split `lib.rs` (756
   lines) into modules in task 8.
+- 2026-10-10, task 8: `lib.rs` split into `policy`, `client`, `error`,
+  `search`, `test_support` (13 prior tests unchanged and green), then Advanced
+  Search added test-first. RED: 16 compile errors (missing `SearchQuery`,
+  `Endpoints`, `InvalidQuery`, `search`). GREEN: 30 passed. Independent verifier:
+  fmt, clippy `-D warnings`, `cargo test` 30/30 twice, no real network I/O in
+  tests, changes confined to the crate. Parent review of `to_lucene`/`quote`: every
+  user value quoted after escaping `\` and `"`; unfiltered queries refused.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
