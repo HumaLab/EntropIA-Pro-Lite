@@ -43,9 +43,57 @@ impl IaClient {
         url: &str,
         max_bytes: usize,
     ) -> Result<T, IaError> {
-        let mut current = Url::parse(url).map_err(|e| IaError::Blocked {
+        let initial = Url::parse(url).map_err(|e| IaError::Blocked {
             reason: format!("invalid URL: {e}"),
         })?;
+        let response = self.fetch_final_response(initial).await?;
+        let status = response.status();
+        if status.as_u16() == 429 {
+            let retry_after = parse_retry_after(response.headers());
+            return Err(IaError::Http {
+                status: 429,
+                retry_after,
+            });
+        }
+        if !status.is_success() {
+            return Err(IaError::Http {
+                status: status.as_u16(),
+                retry_after: None,
+            });
+        }
+        // Reject early when the declared length already exceeds the cap.
+        // Compression is not requested (no gzip feature), so the cap
+        // applies to the bytes actually parsed below.
+        if let Some(len) = response.content_length() {
+            if len > max_bytes as u64 {
+                return Err(IaError::TooLarge { limit: max_bytes });
+            }
+        }
+        let mut body = Vec::new();
+        let mut response = response;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| IaError::Network(e.to_string()))?
+        {
+            body.extend_from_slice(&chunk);
+            if body.len() > max_bytes {
+                return Err(IaError::TooLarge { limit: max_bytes });
+            }
+        }
+        serde_json::from_slice(&body).map_err(|e| IaError::Decode(e.to_string()))
+    }
+
+    /// Shared strict fetch: validate policy and addresses on every hop, pin
+    /// the validated address, and follow redirects manually (at most
+    /// [`MAX_REDIRECTS`]). Returns the first non-redirect response without
+    /// interpreting its status, so JSON and download callers share the same
+    /// pinning and validation instead of duplicating a weaker client.
+    pub(crate) async fn fetch_final_response(
+        &self,
+        initial: Url,
+    ) -> Result<reqwest::Response, IaError> {
+        let mut current = initial;
         for hops in 0..=MAX_REDIRECTS {
             self.policy.check_url(&current)?;
             let pin = self.pinned_addr(&current).await?;
@@ -86,40 +134,7 @@ impl IaClient {
                 })?;
                 continue;
             }
-            if status.as_u16() == 429 {
-                let retry_after = parse_retry_after(response.headers());
-                return Err(IaError::Http {
-                    status: 429,
-                    retry_after,
-                });
-            }
-            if !status.is_success() {
-                return Err(IaError::Http {
-                    status: status.as_u16(),
-                    retry_after: None,
-                });
-            }
-            // Reject early when the declared length already exceeds the cap.
-            // Compression is not requested (no gzip feature), so the cap
-            // applies to the bytes actually parsed below.
-            if let Some(len) = response.content_length() {
-                if len > max_bytes as u64 {
-                    return Err(IaError::TooLarge { limit: max_bytes });
-                }
-            }
-            let mut body = Vec::new();
-            let mut response = response;
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| IaError::Network(e.to_string()))?
-            {
-                body.extend_from_slice(&chunk);
-                if body.len() > max_bytes {
-                    return Err(IaError::TooLarge { limit: max_bytes });
-                }
-            }
-            return serde_json::from_slice(&body).map_err(|e| IaError::Decode(e.to_string()));
+            return Ok(response);
         }
         Err(IaError::TooManyRedirects)
     }
@@ -294,7 +309,7 @@ impl IaClient {
 }
 
 /// Parse a `Retry-After` header in seconds; HTTP-dates and garbage map to None.
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+pub(crate) fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
     let secs: u64 = value.trim().parse().ok()?;
     Some(Duration::from_secs(secs))

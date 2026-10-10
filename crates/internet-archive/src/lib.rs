@@ -11,6 +11,7 @@
 use std::time::Duration;
 
 pub mod client;
+pub mod download;
 pub mod error;
 pub mod item;
 pub mod job;
@@ -23,6 +24,9 @@ pub mod store;
 pub mod test_support;
 
 pub use client::IaClient;
+pub use download::{
+    DownloadLimits, RetryPolicy, ABSOLUTE_MAX_DOWNLOAD_BYTES, DEFAULT_MAX_DOWNLOAD_BYTES,
+};
 pub use error::IaError;
 pub use item::{
     Availability, FileSource, ItemDetails, PdfFile, RestrictedReason, MAX_PDFS_PER_ITEM,

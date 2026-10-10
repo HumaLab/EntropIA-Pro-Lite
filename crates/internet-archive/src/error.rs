@@ -35,4 +35,13 @@ pub enum IaError {
     /// The body was received within the cap but is not the expected JSON.
     #[error("decode error: {0}")]
     Decode(String),
+    /// A download exceeds the configured byte cap (`limits.max_bytes`).
+    #[error("archivo demasiado grande: supera el límite de {limit} bytes")]
+    FileTooLarge { limit: u64 },
+    /// The download destination already exists; it is never overwritten.
+    #[error("ya existe: {path}")]
+    AlreadyExists { path: String },
+    /// Local filesystem failure while staging a download.
+    #[error("i/o error: {0}")]
+    Io(String),
 }

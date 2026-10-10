@@ -134,7 +134,7 @@ T3.0 is done in `src-tauri`. The download and verification stay in
 `crates/internet-archive` so they test here. The app wires the data dir and
 commands in Phase 4.
 
-- [ ] 17. Streaming download (T3.2, §7 points 1, 3, 5, 6, 9): GET
+- [x] 17. Streaming download (T3.2, §7 points 1, 3, 5, 6, 9): GET
       `/download/{identifier}/{file}` through the existing fetch policy, write to
       a caller-supplied staging path ending in `.pdf`, refuse to overwrite an
       existing file, stream with a hard cap (default 500 MB, absolute max 2 GB,
@@ -151,6 +151,14 @@ commands in Phase 4.
       `navegador-copy.ts` `safeStem`, always `.pdf`, fallback to the identifier.
 
 ## Evidence
+
+- 2026-10-10, task 17: `download.rs` streams to `<dest>.partial`, renames only
+  after success, deletes the partial on every failure, refuses to overwrite an
+  existing dest, clamps the cap to 500 MB..2 GB, and retries only network/5xx
+  (max 2, injectable zero delay). URL is built with path segments. Shared
+  `fetch_final_response` keeps `get_json` unchanged. RED: 11 tests against
+  `todo!()`. GREEN: 115. The independent verifier failed twice to start; the
+  parent ran `fmt`, `clippy -D warnings`, and `cargo test` (115 passed).
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
