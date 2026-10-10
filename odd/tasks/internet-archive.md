@@ -31,11 +31,11 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
 
 ## Phase 0 tasks
 
-- [ ] 1. Inventory the importer, store schema, collections, job/queue mechanisms
+- [x] 1. Inventory the importer, store schema, collections, job/queue mechanisms
       and Tauri permissions, including the `generate_handler!` / `APP_COMMANDS` /
       capability triple (T0.1).
-- [ ] 2. Document extension points and Lite/Pro differences (T0.2).
-- [ ] 3. Smoke-test Internet Archive endpoints: Advanced Search, Scraping API,
+- [x] 2. Document extension points and Lite/Pro differences (T0.2).
+- [x] 3. Smoke-test Internet Archive endpoints: Advanced Search, Scraping API,
       Metadata API (`size` as string, `access-restricted-item`, `private`), and
       download redirect hosts (T0.3).
 - [ ] 4. Define the data mapping, multi-PDF policy, duplicates and permissions;
@@ -47,3 +47,26 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
       for Phase 1.
 
 ## Evidence
+
+- 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
+  (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
+  `runner.ts`, latest migration `0058`), the durable processing queue, the Tauri
+  command triple guarded by `tests/acl_manifest_guard.rs`, `reqwest` usage (no
+  shared client, no redirect policy, no DNS resolver), `navegador/url_policy.rs`,
+  data-dir/dev-profile resolution, `ImportSourcesDialog.svelte` (no source list),
+  `ActionIcon`, `LOCAL_ML`, settings, i18n and test conventions (no HTTP mock
+  crate; hand-rolled `test_server` in `navegador/zotero_copy/port.rs`). Details in
+  the Phase 0 audit.
+- 2026-10-10, task 3: live GETs against archive.org (small, public):
+  - Advanced Search OK; `access-restricted-item` is requestable in `fl[]` (string
+    `"true"`).
+  - Metadata API: `size`/`mtime` are strings, some files have no `size`;
+    `private: "true"` on lending PDFs; lending items also list `LCP Encrypted PDF`
+    (`.lcpdf`) and `ACS Encrypted PDF` files that a format-first PDF rule would
+    wrongly accept. Plan gap.
+  - Download: `archive.org/download/...` 302 to `dn711501.ca.archive.org` (not only
+    `ia*.us.archive.org`), `Accept-Ranges: bytes`, 206 on range, `%PDF-1.4`
+    header. A `private` file redirects to `ia801501.us.archive.org` and ends in 403.
+  - Scraping API returned identical items and totals for different queries
+    (`collection:americana` and `mediatype:movies AND title:(chaplin)` both
+    `total 4391810`, same first ids). Not reliable as observed. Plan gap.
