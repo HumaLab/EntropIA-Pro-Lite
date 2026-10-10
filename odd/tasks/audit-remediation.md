@@ -135,7 +135,15 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     (`ocr-rich-text.ts`) runs with `linkify: false`. Checks: frozen install ok; desktop Pro
     3507 / Lite 3486, UI 847 passed; both typechecks 0 errors; lint clean. Audit: high 3 → 1
     (drizzle-orm), moderate 3 → 1 (@tiptap/core).
-  - [ ] 2.2.3 (D-02) — `drizzle-orm` 0.40 → >= 0.45.2.
+  - [x] 2.2.3 (D-02) — `drizzle-orm` 0.40 → >= 0.45.2. Branch `fix/d02-drizzle-orm`: `^0.45.2` in
+    `packages/store` and `apps/desktop` (prebundle copy), resolves 0.45.4; no drizzle-kit in
+    the repo. Advisory GHSA-gpj5-g38j-94v9 (identifier escaping; our identifiers are static).
+    Release notes 0.41-0.45 checked: nothing touches sqlite-proxy + classic CRUD +
+    `.returning()`; 0.44's `DrizzleQueryError` wrapper does not affect
+    `isAssetOrderSnapshotConflict` (raw-client errors). Checks: frozen install; store 374/374
+    (real `node:sqlite` through the proxy), store tsc clean; desktop Pro 3507 / Lite 3486;
+    typechecks 0 errors; Lite `vite build` ok; lint clean. Audit: high 1 → 0; only
+    `@tiptap/core` (moderate) remains.
   - [ ] 2.2.4 (D-02) — Tiptap 2 → 3: own PR or documented accepted risk (moderate).
   - [ ] 2.3 (D-08) — Rust advisories (`cargo audit`).
   - [ ] 2.4 (D-03) — unused/duplicated deps.
