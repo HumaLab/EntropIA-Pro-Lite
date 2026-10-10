@@ -358,17 +358,19 @@ function relativeToDataDir(absolutePath: string): string | null {
  * Whether a stored asset path resolves outside the data directory: an
  * external file that was never copied in. The app never deletes those — they
  * are the user's files, not the archive's, and the renderer's file-system
- * scope does not reach them anyway. `false` until the cache is primed.
+ * scope does not reach them anyway. `true` until the cache is primed: a path
+ * that cannot be proven to lie inside the archive is treated as external.
  */
 export function isOutsideDataDir(storedPath: string): boolean {
-  return cachedDataDir !== null && relativeToDataDir(resolveStoredAssetPath(storedPath)) === null
+  return relativeToDataDir(resolveStoredAssetPath(storedPath)) === null
 }
 
 /**
  * Delete an asset file from the filesystem.
  *
- * - A file outside the data directory is never deleted (see
- *   {@link isOutsideDataDir}); the DB cleanup still proceeds.
+ * - A file outside the data directory, or any file before the directory is
+ *   primed, is never deleted (see {@link isOutsideDataDir}); the DB cleanup
+ *   still proceeds.
  * - If the file does not exist (ENOENT/not-found), logs a warning and returns
  *   successfully — the DB cleanup should still proceed.
  * - If a permission error or other filesystem error occurs, throws so the
