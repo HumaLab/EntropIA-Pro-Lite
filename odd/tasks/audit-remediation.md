@@ -11,7 +11,7 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   absolute on Linux, so `native_path` was `None`). Production is right; the fixture now uses a
   platform-native absolute path, plus a non-Windows test that a drive-letter path is not local.
   GREEN: `bibliography_processing` 168/168; every other binary was already green (lib 2444 passed);
-  clippy `-D warnings` and fmt clean.
+  clippy `-D warnings` and fmt clean. Commit `985ef89f`.
 - [x] P0.2 (C-01) — `rust-lite-linux` CI job on `ubuntu-22.04`: fmt, clippy `-D warnings`, test,
   no features, gated by `detect-rust-changes`. Commit `cd357702`. Pending: observe the job green on
   the PR (needs a push).
@@ -35,5 +35,10 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
+
+- RDD review: both attempts on Phase 0 (lineage `review-0ebf7219c9620f7f`, docs+CI vs `main`, 128 KB
+  prompt; lineage `review-3e8616c5d9968c27`, Phase 0 only vs `40f73ea3`, 17 KB prompt) ended in
+  `pi-host-relay-timeout` (~15-17 min) with no reviewer output. The user chose to continue this plan
+  without RDD review (2026-10-10).
 
 - The hlab task board API answered 401 ("Clave incorrecta o ausente") on 2026-10-09; no cards moved.
