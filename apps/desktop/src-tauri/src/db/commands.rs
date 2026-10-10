@@ -2,11 +2,16 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::types::Value;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use tauri::State;
 
-use crate::db::authorizer::{RendererSqlAuthorizer, RendererSqlKind};
-use crate::db::state::AppDbState;
+use crate::db::authorizer::{
+    ArmedMigrationException, MigrationStatementException, RendererSqlAuthorizer, RendererSqlKind,
+};
+use crate::db::migration_allowlist::{
+    classify, declared_object, declared_table, DdlKind, MigrationDdlAllowlist,
+};
+use crate::db::sql_split::{fingerprint, split_sql_statements};
+use crate::db::state::{AppDbState, MigrationWindow};
 use crate::db::util::{is_safe_identifier, json_to_sql_param, quote_identifier};
 
 /// Tables that exist but must never reach the renderer: `app_settings` holds
@@ -94,19 +99,145 @@ fn map_db_error(err: rusqlite::Error) -> String {
 
 /// Execute multiple SQL statements atomically within a transaction.
 /// Used for cascade deletes and other multi-statement operations.
+///
+/// Statements run one at a time so a listed migration statement can arm its
+/// scoped authorizer exception without exposing its neighbours (S-02c); the
+/// batch still stops at the first error, exactly like `execute_batch` did.
 #[tauri::command]
 pub async fn db_execute_batch(db: State<'_, AppDbState>, sql: String) -> Result<(), String> {
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || execute_batch_on(&conn, &sql)).await
+    let db = db.inner().clone();
+    run_blocking_db_task(move || execute_batch_on(&db, &sql)).await
+}
+
+/// Opens the one-shot migration window (`NotStarted → Open`). Succeeds only
+/// once per process; a second `begin`, or one after `end`/auto-close, fails.
+#[tauri::command]
+pub async fn db_migration_window_begin(db: State<'_, AppDbState>) -> Result<(), String> {
+    db.migration_window.begin()
+}
+
+/// Closes the one-shot migration window (`→ Closed`). Idempotent, never errors.
+#[tauri::command]
+pub async fn db_migration_window_end(db: State<'_, AppDbState>) -> Result<(), String> {
+    db.migration_window.end();
+    Ok(())
+}
+
+/// Errors the TypeScript migration runner deliberately swallows as an
+/// idempotent no-op (`applyLayoutsMigration` and the per-statement path treat
+/// `duplicate column name` as an already-applied ALTER). A fresh install hits
+/// it at the 0020 layouts ALTER, and the runner keeps migrating afterwards.
+/// Those errors still reach the renderer unchanged, but they must not close
+/// the one-shot window or the remaining migrations would be denied.
+const RUNNER_TOLERATED_MIGRATION_ERRORS: &[&str] = &["duplicate column name"];
+
+/// True when the renderer's migration runner treats `error` as a non-fatal
+/// idempotency signal rather than a migration failure.
+fn is_runner_tolerated_migration_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    RUNNER_TOLERATED_MIGRATION_ERRORS
+        .iter()
+        .any(|tolerated| error.contains(tolerated))
+}
+
+/// Window bookkeeping shared by every renderer `db_*` command body (S-02c):
+/// a call that arrives before `begin` proves the UI is already operating
+/// without migrating, so the one-shot window closes and can never open; any
+/// error inside the window closes it too, except the idempotency errors the
+/// runner swallows (see [`RUNNER_TOLERATED_MIGRATION_ERRORS`]).
+fn run_in_migration_window<T>(
+    db: &AppDbState,
+    task: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    db.migration_window.close_if_not_started();
+    let result = task();
+    if let Err(error) = &result {
+        if !is_runner_tolerated_migration_error(error) {
+            db.migration_window.end();
+        }
+    }
+    result
 }
 
 /// Body of `db_execute_batch`, factored out so tests exercise the real
 /// validation + authorizer path without a Tauri runtime.
-fn execute_batch_on(conn: &Mutex<Connection>, sql: &str) -> Result<(), String> {
-    validate_sql_batch(sql)?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Batch);
-    conn.execute_batch(sql).map_err(map_db_error)
+fn execute_batch_on(db: &AppDbState, sql: &str) -> Result<(), String> {
+    run_in_migration_window(db, || {
+        let window_open = db.migration_window.is_open();
+        validate_sql_batch(sql, window_open)?;
+        let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        let allowlist = MigrationDdlAllowlist::embedded();
+        for statement in split_sql_statements(sql) {
+            let exception = batch_statement_exception(&statement, window_open, allowlist);
+            execute_batch_statement(&conn, &statement, exception)?;
+        }
+        if window_open {
+            close_window_when_migrations_finish(&conn, &db.migration_window);
+        }
+        Ok(())
+    })
+}
+
+/// The scoped exception for one split batch statement: a listed migration DDL
+/// statement running while the window is open gets its fingerprint-scoped
+/// exception; a `DROP TABLE`/`ALTER TABLE` statement gets the narrower
+/// table-rebuild exception SQLite needs to drop that table's own triggers.
+fn batch_statement_exception(
+    statement: &str,
+    window_open: bool,
+    allowlist: &MigrationDdlAllowlist,
+) -> Option<std::sync::Arc<MigrationStatementException>> {
+    if !window_open {
+        return None;
+    }
+    if allowlist.allows_statement(statement) {
+        let kind = classify(statement).expect("a listed statement is always a classified DDL kind");
+        return Some(MigrationStatementException::new(
+            kind,
+            declared_object(statement),
+        ));
+    }
+    declared_table(statement).map(MigrationStatementException::for_table_rebuild)
+}
+
+/// Runs one split statement of a batch. The authorizer is installed for the
+/// statement only; when `exception` is present it is armed for exactly the
+/// `execute_batch` call and disarmed on drop, including when the statement
+/// fails.
+fn execute_batch_statement(
+    conn: &Connection,
+    statement: &str,
+    exception: Option<std::sync::Arc<MigrationStatementException>>,
+) -> Result<(), String> {
+    let _authorizer =
+        RendererSqlAuthorizer::install(conn, RendererSqlKind::Batch, exception.clone());
+    match &exception {
+        Some(exception) => {
+            let _armed = ArmedMigrationException::arm(exception);
+            conn.execute_batch(statement).map_err(map_db_error)
+        }
+        None => conn.execute_batch(statement).map_err(map_db_error),
+    }
+}
+
+/// Auto-closes the window as soon as `_migrations` holds the last migration the
+/// committed allowlist knows (no hardcoded name). A missing `_migrations`
+/// table or a failed lookup simply keeps the window open; the frontend's
+/// `end` and the error path remain the other closers.
+fn close_window_when_migrations_finish(conn: &Connection, window: &MigrationWindow) {
+    let Some(last) = MigrationDdlAllowlist::embedded().last_migration() else {
+        return;
+    };
+    let finished = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM _migrations WHERE name = ?1)",
+            [last],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
+    if finished {
+        window.end();
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,45 +253,48 @@ pub async fn db_execute_transaction(
     db: State<'_, AppDbState>,
     statements: Vec<ParameterizedStatement>,
 ) -> Result<(), String> {
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || execute_transaction_on(&conn, &statements)).await
+    let db = db.inner().clone();
+    run_blocking_db_task(move || execute_transaction_on(&db, &statements)).await
 }
 
 /// Body of `db_execute_transaction`, factored out for tests.
 fn execute_transaction_on(
-    conn: &Mutex<Connection>,
+    db: &AppDbState,
     statements: &[ParameterizedStatement],
 ) -> Result<(), String> {
-    for statement in statements {
-        validate_sql_execute(&statement.sql)?;
-    }
+    run_in_migration_window(db, || {
+        for statement in statements {
+            validate_sql_execute(&statement.sql)?;
+        }
 
-    let mut conn = conn.lock().map_err(|e| e.to_string())?;
-    // IMMEDIATE takes the write lock up front, so a busy archive makes this
-    // wait out busy_timeout. A DEFERRED transaction that reads first fails
-    // instantly with `database is locked` when a worker is mid-write:
-    // SQLite refuses to upgrade a read lock rather than risk a deadlock.
-    let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
-    // SQLite authorizes trigger bodies when they fire, not when the outer
-    // statement is prepared, so the guard stays installed while the statements
-    // run. It is lifted before COMMIT because the borrow checker cannot move
-    // `tx` while the guard borrows it; the policy allows the transaction
-    // actions themselves anyway.
-    let authorizer = RendererSqlAuthorizer::install(&tx, RendererSqlKind::Single);
+        let mut conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        // IMMEDIATE takes the write lock up front, so a busy archive makes this
+        // wait out busy_timeout. A DEFERRED transaction that reads first fails
+        // instantly with `database is locked` when a worker is mid-write:
+        // SQLite refuses to upgrade a read lock rather than risk a deadlock.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| e.to_string())?;
+        // SQLite authorizes trigger bodies when they fire, not when the outer
+        // statement is prepared, so the guard stays installed while the statements
+        // run. It is lifted before COMMIT because the borrow checker cannot move
+        // `tx` while the guard borrows it; the policy allows the transaction
+        // actions themselves anyway. Non-batch commands never lift the migration
+        // exception.
+        let authorizer = RendererSqlAuthorizer::install(&tx, RendererSqlKind::Single, None);
 
-    for statement in statements {
-        let params: Vec<Box<dyn rusqlite::ToSql>> =
-            statement.params.iter().map(json_to_sql_param).collect();
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            params.iter().map(|param| param.as_ref()).collect();
-        tx.execute(&statement.sql, params_ref.as_slice())
-            .map_err(map_db_error)?;
-    }
+        for statement in statements {
+            let params: Vec<Box<dyn rusqlite::ToSql>> =
+                statement.params.iter().map(json_to_sql_param).collect();
+            let params_ref: Vec<&dyn rusqlite::ToSql> =
+                params.iter().map(|param| param.as_ref()).collect();
+            tx.execute(&statement.sql, params_ref.as_slice())
+                .map_err(map_db_error)?;
+        }
 
-    drop(authorizer);
-    tx.commit().map_err(map_db_error)
+        drop(authorizer);
+        tx.commit().map_err(map_db_error)
+    })
 }
 
 #[tauri::command]
@@ -169,26 +303,30 @@ pub async fn db_execute(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<ExecuteResult, String> {
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || execute_on(&conn, &sql, &params)).await
+    let db = db.inner().clone();
+    run_blocking_db_task(move || execute_on(&db, &sql, &params)).await
 }
 
 /// Body of `db_execute`, factored out for tests.
 fn execute_on(
-    conn: &Mutex<Connection>,
+    db: &AppDbState,
     sql: &str,
     params: &[serde_json::Value],
 ) -> Result<ExecuteResult, String> {
-    validate_sql_execute(sql)?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
-    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
-    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let rows_affected = conn
-        .execute(sql, params_as_refs.as_slice())
-        .map_err(map_db_error)?;
-    Ok(ExecuteResult {
-        rows_affected: rows_affected as u64,
+    run_in_migration_window(db, || {
+        validate_sql_execute(sql)?;
+        let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single, None);
+        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
+            params.iter().map(json_to_sql_param).collect();
+        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
+            params_ref.iter().map(|b| b.as_ref()).collect();
+        let rows_affected = conn
+            .execute(sql, params_as_refs.as_slice())
+            .map_err(map_db_error)?;
+        Ok(ExecuteResult {
+            rows_affected: rows_affected as u64,
+        })
     })
 }
 
@@ -198,41 +336,45 @@ pub async fn db_select(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || select_on(&conn, &sql, &params)).await
+    let db = db.inner().clone();
+    run_blocking_db_task(move || select_on(&db, &sql, &params)).await
 }
 
 /// Body of `db_select`, factored out for tests.
 fn select_on(
-    conn: &Mutex<Connection>,
+    db: &AppDbState,
     sql: &str,
     params: &[serde_json::Value],
 ) -> Result<Vec<serde_json::Value>, String> {
-    validate_sql_row_query(sql)?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
-    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
-    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
-    let col_count = stmt.column_count();
-    let col_names: Vec<String> = (0..col_count)
-        .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-        .collect();
+    run_in_migration_window(db, || {
+        validate_sql_row_query(sql)?;
+        let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single, None);
+        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
+            params.iter().map(json_to_sql_param).collect();
+        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
+            params_ref.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+        let col_count = stmt.column_count();
+        let col_names: Vec<String> = (0..col_count)
+            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+            .collect();
 
-    let rows = stmt
-        .query_map(params_as_refs.as_slice(), |row| {
-            let mut map = serde_json::Map::new();
-            for (i, name) in col_names.iter().enumerate() {
-                let val: Value = row.get(i)?;
-                map.insert(name.clone(), rusqlite_value_to_json(val));
-            }
-            Ok(serde_json::Value::Object(map))
-        })
-        .map_err(map_db_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(map_db_error)?;
+        let rows = stmt
+            .query_map(params_as_refs.as_slice(), |row| {
+                let mut map = serde_json::Map::new();
+                for (i, name) in col_names.iter().enumerate() {
+                    let val: Value = row.get(i)?;
+                    map.insert(name.clone(), rusqlite_value_to_json(val));
+                }
+                Ok(serde_json::Value::Object(map))
+            })
+            .map_err(map_db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_error)?;
 
-    Ok(rows)
+        Ok(rows)
+    })
 }
 
 /// Returns rows as arrays in column order — required by Drizzle sqlite-proxy
@@ -243,38 +385,42 @@ pub async fn db_select_rows(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<Vec<Vec<serde_json::Value>>, String> {
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || select_rows_on(&conn, &sql, &params)).await
+    let db = db.inner().clone();
+    run_blocking_db_task(move || select_rows_on(&db, &sql, &params)).await
 }
 
 /// Body of `db_select_rows`, factored out for tests.
 fn select_rows_on(
-    conn: &Mutex<Connection>,
+    db: &AppDbState,
     sql: &str,
     params: &[serde_json::Value],
 ) -> Result<Vec<Vec<serde_json::Value>>, String> {
-    validate_sql_row_query(sql)?;
-    let conn = conn.lock().map_err(|e| e.to_string())?;
-    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
-    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
-    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
-    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
-    let col_count = stmt.column_count();
+    run_in_migration_window(db, || {
+        validate_sql_row_query(sql)?;
+        let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single, None);
+        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
+            params.iter().map(json_to_sql_param).collect();
+        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
+            params_ref.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+        let col_count = stmt.column_count();
 
-    let rows = stmt
-        .query_map(params_as_refs.as_slice(), |row| {
-            let mut values = Vec::with_capacity(col_count);
-            for i in 0..col_count {
-                let val: Value = row.get(i)?;
-                values.push(rusqlite_value_to_json(val));
-            }
-            Ok(values)
-        })
-        .map_err(map_db_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(map_db_error)?;
+        let rows = stmt
+            .query_map(params_as_refs.as_slice(), |row| {
+                let mut values = Vec::with_capacity(col_count);
+                for i in 0..col_count {
+                    let val: Value = row.get(i)?;
+                    values.push(rusqlite_value_to_json(val));
+                }
+                Ok(values)
+            })
+            .map_err(map_db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_error)?;
 
-    Ok(rows)
+        Ok(rows)
+    })
 }
 
 #[tauri::command]
@@ -824,37 +970,36 @@ fn validate_sql_execute(sql: &str) -> Result<(), String> {
 /// `;`, normalize each statement, and check its LEADING keyword against the
 /// denylist used by the single-statement validators. Substring matching is
 /// intentionally avoided — a literal like `'please attach the file'` inside an
-/// INSERT must not be rejected, while real ATTACH/DETACH/VACUUM/PRAGMA
-/// statements stay blocked.
+/// INSERT must not be rejected, while real ATTACH/DETACH/VACUUM statements
+/// stay blocked.
 ///
-/// `PRAGMA defer_foreign_keys` is the one pragma the TS migration runner
-/// legitimately sends through this path (migrations 0045/0048/0050/0052/0058);
-/// the authorizer also allows only that pragma and only for this kind. S-02c
-/// narrows both to the exact listed migration statements.
+/// Trigger/view DDL and every PRAGMA are checked separately, on the accurate
+/// [`split_sql_statements`] boundaries: they are accepted only when the exact
+/// statement is a listed migration statement AND the backend's one-shot
+/// migration window is open (S-02c). The window alone never authorizes
+/// anything; outside it, every one of those statements is refused.
 ///
-/// Limitation: the `;` split is NOT string-literal aware. A literal that
-/// itself contains a semicolon followed by a denylisted keyword (e.g.
-/// `'…;pragma …'`) is split mid-literal and the fragment after the `;` is
-/// checked as if it started a statement, rejecting the batch. This fails
-/// CLOSED — a legitimate batch may be falsely rejected, never the reverse.
+/// Limitation: the `;` split used by the deny checks is NOT string-literal
+/// aware. A literal that itself contains a semicolon followed by a denylisted
+/// keyword (e.g. `'…;pragma …'`) is split mid-literal and the fragment after
+/// the `;` is checked as if it started a statement, rejecting the batch. This
+/// fails CLOSED — a legitimate batch may be falsely rejected, never the
+/// reverse. The DDL pass does not share this limitation: it cuts on the same
+/// boundaries the executor uses.
 ///
 /// Caller contract: batch callers must only interpolate semicolon-free
 /// escaped identifiers/values (today: UUIDs) into batch SQL, which keeps the
 /// false positive unreachable. Free-form user text must go through the
 /// parameterized single-statement commands instead.
-fn validate_sql_batch(sql: &str) -> Result<(), String> {
+fn validate_sql_batch(sql: &str, window_open: bool) -> Result<(), String> {
     let stripped = strip_sql_comments(sql)?;
     for statement in stripped.split(';') {
         let normalized = normalize_sql(statement);
         if normalized.is_empty() {
             continue;
         }
-        let mut tokens = normalized.split(' ');
-        let leading_keyword = tokens.next().unwrap_or("");
+        let leading_keyword = normalized.split(' ').next().unwrap_or("");
         if matches!(leading_keyword, "attach" | "detach" | "vacuum") {
-            return Err("Restricted SQL statement in db_execute_batch".to_string());
-        }
-        if leading_keyword == "pragma" && !tokens.next().is_some_and(is_defer_foreign_keys_pragma) {
             return Err("Restricted SQL statement in db_execute_batch".to_string());
         }
         if sql_references_sensitive_table(&normalized) {
@@ -864,16 +1009,37 @@ fn validate_sql_batch(sql: &str) -> Result<(), String> {
             return Err(SYNC_PROTECTION_ERROR.to_string());
         }
     }
-    Ok(())
+    validate_batch_migration_ddl(sql, window_open)
 }
 
-/// True for the pragma-name token of `PRAGMA defer_foreign_keys`, written
-/// either as one token (`defer_foreign_keys=on`) or with spaces around `=`.
-fn is_defer_foreign_keys_pragma(token: &str) -> bool {
-    token == "defer_foreign_keys"
-        || token
-            .strip_prefix("defer_foreign_keys=")
-            .is_some_and(|value| !value.is_empty())
+/// Renderer-facing message for a trigger/view statement that is not exactly a
+/// listed migration statement running while the window is open.
+const TRIGGER_VIEW_WINDOW_ERROR: &str = "trigger/view DDL is only accepted for known migration \
+     statements during the startup migration window";
+
+/// Renderer-facing message for a pragma statement outside the listed window.
+const PRAGMA_WINDOW_ERROR: &str = "PRAGMA statements are only accepted for known migration \
+     statements during the startup migration window";
+
+/// Layer 1 for the DDL kinds the migration allowlist covers (`CREATE`/`DROP`
+/// `TRIGGER`/`VIEW` and `PRAGMA`): the exact fingerprint must be committed AND
+/// the window must be open. Layer 2 enforces the same rule semantically, so
+/// the two layers agree.
+fn validate_batch_migration_ddl(sql: &str, window_open: bool) -> Result<(), String> {
+    let allowlist = MigrationDdlAllowlist::embedded();
+    for statement in split_sql_statements(sql) {
+        let Some(kind) = classify(&statement) else {
+            continue;
+        };
+        if window_open && allowlist.contains(&fingerprint(&statement)) {
+            continue;
+        }
+        return Err(match kind {
+            DdlKind::Pragma => PRAGMA_WINDOW_ERROR.to_string(),
+            _ => TRIGGER_VIEW_WINDOW_ERROR.to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -887,7 +1053,7 @@ mod tests {
         // allows it — matching how their BEGIN/COMMIT are issued. Sending ROLLBACK
         // through execute silently fails and leaves the transaction open.
         assert!(validate_sql_execute("ROLLBACK").is_err());
-        assert!(validate_sql_batch("ROLLBACK").is_ok());
+        assert!(validate_sql_batch("ROLLBACK", false).is_ok());
     }
 
     #[test]
@@ -914,7 +1080,7 @@ mod tests {
             DELETE FROM assets WHERE id = 'a2';\n\
             DELETE FROM assets WHERE id = 'a1';\n\
             COMMIT;";
-        validate_sql_batch(cascade).expect("el batch del cascade pasa el validador");
+        validate_sql_batch(cascade, false).expect("el batch del cascade pasa el validador");
         assert!(
             conn.execute_batch(cascade).is_err(),
             "el DELETE de a1 viola la FK de e1: el batch falla antes del COMMIT"
@@ -929,7 +1095,7 @@ mod tests {
             validate_sql_execute("ROLLBACK").is_err(),
             "db_execute de Pro es DML-only: rechaza ROLLBACK (por eso NO se usa execute)"
         );
-        validate_sql_batch("ROLLBACK")
+        validate_sql_batch("ROLLBACK", false)
             .expect("db_execute_batch acepta ROLLBACK: la via correcta del catch en Pro");
         conn.execute_batch("ROLLBACK")
             .expect("el ROLLBACK por batch se ejecuta");
@@ -1170,7 +1336,7 @@ mod tests {
             "Restricted sensitive table for db_execute"
         );
         assert_eq!(
-            validate_sql_batch("BEGIN; DELETE FROM app_settings; COMMIT;").unwrap_err(),
+            validate_sql_batch("BEGIN; DELETE FROM app_settings; COMMIT;", false).unwrap_err(),
             "Restricted sensitive table in db_execute_batch"
         );
     }
@@ -1198,26 +1364,28 @@ mod tests {
         );
         // Batch path blocks sync DML and sync DDL (tables and trg_sync_* triggers).
         assert_eq!(
-            validate_sql_batch("DELETE FROM sync_oplog; DELETE FROM sync_conflicts;").unwrap_err(),
+            validate_sql_batch("DELETE FROM sync_oplog; DELETE FROM sync_conflicts;", false)
+                .unwrap_err(),
             SYNC_PROTECTION_ERROR
         );
         assert_eq!(
-            validate_sql_batch("DROP TABLE sync_oplog;").unwrap_err(),
+            validate_sql_batch("DROP TABLE sync_oplog;", false).unwrap_err(),
             SYNC_PROTECTION_ERROR
         );
         assert_eq!(
-            validate_sql_batch("ALTER TABLE sync_meta ADD COLUMN x TEXT;").unwrap_err(),
+            validate_sql_batch("ALTER TABLE sync_meta ADD COLUMN x TEXT;", false).unwrap_err(),
             SYNC_PROTECTION_ERROR
         );
         assert_eq!(
             validate_sql_batch(
-                "CREATE TRIGGER trg_sync_items_u AFTER UPDATE ON items BEGIN SELECT 1; END;"
+                "CREATE TRIGGER trg_sync_items_u AFTER UPDATE ON items BEGIN SELECT 1; END;",
+                false,
             )
             .unwrap_err(),
             SYNC_PROTECTION_ERROR
         );
         assert_eq!(
-            validate_sql_batch("DROP TRIGGER IF EXISTS trg_sync_items_d;").unwrap_err(),
+            validate_sql_batch("DROP TRIGGER IF EXISTS trg_sync_items_d;", false).unwrap_err(),
             SYNC_PROTECTION_ERROR
         );
     }
@@ -1247,10 +1415,11 @@ mod tests {
                 .is_ok()
         );
         assert!(validate_sql_execute("DELETE FROM notes WHERE id = ?").is_ok());
-        assert!(
-            validate_sql_batch("BEGIN; DELETE FROM notes WHERE item_id = 'item-1'; COMMIT;")
-                .is_ok()
-        );
+        assert!(validate_sql_batch(
+            "BEGIN; DELETE FROM notes WHERE item_id = 'item-1'; COMMIT;",
+            false
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1351,28 +1520,31 @@ mod tests {
         // Substring false positives: denylist words inside string literals or
         // identifiers must not block legitimate statements.
         assert!(validate_sql_batch(
-            "INSERT INTO notes (id, content) VALUES ('n-1', 'please attach the file');"
+            "INSERT INTO notes (id, content) VALUES ('n-1', 'please attach the file');",
+            false,
         )
         .is_ok());
         assert!(validate_sql_batch(
             "UPDATE items SET title = 'vacuum cleaner manual' WHERE id = 'item-1';
-             DELETE FROM notes WHERE content LIKE '%pragma%';"
+             DELETE FROM notes WHERE content LIKE '%pragma%';",
+            false,
         )
         .is_ok());
     }
 
     #[test]
     fn validate_sql_batch_blocks_restricted_leading_keywords() {
-        assert!(validate_sql_batch("ATTACH DATABASE 'evil.db' AS evil;").is_err());
-        assert!(validate_sql_batch("detach evil;").is_err());
-        assert!(validate_sql_batch("PRAGMA journal_mode=DELETE;").is_err());
-        assert!(validate_sql_batch("VACUUM").is_err());
+        assert!(validate_sql_batch("ATTACH DATABASE 'evil.db' AS evil;", false).is_err());
+        assert!(validate_sql_batch("detach evil;", false).is_err());
+        assert!(validate_sql_batch("PRAGMA journal_mode=DELETE;", false).is_err());
+        assert!(validate_sql_batch("VACUUM", false).is_err());
         // Restricted statements hidden after legitimate ones stay blocked.
         assert!(validate_sql_batch(
-            "DELETE FROM notes WHERE id = 'n-1'; ATTACH DATABASE 'evil.db' AS evil;"
+            "DELETE FROM notes WHERE id = 'n-1'; ATTACH DATABASE 'evil.db' AS evil;",
+            false,
         )
         .is_err());
-        assert!(validate_sql_batch("DELETE FROM notes; \n  pragma temp_store = 2").is_err());
+        assert!(validate_sql_batch("DELETE FROM notes; \n  pragma temp_store = 2", false).is_err());
     }
 
     #[test]
@@ -1381,11 +1553,12 @@ mod tests {
             "BEGIN;
              DELETE FROM assets WHERE item_id = 'item-1';
              DELETE FROM items WHERE id = 'item-1';
-             COMMIT;"
+             COMMIT;",
+            false,
         )
         .is_ok());
-        assert!(validate_sql_batch("").is_ok());
-        assert!(validate_sql_batch(";;").is_ok());
+        assert!(validate_sql_batch("", false).is_ok());
+        assert!(validate_sql_batch(";;", false).is_ok());
     }
 
     #[test]
@@ -1401,25 +1574,86 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // S-02a — layer 2 (authorizer) + comment-stripping layer 1.
+    // S-02a/S-02c — layer 2 (authorizer), layer 1 and the migration window.
     // -----------------------------------------------------------------------
 
-    fn mutex_conn(conn: Connection) -> Mutex<Connection> {
-        Mutex::new(conn)
+    /// The real `AppDbState` the renderer command bodies receive in production,
+    /// backed by an in-memory UI connection. The worker connection is never
+    /// used by the `db_*` commands.
+    fn test_db(conn: Connection) -> AppDbState {
+        AppDbState::new(
+            conn,
+            Connection::open_in_memory().expect("worker in-memory db"),
+            std::path::PathBuf::from(":memory:"),
+        )
+    }
+
+    /// Same, with the one-shot migration window already open.
+    fn window_open_db(conn: Connection) -> AppDbState {
+        let db = test_db(conn);
+        db.migration_window
+            .begin()
+            .expect("open the migration window");
+        db
     }
 
     /// Real synced schema with capture triggers installed and a session whose
     /// `capture_enabled` flag is on. The sync-only test helpers live behind
     /// `#[cfg(test)]`, and capture is what the authorizer must not break.
-    fn capture_enabled_conn() -> Mutex<Connection> {
+    fn capture_enabled_db() -> AppDbState {
         let conn = crate::sync::test_support::new_synced_test_db();
         crate::sync::capture::ensure_capture(&conn).expect("install capture triggers");
         crate::sync::test_support::set_session_with_capture(&conn);
-        Mutex::new(conn)
+        test_db(conn)
     }
 
-    fn oplog_count(conn: &Mutex<Connection>) -> i64 {
-        crate::sync::test_support::oplog_count(&conn.lock().unwrap())
+    fn oplog_count(db: &AppDbState) -> i64 {
+        crate::sync::test_support::oplog_count(&db.ui_conn.lock().unwrap())
+    }
+
+    use crate::db::migration_allowlist::MigrationIpcFixture;
+
+    /// The recorded exact IPC sequence `runMigrations` sends on a fresh install.
+    fn migration_fixture() -> MigrationIpcFixture {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/migration_ipc.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "cannot read the migration IPC fixture {}: {error}\n\
+                 Run: pnpm --filter @entropia/store export-migration-ipc",
+                path.display()
+            )
+        });
+        serde_json::from_str(&text).expect("the migration IPC fixture is valid JSON")
+    }
+
+    /// The recorded `db_execute_batch` call whose SQL contains `marker`.
+    fn recorded_batch(marker: &str) -> String {
+        migration_fixture()
+            .calls
+            .into_iter()
+            .find(|call| call.command == "db_execute_batch" && call.sql.contains(marker))
+            .map(|call| call.sql)
+            .unwrap_or_else(|| panic!("no recorded batch contains {marker:?}"))
+    }
+
+    /// A listed migration statement from the fixture whose text contains
+    /// `marker` (for example a `CREATE TRIGGER` statement).
+    fn listed_statement(marker: &str) -> String {
+        for call in migration_fixture().calls {
+            if call.command != "db_execute_batch" {
+                continue;
+            }
+            for statement in split_sql_statements(&call.sql) {
+                if classify(&statement).is_some()
+                    && statement.contains(marker)
+                    && MigrationDdlAllowlist::embedded().contains(&fingerprint(&statement))
+                {
+                    return statement;
+                }
+            }
+        }
+        panic!("no listed migration statement contains {marker:?}")
     }
 
     #[test]
@@ -1427,7 +1661,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let target = dir.path().join("exfiltrated.db");
         let target_sql = target.to_str().expect("utf-8 path");
-        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+        let conn = test_db(Connection::open_in_memory().unwrap());
 
         // `/**/VACUUM INTO` and `--x\nVACUUM INTO` evade the old leading-keyword
         // match; the target file must not exist afterwards.
@@ -1450,22 +1684,38 @@ mod tests {
     }
 
     #[test]
-    fn comments_cannot_hide_pragmas_except_the_migration_defer_foreign_keys() {
-        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+    fn pragmas_are_denied_outside_the_listed_migration_window() {
+        // Not started: the first renderer call closes the window and the pragma
+        // is refused even though its text is the listed migration statement.
+        let db = test_db(Connection::open_in_memory().unwrap());
+        assert!(execute_batch_on(&db, "/* */PRAGMA writable_schema=ON").is_err());
+        assert_eq!(
+            execute_batch_on(&db, "PRAGMA defer_foreign_keys=ON").unwrap_err(),
+            PRAGMA_WINDOW_ERROR
+        );
+        assert!(db.migration_window.begin().is_err(), "the window is closed");
 
-        // `/* */PRAGMA writable_schema=ON` used to pass the leading-keyword check.
-        assert!(execute_batch_on(&conn, "/* */PRAGMA writable_schema=ON").is_err());
-        // The one pragma the TS migration runner legitimately sends must survive
-        // layer 1 (layer 2 allows it for Batch only).
-        assert!(execute_batch_on(&conn, "PRAGMA defer_foreign_keys=ON").is_ok());
+        // A fresh process: the exact recorded pragma statement (with whatever
+        // leading comment the migration carries) runs while the window is open.
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        let listed_pragma = listed_statement("defer_foreign_keys");
+        let listed = execute_batch_on(&db, &listed_pragma);
+        assert!(listed.is_ok(), "listed pragma denied: {listed:?}");
+        assert!(db.migration_window.is_open());
+        // A comment prefix changes the fingerprint, so it is refused.
+        let tampered = format!("/* x */ {listed_pragma}");
+        assert_eq!(
+            execute_batch_on(&db, &tampered).unwrap_err(),
+            PRAGMA_WINDOW_ERROR
+        );
         // Pragmas never reach db_select: a leading comment must not hide one.
-        let err = select_on(&conn, "/* */PRAGMA table_info(items)", &[]).unwrap_err();
+        let err = select_on(&db, "/* */PRAGMA table_info(items)", &[]).unwrap_err();
         assert!(err.contains("Restricted"), "unexpected error: {err}");
     }
 
     #[test]
     fn db_select_cannot_write_sync_oplog_through_returning() {
-        let conn = capture_enabled_conn();
+        let conn = capture_enabled_db();
         let err = select_on(
             &conn,
             "INSERT INTO sync_oplog (table_name, row_id, op, changed_at) \
@@ -1479,7 +1729,7 @@ mod tests {
 
     #[test]
     fn sync_write_detection_sees_with_dml_and_update_conflict_clauses() {
-        let conn = capture_enabled_conn();
+        let conn = capture_enabled_db();
         let err = execute_on(
             &conn,
             "WITH x AS (SELECT 1) INSERT INTO sync_meta(key, value) SELECT 'k', 'v' FROM x",
@@ -1496,6 +1746,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, SYNC_PROTECTION_ERROR);
         let capture: String = conn
+            .ui_conn
             .lock()
             .unwrap()
             .query_row(
@@ -1509,7 +1760,7 @@ mod tests {
 
     #[test]
     fn commented_app_settings_reads_stay_rejected() {
-        let conn = mutex_conn(setup_db_browser_test_db());
+        let conn = test_db(setup_db_browser_test_db());
         for sql in [
             "SELECT * FROM /* c */ app_settings",
             "SELECT * FROM app_settings -- c",
@@ -1527,7 +1778,7 @@ mod tests {
         let conn = setup_db_browser_test_db();
         conn.execute_batch("CREATE VIEW v_secret AS SELECT key, value FROM app_settings;")
             .unwrap();
-        let conn = mutex_conn(conn);
+        let conn = test_db(conn);
 
         // Layer 1 only sees `v_secret`; SQLite expands the view and reports a
         // read of `app_settings` (accessor = the view), which layer 2 denies.
@@ -1537,6 +1788,7 @@ mod tests {
         // The authorizer must be gone after the command: the backend keeps
         // reading app_settings directly on the same connection.
         let direct: i64 = conn
+            .ui_conn
             .lock()
             .unwrap()
             .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
@@ -1548,7 +1800,7 @@ mod tests {
     fn layer_two_alone_denies_a_subquery_over_app_settings() {
         let conn = setup_db_browser_test_db();
         {
-            let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
+            let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single, None);
             let denied = conn.query_row(
                 "SELECT COUNT(*) FROM (SELECT * FROM app_settings)",
                 [],
@@ -1571,11 +1823,96 @@ mod tests {
     }
 
     #[test]
+    fn drop_table_may_drop_its_own_attached_trigger_while_migrating() {
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        // Seed the trigger outside the renderer path: an explicit unlisted
+        // CREATE TRIGGER would (correctly) be refused.
+        db.ui_conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE t (id TEXT);
+                 CREATE TRIGGER trg_t AFTER INSERT ON t BEGIN SELECT 1; END;",
+            )
+            .unwrap();
+
+        // SQLite drops the attached trigger as part of the table drop; the
+        // statement names the table, so the executor scopes that internal drop
+        // to it. An explicit `DROP TRIGGER` stays refused.
+        execute_batch_on(&db, "DROP TABLE t").unwrap();
+        let triggers: i64 = db
+            .ui_conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'trg_t'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(triggers, 0);
+        assert!(db.migration_window.is_open());
+    }
+
+    #[test]
+    fn plain_drop_trigger_is_still_denied_while_the_window_is_open() {
+        // The table-rebuild exception covers only the triggers SQLite drops
+        // as part of dropping that table; an explicit DROP TRIGGER statement
+        // is not a listed migration statement and stays refused.
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        assert_eq!(
+            execute_batch_on(&db, "DROP TRIGGER IF EXISTS trg_anything;").unwrap_err(),
+            TRIGGER_VIEW_WINDOW_ERROR
+        );
+    }
+
+    #[test]
+    fn a_migration_can_rebuild_a_captured_table_but_not_drop_its_capture_triggers() {
+        // `ensure_capture` runs at backend setup, before the JS migrations, so
+        // an old archive reaches 0010/0019/0021-style rebuilds (`DROP TABLE x`)
+        // with `trg_sync_x_*` already on the table. SQLite drops them with the
+        // table; `sync_ensure_capture` recreates them after migrating.
+        let conn = crate::sync::test_support::new_synced_test_db();
+        crate::sync::capture::ensure_capture(&conn).expect("install capture triggers");
+        let db = window_open_db(conn);
+
+        execute_batch_on(
+            &db,
+            "CREATE TABLE annotations_v2 AS SELECT * FROM annotations WHERE 0;\n\
+             DROP TABLE annotations;\n\
+             ALTER TABLE annotations_v2 RENAME TO annotations;",
+        )
+        .expect("the rebuild drops the table's own capture triggers");
+
+        let conn = db.ui_conn.lock().unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_sync_annotations_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+        let others: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_sync_items_%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(others, 3, "other tables keep their capture triggers");
+        drop(conn);
+
+        // An explicit drop of another table's capture trigger stays refused.
+        assert!(execute_batch_on(&db, "DROP TRIGGER trg_sync_items_i;").is_err());
+    }
+
+    #[test]
     fn plain_vacuum_is_also_denied_by_the_attach_check() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);")
             .unwrap();
-        let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Batch);
+        let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Batch, None);
         // SQLite routes plain VACUUM through the same SQLITE_ATTACH check as
         // VACUUM INTO (with a NULL filename), so the guard denies it too. In
         // production layer 1 rejects it before the authorizer runs.
@@ -1585,7 +1922,7 @@ mod tests {
 
     #[test]
     fn capture_still_records_writes_through_every_guarded_command_path() {
-        let conn = capture_enabled_conn();
+        let conn = capture_enabled_db();
         assert_eq!(
             oplog_count(&conn),
             0,
@@ -1625,23 +1962,30 @@ mod tests {
     #[test]
     fn comment_stripping_preserves_literals_and_fails_closed() {
         // `--` and `/*` inside a string literal are data, not comments.
-        assert!(
-            validate_sql_batch("INSERT INTO notes (id, content) VALUES ('n-1', 'a -- b');").is_ok()
-        );
         assert!(validate_sql_batch(
-            "INSERT INTO notes (id, content) VALUES ('n-1', '/* not a comment */');"
+            "INSERT INTO notes (id, content) VALUES ('n-1', 'a -- b');",
+            false
+        )
+        .is_ok());
+        assert!(validate_sql_batch(
+            "INSERT INTO notes (id, content) VALUES ('n-1', '/* not a comment */');",
+            false,
         )
         .is_ok());
         // An unterminated literal or block comment is rejected, never guessed.
-        assert!(validate_sql_batch("INSERT INTO notes (id) VALUES ('unterminated").is_err());
-        assert!(validate_sql_batch("INSERT INTO notes (id) VALUES ('n-1'); /* open").is_err());
+        assert!(validate_sql_batch("INSERT INTO notes (id) VALUES ('unterminated", false).is_err());
+        assert!(
+            validate_sql_batch("INSERT INTO notes (id) VALUES ('n-1'); /* open", false).is_err()
+        );
         // A comment cannot smuggle a denylisted keyword to the front of a batch.
-        assert!(validate_sql_batch("SELECT 1; --x\nATTACH DATABASE 'evil.db' AS e;").is_err());
+        assert!(
+            validate_sql_batch("SELECT 1; --x\nATTACH DATABASE 'evil.db' AS e;", false,).is_err()
+        );
     }
 
     #[test]
     fn ordinary_dml_select_and_schema_work_under_both_layers() {
-        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+        let conn = test_db(Connection::open_in_memory().unwrap());
         execute_batch_on(
             &conn,
             "CREATE TABLE notes (id TEXT PRIMARY KEY, content TEXT NOT NULL);\n\
@@ -1698,33 +2042,412 @@ mod tests {
     }
 
     #[test]
-    fn trigger_and_view_ddl_is_batch_only() {
-        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+    fn trigger_and_view_ddl_is_denied_on_every_path_without_a_listed_window() {
+        let db = test_db(Connection::open_in_memory().unwrap());
         execute_batch_on(
-            &conn,
+            &db,
             "CREATE TABLE t (id TEXT); CREATE TABLE audit (id TEXT);",
         )
         .unwrap();
-        // Batch keeps today's DDL behaviour until S-02c.
-        execute_batch_on(
-            &conn,
-            "CREATE TRIGGER trg_t AFTER INSERT ON t \
-             BEGIN INSERT INTO audit (id) VALUES (NEW.id); END;",
-        )
-        .unwrap();
-        execute_batch_on(&conn, "CREATE VIEW v_t AS SELECT id FROM t;").unwrap();
 
+        // The first call arrived in NotStarted, so the window is closed: an
+        // ordinary trigger is refused by layer 1 before SQLite sees it.
         let create_trigger = "CREATE TRIGGER trg_bad AFTER INSERT ON t \
-             BEGIN INSERT INTO audit (id) VALUES (NEW.id); END";
-        assert!(execute_on(&conn, create_trigger, &[]).is_err());
+             BEGIN INSERT INTO audit (id) VALUES (NEW.id); END;";
+        assert_eq!(
+            execute_batch_on(&db, create_trigger).unwrap_err(),
+            TRIGGER_VIEW_WINDOW_ERROR
+        );
+        assert_eq!(
+            execute_batch_on(&db, "CREATE VIEW v_t AS SELECT id FROM t;").unwrap_err(),
+            TRIGGER_VIEW_WINDOW_ERROR
+        );
+        assert!(execute_on(&db, create_trigger, &[]).is_err());
         assert!(execute_transaction_on(
-            &conn,
+            &db,
             &[ParameterizedStatement {
                 sql: create_trigger.to_string(),
                 params: vec![],
             }]
         )
         .is_err());
-        assert!(execute_on(&conn, "DROP TRIGGER trg_t", &[]).is_err());
+        assert!(db.migration_window.begin().is_err());
+    }
+
+    #[test]
+    fn the_window_is_one_shot_and_never_reopens() {
+        let db = test_db(Connection::open_in_memory().unwrap());
+        db.migration_window
+            .begin()
+            .expect("first begin opens the window");
+        assert_eq!(
+            db.migration_window.begin().unwrap_err(),
+            "Migration window is already open for this process"
+        );
+        db.migration_window.end();
+        db.migration_window.end();
+        assert!(db.migration_window.begin().is_err());
+        assert!(!db.migration_window.is_open());
+    }
+
+    #[test]
+    fn a_db_call_before_begin_closes_the_window_and_an_error_inside_closes_it_too() {
+        // Any renderer db_* call in NotStarted closes the window first.
+        let db = test_db(Connection::open_in_memory().unwrap());
+        execute_batch_on(&db, "CREATE TABLE t (id TEXT)").unwrap();
+        assert!(
+            db.migration_window.begin().is_err(),
+            "the UI is already operating without migrating"
+        );
+
+        // Inside the window, an error from any db_* command closes it.
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        assert!(execute_on(&db, "INSERT INTO missing (id) VALUES ('x')", &[]).is_err());
+        assert!(
+            !db.migration_window.is_open(),
+            "the error closed the window"
+        );
+
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        assert!(select_on(&db, "SELECT * FROM missing", &[]).is_err());
+        assert!(!db.migration_window.is_open());
+
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        assert!(execute_transaction_on(
+            &db,
+            &[ParameterizedStatement {
+                sql: "INSERT INTO missing (id) VALUES ('x')".to_string(),
+                params: vec![],
+            }]
+        )
+        .is_err());
+        assert!(!db.migration_window.is_open());
+    }
+
+    #[test]
+    fn fresh_install_migrates_under_authorizer() {
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        let fixture = migration_fixture();
+        let allowlist = MigrationDdlAllowlist::embedded();
+        let mut defer_foreign_keys_statements = 0usize;
+
+        for call in &fixture.calls {
+            match call.command.as_str() {
+                "db_execute_batch" => {
+                    for statement in split_sql_statements(&call.sql) {
+                        if classify(&statement) == Some(DdlKind::Pragma) {
+                            assert!(
+                                allowlist.contains(&fingerprint(&statement)),
+                                "the recorded pragma must be listed:\n{statement}"
+                            );
+                            defer_foreign_keys_statements += 1;
+                        }
+                    }
+                    execute_batch_on(&db, &call.sql).unwrap_or_else(|error| {
+                        // The runner swallows the 0020 layouts duplicate-column
+                        // ALTER; anything else is a real migration failure.
+                        if !is_runner_tolerated_migration_error(&error) {
+                            panic!(
+                                "db_execute_batch failed during the fresh install: {error}\n{}",
+                                &call.sql[..call.sql.len().min(200)]
+                            )
+                        }
+                    });
+                }
+                "db_execute" => {
+                    execute_on(&db, &call.sql, &call.params).unwrap_or_else(|error| {
+                        panic!("db_execute failed during the fresh install: {error}")
+                    });
+                }
+                "db_execute_transaction" => {
+                    execute_transaction_on(
+                        &db,
+                        &[ParameterizedStatement {
+                            sql: call.sql.clone(),
+                            params: call.params.clone(),
+                        }],
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("db_execute_transaction failed during the fresh install: {error}")
+                    });
+                }
+                "db_select" => {
+                    select_on(&db, &call.sql, &call.params).unwrap_or_else(|error| {
+                        panic!("db_select failed during the fresh install: {error}")
+                    });
+                }
+                "db_select_rows" => {
+                    select_rows_on(&db, &call.sql, &call.params).unwrap_or_else(|error| {
+                        panic!("db_select_rows failed during the fresh install: {error}")
+                    });
+                }
+                other => panic!("unexpected migration IPC command {other}"),
+            }
+        }
+
+        // The pragma the authorizer used to allow for every batch only ran
+        // because the listed exception was armed for it.
+        assert_eq!(defer_foreign_keys_statements, 5);
+
+        let ui = db.ui_conn.lock().unwrap();
+        let last: String = ui
+            .query_row(
+                "SELECT name FROM _migrations ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(last, "0058_processing_ner_tasks");
+        let triggers: Vec<String> = ui
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for expected in ["rag_chunks_fts_insert", "collection_activity_items_update"] {
+            assert!(
+                triggers.iter().any(|name| name == expected),
+                "missing legit trigger {expected}; got {triggers:?}"
+            );
+        }
+        drop(ui);
+
+        assert!(
+            !db.migration_window.is_open(),
+            "the window must auto-close once _migrations holds the last migration"
+        );
+    }
+
+    #[test]
+    fn unlisted_create_trigger_in_migration_batch_is_denied() {
+        // A real migration batch (0029 creates rag_chunks + its FTS triggers)
+        // with one extra trigger injected inside the batch transaction.
+        let legit = recorded_batch("0029_rag_chunks");
+        let injected = "CREATE TRIGGER trg_capture_off AFTER INSERT ON items \
+             BEGIN UPDATE sync_meta SET value='0' WHERE key='capture_enabled'; END;";
+        let batch = legit.replacen("\nCOMMIT;", &format!("\n{injected}\nCOMMIT;"), 1);
+        assert!(
+            batch.contains(injected),
+            "the injection must land in the batch"
+        );
+
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        // Layer 1 refuses the whole batch before SQLite runs anything: the
+        // extra trigger writes sync state, and even without that it is not a
+        // listed statement. Nothing from the batch can be half-applied, which
+        // is stronger than a rollback: there is no transaction to undo.
+        assert_eq!(
+            execute_batch_on(&db, &batch).unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        let created: i64 = db
+            .ui_conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE name IN ('rag_chunks', 'rag_chunks_fts', 'trg_capture_off')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0, "layer 1 denied the batch before any DDL ran");
+        assert!(
+            !db.migration_window.is_open(),
+            "the denial closed the window"
+        );
+
+        // The runner's cleanup call has nothing to undo; it still fails
+        // against the real connection, exactly as SQLite reports an idle
+        // ROLLBACK, and leaves autocommit on.
+        assert!(execute_batch_on(&db, "ROLLBACK;").is_err());
+        assert!(db.ui_conn.lock().unwrap().is_autocommit());
+    }
+
+    #[test]
+    fn a_listed_trigger_name_with_another_body_or_a_comment_prefix_is_denied() {
+        let listed = listed_statement("rag_chunks_fts_insert");
+        let begin = listed.find("BEGIN").expect("a trigger body");
+        let same_name_other_body = format!("{}BEGIN\n  SELECT 1;\nEND;", &listed[..begin]);
+        let comment_prefixed = format!("/* x */ {listed}");
+        assert_ne!(same_name_other_body, listed);
+
+        for candidate in [same_name_other_body, comment_prefixed] {
+            // The fingerprint is the authority: a comment or a different body
+            // changes it, so layer 1 refuses the statement (and layer 2 would
+            // refuse it again even if layer 1 were bypassed).
+            let db = window_open_db(Connection::open_in_memory().unwrap());
+            assert_eq!(
+                execute_batch_on(&db, &candidate).unwrap_err(),
+                TRIGGER_VIEW_WINDOW_ERROR
+            );
+            let created: i64 = db
+                .ui_conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = 'rag_chunks_fts_insert'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(created, 0, "no trigger may be created for {candidate:?}");
+        }
+    }
+
+    #[test]
+    fn a_renderer_begin_does_not_authorize_its_own_trigger() {
+        // The renderer can open the window itself (NotStarted → Open), but the
+        // window alone authorizes nothing: a trigger it injects is still not a
+        // listed statement (and here it also writes sync state).
+        let db = test_db(Connection::open_in_memory().unwrap());
+        db.migration_window
+            .begin()
+            .expect("the renderer's begin opens the window");
+        let own_trigger = "CREATE TRIGGER trg_own AFTER INSERT ON items \
+             BEGIN UPDATE sync_meta SET value='0' WHERE key='capture_enabled'; END;";
+        assert_eq!(
+            execute_batch_on(&db, own_trigger).unwrap_err(),
+            SYNC_PROTECTION_ERROR
+        );
+        let created: i64 = db
+            .ui_conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'trg_own'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0);
+    }
+
+    #[test]
+    fn exception_is_cleared_after_listed_statement() {
+        let trigger = listed_statement("rag_chunks_fts_insert");
+        let allowlist = MigrationDdlAllowlist::embedded();
+        let exception = batch_statement_exception(&trigger, true, allowlist)
+            .expect("a listed trigger gets a statement-scoped exception");
+
+        // Success path: the listed statement runs under the armed exception...
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE rag_chunks (id TEXT PRIMARY KEY, text_content TEXT); \
+             CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);",
+        )
+        .unwrap();
+        execute_batch_statement(&conn, &trigger, Some(std::sync::Arc::clone(&exception))).unwrap();
+        assert!(
+            !exception.is_armed(),
+            "the arm must clear after a successful statement"
+        );
+
+        // ... and a disarmed exception no longer authorizes even the same
+        // listed statement: layer 2 denies it while the hook is installed.
+        let fresh = Connection::open_in_memory().unwrap();
+        fresh
+            .execute_batch(
+                "CREATE TABLE rag_chunks (id TEXT PRIMARY KEY, text_content TEXT); \
+                 CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);",
+            )
+            .unwrap();
+        {
+            let _authorizer = RendererSqlAuthorizer::install(
+                &fresh,
+                RendererSqlKind::Batch,
+                Some(std::sync::Arc::clone(&exception)),
+            );
+            let denied = fresh
+                .execute_batch(&trigger)
+                .map_err(map_db_error)
+                .unwrap_err();
+            assert_eq!(denied, SQL_AUTHORIZER_DENIED_ERROR);
+        }
+        assert!(!exception.is_armed());
+
+        // Failure path: without its tables the listed statement fails, and the
+        // arm must clear on error too.
+        let failing = batch_statement_exception(&trigger, true, allowlist).unwrap();
+        let bare = Connection::open_in_memory().unwrap();
+        assert!(
+            execute_batch_statement(&bare, &trigger, Some(std::sync::Arc::clone(&failing)))
+                .is_err()
+        );
+        assert!(
+            !failing.is_armed(),
+            "the arm must clear after a failed statement"
+        );
+    }
+
+    #[test]
+    fn non_batch_ipc_never_lifts_exception() {
+        let trigger = listed_statement("rag_chunks_fts_insert");
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        // Even with the window open and the statement listed, the non-batch
+        // commands refuse trigger DDL in layer 1.
+        assert!(execute_on(&db, &trigger, &[]).is_err());
+        assert!(select_on(&db, &trigger, &[]).is_err());
+        assert!(select_rows_on(&db, &trigger, &[]).is_err());
+        assert!(execute_transaction_on(
+            &db,
+            &[ParameterizedStatement {
+                sql: trigger.clone(),
+                params: vec![],
+            }]
+        )
+        .is_err());
+        assert!(
+            db.migration_window.begin().is_err(),
+            "the errors closed the window"
+        );
+
+        // Layer 2 on its own: an armed exception never lifts for `Single`.
+        let exception = MigrationStatementException::new(
+            DdlKind::CreateTrigger,
+            Some("rag_chunks_fts_insert".to_string()),
+        );
+        let _armed = ArmedMigrationException::arm(&exception);
+        let conn = Connection::open_in_memory().unwrap();
+        // SQLite resolves the trigger's table before authorizing its creation,
+        // so the prerequisites must exist for layer 2 to be the thing that
+        // refuses the statement.
+        conn.execute_batch(
+            "CREATE TABLE rag_chunks (id TEXT PRIMARY KEY, text_content TEXT); \
+             CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);",
+        )
+        .unwrap();
+        let _authorizer = RendererSqlAuthorizer::install(
+            &conn,
+            RendererSqlKind::Single,
+            Some(std::sync::Arc::clone(&exception)),
+        );
+        assert_eq!(
+            conn.execute_batch(&trigger)
+                .map_err(map_db_error)
+                .unwrap_err(),
+            SQL_AUTHORIZER_DENIED_ERROR
+        );
+    }
+
+    #[test]
+    fn listed_trigger_is_denied_after_the_window_closed() {
+        let trigger = listed_statement("rag_chunks_fts_insert");
+
+        // Never opened: the first renderer call closes the window itself.
+        let db = test_db(Connection::open_in_memory().unwrap());
+        assert_eq!(
+            execute_batch_on(&db, &trigger).unwrap_err(),
+            TRIGGER_VIEW_WINDOW_ERROR
+        );
+
+        // Opened and explicitly ended: same denial.
+        let db = window_open_db(Connection::open_in_memory().unwrap());
+        db.migration_window.end();
+        assert_eq!(
+            execute_batch_on(&db, &trigger).unwrap_err(),
+            TRIGGER_VIEW_WINDOW_ERROR
+        );
     }
 }

@@ -16,7 +16,6 @@
 //! the statement it precedes or follows. The only text the splitter may drop is
 //! a trailing run of whitespace/comments after the last statement, so
 //! concatenating the returned pieces equals the input minus that trailing run.
-#![allow(dead_code)] // S-02c wires this into `db_execute_batch`; kept compiled until then.
 
 use sha2::{Digest, Sha256};
 

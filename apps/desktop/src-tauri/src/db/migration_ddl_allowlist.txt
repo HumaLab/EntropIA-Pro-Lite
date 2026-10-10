@@ -6,9 +6,14 @@
 # trailing ';' removed. Comments are NOT stripped: a leading or interleaved comment
 # changes the fingerprint and the statement is refused.
 #
+# The `# last-migration:` directive below is the last `_migrations` row the
+# recorded fixture inserts; the backend closes the one-shot migration window
+# once the database holds it.
+#
 # Regenerate after any runner.ts change:
 #   pnpm --filter @entropia/store export-migration-ipc
 #   cargo test --lib regenerate_migration_ddl_allowlist -- --ignored
+# last-migration: 0058_processing_ner_tasks
 00defc24a590a3fc924601f3965560367562762f754e9e84d7203c072d6c3940
 02aff3679d2552dce395ca0ef8a24b1a1710ec967ed8f0a204d2ac11c957005c
 0537e79f90c233a9345946499de866952fbb39ca52284e03dd2d0ab3c71fcbcb

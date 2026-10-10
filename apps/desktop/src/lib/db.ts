@@ -52,7 +52,26 @@ export function getProcessingInitState(): {
 }
 
 export async function initDb(): Promise<void> {
-  _store = await initStore(createTauriDbClient())
+  // One-shot migration window (S-02c). The backend accepts `begin` only once
+  // per process; a webview reload re-runs initDb in the same process, where
+  // the window is already closed and migrations are already applied, so a
+  // failed begin must never block startup.
+  try {
+    await invoke('db_migration_window_begin')
+  } catch (error) {
+    console.warn('[db] db_migration_window_begin failed:', error)
+  }
+  try {
+    _store = await initStore(createTauriDbClient())
+  } finally {
+    // Close the window even when initStore throws: the runner is done either
+    // way, and the backend's error path/auto-close already covers the rest.
+    try {
+      await invoke('db_migration_window_end')
+    } catch (error) {
+      console.warn('[db] db_migration_window_end failed:', error)
+    }
+  }
   // Sync capture bootstrap (DESIGN §6.1): now that every migration has run and
   // all synced tables exist, ensure the sync schema + capture triggers. The
   // backend already ran this at setup for tables that existed then; this covers
