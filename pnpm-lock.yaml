@@ -4,6 +4,63 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    '@tiptap/core':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-document':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-gapcursor':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-highlight':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-link':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-placeholder':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-subscript':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-superscript':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-table':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-table-cell':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-table-header':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-table-row':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-text-align':
+      specifier: ^2.26.4
+      version: 2.27.3
+    '@tiptap/extension-text-style':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/extension-underline':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/pm':
+      specifier: ^2.26.4
+      version: 2.27.2
+    '@tiptap/starter-kit':
+      specifier: ^2.26.4
+      version: 2.27.2
+    leaflet:
+      specifier: ^1.9.4
+      version: 1.9.4
+
 overrides:
   prosemirror-view: ^1.42.3
   markdown-it: ^14.3.1
@@ -112,55 +169,55 @@ importers:
         specifier: ^2.6.0
         version: 2.6.0
       '@tiptap/core':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/pm@2.27.2)
       '@tiptap/extension-document':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-gapcursor':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-highlight':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-link':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-placeholder':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-subscript':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-superscript':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-table-cell':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-header':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-row':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-text-align':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-text-style':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-underline':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/pm':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2
       '@tiptap/starter-kit':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2
       docx:
         specifier: 9.7.1
@@ -169,7 +226,7 @@ importers:
         specifier: ^0.45.2
         version: 0.45.4
       leaflet:
-        specifier: ^1.9.4
+        specifier: 'catalog:'
         version: 1.9.4
       markdown-it:
         specifier: ^14.3.1
@@ -254,58 +311,58 @@ importers:
         specifier: ^3.46.0
         version: 3.46.0(svelte@5.56.10(@typescript-eslint/types@8.58.1))
       '@tiptap/core':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/pm@2.27.2)
       '@tiptap/extension-document':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-gapcursor':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-highlight':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-link':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-placeholder':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-subscript':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-superscript':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-table-cell':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-header':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-row':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-text-align':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-text-style':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-underline':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/pm':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2
       '@tiptap/starter-kit':
-        specifier: ^2.26.4
+        specifier: 'catalog:'
         version: 2.27.2
       leaflet:
-        specifier: ^1.9.4
+        specifier: 'catalog:'
         version: 1.9.4
       pdfjs-dist:
         specifier: ^4
