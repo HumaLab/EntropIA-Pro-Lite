@@ -33,6 +33,7 @@ const APP_COMMANDS: &[&str] = &[
     "processing_latest_bibliography_sync_status",
     "bibliography_search_works",
     "bibliography_open_passage",
+    "zotero_data_dir_grant",
     "bibliography_passage_context",
     "bibliography_library_status",
     "bibliography_search_passages",
