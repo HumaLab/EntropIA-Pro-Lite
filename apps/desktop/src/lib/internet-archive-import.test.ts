@@ -266,6 +266,89 @@ describe('importVerifiedFiles', () => {
     expect(outcome.imported).toEqual([])
   })
 
+  it('keeps the confirm code and continues when discarding after a refused confirm fails', async () => {
+    iaRef.iaListVerifiedFiles.mockResolvedValue([file(0), file(1)])
+    iaRef.iaBeginFileImport.mockImplementation(async (_job: string, index: number) => ({
+      action: 'import',
+      file: file(index),
+    }))
+    iaRef.iaConfirmFileImported.mockRejectedValueOnce(
+      new Error('incomplete_import: pages missing')
+    )
+    importRef.discardFailedImport.mockRejectedValueOnce(new Error('io: cannot discard'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const outcome = await importVerifiedFiles('job-1')
+
+      expect(iaRef.iaFailFileImport).not.toHaveBeenCalled()
+      expect(outcome.failed).toEqual([{ index: 0, code: 'incomplete_import' }])
+      expect(outcome.imported).toEqual([{ index: 1, itemId: 'item-1' }])
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('still reports the failure and continues when discarding after a bad import fails', async () => {
+    iaRef.iaListVerifiedFiles.mockResolvedValue([file(0), file(1)])
+    iaRef.iaBeginFileImport.mockImplementation(async (_job: string, index: number) => ({
+      action: 'import',
+      file: file(index),
+    }))
+    importRef.importClassifiedPathsIntoCollection
+      .mockResolvedValueOnce({
+        classifiedCount: 1,
+        rejected: [],
+        createdItems: [
+          { id: 'item-a', title: 'Title 0' },
+          { id: 'item-b', title: 'Title 0' },
+        ],
+        importErrors: [],
+        alreadyImported: [],
+      })
+      .mockResolvedValueOnce(imported('item-1', 'Title 1'))
+    importRef.discardFailedImport.mockRejectedValue(new Error('io: cannot discard'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const outcome = await importVerifiedFiles('job-1')
+
+      expect(iaRef.iaFailFileImport).toHaveBeenCalledWith('job-1', 0)
+      expect(outcome.failed).toEqual([{ index: 0, code: 'unknown' }])
+      expect(outcome.imported).toEqual([{ index: 1, itemId: 'item-1' }])
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('records partial_remains without beginning again when the partial discard fails', async () => {
+    iaRef.iaListVerifiedFiles.mockResolvedValue([file(0), file(1)])
+    iaRef.iaBeginFileImport.mockImplementation(async (_job: string, index: number) =>
+      index === 0
+        ? { action: 'discard_partial', itemId: 'item-old' }
+        : { action: 'import', file: file(index) }
+    )
+    importRef.discardFailedImport.mockRejectedValueOnce(new Error('io: cannot discard'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const outcome = await importVerifiedFiles('job-1')
+
+      expect(iaRef.iaBeginFileImport).toHaveBeenCalledTimes(2)
+      expect(iaRef.iaBeginFileImport).toHaveBeenNthCalledWith(1, 'job-1', 0)
+      expect(iaRef.iaBeginFileImport).toHaveBeenNthCalledWith(2, 'job-1', 1)
+      expect(importRef.importClassifiedPathsIntoCollection).toHaveBeenCalledTimes(1)
+      expect(iaRef.iaFailFileImport).not.toHaveBeenCalled()
+      expect(outcome.failed).toEqual([{ index: 0, code: 'partial_remains' }])
+      expect(outcome.imported).toEqual([{ index: 1, itemId: 'item-1' }])
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('records the parsed code when begin rejects and continues with the rest', async () => {
     iaRef.iaListVerifiedFiles.mockResolvedValue([file(0), file(1)])
     iaRef.iaBeginFileImport

@@ -123,8 +123,17 @@ async function reportFailed(run: IaImportRun, index: number) {
 
 // The item exists but will not be confirmed: drop it so no broken remnant
 // stays in the collection. A later run then begins the file from scratch.
-async function dropUnconfirmed(run: IaImportRun, itemId: string) {
-  await discardFailedImport(run.collectionId, itemId)
+// A refusal never fails the run: it is logged and reported as `false`, so
+// the caller keeps the file's original failure code. The remnant surfaces
+// as `discard_partial` on a later run, so nothing is lost.
+async function dropUnconfirmed(run: IaImportRun, itemId: string): Promise<boolean> {
+  try {
+    await discardFailedImport(run.collectionId, itemId)
+    return true
+  } catch (reason) {
+    console.warn('[internet-archive] could not discard the failed import:', reason)
+    return false
+  }
 }
 
 // Confirm the item for one `Importing` file. A refusal means Rust already
@@ -205,7 +214,16 @@ async function importFile(run: IaImportRun, listed: IaVerifiedFile) {
     return
   }
   if (begin.action === 'discard_partial') {
-    if (begin.itemId) await discardFailedImport(run.collectionId, begin.itemId)
+    if (begin.itemId) {
+      const discarded = await dropUnconfirmed(run, begin.itemId)
+      if (!discarded) {
+        // The remnant is still there and the discard itself failed: leave
+        // it for a later run instead of beginning again. The file stays
+        // `verified`: nothing to report.
+        run.outcome.failed.push({ index: listed.index, code: 'partial_remains' })
+        return
+      }
+    }
     let again: IaBeginResult
     try {
       again = await iaBeginFileImport(run.jobId, listed.index)
