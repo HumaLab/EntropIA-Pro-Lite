@@ -195,3 +195,34 @@ fn no_capability_names_a_browser_tab_or_popup_label() {
         }
     }
 }
+
+/// S-01: the renderer's file-system reach is granted at runtime
+/// (`fs_scope::grant_frontend_fs_scope`), never by a static `fs:scope` allow
+/// or a whole-folder read set, which would reach `$HOME` or the database.
+#[test]
+fn the_capability_grants_no_static_fs_directory() {
+    let permissions = capability()["permissions"]
+        .as_array()
+        .expect("permissions")
+        .clone();
+    for permission in &permissions {
+        if let Some(name) = permission.as_str() {
+            assert!(
+                !(name.starts_with("fs:") && name.contains("-recursive")),
+                "{name} grants a whole folder to the renderer"
+            );
+            assert!(
+                !name.starts_with("fs:scope"),
+                "{name} grants an fs scope statically"
+            );
+        } else if permission["identifier"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("fs:"))
+        {
+            assert!(
+                permission.get("allow").is_none(),
+                "{permission} allows fs paths statically"
+            );
+        }
+    }
+}
