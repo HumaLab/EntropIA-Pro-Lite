@@ -91,6 +91,21 @@ fn lock_setting_key(key: &str) -> Option<MutexGuard<'static, ()>> {
     Some(mutex.lock().unwrap_or_else(|poison| poison.into_inner()))
 }
 
+/// [`lock_setting_key`] for a batch read (A-05b): every secret key among `keys`
+/// is locked in `SECRET_SETTING_KEYS` order, so two concurrent multi-key reads
+/// always take the same locks in the same order and cannot deadlock.
+fn lock_setting_keys(keys: &[&str]) -> Vec<MutexGuard<'static, ()>> {
+    let mut guards = Vec::new();
+    for secret_key in SECRET_SETTING_KEYS {
+        if keys.contains(&secret_key) {
+            if let Some(guard) = lock_setting_key(secret_key) {
+                guards.push(guard);
+            }
+        }
+    }
+    guards
+}
+
 /// The system credential store (keyring) behind secret settings, injectable so
 /// tests can drive the set/read/delete sequences against an in-memory fake and
 /// never touch the keyring of the machine running the tests.
@@ -180,7 +195,9 @@ pub async fn settings_set(
     let invalidation_key = key.clone();
     let db = db.inner().clone();
     run_blocking_db_task(move || {
-        set_setting_with_store(&db.ui_conn, &key, &value, &KeyringSecretStore)
+        set_setting_with_store(&db.ui_conn, &key, &value, &KeyringSecretStore)?;
+        resume_work_after_setting_change_outside_ui_conn(&db.db_path, &key);
+        Ok(())
     })
     .await?;
     if should_invalidate {
@@ -209,10 +226,15 @@ fn ensure_renderer_writable_setting(key: &str) -> Result<(), String> {
 
 /// The whole [`settings_set`] sequence for a renderer-writable key:
 /// renderer-writable check, per-key lock, credential-store write (secret keys
-/// only, with no `ui_conn` held), then `forget_zotero_user_id_for`, the
-/// reference row and the work the new value unblocks, all under `ui_conn`.
-/// A credential-store failure returns the error and leaves the row untouched.
-/// The store is injected so tests never touch the real keyring.
+/// only, with no `ui_conn` held), then `forget_zotero_user_id_for` and the
+/// reference row under `ui_conn`. A credential-store failure returns the error
+/// and leaves the row untouched. The store is injected so tests never touch
+/// the real keyring.
+///
+/// The configuration resume that follows runs in a second phase, on its own
+/// connection ([`resume_work_after_setting_change_outside_ui_conn`]): the
+/// repository re-reads the configuration, including secrets that live in the
+/// credential store, so it must not run while `ui_conn` is held (A-05b).
 fn set_setting_with_store(
     ui_conn: &Mutex<rusqlite::Connection>,
     key: &str,
@@ -231,7 +253,6 @@ fn set_setting_with_store(
         let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
         forget_zotero_user_id_for(&conn, key);
         write_setting_row(&conn, key, value)?;
-        resume_work_after_setting_change(&conn, key);
     }
     if clearing_secret {
         // Row first, then the secret (today's semantics): a credential-store
@@ -241,6 +262,25 @@ fn set_setting_with_store(
         }
     }
     Ok(())
+}
+
+/// The configuration resume of a settings save, on a connection of its own so
+/// no `ui_conn` guard is held while the repository resolves secret references
+/// from the credential store (A-05b). The new row is already committed, so a
+/// fresh archive connection reads it; a failure is logged and never fails the
+/// save, exactly like the in-lock pass this replaced.
+fn resume_work_after_setting_change_outside_ui_conn(db_path: &std::path::Path, key: &str) {
+    if !is_embedding_engine_setting(key) && !is_ocr_engine_setting(key) {
+        return;
+    }
+    match crate::db::open::open_archive_connection(db_path) {
+        Ok(conn) => {
+            resume_work_after_setting_change(&conn, key);
+        }
+        Err(error) => {
+            eprintln!("[settings] Could not resume configuration-blocked work: {error}");
+        }
+    }
 }
 
 /// Logs, without values and without deleting them, the backend-only
@@ -502,6 +542,88 @@ pub(crate) fn resolve_setting_ref(
     }
 }
 
+/// [`resolve_setting_ref`] with [`get_setting`]'s reporting contract: a
+/// missing credential-store entry and a credential-store failure are logged
+/// and read as `None`, so Rust-side readers keep today's empty-value
+/// behaviour instead of surfacing a keyring error.
+fn resolve_reference_logged(
+    reference: &SettingRef,
+    key: &str,
+    store: &dyn SecretStore,
+) -> Option<String> {
+    match resolve_setting_ref(reference, store) {
+        Ok(value) => {
+            if matches!(reference, SettingRef::Secret { .. }) && value.is_none() {
+                eprintln!(
+                    "[settings] Protected setting '{key}' references a missing credential store entry"
+                );
+            }
+            value
+        }
+        Err(error) => {
+            eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
+            None
+        }
+    }
+}
+
+/// Resolve one or more settings from the shared `ui_conn` without holding it
+/// during credential-store I/O (A-05b). A-05a's fixed order holds: the secret
+/// keys' per-key locks first, then `ui_conn` for the references only, then the
+/// released connection while [`resolve_setting_ref`] reads the credential
+/// store. Keyring failures and missing entries read as `None`, exactly like
+/// [`get_setting`]; the only error is a poisoned `ui_conn`.
+pub(crate) fn read_settings_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    keys: &[&str],
+    store: &dyn SecretStore,
+) -> Result<Vec<Option<String>>, String> {
+    let _key_guards = lock_setting_keys(keys);
+    let references: Vec<SettingRef> = {
+        let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
+        keys.iter()
+            .map(|key| read_setting_ref(&conn, key))
+            .collect()
+    };
+    Ok(keys
+        .iter()
+        .zip(references.iter())
+        .map(|(key, reference)| resolve_reference_logged(reference, key, store))
+        .collect())
+}
+
+/// [`read_settings_unlocked`] for a single key.
+pub(crate) fn get_secret_setting_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    key: &str,
+    store: &dyn SecretStore,
+) -> Result<Option<String>, String> {
+    Ok(read_settings_unlocked(ui_conn, &[key], store)?
+        .into_iter()
+        .next()
+        .flatten())
+}
+
+/// [`resolve_api_key_input`] for callers that share `ui_conn` (A-05b): an
+/// explicit `provided` key wins with no database or credential-store access,
+/// and a blank one resolves the stored secret after the connection is
+/// released. The error for a key that is not configured is unchanged.
+pub(crate) fn resolve_api_key_input_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    key: &str,
+    provided: &str,
+    store: &dyn SecretStore,
+) -> Result<String, String> {
+    let provided = provided.trim();
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
+    }
+    get_secret_setting_unlocked(ui_conn, key, store)?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("No protected credential is configured for '{key}'"))
+}
+
 /// The whole [`settings_get`] sequence: per-key lock for secret keys, read the
 /// reference under `ui_conn`, release it, then resolve the credential store.
 /// Returns the renderer-facing value ([`ipc_setting_value`]): the resolution
@@ -538,39 +660,11 @@ fn read_setting_for_ipc(
 ///
 /// Kept for Rust-side callers that own the connection; A-05b migrates the
 /// callers that currently invoke it with `ui_conn` held to the two-step API
-/// ([`read_setting_ref`] then [`resolve_setting_ref`]).
+/// ([`read_setting_ref`] then [`resolve_setting_ref`], wrapped by
+/// [`read_settings_unlocked`]).
 pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     let reference = read_setting_ref(conn, key);
-    let has_secret_ref = matches!(reference, SettingRef::Secret { .. });
-    match resolve_setting_ref(&reference, &KeyringSecretStore) {
-        Ok(value) => {
-            if has_secret_ref && value.is_none() {
-                eprintln!(
-                    "[settings] Protected setting '{key}' references a missing credential store entry"
-                );
-            }
-            value
-        }
-        Err(error) => {
-            eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
-            None
-        }
-    }
-}
-
-pub fn resolve_api_key_input(
-    conn: &rusqlite::Connection,
-    key: &str,
-    provided: &str,
-) -> Result<String, String> {
-    let provided = provided.trim();
-    if !provided.is_empty() {
-        return Ok(provided.to_string());
-    }
-    get_setting(conn, key)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("No protected credential is configured for '{key}'"))
+    resolve_reference_logged(&reference, key, &KeyringSecretStore)
 }
 
 pub(crate) fn get_raw_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
@@ -1441,12 +1535,22 @@ mod tests {
 
     #[test]
     fn explicit_api_key_input_takes_precedence_over_stored_value() {
-        let conn = in_memory_settings_db();
-        set_setting(&conn, OPENROUTER_API_KEY, "legacy-stored").expect("save key");
+        let conn = Mutex::new(in_memory_settings_db());
+        set_setting(
+            &conn.lock().expect("conn"),
+            OPENROUTER_API_KEY,
+            "legacy-stored",
+        )
+        .expect("save key");
 
         assert_eq!(
-            resolve_api_key_input(&conn, OPENROUTER_API_KEY, "  explicit  ")
-                .expect("resolve explicit key"),
+            resolve_api_key_input_unlocked(
+                &conn,
+                OPENROUTER_API_KEY,
+                "  explicit  ",
+                &KeyringSecretStore
+            )
+            .expect("resolve explicit key"),
             "explicit"
         );
     }
@@ -2353,6 +2457,72 @@ mod tests {
 
         assert_eq!(value.as_deref(), Some("dark"));
         assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    }
+
+    /// A-05b's reader for command callers: the credential store must be read
+    /// with `ui_conn` already released, exactly like `read_setting_for_ipc`.
+    #[test]
+    fn the_unlocked_secret_reader_resolves_the_keyring_after_releasing_the_connection() {
+        let conn = shared_settings_db();
+        set_setting(
+            &conn.lock().expect("conn"),
+            OPENROUTER_API_KEY,
+            "secret_ref:openrouter_api_key",
+        )
+        .expect("seed reference");
+        let store = UnlockedReadStore {
+            conn: &conn,
+            secret: Some("sk-protected".to_string()),
+            reads: AtomicUsize::new(0),
+        };
+
+        let value =
+            get_secret_setting_unlocked(&conn, OPENROUTER_API_KEY, &store).expect("read setting");
+
+        assert_eq!(value.as_deref(), Some("sk-protected"));
+        assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// A-05b's batch reader keeps key order while mixing plain and secret
+    /// settings, so `ensure_selected_cloud_key_unlocked` reads its mode and key
+    /// from one connection acquisition.
+    #[test]
+    fn the_unlocked_batch_read_returns_plain_and_secret_values_in_key_order() {
+        let conn = shared_settings_db();
+        {
+            let conn = conn.lock().expect("conn");
+            set_setting(&conn, crate::ocr::OCRH_SETTING_MODE, "glm_ocr").expect("mode row");
+            set_setting(&conn, GLM_OCR_API_KEY, "secret_ref:glm_ocr_api_key")
+                .expect("key reference");
+        }
+        let store = InMemorySecretStore::with_secret(GLM_OCR_API_KEY, "sk-glm");
+
+        let values = read_settings_unlocked(
+            &conn,
+            &[crate::ocr::OCRH_SETTING_MODE, GLM_OCR_API_KEY],
+            &store,
+        )
+        .expect("batch read");
+
+        assert_eq!(values[0].as_deref(), Some("glm_ocr"));
+        assert_eq!(values[1].as_deref(), Some("sk-glm"));
+    }
+
+    /// A blank explicit key resolves the stored secret through the unlocked
+    /// helper; an explicit one never touches the connection at all.
+    #[test]
+    fn the_unlocked_api_key_resolution_prefers_the_explicit_value() {
+        let conn = shared_settings_db();
+        let store = FailingSecretStore;
+
+        assert_eq!(
+            resolve_api_key_input_unlocked(&conn, OPENROUTER_API_KEY, "  explicit  ", &store)
+                .expect("explicit key"),
+            "explicit"
+        );
+        let error = resolve_api_key_input_unlocked(&conn, OPENROUTER_API_KEY, "", &store)
+            .expect_err("a failing store must not yield a key");
+        assert!(error.contains(OPENROUTER_API_KEY), "{error}");
     }
 
     /// Extracts a top-level function's source: from its signature to the first

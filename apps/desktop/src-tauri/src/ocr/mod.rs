@@ -717,6 +717,34 @@ pub(super) fn ensure_selected_cloud_key(conn: &rusqlite::Connection) -> Result<(
     Ok(())
 }
 
+/// [`ensure_selected_cloud_key`] for callers that share `AppDbState::ui_conn`
+/// from an async command: the mode and the GLM-OCR key are read under one
+/// connection acquisition, and the credential store resolves the key after the
+/// connection is released, so a slow keyring never stalls renderer queries
+/// (A-05b).
+pub(super) fn ensure_selected_cloud_key_unlocked(
+    ui_conn: &std::sync::Mutex<rusqlite::Connection>,
+) -> Result<(), String> {
+    let values = crate::settings::read_settings_unlocked(
+        ui_conn,
+        &[OCRH_SETTING_MODE, OCRH_SETTING_GLM_OCR_API_KEY],
+        &crate::settings::KeyringSecretStore,
+    )?;
+    let mode = values[0]
+        .as_deref()
+        .unwrap_or(OCRH_MODE_LOCAL)
+        .to_lowercase();
+    let api_key = values[1].as_deref().unwrap_or_default().trim();
+    if mode == OCRH_MODE_GLM_OCR && api_key.is_empty() {
+        return Err(
+            "GLM-OCR no está configurado. Andá a Configuración > OCRH y cargá una API key antes de usar OCRH."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 /// The error [`process_with_glm_ocr_provider`] raises when GLM-OCR answers
 /// with no useful content for an asset. Whole-asset corpus OCR keeps this a
 /// failure (the user re-runs the asset); the bibliography page path maps it

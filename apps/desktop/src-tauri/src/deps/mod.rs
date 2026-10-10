@@ -313,14 +313,18 @@ pub async fn probe_all_once(
         };
 
         if let Some(probe_generation) = probe_generation {
-            let probe_settings = {
+            // The settings read is SQL: run it on the blocking pool so the
+            // async worker never locks `ui_conn` (A-05b).
+            let db = db.clone();
+            let probe_settings = tokio::task::spawn_blocking(move || -> Result<_, String> {
                 let conn = db
                     .ui_conn
                     .lock()
-                    .map_err(|err| format!("DB lock error: {err}"));
-
-                conn.map(|guard| checks::load_probe_python_settings(&guard))
-            };
+                    .map_err(|err| format!("DB lock error: {err}"))?;
+                Ok(checks::load_probe_python_settings(&conn))
+            })
+            .await
+            .map_err(|err| format!("DB task failed: {err}"))?;
 
             let probe_settings = if let Ok(settings) = probe_settings {
                 settings
@@ -685,20 +689,28 @@ pub async fn deps_reset(
 
     // ── 2. Delete Python-path settings from app_settings ─────────────────────
     {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock error: {e}"))?;
-        let keys = [
-            "deps_venv_python_path",
-            "python.runtime_selection",
-            "python.paddle_vl.path",
-            "python.faster_whisper.path",
-        ];
-        for key in keys {
-            crate::settings::delete_setting(&conn, key)
-                .map_err(|e| format!("Error eliminando configuración '{key}': {e}"))?;
-        }
+        // SQL on the blocking pool: an async command must not lock `ui_conn`
+        // on its own thread (A-05b).
+        let db = db.inner().clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let conn = db
+                .ui_conn
+                .lock()
+                .map_err(|e| format!("DB lock error: {e}"))?;
+            let keys = [
+                "deps_venv_python_path",
+                "python.runtime_selection",
+                "python.paddle_vl.path",
+                "python.faster_whisper.path",
+            ];
+            for key in keys {
+                crate::settings::delete_setting(&conn, key)
+                    .map_err(|e| format!("Error eliminando configuración '{key}': {e}"))?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("DB task failed: {e}"))??;
     }
 
     // ── 3. Invalidate the Python discovery probe cache ────────────────────────

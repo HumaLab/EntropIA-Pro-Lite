@@ -1,24 +1,33 @@
 /// Tauri IPC commands for transcription operations.
 use super::{TranscriptionJob, TranscriptionQueue};
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 use tauri::{AppHandle, State};
+
+/// [`super::ensure_selected_cloud_key`] on a connection of its own, inside a
+/// blocking task: the async commands must not lock `ui_conn` on their own
+/// thread, and the credential store must not be read while it is held (A-05b).
+/// The settings rows are already committed, so the fresh connection sees them.
+fn ensure_selected_cloud_key_blocking(db: &AppDbState) -> Result<(), String> {
+    let conn = crate::db::open::open_archive_connection(&db.db_path)?;
+    super::ensure_selected_cloud_key(&conn)
+}
 
 #[tauri::command]
 pub async fn test_assemblyai_connection(
     api_key: String,
     db: State<'_, AppDbState>,
 ) -> Result<(), String> {
-    let api_key = {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error: {error}"))?;
-        crate::settings::resolve_api_key_input(
-            &conn,
+    let db = db.inner().clone();
+    let api_key = run_blocking_db_task(move || {
+        crate::settings::resolve_api_key_input_unlocked(
+            &db.ui_conn,
             crate::settings::ASSEMBLYAI_API_KEY,
             &api_key,
-        )?
-    };
+            &crate::settings::KeyringSecretStore,
+        )
+    })
+    .await?;
     super::assemblyai::AssemblyAiClient::new(api_key)
         .test_connection()
         .await
@@ -48,11 +57,8 @@ pub async fn transcribe_audio(
 
     super::ensure_transcription_runtime_ready(&app_handle)?;
     {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock poisoned: {e}"))?;
-        super::ensure_selected_cloud_key(&conn)?;
+        let db = db.inner().clone();
+        run_blocking_db_task(move || ensure_selected_cloud_key_blocking(&db)).await?;
     }
 
     crate::app_logs::info(
@@ -81,31 +87,35 @@ pub async fn update_transcription_text_cmd(
     text_content: String,
     db: State<'_, AppDbState>,
 ) -> Result<(), String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock poisoned: {e}"))?;
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
 
-    // Find the latest transcription for this asset
-    let mut stmt = conn
-        .prepare(
-            "SELECT id FROM transcriptions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",
-        )
-        .map_err(|e| format!("Failed to prepare query: {e}"))?;
+        // Find the latest transcription for this asset
+        let mut stmt = conn
+            .prepare(
+                "SELECT id FROM transcriptions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            )
+            .map_err(|e| format!("Failed to prepare query: {e}"))?;
 
-    let transcription_id: Result<String, _> = stmt.query_row([&asset_id], |row| row.get(0));
+        let transcription_id: Result<String, _> = stmt.query_row([&asset_id], |row| row.get(0));
 
-    drop(stmt); // release borrow before execute
+        drop(stmt); // release borrow before execute
 
-    if let Ok(id) = transcription_id {
-        conn.execute(
-            "UPDATE transcriptions SET text_content = ?1 WHERE id = ?2",
-            rusqlite::params![text_content, id],
-        )
-        .map_err(|e| format!("Failed to update transcription text: {e}"))?;
-    }
+        if let Ok(id) = transcription_id {
+            conn.execute(
+                "UPDATE transcriptions SET text_content = ?1 WHERE id = ?2",
+                rusqlite::params![text_content, id],
+            )
+            .map_err(|e| format!("Failed to update transcription text: {e}"))?;
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -122,11 +132,8 @@ pub async fn transcribe_dictation(
     );
     let db_path = db.db_path.clone();
     {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock poisoned: {e}"))?;
-        super::ensure_selected_cloud_key(&conn)?;
+        let db = db.inner().clone();
+        run_blocking_db_task(move || ensure_selected_cloud_key_blocking(&db)).await?;
     }
 
     let audio_path_for_worker = audio_path.clone();
