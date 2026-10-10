@@ -29,7 +29,7 @@ XML and some tables.
   unit tests from real samples (true and false positives).
 - [x] T2 — Measure v2 on a copy of the prueba-sync archive with the existing
   ignored measurement test; update odd/reports/native-text-detector-measurement.md.
-- [ ] T3 — Preview in tauri dev: Abulafia is a candidate again; record the
+- [x] T3 — Preview in tauri dev: Abulafia is a candidate again; record the
   new cost. No paid confirm without the owner.
 - [x] T4 — Owner rule (2026-10-10): scanned paper books whose PDF carries a
   bad old-OCR text layer go to GLM-OCR automatically in the regular
@@ -67,3 +67,7 @@ XML and some tables.
 - T4: no code needed. The regular extraction already routes detector-flagged
   pages to GLM-OCR automatically (see the T1 report above); detector v2 is
   what makes scanned books with a bad old-OCR layer reach that path.
+- T3 (tauri dev from this branch, prueba-sync, over CDP): the library
+  candidates scan now lists 22 attachments; preview: 2,469 pages, 600 for
+  GLM-OCR, 739 OCR pages reused, 31 fixed without OCR, estimated USD 0.054.
+  Dialog closed without confirming; no reprocess task queued.
