@@ -1,4 +1,6 @@
-//! Strict HTTP fetch policy for the Internet Archive connector.
+//! Internet Archive client for the EntropIA connector: search, item metadata
+//! with PDF availability, and identifier resolution, behind a strict fetch
+//! policy.
 //!
 //! Only `https://archive.org` and `https://*.archive.org` are reachable in
 //! production, every resolved address is checked against the public-internet

@@ -81,10 +81,13 @@ unify later.
 - [x] 10. Input resolution (T1.5): accept a bare identifier, an
       `archive.org/details/<id>` URL or a collection URL; reject anything else; no
       arbitrary endpoints.
-- [ ] 11. Tauri commands `ia_search` and `ia_get_item`: registered in
-      `generate_handler!`, `APP_COMMANDS` and `allow-ia-*` in
-      `capabilities/default.json`; `acl_manifest_guard.rs` green; `cargo check`
-      for Lite (no features) and Pro (`local-ml`).
+- [x] 11. ~~Tauri commands `ia_search` and `ia_get_item`~~ moved to Phase 4
+      (decided with the user 2026-10-10): `src-tauri` cannot compile on this Linux
+      box (no Tauri system libraries) and its `Cargo.lock` must not be regenerated
+      here (AGENTS.md `entropia-agent` git source line). All `ia_*` commands get
+      registered together in Phase 4 and verified once on Windows (Lite, Pro,
+      `acl_manifest_guard.rs`, `Cargo.lock`). Replaced by a manual live smoke test,
+      `crates/internet-archive/examples/live_smoke.rs`.
 
 ## Evidence
 
@@ -116,6 +119,13 @@ unify later.
   shape, so the mediatype decides). RED: accept tests failed against a stub,
   item tests failed to compile. GREEN: 47 passed. Independent verifier: fmt,
   clippy, 47/47 twice, `Cargo.toml` unchanged, no prior test lost.
+- 2026-10-10, task 11 / Phase 1 close: `cargo run --example live_smoke`
+  against the real archive.org with `FetchPolicy::production()` passed (search
+  283 found; open item 1 PDF available; lending item 3 PDFs, none available, one
+  or more `Encrypted`; details URL resolved; unknown id `NotFound`). fmt, clippy
+  `-D warnings` and `cargo test` 47/47 green after the crate description update.
+  Phase 1 acceptance (search and metadata correct, no local writes, no
+  downloads, clear errors) met at crate level.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
