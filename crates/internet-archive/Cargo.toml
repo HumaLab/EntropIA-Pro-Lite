@@ -11,6 +11,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
+lopdf = "0.45"
+sha2 = "0.10"
+md-5 = "0.10"
 tokio = { version = "1", features = ["net", "rt", "macros", "time"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }

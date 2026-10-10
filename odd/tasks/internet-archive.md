@@ -142,7 +142,7 @@ commands in Phase 4.
       partial on any failure, no `.part` kept. Bounded retries for transient
       failures; never retry 401/403/404. MVP resume is a full re-download by the
       caller.
-- [ ] 18. Verification (T3.3, §7 point 7): `%PDF` header, remote md5 or sha1 when
+- [x] 18. Verification (T3.3, §7 point 7): `%PDF` header, remote md5 or sha1 when
       published, always local SHA-256, page count via `lopdf` (accepted parse
       risk, input already capped), reject over the page cap with
       `demasiadas páginas`, unreadable PDF with `verificación fallida`. Result
@@ -159,6 +159,14 @@ commands in Phase 4.
   `fetch_final_response` keeps `get_json` unchanged. RED: 11 tests against
   `todo!()`. GREEN: 115. The independent verifier failed twice to start; the
   parent ran `fmt`, `clippy -D warnings`, and `cargo test` (115 passed).
+- 2026-10-10, task 18: `verify.rs` checks `%PDF`, declared length, remote md5/sha1
+  (case-insensitive; empty means absent), always computes SHA-256, counts pages
+  with `lopdf`, and deletes the staged file on every rejection. Markers:
+  `verificación fallida`, `demasiadas páginas`. Page cap clamps to 1..=2000 with
+  default 500. A PDF that opens with zero pages is also rejected (parent added
+  that check and its test after review). RED: 5 failing tests against a stub.
+  GREEN: 128. SHA-1 is hand-rolled and checked against FIPS 180-4 vectors because
+  `sha2` does not include SHA-1.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

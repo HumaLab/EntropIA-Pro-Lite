@@ -22,6 +22,7 @@ pub mod search;
 pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod verify;
 
 pub use client::IaClient;
 pub use download::{
@@ -34,6 +35,10 @@ pub use item::{
 pub use policy::{is_public_ip, FetchPolicy};
 pub use resolve::resolve_identifier;
 pub use search::{Endpoints, SearchItem, SearchPage, SearchQuery};
+pub use verify::{
+    verify_staged_pdf, ExpectedRemote, PageLimits, VerifiedPdf, ABSOLUTE_MAX_PAGES,
+    DEFAULT_MAX_PAGES,
+};
 
 /// Cap for item metadata payloads.
 pub const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;

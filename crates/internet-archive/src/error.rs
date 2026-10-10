@@ -44,4 +44,13 @@ pub enum IaError {
     /// Local filesystem failure while staging a download.
     #[error("i/o error: {0}")]
     Io(String),
+    /// A staged PDF failed verification (bad header, size or checksum
+    /// mismatch, or unreadable PDF). No path is included: staging paths
+    /// are private.
+    #[error("verificación fallida: {reason}")]
+    VerifyFailed { reason: String },
+    /// A staged PDF has more pages than the configured limit. No path is
+    /// included: staging paths are private.
+    #[error("demasiadas páginas: {pages} supera el límite de {max_pages}")]
+    TooManyPages { pages: u32, max_pages: u32 },
 }
