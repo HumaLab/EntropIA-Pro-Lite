@@ -372,6 +372,15 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
   GREEN: app `internet_archive` 78, `acl_manifest_guard` 6, clippy clean,
   `Cargo.lock` unchanged; desktop 251 files green in both variants (3563 and
   3542); typecheck 0 errors; eslint clean.
+- 2026-10-10, review of `224dbdbf..c9ecf499` (TS client and orchestrator) from a
+  temporary worktree at `c9ecf499` (user-authorized): `correction_required`,
+  BLOCKER R3-001, a rejected `discardFailedImport` escaped the per-file loop and
+  aborted the whole import. Fixed in the worktree (`af5c2cbb`, 107 of 120
+  planned diff lines; RED 3 tests, GREEN 21) and cherry-picked to the branch as
+  `0defcfd5` (desktop 251 files green in both variants, typecheck 0 errors,
+  eslint clean). The review's targeted validation timed out in the Pi relay
+  after ~15 min; it needs `GENTLE_PI_REVIEW_RELAY_PI_TIMEOUT_MS` raised before the
+  host starts. The lineage stays open and the worktree is kept until then.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
