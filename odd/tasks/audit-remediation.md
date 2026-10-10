@@ -215,6 +215,34 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       postcss/nanoid via vite, ws via jsdom, source-map-js via coverage; none ships. Follow-up
       for Phase 7 (C-03, supply chain).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
+  - [ ] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
+    Facts: rusqlite 0.31 without `hooks`; renderer SQL runs only on `ui_conn` through
+    `db_execute`, `db_execute_batch`, `db_execute_transaction`, `db_select`, `db_select_rows`;
+    `app_settings` is reached only through `settings_*` commands; 54 `trg_sync_*` triggers write
+    `sync_oplog`; last migration `0058_processing_ner_tasks`; the only write pragma the runner
+    emits is `defer_foreign_keys`. Split so every commit stays green:
+    - [x] S-02a — authorizer core (layer 2) + comment-stripping text validators (layer 1).
+      Commit `400028a3`: new `db/authorizer.rs` (pure `authorize` policy + RAII
+      `RendererSqlAuthorizer`), command bodies factored into `*_on` functions. Plain `VACUUM`
+      is denied too (SQLite checks SQLITE_ATTACH for it). RED 13 failed; GREEN Lite
+      `cargo test` 2744 passed / 0 failed / 34 ignored (+20), `db::` 63, `sync::` 444; fmt,
+      clippy `-D warnings` clean; Pro clippy only the 9 known findings. Capture through all
+      three write commands still reaches `sync_oplog`. Migrations emit no other sensitive SQL
+      (only `defer_foreign_keys`), so layer 1's comment stripping does not reject them.
+      Active only while a renderer `db_*` statement runs (RAII guard on `ui_conn`). Denies
+      ATTACH/DETACH (so VACUUM INTO), PRAGMA except `defer_foreign_keys` in `db_execute_batch`,
+      any access to `app_settings`, writes to `sync_*` unless the accessor is a `trg_sync_*`
+      trigger, and CREATE/DROP TRIGGER/VIEW outside `db_execute_batch` (batch keeps today's
+      DDL until S-02c). Tests first: the audit's evasions, VACUUM INTO, and a write with
+      capture on that must still land in `sync_oplog`.
+    - [ ] S-02b — lexical `split_sql_statements` (never prepares), the exported migration
+      allowlist of SHA-256 hashes (`db/migration_ddl_allowlist.txt`), its generator and a
+      consistency test. No behaviour change.
+    - [ ] S-02c — one-shot migration window (`NotStarted → Open → Closed`) with
+      `db_migration_window_begin/end`, statement-by-statement `db_execute_batch`, the listed-hash
+      exception for TRIGGER/VIEW DDL and `defer_foreign_keys`, frontend calls in `initDb`; tests
+      (a)-(e) of the plan and a fresh install replaying the runner's IPC under the authorizer.
+    - [ ] S-02d — manual: fresh install and main views in a dev profile (user).
 - [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
 - [ ] Phase 5 — performance and observability (P-01..P-04)
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
