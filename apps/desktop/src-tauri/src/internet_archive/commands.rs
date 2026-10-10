@@ -735,7 +735,7 @@ pub async fn ia_prepare_import(
             let conn = db
                 .ui_conn
                 .lock()
-                .map_err(|error| format!("DB lock poisoned: {error}"))?;
+                .map_err(|_| "io: local storage error".to_string())?;
             ProvenanceSnapshot::open(&conn, &collection_id, identifiers)
                 .map_err(|error| format!("db: {error}"))
         },

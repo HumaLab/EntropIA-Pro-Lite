@@ -209,7 +209,7 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
 `VITE_LOCAL_ML=0` and `1`. Visual check needs the user, under
 `ENTROPIA_DEV_PROFILE`.
 
-- [ ] 24. TS client `lib/internet-archive.ts`: typed wrappers for the 17
+- [x] 24. TS client `lib/internet-archive.ts`: typed wrappers for the 15
       `ia_*` commands, `parseIaError` for `<code>: <message>`, and a helper
       for the `ia://job-updated` event.
 - [ ] 25. Import orchestrator `lib/internet-archive-import.ts`: for each
@@ -311,6 +311,13 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
   complete copy existed. Fixed test-first by checking the confirmed item's own
   completeness (RED observed, then GREEN). Parent ran fmt, clippy, `internet_archive`
   69 twice, `acl_manifest_guard` 6, `ocr::pdf` 92; `Cargo.lock` unchanged.
+- 2026-10-10, task 24: `lib/internet-archive.ts`: 15 typed wrappers (camelCase
+  args), DTO and tag unions, closed `IA_ERROR_CODES` plus the `http_<status>`
+  family, `parseIaError`, `onIaJobUpdated`. RED: missing module. GREEN: 12 tests
+  in both variants; typecheck 0 errors in both; eslint clean. `pnpm install
+  --frozen-lockfile` was needed first. Parent also changed one Rust message so a
+  poisoned SQLite lock in `ia_prepare_import` reports the `io` code like every
+  other command (app `internet_archive` 69, clippy clean).
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
