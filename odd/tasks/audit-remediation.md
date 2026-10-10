@@ -144,7 +144,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     (real `node:sqlite` through the proxy), store tsc clean; desktop Pro 3507 / Lite 3486;
     typechecks 0 errors; Lite `vite build` ok; lint clean. Audit: high 1 → 0; only
     `@tiptap/core` (moderate) remains.
-  - [ ] 2.2.4 (D-02) — Tiptap 2 → 3: own PR or documented accepted risk (moderate).
+  - [x] 2.2.4 (D-02) — Tiptap 2 → 3: **accepted risk** for this cycle (user decision,
+    2026-10-10). Advisory GHSA-cp6q-959q-f8rh (moderate, `@tiptap/core` >=2.0.0-alpha.0
+    <3.30.4): `mergeAttributes()` assigns an own `__proto__` key with bracket assignment, so
+    the merged object gets an attacker-controlled prototype that ProseMirror's `renderSpec()`
+    then copies into DOM attributes (`for...in`). Exposure check: our four `mergeAttributes`
+    calls (`WritingEditor/extensions.ts:120,191,267,348`) merge literal objects with
+    `HTMLAttributes`; Tiptap builds `HTMLAttributes` keyed by schema attribute names, every
+    custom attribute `renderHTML` (`paragraph-format.ts`, `font-size.ts`, `highlight.ts`,
+    `text-color.ts`) returns a literal object from parsed values, and ProseMirror drops
+    attributes the schema does not define. No path found for a document-supplied `__proto__`
+    own key; residual risk is Tiptap's own internals and third-party extensions. Revisit with
+    the Tiptap 3 migration (major: custom footnote, image and citation extensions in
+    `packages/ui`). It is the only advisory left in `pnpm audit --prod`, so the plan's
+    `--audit-level high` gate passes.
   - [ ] 2.3 (D-08) — Rust advisories (`cargo audit`).
   - [ ] 2.4 (D-03) — unused/duplicated deps.
   - [ ] 2.5 (D-04) — test tooling (vitest, happy-dom, vite).
