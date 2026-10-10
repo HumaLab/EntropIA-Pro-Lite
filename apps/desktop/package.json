@@ -48,7 +48,7 @@
     "@tiptap/pm": "^2.26.4",
     "@tiptap/starter-kit": "^2.26.4",
     "docx": "9.7.1",
-    "drizzle-orm": "^0.40.0",
+    "drizzle-orm": "^0.45.2",
     "leaflet": "^1.9.4",
     "markdown-it": "^14.3.1",
     "pdfjs-dist": "^4",
