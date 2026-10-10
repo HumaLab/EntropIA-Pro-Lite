@@ -195,3 +195,28 @@ False positives: 5 born-digital pages of 19,074 (0.026 %), all code or data
 that GLM-OCR also reads well. The regular extraction sends flagged pages to
 GLM-OCR automatically (owner rule for scanned books with a bad text layer), so
 this rate is what that rule costs on a born-digital library.
+
+## Detector v3 (detector-shredded-text, 2026-10-10)
+
+After the v2 reprocess finished, Abulafia kept 388 native pages (358 rich),
+most of them real garbage shredded into 1-2 char fragments that v2's gates
+miss: rule 2 never reaches 10 judged tokens and rule 3 excludes single
+repeated chars. v3 (`BIBLIOGRAPHY_DETECTOR_VERSION` = 3) adds rule 4:
+
+- Shredded text: of 30+ whitespace tokens, fewer than 30 % hold a run of 3+
+  Latin letters AND 15 %+ are shred tokens (2 or fewer chars, not a short
+  es/en/fr/de/pt word, not all digits). A case-soup clause was measured again
+  and left out (camelCase identifiers in born-digital papers).
+
+Same database copy method (587 PDF attachments, 19,062 stored-`rich` pages
+read with PDFium):
+
+| | v2 | v3 |
+|---|---|---|
+| PDFium pages flagged | 1,126 in 8 attachments | 1,361 (7.14 %) in 22 attachments |
+| Stored rows flagged | 599 in 21 attachments | 845 in 31 attachments |
+
+Rule 4 alone flags 683 PDFium pages. Read by hand: Abulafia's shredded
+leftovers, spaced-letter damage in 3 more works (true positives), plus the
+accepted overtreatment — TOC dot-leader pages, math-symbol pages and
+number-table pages, all of which GLM-OCR reads well and which cost cents.
