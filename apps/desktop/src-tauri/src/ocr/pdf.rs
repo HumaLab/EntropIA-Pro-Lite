@@ -1327,17 +1327,33 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
 /// Version of the bibliography garble detector. Bumped whenever a rule or a
 /// threshold changes, so a stored measurement names the rules that produced
 /// it (B2, plan-texto-nativo-parte-b 2.2).
-pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 1;
+///
+/// v2 (detector-old-ocr-noise) widened rule 2 (digits and more separators
+/// between letters, replacement-character and case-soup noise, identifier
+/// tokens excluded, 10 % over 10 judged tokens) and added rule 3,
+/// punctuation soup (15 % over 20 whitespace tokens). Measured on the
+/// 18 984-page prueba-sync copy: 582 of the 911 Abulafia 1950 pages and 121
+/// pages of other works (52 works) flag, versus v1's 42 and 56. Born-digital
+/// false positives are the risk to minimize: a flagged page leaves the
+/// regular extraction for GLM-OCR.
+pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 2;
 
-/// Which of the two bibliography-garble rules flag a text.
+/// Which of the three bibliography-garble rules flag a text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GarbledBibliographyFlags {
     /// Rule 1, glued words: at least half the Latin letters sit in tokens
     /// whose longest Latin-letter run is longer than 24 characters.
     pub glued_words: bool,
-    /// Rule 2, old OCR noise: at least 8 % of the eligible 4+-letter tokens
-    /// carry an intrusive `.`, `~` or `·` between two letters.
+    /// Rule 2, old OCR noise: at least 10 % of the judged tokens (4+ Latin
+    /// letters, identifier-like tokens excluded) carry noise inside the
+    /// word — a U+FFFD, an intrusive digit or punctuation mark between two
+    /// letters, or a lowercase-uppercase-lowercase run.
     pub old_ocr_noise: bool,
+    /// Rule 3, punctuation soup: at least 15 % of the whitespace tokens are
+    /// punctuation without one alphanumeric character — lone quote or tilde
+    /// marks and mixed punctuation, the shape of an old typewritten scan
+    /// whose OCR layer answers with punctuation soup and few whole words.
+    pub punctuation_soup: bool,
 }
 
 /// True when the bibliography detector flags the text as garbled (B2). Used
@@ -1349,20 +1365,32 @@ pub struct GarbledBibliographyFlags {
 /// [`is_quality_text`] are untouched.
 ///
 /// Two independent rules over the eligible tokens (whitespace split minus
-/// URL/DOI/email/domain tokens, punctuation stripped at the edges):
+/// URL/DOI/email/domain tokens, punctuation stripped at the edges), plus a
+/// third over the raw whitespace tokens:
 ///
 /// 1. **Glued words.** Needs 80 Latin letters (ASCII, Latin-1 Supplement,
 ///    Latin Extended-A/B — so spaceless scripts are never judged). Flags
 ///    when >= 50 % of those letters lie in tokens whose longest Latin-letter
 ///    run is longer than 24.
-/// 2. **Old OCR noise.** Needs 40 eligible tokens of 4+ Latin letters. Flags
-///    when >= 8 % of them contain `.`, `~` or `·` between two letters.
-///    Hyphens and apostrophes never count, the Catalan geminate `l·l` is
-///    not noise, and dotted abbreviations (`U.S.`, `U.S.A.`, `e.g.`, `i.e.`)
-///    are not noise either.
+/// 2. **Old OCR noise.** Needs 10 judged tokens (4+ Latin letters, minus
+///    identifier-like tokens: URL/DOI/file-name shapes, slashes, colons,
+///    two digits). Flags when >= 10 % of them carry noise inside the word:
+///    a U+FFFD, a digit or an intrusive `. ~ · " ; , : ! | ^ ` \ { } < >`
+///    between two letters, or a lowercase-uppercase-lowercase run. Hyphens
+///    and apostrophes never count, the Catalan geminate `l·l` is not noise,
+///    and dotted abbreviations (`U.S.`, `U.S.A.`, `e.g.`, `i.e.`) are not
+///    noise either.
+/// 3. **Punctuation soup.** Needs 20 whitespace tokens (no edge stripping).
+///    Flags when >= 15 % of them hold no alphanumeric character and either
+///    carry a quote-or-tilde-like mark or mix punctuation.
+///
+/// Measured on the 18 984-page prueba-sync copy (abulafia_soup/
+/// abulafia_prose-class pages are the v2 target): rules 2+3 at these
+/// thresholds flag 582 of the 911 Abulafia 1950 pages and 121 pages of
+/// other works (52 works), versus v1's 42 and 56.
 pub fn is_garbled_bibliography_text(text: &str) -> bool {
     let flags = garbled_bibliography_flags(text);
-    flags.glued_words || flags.old_ocr_noise
+    flags.glued_words || flags.old_ocr_noise || flags.punctuation_soup
 }
 
 /// The per-rule verdict behind [`is_garbled_bibliography_text`]: the
@@ -1372,6 +1400,7 @@ pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
     GarbledBibliographyFlags {
         glued_words: glued_words_flag(&tokens),
         old_ocr_noise: old_ocr_noise_flag(&tokens),
+        punctuation_soup: punctuation_soup_flag(text),
     }
 }
 
@@ -1380,10 +1409,13 @@ pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
 const BIBLIOGRAPHY_GLUED_MIN_LETTERS: usize = 80;
 /// A Latin-letter run longer than this is a glued word.
 const BIBLIOGRAPHY_GLUED_RUN: usize = 24;
-/// Rule 2 needs this many eligible tokens of 4+ Latin letters.
-const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 40;
+/// Rule 2 needs this many judged tokens (4+ Latin letters, identifiers
+/// excluded).
+const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 10;
 /// A token enters rule 2's judgement from this many Latin letters.
 const BIBLIOGRAPHY_NOISE_MIN_TOKEN_LETTERS: usize = 4;
+/// Rule 3 needs this many whitespace tokens before it judges a page.
+const BIBLIOGRAPHY_SOUP_MIN_TOKENS: usize = 20;
 
 /// The letters rule 1 counts: ASCII, Latin-1 Supplement and Latin
 /// Extended-A/B. `×` (U+00D7) and `÷` (U+00F7) sit inside Latin-1 but are
@@ -1491,9 +1523,11 @@ fn glued_words_flag(tokens: &[&str]) -> bool {
     total >= BIBLIOGRAPHY_GLUED_MIN_LETTERS && glued * 2 >= total
 }
 
-/// Rule 2, old OCR noise: at least 8 % of the judged tokens carry an
-/// intrusive `.`, `~` or `·` between two letters. Exact integer arithmetic
-/// at the 8 % line (4 of 50 flags; 3 of 50 does not).
+/// Rule 2, old OCR noise: at least 10 % of the judged tokens carry noise
+/// inside the word. Identifier-like tokens are dropped before the judgement
+/// — their dots, slashes and digits are structure, not noise (a DOI stamp or
+/// an `arXiv:…` line would otherwise read as noise). Exact integer
+/// arithmetic at the 10 % line (5 of 50 flags; 4 of 50 does not).
 fn old_ocr_noise_flag(tokens: &[&str]) -> bool {
     let mut judged = 0usize;
     let mut noisy = 0usize;
@@ -1503,22 +1537,57 @@ fn old_ocr_noise_flag(tokens: &[&str]) -> bool {
         {
             continue;
         }
+        if is_noise_excluded_identifier(token) {
+            continue;
+        }
         judged += 1;
         if token_has_old_ocr_noise(token) {
             noisy += 1;
         }
     }
-    judged >= BIBLIOGRAPHY_NOISE_MIN_TOKENS && noisy * 100 >= judged * 8
+    judged >= BIBLIOGRAPHY_NOISE_MIN_TOKENS && noisy * 100 >= judged * 10
 }
 
-/// Whether the token carries one non-excluded noise occurrence. Hyphens
-/// and apostrophes are not in the separator set at all: real spelling
-/// ("state-of-the-art", "l'adquisició") never counts.
+/// Whether the token is identifier-like and stays out of rule 2's judgement:
+/// a URL, DOI, domain, file name or code. Case-insensitive markers plus the
+/// structural punctuation (`/`, `@`, `:`) and two-digit runs cover them.
+fn is_noise_excluded_identifier(token: &str) -> bool {
+    let lower = token.to_lowercase();
+    if ["http", "www", "doi", "arxiv", ".pdf", ".htm"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+    if token.contains('@') || token.contains('/') || token.contains(':') {
+        return true;
+    }
+    token.chars().filter(|c| c.is_ascii_digit()).count() >= 2
+}
+
+/// The characters rule 2 counts between two Latin letters: the dotted and
+/// tilde artifacts of old recognizers plus the punctuation a shifted glyph
+/// map glues into words. Hyphens and apostrophes are not in the set at all:
+/// real spelling ("state-of-the-art", "l'adquisició") never counts.
+const BIBLIOGRAPHY_NOISE_SEPARATORS: &[char] = &[
+    '.', '~', '\u{00B7}', '"', ';', ',', ':', '!', '|', '^', '`', '\\', '{', '}', '<', '>',
+];
+
+/// Whether the token carries one non-excluded noise occurrence: a U+FFFD, a
+/// digit or [`BIBLIOGRAPHY_NOISE_SEPARATORS`] character between two Latin
+/// letters, or a lowercase-uppercase-lowercase run. The separator checks
+/// keep today's exclusions: hyphens and apostrophes never count, the Catalan
+/// geminate "l·l" ("paral·lel", case-insensitive) is not noise, and dotted
+/// abbreviations ("U.S.", "U.S.A.", "N.A.T.O.", "e.g.", "i.e.") are not
+/// noise either.
 fn token_has_old_ocr_noise(token: &str) -> bool {
+    if token.contains('\u{FFFD}') {
+        return true;
+    }
     let chars: Vec<char> = token.chars().collect();
     for index in 1..chars.len().saturating_sub(1) {
         let sep = chars[index];
-        if !matches!(sep, '.' | '~' | '\u{00B7}') {
+        if !(sep.is_ascii_digit() || BIBLIOGRAPHY_NOISE_SEPARATORS.contains(&sep)) {
             continue;
         }
         let before = chars[index - 1];
@@ -1548,7 +1617,70 @@ fn token_has_old_ocr_noise(token: &str) -> bool {
         }
         return true;
     }
-    false
+    token_has_case_soup(token)
+}
+
+/// Case soup inside a word ("PrelUlliIl~r"): a lowercase-uppercase-lowercase
+/// run of Latin letters (accented forms included). Surnames that legitimately
+/// carry one start with a name prefix ("McDonald", "DeLuca", "VanGogh"), so
+/// those never count.
+fn token_has_case_soup(token: &str) -> bool {
+    for prefix in ["Mc", "Mac", "O'", "De", "Di", "La", "Le", "Van"] {
+        if let Some(rest) = token.strip_prefix(prefix) {
+            if rest.chars().next().is_some_and(|c| c.is_uppercase()) {
+                return false;
+            }
+        }
+    }
+    let chars: Vec<char> = token.chars().collect();
+    chars.windows(3).any(|run| {
+        is_latin_letter(run[0])
+            && run[0].is_lowercase()
+            && is_latin_letter(run[1])
+            && run[1].is_uppercase()
+            && is_latin_letter(run[2])
+            && run[2].is_lowercase()
+    })
+}
+
+/// The marks rule 3 reads as OCR punctuation soup: quote and tilde-like
+/// characters, the replacement character and the inverted/angled quotes.
+const BIBLIOGRAPHY_SOUP_MARKS: &[char] = &[
+    '~', '\'', '"', '`', '^', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{FFFD}',
+    '\u{00A1}', '\u{00BF}', '\u{00AB}', '\u{00BB}',
+];
+
+/// Rule 3, punctuation soup: at least 15 % of the raw whitespace tokens are
+/// soup. Exact integer arithmetic at the 15 % line (3 of 20 flags; 2 of 20
+/// does not).
+fn punctuation_soup_flag(text: &str) -> bool {
+    let mut tokens = 0usize;
+    let mut soup = 0usize;
+    for token in text.split_whitespace() {
+        tokens += 1;
+        if is_punctuation_soup_token(token) {
+            soup += 1;
+        }
+    }
+    tokens >= BIBLIOGRAPHY_SOUP_MIN_TOKENS && soup * 100 >= tokens * 15
+}
+
+/// A soup token: not one alphanumeric character, and either a quote-or-tilde
+/// mark or punctuation mixing (2+ distinct characters). A lone paren,
+/// comma, equals sign, dot leader, ellipsis of dots or hyphen run carries no
+/// mark and only one distinct character — spacing, never soup.
+fn is_punctuation_soup_token(token: &str) -> bool {
+    if token.chars().any(char::is_alphanumeric) {
+        return false;
+    }
+    if token.chars().any(|c| BIBLIOGRAPHY_SOUP_MARKS.contains(&c)) {
+        return true;
+    }
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    chars.any(|c| c != first)
 }
 
 /// Build a conservative per-page profile for a PDF, synchronously.
@@ -3677,13 +3809,15 @@ mod tests {
 
     // ── Bibliography garble detector (B2, plan-texto-nativo 3.4) ──────────
     //
-    // Two rules, both pure text statistics. Rule 1 (glued words) catches
+    // Three rules, all pure text statistics. Rule 1 (glued words) catches
     // the lopdf page layer that never saw a space; rule 2 (old OCR noise)
-    // catches the dotted artifacts of old recognizers in SPACED text. The
-    // p. 309 fixtures are verbatim from one user library (Abulafia 1950,
-    // stored row and PDFium read); the rest pin every false-positive shape
-    // the plan names. `is_garbled_text`/`is_quality_text` above are a
-    // different detector for raw glyph codes and must not change.
+    // catches the dotted artifacts of old recognizers in SPACED text; rule
+    // 3 (punctuation soup) catches the old typewritten-scan layers that
+    // answer with punctuation instead of words. The p. 309 fixtures are
+    // verbatim from one user library (Abulafia 1950, stored row and PDFium
+    // read); the rest pin every false-positive shape the plan names.
+    // `is_garbled_text`/`is_quality_text` above are a different detector for
+    // raw glyph codes and must not change.
 
     /// Verbatim prefix of the stored `bibliographic_page_texts` row for
     /// Abulafia 1950, p. 309 (353 chars): lopdf glued the words.
@@ -3811,10 +3945,19 @@ mod tests {
         // Rule 1 below 80 Latin letters: silence.
         let short_glued = "ArrozElcultivodelarrozaligualqueeldelgirasoL";
         assert!(!garbled_bibliography_flags(short_glued).glued_words);
-        // Rule 2 below 40 eligible tokens of 4+ letters: silence.
+        // Rule 2 below its judged-token gate: silence (v2 judges from 10
+        // tokens; v1 needed 40).
         let sparse_noise =
             "deb.\u{ed}.endo superfi~ie cultiv.ada r.ecu.rrir impor.tac.ion defi.cit cober.tura";
         assert!(!garbled_bibliography_flags(sparse_noise).old_ocr_noise);
+        let doubled_noise = format!("{sparse_noise} {sparse_noise}");
+        assert!(
+            garbled_bibliography_flags(&doubled_noise).old_ocr_noise,
+            "14 judged tokens clear the 10-token gate"
+        );
+        // Rule 3 below 20 whitespace tokens: silence, even at 15 % soup.
+        let sparse_soup = format!("{} {}", ["\u{FFFD}"; 3].join(" "), ["x"; 16].join(" "));
+        assert!(!is_garbled_bibliography_text(&sparse_soup));
     }
 
     #[test]
@@ -3824,26 +3967,141 @@ mod tests {
         let suffix = ["ab"; 25].join(" "); // 50 letters in short words
         assert!(garbled_bibliography_flags(&format!("{} {suffix}", "a".repeat(50))).glued_words);
         assert!(!garbled_bibliography_flags(&format!("{} {suffix} x", "a".repeat(49))).glued_words);
-        // Rule 2: exactly 8 % noisy tokens flags; one noisy token less does
-        // not (4/50 vs 3/50).
-        let clean = (0..46)
-            .map(|n| format!("palabra{n}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let noisy = ["pq.rstu"; 4].join(" ");
+        // Rule 2 v2 thresholds at 10 % over judged tokens (v1 was 8 %):
+        // 5 of 50 flags, one noisy token less does not. The clean tokens
+        // carry no digits because v2 drops identifier-like tokens from the
+        // judgement.
+        let clean = ["palabralimpia"; 45].join(" ");
+        let noisy = ["pq.rstu"; 5].join(" ");
         assert!(
             garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
-            "4 of 50 is exactly 8 %"
+            "5 of 50 is exactly 10 %"
         );
-        let clean = (0..47)
-            .map(|n| format!("palabra{n}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let noisy = ["pq.rstu"; 3].join(" ");
+        let clean = ["palabralimpia"; 46].join(" ");
+        let noisy = ["pq.rstu"; 4].join(" ");
         assert!(
             !garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
-            "3 of 50 is below 8 %"
+            "4 of 50 is below 10 %"
         );
+        // Rule 3 thresholds at 15 % over whitespace tokens: 3 of 20 flags,
+        // one soup token less does not.
+        let soup = format!("{} {}", ["\u{FFFD}"; 3].join(" "), ["x"; 17].join(" "));
+        assert!(
+            garbled_bibliography_flags(&soup).punctuation_soup,
+            "3 of 20 is exactly 15 %"
+        );
+        let soup = format!("{} {}", ["\u{FFFD}"; 2].join(" "), ["x"; 18].join(" "));
+        assert!(
+            !garbled_bibliography_flags(&soup).punctuation_soup,
+            "2 of 20 is below 15 %"
+        );
+    }
+
+    // ── Detector v2 sample corpus (odd/tasks/detector-old-ocr-noise) ─────
+    //
+    // Verbatim page samples from the prueba-sync archive: the old
+    // typewritten-scan OCR layer of Abulafia 1950 (punctuation soup and
+    // dotted noise with few whole words — v1's rule 2 never judged these
+    // pages) and a shifted-glyph page fragment, plus the false-positive
+    // shapes that must stay clean. Non-ASCII characters are written as Rust
+    // escapes, exactly as the sample file records them.
+
+    /// Abulafia 1950, p. 154 (verbatim sample): punctuation soup with few
+    /// whole words.
+    const ABULAFIA_PUNCTUATION_SOUP: &str = "154 . ' . , , . \" ......... , ..... .- ~,,,\" ... Q ~. \u{FFFD}Canad4.' \", .'. . .' .: ..... ..... \u{FFFD} _ ..... 1. . ~- ,... .... ~\"..' . ' . ~: \" ,.. . ,... 156 \" ~~. \" - \u{FFFD} ... ..,.- 4 r .'-;, . vador-e s Local.esy ,~\u{FFFD}t~rminq.l~5\u{FFFD} .deg~ano~: ~y,'~on un 'g'ran . .. 'volumen 'de manipuleo'.'";
+
+    /// Abulafia 1950 (verbatim sample): old OCR noise in text that still has
+    /// spaces and some whole words.
+    const ABULAFIA_OLD_OCR_PROSE: &str = "Univeraiu4Naeicnt-.l de Buenos Aires Fa8ul~ad ~. Cien~ia' Eeom'.icaa \"EL PROBLEMA DEL YUTE\" Tesis para optar altiecterad.o 0-1'1 Ciencias Eeen'llicas David Abulafia Buenos Aires, agoste 1950. Aae del Libertaaer General Sa.n.~art!n Introduccion P~...rte PrelUlliIl~r Con~ideraciones~ener~les i 2 - Yute en r<>..n!a y .rpiller~. El yute en. el m~rc~do intorn~c~onal pueden estimarse en alrededor de l4millones de yardas de .rpillera";
+
+    /// A shifted-glyph font's page fragment (verbatim sample): 15 whitespace
+    /// tokens of punctuation soup.
+    const SHIFTED_GLYPH_SOUP: &str =
+        "\u{2019}% 7+ 0154+ . A 8; \u{2019} % -+ 7+ J+ G: 4 5E+ %A$$\u{2019}+$51+515=$9+";
+
+    /// A page whose text decode failed (verbatim shape): replacement
+    /// characters alone and glued inside words.
+    const REPLACEMENT_CHARACTER_BODY: &str = "\u{FFFD} recei\u{FFFD}ed \u{FFFD} pro\u{FFFD}ramme \u{FFFD} docu\u{FFFD}ent \u{FFFD} la\u{FFFD}guage \u{FFFD} \u{FFFD}isible \u{FFFD} i\u{FFFD}age \u{FFFD} co\u{FFFD}plex \u{FFFD} te\u{FFFD}tual \u{FFFD} gra\u{FFFD}ar \u{FFFD} stru\u{FFFD}ture \u{FFFD} \u{FFFD}";
+
+    /// TOC page line (verbatim sample): dot leaders must never count.
+    const CLEAN_TOC_LINE: &str = "3.3.2 Contributors . . . . . . . . . . . . . . . . 32 / 3.3.3 Task Design . . . . . . . . . . . . . . 33";
+
+    /// Math prose (verbatim sample): lone parens, commas and operators.
+    const CLEAN_MATH_LINE: &str = "side of a i ) would incur a larger and more rapidly increasing loss. The objective is thus the sum of these surrogate losses at all points ( x i , c i ) . Let D = { z : f ( z ; w ) \u{2264} 0 } . According to";
+
+    /// Reference-list fragment (verbatim sample): identifiers with slashes,
+    /// colons, dots and digits.
+    const CLEAN_REFS_LINE: &str = "CoRR abs/1609.04836. arXiv:1609.04836. (2016) 46. Krizhevsky, A.: One weird trick. doi: 10.1093/geronb/gbx014";
+
+    /// Clean prose carrying every shape that must never count as noise
+    /// (verbatim sample): dotted abbreviations, e.g./i.e., an apostrophe, a
+    /// hyphenated compound, Mc/De names and the Catalan geminate.
+    const CLEAN_PROSE_FRAGMENT: &str =
+        "U.S.A., e.g., l'adquisici\u{00F3}, state-of-the-art, McDonald, DeLuca, paral\u{00B7}lel";
+
+    #[test]
+    fn the_abulafia_punctuation_soup_sample_is_flagged() {
+        // One sample already clears rule 3's 20-whitespace-token gate; the
+        // repeated page body flags the same way.
+        let flags = garbled_bibliography_flags(ABULAFIA_PUNCTUATION_SOUP);
+        assert!(flags.punctuation_soup, "{ABULAFIA_PUNCTUATION_SOUP}");
+        let body = format!("{ABULAFIA_PUNCTUATION_SOUP} {ABULAFIA_PUNCTUATION_SOUP}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_abulafia_old_ocr_prose_sample_is_flagged_by_the_noise_rule() {
+        // One sample already clears rule 2 v2's 10-judged-token gate; v1
+        // needed 40 and kept this page native.
+        let flags = garbled_bibliography_flags(ABULAFIA_OLD_OCR_PROSE);
+        assert!(flags.old_ocr_noise, "{ABULAFIA_OLD_OCR_PROSE}");
+        let body = format!("{ABULAFIA_OLD_OCR_PROSE} {ABULAFIA_OLD_OCR_PROSE}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_shifted_glyph_soup_sample_is_flagged() {
+        // The sample holds 15 whitespace tokens; repeated it clears rule 3's
+        // 20-token gate and flags.
+        let body = format!("{SHIFTED_GLYPH_SOUP} {SHIFTED_GLYPH_SOUP}");
+        assert!(garbled_bibliography_flags(&body).punctuation_soup, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn a_replacement_character_heavy_body_is_flagged() {
+        // Every word carries a U+FFFD (rule 2's replacement-character noise),
+        // and the lone U+FFFD tokens are quote-or-tilde-like soup (rule 3).
+        let flags = garbled_bibliography_flags(REPLACEMENT_CHARACTER_BODY);
+        assert!(flags.old_ocr_noise, "every word carries a U+FFFD");
+        assert!(flags.punctuation_soup, "the lone U+FFFD tokens are soup");
+        assert!(is_garbled_bibliography_text(REPLACEMENT_CHARACTER_BODY));
+    }
+
+    #[test]
+    fn table_of_contents_dot_leaders_stay_clean() {
+        let page = [CLEAN_TOC_LINE; 8].join("\n");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn math_prose_stays_clean() {
+        let page = [CLEAN_MATH_LINE; 3].join(" ");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn reference_fragments_stay_clean() {
+        let page = [CLEAN_REFS_LINE; 3].join(" ");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn the_clean_prose_fragment_stays_clean_inside_spanish_and_english_paragraphs() {
+        let spanish = format!("El estado de la cuesti\u{f3}n se mantiene estable desde entonces: {CLEAN_PROSE_FRAGMENT} aparecen en el mismo orden en que los cita el autor, y el lector no encuentra aqu\u{ed} m\u{e1}s que prosa acad\u{e9}mica corriente, con comas, puntos y par\u{e9}ntesis bien usados. La investigaci\u{f3}n sobre lectura biling\u{fc}e contin\u{fa}a, con muestras grandes y m\u{e9}todos claros, sin ruido de reconocimiento \u{f3}ptico ni palabras pegadas en ninguna l\u{ed}nea del cap\u{ed}tulo.");
+        let english = format!("The state of the art remains steady: {CLEAN_PROSE_FRAGMENT} all appear here in the order the author cites them, and the reader finds nothing but ordinary academic prose, with commas, periods and parentheses used properly. Research on bilingual reading continues with large samples and clear methods, and no page of the chapter shows optical character recognition noise or glued words.");
+        assert!(!is_garbled_bibliography_text(&spanish), "{spanish}");
+        assert!(!is_garbled_bibliography_text(&english), "{english}");
     }
 
     /// get_pdfium() must never panic — it should return Err when the native
