@@ -15,6 +15,8 @@ const APP_COMMANDS: &[&str] = &[
     "db_execute_transaction",
     "db_select",
     "db_select_rows",
+    "db_migration_window_begin",
+    "db_migration_window_end",
     "db_browser_list_tables",
     "db_browser_describe_table",
     "db_browser_query_rows",

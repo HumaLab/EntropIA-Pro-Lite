@@ -12,6 +12,8 @@
     "allow-db-execute-transaction",
     "allow-db-select",
     "allow-db-select-rows",
+    "allow-db-migration-window-begin",
+    "allow-db-migration-window-end",
     "allow-db-browser-list-tables",
     "allow-db-browser-describe-table",
     "allow-db-browser-query-rows",

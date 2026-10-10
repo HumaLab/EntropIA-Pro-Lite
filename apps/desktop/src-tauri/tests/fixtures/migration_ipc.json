@@ -1,0 +1,906 @@
+{
+  "calls": [
+    {
+      "command": "db_execute_batch",
+      "sql": "\n    CREATE TABLE IF NOT EXISTS _migrations (\n      id    INTEGER PRIMARY KEY AUTOINCREMENT,\n      name  TEXT    NOT NULL UNIQUE,\n      applied_at INTEGER NOT NULL\n    )\n  ",
+      "params": []
+    },
+    {
+      "command": "db_select",
+      "sql": "SELECT name FROM _migrations ORDER BY id",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Migration tracking table\nCREATE TABLE IF NOT EXISTS _migrations (\n  id    INTEGER PRIMARY KEY AUTOINCREMENT,\n  name  TEXT    NOT NULL UNIQUE,\n  applied_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS collections (\n  id          TEXT    PRIMARY KEY,\n  name        TEXT    NOT NULL,\n  description TEXT,\n  created_at  INTEGER NOT NULL,\n  updated_at  INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS items (\n  id            TEXT    PRIMARY KEY,\n  title         TEXT    NOT NULL,\n  collection_id TEXT    NOT NULL REFERENCES collections(id),\n  metadata      TEXT,\n  created_at    INTEGER NOT NULL,\n  updated_at    INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS assets (\n  id         TEXT    PRIMARY KEY,\n  item_id    TEXT    NOT NULL REFERENCES items(id),\n  path       TEXT    NOT NULL,\n  type       TEXT    NOT NULL,\n  size       INTEGER,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS notes (\n  id         TEXT    PRIMARY KEY,\n  item_id    TEXT    NOT NULL REFERENCES items(id),\n  content    TEXT    NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0001_initial",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Add search_text generated column for LIKE queries\nALTER TABLE items ADD COLUMN search_text TEXT GENERATED ALWAYS AS (\n  COALESCE(title, '') || ' ' || COALESCE(json(metadata), '')\n) STORED",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Performance indexes\nCREATE INDEX IF NOT EXISTS idx_items_search ON items(search_text)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_items_collection ON items(collection_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_assets_item ON assets(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_notes_item ON notes(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0002_metadata_search",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS extractions (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  text_content TEXT NOT NULL,\n  method TEXT NOT NULL,\n  confidence REAL,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_extractions_asset_id ON extractions(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0003_extractions",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE VIRTUAL TABLE IF NOT EXISTS fts_items\nUSING fts5(\n  item_id UNINDEXED,\n  title,\n  metadata,\n  extracted_text,\n  tokenize='unicode61 remove_diacritics 1',\n  content=''\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)\nSELECT i.rowid, i.id, i.title, COALESCE(i.metadata,''),\n       COALESCE((SELECT GROUP_CONCAT(e.text_content,' ') FROM extractions e\n                 JOIN assets a ON e.asset_id=a.id WHERE a.item_id=i.id), '')\nFROM items i",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0004_fts5",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS entities (\n  id TEXT PRIMARY KEY NOT NULL,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  entity_type TEXT NOT NULL CHECK(entity_type IN ('person','place','date','institution','organization','misc','custom')),\n  value TEXT NOT NULL,\n  start_offset INTEGER NOT NULL DEFAULT 0,\n  end_offset INTEGER NOT NULL DEFAULT 0,\n  confidence REAL NOT NULL DEFAULT 1.0,\n  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_item_id ON entities(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0005_nlp_tables",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS triples (\n  id TEXT PRIMARY KEY NOT NULL,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  subject TEXT NOT NULL,\n  predicate TEXT NOT NULL,\n  object TEXT NOT NULL,\n  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS triples_item_id_idx ON triples(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0006_triples",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS annotations (\n  id TEXT PRIMARY KEY NOT NULL,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  page INTEGER NOT NULL DEFAULT 1,\n  kind TEXT NOT NULL CHECK(kind IN ('rectangle', 'underline')),\n  color TEXT NOT NULL,\n  x REAL NOT NULL,\n  y REAL NOT NULL,\n  width REAL NOT NULL,\n  height REAL NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS annotations_asset_id_idx ON annotations(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS annotations_asset_page_idx ON annotations(asset_id, page)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0007_annotations",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS transcriptions (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  text_content TEXT NOT NULL,\n  language TEXT,\n  duration_ms INTEGER,\n  model TEXT NOT NULL,\n  segments TEXT,\n  confidence REAL,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_transcriptions_asset_id ON transcriptions(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0008_transcriptions",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TEMP TABLE IF NOT EXISTS __entropia_migration_0009_noop (id INTEGER)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DROP TABLE IF EXISTS __entropia_migration_0009_noop",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0009_entities_provenance",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DROP TABLE IF EXISTS entities_v2",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE entities_v2 (\n  id TEXT PRIMARY KEY NOT NULL,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  entity_type TEXT NOT NULL CHECK(entity_type IN ('person','place','date','institution','organization','misc','custom')),\n  value TEXT NOT NULL,\n  start_offset INTEGER NOT NULL DEFAULT 0,\n  end_offset INTEGER NOT NULL DEFAULT 0,\n  confidence REAL NOT NULL DEFAULT 1.0,\n  source TEXT,\n  model_name TEXT,\n  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "INSERT INTO entities_v2 (\n  id, item_id, entity_type, value, start_offset, end_offset,\n  confidence, source, model_name, created_at\n)\nSELECT\n  id, item_id, entity_type, value, start_offset, end_offset,\n  confidence, NULL, NULL, created_at\nFROM entities",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DROP TABLE entities",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities_v2 RENAME TO entities",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_item_id ON entities(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0010_entities_type_expansion",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN latitude REAL",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN longitude REAL",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN geo_status TEXT NOT NULL DEFAULT 'pending'",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_geo_status ON entities(geo_status)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0011_entities_geocoding",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS llm_results (\n  id TEXT PRIMARY KEY,\n  target_id TEXT NOT NULL,\n  job_type TEXT NOT NULL,\n  result TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_llm_results_target ON llm_results(target_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0012_llm_results",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Add sort_index to assets for stable page ordering (e.g. scanned PDF pages)\nALTER TABLE assets ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_assets_item_sort ON assets(item_id, sort_index)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0013_assets_sort_index",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Add asset_id to notes, entities, and triples for per-page scoping.\n-- Nullable: legacy rows without asset_id are considered \"item-level\" (shown on all pages).\nALTER TABLE notes ADD COLUMN asset_id TEXT",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN asset_id TEXT",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE triples ADD COLUMN asset_id TEXT",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_notes_asset_id ON notes(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_entities_asset_id ON entities(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_triples_asset_id ON triples(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0014_asset_scoping",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Create topics table and item_topics junction table for reusable topic tagging\nCREATE TABLE IF NOT EXISTS topics (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL UNIQUE,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS item_topics (\n  id TEXT PRIMARY KEY,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS idx_item_topics_item_topic ON item_topics(item_id, topic_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_item_topics_topic_id ON item_topics(topic_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0015_topics",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Enforce one extraction/transcription row per asset to enable true UPSERT.\n-- Keep the most recent row (largest rowid) if any legacy duplicates exist.\nDELETE FROM extractions\nWHERE rowid NOT IN (\n  SELECT MAX(rowid) FROM extractions GROUP BY asset_id\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DELETE FROM transcriptions\nWHERE rowid NOT IN (\n  SELECT MAX(rowid) FROM transcriptions GROUP BY asset_id\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_asset_id_unique\nON extractions(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_asset_id_unique\nON transcriptions(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0016_asset_unique_ocr_transcription",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS vec_assets(\n  asset_id TEXT PRIMARY KEY,\n  item_id TEXT NOT NULL,\n  embedding BLOB NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_vec_assets_item_id ON vec_assets(item_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0017_vec_assets",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Rebuild FTS rows so fts_items.rowid always matches items.rowid.\nINSERT INTO fts_items(fts_items) VALUES('delete-all')",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)\nSELECT\n  i.rowid,\n  i.id,\n  i.title,\n  COALESCE(i.metadata, ''),\n  COALESCE((\n    SELECT GROUP_CONCAT(text_part, ' ')\n    FROM (\n      SELECT text_part\n      FROM (\n        SELECT COALESCE(e.text_content, '') AS text_part,\n               0 AS source_order,\n               COALESCE(a.sort_index, 0) AS sort_index,\n               e.created_at AS created_at\n        FROM extractions e\n        JOIN assets a ON a.id = e.asset_id\n        WHERE a.item_id = i.id\n\n        UNION ALL\n\n        SELECT COALESCE(t.text_content, '') AS text_part,\n               1 AS source_order,\n               COALESCE(a.sort_index, 0) AS sort_index,\n               t.created_at AS created_at\n        FROM transcriptions t\n        JOIN assets a ON a.id = t.asset_id\n        WHERE a.item_id = i.id\n      ) ordered_text\n      ORDER BY source_order ASC, sort_index ASC, created_at ASC\n    )\n  ), '')\nFROM items i",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0018_fts_rowid_canonical",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE llm_results_v2 (\n  id TEXT PRIMARY KEY,\n  target_id TEXT NOT NULL,\n  target_type TEXT NOT NULL CHECK(target_type IN ('asset', 'item', 'collection', 'unknown')),\n  job_type TEXT NOT NULL,\n  result TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "INSERT INTO llm_results_v2 (id, target_id, target_type, job_type, result, created_at)\nSELECT\n  lr.id,\n  lr.target_id,\n  CASE\n    WHEN EXISTS (SELECT 1 FROM assets a WHERE a.id = lr.target_id) THEN 'asset'\n    WHEN EXISTS (SELECT 1 FROM items i WHERE i.id = lr.target_id) THEN 'item'\n    WHEN EXISTS (SELECT 1 FROM collections c WHERE c.id = lr.target_id) THEN 'collection'\n    ELSE 'unknown'\n  END,\n  lr.job_type,\n  lr.result,\n  CASE\n    WHEN lr.created_at > 0 AND lr.created_at < 1000000000000 THEN lr.created_at * 1000\n    ELSE lr.created_at\n  END\nFROM llm_results lr",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DROP TABLE llm_results",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE llm_results_v2 RENAME TO llm_results",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_llm_results_target ON llm_results(target_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_llm_results_target_typed\nON llm_results(target_type, target_id, job_type)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0019_llm_results_target_type",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "\n    CREATE TABLE IF NOT EXISTS layouts (\n      id TEXT PRIMARY KEY,\n      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n      regions TEXT NOT NULL,\n      blocks TEXT NOT NULL DEFAULT '[]',\n      model TEXT NOT NULL,\n      image_width INTEGER NOT NULL,\n      image_height INTEGER NOT NULL,\n      created_at INTEGER NOT NULL\n    )\n  ",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE layouts ADD COLUMN blocks TEXT NOT NULL DEFAULT '[]'",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "\n    DELETE FROM layouts\n    WHERE rowid NOT IN (\n      SELECT MAX(rowid) FROM layouts GROUP BY asset_id\n    )\n  ",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_layouts_asset_id ON layouts(asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "\n    UPDATE layouts\n    SET created_at = 1700000000000\n    WHERE created_at IS NULL OR created_at = 0\n  ",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0020_layouts",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "DROP TABLE IF EXISTS jobs",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0021_drop_unused_processing_table",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS rag_conversations (\n  id TEXT PRIMARY KEY,\n  title TEXT NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE TABLE IF NOT EXISTS rag_messages (\n  id TEXT PRIMARY KEY,\n  conversation_id TEXT NOT NULL REFERENCES rag_conversations(id) ON DELETE CASCADE,\n  sort_index INTEGER NOT NULL,\n  role TEXT NOT NULL CHECK(role IN ('user','assistant')),\n  content TEXT NOT NULL,\n  sources TEXT,\n  model TEXT,\n  created_at INTEGER NOT NULL\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_rag_messages_conversation ON rag_messages(conversation_id, sort_index)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0022_rag_conversations",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Deterministic ids for one-per-asset tables (DESIGN §4.6). Rewrites existing\n-- rows so two devices that OCR/transcribe the same asset converge on a single\n-- server row. Nothing references these ids by FK (verified), so the rewrite is\n-- safe. Additive — no rebuild of a synced table, so no re-seed is required.\nUPDATE extractions SET id = 'ext-' || asset_id",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "UPDATE transcriptions SET id = 'trx-' || asset_id",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "UPDATE layouts SET id = 'lay-' || asset_id",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0023_sync_ids",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Page children are additive: legacy assets remain standalone and keep their\n-- existing aggregate OCR/layout rows. New GLM PDF pages point at their source.\nALTER TABLE assets ADD COLUMN parent_asset_id TEXT REFERENCES assets(id) ON DELETE CASCADE",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE assets ADD COLUMN page_number INTEGER",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_assets_parent_asset_id ON assets(parent_asset_id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_parent_page\nON assets(parent_asset_id, page_number)\nWHERE parent_asset_id IS NOT NULL",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0024_pdf_page_assets",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Rebuild annotations so PDF page edits can be persisted without modifying the\n-- source document. Existing rectangle/underline rows retain their ids and data.\nCREATE TABLE annotations_v2 (\n  id TEXT PRIMARY KEY NOT NULL,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  page INTEGER NOT NULL DEFAULT 1,\n  kind TEXT NOT NULL CHECK(kind IN ('rectangle', 'underline', 'crop', 'erase', 'rotation')),\n  color TEXT NOT NULL,\n  x REAL NOT NULL,\n  y REAL NOT NULL,\n  width REAL NOT NULL,\n  height REAL NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n);\nINSERT INTO annotations_v2\nSELECT id, asset_id, page, kind, color, x, y, width, height, created_at, updated_at\nFROM annotations;\nDROP TABLE annotations;\nALTER TABLE annotations_v2 RENAME TO annotations;\nCREATE INDEX annotations_asset_id_idx ON annotations(asset_id);\nCREATE INDEX annotations_asset_page_idx ON annotations(asset_id, page);\nINSERT INTO _migrations (name, applied_at) VALUES ('0025_document_view_edits', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN manual_lat REAL",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE entities ADD COLUMN manual_lon REAL",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0026_entity_manual_coordinates",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Keep collections.updated_at as the canonical last-activity timestamp. Database\n-- triggers cover repository writes, Rust worker writes, and synchronized changes.\nCREATE TRIGGER collection_activity_items_insert\nAFTER INSERT ON items\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id = NEW.collection_id;\nEND;\n\nCREATE TRIGGER collection_activity_items_update\nAFTER UPDATE ON items\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id = OLD.collection_id;\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id = NEW.collection_id;\nEND;\n\nCREATE TRIGGER collection_activity_items_delete\nBEFORE DELETE ON items\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id = OLD.collection_id;\nEND;\n\nCREATE TRIGGER collection_activity_assets_insert\nAFTER INSERT ON assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_assets_update\nAFTER UPDATE ON assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_assets_delete\nBEFORE DELETE ON assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_notes_insert\nAFTER INSERT ON notes\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_notes_update\nAFTER UPDATE ON notes\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_notes_delete\nBEFORE DELETE ON notes\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_extractions_insert\nAFTER INSERT ON extractions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_extractions_update\nAFTER UPDATE ON extractions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_extractions_delete\nBEFORE DELETE ON extractions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_layouts_insert\nAFTER INSERT ON layouts\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_layouts_update\nAFTER UPDATE ON layouts\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_layouts_delete\nBEFORE DELETE ON layouts\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_transcriptions_insert\nAFTER INSERT ON transcriptions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_transcriptions_update\nAFTER UPDATE ON transcriptions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_transcriptions_delete\nBEFORE DELETE ON transcriptions\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_annotations_insert\nAFTER INSERT ON annotations\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_annotations_update\nAFTER UPDATE ON annotations\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = NEW.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_annotations_delete\nBEFORE DELETE ON annotations\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (\n  SELECT i.collection_id\n  FROM items i\n  JOIN assets a ON a.item_id = i.id\n  WHERE a.id = OLD.asset_id\n);\nEND;\n\nCREATE TRIGGER collection_activity_entities_insert\nAFTER INSERT ON entities\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_entities_update\nAFTER UPDATE ON entities\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_entities_delete\nBEFORE DELETE ON entities\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_triples_insert\nAFTER INSERT ON triples\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_triples_update\nAFTER UPDATE ON triples\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_triples_delete\nBEFORE DELETE ON triples\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_vec_assets_insert\nAFTER INSERT ON vec_assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_vec_assets_update\nAFTER UPDATE ON vec_assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = NEW.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_vec_assets_delete\nBEFORE DELETE ON vec_assets\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE id IN (SELECT collection_id FROM items WHERE id = OLD.item_id);\nEND;\n\nCREATE TRIGGER collection_activity_llm_results_insert\nAFTER INSERT ON llm_results\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE (NEW.target_type IN ('collection', 'unknown') AND id = NEW.target_id)\n  OR (NEW.target_type IN ('item', 'unknown') AND id IN (\n    SELECT collection_id FROM items WHERE id = NEW.target_id\n  ))\n  OR (NEW.target_type IN ('asset', 'unknown') AND id IN (\n    SELECT i.collection_id\n    FROM items i\n    JOIN assets a ON a.item_id = i.id\n    WHERE a.id = NEW.target_id\n  ));\nEND;\n\nCREATE TRIGGER collection_activity_llm_results_update\nAFTER UPDATE ON llm_results\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE (OLD.target_type IN ('collection', 'unknown') AND id = OLD.target_id)\n  OR (OLD.target_type IN ('item', 'unknown') AND id IN (\n    SELECT collection_id FROM items WHERE id = OLD.target_id\n  ))\n  OR (OLD.target_type IN ('asset', 'unknown') AND id IN (\n    SELECT i.collection_id\n    FROM items i\n    JOIN assets a ON a.item_id = i.id\n    WHERE a.id = OLD.target_id\n  ));\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE (NEW.target_type IN ('collection', 'unknown') AND id = NEW.target_id)\n  OR (NEW.target_type IN ('item', 'unknown') AND id IN (\n    SELECT collection_id FROM items WHERE id = NEW.target_id\n  ))\n  OR (NEW.target_type IN ('asset', 'unknown') AND id IN (\n    SELECT i.collection_id\n    FROM items i\n    JOIN assets a ON a.item_id = i.id\n    WHERE a.id = NEW.target_id\n  ));\nEND;\n\nCREATE TRIGGER collection_activity_llm_results_delete\nBEFORE DELETE ON llm_results\nBEGIN\n  UPDATE collections\nSET updated_at = MAX(\n  updated_at + 1,\n  CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)\n)\nWHERE (OLD.target_type IN ('collection', 'unknown') AND id = OLD.target_id)\n  OR (OLD.target_type IN ('item', 'unknown') AND id IN (\n    SELECT collection_id FROM items WHERE id = OLD.target_id\n  ))\n  OR (OLD.target_type IN ('asset', 'unknown') AND id IN (\n    SELECT i.collection_id\n    FROM items i\n    JOIN assets a ON a.item_id = i.id\n    WHERE a.id = OLD.target_id\n  ));\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0027_collection_activity', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE vec_assets ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'legacy'",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE vec_assets ADD COLUMN embedding_contract TEXT NOT NULL DEFAULT 'legacy'",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE vec_assets ADD COLUMN dimensions INTEGER NOT NULL DEFAULT 0",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0028_vec_assets_embedding_contract",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\nCREATE TABLE rag_chunks (\n  id TEXT PRIMARY KEY,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,\n  source_kind TEXT NOT NULL CHECK(source_kind IN ('extraction', 'transcription')),\n  source_id TEXT NOT NULL,\n  chunk_ordinal INTEGER NOT NULL CHECK(chunk_ordinal >= 0),\n  text_content TEXT NOT NULL,\n  start_char INTEGER NOT NULL CHECK(start_char >= 0),\n  end_char INTEGER NOT NULL CHECK(end_char > start_char),\n  source_text_hash TEXT NOT NULL,\n  chunking_contract TEXT NOT NULL,\n  embedding BLOB NOT NULL,\n  embedding_model TEXT NOT NULL,\n  embedding_contract TEXT NOT NULL,\n  dimensions INTEGER NOT NULL CHECK(dimensions > 0),\n  UNIQUE(asset_id, source_kind, source_id, chunk_ordinal)\n);\nCREATE INDEX idx_rag_chunks_asset_id ON rag_chunks(asset_id);\nCREATE INDEX idx_rag_chunks_item_id ON rag_chunks(item_id);\nCREATE INDEX idx_rag_chunks_embedding_contract\nON rag_chunks(embedding_model, embedding_contract, dimensions);\nCREATE VIRTUAL TABLE rag_chunks_fts USING fts5(\n  chunk_id UNINDEXED,\n  text_content,\n  tokenize = 'unicode61 remove_diacritics 1'\n);\nCREATE TRIGGER rag_chunks_fts_insert\nAFTER INSERT ON rag_chunks\nBEGIN\n  INSERT INTO rag_chunks_fts(chunk_id, text_content)\n  VALUES (NEW.id, NEW.text_content);\nEND;\nCREATE TRIGGER rag_chunks_fts_delete\nAFTER DELETE ON rag_chunks\nBEGIN\n  DELETE FROM rag_chunks_fts WHERE chunk_id = OLD.id;\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0029_rag_chunks', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "CREATE INDEX IF NOT EXISTS idx_items_collection_title\n  ON items (collection_id, title COLLATE NOCASE, id)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0030_items_collection_title_index",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- A collection is imported one directory at a time, and the directory is the\n-- unit the archivist works in: a legajo, a box, a folder of scans. Ordering the\n-- whole collection by title shuffles those together, so three folders that each\n-- number their pages 0001, 0002, 0003 interleave into a list where nothing sits\n-- next to what it belongs with.\n--\n-- Both facts needed to undo that already live in every item's metadata: the\n-- importer writes originalPath and importedAt for every file. Deriving them\n-- into generated columns makes them indexable with no backfill, no change to\n-- the import path, and nothing new to ask the user for.\n--\n-- These stay local on purpose. PRAGMA table_xinfo reports generated columns as\n-- hidden, which is exactly how the sync layer decides what to replicate, so\n-- each device recomputes them from the metadata that does replicate.\n--\n-- char(92) is the path separator, spelled that way so the expression survives\n-- both the SQL parser and the TypeScript template literal carrying it.\n--\n-- The dirname idiom: rtrim(path, <every character of path except separators>)\n-- eats the filename from the right and stops at the last separator.\nALTER TABLE items ADD COLUMN source_dir TEXT GENERATED ALWAYS AS (\n  NULLIF(\n    rtrim(\n      rtrim(\n        replace(json_extract(metadata, '$.__entropia_file_metadata.originalPath'), '/', char(92)),\n        replace(\n          replace(json_extract(metadata, '$.__entropia_file_metadata.originalPath'), '/', char(92)),\n          char(92),\n          ''\n        )\n      ),\n      char(92)\n    ),\n    ''\n  )\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE items ADD COLUMN imported_at TEXT GENERATED ALWAYS AS (\n  json_extract(metadata, '$.__entropia_file_metadata.importedAt')\n)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Paging inside one directory group, in document-name order.\nCREATE INDEX IF NOT EXISTS idx_items_collection_source_dir\n  ON items (collection_id, source_dir, title COLLATE NOCASE, id)",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Ordering the groups themselves by their earliest import.\nCREATE INDEX IF NOT EXISTS idx_items_collection_source_dir_import\n  ON items (collection_id, source_dir, imported_at)",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0031_items_source_directory",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_select",
+      "sql": "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE name IN (?,?,?,?,?,?,?,?,?,?)",
+      "params": [
+        "processing_batches",
+        "processing_batch_members",
+        "processing_tasks",
+        "processing_batch_tasks",
+        "processing_requests",
+        "processing_attempts",
+        "processing_checkpoints",
+        "processing_asset_revisions",
+        "processing_meta",
+        "trg_processing_extractions_ai"
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\nCREATE TABLE processing_batches (\n  id TEXT PRIMARY KEY,\n  request_id TEXT NOT NULL UNIQUE,\n  origin TEXT NOT NULL CHECK(origin IN ('user', 'manual', 'repair')),\n  state TEXT NOT NULL CHECK(state IN ('preparing', 'ready', 'running', 'pausing', 'paused', 'cancelling', 'cancelled', 'interrupted', 'completed', 'completed_with_errors')),\n  desired_state TEXT NOT NULL CHECK(desired_state IN ('run', 'pause', 'cancel')),\n  operations TEXT NOT NULL,\n  config_snapshot_json TEXT NOT NULL DEFAULT '{}',\n  planning_cursor INTEGER NOT NULL DEFAULT 0,\n  planning_done INTEGER NOT NULL DEFAULT 0 CHECK(planning_done IN (0, 1)),\n  revision INTEGER NOT NULL DEFAULT 0,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  started_at INTEGER,\n  finished_at INTEGER,\n  last_error TEXT\n);\nCREATE TABLE processing_batch_collections (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  collection_id_snapshot TEXT NOT NULL,\n  name_snapshot TEXT NOT NULL,\n  PRIMARY KEY (batch_id, collection_id_snapshot)\n);\nCREATE TABLE processing_batch_members (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),\n  asset_id_snapshot TEXT NOT NULL,\n  item_id_snapshot TEXT NOT NULL,\n  collection_id_snapshot TEXT NOT NULL,\n  title_snapshot TEXT NOT NULL DEFAULT '',\n  classification TEXT NOT NULL DEFAULT 'unclassified',\n  reason TEXT,\n  PRIMARY KEY (batch_id, ordinal),\n  UNIQUE (batch_id, asset_id_snapshot)\n);\nCREATE INDEX idx_processing_members_batch_asset\n  ON processing_batch_members(batch_id, asset_id_snapshot);\nCREATE TABLE processing_tasks (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding')),\n  asset_id_snapshot TEXT NOT NULL,\n  input_revision INTEGER NOT NULL DEFAULT 0,\n  input_fingerprint TEXT NOT NULL DEFAULT '',\n  contract_hash TEXT NOT NULL DEFAULT '',\n  state TEXT NOT NULL CHECK(state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted', 'succeeded', 'failed', 'skipped', 'cancelled')),\n  stage TEXT NOT NULL DEFAULT '',\n  progress_done INTEGER NOT NULL DEFAULT 0 CHECK(progress_done >= 0),\n  progress_total INTEGER NOT NULL DEFAULT 0 CHECK(progress_total >= 0),\n  outcome TEXT NOT NULL DEFAULT '',\n  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),\n  retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  next_retry_at INTEGER,\n  owner_session TEXT,\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  heartbeat_at INTEGER,\n  lease_expires_at INTEGER,\n  last_error_code TEXT,\n  last_error_message TEXT,\n  result_receipt_json TEXT,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n);\nCREATE INDEX idx_processing_tasks_claimable\n  ON processing_tasks(state, next_retry_at, id);\nCREATE UNIQUE INDEX idx_processing_tasks_active_unique\n  ON processing_tasks(kind, asset_id_snapshot)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nCREATE TABLE processing_batch_tasks (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id),\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding')),\n  asset_id_snapshot TEXT NOT NULL,\n  request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),\n  dependency_task_id TEXT REFERENCES processing_tasks(id),\n  PRIMARY KEY (batch_id, task_id)\n);\nCREATE INDEX idx_processing_batch_tasks_task\n  ON processing_batch_tasks(task_id, request_state);\nCREATE INDEX idx_processing_batch_tasks_batch\n  ON processing_batch_tasks(batch_id, task_id);\nCREATE TABLE processing_requests (\n  request_id TEXT PRIMARY KEY,\n  action TEXT NOT NULL,\n  batch_id TEXT REFERENCES processing_batches(id) ON DELETE CASCADE,\n  payload_hash TEXT NOT NULL,\n  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'applied', 'rejected')),\n  selection_cursor INTEGER NOT NULL DEFAULT 0,\n  response_json TEXT,\n  created_at INTEGER NOT NULL\n);\nCREATE TABLE processing_attempts (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  started_at INTEGER NOT NULL,\n  finished_at INTEGER,\n  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),\n  retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),\n  error_code TEXT,\n  error_message TEXT,\n  provider_request_id TEXT,\n  PRIMARY KEY (task_id, attempt_number)\n);\nCREATE INDEX idx_processing_attempts_task\n  ON processing_attempts(task_id, attempt_number);\nCREATE TABLE processing_checkpoints (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  unit_key TEXT NOT NULL,\n  input_fingerprint TEXT NOT NULL,\n  contract_hash TEXT NOT NULL,\n  payload TEXT NOT NULL DEFAULT '{}',\n  payload_checksum TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  PRIMARY KEY (task_id, unit_key)\n);\nCREATE TABLE processing_asset_revisions (\n  asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,\n  source_revision INTEGER NOT NULL DEFAULT 0,\n  embedding_completed_revision INTEGER,\n  invalidated_at INTEGER,\n  invalidation_reason TEXT,\n  auto_suppressed_revision INTEGER\n);\n-- Single-row liveness for the supervisor thread (scheduler_heartbeat =\n-- \"session-id|epoch-millis\"). Recovery and claiming consult it so a\n-- second process never steals units from a live scheduler, while a dead\n-- scheduler's fresh-looking leases still converge on restart.\nCREATE TABLE processing_meta (\n  key TEXT PRIMARY KEY,\n  value TEXT NOT NULL\n);\nCREATE TRIGGER trg_processing_extractions_ai\nAFTER INSERT ON extractions\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (NEW.asset_id, 1, (strftime('%s', 'now') * 1000), 'extraction_insert')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nCREATE TRIGGER trg_processing_extractions_au\nAFTER UPDATE OF text_content, method ON extractions\nWHEN OLD.text_content IS NOT NEW.text_content OR OLD.method IS NOT NEW.method\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (NEW.asset_id, 1, (strftime('%s', 'now') * 1000), 'extraction_update')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nCREATE TRIGGER trg_processing_extractions_ad\nAFTER DELETE ON extractions\nWHEN EXISTS (SELECT 1 FROM assets WHERE id = OLD.asset_id)\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (OLD.asset_id, 1, (strftime('%s', 'now') * 1000), 'extraction_delete')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nCREATE TRIGGER trg_processing_transcriptions_ai\nAFTER INSERT ON transcriptions\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (NEW.asset_id, 1, (strftime('%s', 'now') * 1000), 'transcription_insert')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nCREATE TRIGGER trg_processing_transcriptions_au\nAFTER UPDATE OF text_content ON transcriptions\nWHEN OLD.text_content IS NOT NEW.text_content\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (NEW.asset_id, 1, (strftime('%s', 'now') * 1000), 'transcription_update')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nCREATE TRIGGER trg_processing_transcriptions_ad\nAFTER DELETE ON transcriptions\nWHEN EXISTS (SELECT 1 FROM assets WHERE id = OLD.asset_id)\nBEGIN\n  INSERT INTO processing_asset_revisions(asset_id, source_revision, invalidated_at, invalidation_reason)\n  VALUES (OLD.asset_id, 1, (strftime('%s', 'now') * 1000), 'transcription_delete')\n  ON CONFLICT(asset_id) DO UPDATE SET\n    source_revision = processing_asset_revisions.source_revision + 1,\n    invalidated_at = excluded.invalidated_at,\n    invalidation_reason = excluded.invalidation_reason;\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0032_batch_processing', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "ALTER TABLE processing_tasks ADD COLUMN source_invalidation_count INTEGER NOT NULL DEFAULT 0",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0033_processing_source_invalidation",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\nDROP TABLE IF EXISTS fts_items;\n\nCREATE VIRTUAL TABLE fts_items USING fts5(\n  item_id UNINDEXED,\n  title,\n  metadata,\n  extracted_text,\n  tokenize='unicode61 remove_diacritics 1',\n  content='',\n  contentless_delete=1\n);\n\nINSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)\nSELECT\n  i.rowid,\n  i.id,\n  i.title,\n  COALESCE(i.metadata, ''),\n  COALESCE((\n    SELECT GROUP_CONCAT(text_part, ' ')\n    FROM (\n      SELECT text_part\n      FROM (\n        SELECT COALESCE(e.text_content, '') AS text_part,\n               0 AS source_order,\n               COALESCE(a.sort_index, 0) AS sort_index,\n               e.created_at AS created_at\n        FROM extractions e\n        JOIN assets a ON a.id = e.asset_id\n        WHERE a.item_id = i.id\n\n        UNION ALL\n\n        SELECT COALESCE(t.text_content, '') AS text_part,\n               1 AS source_order,\n               COALESCE(a.sort_index, 0) AS sort_index,\n               t.created_at AS created_at\n        FROM transcriptions t\n        JOIN assets a ON a.id = t.asset_id\n        WHERE a.item_id = i.id\n      ) ordered_text\n      ORDER BY source_order ASC, sort_index ASC, created_at ASC\n    )\n  ), '')\nFROM items i;\nINSERT INTO _migrations (name, applied_at) VALUES ('0034_fts_contentless_delete', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Writing workspace (plan-editor.md §9). The canonical manuscript is the\n-- ProseMirror JSON in writing_documents.current_content_json; the citation\n-- tables are projections of the current revision (§8.4), never a second\n-- editable source of truth.\n--\n-- Corpus references (collection_id, item_id, asset_id on the citation\n-- projection) are plain columns WITHOUT a foreign key, matching the\n-- snapshot-not-hard-link convention of entities.asset_id, triples.asset_id and\n-- the processing_* family: §10.3 requires a citation to survive its source\n-- being deleted, carrying its metadata snapshot and an integrity status.\n--\n-- The one real corpus foreign key is the document-collection association, and\n-- it cascades on purpose: the corpus delete path in collection.repo.ts is\n-- hand-rolled and knows nothing about these tables, so a RESTRICT here would\n-- block deleting a collection.\n\nCREATE TABLE IF NOT EXISTS writing_documents (\n  id                   TEXT    PRIMARY KEY,\n  title                TEXT    NOT NULL,\n  document_type        TEXT    NOT NULL,\n  status               TEXT    NOT NULL DEFAULT 'active'\n                               CHECK (status IN ('active', 'archived', 'trashed')),\n  schema_version       INTEGER NOT NULL,\n  current_content_json TEXT    NOT NULL,\n  revision             INTEGER NOT NULL DEFAULT 0,\n  plain_text_cache     TEXT,\n  citation_style_id    TEXT,\n  citation_locale      TEXT,\n  bibliography_enabled INTEGER NOT NULL DEFAULT 1,\n  created_at           INTEGER NOT NULL,\n  updated_at           INTEGER NOT NULL,\n  last_opened_at       INTEGER\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_documents_status_updated\n  ON writing_documents (status, updated_at DESC);\n\nCREATE TABLE IF NOT EXISTS writing_document_collections (\n  document_id   TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  collection_id TEXT    NOT NULL REFERENCES collections(id)       ON DELETE CASCADE,\n  is_primary    INTEGER NOT NULL DEFAULT 0,\n  created_at    INTEGER NOT NULL,\n  PRIMARY KEY (document_id, collection_id)\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_document_collections_collection\n  ON writing_document_collections (collection_id);\n\n-- A version must carry everything needed to reproduce its citations and\n-- bibliography, not just the text (§8.4).\nCREATE TABLE IF NOT EXISTS writing_document_versions (\n  id                     TEXT    PRIMARY KEY,\n  document_id            TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  version_number         INTEGER NOT NULL,\n  content_json           TEXT    NOT NULL,\n  schema_version         INTEGER NOT NULL,\n  document_settings_json TEXT    NOT NULL DEFAULT '{}',\n  reason                 TEXT    NOT NULL\n                                 CHECK (reason IN ('auto', 'close', 'checkpoint', 'restore', 'migration')),\n  content_hash           TEXT    NOT NULL,\n  created_at             INTEGER NOT NULL,\n  UNIQUE (document_id, version_number)\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_document_versions_document\n  ON writing_document_versions (document_id, version_number DESC);\n\nCREATE TABLE IF NOT EXISTS writing_document_citations (\n  id                     TEXT    PRIMARY KEY,\n  document_id            TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  citation_node_id       TEXT    NOT NULL,\n  collection_id          TEXT,\n  item_id                TEXT,\n  asset_id               TEXT,\n  page_number            INTEGER,\n  start_char             INTEGER,\n  end_char               INTEGER,\n  source_region_json     TEXT,\n  quoted_text            TEXT,\n  source_text_hash       TEXT,\n  locator_json           TEXT,\n  metadata_snapshot_json TEXT    NOT NULL DEFAULT '{}',\n  integrity_status       TEXT    NOT NULL DEFAULT 'valid'\n                                 CHECK (integrity_status IN ('valid', 'source_modified', 'source_missing', 'unverifiable')),\n  created_at             INTEGER NOT NULL,\n  updated_at             INTEGER NOT NULL,\n  UNIQUE (document_id, citation_node_id)\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_document_citations_asset\n  ON writing_document_citations (asset_id);\n\n-- One visible citation can be a cluster of several works, so identity is\n-- (cluster, position), never one row per parenthesis (§9.5).\nCREATE TABLE IF NOT EXISTS writing_zotero_citations (\n  id                      TEXT    PRIMARY KEY,\n  document_id             TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  citation_node_id        TEXT    NOT NULL,\n  citation_cluster_id     TEXT    NOT NULL,\n  item_position           INTEGER NOT NULL,\n  source_origin           TEXT    NOT NULL DEFAULT 'local'\n                                  CHECK (source_origin IN ('local', 'web')),\n  source_instance_id      TEXT,\n  library_type            TEXT    NOT NULL,\n  library_id              TEXT    NOT NULL,\n  item_key                TEXT    NOT NULL,\n  item_version            INTEGER,\n  locator_type            TEXT,\n  locator                 TEXT,\n  prefix                  TEXT,\n  suffix                  TEXT,\n  suppress_author         INTEGER NOT NULL DEFAULT 0,\n  author_only             INTEGER NOT NULL DEFAULT 0,\n  item_csl_json_snapshot  TEXT    NOT NULL DEFAULT '{}',\n  integrity_status        TEXT    NOT NULL DEFAULT 'valid'\n                                  CHECK (integrity_status IN ('valid', 'zotero_unavailable', 'item_missing', 'item_modified')),\n  created_at              INTEGER NOT NULL,\n  updated_at              INTEGER NOT NULL,\n  UNIQUE (document_id, citation_cluster_id, item_position)\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_zotero_citations_item\n  ON writing_zotero_citations (library_type, library_id, item_key);\n\n-- Append-only record of operations (§8.4): it is not a projection and is not\n-- cleared when the text it describes is edited away.\nCREATE TABLE IF NOT EXISTS writing_provenance_events (\n  id                    TEXT    PRIMARY KEY,\n  document_id           TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  version_id            TEXT    REFERENCES writing_document_versions(id) ON DELETE SET NULL,\n  range_anchor_json     TEXT,\n  origin_type           TEXT    NOT NULL\n                                CHECK (origin_type IN ('manual', 'corpus', 'note', 'zotero', 'agent', 'import')),\n  operation_type        TEXT    NOT NULL\n                                CHECK (operation_type IN ('insert', 'replace', 'rewrite', 'restore', 'other')),\n  source_reference_json TEXT,\n  model_provider        TEXT,\n  model_name            TEXT,\n  prompt_template_id    TEXT,\n  created_at            INTEGER NOT NULL\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_provenance_events_document\n  ON writing_provenance_events (document_id, created_at DESC);\n\n-- Pending suggestions live outside the canonical content (§8.2). The target is\n-- pinned by an anchor plus a hash of the selected content, never by a hash of\n-- the whole manuscript (§9.7).\nCREATE TABLE IF NOT EXISTS writing_agent_suggestions (\n  id                    TEXT    PRIMARY KEY,\n  document_id           TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  selection_anchor_json TEXT,\n  source_revision       INTEGER NOT NULL,\n  selected_content_hash TEXT    NOT NULL,\n  action_type           TEXT    NOT NULL,\n  original_text         TEXT,\n  suggested_text        TEXT,\n  rationale             TEXT,\n  evidence_json         TEXT    NOT NULL DEFAULT '{}',\n  status                TEXT    NOT NULL DEFAULT 'pending'\n                                CHECK (status IN ('pending', 'accepted', 'inserted_below', 'discarded')),\n  provider              TEXT,\n  model                 TEXT,\n  created_at            INTEGER NOT NULL,\n  resolved_at           INTEGER\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_agent_suggestions_document\n  ON writing_agent_suggestions (document_id, status);\nINSERT INTO _migrations (name, applied_at) VALUES ('0035_writing_workspace', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Durable recovery journal for in-progress manuscript edits (plan-editor.md\n-- §16.1). Measured in spike S6: a ~1 KB delta costs a p95 of 1.17 ms under the\n-- synchronous=FULL this repository already sets, while writing the whole\n-- manuscript costs 97.5 ms. So this table stores DELTAS, never documents.\n--\n-- delta_json is opaque to the backend: the editor produces ProseMirror steps,\n-- this table makes the sequence durable, and recovery hands it back in order to\n-- be replayed. Nothing here parses it.\n--\n-- Persisting a journal entry is NOT a canonical save (§16.2): the UI shows\n-- \"Guardado\" only after the content commit advances writing_documents.revision.\n-- Entries stay until a canonical revision that already contains them exists,\n-- which is why pruning is keyed on base_revision rather than on age.\n\nCREATE TABLE IF NOT EXISTS writing_journal (\n  document_id    TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  -- Monotonic per document. Gaps are expected: a crash between the commit and\n  -- the writer's acknowledgement leaves an entry nobody was told about, which\n  -- recovery must accept rather than treat as corruption.\n  seq            INTEGER NOT NULL,\n  -- The canonical revision this delta applies on top of. Entries below the\n  -- document's current revision are already folded into the content.\n  base_revision  INTEGER NOT NULL,\n  schema_version INTEGER NOT NULL,\n  delta_json     TEXT    NOT NULL,\n  -- Guards against a truncated or corrupt entry being replayed. §16.3 requires\n  -- that such an entry is never applied partially and is kept for diagnosis.\n  checksum       TEXT    NOT NULL,\n  created_at     INTEGER NOT NULL,\n  PRIMARY KEY (document_id, seq)\n);\n\nCREATE INDEX IF NOT EXISTS idx_writing_journal_replay\n  ON writing_journal (document_id, base_revision, seq);\nINSERT INTO _migrations (name, applied_at) VALUES ('0036_writing_journal', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- A read-only window onto the terms fts_items holds, with how many documents\n-- hold each one. Approximate search draws its variants from here, so it never\n-- suggests a word no document contains (see src/fuzzy.ts).\n--\n-- fts5vocab stores nothing of its own: it reads the index directly, so it\n-- needs no rebuild when fts_items changes, and it survives 0034 dropping and\n-- recreating fts_items because it resolves the table by name on every read.\nCREATE VIRTUAL TABLE IF NOT EXISTS fts_items_vocab USING fts5vocab(fts_items, 'row')",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0037_fts_vocab",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Settle a unit's blocked dependents the moment it ends, instead of every\n-- claim rescanning every blocked unit. The scan cost O(blocked) inside the\n-- write lock on each claim: 0.8 s per page with 200k pages queued, which\n-- starved every other writer for the whole OCR phase.\n--\n-- Same rules as settle_blocked_dependents (processing/repository.rs), which\n-- stays as the one-off repair run at recovery: a succeeded dependency moves\n-- its blocked dependents to pending; a failed or cancelled one fails them.\n-- The trigger fires for every transition path and every process, so no Rust\n-- call site can forget it.\n\n-- claim_next walks pending units in id order and stops at the first runnable\n-- one; without (state, id) it gathered and sorted every pending unit per claim.\nCREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id\n  ON processing_tasks(state, id);\n\nCREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency\n  ON processing_batch_tasks(dependency_task_id)\n  WHERE dependency_task_id IS NOT NULL;\n\nCREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents\nAFTER UPDATE OF state ON processing_tasks\nWHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state\nBEGIN\n  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND outcome = 'open'\n     AND task_id IN (\n       SELECT l.task_id FROM processing_batch_tasks l\n         JOIN processing_tasks t ON t.id = l.task_id\n        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');\n  UPDATE processing_tasks\n     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',\n         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,\n         updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\n  UPDATE processing_tasks\n     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state = 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0038_processing_settle_on_terminal', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "-- Index the source path the import duplicate check looks up for every file\n-- (ItemRepo.findImportedFromSource). Without it each file scanned and parsed\n-- the metadata JSON of every item in the collection: 91 ms per file at 40k\n-- documents, so importing 1000 more files spent 1.5 min just checking.\n--\n-- The expression must match the query exactly for SQLite to use the index.\nCREATE INDEX IF NOT EXISTS idx_items_import_source\n  ON items(collection_id, lower(json_extract(metadata, '$.__entropia_file_metadata.originalPath')))",
+      "params": []
+    },
+    {
+      "command": "db_execute",
+      "sql": "INSERT INTO _migrations (name, applied_at) VALUES (?, ?)",
+      "params": [
+        "0039_items_import_source_index",
+        1700000000
+      ]
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- E1b-1a bibliography catalog foundation.\n--\n-- Connections are namespaces for a Zotero source. A nullable source_instance_id\n-- is intentional: an uncorroborated instance must not be invented from a\n-- Last-Modified-Version value or silently merged with another connection.\n-- Collections, tags, attachments, tombstones and reconciliation state arrive in\n-- later migrations.\n\nCREATE TABLE IF NOT EXISTS zotero_connections (\n  id                  TEXT PRIMARY KEY,\n  source_origin       TEXT NOT NULL CHECK(source_origin IN ('local', 'web')),\n  source_instance_id  TEXT,\n  endpoint            TEXT,\n  capabilities_json   TEXT NOT NULL DEFAULT '{}',\n  credential_ref      TEXT,\n  state               TEXT NOT NULL DEFAULT 'unknown'\n                      CHECK(state IN ('unknown', 'available', 'unavailable', 'disabled', 'error')),\n  revision            INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at          INTEGER NOT NULL,\n  updated_at          INTEGER NOT NULL,\n  CHECK(json_valid(capabilities_json))\n);\n\nCREATE INDEX IF NOT EXISTS idx_zotero_connections_source\n  ON zotero_connections(source_origin, source_instance_id);\n\nCREATE TABLE IF NOT EXISTS zotero_libraries (\n  id                       TEXT PRIMARY KEY,\n  connection_id            TEXT NOT NULL REFERENCES zotero_connections(id) ON DELETE CASCADE,\n  library_type             TEXT NOT NULL CHECK(library_type IN ('user', 'group')),\n  library_id               TEXT NOT NULL,\n  name                     TEXT NOT NULL,\n  last_modified_version    INTEGER,\n  revision                 INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at               INTEGER NOT NULL,\n  updated_at               INTEGER NOT NULL\n);\n\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_libraries_identity\n  ON zotero_libraries(connection_id, library_type, library_id);\nCREATE INDEX IF NOT EXISTS idx_zotero_libraries_connection\n  ON zotero_libraries(connection_id);\n\nCREATE TABLE IF NOT EXISTS bibliographic_items (\n  id                    TEXT PRIMARY KEY,\n  library_id            TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  item_key              TEXT NOT NULL,\n  item_version          INTEGER,\n  native_json_snapshot  TEXT NOT NULL CHECK(json_valid(native_json_snapshot)),\n  csl_json_snapshot     TEXT NOT NULL CHECK(json_valid(csl_json_snapshot)),\n  item_type             TEXT,\n  title                 TEXT,\n  creators_json         TEXT CHECK(creators_json IS NULL OR json_valid(creators_json)),\n  publication_title     TEXT,\n  publisher             TEXT,\n  date                  TEXT,\n  doi                   TEXT,\n  isbn                  TEXT,\n  abstract              TEXT,\n  language              TEXT,\n  url                   TEXT,\n  revision              INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at            INTEGER NOT NULL,\n  updated_at            INTEGER NOT NULL,\n  verified_at           INTEGER NOT NULL\n);\n\nCREATE UNIQUE INDEX IF NOT EXISTS idx_bibliographic_items_library_key\n  ON bibliographic_items(library_id, item_key);\nCREATE INDEX IF NOT EXISTS idx_bibliographic_items_key\n  ON bibliographic_items(item_key);\nCREATE INDEX IF NOT EXISTS idx_bibliographic_items_title\n  ON bibliographic_items(title COLLATE NOCASE);\nINSERT INTO _migrations (name, applied_at) VALUES ('0040_bibliography_catalog', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- E1b-1b relational Zotero catalog slice.\n--\n-- Native collection/tag identity is qualified by the owning library. Attachment\n-- identity is qualified by its mandatory parent item. Parent collection keys are\n-- opaque native values: no parent FK is required and sync order is irrelevant.\n-- Tombstones are side tables so 0040 snapshots and relations stay intact.\n\n-- Composite parent keys for the library-scoped membership foreign keys below.\nCREATE UNIQUE INDEX IF NOT EXISTS idx_bibliographic_items_id_library\n  ON bibliographic_items(id, library_id);\n\nCREATE TABLE IF NOT EXISTS zotero_collections (\n  id                    TEXT PRIMARY KEY,\n  library_id            TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  collection_key        TEXT NOT NULL,\n  name                  TEXT NOT NULL,\n  parent_collection_key TEXT,\n  native_json_snapshot  TEXT NOT NULL CHECK(json_valid(native_json_snapshot)),\n  native_version        INTEGER,\n  revision              INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at            INTEGER NOT NULL,\n  updated_at            INTEGER NOT NULL,\n  verified_at           INTEGER NOT NULL\n);\n\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_collections_library_key\n  ON zotero_collections(library_id, collection_key);\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_collections_id_library\n  ON zotero_collections(id, library_id);\nCREATE INDEX IF NOT EXISTS idx_zotero_collections_library\n  ON zotero_collections(library_id);\n\nCREATE TABLE IF NOT EXISTS zotero_tags (\n  id                    TEXT PRIMARY KEY,\n  library_id            TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  tag_text              TEXT NOT NULL,\n  tag_type              TEXT,\n  native_json_snapshot  TEXT NOT NULL CHECK(json_valid(native_json_snapshot)),\n  native_version        INTEGER,\n  revision              INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at    INTEGER NOT NULL,\n  updated_at    INTEGER NOT NULL,\n  verified_at   INTEGER NOT NULL\n);\n\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_tags_library_text\n  ON zotero_tags(library_id, tag_text);\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_tags_id_library\n  ON zotero_tags(id, library_id);\nCREATE INDEX IF NOT EXISTS idx_zotero_tags_library\n  ON zotero_tags(library_id);\n\nCREATE TABLE IF NOT EXISTS zotero_attachments (\n  id             TEXT PRIMARY KEY,\n  item_id        TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n  attachment_key TEXT NOT NULL,\n  content_type   TEXT,\n  link_mode      TEXT,\n  filename       TEXT,\n  native_path           TEXT,\n  url                   TEXT,\n  md5                   TEXT,\n  mtime                 INTEGER,\n  native_json_snapshot  TEXT NOT NULL CHECK(json_valid(native_json_snapshot)),\n  native_version        INTEGER,\n  revision              INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  created_at     INTEGER NOT NULL,\n  updated_at     INTEGER NOT NULL,\n  verified_at    INTEGER NOT NULL\n);\n\nCREATE UNIQUE INDEX IF NOT EXISTS idx_zotero_attachments_item_key\n  ON zotero_attachments(item_id, attachment_key);\nCREATE INDEX IF NOT EXISTS idx_zotero_attachments_item\n  ON zotero_attachments(item_id);\n\nCREATE TABLE IF NOT EXISTS zotero_item_collections (\n  library_id    TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  item_id       TEXT NOT NULL,\n  collection_id TEXT NOT NULL,\n  PRIMARY KEY (library_id, item_id, collection_id),\n  FOREIGN KEY (item_id, library_id)\n    REFERENCES bibliographic_items(id, library_id) ON DELETE CASCADE,\n  FOREIGN KEY (collection_id, library_id)\n    REFERENCES zotero_collections(id, library_id) ON DELETE CASCADE\n);\n\nCREATE INDEX IF NOT EXISTS idx_zotero_item_collections_item\n  ON zotero_item_collections(library_id, item_id);\nCREATE INDEX IF NOT EXISTS idx_zotero_item_collections_collection\n  ON zotero_item_collections(library_id, collection_id);\n\nCREATE TABLE IF NOT EXISTS zotero_item_tags (\n  library_id TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  item_id    TEXT NOT NULL,\n  tag_id     TEXT NOT NULL,\n  PRIMARY KEY (library_id, item_id, tag_id),\n  FOREIGN KEY (item_id, library_id)\n    REFERENCES bibliographic_items(id, library_id) ON DELETE CASCADE,\n  FOREIGN KEY (tag_id, library_id)\n    REFERENCES zotero_tags(id, library_id) ON DELETE CASCADE\n);\n\nCREATE INDEX IF NOT EXISTS idx_zotero_item_tags_item\n  ON zotero_item_tags(library_id, item_id);\nCREATE INDEX IF NOT EXISTS idx_zotero_item_tags_tag\n  ON zotero_item_tags(library_id, tag_id);\n\n-- One replay-safe tombstone per live entity. The entity FK is deliberately the\n-- only deletion path: tombstoning never deletes snapshots or membership rows.\nCREATE TABLE IF NOT EXISTS zotero_item_tombstones (\n  item_id        TEXT PRIMARY KEY REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n  observed_at    INTEGER NOT NULL,\n  remote_version INTEGER,\n  reason         TEXT NOT NULL CHECK(length(trim(reason)) > 0)\n);\n\nCREATE TABLE IF NOT EXISTS zotero_collection_tombstones (\n  collection_id  TEXT PRIMARY KEY REFERENCES zotero_collections(id) ON DELETE CASCADE,\n  observed_at    INTEGER NOT NULL,\n  remote_version INTEGER,\n  reason         TEXT NOT NULL CHECK(length(trim(reason)) > 0)\n);\n\nCREATE TABLE IF NOT EXISTS zotero_tag_tombstones (\n  tag_id         TEXT PRIMARY KEY REFERENCES zotero_tags(id) ON DELETE CASCADE,\n  observed_at    INTEGER NOT NULL,\n  remote_version INTEGER,\n  reason         TEXT NOT NULL CHECK(length(trim(reason)) > 0)\n);\n\nCREATE TABLE IF NOT EXISTS zotero_attachment_tombstones (\n  attachment_id  TEXT PRIMARY KEY REFERENCES zotero_attachments(id) ON DELETE CASCADE,\n  observed_at    INTEGER NOT NULL,\n  remote_version INTEGER,\n  reason         TEXT NOT NULL CHECK(length(trim(reason)) > 0)\n);\nINSERT INTO _migrations (name, applied_at) VALUES ('0041_bibliography_relations', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- E1b-2 durable per-library bibliography reconciliation state.\n--\n-- The current row is keyed by the internal library FK. A generated run_id\n-- scopes the normalized seen-set, while connection_revision is the stale\n-- identity fence; zotero_libraries.last_modified_version remains catalog data.\n\nCREATE TABLE IF NOT EXISTS zotero_reconciliation_runs (\n  library_id              TEXT PRIMARY KEY NOT NULL\n                            REFERENCES zotero_libraries(id) ON DELETE CASCADE\n                            CHECK(length(trim(library_id)) > 0),\n  run_id                  TEXT NOT NULL CHECK(length(trim(run_id)) > 0),\n  connection_revision     INTEGER NOT NULL CHECK(connection_revision >= 0),\n  state                   TEXT NOT NULL\n                            CHECK(state IN ('running', 'retry_wait', 'interrupted', 'blocked', 'failed', 'completed')),\n  phase                   TEXT NOT NULL\n                            CHECK(phase IN ('versions', 'catalog', 'finalize')),\n  cursor_start            INTEGER NOT NULL DEFAULT 0 CHECK(cursor_start >= 0),\n  cursor_limit            INTEGER NOT NULL CHECK(cursor_limit > 0),\n  remote_total            INTEGER CHECK(remote_total IS NULL OR remote_total >= 0),\n  target_version          INTEGER CHECK(target_version IS NULL OR target_version >= 0),\n  checkpoint_version      INTEGER CHECK(checkpoint_version IS NULL OR checkpoint_version >= 0),\n  retry_count             INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  attempt_count           INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  next_retry_at           INTEGER CHECK(next_retry_at IS NULL OR next_retry_at >= 0),\n  last_attempt_at         INTEGER CHECK(last_attempt_at IS NULL OR last_attempt_at >= 0),\n  latest_error_phase      TEXT CHECK(latest_error_phase IS NULL OR latest_error_phase IN ('versions', 'catalog', 'finalize')),\n  latest_error_code       TEXT CHECK(latest_error_code IS NULL OR (length(trim(latest_error_code)) > 0 AND length(latest_error_code) <= 128)),\n  latest_error_message    TEXT CHECK(latest_error_message IS NULL OR (length(trim(latest_error_message)) > 0 AND length(latest_error_message) <= 1024)),\n  latest_error_retryable  INTEGER CHECK(latest_error_retryable IS NULL OR latest_error_retryable IN (0, 1)),\n  latest_error_at         INTEGER CHECK(latest_error_at IS NULL OR latest_error_at >= 0),\n  revision                INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),\n  checkpointed_at         INTEGER CHECK(checkpointed_at IS NULL OR checkpointed_at >= 0),\n  completed_at            INTEGER CHECK(completed_at IS NULL OR completed_at >= 0),\n  created_at              INTEGER NOT NULL CHECK(created_at >= 0),\n  updated_at              INTEGER NOT NULL CHECK(updated_at >= 0),\n  UNIQUE(library_id, run_id),\n  UNIQUE(run_id),\n  CHECK(\n    (latest_error_phase IS NULL AND latest_error_code IS NULL\n      AND latest_error_message IS NULL AND latest_error_retryable IS NULL\n      AND latest_error_at IS NULL)\n    OR\n    (latest_error_phase IS NOT NULL AND latest_error_code IS NOT NULL\n      AND latest_error_message IS NOT NULL AND latest_error_retryable IS NOT NULL\n      AND latest_error_at IS NOT NULL)\n  )\n);\n\nCREATE INDEX IF NOT EXISTS idx_zotero_reconciliation_runs_state\n  ON zotero_reconciliation_runs(state, next_retry_at, library_id);\n\nCREATE TABLE IF NOT EXISTS zotero_reconciliation_seen (\n  library_id      TEXT NOT NULL CHECK(length(trim(library_id)) > 0),\n  run_id          TEXT NOT NULL,\n  entity_kind     TEXT NOT NULL\n                  CHECK(entity_kind IN ('item', 'collection', 'tag', 'attachment')),\n  entity_key      TEXT NOT NULL CHECK(length(trim(entity_key)) > 0),\n  parent_key      TEXT NOT NULL DEFAULT '',\n  remote_version  INTEGER CHECK(remote_version IS NULL OR remote_version >= 0),\n  observed_at     INTEGER NOT NULL CHECK(observed_at >= 0),\n  PRIMARY KEY (library_id, run_id, entity_kind, entity_key, parent_key),\n  FOREIGN KEY (library_id, run_id)\n    REFERENCES zotero_reconciliation_runs(library_id, run_id) ON DELETE CASCADE,\n  CHECK(\n    (entity_kind = 'attachment' AND length(trim(parent_key)) > 0)\n    OR (entity_kind <> 'attachment' AND parent_key = '')\n  )\n);\n\nCREATE INDEX IF NOT EXISTS idx_zotero_reconciliation_seen_kind\n  ON zotero_reconciliation_seen(library_id, run_id, entity_kind, entity_key);\nINSERT INTO _migrations (name, applied_at) VALUES ('0042_bibliography_reconciliation', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0043_processing_task_subject_identity: additive task-subject identity columns (E2a-1).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0043_processing_task_subject_identity']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042): the whole body goes inside one BEGIN IMMEDIATE ...\n-- COMMIT together with the _migrations row, so a crash between DDL and\n-- bookkeeping can never leave a half-applied 0043 behind.\n--\n-- E2a-1 is additive only: every lookup keeps resolving on\n-- (kind, asset_id_snapshot) and the old partial unique\n-- idx_processing_tasks_active_unique stays until the E2a-2 cutover. The new\n-- composite partial unique idx_processing_tasks_subject_active_unique is\n-- built now so both indexes can be observed side by side before the cutover.\n-- Documentary subject identity is corpus/asset keyed by the snapshot:\n-- subject_id == asset_id_snapshot via dual-write (never dropped), and the\n-- backfill below only writes subject_id — it must never rewrite\n-- input_fingerprint/contract_hash.\n--\n-- Statement order matters: the backfill runs BEFORE the unique index is\n-- created. Freshly added columns default every existing row to subject_id =\n-- '', and several live tasks would share that value; creating the unique\n-- index first would fail on those duplicates. After the backfill each live\n-- row carries its own snapshot, and the pre-existing\n-- idx_processing_tasks_active_unique already guarantees (kind, snapshot) is\n-- unique over live rows, so index creation cannot fail on upgraded data.\n--\n-- Replay contract (why a second runMigrations() pass is an error-free no-op):\n-- the registry row is recorded in the same atomic batch, so a second pass\n-- skips this migration entirely. The statements themselves are\n-- replay-tolerant where SQLite allows it:\n-- - CREATE UNIQUE INDEX IF NOT EXISTS is a native no-op on replay;\n-- - both backfill UPDATEs only touch rows with subject_id = '', so a replay\n--   updates zero rows;\n-- - ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS form in SQLite (same\n--   limitation as 0011/0013/0014/0024/0026/0028/0033, which rely on the\n--   runner's duplicate-column tolerance). Inside the single-batch path there\n--   is no per-statement rescue, so the registry skip above is what makes\n--   runner-level replay error-free; do not apply this file twice by hand.\n\nALTER TABLE processing_tasks ADD COLUMN domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography'));\nALTER TABLE processing_tasks ADD COLUMN subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range'));\nALTER TABLE processing_tasks ADD COLUMN subject_id TEXT NOT NULL DEFAULT '';\nALTER TABLE processing_batch_tasks ADD COLUMN domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography'));\nALTER TABLE processing_batch_tasks ADD COLUMN subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range'));\nALTER TABLE processing_batch_tasks ADD COLUMN subject_id TEXT NOT NULL DEFAULT '';\nUPDATE processing_tasks SET subject_id = asset_id_snapshot WHERE subject_id = '';\nUPDATE processing_batch_tasks SET subject_id = asset_id_snapshot WHERE subject_id = '';\nCREATE UNIQUE INDEX IF NOT EXISTS idx_processing_tasks_subject_active_unique\n  ON processing_tasks(domain, subject_kind, subject_id, kind)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nINSERT INTO _migrations (name, applied_at) VALUES ('0043_processing_task_subject_identity', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0044_processing_task_subject_cutover: single-flight cutover to the composite subject identity (E2a-2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0044_processing_task_subject_cutover']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042/0043): the whole body goes inside one BEGIN IMMEDIATE ...\n-- COMMIT together with the _migrations row, so a crash between DDL and\n-- bookkeeping can never leave a half-applied 0044 behind.\n--\n-- E2a-2 cuts the single-flight authority from the snapshot-scoped partial\n-- unique idx_processing_tasks_active_unique to the composite partial unique\n-- idx_processing_tasks_subject_active_unique (built in E2a-1 alongside the\n-- old one). After this migration the composite is the SOLE single-flight\n-- authority: two live rows may share (kind, asset_id_snapshot) as long as\n-- their (domain, subject_kind, subject_id, kind) differs — e.g. a corpus\n-- asset task and a bibliography item task colliding on the snapshot string.\n-- Documentary lookups switch with it: live_task resolves on the full subject\n-- identity, never on the snapshot alone.\n--\n-- Replay contract (why a second runMigrations() pass is an error-free no-op):\n-- the registry row is recorded in the same atomic batch, so a second pass\n-- skips this migration entirely. The statement itself is replay-tolerant on\n-- its own: DROP INDEX IF EXISTS is a native no-op on replay; do not apply\n-- this file twice by hand (harmless, but the runner owns replay).\n\nDROP INDEX IF EXISTS idx_processing_tasks_active_unique;\nINSERT INTO _migrations (name, applied_at) VALUES ('0044_processing_task_subject_cutover', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0045_bibliography_sync_tasks: bibliographic task admission and system-batch origin (E2b-1).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0045_bibliography_sync_tasks']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042/0043/0044): the whole body goes inside one BEGIN IMMEDIATE ...\n-- COMMIT together with the _migrations row, so a crash between DDL and\n-- bookkeeping can never leave a half-applied 0045 behind.\n--\n-- SQLite cannot ALTER a CHECK, so widening kind/origin requires rebuilding the\n-- three tables: processing_tasks and processing_batch_tasks gain\n-- kind='bibliography_sync', processing_batches gains origin='bibliography'.\n-- All columns, both task indexes (partial composite subject unique +\n-- claimable), every FK, and every row are preserved byte-identically; old\n-- kinds ('ocr', 'embedding') and origins ('user', 'manual', 'repair') are\n-- unchanged, and the snapshot-scoped unique dropped in the 0044 cutover stays\n-- dropped (only claimable + composite subject unique are rebuilt).\n--\n-- DROP order is child-first per the actual FK direction (same order as\n-- PROCESSING_0032_TABLES_CHILD_FIRST in runner.ts): processing_batch_tasks is\n-- the child of processing_tasks (task_id and dependency_task_id reference\n-- tasks.id) and of processing_batches (batch_id references batches.id);\n-- processing_attempts and processing_checkpoints are children of tasks;\n-- processing_batch_collections, processing_batch_members and\n-- processing_requests are children of batches. Dependents are backed up with\n-- CREATE TABLE _backup_... AS SELECT * (plain data copies, no FKs), dropped\n-- child-first so no parent DROP ever meets an inbound FK, then recreated\n-- parent-first with data restored parent-first so immediate FK checks pass.\n-- Only the three target tables change shape; the five dependents are\n-- recreated from their 0032 DDL verbatim. A parent DROP with CASCADE children\n-- still present would delete their rows, which is why every dependent is\n-- backed up and dropped first instead of relying on deferral.\n--\n-- Replay contract (why a second runMigrations() pass is an error-free no-op):\n-- the registry row is recorded in the same atomic batch, so a second pass\n-- skips this migration entirely. The statements themselves are replay-tolerant\n-- by hand too: backups are created and dropped inside the same transaction,\n-- so a manual second run rebuilds the already-widened tables to the same\n-- shape with the same rows; do not apply this file twice by hand outside a\n-- transaction (harmless, but the runner owns replay).\n\nPRAGMA defer_foreign_keys=ON;\n\nCREATE TABLE _backup_0045_processing_batches AS SELECT * FROM processing_batches;\nCREATE TABLE _backup_0045_processing_batch_collections AS SELECT * FROM processing_batch_collections;\nCREATE TABLE _backup_0045_processing_batch_members AS SELECT * FROM processing_batch_members;\nCREATE TABLE _backup_0045_processing_tasks AS SELECT * FROM processing_tasks;\nCREATE TABLE _backup_0045_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;\nCREATE TABLE _backup_0045_processing_requests AS SELECT * FROM processing_requests;\nCREATE TABLE _backup_0045_processing_attempts AS SELECT * FROM processing_attempts;\nCREATE TABLE _backup_0045_processing_checkpoints AS SELECT * FROM processing_checkpoints;\n\nDROP TABLE processing_checkpoints;\nDROP TABLE processing_attempts;\nDROP TABLE processing_requests;\nDROP TABLE processing_batch_tasks;\nDROP TABLE processing_tasks;\nDROP TABLE processing_batch_members;\nDROP TABLE processing_batch_collections;\nDROP TABLE processing_batches;\n\nCREATE TABLE processing_batches (\n  id TEXT PRIMARY KEY,\n  request_id TEXT NOT NULL UNIQUE,\n  origin TEXT NOT NULL CHECK(origin IN ('user', 'manual', 'repair', 'bibliography')),\n  state TEXT NOT NULL CHECK(state IN ('preparing', 'ready', 'running', 'pausing', 'paused', 'cancelling', 'cancelled', 'interrupted', 'completed', 'completed_with_errors')),\n  desired_state TEXT NOT NULL CHECK(desired_state IN ('run', 'pause', 'cancel')),\n  operations TEXT NOT NULL,\n  config_snapshot_json TEXT NOT NULL DEFAULT '{}',\n  planning_cursor INTEGER NOT NULL DEFAULT 0,\n  planning_done INTEGER NOT NULL DEFAULT 0 CHECK(planning_done IN (0, 1)),\n  revision INTEGER NOT NULL DEFAULT 0,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  started_at INTEGER,\n  finished_at INTEGER,\n  last_error TEXT\n);\nCREATE TABLE processing_batch_collections (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  collection_id_snapshot TEXT NOT NULL,\n  name_snapshot TEXT NOT NULL,\n  PRIMARY KEY (batch_id, collection_id_snapshot)\n);\nCREATE TABLE processing_batch_members (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),\n  asset_id_snapshot TEXT NOT NULL,\n  item_id_snapshot TEXT NOT NULL,\n  collection_id_snapshot TEXT NOT NULL,\n  title_snapshot TEXT NOT NULL DEFAULT '',\n  classification TEXT NOT NULL DEFAULT 'unclassified',\n  reason TEXT,\n  PRIMARY KEY (batch_id, ordinal),\n  UNIQUE (batch_id, asset_id_snapshot)\n);\nCREATE INDEX idx_processing_members_batch_asset\n  ON processing_batch_members(batch_id, asset_id_snapshot);\nCREATE TABLE processing_tasks (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync')),\n  asset_id_snapshot TEXT NOT NULL,\n  input_revision INTEGER NOT NULL DEFAULT 0,\n  input_fingerprint TEXT NOT NULL DEFAULT '',\n  contract_hash TEXT NOT NULL DEFAULT '',\n  state TEXT NOT NULL CHECK(state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted', 'succeeded', 'failed', 'skipped', 'cancelled')),\n  stage TEXT NOT NULL DEFAULT '',\n  progress_done INTEGER NOT NULL DEFAULT 0 CHECK(progress_done >= 0),\n  progress_total INTEGER NOT NULL DEFAULT 0 CHECK(progress_total >= 0),\n  outcome TEXT NOT NULL DEFAULT '',\n  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),\n  retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  next_retry_at INTEGER,\n  owner_session TEXT,\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  heartbeat_at INTEGER,\n  lease_expires_at INTEGER,\n  last_error_code TEXT,\n  last_error_message TEXT,\n  result_receipt_json TEXT,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  source_invalidation_count INTEGER NOT NULL DEFAULT 0,\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT ''\n);\nCREATE INDEX idx_processing_tasks_claimable\n  ON processing_tasks(state, next_retry_at, id);\nCREATE UNIQUE INDEX idx_processing_tasks_subject_active_unique\n  ON processing_tasks(domain, subject_kind, subject_id, kind)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nCREATE TABLE processing_batch_tasks (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id),\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync')),\n  asset_id_snapshot TEXT NOT NULL,\n  request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),\n  dependency_task_id TEXT REFERENCES processing_tasks(id),\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT '',\n  PRIMARY KEY (batch_id, task_id)\n);\nCREATE INDEX idx_processing_batch_tasks_task\n  ON processing_batch_tasks(task_id, request_state);\nCREATE INDEX idx_processing_batch_tasks_batch\n  ON processing_batch_tasks(batch_id, task_id);\nCREATE TABLE processing_requests (\n  request_id TEXT PRIMARY KEY,\n  action TEXT NOT NULL,\n  batch_id TEXT REFERENCES processing_batches(id) ON DELETE CASCADE,\n  payload_hash TEXT NOT NULL,\n  state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open', 'applied', 'rejected')),\n  selection_cursor INTEGER NOT NULL DEFAULT 0,\n  response_json TEXT,\n  created_at INTEGER NOT NULL\n);\nCREATE TABLE processing_attempts (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  started_at INTEGER NOT NULL,\n  finished_at INTEGER,\n  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),\n  retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),\n  error_code TEXT,\n  error_message TEXT,\n  provider_request_id TEXT,\n  PRIMARY KEY (task_id, attempt_number)\n);\nCREATE INDEX idx_processing_attempts_task\n  ON processing_attempts(task_id, attempt_number);\nCREATE TABLE processing_checkpoints (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  unit_key TEXT NOT NULL,\n  input_fingerprint TEXT NOT NULL,\n  contract_hash TEXT NOT NULL,\n  payload TEXT NOT NULL DEFAULT '{}',\n  payload_checksum TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  PRIMARY KEY (task_id, unit_key)\n);\n\nINSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error)\n  SELECT id, request_id, origin, state, desired_state, operations, config_snapshot_json, planning_cursor, planning_done, revision, created_at, updated_at, started_at, finished_at, last_error FROM _backup_0045_processing_batches;\nINSERT INTO processing_batch_collections (batch_id, collection_id_snapshot, name_snapshot)\n  SELECT batch_id, collection_id_snapshot, name_snapshot FROM _backup_0045_processing_batch_collections;\nINSERT INTO processing_batch_members (batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason)\n  SELECT batch_id, ordinal, asset_id_snapshot, item_id_snapshot, collection_id_snapshot, title_snapshot, classification, reason FROM _backup_0045_processing_batch_members;\nINSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)\n  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0045_processing_tasks;\nINSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)\n  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0045_processing_batch_tasks;\nINSERT INTO processing_requests (request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at)\n  SELECT request_id, action, batch_id, payload_hash, state, selection_cursor, response_json, created_at FROM _backup_0045_processing_requests;\nINSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)\n  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0045_processing_attempts;\nINSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)\n  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0045_processing_checkpoints;\n\nDROP TABLE _backup_0045_processing_checkpoints;\nDROP TABLE _backup_0045_processing_attempts;\nDROP TABLE _backup_0045_processing_requests;\nDROP TABLE _backup_0045_processing_batch_tasks;\nDROP TABLE _backup_0045_processing_tasks;\nDROP TABLE _backup_0045_processing_batch_members;\nDROP TABLE _backup_0045_processing_batch_collections;\nDROP TABLE _backup_0045_processing_batches;\n\n-- Rebuilding processing_tasks and processing_batch_tasks above dropped the\n-- claim index, the dependency index and the settle trigger that\n-- 0038_processing_settle_on_terminal created on them. Restore them verbatim\n-- so the queue keeps settling dependents on every terminal transition.\nCREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id\n  ON processing_tasks(state, id);\n\nCREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency\n  ON processing_batch_tasks(dependency_task_id)\n  WHERE dependency_task_id IS NOT NULL;\n\nCREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents\nAFTER UPDATE OF state ON processing_tasks\nWHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state\nBEGIN\n  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND outcome = 'open'\n     AND task_id IN (\n       SELECT l.task_id FROM processing_batch_tasks l\n         JOIN processing_tasks t ON t.id = l.task_id\n        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');\n  UPDATE processing_tasks\n     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',\n         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,\n         updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\n  UPDATE processing_tasks\n     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state = 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0045_bibliography_sync_tasks', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0046_processing_priority: per-batch interactive priority (E2c-WU3).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0046_processing_priority']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042/0043/0044/0045): the whole body goes inside one BEGIN\n-- IMMEDIATE ... COMMIT together with the _migrations row, so a crash between\n-- DDL and bookkeeping can never leave a half-applied 0046 behind.\n--\n-- E2c-WU3 is additive only: one priority column on processing_batches plus\n-- an index. Existing rows default to 0 (background); no backfill, no CHECK\n-- widening, no table rebuild. Claim ordering, aging, and the set-priority\n-- API read this column but live in the Rust scheduler, not in this file.\n--\n-- Replay contract (why a second runMigrations() pass is an error-free no-op):\n-- the registry row is recorded in the same atomic batch, so a second pass\n-- skips this migration entirely. The statements themselves are\n-- replay-tolerant where SQLite allows it:\n-- - CREATE INDEX IF NOT EXISTS is a native no-op on replay;\n-- - ALTER TABLE ... ADD COLUMN has no IF NOT EXISTS form in SQLite (same\n--   limitation as 0011/0013/0014/0024/0026/0028/0033/0043, which rely on the\n--   runner's duplicate-column tolerance). Inside the single-batch path there\n--   is no per-statement rescue, so the registry skip above is what makes\n--   runner-level replay error-free; do not apply this file twice by hand.\n\nALTER TABLE processing_batches ADD COLUMN priority INTEGER NOT NULL DEFAULT 0 CHECK(priority IN (0, 1, 2));\nCREATE INDEX IF NOT EXISTS idx_processing_batches_priority\n  ON processing_batches(priority, created_at, id);\nINSERT INTO _migrations (name, applied_at) VALUES ('0046_processing_priority', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0047_bibliographic_semantic_profiles: per-work semantic profiles (E3b-WU1).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0047_bibliographic_semantic_profiles']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042/0043/0044/0045/0046): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0047 behind.\n--\n-- Plan §6 bibliographic_semantic_profiles: one row per verified work —\n-- profile revision, template version, canonical text, field provenance, and\n-- the input hash. Keyed by the internal bibliographic_items.id; a catalog\n-- row delete cascades (profiles are reconstructible, citations never touch\n-- them). No vector columns live here: embeddings get their own tables with\n-- contract/generation identity (E3c), so changing models never rewrites\n-- profile history.\n\nCREATE TABLE bibliographic_semantic_profiles (\n    item_id TEXT PRIMARY KEY NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n    profile_revision INTEGER NOT NULL,\n    template_version TEXT NOT NULL,\n    canonical_text TEXT NOT NULL,\n    input_hash TEXT NOT NULL,\n    field_provenance_json TEXT NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n);\n\nCREATE INDEX idx_bibliographic_semantic_profiles_hash\n    ON bibliographic_semantic_profiles(input_hash);\nINSERT INTO _migrations (name, applied_at) VALUES ('0047_bibliographic_semantic_profiles', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0048_bibliography_profile_tasks: per-work profile tasks and embeddings (E3b-WU2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0048_bibliography_profile_tasks']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0032/0040/0041/0042/0043/0044/0045/0046/0047): the whole body goes inside\n-- one BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a\n-- crash between DDL and bookkeeping can never leave a half-applied 0048\n-- behind.\n--\n-- Two changes:\n-- 1. The kind CHECK on processing_tasks and processing_batch_tasks widens to\n--    admit 'bibliography_profile'. SQLite cannot ALTER a CHECK, so both\n--    tables are rebuilt preserving every column, both task indexes, every\n--    FK, and every row byte-identically (dependents are backed up and\n--    recreated verbatim). processing_batches is untouched: its origin CHECK\n--    already admits 'bibliography' and 0046's priority column survives\n--    because this migration never drops that table.\n-- 2. bibliographic_item_embeddings stores one vector per (work, contract)\n--    under the effective embedding contract, with the profile input hash it\n--    was computed from. Generations (plan §6) arrive in E3c without breaking\n--    this key: a generation column can be added later without rewriting\n--    identity.\n\nPRAGMA defer_foreign_keys=ON;\n\nCREATE TABLE _backup_0048_processing_tasks AS SELECT * FROM processing_tasks;\nCREATE TABLE _backup_0048_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;\nCREATE TABLE _backup_0048_processing_attempts AS SELECT * FROM processing_attempts;\nCREATE TABLE _backup_0048_processing_checkpoints AS SELECT * FROM processing_checkpoints;\n\nDROP TABLE processing_checkpoints;\nDROP TABLE processing_attempts;\nDROP TABLE processing_batch_tasks;\nDROP TABLE processing_tasks;\n\nCREATE TABLE processing_tasks (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile')),\n  asset_id_snapshot TEXT NOT NULL,\n  input_revision INTEGER NOT NULL DEFAULT 0,\n  input_fingerprint TEXT NOT NULL DEFAULT '',\n  contract_hash TEXT NOT NULL DEFAULT '',\n  state TEXT NOT NULL CHECK(state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted', 'succeeded', 'failed', 'skipped', 'cancelled')),\n  stage TEXT NOT NULL DEFAULT '',\n  progress_done INTEGER NOT NULL DEFAULT 0 CHECK(progress_done >= 0),\n  progress_total INTEGER NOT NULL DEFAULT 0 CHECK(progress_total >= 0),\n  outcome TEXT NOT NULL DEFAULT '',\n  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),\n  retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  next_retry_at INTEGER,\n  owner_session TEXT,\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  heartbeat_at INTEGER,\n  lease_expires_at INTEGER,\n  last_error_code TEXT,\n  last_error_message TEXT,\n  result_receipt_json TEXT,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  source_invalidation_count INTEGER NOT NULL DEFAULT 0,\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT ''\n);\nCREATE INDEX idx_processing_tasks_claimable\n  ON processing_tasks(state, next_retry_at, id);\nCREATE UNIQUE INDEX idx_processing_tasks_subject_active_unique\n  ON processing_tasks(domain, subject_kind, subject_id, kind)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nCREATE TABLE processing_batch_tasks (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id),\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile')),\n  asset_id_snapshot TEXT NOT NULL,\n  request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),\n  dependency_task_id TEXT REFERENCES processing_tasks(id),\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT '',\n  PRIMARY KEY (batch_id, task_id)\n);\nCREATE INDEX idx_processing_batch_tasks_task\n  ON processing_batch_tasks(task_id, request_state);\nCREATE INDEX idx_processing_batch_tasks_batch\n  ON processing_batch_tasks(batch_id, task_id);\nCREATE TABLE processing_attempts (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  started_at INTEGER NOT NULL,\n  finished_at INTEGER,\n  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),\n  retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),\n  error_code TEXT,\n  error_message TEXT,\n  provider_request_id TEXT,\n  PRIMARY KEY (task_id, attempt_number)\n);\nCREATE INDEX idx_processing_attempts_task\n  ON processing_attempts(task_id, attempt_number);\nCREATE TABLE processing_checkpoints (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  unit_key TEXT NOT NULL,\n  input_fingerprint TEXT NOT NULL,\n  contract_hash TEXT NOT NULL,\n  payload TEXT NOT NULL DEFAULT '{}',\n  payload_checksum TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  PRIMARY KEY (task_id, unit_key)\n);\n\nINSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)\n  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0048_processing_tasks;\nINSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)\n  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0048_processing_batch_tasks;\nINSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)\n  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0048_processing_attempts;\nINSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)\n  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0048_processing_checkpoints;\n\nDROP TABLE _backup_0048_processing_checkpoints;\nDROP TABLE _backup_0048_processing_attempts;\nDROP TABLE _backup_0048_processing_batch_tasks;\nDROP TABLE _backup_0048_processing_tasks;\n\nCREATE TABLE bibliographic_item_embeddings (\n    item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n    embedding_contract TEXT NOT NULL,\n    embedding_model TEXT NOT NULL,\n    dimensions INTEGER NOT NULL,\n    embedding BLOB NOT NULL,\n    input_hash TEXT NOT NULL,\n    profile_revision INTEGER NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL,\n    PRIMARY KEY (item_id, embedding_contract)\n);\n\nCREATE INDEX idx_bibliographic_item_embeddings_hash\n    ON bibliographic_item_embeddings(input_hash);\n\n-- Rebuilding processing_tasks and processing_batch_tasks above dropped the\n-- claim index, the dependency index and the settle trigger that\n-- 0038_processing_settle_on_terminal created on them. Restore them verbatim\n-- so the queue keeps settling dependents on every terminal transition.\nCREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id\n  ON processing_tasks(state, id);\n\nCREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency\n  ON processing_batch_tasks(dependency_task_id)\n  WHERE dependency_task_id IS NOT NULL;\n\nCREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents\nAFTER UPDATE OF state ON processing_tasks\nWHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state\nBEGIN\n  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND outcome = 'open'\n     AND task_id IN (\n       SELECT l.task_id FROM processing_batch_tasks l\n         JOIN processing_tasks t ON t.id = l.task_id\n        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');\n  UPDATE processing_tasks\n     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',\n         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,\n         updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\n  UPDATE processing_tasks\n     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state = 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0048_bibliography_profile_tasks', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0049_bibliographic_index_generations: immutable embedding contracts and\n-- index generations with a single-global-active pointer (E3c-WU1).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0049_bibliographic_index_generations']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier processing/bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0049 behind.\n--\n-- Plan sections 6 and E3c: one immutable row names a vector space\n-- (provider, model, dimensions, chunking — the resolution inputs of\n-- resolve_effective_embedding_contract); each generation builds vectors for\n-- exactly that space. expected_inputs is the manifest of eligible works a\n-- generation must complete before it may become active; completed_inputs is\n-- its progress. Exactly one generation may be active at a time (partial\n-- unique index): the queryable space is singular, so equal dimensions never\n-- get compared across spaces. Retiring the active generation with no\n-- replacement is legitimate — retrieval then serves the labeled lexical\n-- fallback until a new generation completes.\n\nCREATE TABLE bibliographic_embedding_contracts (\n    contract_hash TEXT PRIMARY KEY,\n    provider TEXT NOT NULL,\n    model TEXT NOT NULL,\n    dimensions INTEGER NOT NULL,\n    chunking_contract TEXT NOT NULL,\n    created_at INTEGER NOT NULL\n);\n\nCREATE TABLE bibliographic_index_generations (\n    id TEXT PRIMARY KEY,\n    contract_hash TEXT NOT NULL REFERENCES bibliographic_embedding_contracts(contract_hash),\n    status TEXT NOT NULL CHECK(status IN ('staging', 'active', 'retired')),\n    expected_inputs INTEGER NOT NULL DEFAULT 0,\n    completed_inputs INTEGER NOT NULL DEFAULT 0,\n    created_at INTEGER NOT NULL,\n    activated_at INTEGER,\n    retired_at INTEGER\n);\n\nCREATE UNIQUE INDEX idx_bibliographic_generations_single_active\n    ON bibliographic_index_generations(contract_hash)\n    WHERE status = 'active';\n\nCREATE INDEX idx_bibliographic_generations_contract\n    ON bibliographic_index_generations(contract_hash, status);\nINSERT INTO _migrations (name, applied_at) VALUES ('0049_bibliographic_index_generations', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0050_bibliographic_embedding_generations: generation identity on work\n-- embeddings (E3c-WU2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0050_bibliographic_embedding_generations']); this file mirrors\n-- it for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier processing/bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0050 behind.\n--\n-- Plan sections 6 and E3c demand uniqueness per object/generation: the\n-- primary key moves from (item_id, embedding_contract) to\n-- (item_id, generation_id), and every row names the generation it was\n-- computed in. Rows already stored predate the generation lifecycle, so the\n-- migration gives them honest ancestry instead of fabricating it: for each\n-- distinct stored contract it registers the contract row (provider/model/\n-- dimensions taken from the stored rows; chunking recorded as unknown) and\n-- one retired legacy generation — retired, never queryable — then points\n-- the restored rows at it. Nothing is dropped; no vector is relabeled as\n-- freshly gated.\n--\n-- E3c-WU3 retrieval reads only vectors stamped with the active generation\n-- of the query contract.\n\nPRAGMA defer_foreign_keys=ON;\n\nCREATE TABLE _backup_0050_item_embeddings AS SELECT * FROM bibliographic_item_embeddings;\n\nDROP TABLE bibliographic_item_embeddings;\n\nCREATE TABLE bibliographic_item_embeddings (\n    item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n    generation_id TEXT NOT NULL REFERENCES bibliographic_index_generations(id),\n    embedding_contract TEXT NOT NULL,\n    embedding_model TEXT NOT NULL,\n    dimensions INTEGER NOT NULL,\n    embedding BLOB NOT NULL,\n    input_hash TEXT NOT NULL,\n    profile_revision INTEGER NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL,\n    PRIMARY KEY (item_id, generation_id)\n);\n\nCREATE INDEX idx_bibliographic_item_embeddings_hash\n    ON bibliographic_item_embeddings(input_hash);\n\nCREATE INDEX idx_bibliographic_item_embeddings_generation\n    ON bibliographic_item_embeddings(generation_id, item_id);\n\nINSERT INTO bibliographic_embedding_contracts\n  (contract_hash, provider, model, dimensions, chunking_contract, created_at)\n  SELECT DISTINCT embedding_contract, 'unknown', embedding_model, dimensions, '', strftime('%s', 'now')\n    FROM _backup_0050_item_embeddings\n    WHERE embedding_contract NOT IN (SELECT contract_hash FROM bibliographic_embedding_contracts);\n\nINSERT INTO bibliographic_index_generations\n  (id, contract_hash, status, expected_inputs, completed_inputs, created_at, retired_at)\n  SELECT 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract, 'retired',\n         COUNT(*), COUNT(*), strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000\n    FROM _backup_0050_item_embeddings\n   GROUP BY embedding_contract;\n\nINSERT INTO bibliographic_item_embeddings\n  (item_id, generation_id, embedding_contract, embedding_model, dimensions, embedding,\n   input_hash, profile_revision, created_at, updated_at)\n  SELECT item_id, 'gen-legacy-' || substr(embedding_contract, 1, 12), embedding_contract,\n         embedding_model, dimensions, embedding, input_hash, profile_revision, created_at, updated_at\n    FROM _backup_0050_item_embeddings;\n\nDROP TABLE _backup_0050_item_embeddings;\nINSERT INTO _migrations (name, applied_at) VALUES ('0050_bibliographic_embedding_generations', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0051_bibliographic_profile_fts: lexical search over work profiles (E3c-WU3).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0051_bibliographic_profile_fts']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0051 behind.\n--\n-- Plan section 6 \"Indices FTS bibliograficos\": FTS5 over the canonical text\n-- of every stored profile, maintained transactionally by triggers on the\n-- profile table — a profile write and its index row commit together, and a\n-- profile delete removes its index row in the same statement. The index is\n-- reconstructible: deleting and re-inserting every profile row rebuilds it.\n-- Retrieval ranks with bm25 and always joins back to the profile row, so a\n-- lexical hit can never describe a work whose profile no longer exists.\n\nCREATE VIRTUAL TABLE bibliographic_profile_fts USING fts5(\n    item_id UNINDEXED,\n    canonical_text,\n    tokenize = 'unicode61 remove_diacritics 1'\n);\n\nCREATE TRIGGER bibliographic_profile_fts_insert AFTER INSERT ON bibliographic_semantic_profiles\nBEGIN\n    INSERT INTO bibliographic_profile_fts(item_id, canonical_text)\n    VALUES (NEW.item_id, NEW.canonical_text);\nEND;\n\nCREATE TRIGGER bibliographic_profile_fts_delete AFTER DELETE ON bibliographic_semantic_profiles\nBEGIN\n    DELETE FROM bibliographic_profile_fts WHERE item_id = OLD.item_id;\nEND;\n\nCREATE TRIGGER bibliographic_profile_fts_update AFTER UPDATE OF canonical_text ON bibliographic_semantic_profiles\nBEGIN\n    DELETE FROM bibliographic_profile_fts WHERE item_id = OLD.item_id;\n    INSERT INTO bibliographic_profile_fts(item_id, canonical_text)\n    VALUES (NEW.item_id, NEW.canonical_text);\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0051_bibliographic_profile_fts', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0052_bibliographic_extraction_tasks: native extraction tasks and rows (E4a-WU2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0052_bibliographic_extraction_tasks']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier processing/bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0052 behind.\n--\n-- Two changes:\n-- 1. The kind CHECK on processing_tasks and processing_batch_tasks widens to\n--    admit 'bibliography_extract'. SQLite cannot ALTER a CHECK, so both\n--    tables are rebuilt preserving every column, both task indexes, every\n--    FK, and every row byte-identically (dependents are backed up and\n--    recreated verbatim). processing_batches is untouched.\n-- 2. bibliographic_extractions stores one native-text row per attachment:\n--    whole-document text plus page count, quality verdict, and the source\n--    file identity (mtime/size) the text was read from, so a replaced file\n--    never passes as current. Per-page rows arrive with selective OCR (E4b)\n--    under their own migration; this table's one-row-per-attachment shape\n--    stays the whole-document native record.\n--\n-- Plan section 6 \"Limpieza local\": these rows are managed derivatives — a\n-- catalog row delete cascades, citations never touch them.\n\nPRAGMA defer_foreign_keys=ON;\n\nCREATE TABLE _backup_0052_processing_tasks AS SELECT * FROM processing_tasks;\nCREATE TABLE _backup_0052_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;\nCREATE TABLE _backup_0052_processing_attempts AS SELECT * FROM processing_attempts;\nCREATE TABLE _backup_0052_processing_checkpoints AS SELECT * FROM processing_checkpoints;\n\nDROP TABLE processing_checkpoints;\nDROP TABLE processing_attempts;\nDROP TABLE processing_batch_tasks;\nDROP TABLE processing_tasks;\n\nCREATE TABLE processing_tasks (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract')),\n  asset_id_snapshot TEXT NOT NULL,\n  input_revision INTEGER NOT NULL DEFAULT 0,\n  input_fingerprint TEXT NOT NULL DEFAULT '',\n  contract_hash TEXT NOT NULL DEFAULT '',\n  state TEXT NOT NULL CHECK(state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted', 'succeeded', 'failed', 'skipped', 'cancelled')),\n  stage TEXT NOT NULL DEFAULT '',\n  progress_done INTEGER NOT NULL DEFAULT 0 CHECK(progress_done >= 0),\n  progress_total INTEGER NOT NULL DEFAULT 0 CHECK(progress_total >= 0),\n  outcome TEXT NOT NULL DEFAULT '',\n  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),\n  retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  next_retry_at INTEGER,\n  owner_session TEXT,\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  heartbeat_at INTEGER,\n  lease_expires_at INTEGER,\n  last_error_code TEXT,\n  last_error_message TEXT,\n  result_receipt_json TEXT,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  source_invalidation_count INTEGER NOT NULL DEFAULT 0,\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT ''\n);\nCREATE INDEX idx_processing_tasks_claimable\n  ON processing_tasks(state, next_retry_at, id);\nCREATE UNIQUE INDEX idx_processing_tasks_subject_active_unique\n  ON processing_tasks(domain, subject_kind, subject_id, kind)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nCREATE TABLE processing_batch_tasks (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id),\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract')),\n  asset_id_snapshot TEXT NOT NULL,\n  request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),\n  dependency_task_id TEXT REFERENCES processing_tasks(id),\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT '',\n  PRIMARY KEY (batch_id, task_id)\n);\nCREATE INDEX idx_processing_batch_tasks_task\n  ON processing_batch_tasks(task_id, request_state);\nCREATE INDEX idx_processing_batch_tasks_batch\n  ON processing_batch_tasks(batch_id, task_id);\nCREATE TABLE processing_attempts (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  started_at INTEGER NOT NULL,\n  finished_at INTEGER,\n  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),\n  retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),\n  error_code TEXT,\n  error_message TEXT,\n  provider_request_id TEXT,\n  PRIMARY KEY (task_id, attempt_number)\n);\nCREATE INDEX idx_processing_attempts_task\n  ON processing_attempts(task_id, attempt_number);\nCREATE TABLE processing_checkpoints (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  unit_key TEXT NOT NULL,\n  input_fingerprint TEXT NOT NULL,\n  contract_hash TEXT NOT NULL,\n  payload TEXT NOT NULL DEFAULT '{}',\n  payload_checksum TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  PRIMARY KEY (task_id, unit_key)\n);\n\nINSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)\n  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0052_processing_tasks;\nINSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)\n  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0052_processing_batch_tasks;\nINSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)\n  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0052_processing_attempts;\nINSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)\n  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0052_processing_checkpoints;\n\nDROP TABLE _backup_0052_processing_checkpoints;\nDROP TABLE _backup_0052_processing_attempts;\nDROP TABLE _backup_0052_processing_batch_tasks;\nDROP TABLE _backup_0052_processing_tasks;\n\nCREATE TABLE bibliographic_extractions (\n    attachment_id TEXT PRIMARY KEY NOT NULL REFERENCES zotero_attachments(id) ON DELETE CASCADE,\n    item_id TEXT NOT NULL,\n    page_count INTEGER NOT NULL,\n    method TEXT NOT NULL CHECK(method IN ('native')),\n    text_content TEXT NOT NULL,\n    text_hash TEXT NOT NULL,\n    text_chars INTEGER NOT NULL,\n    quality TEXT NOT NULL CHECK(quality IN ('rich', 'sparse', 'empty')),\n    source_mtime INTEGER,\n    source_bytes INTEGER NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL\n);\n\nCREATE INDEX idx_bibliographic_extractions_item\n    ON bibliographic_extractions(item_id);\n\n-- Rebuilding processing_tasks and processing_batch_tasks above dropped the\n-- claim index, the dependency index and the settle trigger that\n-- 0038_processing_settle_on_terminal created on them. Restore them verbatim\n-- so the queue keeps settling dependents on every terminal transition.\nCREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id\n  ON processing_tasks(state, id);\n\nCREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency\n  ON processing_batch_tasks(dependency_task_id)\n  WHERE dependency_task_id IS NOT NULL;\n\nCREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents\nAFTER UPDATE OF state ON processing_tasks\nWHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state\nBEGIN\n  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND outcome = 'open'\n     AND task_id IN (\n       SELECT l.task_id FROM processing_batch_tasks l\n         JOIN processing_tasks t ON t.id = l.task_id\n        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');\n  UPDATE processing_tasks\n     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',\n         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,\n         updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\n  UPDATE processing_tasks\n     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state = 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\nEND;\nINSERT INTO _migrations (name, applied_at) VALUES ('0052_bibliographic_extraction_tasks', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0053_bibliographic_page_texts: per-page native texts (E4b-WU2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0053_bibliographic_page_texts']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0053 behind.\n--\n-- One row per (attachment, 1-based page): the native text layer of exactly\n-- that page with its own hash and quality verdict, so E4b-WU3's selective\n-- OCR can skip rich pages and supplement sparse ones without re-reading\n-- the file. The method CHECK already admits 'ocr' rows — nothing writes\n-- them yet; the selective pass arrives in E4b-WU3 and documents its own\n-- writes. The 'unreadable' quality is for pages no engine could read\n-- (E4b-WU4 owns those states); the native fill stores it when lopdf\n-- cannot decode a page it counted.\n--\n-- Managed derivatives like the whole-document row: a catalog row delete\n-- cascades.\n\nCREATE TABLE bibliographic_page_texts (\n    attachment_id TEXT NOT NULL REFERENCES zotero_attachments(id) ON DELETE CASCADE,\n    page_number INTEGER NOT NULL CHECK(page_number >= 1),\n    method TEXT NOT NULL CHECK(method IN ('native', 'ocr')),\n    text_content TEXT NOT NULL,\n    text_hash TEXT NOT NULL,\n    text_chars INTEGER NOT NULL,\n    quality TEXT NOT NULL CHECK(quality IN ('rich', 'sparse', 'empty', 'unreadable')),\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL,\n    PRIMARY KEY (attachment_id, page_number)\n);\n\nCREATE INDEX idx_bibliographic_page_texts_attachment\n    ON bibliographic_page_texts(attachment_id, page_number);\nINSERT INTO _migrations (name, applied_at) VALUES ('0053_bibliographic_page_texts', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0054_bibliographic_chunks: structural work chunks and spans (E4c-WU1).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0054_bibliographic_chunks']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0054 behind.\n--\n-- One chunk row per (work, ordinal) with its text, hash, and the chunking\n-- contract that produced it; one span row per page range the chunk covers,\n-- with exact offsets into the page's text — including chunks that span\n-- pages. Re-chunking replaces a work's set atomically (delete + insert in\n-- the publisher transaction), so a top-insert that shifts ordinals never\n-- leaves half-old sets behind. Chunk vectors live in their own table\n-- (E4c-WU2) keyed by chunk id and generation. Managed derivatives: catalog\n-- deletes cascade.\n\nCREATE TABLE bibliographic_chunks (\n    id TEXT PRIMARY KEY,\n    item_id TEXT NOT NULL REFERENCES bibliographic_items(id) ON DELETE CASCADE,\n    attachment_id TEXT NOT NULL REFERENCES zotero_attachments(id) ON DELETE CASCADE,\n    ordinal INTEGER NOT NULL,\n    text_content TEXT NOT NULL,\n    text_hash TEXT NOT NULL,\n    chunking_contract TEXT NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL,\n    UNIQUE(item_id, ordinal)\n);\n\nCREATE TABLE bibliographic_chunk_spans (\n    chunk_id TEXT NOT NULL REFERENCES bibliographic_chunks(id) ON DELETE CASCADE,\n    page_number INTEGER NOT NULL,\n    start_char INTEGER NOT NULL,\n    end_char INTEGER NOT NULL,\n    PRIMARY KEY (chunk_id, page_number, start_char)\n);\n\nCREATE INDEX idx_bibliographic_chunks_item\n    ON bibliographic_chunks(item_id, ordinal);\nINSERT INTO _migrations (name, applied_at) VALUES ('0054_bibliographic_chunks', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0055_bibliographic_chunk_embeddings: chunk vectors per generation (E4c-WU2).\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0055_bibliographic_chunk_embeddings']); this file mirrors it\n-- for review and for the Rust processing tests (include_str!). Keep both\n-- identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- earlier bibliography migrations): the whole body goes inside one\n-- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n-- between DDL and bookkeeping can never leave a half-applied 0055 behind.\n--\n-- One vector per (chunk, generation) under the effective embedding\n-- contract, stamping the chunk text hash it was computed from — the same\n-- identity shape as work embeddings (plan section 6: FK to chunk,\n-- contract/generation, vector, dimension, input hash, date; uniqueness per\n-- object/generation). Re-chunking deletes a work's chunks and the vectors\n-- cascade; re-embedding a live chunk upserts its generation row.\n-- Retrieval (E4d) reads only the active generation of the query contract.\n\nCREATE TABLE bibliographic_chunk_embeddings (\n    chunk_id TEXT NOT NULL REFERENCES bibliographic_chunks(id) ON DELETE CASCADE,\n    generation_id TEXT NOT NULL REFERENCES bibliographic_index_generations(id),\n    embedding_contract TEXT NOT NULL,\n    embedding_model TEXT NOT NULL,\n    dimensions INTEGER NOT NULL,\n    embedding BLOB NOT NULL,\n    input_hash TEXT NOT NULL,\n    created_at INTEGER NOT NULL,\n    updated_at INTEGER NOT NULL,\n    PRIMARY KEY (chunk_id, generation_id)\n);\n\nCREATE INDEX idx_bibliographic_chunk_embeddings_generation\n    ON bibliographic_chunk_embeddings(generation_id, chunk_id);\n\nCREATE INDEX idx_bibliographic_chunk_embeddings_hash\n    ON bibliographic_chunk_embeddings(input_hash);\nINSERT INTO _migrations (name, applied_at) VALUES ('0055_bibliographic_chunk_embeddings', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0056_bibliographic_ingest_operations: durable pending tray (E5a-WU1).\n  --\n  -- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n  -- (MIGRATIONS['0056_bibliographic_ingest_operations']); this file mirrors it\n  -- for review and for the Rust processing tests (include_str!). Keep both\n  -- identical.\n  --\n  -- Runs through the trigger-safe single-batch path in runMigrations() (same as\n  -- earlier bibliography migrations): the whole body goes inside one\n  -- BEGIN IMMEDIATE ... COMMIT together with the _migrations row, so a crash\n  -- between DDL and bookkeeping can never leave a half-applied 0056 behind.\n  --\n  -- One row per explicit user decision: link an existing work or create a\n  -- parent (and eventually upload an attachment) in one library. `request_id`\n  -- is the idempotency key — double-clicks record exactly one operation.\n  -- Receipts carry the verified Zotero identity (item key/version) that E5c\n  -- gates processing demand on. Recovery parks `running` rows back to\n  -- `queued`: every transport op is idempotent by request or by key, so a\n  -- retry after a crash never duplicates a record.\n\n  CREATE TABLE bibliographic_ingest_operations (\n      id TEXT PRIMARY KEY,\n      request_id TEXT NOT NULL UNIQUE,\n      kind TEXT NOT NULL CHECK(kind IN ('link_match', 'create_parent', 'upload_attachment')),\n      library_id TEXT NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n      payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),\n      state TEXT NOT NULL CHECK(state IN ('queued', 'running', 'blocked', 'succeeded', 'failed', 'cancelled')),\n      attempt_count INTEGER NOT NULL DEFAULT 0,\n      receipt_json TEXT,\n      last_error_code TEXT,\n      last_error_message TEXT,\n      created_at INTEGER NOT NULL,\n      updated_at INTEGER NOT NULL\n  );\n\n  CREATE INDEX idx_bibliographic_ingest_operations_state\n      ON bibliographic_ingest_operations(state, library_id);\nINSERT INTO _migrations (name, applied_at) VALUES ('0056_bibliographic_ingest_operations', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- Web sources and their captures (Navegador, docs/navegador/plan.md section 5).\n--\n-- A web source is one page the person saved from the in-app browser. It\n-- belongs to no collection and no library, so there is no corpus foreign key.\n-- A capture is one saved version of it: a page snapshot, a selection or a PDF.\n-- Captures never change once written; a new capture is a new row, so earlier\n-- evidence is never overwritten.\n--\n-- Time columns: accessed_at and first_accessed_at are provenance, kept as the\n-- RFC 3339 UTC text the person saw when they saved (the form CSL and Zotero\n-- take as \"accessed\"). created_at and updated_at follow the rest of the\n-- archive: epoch milliseconds.\n--\n-- Files live under <data>/web-captures/<web_source_id>/<capture_id>.<ext>;\n-- rel_path and text_rel_path hold the relative key, never an absolute path.\n-- Text up to 512 KB stays in text; larger text goes to text_rel_path.\n--\n-- Local only for now: nothing here is in the sync set.\n\nCREATE TABLE IF NOT EXISTS web_sources (\n  id                TEXT    PRIMARY KEY,\n  original_url      TEXT    NOT NULL,\n  final_url         TEXT    NOT NULL,\n  canonical_url     TEXT,\n  title             TEXT,\n  site_name         TEXT,\n  first_accessed_at TEXT    NOT NULL,\n  created_at        INTEGER NOT NULL,\n  updated_at        INTEGER NOT NULL\n);\n\n-- Not unique on purpose: two devices may each save the same page before they\n-- meet, and sync must be able to hold both.\nCREATE INDEX IF NOT EXISTS idx_web_sources_final_url ON web_sources (final_url);\nCREATE INDEX IF NOT EXISTS idx_web_sources_updated ON web_sources (updated_at DESC);\n\nCREATE TABLE IF NOT EXISTS web_captures (\n  id                TEXT    PRIMARY KEY,\n  web_source_id     TEXT    NOT NULL REFERENCES web_sources(id) ON DELETE CASCADE,\n  accessed_at       TEXT    NOT NULL,\n  final_url         TEXT    NOT NULL,\n  kind              TEXT    NOT NULL CHECK (kind IN ('page', 'selection', 'pdf')),\n  mime_type         TEXT    NOT NULL,\n  text              TEXT    CHECK (text IS NULL OR length(CAST(text AS BLOB)) <= 524288),\n  text_rel_path     TEXT,\n  quote_prefix      TEXT,\n  quote_suffix      TEXT,\n  rel_path          TEXT,\n  sha256            TEXT    NOT NULL,\n  hash_of           TEXT    NOT NULL CHECK (hash_of IN ('html', 'quote', 'pdf')),\n  size_bytes        INTEGER NOT NULL,\n  extractor_version TEXT,\n  title             TEXT,\n  created_at        INTEGER NOT NULL\n);\n\nCREATE INDEX IF NOT EXISTS idx_web_captures_source ON web_captures (web_source_id, accessed_at DESC);\nINSERT INTO _migrations (name, applied_at) VALUES ('0057_web_captures', 1700000000);\nCOMMIT;",
+      "params": []
+    },
+    {
+      "command": "db_execute_batch",
+      "sql": "BEGIN IMMEDIATE;\n-- 0058_processing_ner_tasks: entity and triple extraction as batch work.\n--\n-- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts\n-- (MIGRATIONS['0058_processing_ner_tasks']); this file mirrors it for review\n-- and for the Rust processing tests (include_str!). Keep both identical.\n--\n-- Runs through the trigger-safe single-batch path in runMigrations() (same as\n-- 0052): the whole body goes inside one BEGIN IMMEDIATE ... COMMIT together\n-- with the _migrations row.\n--\n-- The kind CHECK on processing_tasks and processing_batch_tasks widens to\n-- admit 'ner' and 'triples' (corpus/asset work from the batch tab). Both\n-- kinds land in one rebuild so triples never needs a second one. SQLite\n-- cannot ALTER a CHECK, so both tables are rebuilt preserving every column,\n-- index, FK and row byte-identically, exactly like 0052.\n\nPRAGMA defer_foreign_keys=ON;\n\nCREATE TABLE _backup_0058_processing_tasks AS SELECT * FROM processing_tasks;\nCREATE TABLE _backup_0058_processing_batch_tasks AS SELECT * FROM processing_batch_tasks;\nCREATE TABLE _backup_0058_processing_attempts AS SELECT * FROM processing_attempts;\nCREATE TABLE _backup_0058_processing_checkpoints AS SELECT * FROM processing_checkpoints;\n\nDROP TABLE processing_checkpoints;\nDROP TABLE processing_attempts;\nDROP TABLE processing_batch_tasks;\nDROP TABLE processing_tasks;\n\nCREATE TABLE processing_tasks (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples', 'schema_extract')),\n  asset_id_snapshot TEXT NOT NULL,\n  input_revision INTEGER NOT NULL DEFAULT 0,\n  input_fingerprint TEXT NOT NULL DEFAULT '',\n  contract_hash TEXT NOT NULL DEFAULT '',\n  state TEXT NOT NULL CHECK(state IN ('pending', 'blocked', 'running', 'retry_wait', 'interrupted', 'succeeded', 'failed', 'skipped', 'cancelled')),\n  stage TEXT NOT NULL DEFAULT '',\n  progress_done INTEGER NOT NULL DEFAULT 0 CHECK(progress_done >= 0),\n  progress_total INTEGER NOT NULL DEFAULT 0 CHECK(progress_total >= 0),\n  outcome TEXT NOT NULL DEFAULT '',\n  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),\n  retry_cycle INTEGER NOT NULL DEFAULT 0 CHECK(retry_cycle >= 0),\n  retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),\n  next_retry_at INTEGER,\n  owner_session TEXT,\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  heartbeat_at INTEGER,\n  lease_expires_at INTEGER,\n  last_error_code TEXT,\n  last_error_message TEXT,\n  result_receipt_json TEXT,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL,\n  source_invalidation_count INTEGER NOT NULL DEFAULT 0,\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT ''\n);\nCREATE INDEX idx_processing_tasks_claimable\n  ON processing_tasks(state, next_retry_at, id);\nCREATE UNIQUE INDEX idx_processing_tasks_subject_active_unique\n  ON processing_tasks(domain, subject_kind, subject_id, kind)\n  WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');\nCREATE TABLE processing_batch_tasks (\n  batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id),\n  kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding', 'bibliography_sync', 'bibliography_profile', 'bibliography_extract', 'ner', 'triples', 'schema_extract')),\n  asset_id_snapshot TEXT NOT NULL,\n  request_state TEXT NOT NULL DEFAULT 'active' CHECK(request_state IN ('active', 'paused', 'cancelled')),\n  dependency_task_id TEXT REFERENCES processing_tasks(id),\n  domain TEXT NOT NULL DEFAULT 'corpus' CHECK(domain IN ('corpus', 'bibliography')),\n  subject_kind TEXT NOT NULL DEFAULT 'asset' CHECK(subject_kind IN ('asset', 'library', 'item', 'attachment', 'page_range')),\n  subject_id TEXT NOT NULL DEFAULT '',\n  PRIMARY KEY (batch_id, task_id)\n);\nCREATE INDEX idx_processing_batch_tasks_task\n  ON processing_batch_tasks(task_id, request_state);\nCREATE INDEX idx_processing_batch_tasks_batch\n  ON processing_batch_tasks(batch_id, task_id);\nCREATE TABLE processing_attempts (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),\n  lease_epoch INTEGER NOT NULL DEFAULT 0,\n  started_at INTEGER NOT NULL,\n  finished_at INTEGER,\n  outcome TEXT NOT NULL DEFAULT 'open' CHECK(outcome IN ('open', 'succeeded', 'failed', 'interrupted', 'cancelled')),\n  retryable INTEGER NOT NULL DEFAULT 0 CHECK(retryable IN (0, 1)),\n  error_code TEXT,\n  error_message TEXT,\n  provider_request_id TEXT,\n  PRIMARY KEY (task_id, attempt_number)\n);\nCREATE INDEX idx_processing_attempts_task\n  ON processing_attempts(task_id, attempt_number);\nCREATE TABLE processing_checkpoints (\n  task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,\n  unit_key TEXT NOT NULL,\n  input_fingerprint TEXT NOT NULL,\n  contract_hash TEXT NOT NULL,\n  payload TEXT NOT NULL DEFAULT '{}',\n  payload_checksum TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  PRIMARY KEY (task_id, unit_key)\n);\n\nINSERT INTO processing_tasks (id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id)\n  SELECT id, kind, asset_id_snapshot, input_revision, input_fingerprint, contract_hash, state, stage, progress_done, progress_total, outcome, attempt_count, retry_cycle, retry_count, next_retry_at, owner_session, lease_epoch, heartbeat_at, lease_expires_at, last_error_code, last_error_message, result_receipt_json, created_at, updated_at, source_invalidation_count, domain, subject_kind, subject_id FROM _backup_0058_processing_tasks;\nINSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id)\n  SELECT batch_id, task_id, kind, asset_id_snapshot, request_state, dependency_task_id, domain, subject_kind, subject_id FROM _backup_0058_processing_batch_tasks;\nINSERT INTO processing_attempts (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id)\n  SELECT task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, retryable, error_code, error_message, provider_request_id FROM _backup_0058_processing_attempts;\nINSERT INTO processing_checkpoints (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)\n  SELECT task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at FROM _backup_0058_processing_checkpoints;\n\nDROP TABLE _backup_0058_processing_checkpoints;\nDROP TABLE _backup_0058_processing_attempts;\nDROP TABLE _backup_0058_processing_batch_tasks;\nDROP TABLE _backup_0058_processing_tasks;\n\n-- Rebuilding processing_tasks and processing_batch_tasks above dropped the\n-- claim index, the dependency index and the settle trigger that\n-- 0038_processing_settle_on_terminal created on them. Restore them verbatim\n-- so the queue keeps settling dependents on every terminal transition.\nCREATE INDEX IF NOT EXISTS idx_processing_tasks_state_id\n  ON processing_tasks(state, id);\n\nCREATE INDEX IF NOT EXISTS idx_processing_batch_tasks_dependency\n  ON processing_batch_tasks(dependency_task_id)\n  WHERE dependency_task_id IS NOT NULL;\n\nCREATE TRIGGER IF NOT EXISTS processing_tasks_settle_dependents\nAFTER UPDATE OF state ON processing_tasks\nWHEN NEW.state IN ('succeeded', 'failed', 'cancelled') AND OLD.state IS NOT NEW.state\nBEGIN\n  UPDATE processing_attempts SET outcome = 'failed', finished_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND outcome = 'open'\n     AND task_id IN (\n       SELECT l.task_id FROM processing_batch_tasks l\n         JOIN processing_tasks t ON t.id = l.task_id\n        WHERE l.dependency_task_id = NEW.id AND t.state = 'blocked');\n  UPDATE processing_tasks\n     SET state = 'failed', outcome = 'dependency_failed', last_error_code = 'dependency_failed',\n         last_error_message = 'dependency ' || NEW.id || ' ended as ' || NEW.state,\n         updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state <> 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\n  UPDATE processing_tasks\n     SET state = 'pending', stage = '', updated_at = strftime('%s', 'now') * 1000\n   WHERE NEW.state = 'succeeded' AND state = 'blocked'\n     AND id IN (SELECT task_id FROM processing_batch_tasks WHERE dependency_task_id = NEW.id);\nEND;\n\n-- Extraction with a user-defined schema (T-51): the user names the fields\n-- (one may repeat: one ship, many cargoes) and a batch fills one record per\n-- thing the text describes. Local to this device for now: sync does not\n-- capture these tables.\nCREATE TABLE IF NOT EXISTS extraction_schemas (\n  id TEXT PRIMARY KEY,\n  name TEXT NOT NULL,\n  fields_json TEXT NOT NULL,\n  -- OpenRouter model for this schema; '' uses the general one (T-26).\n  model TEXT NOT NULL DEFAULT '',\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n);\n\nCREATE TABLE IF NOT EXISTS extraction_records (\n  id TEXT PRIMARY KEY,\n  schema_id TEXT NOT NULL REFERENCES extraction_schemas(id) ON DELETE CASCADE,\n  asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,\n  item_id TEXT NOT NULL,\n  record_json TEXT NOT NULL,\n  created_at INTEGER NOT NULL\n);\n\nCREATE INDEX IF NOT EXISTS idx_extraction_records_schema_asset\n  ON extraction_records(schema_id, asset_id);\nINSERT INTO _migrations (name, applied_at) VALUES ('0058_processing_ner_tasks', 1700000000);\nCOMMIT;",
+      "params": []
+    }
+  ],
+  "repair_drops": [
+    "DROP TRIGGER IF EXISTS trg_processing_extractions_ai;",
+    "DROP TRIGGER IF EXISTS trg_processing_extractions_au;",
+    "DROP TRIGGER IF EXISTS trg_processing_extractions_ad;",
+    "DROP TRIGGER IF EXISTS trg_processing_transcriptions_ai;",
+    "DROP TRIGGER IF EXISTS trg_processing_transcriptions_au;",
+    "DROP TRIGGER IF EXISTS trg_processing_transcriptions_ad;",
+    "DROP TABLE IF EXISTS processing_asset_revisions;",
+    "DROP TABLE IF EXISTS processing_checkpoints;",
+    "DROP TABLE IF EXISTS processing_attempts;",
+    "DROP TABLE IF EXISTS processing_requests;",
+    "DROP TABLE IF EXISTS processing_batch_tasks;",
+    "DROP TABLE IF EXISTS processing_tasks;",
+    "DROP TABLE IF EXISTS processing_batch_members;",
+    "DROP TABLE IF EXISTS processing_batch_collections;",
+    "DROP TABLE IF EXISTS processing_batches;",
+    "DROP TABLE IF EXISTS processing_meta;"
+  ]
+}
