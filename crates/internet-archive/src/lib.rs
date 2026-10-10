@@ -15,6 +15,7 @@ pub mod error;
 pub mod item;
 pub mod job;
 pub mod policy;
+pub mod prepare;
 pub mod resolve;
 pub mod search;
 pub mod store;

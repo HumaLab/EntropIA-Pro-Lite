@@ -107,7 +107,7 @@ collection inventory is persisted (plan §1, D5).
       writes (temp file, fsync, rename), a schema version, listing and
       reloading jobs after a restart, and corrupt files quarantined instead of
       crashing.
-- [ ] 15. Size estimate and duplicate classification (T2.3, T2.4): totals with
+- [x] 15. Size estimate and duplicate classification (T2.3, T2.4): totals with
       unknown sizes counted apart; per selected file `AlreadyInTarget`,
       `InOtherCollection`, `NewVersion` (same remote key, different fingerprint:
       md5, else sha1, else size+mtime) or `New`, against provenance records
@@ -175,6 +175,21 @@ collection inventory is persisted (plan §1, D5).
   orphan staging but never staging pending reconciliation. Added `uuid` and
   dev-dependency `tempfile`. RED: 16 tests against `todo!()` stubs. GREEN: 79.
   Independent verifier: fmt, clippy, 79/79 twice, tests confined to temp dirs.
+- 2026-10-10, task 15: pure `prepare.rs`: `RemoteFingerprint` (md5 > sha1 >
+  size+mtime, hex lowercased), `same_version` (strongest kind both sides have;
+  `None` when incomparable), `ProvenanceLookup` trait for the app's SQLite
+  lookup, `classify` (AlreadyInTarget > NewVersion > InOtherCollection > New;
+  incomparable counts as a match, conservatively; sorted records for
+  determinism), `summarize` and the synced-volume estimate (2x known bytes of
+  files that would be imported; other-collection bytes apart). RED: 2 failing
+  tests against stubs. GREEN: 104. Independent verifier: fmt, clippy, 104/104
+  twice, module pure, only a test-only `allow(clippy::too_many_arguments)`.
+- 2026-10-10, Phase 2 close: collection browsing, job model, job store and
+  preparation logic done at crate level. App wiring (SQLite `ProvenanceLookup`,
+  data dir, commands) moves with Phases 3-4. Phase 2 acceptance (inventory a
+  paginated collection, close and reopen without losing the selection, no
+  implicit download) holds at crate level: `job.json` survives restart through
+  `recover_all`; nothing downloads yet.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
