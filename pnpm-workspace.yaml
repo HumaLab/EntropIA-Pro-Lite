@@ -3,3 +3,26 @@ packages:
   - 'packages/*'
 onlyBuiltDependencies:
   - esbuild
+
+# Versions shared by packages/ui (which uses them) and apps/desktop (which
+# redeclares them so Vite prebundles a single copy from the app's resolution
+# root; see apps/desktop/vite.config.ts). Change them here, once.
+catalog:
+  '@tiptap/core': ^2.26.4
+  '@tiptap/extension-document': ^2.26.4
+  '@tiptap/extension-gapcursor': ^2.26.4
+  '@tiptap/extension-highlight': ^2.26.4
+  '@tiptap/extension-link': ^2.26.4
+  '@tiptap/extension-placeholder': ^2.26.4
+  '@tiptap/extension-subscript': ^2.26.4
+  '@tiptap/extension-superscript': ^2.26.4
+  '@tiptap/extension-table': ^2.26.4
+  '@tiptap/extension-table-cell': ^2.26.4
+  '@tiptap/extension-table-header': ^2.26.4
+  '@tiptap/extension-table-row': ^2.26.4
+  '@tiptap/extension-text-align': ^2.26.4
+  '@tiptap/extension-text-style': ^2.26.4
+  '@tiptap/extension-underline': ^2.26.4
+  '@tiptap/pm': ^2.26.4
+  '@tiptap/starter-kit': ^2.26.4
+  'leaflet': ^1.9.4

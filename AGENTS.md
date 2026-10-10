@@ -44,6 +44,12 @@
 - Vite dev server is fixed to port `1420` for Tauri and ignores `src-tauri/**` watches.
 - Desktop Vite pins dependency prebundling and `noDiscovery` to avoid stale optimized chunks in Tauri WebView; be careful when adding new bare runtime imports from linked workspace packages.
 
+## Dependencies
+
+- `@tiptap/*` and `leaflet` versions live in the `catalog:` of `pnpm-workspace.yaml`; both `packages/ui` and `apps/desktop` reference them as `catalog:`. Change a version there, once.
+- `apps/desktop` redeclares the editor packages `packages/ui` uses on purpose: Vite prebundles them from the app's own resolution root, and a package it optimizes without the app depending on it resolves through the linked workspace, loading a second `prosemirror-state` that ProseMirror rejects. Add a new Tiptap/ProseMirror runtime dependency to both packages and to `optimizeDeps.include` in `apps/desktop/vite.config.ts`.
+- Two Markdown renderers coexist on purpose: `apps/desktop/src/lib/markdown.ts` renders untrusted LLM output (RAG chat, research, investigation reports) and escapes all HTML first, so its output is safe for `{@html}`; `markdown-it` renders OCR text only (`lib/ocr-rich-text.ts`), which needs raw HTML and full tables and is sanitized afterwards by `sanitizeOcrHtml`. Do not route LLM output through `markdown-it`.
+
 ## Style constraints already encoded in config
 
 - ESLint warnings allow `_`-prefixed unused args/vars, rest-sibling stripping, and `any`; do not “fix” those patterns blindly.
