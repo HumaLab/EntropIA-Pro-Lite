@@ -591,6 +591,7 @@ describe('AssetRepo', () => {
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
         executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction: vi.fn().mockResolvedValue(undefined),
         select: vi.fn().mockResolvedValue([]),
       } as unknown as DbClient
       const repoWithRaw = new AssetRepo(db.db, rawClient)
@@ -600,7 +601,7 @@ describe('AssetRepo', () => {
       )
     })
 
-    it('returns the deleted asset and executes batch delete', async () => {
+    it('returns the deleted asset and executes one parameterized transaction', async () => {
       const asset = {
         id: 'asset-1',
         itemId: 'item-1',
@@ -614,37 +615,47 @@ describe('AssetRepo', () => {
       const selectResult = createChainMock([asset])
       ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
 
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
         executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([asset]),
-      } as unknown as DbClient & { executeBatch: ReturnType<typeof vi.fn> }
+      } as unknown as DbClient & { executeTransaction: ReturnType<typeof vi.fn> }
       const repoWithRaw = new AssetRepo(db.db, rawClient)
 
       const result = await repoWithRaw.deleteWithCascade('asset-1')
 
       expect(result).toEqual(asset)
-      expect(rawClient.executeBatch).toHaveBeenCalledOnce()
-      const batchSql = rawClient.executeBatch.mock.calls[0]?.[0] as string
-      expect(batchSql).toContain('BEGIN;')
-      expect(batchSql).toContain('DELETE FROM extractions')
-      expect(batchSql).toContain('DELETE FROM layouts')
-      expect(batchSql).toContain('DELETE FROM transcriptions')
-      expect(batchSql).toContain('DELETE FROM llm_results')
-      expect(batchSql).toContain('DELETE FROM annotations')
-      expect(batchSql).toContain('DELETE FROM entities')
-      expect(batchSql).toContain('DELETE FROM triples')
-      expect(batchSql).toContain('DELETE FROM vec_assets')
-      expect(batchSql).toContain(
-        "DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = 'asset-1')"
+      expect(executeTransaction).toHaveBeenCalledOnce()
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      const sql = statements.map((statement) => statement.sql).join('\n')
+      // The command holds the transaction; every entry is a single statement.
+      expect(sql).not.toContain('BEGIN')
+      expect(sql).not.toContain('COMMIT')
+      expect(statements.every((statement) => !statement.sql.includes(';'))).toBe(true)
+      expect(sql).toContain('DELETE FROM extractions')
+      expect(sql).toContain('DELETE FROM layouts')
+      expect(sql).toContain('DELETE FROM transcriptions')
+      expect(sql).toContain('DELETE FROM llm_results')
+      expect(sql).toContain('DELETE FROM annotations')
+      expect(sql).toContain('DELETE FROM entities')
+      expect(sql).toContain('DELETE FROM triples')
+      expect(sql).toContain('DELETE FROM vec_assets')
+      expect(sql).toContain(
+        'DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)'
       )
-      expect(batchSql).toContain(
-        "DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = 'asset-1')"
+      expect(sql).toContain(
+        'DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)'
       )
-      expect(batchSql).toContain('DELETE FROM assets WHERE parent_asset_id')
-      expect(batchSql).toContain('DELETE FROM assets')
-      expect(batchSql).toContain('COMMIT;')
-      expect(batchSql).toContain('asset-1')
+      expect(sql).toContain('DELETE FROM assets WHERE parent_asset_id = ?')
+      expect(sql).toContain('DELETE FROM assets WHERE id = ?')
+      // The id travels bound, never interpolated into the SQL.
+      expect(statements.some((statement) => statement.sql.includes('asset-1'))).toBe(false)
+      expect(statements.every((statement) => statement.params.includes('asset-1'))).toBe(true)
     })
 
     it('removes only deleted asset scoped derived data', async () => {
@@ -705,27 +716,43 @@ describe('AssetRepo', () => {
       const selectResult = createChainMock([asset])
       ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
 
+      const executeTransaction = vi.fn().mockImplementation(
+        async (statements: Array<{ sql: string; params?: unknown[] }>) => {
+          for (const { sql } of statements) {
+            if (sql.includes('DELETE FROM extractions')) {
+              tables.extractions = tables.extractions.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM layouts')) {
+              tables.layouts = tables.layouts.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM transcriptions')) {
+              tables.transcriptions = tables.transcriptions.filter(
+                (row) => row.asset_id !== 'asset-1'
+              )
+            } else if (sql.includes('DELETE FROM llm_results')) {
+              tables.llm_results = tables.llm_results.filter(
+                (row) =>
+                  !(
+                    row.target_id === 'asset-1' &&
+                    (row.target_type === 'asset' || row.target_type === 'unknown')
+                  )
+              )
+            } else if (sql.includes('DELETE FROM annotations')) {
+              tables.annotations = tables.annotations.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM entities')) {
+              tables.entities = tables.entities.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM triples')) {
+              tables.triples = tables.triples.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM vec_assets')) {
+              tables.vec_assets = tables.vec_assets.filter((row) => row.asset_id !== 'asset-1')
+            } else if (sql.includes('DELETE FROM assets')) {
+              tables.assets = tables.assets.filter((row) => row.id !== 'asset-1')
+            }
+          }
+        }
+      )
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: vi.fn().mockImplementation(async (sql: string) => {
-          expect(sql).toContain('BEGIN')
-          expect(sql).toContain('COMMIT')
-          tables.extractions = tables.extractions.filter((row) => row.asset_id !== 'asset-1')
-          tables.layouts = tables.layouts.filter((row) => row.asset_id !== 'asset-1')
-          tables.transcriptions = tables.transcriptions.filter((row) => row.asset_id !== 'asset-1')
-          tables.llm_results = tables.llm_results.filter(
-            (row) =>
-              !(
-                row.target_id === 'asset-1' &&
-                (row.target_type === 'asset' || row.target_type === 'unknown')
-              )
-          )
-          tables.annotations = tables.annotations.filter((row) => row.asset_id !== 'asset-1')
-          tables.entities = tables.entities.filter((row) => row.asset_id !== 'asset-1')
-          tables.triples = tables.triples.filter((row) => row.asset_id !== 'asset-1')
-          tables.vec_assets = tables.vec_assets.filter((row) => row.asset_id !== 'asset-1')
-          tables.assets = tables.assets.filter((row) => row.id !== 'asset-1')
-        }),
+        executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([asset]),
       } as unknown as DbClient
       const repoWithRaw = new AssetRepo(db.db, rawClient)
@@ -733,6 +760,7 @@ describe('AssetRepo', () => {
       const result = await repoWithRaw.deleteWithCascade('asset-1')
 
       expect(result).toEqual(asset)
+      expect(executeTransaction).toHaveBeenCalledOnce()
       expect(tables.assets).toEqual([otherAsset])
       expect(tables.extractions).toEqual([{ id: 'extraction-2', asset_id: 'asset-2' }])
       expect(tables.layouts).toEqual([{ id: 'layout-2', asset_id: 'asset-2' }])
@@ -747,7 +775,7 @@ describe('AssetRepo', () => {
       ])
     })
 
-    it('escapes asset ids inside the transactional batch', async () => {
+    it('binds an asset id with single quotes instead of interpolating it', async () => {
       const asset = {
         id: "asset-'quoted",
         itemId: 'item-1',
@@ -760,21 +788,30 @@ describe('AssetRepo', () => {
       const selectResult = createChainMock([asset])
       ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
 
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeBatch: vi.fn(),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([asset]),
-      } as unknown as DbClient & { executeBatch: ReturnType<typeof vi.fn> }
+      } as unknown as DbClient & { executeTransaction: ReturnType<typeof vi.fn> }
       const repoWithRaw = new AssetRepo(db.db, rawClient)
 
       await repoWithRaw.deleteWithCascade("asset-'quoted")
 
-      const batchSql = rawClient.executeBatch.mock.calls[0]?.[0] as string
-      expect(batchSql).toContain("asset-''quoted")
-      expect(batchSql).not.toContain("asset-'quoted';")
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      expect(
+        statements.some((statement) => statement.sql.includes("asset-'quoted"))
+      ).toBe(false)
+      expect(
+        statements.every((statement) => statement.params.includes("asset-'quoted"))
+      ).toBe(true)
     })
 
-    it('rethrows error when batch execution fails', async () => {
+    it('rethrows error when the transaction fails', async () => {
       const asset = {
         id: 'asset-1',
         itemId: 'item-1',
@@ -790,7 +827,8 @@ describe('AssetRepo', () => {
 
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: vi.fn().mockRejectedValue(new Error('constraint violation')),
+        executeBatch: vi.fn(),
+        executeTransaction: vi.fn().mockRejectedValue(new Error('constraint violation')),
         select: vi.fn().mockResolvedValue([asset]),
       } as unknown as DbClient
       const repoWithRaw = new AssetRepo(db.db, rawClient)
@@ -798,7 +836,8 @@ describe('AssetRepo', () => {
       await expect(repoWithRaw.deleteWithCascade('asset-1')).rejects.toThrow(
         'Failed to delete asset cascade for asset-1: constraint violation'
       )
-      expect(rawClient.executeBatch).toHaveBeenCalledWith('ROLLBACK')
+      // The command is atomic and rolls back server-side; the repo sends no ROLLBACK.
+      expect(rawClient.executeBatch).not.toHaveBeenCalled()
     })
   })
 })

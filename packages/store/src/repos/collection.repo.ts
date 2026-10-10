@@ -93,10 +93,11 @@ export class CollectionRepo {
    * Delete a collection and ALL its associated data.
    *
    * Two-phase approach:
-   * Phase 1 (atomic): Core tables that ALWAYS exist — wrapped in BEGIN/COMMIT.
-   *   If any statement fails, the whole transaction rolls back.
+   * Phase 1 (atomic): Core tables that ALWAYS exist, executed by the database
+   *   command in one transaction. A failing statement rolls the whole delete
+   *   back server-side, so the repo sends no BEGIN/COMMIT/ROLLBACK.
    * Phase 2 (best-effort): Derived/optional tables that may not exist
-   *   (`fts_items`, `vec_assets`). These are cleaned up
+   *   (`vec_assets`). These are cleaned up
    *   after Phase 1 succeeds.
    *   Failures here are silently ignored — they're index/cache data.
    *
@@ -104,57 +105,81 @@ export class CollectionRepo {
    * @throws Error if the core transaction fails
    */
   async delete(id: string): Promise<void> {
-    if (!this.rawClient) {
+    const rawClient = this.rawClient
+    if (!rawClient?.executeTransaction) {
       throw new Error('delete requires a rawClient for transactional execution')
     }
 
-    const esc = id.replace(/'/g, "''")
-
     // Step 0: Get item IDs before deleting (needed for optional table cleanup)
-    const itemRows = await this.rawClient.select(
-      `SELECT id FROM items WHERE collection_id = '${esc}'`,
-      []
+    const itemRows = await rawClient.select<{ id: string }>(
+      'SELECT id FROM items WHERE collection_id = ?',
+      [id]
     )
-    const itemIds = itemRows.map((r: Record<string, unknown>) => r.id as string)
-    const itemIdsList = itemIds.map((i) => `'${(i as string).replace(/'/g, "''")}'`).join(',')
+    const itemIds = itemRows.map((row) => row.id)
 
     // Phase 1: Atomic transaction for core tables (always exist)
     try {
-      await this.rawClient.executeBatch(`
-        BEGIN;
-        DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}'));
-        DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}'));
-        DELETE FROM llm_results WHERE (target_type = 'asset' OR target_type = 'unknown') AND target_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}'));
-        DELETE FROM llm_results WHERE (target_type = 'item' OR target_type = 'unknown') AND target_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
-        DELETE FROM llm_results WHERE target_id = '${esc}' AND (target_type = 'collection' OR target_type = 'unknown');
-        DELETE FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
-        DELETE FROM entities WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
-        DELETE FROM triples WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
-        DELETE FROM notes WHERE item_id IN (SELECT id FROM items WHERE collection_id = '${esc}');
-        DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE collection_id = '${esc}');
-        DELETE FROM items WHERE collection_id = '${esc}';
-        DELETE FROM collections WHERE id = '${esc}';
-        COMMIT;
-      `)
+      await rawClient.executeTransaction([
+        {
+          sql: 'DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?))',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?))',
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM llm_results WHERE (target_type = 'asset' OR target_type = 'unknown') AND target_id IN (SELECT id FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?))",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM llm_results WHERE (target_type = 'item' OR target_type = 'unknown') AND target_id IN (SELECT id FROM items WHERE collection_id = ?)",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM llm_results WHERE target_id = ? AND (target_type = 'collection' OR target_type = 'unknown')",
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM assets WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM entities WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM triples WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM notes WHERE item_id IN (SELECT id FROM items WHERE collection_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE collection_id = ?)',
+          params: [id],
+        },
+        { sql: 'DELETE FROM items WHERE collection_id = ?', params: [id] },
+        { sql: 'DELETE FROM collections WHERE id = ?', params: [id] },
+      ])
     } catch (e) {
-      try {
-        await this.rawClient.executeBatch('ROLLBACK')
-      } catch {
-        /* rollback is best-effort; preserve the original failure */
-      }
-
       throw new Error(
         `Failed to delete collection ${id}: ${e instanceof Error ? e.message : String(e)}`
       )
     }
 
     // Phase 2: Best-effort cleanup for optional tables (items already deleted, use cached IDs)
-    if (itemIdsList.length > 0) {
+    if (itemIds.length > 0) {
       this.ftsRepo?.forgetVocabulary()
 
       // Asset embedding vectors
       try {
-        await this.rawClient.execute(`DELETE FROM vec_assets WHERE item_id IN (${itemIdsList})`)
+        const placeholders = itemIds.map(() => '?').join(', ')
+        await rawClient.execute(
+          `DELETE FROM vec_assets WHERE item_id IN (${placeholders})`,
+          itemIds
+        )
       } catch {
         /* table may not exist — non-fatal */
       }
