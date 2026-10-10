@@ -26,7 +26,7 @@ false positives (GLM reads those fine; owner accepts the overtreatment).
 - [x] T2 — Measure v3 on a DB copy (recreate via the sqlite backup API; the
   940 MB copy was deleted twice already), update
   odd/reports/native-text-detector-measurement.md with a v3 section.
-- [ ] T3 — Preview in tauri dev, record the new cost. No paid confirm without
+- [x] T3 — Preview in tauri dev, record the new cost. No paid confirm without
   the owner.
 
 ## Evidence
@@ -40,3 +40,8 @@ false positives (GLM reads those fine; owner accepts the overtreatment).
   Abulafia 1,204); stored rows 845 in 31 attachments (v2: 599/21). New flags
   read by hand: shredded leftovers, spaced-letter damage in 3 works (true),
   TOC/math/table pages (accepted overtreatment). Report updated.
+- T3 (tauri dev from this branch, prueba-sync, over CDP): preview 33
+  attachments, 3,603 pages, 279 for GLM-OCR, 1,348 reused, 277 fixed without
+  OCR, estimated USD 0.0251. Owner pre-authorized spending: confirmed. Batch
+  finished with 158/158 succeeded, 0 failed. Abulafia: native rich 358 -> 182,
+  OCR rich 1,089 -> 1,248.
