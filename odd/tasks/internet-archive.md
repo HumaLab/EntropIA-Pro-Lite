@@ -12,6 +12,12 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
 
 ## Decisions
 
+- 2026-10-10, Phase 0: job state lives in
+  `<data_dir>/staging/internet-archive/<job>/job.json` (atomic writes); the
+  connector adds no migration. Provenance key `__entropia_internet_archive`.
+  Encrypted (`LCP`/`ACS`, `.lcpdf`) and `private` files are never offered. MVP
+  collection browsing uses Advanced Search; the Scraping API is deferred.
+
 - Rust owns network, staging and job state; the frontend imports each `verified`
   file with `importClassifiedPathsIntoCollection` (plan §4). No Rust port of the
   importer.
@@ -42,7 +48,7 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
       fix the provenance key, confirm job tables stay out of `SYNCED_TABLES`, and
       decide whether job state needs a migration (T0.4, T0.6).
 - [x] 5. Write the security checklist and test plan (T0.5).
-- [ ] 6. Write `docs/internet-archive/auditoria-fase-0.md` with real paths,
+- [x] 6. Write `docs/internet-archive/auditoria-fase-0.md` with real paths,
       reused functions, required migrations and risks; get the user's go-ahead
       for Phase 1.
 
@@ -77,3 +83,8 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
   kept), security checklist and test plan written to the Phase 0 audit. Real API
   responses saved as fixtures under `docs/internet-archive/fixtures/` (local).
   Pending the user's approval (task 6).
+- 2026-10-10, task 6: the user delegated D3; chose `job.json` (no migration, no
+  `schema_tag` change, out of sync by construction). Phase 0 corrections applied to
+  `docs/internet-archive/plan.md` (encrypted PDFs excluded, Advanced Search for
+  collection browsing, `dn*.ca.archive.org` hosts, `job.json`, restricted marker
+  from `fl[]`). Phase 0 closed; Phase 1 needs the user's go-ahead.
