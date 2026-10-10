@@ -10,7 +10,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::client::IaClient;
+use crate::client::{FetchKind, IaClient};
 use crate::error::IaError;
 use crate::search::{is_valid_identifier, Endpoints};
 
@@ -198,7 +198,10 @@ impl IaClient {
 
         let mut attempt: u32 = 0;
         loop {
-            let response = match self.fetch_final_response(url.clone()).await {
+            let response = match self
+                .fetch_final_response(url.clone(), FetchKind::Download)
+                .await
+            {
                 Ok(response) => response,
                 Err(IaError::Network(_)) if attempt < retry.max_retries => {
                     backoff_sleep(retry, attempt).await;
@@ -349,6 +352,7 @@ async fn stream_to_partial(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::Timeouts;
     use crate::policy::FetchPolicy;
     use crate::test_support::TestServer;
     use url::Url;
@@ -512,6 +516,90 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, IaError::FileTooLarge { .. }), "got {err:?}");
+        assert!(!dest.exists());
+        assert!(!partial_of(&dest).exists());
+    }
+
+    #[tokio::test]
+    async fn download_slower_than_json_total_succeeds_with_idle_timeout() {
+        // 10 one-byte chunks spaced 60 ms apart take ~540 ms on the wire:
+        // past a 200 ms total budget, but fine under a 300 ms idle budget.
+        let body: Vec<u8> = (0..10u8).collect();
+        let server = TestServer::start(vec![TestServer::chunked(
+            "/download/myid/slow.pdf",
+            200,
+            vec![("Content-Length".into(), body.len().to_string())],
+            body.clone(),
+            1,
+            Duration::from_millis(60),
+        )]);
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(10),
+            json_total: Duration::from_millis(200),
+            download_idle: Duration::from_millis(300),
+            download_total: Duration::from_secs(30),
+        };
+        let client = IaClient::with_timeouts(FetchPolicy::loopback_for_tests(), timeouts);
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("slow.pdf");
+        let limits = DownloadLimits::clamped(None);
+        let n = client
+            .download_file_with_retry(
+                &local_endpoints(&server),
+                "myid",
+                "slow.pdf",
+                &dest,
+                &limits,
+                None,
+                &RetryPolicy::no_delay(),
+            )
+            .await
+            .expect("download under the idle budget must succeed");
+        assert_eq!(n as usize, body.len());
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
+        assert!(!partial_of(&dest).exists());
+    }
+
+    #[tokio::test]
+    async fn download_idle_stall_maps_to_network_without_trace() {
+        let body = b"0123456789".to_vec();
+        let server = TestServer::start(vec![TestServer::stall(
+            "/download/myid/stall.pdf",
+            200,
+            vec![("Content-Length".into(), body.len().to_string())],
+            body,
+            Duration::from_secs(1),
+        )]);
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(10),
+            json_total: Duration::from_secs(30),
+            download_idle: Duration::from_millis(200),
+            download_total: Duration::from_secs(30),
+        };
+        let client = IaClient::with_timeouts(FetchPolicy::loopback_for_tests(), timeouts);
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("stall.pdf");
+        let limits = DownloadLimits::clamped(None);
+        let retry = RetryPolicy {
+            max_retries: 0,
+            base_delay: Duration::ZERO,
+        };
+        let err = client
+            .download_file_with_retry(
+                &local_endpoints(&server),
+                "myid",
+                "stall.pdf",
+                &dest,
+                &limits,
+                None,
+                &retry,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IaError::Network(_)),
+            "idle stall must map to Network, got {err:?}"
+        );
         assert!(!dest.exists());
         assert!(!partial_of(&dest).exists());
     }

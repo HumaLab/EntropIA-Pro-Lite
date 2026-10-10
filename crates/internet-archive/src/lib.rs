@@ -26,7 +26,7 @@ pub mod store;
 pub mod test_support;
 pub mod verify;
 
-pub use client::IaClient;
+pub use client::{IaClient, Timeouts};
 pub use download::{
     DownloadLimits, RetryPolicy, ABSOLUTE_MAX_DOWNLOAD_BYTES, DEFAULT_MAX_DOWNLOAD_BYTES,
 };

@@ -21,17 +21,62 @@ use crate::{
 /// are deterministic across requests.
 const COLLECTION_SORT: &str = "identifier asc";
 
+/// Separate timeouts for short JSON metadata calls and bulk downloads.
+///
+/// JSON calls keep the historic total timeout; downloads use an idle
+/// (per-read) timeout plus a generous total ceiling so a large PDF that
+/// transfers slower than the JSON budget still completes, while a
+/// stuck-but-trickling server cannot hold a job forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timeouts {
+    /// TCP connect timeout for every call.
+    pub connect: Duration,
+    /// Total timeout for JSON calls (connect + response body).
+    pub json_total: Duration,
+    /// Idle (per-read) timeout for downloads: no body bytes for this
+    /// long fails the download.
+    pub download_idle: Duration,
+    /// Total ceiling for downloads.
+    pub download_total: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            connect: CONNECT_TIMEOUT,
+            json_total: REQUEST_TIMEOUT,
+            download_idle: Duration::from_secs(60),
+            download_total: Duration::from_secs(4 * 60 * 60),
+        }
+    }
+}
+
+/// Which kind of call [`IaClient::fetch_final_response`] performs: JSON
+/// calls keep the total timeout, downloads use idle + total timeouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchKind {
+    Json,
+    Download,
+}
+
 /// Strict client: validates policy and addresses on every hop, pins the
 /// validated address, follows redirects manually, and caps the body.
 #[derive(Debug, Clone)]
 pub struct IaClient {
     policy: FetchPolicy,
+    timeouts: Timeouts,
 }
 
 impl IaClient {
-    /// Build a client for the given policy.
+    /// Build a client for the given policy with default [`Timeouts`].
     pub fn new(policy: FetchPolicy) -> Self {
-        Self { policy }
+        Self::with_timeouts(policy, Timeouts::default())
+    }
+
+    /// Build a client for the given policy with explicit timeouts, so
+    /// tests and callers can shrink them.
+    pub fn with_timeouts(policy: FetchPolicy, timeouts: Timeouts) -> Self {
+        Self { policy, timeouts }
     }
 
     /// GET `url` as JSON, rejecting bodies larger than `max_bytes`. Redirects
@@ -46,7 +91,7 @@ impl IaClient {
         let initial = Url::parse(url).map_err(|e| IaError::Blocked {
             reason: format!("invalid URL: {e}"),
         })?;
-        let response = self.fetch_final_response(initial).await?;
+        let response = self.fetch_final_response(initial, FetchKind::Json).await?;
         let status = response.status();
         if status.as_u16() == 429 {
             let retry_after = parse_retry_after(response.headers());
@@ -92,6 +137,7 @@ impl IaClient {
     pub(crate) async fn fetch_final_response(
         &self,
         initial: Url,
+        kind: FetchKind,
     ) -> Result<reqwest::Response, IaError> {
         let mut current = initial;
         for hops in 0..=MAX_REDIRECTS {
@@ -99,10 +145,24 @@ impl IaClient {
             let pin = self.pinned_addr(&current).await?;
             let mut builder = reqwest::Client::builder()
                 .redirect(Policy::none())
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
+                .connect_timeout(self.timeouts.connect)
                 .user_agent(USER_AGENT)
                 .no_proxy();
+            // JSON calls keep the historic total timeout. Downloads use
+            // an idle (per-read) timeout plus a generous total ceiling,
+            // so a large PDF that transfers slower than the JSON budget
+            // still completes while a stuck server cannot hold a job
+            // forever (plan §7 point 4).
+            match kind {
+                FetchKind::Json => {
+                    builder = builder.timeout(self.timeouts.json_total);
+                }
+                FetchKind::Download => {
+                    builder = builder
+                        .read_timeout(self.timeouts.download_idle)
+                        .timeout(self.timeouts.download_total);
+                }
+            }
             if let Some((domain, addr)) = &pin {
                 builder = builder.resolve(domain.as_str(), *addr);
             }
@@ -603,6 +663,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(got["title"], "hello");
+    }
+
+    #[tokio::test]
+    async fn json_trickle_past_total_timeout_fails() {
+        // 7 one-byte chunks spaced 60 ms apart take ~360 ms on the wire:
+        // past the 200 ms JSON total budget, proving JSON keeps its total
+        // timeout even though the download idle budget is generous.
+        let server = TestServer::start(vec![TestServer::chunked(
+            "/trickle",
+            200,
+            vec![("Content-Type".into(), "application/json".into())],
+            br#"{"v":1}"#.to_vec(),
+            1,
+            Duration::from_millis(60),
+        )]);
+        let timeouts = Timeouts {
+            connect: Duration::from_secs(10),
+            json_total: Duration::from_millis(200),
+            download_idle: Duration::from_secs(5),
+            download_total: Duration::from_secs(30),
+        };
+        let client = IaClient::with_timeouts(FetchPolicy::loopback_for_tests(), timeouts);
+        let res: Result<serde_json::Value, _> = client
+            .get_json(&format!("{}/trickle", server.base()), 1024)
+            .await;
+        assert!(
+            matches!(res, Err(IaError::Network(_))),
+            "JSON past its total budget must fail with Network, got {res:?}"
+        );
     }
 
     #[tokio::test]

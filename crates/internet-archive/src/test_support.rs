@@ -9,6 +9,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Canned answer served for one exact path.
 pub struct Route {
@@ -16,6 +17,9 @@ pub struct Route {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    chunk_size: usize,
+    chunk_delay: Duration,
+    stall_after_headers: Duration,
 }
 
 /// Local test server. Routing matches the path part of the request target;
@@ -36,6 +40,9 @@ impl TestServer {
                 ("Content-Length".to_string(), "0".to_string()),
             ],
             body: Vec::new(),
+            chunk_size: 0,
+            chunk_delay: Duration::ZERO,
+            stall_after_headers: Duration::ZERO,
         }
     }
 
@@ -50,6 +57,9 @@ impl TestServer {
                 ("Content-Length".to_string(), bytes.len().to_string()),
             ],
             body: bytes,
+            chunk_size: 0,
+            chunk_delay: Duration::ZERO,
+            stall_after_headers: Duration::ZERO,
         }
     }
 
@@ -60,6 +70,50 @@ impl TestServer {
             status,
             headers,
             body,
+            chunk_size: 0,
+            chunk_delay: Duration::ZERO,
+            stall_after_headers: Duration::ZERO,
+        }
+    }
+
+    /// Build a route whose body is sent in `chunk_size`-byte pieces with
+    /// `chunk_delay` slept between pieces, so the transfer trickles.
+    pub fn chunked(
+        path: &str,
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        chunk_size: usize,
+        chunk_delay: Duration,
+    ) -> Route {
+        Route {
+            path: path.to_string(),
+            status,
+            headers,
+            body,
+            chunk_size: chunk_size.max(1),
+            chunk_delay,
+            stall_after_headers: Duration::ZERO,
+        }
+    }
+
+    /// Build a route that sends its headers, then stalls `stall` before
+    /// the body, so readers observe an idle connection.
+    pub fn stall(
+        path: &str,
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        stall: Duration,
+    ) -> Route {
+        Route {
+            path: path.to_string(),
+            status,
+            headers,
+            body,
+            chunk_size: 0,
+            chunk_delay: Duration::ZERO,
+            stall_after_headers: stall,
         }
     }
 
@@ -100,12 +154,22 @@ impl TestServer {
                     .unwrap_or(&target)
                     .to_string();
                 let route = routes.iter().find(|r| r.path == path_only);
-                let (status, headers, body) = match route {
-                    Some(r) => (r.status, r.headers.clone(), r.body.clone()),
+                let (status, headers, body, chunk_size, chunk_delay, stall) = match route {
+                    Some(r) => (
+                        r.status,
+                        r.headers.clone(),
+                        r.body.clone(),
+                        r.chunk_size,
+                        r.chunk_delay,
+                        r.stall_after_headers,
+                    ),
                     None => (
                         404,
                         vec![("Content-Length".to_string(), "0".to_string())],
                         Vec::new(),
+                        0,
+                        Duration::ZERO,
+                        Duration::ZERO,
                     ),
                 };
                 let mut reply = format!("HTTP/1.1 {status} X\r\nConnection: close\r\n");
@@ -114,7 +178,21 @@ impl TestServer {
                 }
                 reply.push_str("\r\n");
                 let _ = stream.write_all(reply.as_bytes());
-                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+                if !stall.is_zero() {
+                    std::thread::sleep(stall);
+                }
+                if chunk_size == 0 || body.len() <= chunk_size {
+                    let _ = stream.write_all(&body);
+                } else {
+                    for (i, piece) in body.chunks(chunk_size).enumerate() {
+                        if i > 0 {
+                            std::thread::sleep(chunk_delay);
+                        }
+                        let _ = stream.write_all(piece);
+                        let _ = stream.flush();
+                    }
+                }
             }
         });
         Self { base, targets }

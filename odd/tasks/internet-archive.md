@@ -172,6 +172,11 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       SQLite `ProvenanceLookup` over `items.metadata` key
       `__entropia_internet_archive`, compact provenance record (≤ 64 KB, T3.8),
       and `ia_prepare_import` (creates a `Draft` job and returns its summary).
+- [x] 22a. Download timeout defect (found while planning 22): downloads share
+      the 30 s whole-request timeout of the JSON calls, so any file that takes
+      longer than 30 s to transfer fails. Downloads must use the connect timeout
+      plus an inactivity (read) timeout, per plan §7 point 4; JSON calls keep
+      the total timeout.
 - [ ] 22. Job runner: `ia_start_import`, `ia_cancel_import`,
       `ia_get_import_status`, `ia_list_verified_files`; one job at a time;
       download, verify, record `sha256` and `page_count`; `recover_all` at
@@ -234,6 +239,13 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   `internet_archive` 29, crate 143, `acl_manifest_guard` 6, `ocr::pdf` 92; fmt and
   clippy clean in both; `Cargo.lock` unchanged. Note: the provenance query scans
   `items` (no index on the JSON path); acceptable for the MVP, revisit if slow.
+- 2026-10-10, task 22a: `Timeouts` (connect 10 s, JSON total 30 s, download idle
+  60 s, download ceiling 4 h) and `FetchKind`; downloads use `read_timeout`
+  instead of the total JSON timeout; `IaClient::with_timeouts` for tests. RED: a
+  download trickling past a 200 ms JSON total failed. GREEN: 146 (3 new: slow
+  download succeeds, stalled download fails with no partial left, JSON keeps its
+  total). Parent re-ran fmt, clippy and the crate tests twice, plus the app
+  `internet_archive` tests (29). The defect slipped through the reviewed task 17.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
