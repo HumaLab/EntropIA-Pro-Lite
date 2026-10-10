@@ -15,7 +15,7 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 - [x] P0.2 (C-01) — `rust-lite-linux` CI job on `ubuntu-22.04`: fmt, clippy `-D warnings`, test,
   no features, gated by `detect-rust-changes`. Commit `cd357702`. Pending: observe the job green on
   the PR (needs a push).
-- [ ] P0.3 (E-02 verification) — Pro `.deb` on a clean Ubuntu 22.04 VM without the runtime: does
+- [x] P0.3 (E-02 verification) — Pro `.deb` on a clean Ubuntu 22.04 VM without the runtime: does
   Pdfium load? Manual, needs a VM; cannot run from this session. Static check (2026-10-10):
   CONFIRMED. `resources/lib/linux-x86_64/libpdfium.so` is 49 bytes of ASCII text (also
   `libonnxruntime.so` 54 B and the runtime-pack copies 51/56 B); `tauri.linux.conf.json` bundles
@@ -25,6 +25,12 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   so text degrades to lopdf and page render/thumbnails/OCR fail. Fix belongs to 6.1: fetch the real
   Pdfium for Pro Linux, move the fixtures out of the bundle globs, reject non-ELF/tiny files in the
   resolver. The VM run remains the runtime proof.
+  Runtime check (2026-10-10, clean `ubuntu:22.04` container instead of a VM): the published
+  `EntropIA.Pro_1.0.19_amd64.deb` installs and ships only the text fixtures (`dpkg-deb -c`: 49 B
+  `libpdfium.so`, no `resources/pdfium/`); `dlopen` of the bundled file fails with "file too short"
+  and the system has no `libpdfium.so`. The Linux dev build logs the same failure:
+  `[pdf] Failed to load pdfium from resolved path (.../resources/lib/linux-x86_64/libpdfium.so)`.
+  E-02 exists; the fix is 6.1. Not run: the GUI of the installed .deb (container has no display).
 
 ## Phase 1 — Critical security (small changes)
 
@@ -39,7 +45,9 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   Root `pnpm.overrides` → 1.42.6; `pnpm dedupe` leaves one `prosemirror-model` (1.25.12). RED:
   `pnpm audit --prod` listed prosemirror-view (high); GREEN: gone (high 9 → 8). Frozen install ok;
   UI 847/847 (incl. writing-image-paste); desktop Pro 3488 passed / Lite 3467 passed (247 files
-  each); typechecks clean. Manual paste from a web page / Word still pending (user).
+  each); typechecks clean. Manual (Linux, same session as S-01): HTML pasted from a web page and
+  Word-style HTML keep headings, bold/italic, links and lists; a pasted `<img onerror=…>` probe
+  left no image and ran no script.
 - [x] P1.2 (S-01) — narrow the `fs` plugin scope. Branch `fix/s01-fs-scope`, commits `e751aaf8`
   (frontend never deletes files outside the archive) and `43cdd6c3` (runtime scope). Inventory: every
   frontend plugin-fs path is a dialog pick, a drop, or an archive subdirectory; no frontend flow reads
@@ -55,9 +63,16 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   passed (247 files), lint 0 errors, Lite typecheck 0 errors, clippy Lite clean, Pro clippy only the
   9 known pre-existing errors. Writer subagent failed twice before any tool call (model error); the
   work was done inline as the reported fallback.
-  - Manual check pending (user, dev profile, Windows and Linux): import via dialog; drag-drop a file
-    and a folder onto a collection; sample collection; writing image insert/paste/drop; dictation;
-    audio preview; exports (JSON/CSV/OCR/writing/RAG chat to Downloads); delete item and collection.
+  - Manual check on Linux (2026-10-10, Lite debug build of `fix/s01b-zotero-data-dir-grant`, dev
+    profile `audit-s01`, Xvfb + xdotool, native GTK dialogs): OK with no scope errors in the log —
+    sample collection seeded at first start; import via dialog (PDF); drag-drop of a PDF, a PNG and
+    a WAV; audio preview (`audio-previews/` written and played); writing image via picker, clipboard
+    paste and drop (`writing-images/`); DOCX export with both images and collection JSON export via
+    save dialog; delete item; delete collection. External path: an asset row repointed to a PDF
+    outside the archive (with a `.pages` sibling) was deleted from the UI; DB rows and the in-archive
+    item folder went away, the external PDF and its `.pages` stayed. Dropping a folder answers
+    "Formato no soportado": pre-existing (no frontend code reads directories), not a regression.
+    Not tested: dictation (no audio device, needs an API key), RAG chat export, Windows.
 - [x] P1.2b (S-01 plan step 5) — backend-granted Zotero data dir. Branch
   `fix/s01b-zotero-data-dir-grant`, commit `df91b3bb`. `ZOTERO_DATA_DIR_SETTING_KEY` is now
   `backend_grant.zotero_data_dir`; `settings_set`/`settings_delete` refuse the `backend_grant.`
