@@ -85,6 +85,27 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   Plan step 6 (`import_copy_into_archive`) stays unneeded: no frontend fs read of Zotero paths or
   `source_directory` exists.
 
+## Review follow-ups (branch `fix/audit-review-followups`)
+
+RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
+
+- [x] F1 (#28 R3-003) — `isOutsideDataDir` fails closed before `primeDataDir()`: an unproven path
+  is treated as external, so `deleteAssetFile` and the `.pages` cleanup guards never act on it.
+  Commit `df06541a`. RED: 2 new expectations failed (remove called / `false` before priming);
+  GREEN: file-import, CollectionView, ItemView and layout tests 545/545. The `deleteAssetFile`
+  suite and WorkPane's asset-delete suite now prime the data directory (they relied on the
+  fail-open window).
+- [x] F2 (#27) — bound the `prosemirror-view` override to `^1.42.3` so a future major is not
+  pulled in silently. Commit `461af098`. Frozen install ok; still one version (1.42.6);
+  `pnpm audit --prod` lists no prosemirror-view.
+- Checks: desktop Pro 3494 passed / 7 skipped (247 files, x3); typechecks clean in both variants;
+  eslint clean. Lite: 3472 passed, but `route-loader.test.ts` (Biblioteca routes) times out at
+  5 s under the full parallel suite in 3 of 4 runs; it passes alone with and without these
+  changes — pre-existing flake, follow-up.
+- No action: #28 R3-001 (the archive root is never granted; `forbid_file` covers dialog/drop
+  grants), #28 R3-002 (cache thumbnail/`.pages` may orphan when the asset delete throws;
+  best-effort cleanup), #27 manual paste check (user).
+
 ## Later phases
 
 - [ ] Phase 2 — vulnerable dependencies (D-01, D-02, D-08, D-03, D-04)
