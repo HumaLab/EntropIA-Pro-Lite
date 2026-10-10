@@ -179,7 +179,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     - Checks: fmt; Lite clippy `-D warnings` and `cargo test` 2724 passed / 0 failed / 34
       ignored; Pro clippy no new findings (9 known in `deps/uv.rs`, `llm/download.rs`), Pro
       `ocr::` 216 and `image_edit` 18 passed.
-  - [ ] 2.4 (D-03) — unused/duplicated deps.
+  - [x] 2.4 (D-03) — unused/duplicated deps. Branch `chore/d03-deps-cleanup`.
+    - `9448104d`: drop `@tauri-apps/plugin-sql` (no TS import, no Rust plugin, no capability).
+    - `50f7a9b2`: the 17 `@tiptap/*` packages and `leaflet` use a pnpm catalog
+      (`pnpm-workspace.yaml`), referenced as `catalog:` by `packages/ui` and `apps/desktop`.
+      The plan's other option (desktop stops declaring them) was rejected: desktop redeclares
+      them so Vite prebundles one copy from its own root; without that a second
+      `prosemirror-state` loads (`vite.config.ts` comment). `AGENTS.md` gains a Dependencies
+      section: the catalog rule, that redeclaration rule, and why `lib/markdown.ts` (untrusted
+      LLM output, HTML escaped first) and `markdown-it` (OCR only, sanitized by
+      `sanitizeOcrHtml` at all three call sites) coexist.
+    - Checks: lock keeps every resolved version (only plugin-sql removed); one version per
+      `@tiptap/*` and leaflet 1.9.4 only; `pnpm build` ok; store 374, UI 847, desktop Pro 3507
+      passed; Lite 3485 + 1 failed: the known `route-loader.test.ts` 5 s timeout (passes alone
+      with and without the change; fixed by PR #31, which is not in this stack); typecheck 0
+      errors; lint clean.
   - [ ] 2.5 (D-04) — test tooling (vitest, happy-dom, vite).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
 - [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
