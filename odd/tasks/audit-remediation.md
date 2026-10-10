@@ -261,6 +261,19 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       clean (Pro: only the 9 known); desktop Pro 3510, Lite 3489 (+ known route-loader flake);
       store 377; typecheck and lint clean (3 pre-existing lint warnings in untouched files).
     - [ ] S-02d — manual: fresh install and main views in a dev profile (user).
+    - RDD, per slice: S-02a `review-66bda845393ff635` approved (no findings); S-02b
+      `review-ee05776b5134c924` approved, reviewed WITHOUT the generated
+      `tests/fixtures/migration_ipc.json` (164 KB exceeded the reviewer context budget; user
+      decision; the fixture is covered by the store drift test and the Rust consistency test);
+      S-02c `review-af5009826b333044` approved (high tier, 4 lenses). Both high tiers came from
+      a false-positive "starts processes" signal on `migration_allowlist.rs` (it only prints
+      `pnpm` commands in messages).
+    - Follow-ups from the advisories (non-blocking): R4 a failed migration closes the window,
+      so a reload cannot retry — tell the user to restart the app (`lib/db.ts`); R2 merge the
+      duplicated DropTrigger arms and list `quick_check` in the policy doc table
+      (`authorizer.rs`); R2 small readability notes in `migration_allowlist.rs:92-113` and
+      `migration-ipc-recorder.ts:56-57,102-107`; R1 the rebuild exception drops capture
+      triggers until `sync_ensure_capture` (by design, see S-02c).
 - [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
 - [ ] Phase 5 — performance and observability (P-01..P-04)
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
