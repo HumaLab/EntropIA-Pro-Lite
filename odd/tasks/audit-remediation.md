@@ -214,7 +214,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       dev-only advisories (20 high): brace-expansion and js-yaml via the eslint chain,
       postcss/nanoid via vite, ws via jsdom, source-map-js via coverage; none ships. Follow-up
       for Phase 7 (C-03, supply chain).
-- [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
+- [x] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
   - [x] 3.1 (S-02) — SQLite authorizer on the UI connection (S-02a/b/c) + agent-run dev-profile
     check (S-02d). Branch `fix/s02-sql-authorizer`, PR #41.
   - [x] 3.2 (A-04) — Rust-side rollback in `db_execute_batch` + cascades on
@@ -248,8 +248,12 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `temp/` and `research/`. Stale wording left for later: `dev_profile.rs` module doc
     (configs "cover the whole shared roots") and `file-import.ts:~413` (thumbnails in
     app_data_dir).
-  - [ ] 3.4 (A-05, S-06) — no blocking `ui_conn` in async commands, no keyring I/O under
-    `ui_conn`. Branch `fix/a05-s06-settings-keyring`. Heuristic scan: 17 `async` commands lock
+  - [x] 3.4 (A-05, S-06) — no blocking `ui_conn` in async commands, no keyring I/O under
+    `ui_conn`. Branch `fix/a05-s06-settings-keyring`, PR #45. RDD `review-aa0641b4fe7a6cbe`
+    (high, four lenses, PR slice vs `fix/s05-asset-protocol-scope`) approved. Advisory
+    follow-ups: `settings_get` probes the credential store for a log line under the key lock;
+    empty-value `settings_set` may orphan a keyring entry; duplicated cloud-key check
+    (`ocr/mod.rs`) and secret set sequence (`settings.rs`); hand-rolled guard scanner. Heuristic scan: 17 `async` commands lock
     `ui_conn` outside `spawn_blocking` (settings x4, llm x5, transcription x3, ocr x2, deps x2,
     navegador, nlp, writing publish, zotero_web).
     - [x] A-05a — `settings.rs`: commands on `run_blocking_db_task`; `get_setting` reads the
