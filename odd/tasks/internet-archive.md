@@ -52,6 +52,35 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
       reused functions, required migrations and risks; get the user's go-ahead
       for Phase 1.
 
+## Phase 1 tasks (Rust client, no local writes, no downloads)
+
+Module `apps/desktop/src-tauri/src/internet_archive/`. TDD per task (observed
+RED, then GREEN). Fixtures: real responses from Phase 0 copied to
+`apps/desktop/src-tauri/tests/fixtures/internet_archive/`.
+
+- [ ] 7. HTTP client with a strict fetch policy (T1.1, T1.7): `https` and port
+      443 only, host `archive.org` or `*.archive.org` (suffix boundary), manual
+      redirects (max 5) validated hop by hop, public IPs only via the
+      `url_policy.rs` predicates (exposed `pub(crate)`), resolved IP pinned for the
+      connection, response body caps (16 MB metadata, 4 MB search) enforced while
+      streaming. The policy is injectable so tests can target the local
+      `test_server`; production code cannot build the relaxed policy.
+- [ ] 8. Advanced Search (T1.2): clause-based query builder with Lucene
+      escaping, validated dates, empty or invalid filters rejected, `rows`
+      clamped; request with `fl[]` including `access-restricted-item`; tolerant
+      parsing of `numFound`/`docs`.
+- [ ] 9. Metadata API and PDF selection (T1.3, T1.4): tolerant DTOs (`size`/
+      `mtime` as string, number or missing), PDF candidate rule D2 (exclude
+      `Encrypted` formats, `.lcpdf`, `private: "true"`), cap of 1000 PDFs per item
+      with a truncation flag, normalized output.
+- [ ] 10. Input resolution (T1.5): accept a bare identifier, an
+      `archive.org/details/<id>` URL or a collection URL; reject anything else; no
+      arbitrary endpoints.
+- [ ] 11. Tauri commands `ia_search` and `ia_get_item`: registered in
+      `generate_handler!`, `APP_COMMANDS` and `allow-ia-*` in
+      `capabilities/default.json`; `acl_manifest_guard.rs` green; `cargo check`
+      for Lite (no features) and Pro (`local-ml`).
+
 ## Evidence
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
