@@ -973,7 +973,7 @@ pub fn run() {
 
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
                 .expect("Failed to migrate legacy default OpenRouter model");
-            settings::log_stored_runtime_bootstrap_settings(&ui_conn);
+            settings::log_renderer_written_backend_settings(&ui_conn);
             let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
             if secret_migration.migrated > 0 {
                 eprintln!(
@@ -1313,6 +1313,7 @@ pub fn run() {
             processing::commands::processing_latest_bibliography_sync_status,
             bibliography::commands::bibliography_search_works,
             bibliography::commands::bibliography_open_passage,
+            bibliography::commands::zotero_data_dir_grant,
             bibliography::commands::bibliography_passage_context,
             bibliography::commands::bibliography_library_status,
             bibliography::commands::bibliography_search_passages,

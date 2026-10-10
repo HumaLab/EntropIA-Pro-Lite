@@ -2608,9 +2608,12 @@ pub fn publish_bibliography_profile_output(
 use crate::processing::repository::{parse_extract_contract, ExtractMode};
 
 /// Setting key for the user-configured Zotero profile directory. Stored
-/// copies resolve under `<dir>/storage/<key>/<filename>`; no UI binds it
-/// yet, so an unset key simply makes stored copies unavailable.
-pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "zotero_data_dir";
+/// copies resolve under `<dir>/storage/<key>/<filename>`; an unset key simply
+/// makes stored copies unavailable. Only the backend writes it, from the
+/// native folder picker (`zotero_data_dir::grant_zotero_data_dir`): the
+/// renderer cannot set it, and the legacy `zotero_data_dir` row it once could
+/// is never read (S-01).
+pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "backend_grant.zotero_data_dir";
 
 /// Refusal size for attachment reads: a file above this is not a text
 /// extraction job but a storage problem the user must solve first.

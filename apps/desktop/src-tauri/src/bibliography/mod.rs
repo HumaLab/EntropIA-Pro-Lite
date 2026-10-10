@@ -26,6 +26,7 @@ pub mod validate;
 pub mod vector_index;
 pub mod web_upload;
 pub mod work_view;
+pub mod zotero_data_dir;
 
 pub use detail::*;
 pub use reconciliation::*;

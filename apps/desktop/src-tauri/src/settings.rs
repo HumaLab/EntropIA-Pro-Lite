@@ -27,8 +27,12 @@ pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY: &str = "runtime_bootstrap_public_
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX: &str = "runtime_bootstrap_public_key.";
 /// Key prefixes only the backend may write: `settings_set` and
 /// `settings_delete` refuse them, so a compromised renderer cannot repoint
-/// the managed-runtime download at its own manifest and signing key (S-03).
-const BACKEND_ONLY_SETTING_PREFIXES: [&str; 1] = ["runtime_bootstrap_"];
+/// the managed-runtime download at its own manifest and signing key (S-03)
+/// or the folder the backend reads Zotero attachments from (S-01).
+const BACKEND_ONLY_SETTING_PREFIXES: [&str; 2] = ["runtime_bootstrap_", "backend_grant."];
+/// The legacy, renderer-writable Zotero data directory key: refused too, so a
+/// planted value cannot come back under its old name.
+const LEGACY_ZOTERO_DATA_DIR_KEY: &str = "zotero_data_dir";
 /// Release builds trust only the compiled-in runtime bootstrap source when one
 /// is set; debug builds let stored settings override it to test staging
 /// manifests.
@@ -133,9 +137,10 @@ pub async fn settings_set(
 
 /// Whether the renderer may set or delete `key` through the settings IPC.
 pub(crate) fn is_renderer_writable_setting(key: &str) -> bool {
-    !BACKEND_ONLY_SETTING_PREFIXES
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
+    key != LEGACY_ZOTERO_DATA_DIR_KEY
+        && !BACKEND_ONLY_SETTING_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
 }
 
 fn ensure_renderer_writable_setting(key: &str) -> Result<(), String> {
@@ -168,11 +173,16 @@ fn delete_setting_from_renderer(conn: &rusqlite::Connection, key: &str) -> Resul
     remove_setting_row(conn, key)
 }
 
-/// Logs, without values and without deleting them, the runtime bootstrap
-/// settings found at startup: older builds let the renderer write them.
-pub fn log_stored_runtime_bootstrap_settings(conn: &rusqlite::Connection) {
+/// Logs, without values and without deleting them, the backend-only
+/// settings older builds let the renderer write: the runtime bootstrap source
+/// and the legacy Zotero data directory, which is no longer read.
+pub fn log_renderer_written_backend_settings(conn: &rusqlite::Connection) {
     let keys: Vec<String> = conn
-        .prepare("SELECT key FROM app_settings WHERE key GLOB 'runtime_bootstrap_*' ORDER BY key")
+        .prepare(
+            "SELECT key FROM app_settings
+             WHERE key GLOB 'runtime_bootstrap_*' OR key = 'zotero_data_dir'
+             ORDER BY key",
+        )
         .and_then(|mut stmt| {
             stmt.query_map([], |row| row.get(0))?
                 .collect::<Result<Vec<String>, _>>()
@@ -180,7 +190,7 @@ pub fn log_stored_runtime_bootstrap_settings(conn: &rusqlite::Connection) {
         .unwrap_or_default();
     if !keys.is_empty() {
         eprintln!(
-            "[settings] Stored runtime bootstrap settings found ({}); release builds with a built-in source ignore them",
+            "[settings] Renderer-written settings found ({}); release builds ignore a stored runtime bootstrap source when a built-in one is set, and the legacy Zotero data directory is never read",
             keys.join(", ")
         );
     }
@@ -953,6 +963,25 @@ mod tests {
             delete_setting_from_renderer(&conn, key)
                 .expect_err("a backend-only key must be refused");
             assert_eq!(get_raw_setting(&conn, key).as_deref(), Some("configured"));
+        }
+    }
+
+    // S-01: the Zotero data directory is a root the backend reads attachment
+    // files from, so only the backend's own folder picker may set it.
+    #[test]
+    fn the_renderer_cannot_set_or_delete_the_zotero_data_directory() {
+        let conn = in_memory_settings_db();
+        for key in [
+            crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
+            "zotero_data_dir",
+        ] {
+            set_setting_from_renderer(&conn, key, "/home/ana")
+                .expect_err("a backend-granted key must be refused");
+            assert_eq!(get_raw_setting(&conn, key), None);
+            set_setting(&conn, key, "/home/ana/Zotero").expect("seed");
+            delete_setting_from_renderer(&conn, key)
+                .expect_err("a backend-granted key must be refused");
+            assert!(get_raw_setting(&conn, key).is_some());
         }
     }
 
