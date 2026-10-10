@@ -64,11 +64,11 @@
     "@types/node": "^25.6.0",
     "@types/pdfmake": "^0.3.3",
     "fflate": "0.8.2",
-    "happy-dom": "^17",
+    "happy-dom": "^20.8.9",
     "jsdom": "^26.1.0",
     "svelte": "^5.56.10",
     "svelte-check": "^4",
-    "vite": "^6",
-    "vitest": "^3"
+    "vite": "^6.4.3",
+    "vitest": "^4.1.11"
   }
 }

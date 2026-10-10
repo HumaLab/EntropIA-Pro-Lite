@@ -90,7 +90,7 @@ describe('TranscriptionStore', () => {
 
     await store.startListening(async (event, callback) => {
       callbacks.set(event, callback)
-      return vi.fn()
+      return vi.fn<() => void>()
     })
 
     callbacks.get('transcription:complete')?.({
@@ -119,7 +119,7 @@ describe('TranscriptionStore', () => {
 
     await store.startListening(async (event, callback) => {
       callbacks.set(event, callback)
-      return vi.fn()
+      return vi.fn<() => void>()
     })
 
     callbacks.get('transcription:complete')?.({

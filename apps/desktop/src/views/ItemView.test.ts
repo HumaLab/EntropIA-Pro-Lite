@@ -3809,11 +3809,16 @@ describe('ItemView image annotations', () => {
     await screen.findByTestId('mock-document-viewer')
     await fireEvent.click(screen.getByRole('button', { name: /report image dimensions/i }))
     await fireEvent.click(screen.getByRole('button', { name: /commit fine rotation/i }))
+
+    // updatePath lands inside commitViewerState, before the operation clears
+    // editInProgress; also waiting for the undo button keeps the next click
+    // from being dropped by the in-flight guard.
     await waitFor(() => {
       expect(storeRef.current.assets.updatePath).toHaveBeenCalledWith(
         'asset-image-1',
         'docs/photo-a_v2.png'
       )
+      expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
     })
 
     await fireEvent.click(screen.getByRole('button', { name: /commit fine rotation/i }))
@@ -3822,6 +3827,7 @@ describe('ItemView image annotations', () => {
         'asset-image-1',
         'docs/photo-a_v3.png'
       )
+      expect(screen.getByRole('button', { name: /undo edit/i })).toBeEnabled()
     })
 
     await fireEvent.click(screen.getByRole('button', { name: /undo edit/i }))
