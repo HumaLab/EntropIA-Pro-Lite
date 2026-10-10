@@ -304,6 +304,34 @@ pub async fn bibliography_library_status(
     .await
 }
 
+/// Lets the user choose their Zotero data directory with the native folder
+/// picker. The renderer passes no path: the folder is a root the backend
+/// reads attachment files from, so only a choice made in this picker is
+/// stored (S-01). Returns the stored path, or `None` when the user cancels.
+#[tauri::command]
+pub async fn zotero_data_dir_grant(
+    app: tauri::AppHandle,
+    db: State<'_, AppDbState>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| format!("The folder picker failed: {e}"))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let picked = picked
+        .into_path()
+        .map_err(|e| format!("The chosen folder is not a local path: {e}"))?;
+    let db_path = db.db_path.clone();
+    blocking(move || {
+        let conn = open_archive_connection(&db_path)?;
+        crate::bibliography::zotero_data_dir::grant_zotero_data_dir(&conn, &picked).map(Some)
+    })
+    .await
+}
+
 fn answer_dto(conn: &rusqlite::Connection, answer: HybridAnswer) -> SearchWorksResponse {
     SearchWorksResponse {
         hits: answer
