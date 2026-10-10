@@ -16,7 +16,15 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   no features, gated by `detect-rust-changes`. Commit `cd357702`. Pending: observe the job green on
   the PR (needs a push).
 - [ ] P0.3 (E-02 verification) — Pro `.deb` on a clean Ubuntu 22.04 VM without the runtime: does
-  Pdfium load? Manual, needs a VM; cannot run from this session.
+  Pdfium load? Manual, needs a VM; cannot run from this session. Static check (2026-10-10):
+  CONFIRMED. `resources/lib/linux-x86_64/libpdfium.so` is 49 bytes of ASCII text (also
+  `libonnxruntime.so` 54 B and the runtime-pack copies 51/56 B); `tauri.linux.conf.json` bundles
+  `resources/lib/linux-x86_64/**/*`; `release.yml` runs `fetch-pdfium.sh` only for Lite (the Pro
+  Linux job ships the fixture, comment at `release.yml:92`); `ocr/pdf.rs:368-376` picks the first
+  candidate that merely `exists()`, binding fails, the system fallback is absent on a clean Ubuntu,
+  so text degrades to lopdf and page render/thumbnails/OCR fail. Fix belongs to 6.1: fetch the real
+  Pdfium for Pro Linux, move the fixtures out of the bundle globs, reject non-ELF/tiny files in the
+  resolver. The VM run remains the runtime proof.
 
 ## Phase 1 — Critical security (small changes)
 
@@ -50,11 +58,17 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   - Manual check pending (user, dev profile, Windows and Linux): import via dialog; drag-drop a file
     and a folder onto a collection; sample collection; writing image insert/paste/drop; dictation;
     audio preview; exports (JSON/CSV/OCR/writing/RAG chat to Downloads); delete item and collection.
-- [ ] P1.2b (S-01 plan steps 5-6, deferred) — backend-granted Zotero data dir
-  (`backend_grant.zotero_data_dir` via a native picker command, legacy `zotero_data_dir` not honored)
-  and `import_copy_into_archive`. Not needed for the renderer fs scope (no frontend fs read of those
-  sources); the remaining risk is backend-side: `settings_set("zotero_data_dir", …)` repoints which
-  folder the backend reads Zotero attachments from.
+- [x] P1.2b (S-01 plan step 5) — backend-granted Zotero data dir. Branch
+  `fix/s01b-zotero-data-dir-grant`, commit `df91b3bb`. `ZOTERO_DATA_DIR_SETTING_KEY` is now
+  `backend_grant.zotero_data_dir`; `settings_set`/`settings_delete` refuse the `backend_grant.`
+  prefix and the legacy `zotero_data_dir`; new command `zotero_data_dir_grant` (no path argument:
+  native picker in Rust, canonicalized, requires `storage/` or `zotero.sqlite`), registered in
+  build.rs, the capability and `generate_handler!`; a legacy row is never read and is logged at
+  startup. RED: 4 of 5 new tests failed against a stub; GREEN: Lite `cargo test` 2722 passed / 0
+  failed, Pro `settings::`+`zotero_data_dir` 40/40, ACL suites green in both variants, clippy Lite
+  clean, Pro clippy no new errors. No UI calls the command yet (none bound the old key either).
+  Plan step 6 (`import_copy_into_archive`) stays unneeded: no frontend fs read of Zotero paths or
+  `source_directory` exists.
 
 ## Later phases
 
