@@ -1133,6 +1133,45 @@ pub fn ia_cancel_import(
     Ok(())
 }
 
+/// Remove one abandoned preparation draft: only a `Draft` job goes away,
+/// anything else is refused and left untouched. Testable without a Tauri
+/// handle; the command below only adds the lock ordering.
+///
+/// A draft never downloads, so removing its folder frees nothing but the
+/// manifest itself. Unknown ids report `not_found` through [`job_load_error`].
+pub(crate) fn discard_draft_logic(store: &JobStore, job_id: &str) -> Result<(), String> {
+    let job = store.load(job_id).map_err(job_load_error)?;
+    if job.state != JobState::Draft {
+        return Err("invalid_state: import job is not a draft".to_string());
+    }
+    store.remove_job(job_id).map_err(job_load_error)
+}
+
+/// Discard an abandoned preparation draft (see [`discard_draft_logic`]).
+/// Holds `active` for the whole decision and takes `jobs` for the
+/// load → check → remove (lock order `active` → `jobs`, like the cancel
+/// path). A draft that is somehow the active run is refused: starting flips
+/// a job out of `Draft` first, so that case never happens in practice.
+/// Never touches a job once `ia_start_import` has accepted it.
+#[tauri::command]
+pub fn ia_discard_draft(job_id: String, ia: State<'_, IaState>) -> Result<(), String> {
+    let active_guard = ia
+        .active
+        .lock()
+        .map_err(|_| "io: local storage error".to_string())?;
+    if active_guard
+        .as_ref()
+        .is_some_and(|run| run.job_id == job_id)
+    {
+        return Err("invalid_state: import job is running".to_string());
+    }
+    let _jobs_guard = ia
+        .jobs
+        .lock()
+        .map_err(|_| "io: local storage error".to_string())?;
+    discard_draft_logic(&ia.store, &job_id)
+}
+
 /// Current job state with its files, plus whether a runner works on it.
 #[tauri::command]
 pub fn ia_get_import_status(
@@ -2156,5 +2195,80 @@ mod tests {
         let value = serde_json::to_value(&out[0]).expect("dto serializes");
         assert!(value.get("targetCollectionId").is_some());
         assert!(value.get("totalFiles").is_some());
+    }
+
+    fn discard_test_store(state: JobState) -> (tempfile::TempDir, JobStore, Job) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let file = JobFile::from_pdf("some-id", &available_pdf("doc.pdf")).expect("pdf");
+        let mut job = Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job");
+        // Drive the state machine legally, like the list_jobs test does.
+        if state != JobState::Draft {
+            job.set_job_state(JobState::Ready, 1).unwrap();
+            if state != JobState::Ready {
+                job.set_job_state(JobState::Running, 2).unwrap();
+                if state != JobState::Running {
+                    job.files[0].state = FileState::Failed;
+                    let settled = job.settle(3).expect("settles");
+                    assert_eq!(settled, state);
+                }
+            }
+        }
+        assert_eq!(job.state, state);
+        store.create(&job).unwrap();
+        (dir, store, job)
+    }
+
+    #[test]
+    fn discard_draft_removes_the_job_folder() {
+        let (_dir, store, job) = discard_test_store(JobState::Draft);
+        discard_draft_logic(&store, &job.id).expect("draft discards");
+        let err = store.load(&job.id).expect_err("job folder is gone");
+        assert!(matches!(err, StoreError::NotFound(_)), "error: {err:?}");
+    }
+
+    #[test]
+    fn discard_draft_refuses_a_running_job_untouched() {
+        let (_dir, store, job) = discard_test_store(JobState::Running);
+        let err = discard_draft_logic(&store, &job.id).expect_err("running job refused");
+        assert!(err.starts_with("invalid_state:"), "error: {err}");
+        let kept = store.load(&job.id).expect("job untouched");
+        assert_eq!(kept.state, JobState::Running);
+        assert_eq!(kept.files.len(), 1);
+    }
+
+    #[test]
+    fn discard_draft_refuses_a_terminal_job_untouched() {
+        let (_dir, store, job) = discard_test_store(JobState::Failed);
+        let err = discard_draft_logic(&store, &job.id).expect_err("terminal job refused");
+        assert!(err.starts_with("invalid_state:"), "error: {err}");
+        let kept = store.load(&job.id).expect("job untouched");
+        assert_eq!(kept.state, JobState::Failed);
+        assert_eq!(kept.files.len(), 1);
+    }
+
+    #[test]
+    fn discard_draft_reports_an_unknown_job_as_not_found() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let err = discard_draft_logic(&store, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+            .expect_err("unknown job");
+        assert!(err.starts_with("not_found:"), "error: {err}");
+    }
+
+    #[test]
+    fn discard_draft_rejects_an_invalid_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let err = discard_draft_logic(&store, "nope").expect_err("invalid id");
+        assert!(err.starts_with("invalid_request:"), "error: {err}");
     }
 }

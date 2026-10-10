@@ -1559,6 +1559,7 @@ pub fn run() {
             internet_archive::commands::ia_prepare_import,
             internet_archive::commands::ia_start_import,
             internet_archive::commands::ia_cancel_import,
+            internet_archive::commands::ia_discard_draft,
             internet_archive::commands::ia_get_import_status,
             internet_archive::commands::ia_list_jobs,
             internet_archive::commands::ia_list_verified_files,

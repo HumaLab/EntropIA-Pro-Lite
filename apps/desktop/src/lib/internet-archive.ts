@@ -258,6 +258,15 @@ export function iaCancelImport(jobId: string): Promise<void> {
   return invoke<void>('ia_cancel_import', { jobId })
 }
 
+/**
+ * Discard an abandoned preparation draft. Only a job that was never started
+ * goes away; anything else is refused. Never call after `iaStartImport`
+ * accepted the job.
+ */
+export function iaDiscardDraft(jobId: string): Promise<void> {
+  return invoke<void>('ia_discard_draft', { jobId })
+}
+
 /** Current job state with its files, plus whether a runner works on it. */
 export function iaGetImportStatus(jobId: string): Promise<IaJobStatus> {
   return invoke<IaJobStatus>('ia_get_import_status', { jobId })

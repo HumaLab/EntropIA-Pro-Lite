@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   iaBeginFileImport,
   iaCancelImport,
+  iaDiscardDraft,
   iaConfirmFileImported,
   iaFailFileImport,
   iaFinishReconcile,
@@ -74,13 +75,16 @@ describe('prepare and run commands', () => {
     })
   })
 
-  it('start, cancel and status name the job by id', async () => {
+  it('start, cancel, discard and status name the job by id', async () => {
     vi.mocked(invoke).mockResolvedValue(undefined)
     await iaStartImport('job-1')
     expect(invoke).toHaveBeenCalledWith('ia_start_import', { jobId: 'job-1' })
 
     await iaCancelImport('job-1')
     expect(invoke).toHaveBeenCalledWith('ia_cancel_import', { jobId: 'job-1' })
+
+    await iaDiscardDraft('job-1')
+    expect(invoke).toHaveBeenCalledWith('ia_discard_draft', { jobId: 'job-1' })
 
     vi.mocked(invoke).mockResolvedValue({ id: 'job-1' })
     await iaGetImportStatus('job-1')
