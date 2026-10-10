@@ -6,7 +6,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.40.0"
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",
