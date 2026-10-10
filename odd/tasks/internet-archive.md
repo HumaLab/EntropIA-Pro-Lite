@@ -226,6 +226,12 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
       collection), preparation summary (duplicates, sizes, synced volume),
       progress with cancel, results; entry points in `ImportSourcesDialog` and
       `CollectionView`; texts in `i18n.ts` (es and en).
+- [ ] 28. Review follow-ups (advisory R3-001..003 on the frontend slice):
+      reconcile entries become durable and derived on demand from `job.json`
+      (a `cancelled` file that still has a `staging_name`), so startup timing
+      cannot lose them; cancel paths clear `staging_name` when they delete
+      staging; the startup reconcile retries on failure; the dialog ignores
+      stale `iaGetItem` and status responses.
 - [ ] 27. Variant checks: typecheck, lint and desktop tests with
       `VITE_LOCAL_ML=0` and `1`; then the user's visual check.
 
