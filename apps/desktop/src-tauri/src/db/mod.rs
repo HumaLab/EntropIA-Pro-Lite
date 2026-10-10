@@ -1,3 +1,4 @@
+pub mod authorizer;
 pub mod commands;
 pub mod compact;
 pub mod open;

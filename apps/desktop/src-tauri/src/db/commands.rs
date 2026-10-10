@@ -2,8 +2,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::types::Value;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use tauri::State;
 
+use crate::db::authorizer::{RendererSqlAuthorizer, RendererSqlKind};
 use crate::db::state::AppDbState;
 use crate::db::util::{is_safe_identifier, json_to_sql_param, quote_identifier};
 
@@ -21,7 +23,7 @@ const DB_BROWSER_SCHEMA_SQL: &str = "SELECT name FROM pragma_table_list \
      AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
      ORDER BY name";
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ExecuteResult {
     pub rows_affected: u64,
 }
@@ -74,17 +76,37 @@ where
         .map_err(|e| format!("DB task failed: {e}"))?
 }
 
+/// Renderer-facing message when the layer-2 authorizer (S-02a) denies a
+/// statement. SQLite reports every denial as the same generic `SQLITE_AUTH`
+/// error, so the policy detail stays on the Rust side.
+const SQL_AUTHORIZER_DENIED_ERROR: &str =
+    "Restricted SQL statement: denied by the database authorizer";
+
+/// Maps SQLite failures to renderer-facing strings, keeping the layer-2
+/// denial recognizable instead of leaking the generic "not authorized".
+fn map_db_error(err: rusqlite::Error) -> String {
+    if err.sqlite_error_code() == Some(rusqlite::ErrorCode::AuthorizationForStatementDenied) {
+        SQL_AUTHORIZER_DENIED_ERROR.to_string()
+    } else {
+        err.to_string()
+    }
+}
+
 /// Execute multiple SQL statements atomically within a transaction.
 /// Used for cascade deletes and other multi-statement operations.
 #[tauri::command]
 pub async fn db_execute_batch(db: State<'_, AppDbState>, sql: String) -> Result<(), String> {
-    validate_sql_batch(&sql)?;
     let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || {
-        let conn = conn.lock().map_err(|e| e.to_string())?;
-        conn.execute_batch(&sql).map_err(|e| e.to_string())
-    })
-    .await
+    run_blocking_db_task(move || execute_batch_on(&conn, &sql)).await
+}
+
+/// Body of `db_execute_batch`, factored out so tests exercise the real
+/// validation + authorizer path without a Tauri runtime.
+fn execute_batch_on(conn: &Mutex<Connection>, sql: &str) -> Result<(), String> {
+    validate_sql_batch(sql)?;
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Batch);
+    conn.execute_batch(sql).map_err(map_db_error)
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,33 +122,45 @@ pub async fn db_execute_transaction(
     db: State<'_, AppDbState>,
     statements: Vec<ParameterizedStatement>,
 ) -> Result<(), String> {
-    for statement in &statements {
+    let conn = db.ui_conn.clone();
+    run_blocking_db_task(move || execute_transaction_on(&conn, &statements)).await
+}
+
+/// Body of `db_execute_transaction`, factored out for tests.
+fn execute_transaction_on(
+    conn: &Mutex<Connection>,
+    statements: &[ParameterizedStatement],
+) -> Result<(), String> {
+    for statement in statements {
         validate_sql_execute(&statement.sql)?;
     }
 
-    let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || {
-        let mut conn = conn.lock().map_err(|e| e.to_string())?;
-        // IMMEDIATE takes the write lock up front, so a busy archive makes this
-        // wait out busy_timeout. A DEFERRED transaction that reads first fails
-        // instantly with `database is locked` when a worker is mid-write:
-        // SQLite refuses to upgrade a read lock rather than risk a deadlock.
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+    let mut conn = conn.lock().map_err(|e| e.to_string())?;
+    // IMMEDIATE takes the write lock up front, so a busy archive makes this
+    // wait out busy_timeout. A DEFERRED transaction that reads first fails
+    // instantly with `database is locked` when a worker is mid-write:
+    // SQLite refuses to upgrade a read lock rather than risk a deadlock.
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    // SQLite authorizes trigger bodies when they fire, not when the outer
+    // statement is prepared, so the guard stays installed while the statements
+    // run. It is lifted before COMMIT because the borrow checker cannot move
+    // `tx` while the guard borrows it; the policy allows the transaction
+    // actions themselves anyway.
+    let authorizer = RendererSqlAuthorizer::install(&tx, RendererSqlKind::Single);
 
-        for statement in statements {
-            let params: Vec<Box<dyn rusqlite::ToSql>> =
-                statement.params.iter().map(json_to_sql_param).collect();
-            let params_ref: Vec<&dyn rusqlite::ToSql> =
-                params.iter().map(|param| param.as_ref()).collect();
-            tx.execute(&statement.sql, params_ref.as_slice())
-                .map_err(|e| e.to_string())?;
-        }
+    for statement in statements {
+        let params: Vec<Box<dyn rusqlite::ToSql>> =
+            statement.params.iter().map(json_to_sql_param).collect();
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            params.iter().map(|param| param.as_ref()).collect();
+        tx.execute(&statement.sql, params_ref.as_slice())
+            .map_err(map_db_error)?;
+    }
 
-        tx.commit().map_err(|e| e.to_string())
-    })
-    .await
+    drop(authorizer);
+    tx.commit().map_err(map_db_error)
 }
 
 #[tauri::command]
@@ -135,22 +169,27 @@ pub async fn db_execute(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<ExecuteResult, String> {
-    validate_sql_execute(&sql)?;
     let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || {
-        let conn = conn.lock().map_err(|e| e.to_string())?;
-        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
-            params.iter().map(json_to_sql_param).collect();
-        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
-            params_ref.iter().map(|b| b.as_ref()).collect();
-        let rows_affected = conn
-            .execute(&sql, params_as_refs.as_slice())
-            .map_err(|e| e.to_string())?;
-        Ok(ExecuteResult {
-            rows_affected: rows_affected as u64,
-        })
+    run_blocking_db_task(move || execute_on(&conn, &sql, &params)).await
+}
+
+/// Body of `db_execute`, factored out for tests.
+fn execute_on(
+    conn: &Mutex<Connection>,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<ExecuteResult, String> {
+    validate_sql_execute(sql)?;
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
+    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
+    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
+    let rows_affected = conn
+        .execute(sql, params_as_refs.as_slice())
+        .map_err(map_db_error)?;
+    Ok(ExecuteResult {
+        rows_affected: rows_affected as u64,
     })
-    .await
 }
 
 #[tauri::command]
@@ -159,36 +198,41 @@ pub async fn db_select(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    validate_sql_row_query(&sql)?;
     let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || {
-        let conn = conn.lock().map_err(|e| e.to_string())?;
-        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
-            params.iter().map(json_to_sql_param).collect();
-        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
-            params_ref.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let col_count = stmt.column_count();
-        let col_names: Vec<String> = (0..col_count)
-            .map(|i| stmt.column_name(i).unwrap_or("").to_string())
-            .collect();
+    run_blocking_db_task(move || select_on(&conn, &sql, &params)).await
+}
 
-        let rows = stmt
-            .query_map(params_as_refs.as_slice(), |row| {
-                let mut map = serde_json::Map::new();
-                for (i, name) in col_names.iter().enumerate() {
-                    let val: Value = row.get(i)?;
-                    map.insert(name.clone(), rusqlite_value_to_json(val));
-                }
-                Ok(serde_json::Value::Object(map))
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+/// Body of `db_select`, factored out for tests.
+fn select_on(
+    conn: &Mutex<Connection>,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<Vec<serde_json::Value>, String> {
+    validate_sql_row_query(sql)?;
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
+    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
+    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+    let col_count = stmt.column_count();
+    let col_names: Vec<String> = (0..col_count)
+        .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+        .collect();
 
-        Ok(rows)
-    })
-    .await
+    let rows = stmt
+        .query_map(params_as_refs.as_slice(), |row| {
+            let mut map = serde_json::Map::new();
+            for (i, name) in col_names.iter().enumerate() {
+                let val: Value = row.get(i)?;
+                map.insert(name.clone(), rusqlite_value_to_json(val));
+            }
+            Ok(serde_json::Value::Object(map))
+        })
+        .map_err(map_db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_db_error)?;
+
+    Ok(rows)
 }
 
 /// Returns rows as arrays in column order — required by Drizzle sqlite-proxy
@@ -199,33 +243,38 @@ pub async fn db_select_rows(
     sql: String,
     params: Vec<serde_json::Value>,
 ) -> Result<Vec<Vec<serde_json::Value>>, String> {
-    validate_sql_row_query(&sql)?;
     let conn = db.ui_conn.clone();
-    run_blocking_db_task(move || {
-        let conn = conn.lock().map_err(|e| e.to_string())?;
-        let params_ref: Vec<Box<dyn rusqlite::ToSql>> =
-            params.iter().map(json_to_sql_param).collect();
-        let params_as_refs: Vec<&dyn rusqlite::ToSql> =
-            params_ref.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-        let col_count = stmt.column_count();
+    run_blocking_db_task(move || select_rows_on(&conn, &sql, &params)).await
+}
 
-        let rows = stmt
-            .query_map(params_as_refs.as_slice(), |row| {
-                let mut values = Vec::with_capacity(col_count);
-                for i in 0..col_count {
-                    let val: Value = row.get(i)?;
-                    values.push(rusqlite_value_to_json(val));
-                }
-                Ok(values)
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+/// Body of `db_select_rows`, factored out for tests.
+fn select_rows_on(
+    conn: &Mutex<Connection>,
+    sql: &str,
+    params: &[serde_json::Value],
+) -> Result<Vec<Vec<serde_json::Value>>, String> {
+    validate_sql_row_query(sql)?;
+    let conn = conn.lock().map_err(|e| e.to_string())?;
+    let _authorizer = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
+    let params_ref: Vec<Box<dyn rusqlite::ToSql>> = params.iter().map(json_to_sql_param).collect();
+    let params_as_refs: Vec<&dyn rusqlite::ToSql> = params_ref.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn.prepare(sql).map_err(map_db_error)?;
+    let col_count = stmt.column_count();
 
-        Ok(rows)
-    })
-    .await
+    let rows = stmt
+        .query_map(params_as_refs.as_slice(), |row| {
+            let mut values = Vec::with_capacity(col_count);
+            for i in 0..col_count {
+                let val: Value = row.get(i)?;
+                values.push(rusqlite_value_to_json(val));
+            }
+            Ok(values)
+        })
+        .map_err(map_db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(map_db_error)?;
+
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -483,6 +532,132 @@ fn normalize_sql(sql: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Error returned when a statement cannot be lexed safely: an unterminated
+/// string literal, quoted identifier or block comment. Failing closed rejects
+/// the statement instead of guessing where it ends.
+const MALFORMED_SQL_ERROR: &str =
+    "Malformed SQL statement: unterminated string literal, identifier, or comment";
+
+/// Removes SQL comments (`-- …` to end of line and `/* … */`) before any
+/// keyword or table-name analysis, preserving string literals and quoted
+/// identifiers so `'a -- b'` or `'/* not a comment */'` survives untouched.
+/// Each comment is replaced by one space so `INSERT/*c*/INTO` cannot glue two
+/// tokens into one.
+///
+/// The scanner tracks single-quoted strings (`''` escapes), double-quoted and
+/// backtick identifiers, and bracketed identifiers. It fails CLOSED: a run
+/// that ends inside a string, identifier, or block comment is an error rather
+/// than an educated guess. It is still lexical only — not a SQL parser — but
+/// it closes the comment-prefix evasions the audit found.
+fn strip_sql_comments(sql: &str) -> Result<String, String> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ScanState {
+        Normal,
+        LineComment,
+        BlockComment,
+        SingleQuote,
+        DoubleQuote,
+        Backtick,
+        Bracket,
+    }
+
+    let mut out = String::with_capacity(sql.len());
+    let mut state = ScanState::Normal;
+    let mut chars = sql.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match state {
+            ScanState::Normal => match ch {
+                '-' if chars.peek() == Some(&'-') => {
+                    chars.next();
+                    out.push(' ');
+                    state = ScanState::LineComment;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    out.push(' ');
+                    state = ScanState::BlockComment;
+                }
+                '\'' => {
+                    out.push(ch);
+                    state = ScanState::SingleQuote;
+                }
+                '"' => {
+                    out.push(ch);
+                    state = ScanState::DoubleQuote;
+                }
+                '`' => {
+                    out.push(ch);
+                    state = ScanState::Backtick;
+                }
+                '[' => {
+                    out.push(ch);
+                    state = ScanState::Bracket;
+                }
+                _ => out.push(ch),
+            },
+            ScanState::LineComment => {
+                if ch == '\n' {
+                    out.push('\n');
+                    state = ScanState::Normal;
+                }
+            }
+            ScanState::BlockComment => {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    state = ScanState::Normal;
+                }
+            }
+            ScanState::SingleQuote => {
+                out.push(ch);
+                if ch == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        chars.next();
+                        out.push('\'');
+                    } else {
+                        state = ScanState::Normal;
+                    }
+                }
+            }
+            ScanState::DoubleQuote => {
+                out.push(ch);
+                if ch == '"' {
+                    if chars.peek() == Some(&'"') {
+                        chars.next();
+                        out.push('"');
+                    } else {
+                        state = ScanState::Normal;
+                    }
+                }
+            }
+            ScanState::Backtick => {
+                out.push(ch);
+                if ch == '`' {
+                    if chars.peek() == Some(&'`') {
+                        chars.next();
+                        out.push('`');
+                    } else {
+                        state = ScanState::Normal;
+                    }
+                }
+            }
+            ScanState::Bracket => {
+                out.push(ch);
+                if ch == ']' {
+                    state = ScanState::Normal;
+                }
+            }
+        }
+    }
+
+    match state {
+        // A line comment may run to end of input; everything else unbalanced
+        // is malformed.
+        ScanState::Normal | ScanState::LineComment => Ok(out),
+        _ => Err(MALFORMED_SQL_ERROR.to_string()),
+    }
+}
+
 /// True when a statement references the sensitive `app_settings` table, which
 /// holds API keys and other secrets. EntropIA Pro is 100% local, so these
 /// secrets live in the same SQLite file as user data; the renderer must never
@@ -502,40 +677,55 @@ const SYNC_PROTECTION_ERROR: &str =
 /// blocked — the renderer may inspect sync status, it just must never mutate
 /// it, even by accident.
 ///
-/// Matching is verb-anchored against the leading keyword so that a literal like
-/// `'sync_oplog'` inside a write to a NON-sync table is not falsely rejected.
-/// `normalized` is the lowercased, whitespace-collapsed statement produced by
-/// [`normalize_sql`].
+/// Matching is verb-anchored so a literal like `'sync_oplog'` inside a write to
+/// a NON-sync table is not falsely rejected, but every verb position is scanned
+/// (not just the leading keyword) so `WITH … INSERT/UPDATE/DELETE` is covered;
+/// `UPDATE OR REPLACE|IGNORE` skips the conflict clause before reading the
+/// target. `normalized` is the lowercased, whitespace-collapsed statement
+/// produced by [`normalize_sql`].
 fn statement_writes_sync_objects(normalized: &str) -> bool {
     let leading = normalized.split(' ').next().unwrap_or("");
-    match leading {
-        // `INSERT INTO sync_x`, `INSERT OR REPLACE INTO sync_x`, `REPLACE INTO sync_x`.
-        "insert" | "replace" => {
-            statement_target_after("into", normalized).is_some_and(target_is_sync_table)
-        }
-        "update" => normalized
-            .split(' ')
-            .nth(1)
-            .is_some_and(target_is_sync_table),
-        // `DELETE FROM sync_x`.
-        "delete" => statement_target_after("from", normalized).is_some_and(target_is_sync_table),
-        // `ALTER TABLE sync_x`, `CREATE TABLE … sync_x`, `DROP TABLE … sync_x`,
-        // `CREATE/DROP TRIGGER … trg_sync_x` (and their INDEX variants on sync_*).
-        "alter" | "create" | "drop" => statement_touches_sync_ddl(normalized),
-        _ => false,
+    if matches!(leading, "alter" | "create" | "drop") {
+        return statement_touches_sync_ddl(normalized);
     }
+    if !matches!(leading, "insert" | "replace" | "update" | "delete" | "with") {
+        return false;
+    }
+
+    let tokens: Vec<&str> = normalized.split(' ').collect();
+    tokens.iter().enumerate().any(|(index, token)| {
+        let target = match *token {
+            // `INSERT INTO sync_x`, `INSERT OR REPLACE INTO sync_x`,
+            // `REPLACE INTO sync_x`.
+            "insert" | "replace" => target_after_in(&tokens[index + 1..], "into"),
+            // `UPDATE sync_x`, `UPDATE OR REPLACE|IGNORE sync_x`.
+            "update" => update_target_in(&tokens[index + 1..]),
+            // `DELETE FROM sync_x`.
+            "delete" => target_after_in(&tokens[index + 1..], "from"),
+            _ => None,
+        };
+        target.is_some_and(target_is_sync_table)
+    })
 }
 
-/// Returns the token immediately following `keyword` in the normalized
-/// statement (the conventional position of the target object name).
-fn statement_target_after<'a>(keyword: &str, normalized: &'a str) -> Option<&'a str> {
-    let mut tokens = normalized.split(' ');
-    while let Some(token) = tokens.next() {
-        if token == keyword {
-            return tokens.next();
-        }
+/// Returns the token immediately following `keyword` in `tokens` (the
+/// conventional position of the target object name).
+fn target_after_in<'a>(tokens: &[&'a str], keyword: &str) -> Option<&'a str> {
+    let at = tokens.iter().position(|token| *token == keyword)?;
+    tokens.get(at + 1).copied()
+}
+
+/// The table named by the tokens right after an `UPDATE` verb: skips an
+/// optional `OR REPLACE|IGNORE|ABORT|FAIL|ROLLBACK` conflict clause.
+fn update_target_in<'a>(tokens: &[&'a str]) -> Option<&'a str> {
+    let mut run = tokens.iter().copied();
+    let first = run.next()?;
+    if first == "or" {
+        run.next()?; // the conflict action
+        run.next()
+    } else {
+        Some(first)
     }
-    None
 }
 
 /// True when a CREATE/DROP/ALTER statement targets a sync object: a `sync_*`
@@ -557,7 +747,7 @@ fn target_is_sync_table(token: &str) -> bool {
 }
 
 fn validate_sql_row_query(sql: &str) -> Result<(), String> {
-    let normalized = normalize_sql(sql);
+    let normalized = normalize_sql(&strip_sql_comments(sql)?);
 
     if normalized.contains(';') {
         return Err("db_select/db_select_rows accept only a single SQL statement".to_string());
@@ -571,6 +761,12 @@ fn validate_sql_row_query(sql: &str) -> Result<(), String> {
 
     if sql_references_sensitive_table(&normalized) {
         return Err("Restricted sensitive table for db_select/db_select_rows".to_string());
+    }
+
+    // `INSERT/UPDATE/DELETE … RETURNING` is a write in read clothing; it must
+    // respect the sync protection like `db_execute` does.
+    if statement_writes_sync_objects(&normalized) {
+        return Err(SYNC_PROTECTION_ERROR.to_string());
     }
 
     if normalized.starts_with("select ") || normalized.starts_with("with ") {
@@ -592,7 +788,7 @@ fn validate_sql_row_query(sql: &str) -> Result<(), String> {
 }
 
 fn validate_sql_execute(sql: &str) -> Result<(), String> {
-    let normalized = normalize_sql(sql);
+    let normalized = normalize_sql(&strip_sql_comments(sql)?);
 
     if normalized.contains(';') {
         return Err("db_execute accepts only a single SQL statement".to_string());
@@ -624,12 +820,17 @@ fn validate_sql_execute(sql: &str) -> Result<(), String> {
     Err("Only INSERT, UPDATE, or DELETE statements are allowed in db_execute".to_string())
 }
 
-/// Validate a multi-statement batch per statement: split on `;`, normalize
-/// each statement, and check its LEADING keyword against the denylist used by
-/// the single-statement validators. Substring matching is intentionally
-/// avoided — a literal like `'please attach the file'` inside an INSERT must
-/// not be rejected, while real ATTACH/DETACH/VACUUM/PRAGMA statements stay
-/// blocked.
+/// Validate a multi-statement batch per statement: strip comments, split on
+/// `;`, normalize each statement, and check its LEADING keyword against the
+/// denylist used by the single-statement validators. Substring matching is
+/// intentionally avoided — a literal like `'please attach the file'` inside an
+/// INSERT must not be rejected, while real ATTACH/DETACH/VACUUM/PRAGMA
+/// statements stay blocked.
+///
+/// `PRAGMA defer_foreign_keys` is the one pragma the TS migration runner
+/// legitimately sends through this path (migrations 0045/0048/0050/0052/0058);
+/// the authorizer also allows only that pragma and only for this kind. S-02c
+/// narrows both to the exact listed migration statements.
 ///
 /// Limitation: the `;` split is NOT string-literal aware. A literal that
 /// itself contains a semicolon followed by a denylisted keyword (e.g.
@@ -642,13 +843,18 @@ fn validate_sql_execute(sql: &str) -> Result<(), String> {
 /// false positive unreachable. Free-form user text must go through the
 /// parameterized single-statement commands instead.
 fn validate_sql_batch(sql: &str) -> Result<(), String> {
-    for statement in sql.split(';') {
+    let stripped = strip_sql_comments(sql)?;
+    for statement in stripped.split(';') {
         let normalized = normalize_sql(statement);
         if normalized.is_empty() {
             continue;
         }
-        let leading_keyword = normalized.split(' ').next().unwrap_or("");
-        if matches!(leading_keyword, "attach" | "detach" | "vacuum" | "pragma") {
+        let mut tokens = normalized.split(' ');
+        let leading_keyword = tokens.next().unwrap_or("");
+        if matches!(leading_keyword, "attach" | "detach" | "vacuum") {
+            return Err("Restricted SQL statement in db_execute_batch".to_string());
+        }
+        if leading_keyword == "pragma" && !tokens.next().is_some_and(is_defer_foreign_keys_pragma) {
             return Err("Restricted SQL statement in db_execute_batch".to_string());
         }
         if sql_references_sensitive_table(&normalized) {
@@ -659,6 +865,15 @@ fn validate_sql_batch(sql: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// True for the pragma-name token of `PRAGMA defer_foreign_keys`, written
+/// either as one token (`defer_foreign_keys=on`) or with spaces around `=`.
+fn is_defer_foreign_keys_pragma(token: &str) -> bool {
+    token == "defer_foreign_keys"
+        || token
+            .strip_prefix("defer_foreign_keys=")
+            .is_some_and(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -1183,5 +1398,333 @@ mod tests {
             rusqlite_value_to_json(Value::Blob(vec![0xfb, 0xff, 0xbf])),
             serde_json::Value::String("+/+/".to_string())
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // S-02a — layer 2 (authorizer) + comment-stripping layer 1.
+    // -----------------------------------------------------------------------
+
+    fn mutex_conn(conn: Connection) -> Mutex<Connection> {
+        Mutex::new(conn)
+    }
+
+    /// Real synced schema with capture triggers installed and a session whose
+    /// `capture_enabled` flag is on. The sync-only test helpers live behind
+    /// `#[cfg(test)]`, and capture is what the authorizer must not break.
+    fn capture_enabled_conn() -> Mutex<Connection> {
+        let conn = crate::sync::test_support::new_synced_test_db();
+        crate::sync::capture::ensure_capture(&conn).expect("install capture triggers");
+        crate::sync::test_support::set_session_with_capture(&conn);
+        Mutex::new(conn)
+    }
+
+    fn oplog_count(conn: &Mutex<Connection>) -> i64 {
+        crate::sync::test_support::oplog_count(&conn.lock().unwrap())
+    }
+
+    #[test]
+    fn comments_cannot_hide_vacuum_into_or_attach_from_the_batch_validator() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("exfiltrated.db");
+        let target_sql = target.to_str().expect("utf-8 path");
+        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+
+        // `/**/VACUUM INTO` and `--x\nVACUUM INTO` evade the old leading-keyword
+        // match; the target file must not exist afterwards.
+        for sql in [
+            format!("/**/VACUUM INTO '{target_sql}'"),
+            format!("--x\nVACUUM INTO '{target_sql}'"),
+        ] {
+            assert!(
+                execute_batch_on(&conn, &sql).is_err(),
+                "should be rejected: {sql}"
+            );
+            assert!(!target.exists(), "VACUUM INTO wrote {target_sql}");
+        }
+
+        // Same evasion for ATTACH.
+        let attached = dir.path().join("attached.db");
+        let attach_sql = format!("--x\nATTACH DATABASE '{}' AS e", attached.display());
+        assert!(execute_batch_on(&conn, &attach_sql).is_err());
+        assert!(!attached.exists(), "ATTACH created {}", attached.display());
+    }
+
+    #[test]
+    fn comments_cannot_hide_pragmas_except_the_migration_defer_foreign_keys() {
+        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+
+        // `/* */PRAGMA writable_schema=ON` used to pass the leading-keyword check.
+        assert!(execute_batch_on(&conn, "/* */PRAGMA writable_schema=ON").is_err());
+        // The one pragma the TS migration runner legitimately sends must survive
+        // layer 1 (layer 2 allows it for Batch only).
+        assert!(execute_batch_on(&conn, "PRAGMA defer_foreign_keys=ON").is_ok());
+        // Pragmas never reach db_select: a leading comment must not hide one.
+        let err = select_on(&conn, "/* */PRAGMA table_info(items)", &[]).unwrap_err();
+        assert!(err.contains("Restricted"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn db_select_cannot_write_sync_oplog_through_returning() {
+        let conn = capture_enabled_conn();
+        let err = select_on(
+            &conn,
+            "INSERT INTO sync_oplog (table_name, row_id, op, changed_at) \
+             VALUES ('items', 'forged', 'I', 1) RETURNING *",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err, SYNC_PROTECTION_ERROR);
+        assert_eq!(oplog_count(&conn), 0, "no forged oplog row may land");
+    }
+
+    #[test]
+    fn sync_write_detection_sees_with_dml_and_update_conflict_clauses() {
+        let conn = capture_enabled_conn();
+        let err = execute_on(
+            &conn,
+            "WITH x AS (SELECT 1) INSERT INTO sync_meta(key, value) SELECT 'k', 'v' FROM x",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err, SYNC_PROTECTION_ERROR);
+
+        let err = execute_on(
+            &conn,
+            "UPDATE OR REPLACE sync_meta SET value = '0' WHERE key = 'capture_enabled'",
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(err, SYNC_PROTECTION_ERROR);
+        let capture: String = conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM sync_meta WHERE key = 'capture_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(capture, "1", "the capture flag must not be overwritten");
+    }
+
+    #[test]
+    fn commented_app_settings_reads_stay_rejected() {
+        let conn = mutex_conn(setup_db_browser_test_db());
+        for sql in [
+            "SELECT * FROM /* c */ app_settings",
+            "SELECT * FROM app_settings -- c",
+        ] {
+            let err = select_on(&conn, sql, &[]).unwrap_err();
+            assert_eq!(
+                err,
+                "Restricted sensitive table for db_select/db_select_rows"
+            );
+        }
+    }
+
+    #[test]
+    fn layer_two_denies_app_settings_through_a_view_and_the_guard_is_removed() {
+        let conn = setup_db_browser_test_db();
+        conn.execute_batch("CREATE VIEW v_secret AS SELECT key, value FROM app_settings;")
+            .unwrap();
+        let conn = mutex_conn(conn);
+
+        // Layer 1 only sees `v_secret`; SQLite expands the view and reports a
+        // read of `app_settings` (accessor = the view), which layer 2 denies.
+        let err = select_on(&conn, "SELECT * FROM v_secret", &[]).unwrap_err();
+        assert_eq!(err, SQL_AUTHORIZER_DENIED_ERROR);
+
+        // The authorizer must be gone after the command: the backend keeps
+        // reading app_settings directly on the same connection.
+        let direct: i64 = conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(direct, 0);
+    }
+
+    #[test]
+    fn layer_two_alone_denies_a_subquery_over_app_settings() {
+        let conn = setup_db_browser_test_db();
+        {
+            let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single);
+            let denied = conn.query_row(
+                "SELECT COUNT(*) FROM (SELECT * FROM app_settings)",
+                [],
+                |row| row.get::<_, i64>(0),
+            );
+            assert!(
+                matches!(
+                    denied,
+                    Err(rusqlite::Error::SqliteFailure(error, _))
+                        if error.code == rusqlite::ErrorCode::AuthorizationForStatementDenied
+                ),
+                "layer 2 alone must deny the read, got {denied:?}"
+            );
+        }
+        // Dropping the guard uninstalls the authorizer: the backend read works.
+        let allowed: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_settings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(allowed, 0);
+    }
+
+    #[test]
+    fn plain_vacuum_is_also_denied_by_the_attach_check() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);")
+            .unwrap();
+        let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Batch);
+        // SQLite routes plain VACUUM through the same SQLITE_ATTACH check as
+        // VACUUM INTO (with a NULL filename), so the guard denies it too. In
+        // production layer 1 rejects it before the authorizer runs.
+        let result = conn.execute_batch("VACUUM");
+        assert!(result.is_err(), "plain VACUUM unexpectedly ran: {result:?}");
+    }
+
+    #[test]
+    fn capture_still_records_writes_through_every_guarded_command_path() {
+        let conn = capture_enabled_conn();
+        assert_eq!(
+            oplog_count(&conn),
+            0,
+            "fresh session starts with an empty oplog"
+        );
+
+        // db_execute (INSERT).
+        execute_on(
+            &conn,
+            "INSERT INTO collections (id, name, created_at, updated_at) \
+             VALUES ('c-s02a', 'S-02a', 1, 1)",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(oplog_count(&conn), 1);
+
+        // db_execute_transaction (UPDATE).
+        execute_transaction_on(
+            &conn,
+            &[ParameterizedStatement {
+                sql: "UPDATE collections SET name = ? WHERE id = ?".to_string(),
+                params: vec![serde_json::json!("S-02a v2"), serde_json::json!("c-s02a")],
+            }],
+        )
+        .unwrap();
+        assert_eq!(oplog_count(&conn), 2);
+
+        // db_execute_batch (DELETE).
+        execute_batch_on(
+            &conn,
+            "BEGIN; DELETE FROM collections WHERE id = 'c-s02a'; COMMIT;",
+        )
+        .unwrap();
+        assert_eq!(oplog_count(&conn), 3);
+    }
+
+    #[test]
+    fn comment_stripping_preserves_literals_and_fails_closed() {
+        // `--` and `/*` inside a string literal are data, not comments.
+        assert!(
+            validate_sql_batch("INSERT INTO notes (id, content) VALUES ('n-1', 'a -- b');").is_ok()
+        );
+        assert!(validate_sql_batch(
+            "INSERT INTO notes (id, content) VALUES ('n-1', '/* not a comment */');"
+        )
+        .is_ok());
+        // An unterminated literal or block comment is rejected, never guessed.
+        assert!(validate_sql_batch("INSERT INTO notes (id) VALUES ('unterminated").is_err());
+        assert!(validate_sql_batch("INSERT INTO notes (id) VALUES ('n-1'); /* open").is_err());
+        // A comment cannot smuggle a denylisted keyword to the front of a batch.
+        assert!(validate_sql_batch("SELECT 1; --x\nATTACH DATABASE 'evil.db' AS e;").is_err());
+    }
+
+    #[test]
+    fn ordinary_dml_select_and_schema_work_under_both_layers() {
+        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+        execute_batch_on(
+            &conn,
+            "CREATE TABLE notes (id TEXT PRIMARY KEY, content TEXT NOT NULL);\n\
+             CREATE INDEX idx_notes_content ON notes(content);",
+        )
+        .unwrap();
+        execute_on(
+            &conn,
+            "INSERT INTO notes (id, content) VALUES ('n-1', 'hola')",
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            execute_on(
+                &conn,
+                "UPDATE notes SET content = 'chau' WHERE id = 'n-1'",
+                &[],
+            )
+            .unwrap()
+            .rows_affected,
+            1
+        );
+        execute_transaction_on(
+            &conn,
+            &[ParameterizedStatement {
+                sql: "INSERT INTO notes (id, content) VALUES (?, ?)".to_string(),
+                params: vec![serde_json::json!("n-2"), serde_json::json!("tx")],
+            }],
+        )
+        .unwrap();
+        let rows = select_on(&conn, "SELECT id, content FROM notes ORDER BY id", &[]).unwrap();
+        assert_eq!(rows.len(), 2);
+        let schema = select_rows_on(
+            &conn,
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
+            &[],
+        )
+        .unwrap();
+        assert!(schema
+            .iter()
+            .any(|row| row.first() == Some(&serde_json::json!("notes"))));
+        execute_batch_on(&conn, "BEGIN; DELETE FROM notes WHERE id = 'n-1'; COMMIT;").unwrap();
+        assert_eq!(
+            select_on(&conn, "SELECT * FROM notes", &[]).unwrap().len(),
+            1
+        );
+        // ROLLBACK goes through the same batch path and is allowed.
+        execute_batch_on(&conn, "BEGIN; DELETE FROM notes; ROLLBACK;").unwrap();
+        assert_eq!(
+            select_on(&conn, "SELECT * FROM notes", &[]).unwrap().len(),
+            1,
+            "ROLLBACK must have undone the batch delete"
+        );
+    }
+
+    #[test]
+    fn trigger_and_view_ddl_is_batch_only() {
+        let conn = mutex_conn(Connection::open_in_memory().unwrap());
+        execute_batch_on(
+            &conn,
+            "CREATE TABLE t (id TEXT); CREATE TABLE audit (id TEXT);",
+        )
+        .unwrap();
+        // Batch keeps today's DDL behaviour until S-02c.
+        execute_batch_on(
+            &conn,
+            "CREATE TRIGGER trg_t AFTER INSERT ON t \
+             BEGIN INSERT INTO audit (id) VALUES (NEW.id); END;",
+        )
+        .unwrap();
+        execute_batch_on(&conn, "CREATE VIEW v_t AS SELECT id FROM t;").unwrap();
+
+        let create_trigger = "CREATE TRIGGER trg_bad AFTER INSERT ON t \
+             BEGIN INSERT INTO audit (id) VALUES (NEW.id); END";
+        assert!(execute_on(&conn, create_trigger, &[]).is_err());
+        assert!(execute_transaction_on(
+            &conn,
+            &[ParameterizedStatement {
+                sql: create_trigger.to_string(),
+                params: vec![],
+            }]
+        )
+        .is_err());
+        assert!(execute_on(&conn, "DROP TRIGGER trg_t", &[]).is_err());
     }
 }
