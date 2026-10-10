@@ -272,8 +272,8 @@ describe('the pattern document in html', () => {
 describe('the pattern document in docx', () => {
   /**
    * Read out of the zip, because that is the check that would have caught the
-   * incumbent: S4 found `html-docx-js` producing a file Word renders and that
-   * contains no document model at all.
+   * exporter it replaced: S4 found `html-docx-js` producing a file Word renders
+   * and that contains no document model at all.
    */
   it('keeps every obligatory element of §17.1 as real OOXML', async () => {
     const files = unzipSync((await exported('docx')).bytes)
