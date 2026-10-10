@@ -103,12 +103,25 @@ pub(crate) fn update<R>(
 }
 
 /// `request_cancel` + staging deletion + `finish_cancel_if_idle` on an
-/// in-memory job already owned under the `jobs` lock.
+/// in-memory job already owned under the `jobs` lock. Cancel paths delete
+/// staging, so they also clear `staging_name` (persisted by the caller's
+/// save): a `Cancelled` file keeps its name only for the restart
+/// `Importing` path, and anything else would surface as a false durable
+/// reconcile entry.
 fn apply_cancel_locked(store: &JobStore, job: &mut Job, now: u64) {
     let job_id = job.id.clone();
     let effects = job.request_cancel(now);
     for name in &effects.staging_to_delete {
         delete_dest_and_partial(store, &job_id, name);
+    }
+    for file in &mut job.files {
+        if file.state == FileState::Cancelled {
+            if let Some(name) = file.staging_name.clone() {
+                if effects.staging_to_delete.contains(&name) {
+                    file.staging_name = None;
+                }
+            }
+        }
     }
     job.finish_cancel_if_idle(now);
 }
@@ -213,6 +226,15 @@ fn cancel_with_interrupted_via_update(
         let effects = job.request_cancel(clock());
         for name in &effects.staging_to_delete {
             delete_dest_and_partial(store, &job_id_owned, name);
+        }
+        for file in &mut job.files {
+            if file.state == FileState::Cancelled {
+                if let Some(name) = file.staging_name.clone() {
+                    if effects.staging_to_delete.contains(&name) {
+                        file.staging_name = None;
+                    }
+                }
+            }
         }
         // The worker owns `Downloading`/`Verifying`: `request_cancel` leaves
         // it alone, so the runner moves it itself before finishing.
@@ -1106,5 +1128,50 @@ mod tests {
         assert!(!dest.exists(), "staging removed");
         assert!(!internet_archive::partial_path(&dest).exists());
         assert_eq!(out.state, JobState::Cancelled);
+    }
+
+    #[test]
+    fn live_cancel_of_verified_files_clears_staging_name() {
+        // Task 28: a live cancel that deletes staging must also clear
+        // `staging_name` in the saved job, or the file would show up as a
+        // false durable reconcile entry (`Cancelled` + `Some`).
+        let (_dir, store) = test_store();
+        let mut job = make_job(vec![("id-a", "a.pdf"), ("id-b", "b.pdf")]);
+        for file in &mut job.files {
+            file.state = FileState::Verified;
+            file.staging_name = Some(internet_archive::store::new_staging_name());
+            file.sha256 = Some("abc123".to_string());
+            file.page_count = Some(1);
+        }
+        let stagings: Vec<String> = job
+            .files
+            .iter()
+            .map(|file| file.staging_name.clone().unwrap())
+            .collect();
+        let job = running_job(job);
+        let job_id = job.id.clone();
+        store.create(&job).unwrap();
+        for staging in &stagings {
+            let dest = store.staging_path(&job_id, staging).unwrap();
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::write(&dest, b"staged").unwrap();
+        }
+        let jobs = Mutex::new(());
+        let (applied, out) = apply_end_of_run_cancel(&store, &jobs, &job_id, true, 1_700_000_030)
+            .expect("cancel applies");
+        assert!(applied);
+        for (index, file) in out.files.iter().enumerate() {
+            assert_eq!(file.state, FileState::Cancelled, "file {index} cancelled");
+            assert_eq!(
+                file.staging_name, None,
+                "file {index} staging_name cleared so no false reconcile entry"
+            );
+        }
+        let saved = store.load(&job_id).unwrap();
+        assert!(saved.files.iter().all(|file| file.staging_name.is_none()));
+        for staging in &stagings {
+            let dest = store.staging_path(&job_id, staging).unwrap();
+            assert!(!dest.exists(), "staging {staging} removed");
+        }
     }
 }

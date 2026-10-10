@@ -51,4 +51,47 @@ describe('runStartupReconcile', () => {
 
     expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledOnce()
   })
+
+  it('retries after a failure and succeeds', async () => {
+    resolveRef.resolveReconcileLeftovers
+      .mockRejectedValueOnce(new Error('db locked'))
+      .mockResolvedValueOnce({ released: 1, failed: [] })
+    const runStartupReconcile = await loadRunStartupReconcile()
+
+    await runStartupReconcile()
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(1)
+    await runStartupReconcile()
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(2)
+    // After success, further calls are a no-op.
+    await runStartupReconcile()
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(2)
+  })
+
+  it('shares one in-flight promise across concurrent calls', async () => {
+    let release!: () => void
+    const gate = new Promise<{ released: number; failed: [] }>((resolve) => {
+      release = () => resolve({ released: 0, failed: [] })
+    })
+    resolveRef.resolveReconcileLeftovers.mockReturnValue(gate)
+    const runStartupReconcile = await loadRunStartupReconcile()
+
+    const first = runStartupReconcile()
+    const second = runStartupReconcile()
+    // The second call must not resolve before the shared work does.
+    let secondSettled = false
+    void second.then(() => {
+      secondSettled = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(secondSettled).toBe(false)
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(1)
+    release()
+    await first
+    await second
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(1)
+    // After the shared run succeeds, later calls are a no-op.
+    await runStartupReconcile()
+    expect(resolveRef.resolveReconcileLeftovers).toHaveBeenCalledTimes(1)
+  })
 })

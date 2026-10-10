@@ -1014,8 +1014,11 @@ pub fn run() {
             // lazily on first write, never here.
             app.manage(internet_archive::IaState::new(&app_dir));
             // Startup recovery for interrupted downloads: normalize every job
-            // folder, keep `needs_reconcile` entries for the frontend, and
-            // never block or fail startup over it. The whole `recover_all`
+            // folder and never block or fail startup over it. Reconcile
+            // entries are durable and derived on demand from `job.json` (a
+            // `Cancelled` file that still has a `staging_name`), so nothing
+            // is kept in memory for the frontend: it may call
+            // `ia_list_reconcile` any time after this. The whole `recover_all`
             // runs while holding `jobs`, so a start arriving during recovery
             // waits for it (lock order: `jobs` only, never `active`).
             {
@@ -1031,11 +1034,6 @@ pub fn run() {
                     let _jobs_guard = state.as_ref().and_then(|state| state.jobs.lock().ok());
                     let report = store.recover_all(now);
                     let reconcile = report.needs_reconcile.len();
-                    if let Some(state) = handle.try_state::<internet_archive::IaState>() {
-                        if let Ok(mut slot) = state.reconcile.lock() {
-                            *slot = report.needs_reconcile;
-                        }
-                    }
                     eprintln!(
                         "[ia] recovery: {} jobs, {} reconcile, {} skipped, {} quarantined, {} unsupported",
                         report.jobs.len(),

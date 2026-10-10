@@ -906,6 +906,96 @@ describe('InternetArchiveDialog resume (26b)', () => {
   )
 })
 
+describe('InternetArchiveDialog stale responses (28)', () => {
+  it('shows the second item when the first iaGetItem resolves last', async () => {
+    iaRef.iaSearch.mockResolvedValue({
+      numFound: 2,
+      items: [
+        searchItem(),
+        searchItem({
+          identifier: 'other-id',
+          title: 'Other Title',
+          creators: [],
+          date: null,
+          restricted: false,
+        }),
+      ],
+    })
+    open()
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    await screen.findByText('Some Title')
+    let resolveFirst!: (value: unknown) => void
+    let resolveSecond!: (value: unknown) => void
+    const firstGate = new Promise((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondGate = new Promise((resolve) => {
+      resolveSecond = resolve
+    })
+    iaRef.iaGetItem.mockImplementation((identifier: string) => {
+      if (identifier === 'some-id') return firstGate as Promise<never>
+      return secondGate as Promise<never>
+    })
+    const buttons = screen.getAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(buttons[0]!)
+    // The first item is still loading: go back and open the second one, so
+    // both `iaGetItem` calls overlap with the first resolving last.
+    await screen.findByRole('button', { name: 'Volver' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
+    await screen.findByText('Some Title')
+    const again = screen.getAllByRole('button', { name: 'Ver archivos' })
+    await fireEvent.click(again[1]!)
+    resolveSecond(itemDetails({ identifier: 'other-id', title: 'Other Title' }))
+    await screen.findByText('Other Title')
+    resolveFirst(itemDetails({ identifier: 'some-id', title: 'Some Title' }))
+    // Let the stale first response settle.
+    await waitFor(() => expect(iaRef.iaGetItem).toHaveBeenCalledTimes(2))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('Other Title')).toBeInTheDocument()
+    expect(screen.queryByText('some-id')).toBeNull()
+  })
+
+  it('does not let an older status overwrite a newer one', async () => {
+    const currentStatus: Record<string, unknown> = jobStatus()
+    iaRef.iaGetImportStatus.mockImplementation(async () => currentStatus)
+    await prepareIntoCollection('col-1')
+    iaRef.iaStartImport.mockResolvedValue(undefined)
+    await fireEvent.click(screen.getByRole('button', { name: 'Iniciar importación' }))
+    await screen.findByText('Importando…')
+    // Two overlapping refreshes: the first is slow with first.pdf, the
+    // second is fast with second.pdf. Resolving the slow one last must not
+    // overwrite the newer status.
+    let resolveSlow!: (value: unknown) => void
+    let resolveFast!: (value: unknown) => void
+    const slowGate = new Promise((resolve) => {
+      resolveSlow = resolve
+    })
+    const fastGate = new Promise((resolve) => {
+      resolveFast = resolve
+    })
+    const slowStatus = jobStatus({
+      state: 'running',
+      files: [jobFile({ displayFileName: 'first.pdf', fileName: 'first.pdf' })],
+    })
+    const fastStatus = jobStatus({
+      state: 'running',
+      files: [jobFile({ displayFileName: 'second.pdf', fileName: 'second.pdf' })],
+    })
+    iaRef.iaGetImportStatus
+      .mockImplementationOnce(() => slowGate as Promise<never>)
+      .mockImplementationOnce(() => fastGate as Promise<never>)
+      .mockImplementation(async () => fastStatus)
+    jobHandler?.('job-1')
+    jobHandler?.('job-1')
+    resolveFast(fastStatus)
+    await screen.findByText('second.pdf')
+    resolveSlow(slowStatus)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('second.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('first.pdf')).toBeNull()
+  })
+})
+
 describe('InternetArchiveDialog in English', () => {
   it('renders the tabs, phases and duplicate statuses in English', async () => {
     locale.set('en')

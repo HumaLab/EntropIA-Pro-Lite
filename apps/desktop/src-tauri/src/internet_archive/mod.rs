@@ -14,7 +14,7 @@ pub mod runner;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use internet_archive::store::{JobStore, RecoveryReconcileEntry};
+use internet_archive::store::JobStore;
 use internet_archive::{Endpoints, FetchPolicy, IaClient};
 
 /// One active download runner: the job it works on plus the cancel signal.
@@ -50,11 +50,6 @@ pub struct IaState {
     /// end-of-run cancel, recovery, and later task 23). Only synchronous
     /// file I/O happens under it; it is never held across an `.await`.
     pub jobs: Mutex<()>,
-    /// `needs_reconcile` entries from the startup `recover_all`: files that
-    /// were `Importing` when a `Cancelling` job restarted. The frontend
-    /// import may have been interrupted midway, so these need provenance
-    /// reconciliation before their staging may be deleted.
-    pub reconcile: Mutex<Vec<RecoveryReconcileEntry>>,
     /// Resolved data dir (remembered at setup): asset-file existence checks
     /// resolve stored `assets.path` values against it.
     pub data_dir: PathBuf,
@@ -71,7 +66,6 @@ impl IaState {
             store: JobStore::new(data_dir.join("staging").join("internet-archive")),
             active: Mutex::new(None),
             jobs: Mutex::new(()),
-            reconcile: Mutex::new(Vec::new()),
             data_dir: data_dir.to_path_buf(),
         }
     }

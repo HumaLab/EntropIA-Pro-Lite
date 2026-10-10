@@ -19,8 +19,9 @@
 //!   `Verified` with a machine-coded error.
 //! - [`ia_fail_file_import`]: the frontend reports a failed import; the file
 //!   goes to `Failed` and its staging is dropped.
-//! - [`ia_list_reconcile`] / [`ia_finish_reconcile`]: the startup-recovery
-//!   leftovers from `IaState.reconcile`, classified the same way.
+//! - [`ia_list_reconcile`] / [`ia_finish_reconcile`]: durable recovery
+//!   leftovers derived on demand from `job.json` (a `Cancelled` file that
+//!   still has a `staging_name`), classified the same way.
 //!
 //! Locking mirrors the runner: every job write is load → modify → save under
 //! the single `jobs` writer lock via [`update`]; the SQLite `ui_conn` mutex
@@ -33,7 +34,7 @@ use std::sync::Mutex;
 
 use internet_archive::job::{FileState, Job, JobFile};
 use internet_archive::prepare::ProvenanceRecord;
-use internet_archive::store::{JobStore, RecoveryReconcileEntry};
+use internet_archive::store::{is_valid_job_id, JobStore};
 use internet_archive::PROVENANCE_KEY;
 use serde::Serialize;
 use tauri::State;
@@ -523,59 +524,116 @@ pub(crate) struct ReconcileDto {
     pub item_id: Option<String>,
 }
 
-/// Classify one recovery leftover with [`existing_import`] over the owning
+/// One durable recovery leftover: a `Cancelled` file that still has a
+/// `staging_name`. Only the restart path for an `Importing` file of a
+/// `Cancelling` job keeps it; every live cancel or failure path that
+/// deletes staging also clears the name, so anything listed here still has
+/// bytes to reconcile.
+#[derive(Debug, Clone)]
+struct DurableEntry {
+    job_id: String,
+    index: usize,
+    identifier: String,
+    file_name: String,
+    collection_id: Option<String>,
+    sha256: Option<String>,
+    page_count: Option<u32>,
+    staging_name: String,
+}
+
+/// Scan the store for durable entries, under the `jobs` lock with only
+/// synchronous file I/O. Missing roots are empty; unloadable jobs are
+/// skipped; ids sort for a stable list.
+fn durable_entries(store: &JobStore, jobs: &Mutex<()>) -> Result<Vec<DurableEntry>, String> {
+    let _guard = jobs
+        .lock()
+        .map_err(|_| "io: local storage error".to_string())?;
+    let entries = match std::fs::read_dir(store.root()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("io: local storage error".to_string()),
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_valid_job_id(&name) {
+            ids.push(name);
+        }
+    }
+    ids.sort();
+    let mut out = Vec::new();
+    for id in ids {
+        let job = match store.load(&id) {
+            Ok(job) => job,
+            Err(_) => continue,
+        };
+        let collection_id = target_collection_id(&job);
+        for (index, file) in job.files.iter().enumerate() {
+            if file.state != FileState::Cancelled {
+                continue;
+            }
+            let Some(staging_name) = file.staging_name.clone() else {
+                continue;
+            };
+            out.push(DurableEntry {
+                job_id: job.id.clone(),
+                index,
+                identifier: file.identifier.clone(),
+                file_name: file.file_name.clone(),
+                collection_id: collection_id.clone(),
+                sha256: file.sha256.clone().filter(|hash| !hash.trim().is_empty()),
+                page_count: file.page_count,
+                staging_name,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Classify one durable entry with [`existing_import`] over its owning
 /// job's target collection and the file's recorded sha256/page_count.
-/// Anything unloadable (job, file, target, fingerprint) is `None`: there is
+/// Anything unloadable (missing target or fingerprint) is `None`: there is
 /// nothing the classification can vouch for.
-fn classify_entry(
-    store: &JobStore,
+fn classify_durable(
     conn: &rusqlite::Connection,
     data_dir: &Path,
-    entry: &RecoveryReconcileEntry,
+    entry: &DurableEntry,
 ) -> Result<Existing, String> {
-    let job = match store.load(&entry.job_id) {
-        Ok(job) => job,
-        Err(_) => return Ok(Existing::None),
-    };
-    let collection_id = match target_collection_id(&job) {
-        Some(id) => id,
-        None => return Ok(Existing::None),
-    };
-    let file = match job.files.get(entry.index) {
-        Some(file) => file,
-        None => return Ok(Existing::None),
-    };
-    let sha256 = file.sha256.clone().filter(|hash| !hash.trim().is_empty());
-    let (Some(sha256), Some(page_count)) = (sha256.as_deref(), file.page_count) else {
+    let (Some(collection_id), Some(sha256), Some(page_count)) = (
+        entry.collection_id.as_deref(),
+        entry.sha256.as_deref(),
+        entry.page_count,
+    ) else {
         return Ok(Existing::None);
     };
     existing_import(
         conn,
         data_dir,
-        &collection_id,
-        &file.identifier,
-        &file.file_name,
+        collection_id,
+        &entry.identifier,
+        &entry.file_name,
         sha256,
         page_count,
     )
     .map_err(|error| format!("db: {error}"))
 }
 
-/// Classify every recovery leftover with [`existing_import`] over the owning
-/// job's target collection and the file's recorded sha256/page_count.
-/// Unloadable jobs, unknown files, and missing hashes classify as `None`.
+/// Classify every durable leftover with [`existing_import`]. The store scan
+/// runs under the `jobs` lock (sync I/O only); classification runs under
+/// the SQLite lock after, never holding both at once.
 pub(crate) fn list_reconcile(
     store: &JobStore,
-    entries: &[RecoveryReconcileEntry],
+    jobs: &Mutex<()>,
     ui: &Mutex<rusqlite::Connection>,
     data_dir: &Path,
 ) -> Result<Vec<ReconcileDto>, String> {
+    let entries = durable_entries(store, jobs)?;
     let conn = ui
         .lock()
         .map_err(|_| "io: local storage error".to_string())?;
     let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let (action, item_id) = match classify_entry(store, &conn, data_dir, entry)? {
+    for entry in &entries {
+        let (action, item_id) = match classify_durable(&conn, data_dir, entry)? {
             Existing::Complete { item_id } => (ReconcileAction::Keep, Some(item_id)),
             Existing::Partial { item_id } => (ReconcileAction::Discard, Some(item_id)),
             Existing::None => (ReconcileAction::None, None),
@@ -592,25 +650,59 @@ pub(crate) fn list_reconcile(
     Ok(out)
 }
 
-/// Release one recovery leftover: re-classify, refuse with `partial_remains`
-/// while the remnant is still there, else drop the staging file and remove
-/// the entry from the state list.
+/// Best-effort staging deletion for a finished leftover: the file plus its
+/// `.partial`, like the runner's cleanup.
+fn delete_reconcile_staging(store: &JobStore, job_id: &str, staging_name: &str) {
+    let _ = store.delete_staging(job_id, staging_name);
+    if let Ok(dest) = store.staging_path(job_id, staging_name) {
+        let _ = std::fs::remove_file(internet_archive::partial_path(&dest));
+        let _ = std::fs::remove_file(&dest);
+    }
+}
+
+/// Release one durable leftover: re-classify the live job, refuse with
+/// `partial_remains` while the remnant is still there (persisted state
+/// untouched), otherwise delete the staging file and clear `staging_name`
+/// via the [`update`] load-modify-save helper so the clearing persists and
+/// a second list no longer returns it.
 pub(crate) fn finish_reconcile(
     store: &JobStore,
-    reconcile: &Mutex<Vec<RecoveryReconcileEntry>>,
+    jobs: &Mutex<()>,
     ui: &Mutex<rusqlite::Connection>,
     data_dir: &Path,
     job_id: &str,
     index: usize,
 ) -> Result<(), String> {
-    let entry = reconcile
-        .lock()
-        .map_err(|_| "io: local storage error".to_string())?
-        .iter()
-        .find(|entry| entry.job_id == job_id && entry.index == index)
-        .cloned();
-    let Some(entry) = entry else {
-        return Err("not_found: reconcile entry not found".to_string());
+    // Live snapshot under the writer lock; anything missing or not a
+    // durable entry is `not_found` (no job shape is leaked).
+    let snapshot: DurableEntry = {
+        let _guard = jobs
+            .lock()
+            .map_err(|_| "io: local storage error".to_string())?;
+        let job = match store.load(job_id) {
+            Ok(job) => job,
+            Err(_) => return Err("not_found: reconcile entry not found".to_string()),
+        };
+        let file = match job.files.get(index) {
+            Some(file) => file,
+            None => return Err("not_found: reconcile entry not found".to_string()),
+        };
+        if file.state != FileState::Cancelled {
+            return Err("not_found: reconcile entry not found".to_string());
+        }
+        let Some(staging_name) = file.staging_name.clone() else {
+            return Err("not_found: reconcile entry not found".to_string());
+        };
+        DurableEntry {
+            job_id: job.id.clone(),
+            index,
+            identifier: file.identifier.clone(),
+            file_name: file.file_name.clone(),
+            collection_id: target_collection_id(&job),
+            sha256: file.sha256.clone().filter(|hash| !hash.trim().is_empty()),
+            page_count: file.page_count,
+            staging_name,
+        }
     };
     // Re-classify against the live collection: only a remnant that is still
     // there keeps the entry (and its staging) around.
@@ -618,24 +710,26 @@ pub(crate) fn finish_reconcile(
         let conn = ui
             .lock()
             .map_err(|_| "io: local storage error".to_string())?;
-        classify_entry(store, &conn, data_dir, &entry)?
+        classify_durable(&conn, data_dir, &snapshot)?
     };
     if matches!(existing, Existing::Partial { .. }) {
         return Err("partial_remains: the partial import is still in the collection".to_string());
     }
-    {
-        let mut guard = reconcile
-            .lock()
-            .map_err(|_| "io: local storage error".to_string())?;
-        let position = guard
-            .iter()
-            .position(|entry| entry.job_id == job_id && entry.index == index)
-            .ok_or_else(|| "not_found: reconcile entry not found".to_string())?;
-        guard.remove(position);
-    }
-    if let Some(name) = entry.staging_name.as_deref() {
-        let _ = store.delete_staging(&entry.job_id, name);
-    }
+    let staging_name = snapshot.staging_name.clone();
+    update(store, jobs, job_id, |job| {
+        let file = match job.files.get(index) {
+            Some(file) => file,
+            None => return Err("not_found: reconcile entry not found".to_string()),
+        };
+        if file.state != FileState::Cancelled
+            || file.staging_name.as_deref() != Some(staging_name.as_str())
+        {
+            return Err("not_found: reconcile entry not found".to_string());
+        }
+        job.files[index].staging_name = None;
+        Ok(())
+    })?;
+    delete_reconcile_staging(store, job_id, &staging_name);
     Ok(())
 }
 
@@ -696,18 +790,16 @@ pub fn ia_fail_file_import(
     })
 }
 
-/// Classified recovery leftovers for the reconcile screen.
+/// Classified recovery leftovers for the reconcile screen, derived on
+/// demand from `job.json`: every `Cancelled` file that still has a
+/// `staging_name`. No startup timing can lose them: the frontend may call
+/// any time after `recover_all`.
 #[tauri::command]
 pub fn ia_list_reconcile(
     ia: State<'_, IaState>,
     db: State<'_, AppDbState>,
 ) -> Result<Vec<ReconcileDto>, String> {
-    let entries = ia
-        .reconcile
-        .lock()
-        .map_err(|_| "io: local storage error".to_string())?
-        .clone();
-    list_reconcile(&ia.store, &entries, &db.ui_conn, &ia.data_dir)
+    list_reconcile(&ia.store, &ia.jobs, &db.ui_conn, &ia.data_dir)
 }
 
 /// Release one recovery leftover (see [`finish_reconcile`]).
@@ -720,7 +812,7 @@ pub fn ia_finish_reconcile(
 ) -> Result<(), String> {
     finish_reconcile(
         &ia.store,
-        &ia.reconcile,
+        &ia.jobs,
         &db.ui_conn,
         &ia.data_dir,
         &job_id,
@@ -1591,18 +1683,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // reconcile
+    // reconcile (durable, derived on demand: `Cancelled` + `staging_name`)
     // ------------------------------------------------------------------
-
-    fn reconcile_entry(job_id: &str, index: usize, staging: &str) -> RecoveryReconcileEntry {
-        RecoveryReconcileEntry {
-            job_id: job_id.to_string(),
-            index,
-            identifier: IDENT.to_string(),
-            file_name: FILE.to_string(),
-            staging_name: Some(staging.to_string()),
-        }
-    }
 
     fn reconcile_ctx(pages_setup: impl FnOnce(&rusqlite::Connection, &Path)) -> (Ctx, Job, String) {
         let ctx = ctx();
@@ -1617,10 +1699,61 @@ mod tests {
         (ctx, job, staging)
     }
 
+    /// A `Cancelling` job with an `Importing` file, as a crash would leave
+    /// it: `recover_all` normalizes it to `Cancelled` and the durable scan
+    /// must find it with no in-memory list.
+    fn cancelling_importing_ctx() -> (Ctx, Job, String) {
+        let ctx = ctx();
+        let staging = new_staging_name();
+        let mut file = verified_file(IDENT, FILE, &staging, SHA, PAGES);
+        file.state = FileState::Importing;
+        let mut job = Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job");
+        job.set_job_state(JobState::Ready, 1_700_000_001)
+            .expect("ready");
+        job.set_job_state(JobState::Running, 1_700_000_002)
+            .expect("running");
+        job.set_job_state(JobState::Cancelling, 1_700_000_003)
+            .expect("cancelling");
+        persist(&ctx, &job);
+        (ctx, job, staging)
+    }
+
+    #[test]
+    fn durable_entry_exists_after_restart_without_in_memory_state() {
+        let (ctx, job, staging) = cancelling_importing_ctx();
+        assert!(staging_exists(&ctx, &job.id, &staging));
+        // Simulate the restart: `recover_all` persists the `Cancelled` job.
+        let report = ctx.store.recover_all(1_700_000_010);
+        assert!(report.jobs.iter().any(|recovered| recovered.id == job.id));
+        let saved = load(&ctx, &job.id);
+        assert_eq!(saved.state, JobState::Cancelled);
+        assert_eq!(saved.files[0].state, FileState::Cancelled);
+        assert_eq!(
+            saved.files[0].staging_name.as_deref(),
+            Some(staging.as_str())
+        );
+        // Derived on demand: no in-memory list, just the store scan.
+        let jobs = Mutex::new(());
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].job_id, job.id);
+        assert_eq!(out[0].index, 0);
+        assert_eq!(out[0].identifier, IDENT);
+        assert_eq!(out[0].file_name, FILE);
+    }
+
     #[test]
     fn reconcile_classifies_keep_discard_and_none() {
-        let (ctx, job, staging) = reconcile_ctx(|_, _| {});
-        let keep_entry = reconcile_entry(&job.id, 0, &staging);
+        let jobs = Mutex::new(());
+        let (ctx, job, _staging) = reconcile_ctx(|_, _| {});
         insert_complete_item(
             &ctx.ui.lock().unwrap(),
             &ctx.data_dir,
@@ -1631,14 +1764,14 @@ mod tests {
             SHA,
             PAGES,
         );
-        let out = list_reconcile(&ctx.store, &[keep_entry], &ctx.ui, &ctx.data_dir)
-            .expect("list succeeds");
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
         assert_eq!(out.len(), 1);
+        assert_eq!(out[0].job_id, job.id);
         assert_eq!(out[0].action, ReconcileAction::Keep);
         assert_eq!(out[0].item_id.as_deref(), Some("item-1"));
 
         // Partial remnant: discard with the item id.
-        let (ctx, job, staging) = reconcile_ctx(|conn, data_dir| {
+        let (ctx, job, _staging) = reconcile_ctx(|conn, data_dir| {
             conn.execute(
                 "INSERT INTO items (id, collection_id, metadata) VALUES ('item-9', 'col-1', ?1)",
                 rusqlite::params![prov_meta(IDENT, FILE, SHA)],
@@ -1655,27 +1788,48 @@ mod tests {
             );
             touch(data_dir, "assets/col-1/item-9/parent.pdf");
         });
-        let out = list_reconcile(
-            &ctx.store,
-            &[reconcile_entry(&job.id, 0, &staging)],
-            &ctx.ui,
-            &ctx.data_dir,
-        )
-        .expect("list succeeds");
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        // Only this ctx's job lives in its own store, so exactly one entry.
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].job_id, job.id);
         assert_eq!(out[0].action, ReconcileAction::Discard);
         assert_eq!(out[0].item_id.as_deref(), Some("item-9"));
 
         // Nothing imported: none.
-        let (ctx, job, staging) = reconcile_ctx(|_, _| {});
-        let out = list_reconcile(
-            &ctx.store,
-            &[reconcile_entry(&job.id, 0, &staging)],
-            &ctx.ui,
-            &ctx.data_dir,
-        )
-        .expect("list succeeds");
+        let (ctx, job, _staging) = reconcile_ctx(|_, _| {});
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].job_id, job.id);
         assert_eq!(out[0].action, ReconcileAction::None);
         assert_eq!(out[0].item_id, None);
+    }
+
+    #[test]
+    fn finish_persists_cleared_staging_and_second_list_is_empty() {
+        let (ctx, job, staging) = reconcile_ctx(|_, _| {});
+        insert_complete_item(
+            &ctx.ui.lock().unwrap(),
+            &ctx.data_dir,
+            "item-1",
+            "col-1",
+            IDENT,
+            FILE,
+            SHA,
+            PAGES,
+        );
+        let jobs = Mutex::new(());
+        finish_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir, &job.id, 0)
+            .expect("finish succeeds");
+        // Persisted: the name is cleared in `job.json`, not just memory.
+        let saved = load(&ctx, &job.id);
+        assert_eq!(saved.files[0].staging_name, None);
+        assert!(!staging_exists(&ctx, &job.id, &staging), "staging gone");
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        assert!(out.is_empty(), "second list no longer returns it");
+        // A second finish finds nothing to release.
+        let error =
+            finish_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir, &job.id, 0).unwrap_err();
+        assert!(error.starts_with("not_found"), "got {error:?}");
     }
 
     #[test]
@@ -1697,17 +1851,28 @@ mod tests {
             );
             touch(data_dir, "assets/col-1/item-9/parent.pdf");
         });
-        let reconcile = Mutex::new(vec![reconcile_entry(&job.id, 0, &staging)]);
-        let error = finish_reconcile(&ctx.store, &reconcile, &ctx.ui, &ctx.data_dir, &job.id, 0)
-            .unwrap_err();
+        let jobs = Mutex::new(());
+        let before = load(&ctx, &job.id);
+        let error =
+            finish_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir, &job.id, 0).unwrap_err();
         assert!(error.starts_with("partial_remains"), "got {error:?}");
-        assert_eq!(reconcile.lock().unwrap().len(), 1);
+        // Persisted state unchanged: the name and the file stay.
+        let saved = load(&ctx, &job.id);
+        assert_eq!(saved, before);
+        assert_eq!(
+            saved.files[0].staging_name.as_deref(),
+            Some(staging.as_str())
+        );
         assert!(staging_exists(&ctx, &job.id, &staging), "staging kept");
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].action, ReconcileAction::Discard);
     }
 
     #[test]
     fn finish_releases_keep_and_none() {
-        // Complete: staging deleted, entry removed.
+        let jobs = Mutex::new(());
+        // Complete: staging deleted, entry gone.
         let (ctx, job, staging) = reconcile_ctx(|_, _| {});
         insert_complete_item(
             &ctx.ui.lock().unwrap(),
@@ -1719,19 +1884,34 @@ mod tests {
             SHA,
             PAGES,
         );
-        let reconcile = Mutex::new(vec![reconcile_entry(&job.id, 0, &staging)]);
-        finish_reconcile(&ctx.store, &reconcile, &ctx.ui, &ctx.data_dir, &job.id, 0)
+        finish_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir, &job.id, 0)
             .expect("finish succeeds");
-        assert!(reconcile.lock().unwrap().is_empty());
+        assert_eq!(load(&ctx, &job.id).files[0].staging_name, None);
         assert!(!staging_exists(&ctx, &job.id, &staging), "staging gone");
 
         // None: same release.
         let (ctx, job, staging) = reconcile_ctx(|_, _| {});
-        let reconcile = Mutex::new(vec![reconcile_entry(&job.id, 0, &staging)]);
-        finish_reconcile(&ctx.store, &reconcile, &ctx.ui, &ctx.data_dir, &job.id, 0)
+        finish_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir, &job.id, 0)
             .expect("finish succeeds");
-        assert!(reconcile.lock().unwrap().is_empty());
+        assert_eq!(load(&ctx, &job.id).files[0].staging_name, None);
         assert!(!staging_exists(&ctx, &job.id, &staging), "staging gone");
+    }
+
+    #[test]
+    fn live_cancel_leaves_no_durable_entries() {
+        use crate::internet_archive::runner::apply_end_of_run_cancel;
+
+        let ctx = ctx();
+        let staging = new_staging_name();
+        let file = verified_file(IDENT, FILE, &staging, SHA, PAGES);
+        let job = running_job(vec![file]);
+        persist(&ctx, &job);
+        let jobs = Mutex::new(());
+        let (applied, _) = apply_end_of_run_cancel(&ctx.store, &jobs, &job.id, true, 1_700_000_030)
+            .expect("cancel applies");
+        assert!(applied);
+        let out = list_reconcile(&ctx.store, &jobs, &ctx.ui, &ctx.data_dir).expect("list succeeds");
+        assert!(out.is_empty(), "live cancel must leave no entries");
     }
 
     #[test]

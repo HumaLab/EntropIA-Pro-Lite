@@ -130,6 +130,8 @@
   let itemIdentifier = $state('')
   let itemDetails = $state<IaItemDetails | null>(null)
   let itemLoading = $state(false)
+  /** Guards `openItem` against stale `iaGetItem` responses. */
+  let itemRequest = 0
 
   // Selection accumulated across items.
   let selection = $state<Array<{ identifier: string; fileName: string; title: string }>>([])
@@ -153,6 +155,8 @@
   // Running phase.
   let jobId = $state<string | null>(null)
   let jobStatus = $state<IaJobStatus | null>(null)
+  /** Guards `refresh` against stale `iaGetImportStatus` responses. */
+  let statusRequest = 0
   let importInFlight = $state(false)
   let importProgress = $state<{ displayFileName: string } | null>(null)
   let cancelRequested = $state(false)
@@ -442,17 +446,21 @@
   }
 
   async function openItem(identifier: string): Promise<void> {
+    const request = ++itemRequest
     phase = 'item'
     problem = null
     itemLoading = true
     itemDetails = null
     itemIdentifier = identifier
     try {
-      itemDetails = await iaGetItem(identifier)
+      const details = await iaGetItem(identifier)
+      if (request !== itemRequest) return
+      itemDetails = details
     } catch (reason) {
+      if (request !== itemRequest) return
       problem = describeError(reason)
     } finally {
-      itemLoading = false
+      if (request === itemRequest) itemLoading = false
     }
   }
 
@@ -647,12 +655,19 @@
 
   async function refresh(): Promise<void> {
     if (!jobId || phase !== 'running') return
+    const request = ++statusRequest
+    const currentJob = jobId
+    let status: IaJobStatus
     try {
-      jobStatus = await iaGetImportStatus(jobId)
+      status = await iaGetImportStatus(currentJob)
     } catch (reason) {
+      if (request !== statusRequest) return
       problem = describeError(reason)
       return
     }
+    if (request !== statusRequest) return
+    if (jobId !== currentJob || phase !== 'running') return
+    jobStatus = status
     await maybeImport()
     checkDone()
   }
