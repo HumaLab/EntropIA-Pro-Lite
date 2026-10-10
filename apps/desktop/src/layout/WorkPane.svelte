@@ -11,6 +11,7 @@
     deleteAssetFile,
     deleteImageThumbnail,
     deletePdfThumbnail,
+    isOutsideDataDir,
     resolveStoredAssetPath,
   } from '$lib/file-import'
   import { getAssetPathLabel } from '$lib/item-metadata'
@@ -278,7 +279,7 @@
       await deleteAssetFile(asset.path)
       if (asset.type === 'pdf') {
         await deletePdfThumbnail(asset.id)
-        if (!asset.parentAssetId) {
+        if (!asset.parentAssetId && !isOutsideDataDir(asset.path)) {
           await remove(resolveStoredAssetPath(asset.path).replace(/\.pdf$/i, '.pages'), {
             recursive: true,
           })

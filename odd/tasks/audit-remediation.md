@@ -32,7 +32,29 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
   `pnpm audit --prod` listed prosemirror-view (high); GREEN: gone (high 9 → 8). Frozen install ok;
   UI 847/847 (incl. writing-image-paste); desktop Pro 3488 passed / Lite 3467 passed (247 files
   each); typechecks clean. Manual paste from a web page / Word still pending (user).
-- [ ] P1.2 (S-01) — narrow the `fs` plugin scope (inventory first).
+- [x] P1.2 (S-01) — narrow the `fs` plugin scope. Branch `fix/s01-fs-scope`, commits `e751aaf8`
+  (frontend never deletes files outside the archive) and `43cdd6c3` (runtime scope). Inventory: every
+  frontend plugin-fs path is a dialog pick, a drop, or an archive subdirectory; no frontend flow reads
+  Zotero paths or `source_directory` through plugin-fs (the backend does). Design: setup grants
+  `assets`, `writing-images`, `writing-crops`, `temp`, `sample-staging` and cache `audio-previews`
+  via `fs_scope::grant_frontend_fs_scope` (path_utils-derived, covers dev profiles) and forbids
+  `entropia.sqlite{,-wal,-shm,-journal}`; capability keeps only `deny` globs `**/*.sqlite*`, drops
+  the four `*-read-recursive` sets, adds `fs:allow-stat`; dialog/drop paths are added to the scope
+  by tauri-plugin-dialog 2.8.1 / tauri-plugin-fs 2.6.0 at runtime. RED: `app_acl` home read and
+  shared-root DB path answered "No such file" (in scope) and archive dirs were forbidden; manifest
+  guard failed on the old capability; 3 file-import tests failed. GREEN: `app_acl` 15/15 and
+  `acl_manifest_guard` 7/7 (Lite and Pro), Lite lib 2447 passed, desktop JS Pro 3493 / Lite 3472
+  passed (247 files), lint 0 errors, Lite typecheck 0 errors, clippy Lite clean, Pro clippy only the
+  9 known pre-existing errors. Writer subagent failed twice before any tool call (model error); the
+  work was done inline as the reported fallback.
+  - Manual check pending (user, dev profile, Windows and Linux): import via dialog; drag-drop a file
+    and a folder onto a collection; sample collection; writing image insert/paste/drop; dictation;
+    audio preview; exports (JSON/CSV/OCR/writing/RAG chat to Downloads); delete item and collection.
+- [ ] P1.2b (S-01 plan steps 5-6, deferred) — backend-granted Zotero data dir
+  (`backend_grant.zotero_data_dir` via a native picker command, legacy `zotero_data_dir` not honored)
+  and `import_copy_into_archive`. Not needed for the renderer fs scope (no frontend fs read of those
+  sources); the remaining risk is backend-side: `settings_set("zotero_data_dir", …)` repoints which
+  folder the backend reads Zotero attachments from.
 
 ## Later phases
 

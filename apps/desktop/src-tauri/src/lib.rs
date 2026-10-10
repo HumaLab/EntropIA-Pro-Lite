@@ -6,6 +6,7 @@ mod audio_preview;
 pub mod bibliography;
 mod db;
 mod dev_profile;
+pub mod fs_scope;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name
 // + its command/struct surface are identical in both arms (DependencyId diverges
@@ -769,6 +770,12 @@ pub fn run() {
                     )
                 })?;
             }
+
+            // The renderer's file-system scope: only the archive directories
+            // it works in, never the database (S-01).
+            fs_scope::grant_frontend_fs_scope(app.handle(), &app_dir, &cache_dir).map_err(|e| {
+                fail("No se pudo habilitar el acceso a la carpeta de datos.", e)
+            })?;
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
             app.manage(store_updates::StoreUpdateState::new());
@@ -3133,30 +3140,37 @@ mod tests {
     }
 
     #[test]
-    fn the_fs_capability_exposes_only_the_shared_directory() {
+    fn the_fs_capability_grants_no_directory_and_denies_the_database() {
         let raw = fs::read_to_string("capabilities/default.json").expect("read capabilities");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse capabilities");
         let permissions = parsed["permissions"]
             .as_array()
             .expect("permissions is an array");
 
+        // The directories are granted at runtime (`fs_scope`), derived from
+        // `path_utils` like the asset protocol scope; the static scope only
+        // denies the database under the shared roots.
         let scope = permissions
             .iter()
             .find(|entry| entry["identifier"] == "fs:scope")
             .expect("an fs:scope permission");
-        let allowed: Vec<String> = scope["allow"]
+        assert!(
+            scope.get("allow").is_none(),
+            "fs:scope must not allow paths"
+        );
+        let denied: Vec<String> = scope["deny"]
             .as_array()
-            .expect("allow is an array")
+            .expect("deny is an array")
             .iter()
             .filter_map(|entry| entry["path"].as_str())
             .map(str::to_string)
             .collect();
 
         assert_eq!(
-            allowed,
+            denied,
             vec![
-                format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
-                format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+                format!("$DATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+                format!("$LOCALDATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
             ]
         );
 

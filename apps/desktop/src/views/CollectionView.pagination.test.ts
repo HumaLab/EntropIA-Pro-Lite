@@ -35,6 +35,7 @@ vi.mock('$lib/file-import', () => ({
   deleteAssetFile: vi.fn(),
   deleteImageThumbnail: vi.fn(),
   deletePdfThumbnail: vi.fn(),
+  isOutsideDataDir: () => false,
   resolveStoredAssetPath: (path: string) => path,
 }))
 

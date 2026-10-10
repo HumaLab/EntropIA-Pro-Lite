@@ -13,6 +13,7 @@ import {
   deletePdfThumbnail,
   duplicateAssetFile,
   getNextAssetCopyName,
+  isOutsideDataDir,
   primeDataDir,
   resetDataDirCache,
   resolveStoredAssetPath,
@@ -562,5 +563,57 @@ describe('duplicateAssetFile with a relative stored path', () => {
     const [source, destination] = vi.mocked(copyFile).mock.calls[0]!
     expect(source).toBe('/mock/app-data/assets/col/item/photo.jpg')
     expect(destination.toString().startsWith('/mock/app-data/assets/col/item/')).toBe(true)
+  })
+})
+
+describe('deleteAssetFile never touches files outside the archive', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    resetDataDirCache()
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    vi.mocked(remove).mockResolvedValue(undefined)
+    await primeDataDir()
+  })
+
+  it('skips an external absolute path without calling remove', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+
+    await expect(deleteAssetFile('/home/ana/Libros/externo.pdf')).resolves.toBeUndefined()
+
+    expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('removes a legacy absolute path inside the data directory', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+
+    await deleteAssetFile('/mock/app-data/assets/col/item/a.pdf')
+
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col/item/a.pdf')
+  })
+
+  it('removes a relative key resolved against the data directory', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+
+    await deleteAssetFile('assets/col/item/a.pdf')
+
+    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col/item/a.pdf')
+  })
+})
+
+describe('isOutsideDataDir', () => {
+  beforeEach(() => {
+    resetDataDirCache()
+  })
+
+  it('cannot tell before the data directory is primed', () => {
+    expect(isOutsideDataDir('/home/ana/a.pdf')).toBe(false)
+  })
+
+  it('tells archive paths from external ones, including a lookalike prefix', async () => {
+    await primeDataDir()
+
+    expect(isOutsideDataDir('/mock/app-data/assets/a.pdf')).toBe(false)
+    expect(isOutsideDataDir('/mock/app-data-elsewhere/a.pdf')).toBe(true)
+    expect(isOutsideDataDir('/home/ana/a.pdf')).toBe(true)
   })
 })
