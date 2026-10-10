@@ -260,7 +260,17 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `cargo test` 2780 / 0 / 35; app_acl 15, acl_manifest_guard 7; Pro `db::` 99; fmt, clippy
       clean (Pro: only the 9 known); desktop Pro 3510, Lite 3489 (+ known route-loader flake);
       store 377; typecheck and lint clean (3 pre-existing lint warnings in untouched files).
-    - [ ] S-02d — manual: fresh install and main views in a dev profile (user).
+    - [x] S-02d — fresh install and main views in a dev profile (agent-run, 2026-10-10,
+      profile `s02-fresh`, Lite `VITE_LOCAL_ML=0`, isolated Xvfb display). Startup line
+      `profile=dev:s02-fresh ... sync=disabled`; archive shared untouched. Fresh DB migrated to
+      `0058_processing_ner_tasks` (58 `_migrations` rows) with 54 `trg_sync_*` triggers, so
+      `PRAGMA defer_foreign_keys` ran under the authorizer. Walked with mouse: Inicio,
+      Colecciones (list), collection detail, item view (viewer + notes panel), Chat,
+      Investigación and Escritura — all render, no error dialog, zero `app-log:error` and zero
+      authorizer denials in the log. Notes: WebKitGTK needs `GDK_BACKEND=x11` (the shell's
+      `WAYLAND_DISPLAY` made it pick Wayland and no window mapped) plus
+      `WEBKIT_DISABLE_COMPOSITING_MODE=1` under Xvfb; the window starts hidden until
+      `splash_finish`.
     - RDD, per slice: S-02a `review-66bda845393ff635` approved (no findings); S-02b
       `review-ee05776b5134c924` approved, reviewed WITHOUT the generated
       `tests/fixtures/migration_ipc.json` (164 KB exceeded the reviewer context budget; user
