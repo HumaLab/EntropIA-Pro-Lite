@@ -49,7 +49,9 @@ jobs:
             fi
           fi
 
-          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|src/.*\.rs|scripts/.*\.ps1)$)' >/dev/null; then
+          # Integration tests, capabilities (the ACL tests read them), the
+          # vecscan crate and this workflow change what the Rust jobs check.
+          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^crates/.*\.(rs|toml)$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|(src|tests)/.*\.rs|capabilities/.*\.json|scripts/.*\.ps1)$)' >/dev/null; then
             echo "has_rs_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_rs_changes=false" >> "$GITHUB_OUTPUT"
