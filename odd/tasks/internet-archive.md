@@ -99,7 +99,7 @@ collection inventory is persisted (plan §1, D5).
 - [x] 12. Collection browsing (T2.1): page through a collection with Advanced
       Search, `collection:<id>`, stable `sort[]=identifier asc`, reusing the
       search builder and limits.
-- [ ] 13. Job and manifest model (plan §4.2, T2.4): job and file states,
+- [x] 13. Job and manifest model (plan §4.2, T2.4): job and file states,
       validated transitions, idempotent terminal states, and the restart
       normalization rules (`running`→`ready`, `downloading`/`verifying`→`queued`,
       `importing`→`verified`, `cancelling`→`cancelled`). Pure, no I/O.
@@ -157,6 +157,16 @@ collection inventory is persisted (plan §1, D5).
   clippy, 52/52 twice, `Cargo.toml` unchanged, no prior test lost. Live smoke
   (parent): `opensource` page 1 returned 5 of 1225104 items; all other live checks
   still pass.
+- 2026-10-10, task 13: pure `job.rs` (no fs/net/clock): `Job`, `JobFile`,
+  `ImportTarget`, `JobState`, `FileState`, validated transitions, `settle`,
+  `request_cancel`, `finish_cancel_if_idle`, `normalize_after_restart`; serde
+  snake_case for `job.json`. RED: 11 tests against `todo!()` stubs. GREEN: 63.
+  Parent review found a gap the plan did not cover: a `Cancelling` job restarted
+  with an `Importing` file marked it `Cancelled` and silently kept its staging
+  (possible partial Corpus item, leaked file). Fixed test-first:
+  `RestartEffects.needs_reconcile` reports it; the caller keeps a complete item or
+  discards a partial one, then deletes staging (Phase 3 must honor this).
+  Independent verifier: fmt, clippy, 63/63 twice, module pure.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,

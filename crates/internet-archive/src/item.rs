@@ -78,7 +78,8 @@ pub struct PdfFile {
 }
 
 /// Declared `source` bucket of a file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FileSource {
     /// `source` is `original` (any case).
     Original,

@@ -13,6 +13,7 @@ use std::time::Duration;
 pub mod client;
 pub mod error;
 pub mod item;
+pub mod job;
 pub mod policy;
 pub mod resolve;
 pub mod search;
