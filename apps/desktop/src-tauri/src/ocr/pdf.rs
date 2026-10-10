@@ -881,9 +881,10 @@ fn cancelled_output_error() -> pdf_extract::OutputError {
     ))
 }
 
-/// pdf-extract 0.7.12 keeps `maybe_decrypt` private; this is that step
-/// verbatim: a permissions-only file opens with the empty user password, and
-/// a real user password fails with the crate's own hint on stderr.
+/// pdf-extract 0.12.1 keeps `maybe_decrypt` private; this is that step: a
+/// permissions-only file opens with the empty user password, and a real user
+/// password fails with the crate's own hint. The crate logs that hint through
+/// `log::error!`; this copy keeps it on stderr.
 fn maybe_decrypt_pdf_extract(
     doc: &mut pdf_extract::Document,
 ) -> Result<(), pdf_extract::OutputError> {
@@ -905,7 +906,7 @@ fn maybe_decrypt_pdf_extract(
     Ok(())
 }
 
-/// Mirrors pdf-extract 0.7.12's `extract_text_from_mem` exactly — same
+/// Mirrors pdf-extract 0.12.1's `extract_text_from_mem` exactly — same
 /// [`pdf_extract::Document::load_mem`], same decrypt step
 /// ([`maybe_decrypt_pdf_extract`]), same [`pdf_extract::output_doc`] over
 /// [`pdf_extract::PlainTextOutput`] — with [`PageProgressOutput`] around the
@@ -985,9 +986,9 @@ pub fn extract_pdf_text_with_progress(
 /// Extract text from the native text layer of a PDF byte slice.
 /// Returns the raw extracted text or an error message.
 ///
-/// `pdf-extract` signals unsupported constructs (function type 4 tint
-/// transforms, DeviceN spaces, dangling references, fonts without a unicode
-/// map) with `panic!` instead of an error, and that panic is contained here,
+/// `pdf-extract` signals unsupported constructs (DeviceN spaces, missing
+/// colour spaces, dangling references, fonts without a unicode map) with
+/// `panic!` instead of an error, and that panic is contained here,
 /// at the narrowest boundary, so every caller — bibliography extraction,
 /// corpus import, OCR fallback — receives an ordinary `Err`. Containment
 /// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
@@ -2322,10 +2323,76 @@ mod tests {
 
     /// 816 bytes minimised from real library PDFs: a page whose colour space
     /// is a `Separation` with a PostScript-calculator (`/FunctionType 4`) tint
-    /// transform. `pdf-extract` 0.7 answers it with `panic!("unhandled
-    /// function type 4")` instead of an error.
+    /// transform. `pdf-extract` 0.7 answered it with `panic!("unhandled
+    /// function type 4")`; 0.12 evaluates the function and reads the text.
     const TYPE4_TINT_PDF: &[u8] =
         include_bytes!("../../tests/fixtures/pdf-type4-tint-transform.pdf");
+
+    /// A one-page PDF with `page_entries` added to the page dictionary and, when
+    /// given, `content` as its content stream. The cross-reference table is
+    /// correct, so the parser takes its normal path.
+    fn one_page_pdf(page_entries: &str, content: Option<&str>) -> Vec<u8> {
+        let contents = if content.is_some() {
+            " /Contents 4 0 R"
+        } else {
+            ""
+        };
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10]{contents} {page_entries} >>"
+            ),
+        ];
+        if let Some(content) = content {
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ));
+        }
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    /// RUSTSEC-2026-0187: lopdf before 0.42 parsed nested objects recursively
+    /// with no depth limit, so a crafted PDF overflowed the stack. That aborts
+    /// the process — `catch_unwind` cannot contain it — and PDFs arrive from
+    /// the user, the Navegador and Zotero. The extraction must return.
+    #[test]
+    fn extract_pdf_text_survives_deeply_nested_objects() {
+        let depth = 100_000;
+        let nested = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        let pdf = one_page_pdf(&format!("/Nested {nested}"), None);
+
+        let result = extract_pdf_text(&pdf);
+
+        assert_eq!(result, Ok(String::new()), "the page holds no text");
+    }
+
+    /// A page that selects a colour space its resources never declare:
+    /// `pdf-extract` answers it with `panic!("missing colorspace ...")`.
+    fn parser_panic_pdf() -> Vec<u8> {
+        one_page_pdf("/Resources << >>", Some("/CS0 cs"))
+    }
 
     #[test]
     fn extract_pdf_text_turns_a_parser_panic_into_an_error() {
@@ -2333,9 +2400,17 @@ mod tests {
         // dangling references, fonts without a unicode map). A panic must
         // never cross this boundary: callers get an honest Err they can
         // route, not an unwinding thread.
-        let error = extract_pdf_text(TYPE4_TINT_PDF).expect_err("the parser panics on this file");
+        let error =
+            extract_pdf_text(&parser_panic_pdf()).expect_err("the parser panics on this file");
 
         assert_eq!(error, UNREADABLE_PDF_TEXT_MESSAGE);
+    }
+
+    #[test]
+    fn extract_pdf_text_reads_a_page_with_a_type4_tint_transform() {
+        let text = extract_pdf_text(TYPE4_TINT_PDF).expect("pdf-extract 0.12 reads this file");
+
+        assert!(text.contains("Texto nativo legible"), "{text:?}");
     }
 
     /// Text PDFs with an owner password and an EMPTY user password — the
@@ -2459,14 +2534,19 @@ mod tests {
     const RC4_40_INLINE_IMAGE_TEXT_PDF: &[u8] =
         include_bytes!("../../tests/fixtures/pdf-rc4-40-inline-image-text.pdf");
 
-    /// `pdf-extract` answers `Ok("")` for a page with an inline image before
-    /// its text: no error, no panic, no text. The fixture only guards the fix
-    /// while that stays true.
+    /// `pdf-extract` 0.7 answered `Ok("")` for a page with an inline image
+    /// before its text, which is why `extract_pdf_text_with_progress` asks the
+    /// page layer when the whole-document text is blank. 0.12 reads this page
+    /// itself, so this fixture no longer reaches that fallback; no fixture
+    /// does today.
     #[test]
-    fn the_inline_image_fixture_still_defeats_the_whole_document_parser() {
+    fn the_whole_document_parser_reads_a_page_with_an_inline_image() {
         let plain = open_with_empty_password(RC4_40_INLINE_IMAGE_TEXT_PDF).expect("opens");
         let text = pdf_extract::extract_text_from_mem(&plain).expect("no error");
-        assert!(text.trim().is_empty(), "pdf-extract read {text:?}");
+        assert!(
+            text.contains("Informe sociolaboral del Partido de General Pueyrredon"),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -2614,7 +2694,7 @@ mod tests {
 
     #[test]
     fn the_progress_pass_contains_the_parser_panic_like_the_plain_path() {
-        let outcome = extract_text_from_mem_reported(TYPE4_TINT_PDF, None, None);
+        let outcome = extract_text_from_mem_reported(&parser_panic_pdf(), None, None);
 
         assert!(
             matches!(outcome, ExtractPassOutcome::Panicked),
