@@ -218,7 +218,7 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
       discard a partial one with `discardFailedImport`, exported unchanged),
       then confirm or report failure; cancel checked between files; reconcile
       leftovers from a cancelled job.
-- [ ] 26. (Split: 26a the dialog component, its states and texts; 26b entry
+- [x] 26. (Split: 26a the dialog component, its states and texts; 26b entry
       points and startup reconcile. MVP imports only: no post-processing option,
       plan §9 default; limits use their defaults, no settings UI yet.)
       `views/InternetArchiveDialog.svelte`: search, collection and link
@@ -343,6 +343,16 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
   both fixed. RED: missing component, then the two token tests. GREEN: app
   `internet_archive` 74, `acl_manifest_guard` 6, `Cargo.lock` unchanged; desktop
   250 files green in both variants (3546 and 3525 tests); typecheck 0 errors in
+  both; eslint clean.
+- 2026-10-10, task 26b (commit 8a1ae94a): "Desde Internet Archive" in
+  `ImportSourcesDialog` (opened from `HomeView`) and in `CollectionView`
+  (preselected collection); resume notice for started jobs on dialog open;
+  `runStartupReconcile` from `App.svelte` after the store is ready (once, never
+  throws). RED: 5 view tests plus the missing reconcile module. GREEN. Parent
+  review found that resuming a job left `ready` (or `running` without a runner)
+  after a restart never restarted its downloads; fixed test-first by calling
+  `iaStartImport` when no runner is active (RED: 2 tests, then GREEN). Desktop
+  251 files green in both variants (3559 and 3538 tests); typecheck 0 errors in
   both; eslint clean.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
