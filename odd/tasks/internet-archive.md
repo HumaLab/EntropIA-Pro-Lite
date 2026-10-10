@@ -200,6 +200,32 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       complete (parent asset plus pages 1..N with files on disk); otherwise
       reject and keep the file `verified` with its staging.
 
+## Phase 4 tasks (frontend)
+
+Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
+`lib/navegador-copy.ts` (orchestration over the importer),
+`views/NavegadorCopyDialog.svelte` (destination picker),
+`views/ImportSourcesDialog.svelte` (entry point). Tests run with
+`VITE_LOCAL_ML=0` and `1`. Visual check needs the user, under
+`ENTROPIA_DEV_PROFILE`.
+
+- [ ] 24. TS client `lib/internet-archive.ts`: typed wrappers for the 17
+      `ia_*` commands, `parseIaError` for `<code>: <message>`, and a helper
+      for the `ia://job-updated` event.
+- [ ] 25. Import orchestrator `lib/internet-archive-import.ts`: for each
+      verified file, begin, then import through
+      `importClassifiedPathsIntoCollection` (or confirm an existing item, or
+      discard a partial one with `discardFailedImport`, exported unchanged),
+      then confirm or report failure; cancel checked between files; reconcile
+      leftovers from a cancelled job.
+- [ ] 26. `views/InternetArchiveDialog.svelte`: search, collection and link
+      tabs, item files with availability, destination (existing or new
+      collection), preparation summary (duplicates, sizes, synced volume),
+      progress with cancel, results; entry points in `ImportSourcesDialog` and
+      `CollectionView`; texts in `i18n.ts` (es and en).
+- [ ] 27. Variant checks: typecheck, lint and desktop tests with
+      `VITE_LOCAL_ML=0` and `1`; then the user's visual check.
+
 ## Evidence
 
 - 2026-10-10, task 17: `download.rs` streams to `<dest>.partial`, renames only
