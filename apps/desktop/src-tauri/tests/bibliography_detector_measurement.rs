@@ -14,7 +14,7 @@
 //! For every PDF attachment with stored `bibliographic_page_texts` rows the
 //! measurement resolves the file with the app's own resolver, reads the
 //! stored-`rich` pages with the part-A PDFium reader, and reports how the
-//! detector splits them (rule 1 vs rule 2), plus how many STORED page texts
+//! detector splits them (rules 1-4), plus how many STORED page texts
 //! it flags — the size of the reprocess candidate list. Full page texts
 //! never leave the process; samples carry at most 200 characters.
 
@@ -134,11 +134,13 @@ fn measure_bibliography_detector_on_db_copy() {
     let mut pdfium_rule1 = 0usize;
     let mut pdfium_rule2 = 0usize;
     let mut pdfium_rule3 = 0usize;
+    let mut pdfium_rule4 = 0usize;
     let mut pdfium_flagged = 0usize;
     let mut stored_flagged = 0usize;
     let mut stored_rule1 = 0usize;
     let mut stored_rule2 = 0usize;
     let mut stored_rule3 = 0usize;
+    let mut stored_rule4 = 0usize;
     let mut stored_flagged_rich = 0usize;
     let mut stored_flagged_attachments: HashSet<String> = HashSet::new();
     let mut pdfium_flagged_attachments: HashSet<String> = HashSet::new();
@@ -176,7 +178,14 @@ fn measure_bibliography_detector_on_db_copy() {
             if flags.punctuation_soup {
                 stored_rule3 += 1;
             }
-            if flags.glued_words || flags.old_ocr_noise || flags.punctuation_soup {
+            if flags.shredded_text {
+                stored_rule4 += 1;
+            }
+            if flags.glued_words
+                || flags.old_ocr_noise
+                || flags.punctuation_soup
+                || flags.shredded_text
+            {
                 stored_flagged += 1;
                 if page.quality == "rich" {
                     stored_flagged_rich += 1;
@@ -240,6 +249,10 @@ fn measure_bibliography_detector_on_db_copy() {
                 pdfium_rule3 += 1;
                 rules.push("rule 3 (punctuation soup)");
             }
+            if flags.shredded_text {
+                pdfium_rule4 += 1;
+                rules.push("rule 4 (shredded text)");
+            }
             if rules.is_empty() {
                 continue;
             }
@@ -298,6 +311,7 @@ fn measure_bibliography_detector_on_db_copy() {
     println!("- flagged by rule 1 (glued words): {pdfium_rule1}");
     println!("- flagged by rule 2 (old OCR noise): {pdfium_rule2}");
     println!("- flagged by rule 3 (punctuation soup): {pdfium_rule3}");
+    println!("- flagged by rule 4 (shredded text): {pdfium_rule4}");
     println!(
         "- flagged by any rule: {pdfium_flagged} ({:.2} % of scanned)",
         pct(pdfium_flagged, rich_pages_with_pdfium_text)
@@ -333,6 +347,7 @@ fn measure_bibliography_detector_on_db_copy() {
     println!("- flagged by rule 1 (glued words): {stored_rule1}");
     println!("- flagged by rule 2 (old OCR noise): {stored_rule2}");
     println!("- flagged by rule 3 (punctuation soup): {stored_rule3}");
+    println!("- flagged by rule 4 (shredded text): {stored_rule4}");
     println!(
         "- flagged by any rule: {stored_flagged} ({:.2} % of stored rows)",
         pct(stored_flagged, pages_stored)
