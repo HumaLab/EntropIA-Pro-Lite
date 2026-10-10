@@ -35,6 +35,7 @@
     iaGetImportStatus,
     iaGetItem,
     iaListCollection,
+    iaListJobs,
     iaPrepareImport,
     iaResolveIdentifier,
     iaSearch,
@@ -43,6 +44,7 @@
     parseIaError,
     type IaItemDetails,
     type IaJobStatus,
+    type IaJobSummary,
     type IaPrepareEntry,
     type IaPrepareResult,
     type IaSearchPage,
@@ -165,8 +167,52 @@
 
   let stopListening: (() => void) | null = null
 
+  /**
+   * Started jobs that survived a closed dialog (26b): only jobs the backend
+   * already accepted (`ready`, `running`, `cancelling`) are offered. Drafts
+   * are discarded on close, so offering them would resume nothing.
+   */
+  let resumableJobs = $state<IaJobSummary[]>([])
+
+  async function loadResumableJobs(): Promise<void> {
+    try {
+      const jobs = await iaListJobs()
+      resumableJobs = jobs.filter(
+        (job) => job.state === 'ready' || job.state === 'running' || job.state === 'cancelling'
+      )
+    } catch {
+      // Best effort: a failed listing hides the notice, never the dialog.
+      resumableJobs = []
+    }
+  }
+
+  /**
+   * Switches the dialog to the running phase for an already-started job.
+   * Everything (status, files, target collection) is read back from the
+   * backend — there is no prepare result in memory for these jobs — and the
+   * shared running-phase logic (`enterRunning`) takes it from there.
+   */
+  async function resumeJob(id: string): Promise<void> {
+    problem = null
+    try {
+      const status = await iaGetImportStatus(id)
+      if (status.targetCollectionId) targetCollectionId = status.targetCollectionId
+      // After a restart the job is `ready` (or `running` with no runner):
+      // its queued files only download again once the runner restarts.
+      if (!status.running && (status.state === 'ready' || status.state === 'running')) {
+        await iaStartImport(id)
+      }
+    } catch (reason) {
+      problem = describeError(reason)
+      return
+    }
+    jobId = id
+    enterRunning()
+  }
+
   onMount(() => {
     void loadCollections()
+    void loadResumableJobs()
     onIaJobUpdated(handleJobEvent)
       .then((stop) => {
         stopListening = stop
@@ -809,6 +855,31 @@
     onconfirm={handleDialogConfirm}
   >
     {#if phase === 'discover'}
+      {#if resumableJobs.length > 0}
+        <div class="ia-resume" role="status">
+          <p class="ia-resume__title">{t('internetArchive.resume.title')}</p>
+          <ul class="ia-resume__list">
+            {#each resumableJobs as job (job.id)}
+              <li class="ia-resume__item">
+                <span class="ia-resume__label">
+                  {t('internetArchive.resume.job', {
+                    state: t(`internetArchive.jobState.${job.state}`),
+                    done: formatCount(job.verifiedFiles),
+                    total: formatCount(job.totalFiles),
+                  })}
+                </span>
+                <button
+                  type="button"
+                  class="ia-results__action"
+                  onclick={() => void resumeJob(job.id)}
+                >
+                  {t('internetArchive.resume.action')}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
       <div class="ia-tabs" role="group" aria-label={t('internetArchive.discover.group')}>
         <button
           type="button"
@@ -1398,6 +1469,42 @@
     padding: var(--space-1);
     border-radius: var(--radius-control);
     background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
+  }
+
+  .ia-resume {
+    margin-bottom: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-control);
+    background-color: color-mix(in srgb, var(--color-surface-sunken) 88%, transparent);
+  }
+
+  .ia-resume__title {
+    margin: 0 0 var(--space-1);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+  }
+
+  .ia-resume__list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ia-resume__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .ia-resume__label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
   }
 
   .ia-tabs__tab {

@@ -44,6 +44,7 @@
     VirtualGrid,
   } from '@entropia/ui'
   import CollectionAnalysisPanel from './CollectionAnalysisPanel.svelte'
+  import InternetArchiveDialog from './InternetArchiveDialog.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { ThumbnailQueue, updateThumbnailMeta, type ThumbnailRequest } from '$lib/thumbnail-queue'
   import { buildDocumentCountLabel } from '$lib/document-count-label'
@@ -76,6 +77,7 @@
   let error = $state<string | null>(null)
   let importing = $state(false)
   let exporting = $state(false)
+  let showIaDialog = $state(false)
   type ImportSummary = {
     imported: number
     skipped: number
@@ -811,6 +813,17 @@
     dragActive = false
   }
 
+  /**
+   * The Internet Archive dialog finished into this collection (26b): reload
+   * the item list and announce it exactly like a local import does.
+   */
+  async function handleIaImported() {
+    showIaDialog = false
+    await loadItems()
+    notifyExplorerCollectionChanged()
+    analysisRefreshToken++
+  }
+
   async function handleExportJson() {
     try {
       exporting = true
@@ -1150,6 +1163,16 @@
         <Button
           variant="secondary"
           iconOnly
+          aria-label={$currentLocale && t('collection.importFromInternetArchive')}
+          title={$currentLocale && t('collection.importFromInternetArchive')}
+          onclick={() => (showIaDialog = true)}
+          disabled={importing}
+        >
+          <ActionIcon name="download" size={20} />
+        </Button>
+        <Button
+          variant="secondary"
+          iconOnly
           aria-label={$currentLocale && t('collection.export')}
           title={$currentLocale && t('collection.export')}
           onclick={handleExportJson}
@@ -1365,6 +1388,14 @@
       <p class="page-continuation" data-testid="collection-page-loading">
         {$currentLocale && t('collection.loadingMore')}
       </p>
+    {/if}
+
+    {#if showIaDialog}
+      <InternetArchiveDialog
+        initialCollectionId={collectionId}
+        onClose={() => (showIaDialog = false)}
+        onImported={handleIaImported}
+      />
     {/if}
 
     <!-- Delete confirmation modal -->

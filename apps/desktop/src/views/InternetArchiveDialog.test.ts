@@ -17,6 +17,7 @@ const { iaRef, importRef, storeRef } = vi.hoisted(() => ({
     iaCancelImport: vi.fn(),
     iaDiscardDraft: vi.fn(),
     iaGetImportStatus: vi.fn(),
+    iaListJobs: vi.fn(),
     onIaJobUpdated: vi.fn(),
   },
   importRef: {
@@ -45,6 +46,7 @@ vi.mock('$lib/internet-archive', async (importOriginal) => {
     iaCancelImport: iaRef.iaCancelImport,
     iaDiscardDraft: iaRef.iaDiscardDraft,
     iaGetImportStatus: iaRef.iaGetImportStatus,
+    iaListJobs: iaRef.iaListJobs,
     onIaJobUpdated: iaRef.onIaJobUpdated,
   }
 })
@@ -257,6 +259,7 @@ beforeEach(() => {
   })
   importRef.importVerifiedFiles.mockResolvedValue(importOutcome())
   iaRef.iaDiscardDraft.mockResolvedValue(undefined)
+  iaRef.iaListJobs.mockResolvedValue([])
   onClose.mockReset()
   onImported.mockReset()
 })
@@ -815,6 +818,92 @@ describe('InternetArchiveDialog running and done', () => {
     expect(unlisten).toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
   })
+})
+
+describe('InternetArchiveDialog resume (26b)', () => {
+  const resumableJob = (patch: Record<string, unknown> = {}) => ({
+    id: 'job-9',
+    state: 'running',
+    targetCollectionId: 'col-1',
+    totalFiles: 2,
+    verifiedFiles: 1,
+    ...patch,
+  })
+
+  it('lists a started job with a resume action at the top of the discover phase', async () => {
+    iaRef.iaListJobs.mockResolvedValue([resumableJob()])
+    open()
+
+    expect(await screen.findByText('Importaciones en curso')).toBeInTheDocument()
+    expect(screen.getByText(/En curso/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retomar importación' })).toBeInTheDocument()
+  })
+
+  it('does not offer draft or terminal jobs', async () => {
+    iaRef.iaListJobs.mockResolvedValue([
+      resumableJob({ id: 'job-draft', state: 'draft' }),
+      resumableJob({ id: 'job-done', state: 'completed' }),
+    ])
+    open()
+
+    await waitFor(() => expect(iaRef.iaListJobs).toHaveBeenCalled())
+    await screen.findByRole('group', { name: 'Descubrimiento' })
+    expect(screen.queryByText('Importaciones en curso')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retomar importación' })).toBeNull()
+  })
+
+  it('hides the notice and still discovers when listing jobs fails', async () => {
+    iaRef.iaListJobs.mockRejectedValue(new Error('io: gone'))
+    iaRef.iaSearch.mockResolvedValue({ numFound: 0, items: [] })
+    open()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Buscar en el archivo' }))
+    expect(await screen.findByText('Sin resultados para esta búsqueda.')).toBeInTheDocument()
+    expect(screen.queryByText('Importaciones en curso')).toBeNull()
+  })
+
+  it('resumes into the running phase reading everything from the backend status', async () => {
+    iaRef.iaListJobs.mockResolvedValue([resumableJob()])
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-9', state: 'running' }))
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Retomar importación' }))
+
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+    expect(iaRef.iaGetImportStatus).toHaveBeenCalledWith('job-9')
+    expect(importRef.importVerifiedFiles).toHaveBeenCalledWith(
+      'job-9',
+      expect.objectContaining({ shouldCancel: expect.any(Function) })
+    )
+    expect(iaRef.iaPrepareImport).not.toHaveBeenCalled()
+  })
+
+  it('does not restart a job whose runner is still active', async () => {
+    iaRef.iaListJobs.mockResolvedValue([resumableJob()])
+    iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-9', running: true }))
+    open()
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Retomar importación' }))
+
+    expect(await screen.findByText('Importando…')).toBeInTheDocument()
+    expect(iaRef.iaStartImport).not.toHaveBeenCalled()
+  })
+
+  it.each(['ready', 'running'])(
+    'restarts the downloads of a %s job left without a runner',
+    async (state) => {
+      iaRef.iaListJobs.mockResolvedValue([resumableJob({ state })])
+      iaRef.iaGetImportStatus.mockResolvedValue(
+        jobStatus({ id: 'job-9', state, running: false })
+      )
+      open()
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Retomar importación' }))
+
+      await waitFor(() => expect(iaRef.iaStartImport).toHaveBeenCalledWith('job-9'))
+      expect(await screen.findByText('Importando…')).toBeInTheDocument()
+    }
+  )
 })
 
 describe('InternetArchiveDialog in English', () => {
