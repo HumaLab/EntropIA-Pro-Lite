@@ -43,7 +43,7 @@ These do not travel as separate runtime-payload files: they are compiled or bund
 | `leaflet` | Location map | BSD-2-Clause |
 | `@tiptap/*` | Rich-text editor behind notes | MIT |
 | `pdfmake` | PDF export | MIT |
-| `html-docx-js` | DOCX export | MIT |
+| `docx` | DOCX export | MIT |
 | `drizzle-orm` | Local database access layer | Apache-2.0 |
 | `@fontsource*/*` (Source Sans 3, Source Serif 4, JetBrains Mono, Inter, Literata, IBM Plex Sans, IBM Plex Mono, Lora, Atkinson Hyperlegible Next, Noto Serif, Source Code Pro) | Typography presets; latin/latin-ext subsets only | OFL-1.1 — notices bundled in `resources/fonts/LICENSE` |
 

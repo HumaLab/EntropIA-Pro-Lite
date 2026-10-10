@@ -46,11 +46,11 @@ import { safeHref } from './export-html'
  *
  * # Why the object model and not HTML in a wrapper
  *
- * Spike S4 opened the incumbent, `html-docx-js`, and found no document model at
- * all: its `word/document.xml` is 2 KB of namespaces wrapping an `altChunk`,
- * and the content sits in `word/afchunk.mht`. What a reader sees is produced by
- * the application opening the file, not by the file — and there is no
- * `footnotes.xml`, which §17.1 requires outright.
+ * Spike S4 opened the exporter this replaced, `html-docx-js`, and found no
+ * document model at all: its `word/document.xml` is 2 KB of namespaces
+ * wrapping an `altChunk`, and the content sits in `word/afchunk.mht`. What a
+ * reader sees is produced by the application opening the file, not by the
+ * file — and there is no `footnotes.xml`, which §17.1 requires outright.
  *
  * `docx` 9.7.1 builds the real parts. S4 verified all twelve elements of the
  * matrix in Word, including the one that distinguishes real footnotes from
@@ -545,6 +545,16 @@ function quotedBlock(paragraph: Node, build: Build): Paragraph[] | null {
   return paragraphs
 }
 
+/**
+ * A `colspan`/`rowspan` attribute as a merge count. 1 — and anything that is
+ * not a whole number above it — means no merge. Tiptap may have stored the
+ * value as the string it parsed out of HTML.
+ */
+function spanOf(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  return Number.isInteger(parsed) && parsed > 1 ? parsed : undefined
+}
+
 function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph | Table)[] {
   const kids = childrenOf(node)
 
@@ -632,19 +642,24 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
           rows: kids.map(
             (row) =>
               new TableRow({
-                children: childrenOf(row).map(
-                  (cell) =>
-                    new TableCell({
-                      // A header cell is shaded, which is how S4 verified the
-                      // header row renders as one in Word.
-                      ...(cell.type === 'tableHeader'
-                        ? { shading: { type: ShadingType.CLEAR, fill: 'EEEEEE' } }
-                        : {}),
-                      children: childrenOf(cell).flatMap(
-                        (child) => block(child, build, depth, quoted) as Paragraph[]
-                      ),
-                    })
-                ),
+                children: childrenOf(row).map((cell) => {
+                  const columnSpan = spanOf(cell.attrs?.colspan)
+                  const rowSpan = spanOf(cell.attrs?.rowspan)
+                  return new TableCell({
+                    // A header cell is shaded, which is how S4 verified the
+                    // header row renders as one in Word.
+                    ...(cell.type === 'tableHeader'
+                      ? { shading: { type: ShadingType.CLEAR, fill: 'EEEEEE' } }
+                      : {}),
+                    // A merged cell is written once and continued in the rows
+                    // below; Word needs both halves or the grid shifts left.
+                    ...(columnSpan === undefined ? {} : { columnSpan }),
+                    ...(rowSpan === undefined ? {} : { rowSpan }),
+                    children: childrenOf(cell).flatMap(
+                      (child) => block(child, build, depth, quoted) as Paragraph[]
+                    ),
+                  })
+                }),
               })
           ),
         }),
@@ -684,8 +699,20 @@ function block(node: Node, build: Build, depth = 0, quoted = false): (Paragraph 
   }
 }
 
+/**
+ * The section's page setup, when an exporter asks for its own.
+ *
+ * Word's own default is a one-inch margin, which the manuscript export keeps.
+ * The printable HTML the OCR and report exports share is half an inch — the
+ * old `html-docx-js` call asked for 720 twips — so those exports pass 720.
+ */
+export interface DocxPageSetup {
+  /** Page margins on all four sides, in twips. */
+  margins?: number
+}
+
 /** The document model, before it is packed. Separated so a test can read it. */
-export function buildDocx(doc: Node, context: ExportContext): Document {
+export function buildDocx(doc: Node, context: ExportContext, page: DocxPageSetup = {}): Document {
   const build: Build = {
     context,
     bodies: new Map(),
@@ -757,7 +784,25 @@ export function buildDocx(doc: Node, context: ExportContext): Document {
         },
       ],
     },
-    sections: [{ children: body }],
+    sections: [
+      {
+        ...(page.margins === undefined
+          ? {}
+          : {
+              properties: {
+                page: {
+                  margin: {
+                    top: page.margins,
+                    right: page.margins,
+                    bottom: page.margins,
+                    left: page.margins,
+                  },
+                },
+              },
+            }),
+        children: body,
+      },
+    ],
   })
 }
 
@@ -767,6 +812,10 @@ export function buildDocx(doc: Node, context: ExportContext): Document {
  * `toArrayBuffer`, never `toBuffer`: the app runs in a WebView, which has no
  * Node `Buffer`, and there JSZip refuses the `nodebuffer` output outright.
  */
-export async function toDocx(doc: Node, context: ExportContext): Promise<Uint8Array> {
-  return new Uint8Array(await Packer.toArrayBuffer(buildDocx(doc, context)))
+export async function toDocx(
+  doc: Node,
+  context: ExportContext,
+  page: DocxPageSetup = {}
+): Promise<Uint8Array> {
+  return new Uint8Array(await Packer.toArrayBuffer(buildDocx(doc, context, page)))
 }

@@ -108,7 +108,24 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
 
 ## Later phases
 
-- [ ] Phase 2 — vulnerable dependencies (D-01, D-02, D-08, D-03, D-04)
+- [ ] Phase 2 — vulnerable dependencies (D-01, D-02, D-08, D-03, D-04). Baseline `pnpm audit --prod`:
+  8 high / 11 moderate / 1 low. One stacked branch per item, on `fix/audit-review-followups`.
+  - [x] 2.1 (D-01) — replace `html-docx-js` with `docx` in the OCR export (removes `lodash.merge`,
+    `jszip` 2.7). Branch `fix/d01-ocr-docx-export`, commit `10b157a8`. New `ocr-docx.ts` reads the
+    sanitized OCR HTML into the manuscript `Node` model and builds it with `toDocx`; the `<script>`
+    loader and `types/ocr-export-libraries.d.ts` are gone; `export-docx.ts` now honours
+    `colspan`/`rowspan` and optional page margins (OCR keeps 720 twip; page size is docx's A4 like
+    the manuscript export, html-docx-js wrote Letter). RED: 13 failed (no OOXML structure, no
+    gridSpan/vMerge, pgMar 1440); GREEN: focused 96/96; desktop Pro 3507 / Lite 3486 passed,
+    UI 847/847, lint, both typechecks and both `vite build`s clean. Audit: high 8 → 6,
+    moderate 11 → 10; `docx` brings `jszip` 3.10.2 (patched).
+  - [ ] 2.2.1 (D-02) — `svelte` >= 5.55.7, `devalue` >= 5.9.3.
+  - [ ] 2.2.2 (D-02) — `markdown-it` >= 14.3.1, `linkify-it` >= 5.0.2 (override).
+  - [ ] 2.2.3 (D-02) — `drizzle-orm` 0.40 → >= 0.45.2.
+  - [ ] 2.2.4 (D-02) — Tiptap 2 → 3: own PR or documented accepted risk (moderate).
+  - [ ] 2.3 (D-08) — Rust advisories (`cargo audit`).
+  - [ ] 2.4 (D-03) — unused/duplicated deps.
+  - [ ] 2.5 (D-04) — test tooling (vitest, happy-dom, vite).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
 - [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
 - [ ] Phase 5 — performance and observability (P-01..P-04)

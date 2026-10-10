@@ -34,7 +34,7 @@ const EXTENSION: Record<ExportFormat, { name: string; extension: string }> = {
 
 const MAX_FILENAME_STEM_LENGTH = 80
 
-/** Generators are injectable so a test never loads the html-docx browser bundle. */
+/** Generators are injectable so a test never packs a DOCX. */
 export interface InvestigationExportGenerators {
   docx: (html: string) => Promise<Uint8Array>
 }
