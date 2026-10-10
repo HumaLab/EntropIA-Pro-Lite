@@ -5,10 +5,16 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 
 ## Phase 0 — Linux CI baseline (branch `ci/audit-phase-0`)
 
-- [ ] P0.1 (Q-05) — Lite `cargo test` passes on Linux. The `navegador/download.rs` half was already
-  fixed in `5905a2dd`; the remaining failures come from the baseline run.
-- [ ] P0.2 (C-01) — `rust-lite-linux` CI job on `ubuntu-22.04`: fmt, clippy `-D warnings`, test,
-  no features, gated by `detect-rust-changes`.
+- [x] P0.1 (Q-05) — Lite `cargo test` passes on Linux. The `navegador/download.rs` half was already
+  fixed in `5905a2dd`. Baseline (Lite, Linux): only
+  `attachment_page_keeps_pdfs_..._decodes_the_enclosure` failed (RED: `C:/Libros/externo.pdf` is not
+  absolute on Linux, so `native_path` was `None`). Production is right; the fixture now uses a
+  platform-native absolute path, plus a non-Windows test that a drive-letter path is not local.
+  GREEN: `bibliography_processing` 168/168; every other binary was already green (lib 2444 passed);
+  clippy `-D warnings` and fmt clean.
+- [x] P0.2 (C-01) — `rust-lite-linux` CI job on `ubuntu-22.04`: fmt, clippy `-D warnings`, test,
+  no features, gated by `detect-rust-changes`. Commit `cd357702`. Pending: observe the job green on
+  the PR (needs a push).
 - [ ] P0.3 (E-02 verification) — Pro `.deb` on a clean Ubuntu 22.04 VM without the runtime: does
   Pdfium load? Manual, needs a VM; cannot run from this session.
 
