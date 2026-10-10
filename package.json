@@ -41,7 +41,8 @@
   },
   "pnpm": {
     "overrides": {
-      "prosemirror-view": "^1.42.3"
+      "prosemirror-view": "^1.42.3",
+      "markdown-it": "^14.3.1"
     }
   }
 }
