@@ -20,7 +20,13 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 
 ## Phase 1 — Critical security (small changes)
 
-- [ ] P1.1 (S-03) — renderer cannot overwrite the runtime bootstrap trust source.
+- [x] P1.1 (S-03) — renderer cannot overwrite the runtime bootstrap trust source. Branch
+  `fix/s03-runtime-bootstrap-trust`, commit `fdaf827b`. RED (fix neutralized, Pro): 4 new tests failed
+  (set/delete refused, built-in source wins, built-in key never replaced). GREEN: Pro
+  `settings::` + `runtime::manager::` 70/70, Lite `settings::` 22/22; clippy Lite clean.
+  Note: the plan's step "ACL test" is n/a here (the guard is in the command body, covered by unit
+  tests). `db_execute*` can still write `app_settings` until S-02 (Phase 3); release precedence is
+  what neutralizes that path meanwhile.
 - [ ] P1.3 (S-04) — `prosemirror-view` >= 1.42.3.
 - [ ] P1.2 (S-01) — narrow the `fs` plugin scope (inventory first).
 
@@ -35,6 +41,13 @@ related tasks; security never mixed with refactors. Work starts at Phase 0, then
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
+
+- Pro on Linux: `cargo clippy --features local-ml --all-targets -D warnings` fails with 9
+  pre-existing errors in `src/deps/uv.rs` (dead Windows-only consts, unneeded `mut`/`return`) and
+  `src/llm/download.rs:351` (unreachable statement in a test). No CI job covers Pro on Linux;
+  follow-up candidate for Phase 0/7. Local Pro builds need a working CMake: the `~/.local/bin/cmake`
+  pip shim is broken; `/tmp/entropia-cmake-venv/bin/cmake` (3.31, via uv) works with
+  `CMAKE=... PATH=...`.
 
 - RDD review: both attempts on Phase 0 (lineage `review-0ebf7219c9620f7f`, docs+CI vs `main`, 128 KB
   prompt; lineage `review-3e8616c5d9968c27`, Phase 0 only vs `40f73ea3`, 17 KB prompt) ended in

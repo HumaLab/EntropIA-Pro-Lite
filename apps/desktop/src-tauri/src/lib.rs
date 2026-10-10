@@ -966,6 +966,7 @@ pub fn run() {
 
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
                 .expect("Failed to migrate legacy default OpenRouter model");
+            settings::log_stored_runtime_bootstrap_settings(&ui_conn);
             let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
             if secret_migration.migrated > 0 {
                 eprintln!(

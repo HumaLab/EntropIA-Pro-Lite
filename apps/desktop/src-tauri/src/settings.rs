@@ -25,6 +25,15 @@ pub const RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY: &str = "runtime_bootstrap_manifest
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY: &str = "runtime_bootstrap_public_key_id";
 #[allow(dead_code)]
 pub const RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX: &str = "runtime_bootstrap_public_key.";
+/// Key prefixes only the backend may write: `settings_set` and
+/// `settings_delete` refuse them, so a compromised renderer cannot repoint
+/// the managed-runtime download at its own manifest and signing key (S-03).
+const BACKEND_ONLY_SETTING_PREFIXES: [&str; 1] = ["runtime_bootstrap_"];
+/// Release builds trust only the compiled-in runtime bootstrap source when one
+/// is set; debug builds let stored settings override it to test staging
+/// manifests.
+#[cfg(feature = "local-ml")]
+const SETTINGS_MAY_OVERRIDE_BUILTIN_RUNTIME_SOURCE: bool = cfg!(debug_assertions);
 const REDACTED_SETTING_VALUE: &str = "[redacted]";
 const SECRET_REF_PREFIX: &str = "secret_ref:";
 const APP_CREDENTIAL_SERVICE: &str = "com.entropia.desktop credentials";
@@ -114,13 +123,67 @@ pub async fn settings_set(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        persist_setting(&conn, &key, &value)?;
-        resume_work_after_setting_change(&conn, &key);
+        set_setting_from_renderer(&conn, &key, &value)?;
     }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
     }
     Ok(())
+}
+
+/// Whether the renderer may set or delete `key` through the settings IPC.
+pub(crate) fn is_renderer_writable_setting(key: &str) -> bool {
+    !BACKEND_ONLY_SETTING_PREFIXES
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+fn ensure_renderer_writable_setting(key: &str) -> Result<(), String> {
+    if is_renderer_writable_setting(key) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Setting '{key}' is managed by the app and cannot be changed from the interface"
+        ))
+    }
+}
+
+/// The database side of [`settings_set`]: refuses backend-only keys, then
+/// saves the value and resumes the work it unblocks.
+fn set_setting_from_renderer(
+    conn: &rusqlite::Connection,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    ensure_renderer_writable_setting(key)?;
+    persist_setting(conn, key, value)?;
+    resume_work_after_setting_change(conn, key);
+    Ok(())
+}
+
+/// The database side of [`settings_delete`]: refuses backend-only keys, then
+/// removes the row (the keyring cleanup stays in the command).
+fn delete_setting_from_renderer(conn: &rusqlite::Connection, key: &str) -> Result<(), String> {
+    ensure_renderer_writable_setting(key)?;
+    remove_setting_row(conn, key)
+}
+
+/// Logs, without values and without deleting them, the runtime bootstrap
+/// settings found at startup: older builds let the renderer write them.
+pub fn log_stored_runtime_bootstrap_settings(conn: &rusqlite::Connection) {
+    let keys: Vec<String> = conn
+        .prepare("SELECT key FROM app_settings WHERE key GLOB 'runtime_bootstrap_*' ORDER BY key")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<String>, _>>()
+        })
+        .unwrap_or_default();
+    if !keys.is_empty() {
+        eprintln!(
+            "[settings] Stored runtime bootstrap settings found ({}); release builds with a built-in source ignore them",
+            keys.join(", ")
+        );
+    }
 }
 
 /// Settings that decide whether the embedding engine can initialize.
@@ -268,7 +331,7 @@ pub async fn settings_delete(
             .ui_conn
             .lock()
             .map_err(|e| format!("DB lock error: {e}"))?;
-        remove_setting_row(&conn, &key)?;
+        delete_setting_from_renderer(&conn, &key)?;
         if is_secret_setting_key(&key) {
             if let Err(error) = delete_secret(&key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
@@ -666,16 +729,35 @@ pub fn get_runtime_bootstrap_remote_source(
         option_env!("ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"),
         option_env!("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID"),
         option_env!("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64"),
+        SETTINGS_MAY_OVERRIDE_BUILTIN_RUNTIME_SOURCE,
     )
 }
 
+/// Stored settings are used when no built-in source is compiled in, or when
+/// `settings_may_override` allows them to replace it (debug builds).
 #[cfg(feature = "local-ml")]
 fn get_runtime_bootstrap_remote_source_with_builtin(
     conn: &rusqlite::Connection,
     builtin_manifest_url: Option<&str>,
     builtin_public_key_id: Option<&str>,
     builtin_public_key_base64: Option<&str>,
+    settings_may_override: bool,
 ) -> Result<Option<BootstrapRemoteSource>, String> {
+    let builtin_is_set = [
+        builtin_manifest_url,
+        builtin_public_key_id,
+        builtin_public_key_base64,
+    ]
+    .into_iter()
+    .any(|value| trimmed_optional(value).is_some());
+    if builtin_is_set && !settings_may_override {
+        return builtin_runtime_bootstrap_remote_source(
+            builtin_manifest_url,
+            builtin_public_key_id,
+            builtin_public_key_base64,
+        );
+    }
+
     let manifest_url = get_setting(conn, RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
@@ -798,14 +880,8 @@ fn get_runtime_bootstrap_public_key_with_builtin(
     builtin_public_key_id: Option<&str>,
     builtin_public_key_base64: Option<&str>,
 ) -> Result<String, String> {
-    let key = format!("{RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX}{public_key_id}");
-    if let Some(configured_key) = get_setting(conn, &key)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(configured_key);
-    }
-
+    // The built-in key id always resolves to the built-in key: a stored
+    // setting never replaces the official signing key.
     if trimmed_optional(builtin_public_key_id).as_deref() == Some(public_key_id) {
         if let Some(public_key) = trimmed_optional(builtin_public_key_base64) {
             return Ok(public_key);
@@ -813,6 +889,14 @@ fn get_runtime_bootstrap_public_key_with_builtin(
         return Err(format!(
             "Bootstrap public key '{public_key_id}' is selected by {BUILTIN_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_ENV}, but {BUILTIN_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64_ENV} is not configured"
         ));
+    }
+
+    let key = format!("{RUNTIME_BOOTSTRAP_PUBLIC_KEY_KEY_PREFIX}{public_key_id}");
+    if let Some(configured_key) = get_setting(conn, &key)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(configured_key);
     }
 
     Err(format!(
@@ -836,6 +920,128 @@ mod tests {
 
     fn boxed(message: &str) -> Box<dyn std::error::Error + Send + Sync> {
         message.to_string().into()
+    }
+
+    const RUNTIME_BOOTSTRAP_KEYS: [&str; 3] = [
+        RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY,
+        RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY,
+        "runtime_bootstrap_public_key.entropia-root",
+    ];
+
+    // S-03: a compromised renderer must not repoint the managed-runtime
+    // download at its own manifest and signing key.
+    #[test]
+    fn the_renderer_cannot_set_the_runtime_bootstrap_trust_source() {
+        let conn = in_memory_settings_db();
+        for key in RUNTIME_BOOTSTRAP_KEYS {
+            let error = set_setting_from_renderer(&conn, key, "https://attacker.invalid/x")
+                .expect_err("a backend-only key must be refused");
+            assert!(error.contains(key), "{error}");
+            assert_eq!(
+                get_raw_setting(&conn, key),
+                None,
+                "{key} must not be written"
+            );
+        }
+    }
+
+    #[test]
+    fn the_renderer_cannot_delete_the_runtime_bootstrap_trust_source() {
+        let conn = in_memory_settings_db();
+        for key in RUNTIME_BOOTSTRAP_KEYS {
+            set_setting(&conn, key, "configured").expect("seed");
+            delete_setting_from_renderer(&conn, key)
+                .expect_err("a backend-only key must be refused");
+            assert_eq!(get_raw_setting(&conn, key).as_deref(), Some("configured"));
+        }
+    }
+
+    #[test]
+    fn the_renderer_still_sets_and_deletes_ordinary_settings() {
+        let conn = in_memory_settings_db();
+        set_setting_from_renderer(&conn, "ui_theme", "dark").expect("ordinary key");
+        assert_eq!(get_raw_setting(&conn, "ui_theme").as_deref(), Some("dark"));
+        delete_setting_from_renderer(&conn, "ui_theme").expect("ordinary key");
+        assert_eq!(get_raw_setting(&conn, "ui_theme"), None);
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn the_builtin_runtime_bootstrap_source_wins_when_settings_may_not_override_it() {
+        let conn = in_memory_settings_db();
+        set_setting(
+            &conn,
+            RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY,
+            "https://attacker.invalid/bootstrap.json",
+        )
+        .expect("save manifest url");
+        set_setting(&conn, RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY, "attacker").expect("save id");
+
+        let source = get_runtime_bootstrap_remote_source_with_builtin(
+            &conn,
+            Some("https://example.com/runtime/bootstrap.json"),
+            Some("entropia-root"),
+            Some("base64-public-key"),
+            false,
+        )
+        .expect("built-in source should load");
+
+        assert_eq!(
+            source,
+            Some(BootstrapRemoteSource {
+                manifest_url: "https://example.com/runtime/bootstrap.json".to_string(),
+                public_key_id: "entropia-root".to_string(),
+            })
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn stored_runtime_bootstrap_settings_override_the_builtin_source_only_when_allowed() {
+        let conn = in_memory_settings_db();
+        set_setting(
+            &conn,
+            RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY,
+            "https://staging.example.com/bootstrap.json",
+        )
+        .expect("save manifest url");
+        set_setting(&conn, RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY, "staging").expect("save id");
+
+        let source = get_runtime_bootstrap_remote_source_with_builtin(
+            &conn,
+            Some("https://example.com/runtime/bootstrap.json"),
+            Some("entropia-root"),
+            Some("base64-public-key"),
+            true,
+        )
+        .expect("stored source should load");
+
+        assert_eq!(
+            source.map(|source| source.public_key_id).as_deref(),
+            Some("staging")
+        );
+    }
+
+    #[cfg(feature = "local-ml")]
+    #[test]
+    fn a_stored_public_key_never_replaces_the_builtin_key_id() {
+        let conn = in_memory_settings_db();
+        set_setting(
+            &conn,
+            "runtime_bootstrap_public_key.entropia-root",
+            "attacker-public-key",
+        )
+        .expect("save key");
+
+        let public_key = get_runtime_bootstrap_public_key_with_builtin(
+            &conn,
+            "entropia-root",
+            Some("entropia-root"),
+            Some("official-public-key"),
+        )
+        .expect("built-in public key should load");
+
+        assert_eq!(public_key, "official-public-key");
     }
 
     // WSL, 2026-09-26: no Secret Service at all, then one with no default
@@ -1025,8 +1231,9 @@ mod tests {
     fn returns_none_when_runtime_bootstrap_source_is_not_configured() {
         let conn = in_memory_settings_db();
 
-        let source = get_runtime_bootstrap_remote_source_with_builtin(&conn, None, None, None)
-            .expect("lookup should succeed");
+        let source =
+            get_runtime_bootstrap_remote_source_with_builtin(&conn, None, None, None, true)
+                .expect("lookup should succeed");
 
         assert_eq!(source, None);
     }
@@ -1041,6 +1248,7 @@ mod tests {
             Some("https://example.com/runtime/bootstrap.json"),
             Some("entropia-root"),
             Some("base64-public-key"),
+            true,
         )
         .expect("built-in source should load");
 
@@ -1063,6 +1271,7 @@ mod tests {
             Some("https://example.com/runtime/bootstrap.json"),
             Some("entropia-root"),
             None,
+            true,
         )
         .expect_err("partial built-in config must fail");
 
@@ -1079,6 +1288,7 @@ mod tests {
             None,
             None,
             Some("base64-public-key"),
+            true,
         )
         .expect_err("stray built-in key must fail");
 
