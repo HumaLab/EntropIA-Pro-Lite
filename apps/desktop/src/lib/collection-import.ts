@@ -161,12 +161,15 @@ async function splitPdfIntoPageAssets(
  * Remove everything a failed import created: its assets, its item and the
  * folder its files were copied into.
  *
+ * Exported (unchanged) so the Internet Archive import flow reuses it to drop
+ * partial remnants and failed items.
+ *
  * When splitting fails the parent asset already exists, so deleting the item
  * alone trips the assets foreign key. The assets go first. The item cascade
  * is not an option: it also deletes the collection when this was its first
  * document.
  */
-async function discardFailedImport(collectionId: string, itemId: string) {
+export async function discardFailedImport(collectionId: string, itemId: string) {
   const store = getStore()
   try {
     const assets = await store.assets.findByItem(itemId)

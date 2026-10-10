@@ -212,7 +212,7 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
 - [x] 24. TS client `lib/internet-archive.ts`: typed wrappers for the 15
       `ia_*` commands, `parseIaError` for `<code>: <message>`, and a helper
       for the `ia://job-updated` event.
-- [ ] 25. Import orchestrator `lib/internet-archive-import.ts`: for each
+- [x] 25. Import orchestrator `lib/internet-archive-import.ts`: for each
       verified file, begin, then import through
       `importClassifiedPathsIntoCollection` (or confirm an existing item, or
       discard a partial one with `discardFailedImport`, exported unchanged),
@@ -318,6 +318,15 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
   --frozen-lockfile` was needed first. Parent also changed one Rust message so a
   poisoned SQLite lock in `ia_prepare_import` reports the `io` code like every
   other command (app `internet_archive` 69, clippy clean).
+- 2026-10-10, task 25: `lib/internet-archive-import.ts` (`importVerifiedFiles`,
+  `resolveReconcileLeftovers`, `IaImportError`) and `discardFailedImport`
+  exported unchanged. A rejected confirmation also discards the item it created;
+  a second `discard_partial` is recorded `partial_remains` without calling fail
+  (Rust only fails `importing` files). Known edge: an `io` (not validation)
+  confirm error leaves the file `importing` until the next start, where recovery
+  returns it to `verified`; no data is lost. RED: missing module. GREEN: 18 new
+  tests; with the client and importer suites, 58 pass in both variants; typecheck
+  0 errors in both; eslint clean.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
