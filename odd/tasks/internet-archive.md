@@ -218,7 +218,10 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
       discard a partial one with `discardFailedImport`, exported unchanged),
       then confirm or report failure; cancel checked between files; reconcile
       leftovers from a cancelled job.
-- [ ] 26. `views/InternetArchiveDialog.svelte`: search, collection and link
+- [ ] 26. (Split: 26a the dialog component, its states and texts; 26b entry
+      points and startup reconcile. MVP imports only: no post-processing option,
+      plan §9 default; limits use their defaults, no settings UI yet.)
+      `views/InternetArchiveDialog.svelte`: search, collection and link
       tabs, item files with availability, destination (existing or new
       collection), preparation summary (duplicates, sizes, synced volume),
       progress with cancel, results; entry points in `ImportSourcesDialog` and
@@ -327,6 +330,20 @@ Precedents: `lib/navegador-sources.ts` (thin `invoke` wrappers, error codes),
   returns it to `verified`; no data is lost. RED: missing module. GREEN: 18 new
   tests; with the client and importer suites, 58 pass in both variants; typecheck
   0 errors in both; eslint clean.
+- 2026-10-10, task 26a: `views/InternetArchiveDialog.svelte` (discover with
+  three tabs, item files with availability, destination, summary with duplicate
+  choices, sizes and synced volume, running with cancel, done) and ~130
+  `internetArchive.*` keys in es and en. The writer found a design gap from task
+  21b: a prepared job already contains duplicate files and no command drops one,
+  so "skip" could not be honored. Parent decision: keep re-preparing without the
+  skipped files and add `ia_discard_draft` (removes a job only while `draft`),
+  used after a re-prepare and when the dialog closes before starting. Running the
+  FULL desktop suite caught two regressions the targeted tests missed: a native
+  checkbox (only `Checkbox` may use one) and a font family instead of a token;
+  both fixed. RED: missing component, then the two token tests. GREEN: app
+  `internet_archive` 74, `acl_manifest_guard` 6, `Cargo.lock` unchanged; desktop
+  250 files green in both variants (3546 and 3525 tests); typecheck 0 errors in
+  both; eslint clean.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
