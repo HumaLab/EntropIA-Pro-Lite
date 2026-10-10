@@ -1,9 +1,10 @@
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use tauri::State;
 
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 // Bootstrap remote-source plumbing is local-ml only (the hosted managed-runtime). The
 // type comes from the always-compiled `bootstrap_types`; the import + every fn below is
@@ -58,6 +59,79 @@ const SECRET_SETTING_KEYS: [&str; 5] = [
     HLAB_PUBLISH_KEY,
 ];
 static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
+
+/// Per-key locks serializing the whole credential-store + `app_settings`
+/// sequence of each secret setting (A-05a).
+///
+/// Acquisition order, never inverted, so there is no cycle:
+/// 1. the key's lock from this map — secret keys only;
+/// 2. `ui_conn` — only around the SQL, never during credential-store I/O;
+/// 3. `APP_CREDENTIAL_LOCK` — inside each single credential-store call.
+///
+/// The key lock is requested before `ui_conn` and never while holding it.
+/// Entries are created on first use and never removed: only the five
+/// `SECRET_SETTING_KEYS` reach this map, so it cannot grow without bound.
+static SETTINGS_KEY_LOCKS: LazyLock<Mutex<HashMap<String, &'static Mutex<()>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// [`SETTINGS_KEY_LOCKS`]' guard for `key`; `None` for non-secret keys, which
+/// never touch the credential store.
+fn lock_setting_key(key: &str) -> Option<MutexGuard<'static, ()>> {
+    if !is_secret_setting_key(key) {
+        return None;
+    }
+    let mutex: &'static Mutex<()> = {
+        let mut locks = SETTINGS_KEY_LOCKS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        locks
+            .entry(key.to_string())
+            .or_insert_with(|| Box::leak(Box::new(Mutex::new(()))))
+    };
+    Some(mutex.lock().unwrap_or_else(|poison| poison.into_inner()))
+}
+
+/// [`lock_setting_key`] for a batch read (A-05b): every secret key among `keys`
+/// is locked in `SECRET_SETTING_KEYS` order, so two concurrent multi-key reads
+/// always take the same locks in the same order and cannot deadlock.
+fn lock_setting_keys(keys: &[&str]) -> Vec<MutexGuard<'static, ()>> {
+    let mut guards = Vec::new();
+    for secret_key in SECRET_SETTING_KEYS {
+        if keys.contains(&secret_key) {
+            if let Some(guard) = lock_setting_key(secret_key) {
+                guards.push(guard);
+            }
+        }
+    }
+    guards
+}
+
+/// The system credential store (keyring) behind secret settings, injectable so
+/// tests can drive the set/read/delete sequences against an in-memory fake and
+/// never touch the keyring of the machine running the tests.
+pub(crate) trait SecretStore: Send + Sync {
+    fn store(&self, key: &str, value: &str) -> Result<(), String>;
+    fn read(&self, key: &str) -> Result<Option<String>, String>;
+    fn delete(&self, key: &str) -> Result<(), String>;
+}
+
+/// The real credential store: each call wraps one of the guarded keyring
+/// helpers (`store_secret`/`read_secret`/`delete_secret`).
+pub(crate) struct KeyringSecretStore;
+
+impl SecretStore for KeyringSecretStore {
+    fn store(&self, key: &str, value: &str) -> Result<(), String> {
+        store_secret(key, value)
+    }
+
+    fn read(&self, key: &str) -> Result<Option<String>, String> {
+        read_secret(key)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), String> {
+        delete_secret(key)
+    }
+}
 #[cfg(feature = "local-ml")]
 const BUILTIN_RUNTIME_BOOTSTRAP_MANIFEST_URL_ENV: &str = "ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL";
 #[cfg(feature = "local-ml")]
@@ -106,12 +180,8 @@ pub async fn settings_get(
     key: String,
     db: State<'_, AppDbState>,
 ) -> Result<Option<String>, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock error: {e}"))?;
-    let result = get_raw_setting(&conn, &key);
-    Ok(result.map(|value| ipc_setting_value(&key, &value)))
+    let db = db.inner().clone();
+    run_blocking_db_task(move || read_setting_for_ipc(&db.ui_conn, &key, &KeyringSecretStore)).await
 }
 
 #[tauri::command]
@@ -122,15 +192,16 @@ pub async fn settings_set(
     deps: State<'_, crate::deps::DepsState>,
 ) -> Result<(), String> {
     let should_invalidate = crate::deps::should_invalidate_cache_for_setting(&key);
-    {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock error: {e}"))?;
-        set_setting_from_renderer(&conn, &key, &value)?;
-    }
+    let invalidation_key = key.clone();
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        set_setting_with_store(&db.ui_conn, &key, &value, &KeyringSecretStore)?;
+        resume_work_after_setting_change_outside_ui_conn(&db.db_path, &key);
+        Ok(())
+    })
+    .await?;
     if should_invalidate {
-        invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
+        invalidate_dependency_probe_cache_if_needed(&invalidation_key, Some(&deps)).await;
     }
     Ok(())
 }
@@ -153,24 +224,63 @@ fn ensure_renderer_writable_setting(key: &str) -> Result<(), String> {
     }
 }
 
-/// The database side of [`settings_set`]: refuses backend-only keys, then
-/// saves the value and resumes the work it unblocks.
-fn set_setting_from_renderer(
-    conn: &rusqlite::Connection,
+/// The whole [`settings_set`] sequence for a renderer-writable key:
+/// renderer-writable check, per-key lock, credential-store write (secret keys
+/// only, with no `ui_conn` held), then `forget_zotero_user_id_for` and the
+/// reference row under `ui_conn`. A credential-store failure returns the error
+/// and leaves the row untouched. The store is injected so tests never touch
+/// the real keyring.
+///
+/// The configuration resume that follows runs in a second phase, on its own
+/// connection ([`resume_work_after_setting_change_outside_ui_conn`]): the
+/// repository re-reads the configuration, including secrets that live in the
+/// credential store, so it must not run while `ui_conn` is held (A-05b).
+fn set_setting_with_store(
+    ui_conn: &Mutex<rusqlite::Connection>,
     key: &str,
     value: &str,
+    store: &dyn SecretStore,
 ) -> Result<(), String> {
     ensure_renderer_writable_setting(key)?;
-    persist_setting(conn, key, value)?;
-    resume_work_after_setting_change(conn, key);
+    let _key_guard = lock_setting_key(key);
+    let clearing_secret = is_secret_setting_key(key) && value.trim().is_empty();
+    if is_secret_setting_key(key) && !clearing_secret {
+        // Secret first, without `ui_conn`: a credential-store failure must not
+        // leave a reference row pointing at a secret that was never stored.
+        store.store(key, value)?;
+    }
+    {
+        let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
+        forget_zotero_user_id_for(&conn, key);
+        write_setting_row(&conn, key, value)?;
+    }
+    if clearing_secret {
+        // Row first, then the secret (today's semantics): a credential-store
+        // failure only leaves an orphaned entry and never fails the command.
+        if let Err(error) = store.delete(key) {
+            eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+        }
+    }
     Ok(())
 }
 
-/// The database side of [`settings_delete`]: refuses backend-only keys, then
-/// removes the row (the keyring cleanup stays in the command).
-fn delete_setting_from_renderer(conn: &rusqlite::Connection, key: &str) -> Result<(), String> {
-    ensure_renderer_writable_setting(key)?;
-    remove_setting_row(conn, key)
+/// The configuration resume of a settings save, on a connection of its own so
+/// no `ui_conn` guard is held while the repository resolves secret references
+/// from the credential store (A-05b). The new row is already committed, so a
+/// fresh archive connection reads it; a failure is logged and never fails the
+/// save, exactly like the in-lock pass this replaced.
+fn resume_work_after_setting_change_outside_ui_conn(db_path: &std::path::Path, key: &str) {
+    if !is_embedding_engine_setting(key) && !is_ocr_engine_setting(key) {
+        return;
+    }
+    match crate::db::open::open_archive_connection(db_path) {
+        Ok(conn) => {
+            resume_work_after_setting_change(&conn, key);
+        }
+        Err(error) => {
+            eprintln!("[settings] Could not resume configuration-blocked work: {error}");
+        }
+    }
 }
 
 /// Logs, without values and without deleting them, the backend-only
@@ -261,11 +371,15 @@ pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key:
 
 #[tauri::command]
 pub async fn settings_get_all(db: State<'_, AppDbState>) -> Result<Vec<SettingEntry>, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock error: {e}"))?;
-    read_visible_settings(&conn)
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        read_visible_settings(&conn)
+    })
+    .await
 }
 
 /// Every setting the Settings UI may see: the whole `app_settings` table
@@ -329,6 +443,29 @@ fn remove_setting_row(conn: &rusqlite::Connection, key: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// The whole [`settings_delete`] sequence for a renderer-writable key:
+/// renderer-writable check, per-key lock, row delete under `ui_conn`, then the
+/// credential cleanup after that lock is released. A credential-store failure
+/// is logged and never reverts the row (today's semantics).
+fn delete_setting_with_store(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    key: &str,
+    store: &dyn SecretStore,
+) -> Result<(), String> {
+    ensure_renderer_writable_setting(key)?;
+    let _key_guard = lock_setting_key(key);
+    {
+        let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
+        remove_setting_row(&conn, key)?;
+    }
+    if is_secret_setting_key(key) {
+        if let Err(error) = store.delete(key) {
+            eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn settings_delete(
     key: String,
@@ -336,20 +473,12 @@ pub async fn settings_delete(
     deps: State<'_, crate::deps::DepsState>,
 ) -> Result<(), String> {
     let should_invalidate = crate::deps::should_invalidate_cache_for_setting(&key);
-    {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock error: {e}"))?;
-        delete_setting_from_renderer(&conn, &key)?;
-        if is_secret_setting_key(&key) {
-            if let Err(error) = delete_secret(&key) {
-                eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
-            }
-        }
-    }
+    let invalidation_key = key.clone();
+    let db = db.inner().clone();
+    run_blocking_db_task(move || delete_setting_with_store(&db.ui_conn, &key, &KeyringSecretStore))
+        .await?;
     if should_invalidate {
-        invalidate_dependency_probe_cache_if_needed(&key, Some(&deps)).await;
+        invalidate_dependency_probe_cache_if_needed(&invalidation_key, Some(&deps)).await;
     }
     Ok(())
 }
@@ -358,15 +487,73 @@ pub async fn settings_delete(
 // Internal helpers (for Rust-side reading, used by LLM worker)
 // ---------------------------------------------------------------------------
 
-/// Read a setting value directly from a rusqlite connection.
-/// Used by the LLM worker to read API keys without going through Tauri state.
-pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
-    let has_secret_ref = get_raw_setting(conn, key)
-        .map(|value| is_secret_setting_key(key) && value.starts_with(SECRET_REF_PREFIX))
-        .unwrap_or(false);
-    match resolve_setting_with(conn, key, read_secret) {
+/// The stored form of one setting, before any credential-store resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SettingRef {
+    /// No row stored for the key.
+    Missing,
+    /// The stored value is the setting value (plain settings, or legacy
+    /// plaintext a migration has not moved to the credential store yet).
+    Value(String),
+    /// The stored value is a `secret_ref:` marker: the real secret lives in
+    /// the credential store under `key`.
+    Secret { key: String, stored: String },
+}
+
+impl SettingRef {
+    /// The value as stored in `app_settings`, marker included; `None` when the
+    /// key has no row. Used for the renderer-facing value.
+    fn stored_value(&self) -> Option<&str> {
+        match self {
+            SettingRef::Missing => None,
+            SettingRef::Value(value) => Some(value),
+            SettingRef::Secret { stored, .. } => Some(stored),
+        }
+    }
+}
+
+/// First half of a setting read: fetch the stored reference from the caller's
+/// connection. Resolve it with [`resolve_setting_ref`] after releasing the
+/// connection, never while it is held.
+pub(crate) fn read_setting_ref(conn: &rusqlite::Connection, key: &str) -> SettingRef {
+    let Some(stored) = get_raw_setting(conn, key) else {
+        return SettingRef::Missing;
+    };
+    if is_secret_setting_key(key) && stored.starts_with(SECRET_REF_PREFIX) {
+        SettingRef::Secret {
+            key: key.to_string(),
+            stored,
+        }
+    } else {
+        SettingRef::Value(stored)
+    }
+}
+
+/// Second half of a setting read: resolve the credential store outside any
+/// `ui_conn` guard.
+pub(crate) fn resolve_setting_ref(
+    reference: &SettingRef,
+    store: &dyn SecretStore,
+) -> Result<Option<String>, String> {
+    match reference {
+        SettingRef::Missing => Ok(None),
+        SettingRef::Value(value) => Ok(Some(value.clone())),
+        SettingRef::Secret { key, .. } => store.read(key),
+    }
+}
+
+/// [`resolve_setting_ref`] with [`get_setting`]'s reporting contract: a
+/// missing credential-store entry and a credential-store failure are logged
+/// and read as `None`, so Rust-side readers keep today's empty-value
+/// behaviour instead of surfacing a keyring error.
+fn resolve_reference_logged(
+    reference: &SettingRef,
+    key: &str,
+    store: &dyn SecretStore,
+) -> Option<String> {
+    match resolve_setting_ref(reference, store) {
         Ok(value) => {
-            if has_secret_ref && value.is_none() {
+            if matches!(reference, SettingRef::Secret { .. }) && value.is_none() {
                 eprintln!(
                     "[settings] Protected setting '{key}' references a missing credential store entry"
                 );
@@ -380,33 +567,104 @@ pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
     }
 }
 
-pub fn resolve_api_key_input(
-    conn: &rusqlite::Connection,
+/// Resolve one or more settings from the shared `ui_conn` without holding it
+/// during credential-store I/O (A-05b). A-05a's fixed order holds: the secret
+/// keys' per-key locks first, then `ui_conn` for the references only, then the
+/// released connection while [`resolve_setting_ref`] reads the credential
+/// store. Keyring failures and missing entries read as `None`, exactly like
+/// [`get_setting`]; the only error is a poisoned `ui_conn`.
+pub(crate) fn read_settings_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    keys: &[&str],
+    store: &dyn SecretStore,
+) -> Result<Vec<Option<String>>, String> {
+    let _key_guards = lock_setting_keys(keys);
+    let references: Vec<SettingRef> = {
+        let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
+        keys.iter()
+            .map(|key| read_setting_ref(&conn, key))
+            .collect()
+    };
+    Ok(keys
+        .iter()
+        .zip(references.iter())
+        .map(|(key, reference)| resolve_reference_logged(reference, key, store))
+        .collect())
+}
+
+/// [`read_settings_unlocked`] for a single key.
+pub(crate) fn get_secret_setting_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
+    key: &str,
+    store: &dyn SecretStore,
+) -> Result<Option<String>, String> {
+    Ok(read_settings_unlocked(ui_conn, &[key], store)?
+        .into_iter()
+        .next()
+        .flatten())
+}
+
+/// [`resolve_api_key_input`] for callers that share `ui_conn` (A-05b): an
+/// explicit `provided` key wins with no database or credential-store access,
+/// and a blank one resolves the stored secret after the connection is
+/// released. The error for a key that is not configured is unchanged.
+pub(crate) fn resolve_api_key_input_unlocked(
+    ui_conn: &Mutex<rusqlite::Connection>,
     key: &str,
     provided: &str,
+    store: &dyn SecretStore,
 ) -> Result<String, String> {
     let provided = provided.trim();
     if !provided.is_empty() {
         return Ok(provided.to_string());
     }
-    get_setting(conn, key)
+    get_secret_setting_unlocked(ui_conn, key, store)?
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("No protected credential is configured for '{key}'"))
 }
 
-fn resolve_setting_with(
-    conn: &rusqlite::Connection,
+/// The whole [`settings_get`] sequence: per-key lock for secret keys, read the
+/// reference under `ui_conn`, release it, then resolve the credential store.
+/// Returns the renderer-facing value ([`ipc_setting_value`]): the resolution
+/// only verifies presence and logs a missing entry, exactly like the direct
+/// reads; it never exposes the secret over IPC.
+fn read_setting_for_ipc(
+    ui_conn: &Mutex<rusqlite::Connection>,
     key: &str,
-    read: impl FnOnce(&str) -> Result<Option<String>, String>,
+    store: &dyn SecretStore,
 ) -> Result<Option<String>, String> {
-    let Some(stored) = get_raw_setting(conn, key) else {
-        return Ok(None);
+    let _key_guard = lock_setting_key(key);
+    let reference = {
+        let conn = ui_conn.lock().map_err(|e| format!("DB lock error: {e}"))?;
+        read_setting_ref(&conn, key)
     };
-    if !is_secret_setting_key(key) || !stored.starts_with(SECRET_REF_PREFIX) {
-        return Ok(Some(stored));
+    if matches!(reference, SettingRef::Secret { .. }) {
+        match resolve_setting_ref(&reference, store) {
+            Ok(Some(_)) => {}
+            Ok(None) => eprintln!(
+                "[settings] Protected setting '{key}' references a missing credential store entry"
+            ),
+            Err(error) => {
+                eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
+            }
+        }
     }
-    read(key)
+    Ok(reference
+        .stored_value()
+        .map(|value| ipc_setting_value(key, value)))
+}
+
+/// Read a setting value directly from a rusqlite connection.
+/// Used by the LLM worker to read API keys without going through Tauri state.
+///
+/// Kept for Rust-side callers that own the connection; A-05b migrates the
+/// callers that currently invoke it with `ui_conn` held to the two-step API
+/// ([`read_setting_ref`] then [`resolve_setting_ref`], wrapped by
+/// [`read_settings_unlocked`]).
+pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
+    let reference = read_setting_ref(conn, key);
+    resolve_reference_logged(&reference, key, &KeyringSecretStore)
 }
 
 pub(crate) fn get_raw_setting(conn: &rusqlite::Connection, key: &str) -> Option<String> {
@@ -521,7 +779,9 @@ pub(crate) fn persist_setting(
 }
 
 /// [`persist_setting`] with the credential store passed in, so tests never
-/// write to or delete from the real system keyring.
+/// write to or delete from the real system keyring. Direct Rust-side callers
+/// keep their connection; the command path that releases `ui_conn` around the
+/// credential-store I/O lives in [`set_setting_with_store`].
 fn persist_setting_with(
     conn: &rusqlite::Connection,
     key: &str,
@@ -532,14 +792,28 @@ fn persist_setting_with(
     forget_zotero_user_id_for(conn, key);
     if is_secret_setting_key(key) {
         if value.trim().is_empty() {
-            conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
-                .map_err(|error| format!("Failed to delete empty protected setting: {error}"))?;
+            write_setting_row(conn, key, value)?;
             if let Err(error) = delete(key) {
                 eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
             }
             return Ok(());
         }
         store(key, value)?;
+    }
+    write_setting_row(conn, key, value)
+}
+
+/// Writes the `app_settings` row for one setting: the `secret_ref` marker for a
+/// stored secret, the plain value for anything else, or a row delete when a
+/// secret is cleared. Runs with `ui_conn` held; the credential store is the
+/// caller's job and is never touched from here.
+fn write_setting_row(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<(), String> {
+    if is_secret_setting_key(key) {
+        if value.trim().is_empty() {
+            conn.execute("DELETE FROM app_settings WHERE key = ?1", params![key])
+                .map_err(|error| format!("Failed to delete empty protected setting: {error}"))?;
+            return Ok(());
+        }
         conn.execute(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?1, ?2)",
             params![key, secret_reference(key)],
@@ -918,6 +1192,9 @@ fn get_runtime_bootstrap_public_key_with_builtin(
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar};
+    use std::time::{Duration, Instant};
 
     fn in_memory_settings_db() -> Connection {
         let conn = Connection::open_in_memory().expect("in-memory db");
@@ -932,6 +1209,66 @@ mod tests {
         message.to_string().into()
     }
 
+    /// Credential store for keys refused before any keyring I/O: reaching it
+    /// at all is the failure.
+    struct UnreachableSecretStore;
+
+    impl SecretStore for UnreachableSecretStore {
+        fn store(&self, key: &str, _value: &str) -> Result<(), String> {
+            panic!("unexpected credential store write for '{key}'")
+        }
+
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            panic!("unexpected credential store read for '{key}'")
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            panic!("unexpected credential store delete for '{key}'")
+        }
+    }
+
+    /// Simple in-memory credential store for the tests that do not need to
+    /// interleave two sequences.
+    #[derive(Default)]
+    struct InMemorySecretStore {
+        secrets: Mutex<HashMap<String, String>>,
+    }
+
+    impl InMemorySecretStore {
+        fn with_secret(key: &str, value: &str) -> Self {
+            let store = Self::default();
+            store
+                .secrets
+                .lock()
+                .expect("secrets")
+                .insert(key.to_string(), value.to_string());
+            store
+        }
+
+        fn secret(&self, key: &str) -> Option<String> {
+            self.secrets.lock().expect("secrets").get(key).cloned()
+        }
+    }
+
+    impl SecretStore for InMemorySecretStore {
+        fn store(&self, key: &str, value: &str) -> Result<(), String> {
+            self.secrets
+                .lock()
+                .expect("secrets")
+                .insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            Ok(self.secret(key))
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.secrets.lock().expect("secrets").remove(key);
+            Ok(())
+        }
+    }
+
     const RUNTIME_BOOTSTRAP_KEYS: [&str; 3] = [
         RUNTIME_BOOTSTRAP_MANIFEST_URL_KEY,
         RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID_KEY,
@@ -942,13 +1279,18 @@ mod tests {
     // download at its own manifest and signing key.
     #[test]
     fn the_renderer_cannot_set_the_runtime_bootstrap_trust_source() {
-        let conn = in_memory_settings_db();
+        let conn = Mutex::new(in_memory_settings_db());
         for key in RUNTIME_BOOTSTRAP_KEYS {
-            let error = set_setting_from_renderer(&conn, key, "https://attacker.invalid/x")
-                .expect_err("a backend-only key must be refused");
+            let error = set_setting_with_store(
+                &conn,
+                key,
+                "https://attacker.invalid/x",
+                &UnreachableSecretStore,
+            )
+            .expect_err("a backend-only key must be refused");
             assert!(error.contains(key), "{error}");
             assert_eq!(
-                get_raw_setting(&conn, key),
+                get_raw_setting(&conn.lock().expect("conn"), key),
                 None,
                 "{key} must not be written"
             );
@@ -957,12 +1299,15 @@ mod tests {
 
     #[test]
     fn the_renderer_cannot_delete_the_runtime_bootstrap_trust_source() {
-        let conn = in_memory_settings_db();
+        let conn = Mutex::new(in_memory_settings_db());
         for key in RUNTIME_BOOTSTRAP_KEYS {
-            set_setting(&conn, key, "configured").expect("seed");
-            delete_setting_from_renderer(&conn, key)
+            set_setting(&conn.lock().expect("conn"), key, "configured").expect("seed");
+            delete_setting_with_store(&conn, key, &UnreachableSecretStore)
                 .expect_err("a backend-only key must be refused");
-            assert_eq!(get_raw_setting(&conn, key).as_deref(), Some("configured"));
+            assert_eq!(
+                get_raw_setting(&conn.lock().expect("conn"), key).as_deref(),
+                Some("configured")
+            );
         }
     }
 
@@ -970,28 +1315,36 @@ mod tests {
     // files from, so only the backend's own folder picker may set it.
     #[test]
     fn the_renderer_cannot_set_or_delete_the_zotero_data_directory() {
-        let conn = in_memory_settings_db();
+        let conn = Mutex::new(in_memory_settings_db());
         for key in [
             crate::bibliography::processing::ZOTERO_DATA_DIR_SETTING_KEY,
             "zotero_data_dir",
         ] {
-            set_setting_from_renderer(&conn, key, "/home/ana")
+            set_setting_with_store(&conn, key, "/home/ana", &UnreachableSecretStore)
                 .expect_err("a backend-granted key must be refused");
-            assert_eq!(get_raw_setting(&conn, key), None);
-            set_setting(&conn, key, "/home/ana/Zotero").expect("seed");
-            delete_setting_from_renderer(&conn, key)
+            assert_eq!(get_raw_setting(&conn.lock().expect("conn"), key), None);
+            set_setting(&conn.lock().expect("conn"), key, "/home/ana/Zotero").expect("seed");
+            delete_setting_with_store(&conn, key, &UnreachableSecretStore)
                 .expect_err("a backend-granted key must be refused");
-            assert!(get_raw_setting(&conn, key).is_some());
+            assert!(get_raw_setting(&conn.lock().expect("conn"), key).is_some());
         }
     }
 
     #[test]
     fn the_renderer_still_sets_and_deletes_ordinary_settings() {
-        let conn = in_memory_settings_db();
-        set_setting_from_renderer(&conn, "ui_theme", "dark").expect("ordinary key");
-        assert_eq!(get_raw_setting(&conn, "ui_theme").as_deref(), Some("dark"));
-        delete_setting_from_renderer(&conn, "ui_theme").expect("ordinary key");
-        assert_eq!(get_raw_setting(&conn, "ui_theme"), None);
+        let conn = Mutex::new(in_memory_settings_db());
+        set_setting_with_store(&conn, "ui_theme", "dark", &UnreachableSecretStore)
+            .expect("ordinary key");
+        assert_eq!(
+            get_raw_setting(&conn.lock().expect("conn"), "ui_theme").as_deref(),
+            Some("dark")
+        );
+        delete_setting_with_store(&conn, "ui_theme", &UnreachableSecretStore)
+            .expect("ordinary key");
+        assert_eq!(
+            get_raw_setting(&conn.lock().expect("conn"), "ui_theme"),
+            None
+        );
     }
 
     #[cfg(feature = "local-ml")]
@@ -1165,24 +1518,39 @@ mod tests {
         let conn = in_memory_settings_db();
         set_setting(&conn, OPENROUTER_API_KEY, "secret_ref:openrouter_api_key")
             .expect("save reference");
+        let store = InMemorySecretStore::with_secret(OPENROUTER_API_KEY, "sk-protected");
 
-        let value = resolve_setting_with(&conn, OPENROUTER_API_KEY, |key| {
-            assert_eq!(key, OPENROUTER_API_KEY);
-            Ok(Some("sk-protected".to_string()))
-        })
-        .expect("resolve protected setting");
+        let reference = read_setting_ref(&conn, OPENROUTER_API_KEY);
+        assert_eq!(
+            reference,
+            SettingRef::Secret {
+                key: OPENROUTER_API_KEY.to_string(),
+                stored: "secret_ref:openrouter_api_key".to_string(),
+            }
+        );
+        let value = resolve_setting_ref(&reference, &store).expect("resolve protected setting");
 
         assert_eq!(value.as_deref(), Some("sk-protected"));
     }
 
     #[test]
     fn explicit_api_key_input_takes_precedence_over_stored_value() {
-        let conn = in_memory_settings_db();
-        set_setting(&conn, OPENROUTER_API_KEY, "legacy-stored").expect("save key");
+        let conn = Mutex::new(in_memory_settings_db());
+        set_setting(
+            &conn.lock().expect("conn"),
+            OPENROUTER_API_KEY,
+            "legacy-stored",
+        )
+        .expect("save key");
 
         assert_eq!(
-            resolve_api_key_input(&conn, OPENROUTER_API_KEY, "  explicit  ")
-                .expect("resolve explicit key"),
+            resolve_api_key_input_unlocked(
+                &conn,
+                OPENROUTER_API_KEY,
+                "  explicit  ",
+                &KeyringSecretStore
+            )
+            .expect("resolve explicit key"),
             "explicit"
         );
     }
@@ -1703,5 +2071,496 @@ mod tests {
         );
         assert!(shown.contains(&("openrouter_model", "google/gemma")));
         assert!(shown.contains(&(OPENROUTER_API_KEY, REDACTED_SETTING_VALUE)));
+    }
+
+    // ── A-05a: the command sequences and the per-key lock ─────────────────
+
+    /// Shared connection mimicking `AppDbState::ui_conn` in the sequence
+    /// tests: two threads can lock it the way the commands do.
+    fn shared_settings_db() -> Arc<Mutex<Connection>> {
+        Arc::new(Mutex::new(in_memory_settings_db()))
+    }
+
+    /// Credential store that always fails, to pin that a failed `settings_set`
+    /// reports the error and leaves no reference row behind.
+    struct FailingSecretStore;
+
+    impl SecretStore for FailingSecretStore {
+        fn store(&self, key: &str, _value: &str) -> Result<(), String> {
+            Err(format!("credential store unavailable for '{key}'"))
+        }
+
+        fn read(&self, _key: &str) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn delete(&self, _key: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_failing_credential_store_leaves_no_reference_row() {
+        let conn = shared_settings_db();
+        // The Zotero user id is only forgotten once the secret is safely
+        // stored: a failed keyring write must not run any row side effect.
+        set_setting(&conn.lock().expect("conn"), ZOTERO_USER_ID_KEY, "4242").expect("user id");
+
+        let error = set_setting_with_store(&conn, ZOTERO_API_KEY, "new-key", &FailingSecretStore)
+            .expect_err("keyring failure must surface");
+
+        assert!(error.contains("credential store unavailable"), "{error}");
+        let conn = conn.lock().expect("conn");
+        assert_eq!(get_raw_setting(&conn, ZOTERO_API_KEY), None);
+        assert_eq!(
+            get_raw_setting(&conn, ZOTERO_USER_ID_KEY).as_deref(),
+            Some("4242")
+        );
+    }
+
+    /// One-shot flag with a bounded wait, used to force a chosen interleaving
+    /// between the two credential-store operations of the racing tests.
+    struct Flag {
+        set: Mutex<bool>,
+        condvar: Condvar,
+    }
+
+    impl Flag {
+        fn new() -> Self {
+            Self {
+                set: Mutex::new(false),
+                condvar: Condvar::new(),
+            }
+        }
+
+        fn mark(&self) {
+            *self.set.lock().expect("flag") = true;
+            self.condvar.notify_all();
+        }
+
+        fn wait(&self, timeout: Duration) -> bool {
+            let deadline = Instant::now() + timeout;
+            let mut set = self.set.lock().expect("flag");
+            while !*set {
+                let now = Instant::now();
+                if now >= deadline {
+                    return false;
+                }
+                let (next, _) = self
+                    .condvar
+                    .wait_timeout(set, deadline - now)
+                    .expect("flag wait");
+                set = next;
+            }
+            true
+        }
+    }
+
+    /// In-memory credential store that lets the set and delete sequences
+    /// observe each other: `store` writes the secret before waiting for a
+    /// delete to complete, and `delete` waits for a store before removing the
+    /// secret. The waits are bounded, so the serialized (correct) case always
+    /// finishes by itself.
+    struct RacingSecretStore {
+        secrets: Mutex<HashMap<String, String>>,
+        stored: Flag,
+        deleted: Flag,
+        delete_started: Flag,
+        wait: Duration,
+    }
+
+    impl RacingSecretStore {
+        fn new(wait: Duration) -> Self {
+            Self {
+                secrets: Mutex::new(HashMap::new()),
+                stored: Flag::new(),
+                deleted: Flag::new(),
+                delete_started: Flag::new(),
+                wait,
+            }
+        }
+
+        fn secret(&self, key: &str) -> Option<String> {
+            self.secrets.lock().expect("secrets").get(key).cloned()
+        }
+    }
+
+    impl SecretStore for RacingSecretStore {
+        fn store(&self, key: &str, value: &str) -> Result<(), String> {
+            self.secrets
+                .lock()
+                .expect("secrets")
+                .insert(key.to_string(), value.to_string());
+            self.stored.mark();
+            self.deleted.wait(self.wait);
+            Ok(())
+        }
+
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            Ok(self.secret(key))
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.delete_started.mark();
+            self.stored.wait(self.wait);
+            self.secrets.lock().expect("secrets").remove(key);
+            self.deleted.mark();
+            Ok(())
+        }
+    }
+
+    /// The invariant the per-key lock protects: no `app_settings` row whose
+    /// value is a `secret_ref:` points at a secret the credential store no
+    /// longer has. Valid end states are "no row and no secret" or "row and
+    /// secret"; an orphaned secret without a row is allowed.
+    fn assert_no_dangling_secret_ref(conn: &Mutex<Connection>, store: &dyn SecretStore) {
+        let conn = conn.lock().expect("conn");
+        let mut stmt = conn
+            .prepare("SELECT key, value FROM app_settings")
+            .expect("prepare settings scan");
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("scan settings")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("settings rows");
+        drop(stmt);
+        for (key, value) in rows {
+            let Some(reference) = value.strip_prefix(SECRET_REF_PREFIX) else {
+                continue;
+            };
+            let secret = store.read(reference).expect("fake credential store read");
+            assert!(
+                secret.is_some(),
+                "row '{key}' references missing credential '{reference}'"
+            );
+        }
+    }
+
+    const RACE_WAIT: Duration = Duration::from_millis(200);
+
+    // The interleaving the key lock exists for: set writes the secret, delete
+    // completes (row and secret), and only then set inserts the reference row.
+    // Without the lock that leaves a row pointing at a missing secret.
+    #[test]
+    fn a_set_racing_a_delete_of_one_secret_leaves_no_dangling_reference() {
+        let conn = shared_settings_db();
+        let store = Arc::new(RacingSecretStore::new(RACE_WAIT));
+
+        let set_conn = Arc::clone(&conn);
+        let set_store = Arc::clone(&store);
+        let setter = std::thread::spawn(move || {
+            set_setting_with_store(&set_conn, OPENROUTER_API_KEY, "sk-racing", &*set_store)
+        });
+        assert!(
+            store.stored.wait(Duration::from_secs(5)),
+            "the set sequence must reach the credential store first"
+        );
+
+        let delete_conn = Arc::clone(&conn);
+        let delete_store = Arc::clone(&store);
+        let deleter = std::thread::spawn(move || {
+            delete_setting_with_store(&delete_conn, OPENROUTER_API_KEY, &*delete_store)
+        });
+
+        setter.join().expect("set thread").expect("set sequence");
+        deleter
+            .join()
+            .expect("delete thread")
+            .expect("delete sequence");
+
+        assert_no_dangling_secret_ref(&conn, &*store);
+        let conn = conn.lock().expect("conn");
+        assert_eq!(get_raw_setting(&conn, OPENROUTER_API_KEY), None);
+        assert_eq!(store.secret(OPENROUTER_API_KEY), None);
+    }
+
+    #[test]
+    fn a_delete_racing_a_set_of_one_secret_leaves_no_dangling_reference() {
+        let conn = shared_settings_db();
+        let store = Arc::new(RacingSecretStore::new(RACE_WAIT));
+
+        let delete_conn = Arc::clone(&conn);
+        let delete_store = Arc::clone(&store);
+        let deleter = std::thread::spawn(move || {
+            delete_setting_with_store(&delete_conn, OPENROUTER_API_KEY, &*delete_store)
+        });
+        assert!(
+            store.delete_started.wait(Duration::from_secs(5)),
+            "the delete sequence must reach the credential store first"
+        );
+
+        let set_conn = Arc::clone(&conn);
+        let set_store = Arc::clone(&store);
+        let setter = std::thread::spawn(move || {
+            set_setting_with_store(&set_conn, OPENROUTER_API_KEY, "sk-racing", &*set_store)
+        });
+
+        setter.join().expect("set thread").expect("set sequence");
+        deleter
+            .join()
+            .expect("delete thread")
+            .expect("delete sequence");
+
+        assert_no_dangling_secret_ref(&conn, &*store);
+        let conn = conn.lock().expect("conn");
+        assert_eq!(
+            get_raw_setting(&conn, OPENROUTER_API_KEY).as_deref(),
+            Some("secret_ref:openrouter_api_key")
+        );
+        assert_eq!(
+            store.secret(OPENROUTER_API_KEY).as_deref(),
+            Some("sk-racing")
+        );
+    }
+
+    /// Credential store where `store` only returns once two writes have met:
+    /// with a single global lock the first set would never see the second.
+    #[derive(Default)]
+    struct RendezvousSecretStore {
+        secrets: Mutex<HashMap<String, String>>,
+        arrivals: Mutex<usize>,
+        arrived: Condvar,
+    }
+
+    impl SecretStore for RendezvousSecretStore {
+        fn store(&self, key: &str, value: &str) -> Result<(), String> {
+            self.secrets
+                .lock()
+                .expect("secrets")
+                .insert(key.to_string(), value.to_string());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut arrivals = self.arrivals.lock().expect("arrivals");
+            *arrivals += 1;
+            self.arrived.notify_all();
+            while *arrivals < 2 {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err("concurrent stores of different keys were serialized".to_string());
+                }
+                let (next, _) = self
+                    .arrived
+                    .wait_timeout(arrivals, deadline - now)
+                    .expect("rendezvous");
+                arrivals = next;
+            }
+            Ok(())
+        }
+
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            Ok(self.secrets.lock().expect("secrets").get(key).cloned())
+        }
+
+        fn delete(&self, _key: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn concurrent_sets_of_different_secret_keys_do_not_block_each_other() {
+        let conn = shared_settings_db();
+        let store = Arc::new(RendezvousSecretStore::default());
+
+        let first_conn = Arc::clone(&conn);
+        let first_store = Arc::clone(&store);
+        let first = std::thread::spawn(move || {
+            set_setting_with_store(&first_conn, OPENROUTER_API_KEY, "sk-one", &*first_store)
+        });
+
+        let second_conn = Arc::clone(&conn);
+        let second_store = Arc::clone(&store);
+        let second = std::thread::spawn(move || {
+            set_setting_with_store(&second_conn, GLM_OCR_API_KEY, "sk-two", &*second_store)
+        });
+
+        first.join().expect("first thread").expect("first set");
+        second.join().expect("second thread").expect("second set");
+
+        let conn = conn.lock().expect("conn");
+        assert_eq!(
+            get_raw_setting(&conn, OPENROUTER_API_KEY).as_deref(),
+            Some("secret_ref:openrouter_api_key")
+        );
+        assert_eq!(
+            get_raw_setting(&conn, GLM_OCR_API_KEY).as_deref(),
+            Some("secret_ref:glm_ocr_api_key")
+        );
+    }
+
+    /// Credential store whose `read` asserts `ui_conn` is not locked: the
+    /// settings read must resolve the keyring only after releasing it.
+    struct UnlockedReadStore<'a> {
+        conn: &'a Mutex<Connection>,
+        secret: Option<String>,
+        reads: AtomicUsize,
+    }
+
+    impl SecretStore for UnlockedReadStore<'_> {
+        fn store(&self, key: &str, _value: &str) -> Result<(), String> {
+            panic!("unexpected credential store write for '{key}'")
+        }
+
+        fn read(&self, key: &str) -> Result<Option<String>, String> {
+            assert!(
+                self.conn.try_lock().is_ok(),
+                "the credential store must be read after `ui_conn` is released"
+            );
+            assert_eq!(key, OPENROUTER_API_KEY);
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(self.secret.clone())
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            panic!("unexpected credential store delete for '{key}'")
+        }
+    }
+
+    #[test]
+    fn settings_get_resolves_the_keyring_after_releasing_the_connection() {
+        let conn = shared_settings_db();
+        set_setting(
+            &conn.lock().expect("conn"),
+            OPENROUTER_API_KEY,
+            "secret_ref:openrouter_api_key",
+        )
+        .expect("seed reference");
+        let store = UnlockedReadStore {
+            conn: &conn,
+            secret: Some("sk-protected".to_string()),
+            reads: AtomicUsize::new(0),
+        };
+
+        let value = read_setting_for_ipc(&conn, OPENROUTER_API_KEY, &store).expect("read setting");
+
+        assert_eq!(
+            value.as_deref(),
+            Some("secret_ref:openrouter_api_key"),
+            "the renderer keeps seeing the stored marker, never the secret"
+        );
+        assert_eq!(
+            store.reads.load(Ordering::SeqCst),
+            1,
+            "a secret reference must resolve through the credential store"
+        );
+    }
+
+    #[test]
+    fn settings_get_of_a_plain_key_never_touches_the_keyring() {
+        let conn = shared_settings_db();
+        set_setting(&conn.lock().expect("conn"), "ui_theme", "dark").expect("seed");
+        let store = UnlockedReadStore {
+            conn: &conn,
+            secret: None,
+            reads: AtomicUsize::new(0),
+        };
+
+        let value = read_setting_for_ipc(&conn, "ui_theme", &store).expect("read setting");
+
+        assert_eq!(value.as_deref(), Some("dark"));
+        assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+    }
+
+    /// A-05b's reader for command callers: the credential store must be read
+    /// with `ui_conn` already released, exactly like `read_setting_for_ipc`.
+    #[test]
+    fn the_unlocked_secret_reader_resolves_the_keyring_after_releasing_the_connection() {
+        let conn = shared_settings_db();
+        set_setting(
+            &conn.lock().expect("conn"),
+            OPENROUTER_API_KEY,
+            "secret_ref:openrouter_api_key",
+        )
+        .expect("seed reference");
+        let store = UnlockedReadStore {
+            conn: &conn,
+            secret: Some("sk-protected".to_string()),
+            reads: AtomicUsize::new(0),
+        };
+
+        let value =
+            get_secret_setting_unlocked(&conn, OPENROUTER_API_KEY, &store).expect("read setting");
+
+        assert_eq!(value.as_deref(), Some("sk-protected"));
+        assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    }
+
+    /// A-05b's batch reader keeps key order while mixing plain and secret
+    /// settings, so `ensure_selected_cloud_key_unlocked` reads its mode and key
+    /// from one connection acquisition.
+    #[test]
+    fn the_unlocked_batch_read_returns_plain_and_secret_values_in_key_order() {
+        let conn = shared_settings_db();
+        {
+            let conn = conn.lock().expect("conn");
+            set_setting(&conn, crate::ocr::OCRH_SETTING_MODE, "glm_ocr").expect("mode row");
+            set_setting(&conn, GLM_OCR_API_KEY, "secret_ref:glm_ocr_api_key")
+                .expect("key reference");
+        }
+        let store = InMemorySecretStore::with_secret(GLM_OCR_API_KEY, "sk-glm");
+
+        let values = read_settings_unlocked(
+            &conn,
+            &[crate::ocr::OCRH_SETTING_MODE, GLM_OCR_API_KEY],
+            &store,
+        )
+        .expect("batch read");
+
+        assert_eq!(values[0].as_deref(), Some("glm_ocr"));
+        assert_eq!(values[1].as_deref(), Some("sk-glm"));
+    }
+
+    /// A blank explicit key resolves the stored secret through the unlocked
+    /// helper; an explicit one never touches the connection at all.
+    #[test]
+    fn the_unlocked_api_key_resolution_prefers_the_explicit_value() {
+        let conn = shared_settings_db();
+        let store = FailingSecretStore;
+
+        assert_eq!(
+            resolve_api_key_input_unlocked(&conn, OPENROUTER_API_KEY, "  explicit  ", &store)
+                .expect("explicit key"),
+            "explicit"
+        );
+        let error = resolve_api_key_input_unlocked(&conn, OPENROUTER_API_KEY, "", &store)
+            .expect_err("a failing store must not yield a key");
+        assert!(error.contains(OPENROUTER_API_KEY), "{error}");
+    }
+
+    /// Extracts a top-level function's source: from its signature to the first
+    /// closing brace at column 0 (rustfmt keeps top-level braces there).
+    fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("missing {signature}"));
+        let rest = &source[start..];
+        let end = rest
+            .find("\n}")
+            .unwrap_or_else(|| panic!("unclosed {signature}"));
+        &rest[..end]
+    }
+
+    /// A-05a's structural guarantee: the commands and their sequences never
+    /// call the raw keyring helpers, so no credential I/O can sit inside a
+    /// `ui_conn` scope there — they only go through the injected `SecretStore`.
+    /// The scan fails if a future edit puts a direct keyring call back.
+    #[test]
+    fn keyring_calls_stay_out_of_the_ui_conn_scope() {
+        const SOURCE: &str = include_str!("settings.rs");
+        for signature in [
+            "pub async fn settings_get(",
+            "pub async fn settings_set(",
+            "pub async fn settings_get_all(",
+            "pub async fn settings_delete(",
+            "fn read_setting_for_ipc(",
+            "fn set_setting_with_store(",
+            "fn delete_setting_with_store(",
+        ] {
+            let body = function_source(SOURCE, signature);
+            for forbidden in ["store_secret(", "read_secret(", "delete_secret("] {
+                assert!(
+                    !body.contains(forbidden),
+                    "{signature} must not call {forbidden} directly: the credential store is injected"
+                );
+            }
+        }
     }
 }

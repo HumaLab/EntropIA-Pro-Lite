@@ -238,6 +238,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `$LOCALDATA/…/thumbnails/**`; deny `**/*.sqlite*` and `**/web-captures/**/*.html`. One
     list in `asset_scope.rs`, granted from the resolved dirs at setup with `forbid_file` for the
     four database files (`forbid_file` cannot take globs; the config deny covers the rest).
+    RDD `review-9b45b87bd84d5052` approved; PR #44.
     Tests: TS config equality + Rust-list alignment (4); mock-app post-setup scope (2). Checks:
     Lite `cargo test` 2783 / 0 / 35; desktop Pro 3514 / Lite 3493; typecheck, lint clean.
     Manual acceptance (agent-run, profile `s05-scope`, Lite + `navegador` feature, Xvfb):
@@ -247,6 +248,29 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `temp/` and `research/`. Stale wording left for later: `dev_profile.rs` module doc
     (configs "cover the whole shared roots") and `file-import.ts:~413` (thumbnails in
     app_data_dir).
+  - [ ] 3.4 (A-05, S-06) — no blocking `ui_conn` in async commands, no keyring I/O under
+    `ui_conn`. Branch `fix/a05-s06-settings-keyring`. Heuristic scan: 17 `async` commands lock
+    `ui_conn` outside `spawn_blocking` (settings x4, llm x5, transcription x3, ocr x2, deps x2,
+    navegador, nlp, writing publish, zotero_web).
+    - [x] A-05a — `settings.rs`: commands on `run_blocking_db_task`; `get_setting` reads the
+      ref under the lock and resolves the keyring after; `settings_set` writes the secret
+      first without the lock; `settings_delete` deletes the row, then the secret; per-key
+      `SETTINGS_KEY_LOCKS` (only the five secret keys, never pruned) with fixed order key →
+      `ui_conn` → `APP_CREDENTIAL_LOCK`; injectable `SecretStore`; barrier concurrency test,
+      RED with the key lock disabled (`row references missing credential`), 20x loop green.
+      Commit `b9dedc2e`; Lite `cargo test` 2790 / 0 / 35.
+    - [x] A-05b — the other commands (transcription, llm, ocr, nlp, deps, navegador, writing
+      publish, zotero_web; runtime/manager and store_updates readers): SQL on
+      `run_blocking_db_task`/`spawn_blocking`, secrets resolved after releasing `ui_conn`
+      (`get_secret_setting_unlocked`, `resolve_api_key_input_unlocked`,
+      `ensure_selected_cloud_key_unlocked`), no network call under the lock. `settings_set`
+      resumes unblocked work on its own connection after the row write. Guard test
+      `tests/async_lock_guard.rs`: 25 violations on the previous code, green after. Commit
+      `b769fdb8`; Lite `cargo test` 2795 / 0 / 35, Pro focused 630 / 0 / 6, Pro clippy only
+      the 9 known findings, desktop 3514. Accepted deviations: a poisoned lock in
+      `extract_text`/`transcribe_*` now reads "DB lock error:" (no renderer matches it); the
+      Windows-only `store_updates::native::check` call site was checked by reading (no
+      Windows target here).
   - [ ] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
     Facts: rusqlite 0.31 without `hooks`; renderer SQL runs only on `ui_conn` through
     `db_execute`, `db_execute_batch`, `db_execute_transaction`, `db_select`, `db_select_rows`;

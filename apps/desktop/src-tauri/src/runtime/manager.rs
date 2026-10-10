@@ -712,14 +712,9 @@ fn resolve_env_bundle_root_from_value(
 }
 
 fn configured_bootstrap_catalog(app_handle: &AppHandle) -> Result<BootstrapRemoteCatalog, String> {
-    let source = {
-        let db = app_handle.state::<crate::db::state::AppDbState>();
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error while reading bootstrap source: {error}"))?;
-        crate::settings::get_runtime_bootstrap_remote_source(&conn)?
-    };
+    let source = read_runtime_bootstrap_settings(app_handle, |conn| {
+        crate::settings::get_runtime_bootstrap_remote_source(conn)
+    })?;
 
     let Some(source) = source else {
         return Ok(BootstrapRemoteCatalog::SourceUnavailable {
@@ -736,12 +731,28 @@ fn configured_bootstrap_public_key(
     app_handle: &AppHandle,
     public_key_id: &str,
 ) -> Result<String, String> {
-    let db = app_handle.state::<crate::db::state::AppDbState>();
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|error| format!("DB lock error while reading bootstrap public key: {error}"))?;
-    crate::settings::get_runtime_bootstrap_public_key(&conn, public_key_id)
+    read_runtime_bootstrap_settings(app_handle, |conn| {
+        crate::settings::get_runtime_bootstrap_public_key(conn, public_key_id)
+    })
+}
+
+/// Read the backend-only runtime bootstrap settings on a connection of its
+/// own: these readers are reached from sync code paths that async commands
+/// call directly (`ensure_ready_or_bootstrap`, the bootstrap plan), so locking
+/// the shared `ui_conn` there would stall it from the async thread (A-05b).
+/// These settings are SQL rows, never credential-store entries, so the fresh
+/// connection stays off the credential store entirely.
+fn read_runtime_bootstrap_settings<T>(
+    app_handle: &AppHandle,
+    read: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let db_path = app_handle
+        .state::<crate::db::state::AppDbState>()
+        .db_path
+        .clone();
+    let conn = crate::db::open::open_archive_connection(&db_path)
+        .map_err(|error| format!("DB error while reading bootstrap settings: {error}"))?;
+    read(&conn)
 }
 
 fn inspect_runtime(

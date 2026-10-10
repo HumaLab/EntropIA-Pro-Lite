@@ -8,8 +8,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
-use crate::settings::{get_setting, HLAB_PUBLISH_KEY};
+use crate::settings::HLAB_PUBLISH_KEY;
 
 const HLAB_URL: &str = "https://hlab.com.ar";
 /// Debug builds only: points publishing at a local copy of the site.
@@ -56,13 +57,15 @@ pub async fn writing_publish_hlab(
     {
         return Err(format!("invalid document id {document_id:?}"));
     }
-    let key = {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock error: {e}"))?;
-        get_setting(&conn, HLAB_PUBLISH_KEY)
-    }
+    let db = db.inner().clone();
+    let key = run_blocking_db_task(move || {
+        crate::settings::get_secret_setting_unlocked(
+            &db.ui_conn,
+            HLAB_PUBLISH_KEY,
+            &crate::settings::KeyringSecretStore,
+        )
+    })
+    .await?
     .filter(|key| !key.trim().is_empty())
     .ok_or_else(|| "hlab_key_missing: falta la clave para publicar en hlab.com.ar".to_string())?;
 
