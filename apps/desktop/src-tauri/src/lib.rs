@@ -1013,6 +1013,47 @@ pub fn run() {
             // get their own staging area. The store creates its directory
             // lazily on first write, never here.
             app.manage(internet_archive::IaState::new(&app_dir));
+            // Startup recovery for interrupted downloads: normalize every job
+            // folder, keep `needs_reconcile` entries for the frontend, and
+            // never block or fail startup over it. The whole `recover_all`
+            // runs while holding `jobs`, so a start arriving during recovery
+            // waits for it (lock order: `jobs` only, never `active`).
+            {
+                let handle = app.handle().clone();
+                let store = handle.state::<internet_archive::IaState>().store.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|elapsed| elapsed.as_secs())
+                        .unwrap_or(0);
+                    // Keep the state guard alive for the guard borrowing it.
+                    let state = handle.try_state::<internet_archive::IaState>();
+                    let _jobs_guard = state.as_ref().and_then(|state| state.jobs.lock().ok());
+                    let report = store.recover_all(now);
+                    let reconcile = report.needs_reconcile.len();
+                    if let Some(state) = handle.try_state::<internet_archive::IaState>() {
+                        if let Ok(mut slot) = state.reconcile.lock() {
+                            *slot = report.needs_reconcile;
+                        }
+                    }
+                    eprintln!(
+                        "[ia] recovery: {} jobs, {} reconcile, {} skipped, {} quarantined, {} unsupported",
+                        report.jobs.len(),
+                        reconcile,
+                        report.skipped.len(),
+                        report.quarantined.len(),
+                        report.unsupported.len()
+                    );
+                    app_logs::info(
+                        &handle,
+                        "ia/recovery",
+                        format!(
+                            "Recuperación: {} trabajos, {reconcile} por conciliar",
+                            report.jobs.len(),
+                        ),
+                    );
+                });
+            }
 
             // Managed-runtime lifecycle is local-ml only; the lite build has no runtime to validate.
             #[cfg(feature = "local-ml")]
@@ -1516,6 +1557,11 @@ pub fn run() {
             internet_archive::commands::ia_list_collection,
             internet_archive::commands::ia_get_item,
             internet_archive::commands::ia_prepare_import,
+            internet_archive::commands::ia_start_import,
+            internet_archive::commands::ia_cancel_import,
+            internet_archive::commands::ia_get_import_status,
+            internet_archive::commands::ia_list_jobs,
+            internet_archive::commands::ia_list_verified_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

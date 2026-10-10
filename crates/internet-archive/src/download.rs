@@ -99,7 +99,7 @@ fn is_valid_remote_name(value: &str) -> bool {
     true
 }
 
-fn partial_path(dest: &Path) -> PathBuf {
+pub fn partial_path(dest: &Path) -> PathBuf {
     let mut s = dest.as_os_str().to_owned();
     s.push(".partial");
     PathBuf::from(s)

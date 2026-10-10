@@ -177,7 +177,12 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       longer than 30 s to transfer fails. Downloads must use the connect timeout
       plus an inactivity (read) timeout, per plan §7 point 4; JSON calls keep
       the total timeout.
-- [ ] 22. Job runner: `ia_start_import`, `ia_cancel_import`,
+- [ ] 22. (Decisions: files download one at a time in the MVP, a deviation
+      from the plan's default of 2, to keep the runner simple and the load on
+      Archive low; a cancel interrupts the current download; 429 waits for
+      `Retry-After`, capped at 60 s, up to 3 times; a job stays `running` while it
+      has `verified` files waiting for the frontend import; `ia_list_jobs` added so
+      the UI can offer "Retomar importación".) [x] Job runner: `ia_start_import`, `ia_cancel_import`,
       `ia_get_import_status`, `ia_list_verified_files`; one job at a time;
       download, verify, record `sha256` and `page_count`; `recover_all` at
       startup.
@@ -246,6 +251,20 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   download succeeds, stalled download fails with no partial left, JSON keeps its
   total). Parent re-ran fmt, clippy and the crate tests twice, plus the app
   `internet_archive` tests (29). The defect slipped through the reviewed task 17.
+- 2026-10-10, task 22: `runner.rs` (`Downloader` trait, live impl, `run_job`,
+  `decide_start`) and commands `ia_start_import`, `ia_cancel_import`,
+  `ia_get_import_status`, `ia_list_jobs`, `ia_list_verified_files` in all three
+  lists; startup `recover_all` keeps `needs_reconcile` in state. Crate change:
+  `partial_path` made public. RED: stubs failed. GREEN: 41. Parent review found
+  three concurrency defects the single-job tests could not show: the runner kept
+  a job copy across awaits (lost updates once task 23 writes the same job),
+  `ia_start_import` checked and registered under two separate locks, and a
+  cancel arriving as a run ended was dropped. Fixed test-first: one `jobs`
+  writer lock with load-modify-save for every write (runner, start, cancel,
+  recovery), lock order `active` then `jobs`, end-of-run cancel applied before
+  clearing the registry. RED: a concurrent `Importing` change was reverted by
+  the runner. GREEN: 43 (twice). Parent ran fmt, clippy, crate 146,
+  `acl_manifest_guard` 6, `ocr::pdf` 92; `Cargo.lock` unchanged.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

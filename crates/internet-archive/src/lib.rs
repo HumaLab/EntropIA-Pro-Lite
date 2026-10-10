@@ -28,7 +28,8 @@ pub mod verify;
 
 pub use client::{IaClient, Timeouts};
 pub use download::{
-    DownloadLimits, RetryPolicy, ABSOLUTE_MAX_DOWNLOAD_BYTES, DEFAULT_MAX_DOWNLOAD_BYTES,
+    partial_path, DownloadLimits, RetryPolicy, ABSOLUTE_MAX_DOWNLOAD_BYTES,
+    DEFAULT_MAX_DOWNLOAD_BYTES,
 };
 pub use error::IaError;
 pub use item::{

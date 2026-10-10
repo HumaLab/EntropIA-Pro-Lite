@@ -13,7 +13,7 @@ use internet_archive::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tauri::State;
+use tauri::{Manager as _, State};
 
 use super::provenance_db::ProvenanceSnapshot;
 use super::IaState;
@@ -22,6 +22,12 @@ use internet_archive::job::{ImportTarget, Job, JobFile};
 use internet_archive::prepare::{summarize, DuplicateStatus, PrepareSummary};
 use internet_archive::provenance::ItemSnapshot;
 use internet_archive::store::{new_job_id, JobStore};
+
+use super::runner::{apply_end_of_run_cancel, decide_start, run_job, update, LiveDownloader};
+use internet_archive::download::DownloadLimits;
+use internet_archive::job::{FileState, JobState};
+use internet_archive::store::{is_valid_job_id, StoreError};
+use internet_archive::verify::PageLimits;
 
 /// Structured search filters, as the frontend sends them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -738,6 +744,411 @@ pub async fn ia_prepare_import(
         &selections,
     )
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Job runner (task 22)
+//
+// Thin wrappers over the testable [`run_job`] core: commands take only a job
+// id (validated by the store) and file indexes in order — never a path or a
+// URL. Every state change is persisted with `JobStore::save` and then
+// reported as `ia://job-updated` with `{ jobId }` (best effort, logged).
+// ---------------------------------------------------------------------------
+
+/// One file of an import job, as the frontend reads it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobFileStatusDto {
+    pub index: usize,
+    pub identifier: String,
+    pub file_name: String,
+    pub display_file_name: String,
+    pub state: FileState,
+    pub attempts: u32,
+    pub error: Option<String>,
+    pub expected_size: Option<u64>,
+    pub page_count: Option<u32>,
+}
+
+/// An import job with its files, as the frontend reads it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobStatusDto {
+    pub id: String,
+    pub state: JobState,
+    pub target_collection_id: Option<String>,
+    pub files: Vec<JobFileStatusDto>,
+    pub running: bool,
+}
+
+/// A resumable job for the "Retomar importación" list: only non-terminal
+/// jobs are listed.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobSummaryDto {
+    pub id: String,
+    pub state: JobState,
+    pub target_collection_id: Option<String>,
+    pub total_files: usize,
+    pub verified_files: usize,
+}
+
+/// One verified file ready for the frontend import (task 23).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifiedFileDto {
+    pub index: usize,
+    pub identifier: String,
+    pub file_name: String,
+    pub display_file_name: String,
+    pub item_title: String,
+    pub staging_path: String,
+    pub page_count: u32,
+    pub sha256: String,
+    pub extra_metadata: serde_json::Value,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+fn emit_job_updated(app: &tauri::AppHandle, job_id: &str) {
+    use tauri::Emitter as _;
+    if let Err(error) = app.emit("ia://job-updated", serde_json::json!({ "jobId": job_id })) {
+        eprintln!("[ia] job-updated emit failed for {job_id}: {error}");
+    }
+}
+
+fn job_load_error(error: StoreError) -> String {
+    match error {
+        StoreError::NotFound(_) => "not_found: import job not found".to_string(),
+        StoreError::InvalidId(_) => "invalid_request: invalid job id".to_string(),
+        _ => "io: local storage error".to_string(),
+    }
+}
+
+pub(crate) fn target_collection_id(job: &Job) -> Option<String> {
+    match &job.target {
+        ImportTarget::ExistingCollection { collection_id } => Some(collection_id.clone()),
+        ImportTarget::NewCollection { .. } => None,
+    }
+}
+
+pub(crate) fn job_to_status(job: &Job, running: bool) -> JobStatusDto {
+    let files = job
+        .files
+        .iter()
+        .enumerate()
+        .map(|(index, file)| JobFileStatusDto {
+            index,
+            identifier: file.identifier.clone(),
+            file_name: file.file_name.clone(),
+            display_file_name: internet_archive::display_file_name(
+                &file.file_name,
+                &file.identifier,
+            ),
+            state: file.state,
+            attempts: file.attempts,
+            error: file.error.clone(),
+            expected_size: file.expected_size,
+            page_count: file.page_count,
+        })
+        .collect();
+    JobStatusDto {
+        id: job.id.clone(),
+        state: job.state,
+        target_collection_id: target_collection_id(job),
+        files,
+        running,
+    }
+}
+
+/// Verified files of `job` with their absolute staging paths and the
+/// provenance value the frontend passes unchanged as `extraMetadata`.
+pub(crate) fn verified_files_logic(
+    store: &JobStore,
+    job: &Job,
+    now: u64,
+) -> Result<Vec<VerifiedFileDto>, String> {
+    let mut out = Vec::new();
+    for (index, file) in job.files.iter().enumerate() {
+        if file.state != FileState::Verified {
+            continue;
+        }
+        let staging_name = file
+            .staging_name
+            .clone()
+            .ok_or_else(|| "io: verified file has no staging file".to_string())?;
+        let sha256 = file
+            .sha256
+            .clone()
+            .filter(|hash| !hash.trim().is_empty())
+            .ok_or_else(|| "io: verified file has no hash".to_string())?;
+        let page_count = file
+            .page_count
+            .ok_or_else(|| "io: verified file has no page count".to_string())?;
+        let dest = store
+            .staging_path(&job.id, &staging_name)
+            .map_err(|_| "io: local storage error".to_string())?;
+        let display = internet_archive::display_file_name(&file.file_name, &file.identifier);
+        let item_title = job
+            .item(&file.identifier)
+            .and_then(|snapshot| snapshot.title.clone())
+            .unwrap_or_else(|| display.strip_suffix(".pdf").unwrap_or(&display).to_string());
+        let provenance = internet_archive::build_provenance(file, job.item(&file.identifier), now)
+            .map_err(|_| "io: cannot build provenance".to_string())?;
+        out.push(VerifiedFileDto {
+            index,
+            identifier: file.identifier.clone(),
+            file_name: file.file_name.clone(),
+            display_file_name: display,
+            item_title,
+            staging_path: dest.display().to_string(),
+            page_count,
+            sha256,
+            extra_metadata: serde_json::json!({
+                internet_archive::PROVENANCE_KEY: provenance,
+            }),
+        });
+    }
+    Ok(out)
+}
+
+/// Non-terminal jobs for "Retomar importación": root directory names
+/// validated with [`is_valid_job_id`] (no new crate API), loaded through
+/// the store, terminal jobs skipped, unloadable entries skipped.
+pub(crate) fn list_jobs_logic(store: &JobStore) -> Result<Vec<JobSummaryDto>, String> {
+    let entries = match std::fs::read_dir(store.root()) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("io: local storage error".to_string()),
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_valid_job_id(&name) {
+            ids.push(name);
+        }
+    }
+    ids.sort();
+    let mut out = Vec::new();
+    for id in ids {
+        let job = match store.load(&id) {
+            Ok(job) => job,
+            Err(_) => continue,
+        };
+        if job.state.is_terminal() {
+            continue;
+        }
+        let verified = job
+            .files
+            .iter()
+            .filter(|file| file.state == FileState::Verified)
+            .count();
+        out.push(JobSummaryDto {
+            id: job.id.clone(),
+            state: job.state,
+            target_collection_id: target_collection_id(&job),
+            total_files: job.files.len(),
+            verified_files: verified,
+        });
+    }
+    Ok(out)
+}
+
+/// Start (or resume) a job download. One job at a time: rejected with
+/// `job_running` while another job runs. Accepts `Draft` (`Ready` then
+/// `Running`), `Ready` (`Running`), or `Running` without an active runner
+/// (resume, no transition); anything else is `invalid_state`.
+///
+/// `active` is held for the whole check → load → transition → save →
+/// register sequence (lock order `active` first, then `jobs` inside
+/// [`update`]), so concurrent starts serialize with each other and with
+/// cancels: no cancel in the window is overwritten by the start's save.
+/// The runner clears the registry when it ends, also on error; a cancel
+/// that arrives after the run but before the clear is applied at the end
+/// of the run instead of being lost.
+#[tauri::command]
+pub fn ia_start_import(
+    job_id: String,
+    ia: State<'_, IaState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut active_guard = ia
+        .active
+        .lock()
+        .map_err(|_| "io: local storage error".to_string())?;
+    if active_guard.is_some() {
+        return Err("job_running: another import is already running".to_string());
+    }
+    let (_, job) = update(&ia.store, &ia.jobs, &job_id, |job| {
+        decide_start(job.state)?;
+        let now = now_secs();
+        match job.state {
+            JobState::Draft => {
+                job.set_job_state(JobState::Ready, now)
+                    .map_err(|_| "invalid_state: cannot start this job".to_string())?;
+                job.set_job_state(JobState::Running, now)
+                    .map_err(|_| "invalid_state: cannot start this job".to_string())?;
+            }
+            JobState::Ready => {
+                job.set_job_state(JobState::Running, now)
+                    .map_err(|_| "invalid_state: cannot start this job".to_string())?;
+            }
+            JobState::Running => {}
+            _ => return Err("invalid_state: cannot start this job".to_string()),
+        }
+        Ok(())
+    })?;
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    // Still holding `active`: no concurrent start or direct cancel can slip
+    // between the save above and this registration.
+    *active_guard = Some(super::ActiveRun {
+        job_id: job_id.clone(),
+        cancel: tx,
+    });
+    let rx_flag = rx.clone();
+    drop(active_guard);
+    emit_job_updated(&app, &job.id);
+    let store = ia.store.clone();
+    let client = ia.client.clone();
+    let endpoints = ia.endpoints.clone();
+    let app_clone = app.clone();
+    let job_id_clone = job_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let downloader = LiveDownloader {
+            client: &client,
+            endpoints: &endpoints,
+            limits: DownloadLimits::clamped(None),
+            retry: internet_archive::RetryPolicy::default(),
+        };
+        let clock = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or(0)
+        };
+        let on_update = |updated: &Job| {
+            emit_job_updated(&app_clone, &updated.id);
+        };
+        // The writer lock lives in the managed state: borrow it for the
+        // run (the borrow stays inside this task, which owns `app_clone`).
+        // The runner itself only ever takes `jobs`, never `active`.
+        let run_result = match app_clone.try_state::<IaState>() {
+            Some(state) => {
+                run_job(
+                    &store,
+                    &state.jobs,
+                    &job_id_clone,
+                    &downloader,
+                    rx,
+                    (DownloadLimits::clamped(None), PageLimits::clamped(None)),
+                    &clock,
+                    &on_update,
+                )
+                .await
+            }
+            None => Err("io: local storage error".to_string()),
+        };
+        if let Err(error) = run_result {
+            eprintln!("[ia] import runner for {job_id_clone} ended with error: {error}");
+        }
+        // End of run: `active` first, then `jobs` inside the helper. A
+        // cancel that arrived after `run_job` returned but before this
+        // clear still sees the active run when sent; if the flag is set
+        // now, apply the same cancel effects instead of losing it.
+        if let Some(state) = app_clone.try_state::<IaState>() {
+            if let Ok(mut active) = state.active.lock() {
+                let flag = *rx_flag.borrow();
+                if flag {
+                    let now = now_secs();
+                    match apply_end_of_run_cancel(&store, &state.jobs, &job_id_clone, true, now) {
+                        Ok((applied, _)) => {
+                            if applied {
+                                eprintln!("[ia] applied end-of-run cancel for {job_id_clone}");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("[ia] end-of-run cancel for {job_id_clone} failed: {error}");
+                        }
+                    }
+                }
+                if active
+                    .as_ref()
+                    .is_some_and(|run| run.job_id == job_id_clone)
+                {
+                    *active = None;
+                }
+            }
+        }
+        emit_job_updated(&app_clone, &job_id_clone);
+    });
+    Ok(())
+}
+
+/// Cancel a job download. When it is the active run the cancel signal is
+/// sent and the runner finishes the cancellation; otherwise the job is
+/// cancelled directly (same effects as the end-of-run path). Holds `active`
+/// for the whole decision and takes `jobs` inside the helper for the
+/// load → cancel → save (lock order `active` → `jobs`). Idempotent on
+/// terminal jobs.
+#[tauri::command]
+pub fn ia_cancel_import(
+    job_id: String,
+    ia: State<'_, IaState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let active_guard = ia
+        .active
+        .lock()
+        .map_err(|_| "io: local storage error".to_string())?;
+    if let Some(run) = active_guard.as_ref() {
+        if run.job_id == job_id {
+            let _ = run.cancel.send(true);
+            return Ok(());
+        }
+    }
+    let (applied, job) = apply_end_of_run_cancel(&ia.store, &ia.jobs, &job_id, true, now_secs())?;
+    drop(active_guard);
+    if applied {
+        emit_job_updated(&app, &job.id);
+    }
+    Ok(())
+}
+
+/// Current job state with its files, plus whether a runner works on it.
+#[tauri::command]
+pub fn ia_get_import_status(
+    job_id: String,
+    ia: State<'_, IaState>,
+) -> Result<JobStatusDto, String> {
+    let job = ia.store.load(&job_id).map_err(job_load_error)?;
+    let running = ia
+        .active
+        .lock()
+        .map(|active| active.as_ref().is_some_and(|run| run.job_id == job_id))
+        .unwrap_or(false);
+    Ok(job_to_status(&job, running))
+}
+
+/// Non-terminal jobs for "Retomar importación".
+#[tauri::command]
+pub fn ia_list_jobs(ia: State<'_, IaState>) -> Result<Vec<JobSummaryDto>, String> {
+    list_jobs_logic(&ia.store)
+}
+
+/// Verified files of a job with absolute staging paths and provenance
+/// `extraMetadata` for the frontend import.
+#[tauri::command]
+pub fn ia_list_verified_files(
+    job_id: String,
+    ia: State<'_, IaState>,
+) -> Result<Vec<VerifiedFileDto>, String> {
+    let job = ia.store.load(&job_id).map_err(job_load_error)?;
+    verified_files_logic(&ia.store, &job, now_secs())
 }
 
 #[cfg(test)]
@@ -1583,5 +1994,153 @@ mod tests {
             error.starts_with("invalid_query: "),
             "unexpected error {error:?}"
         );
+    }
+
+    #[test]
+    fn job_status_dto_uses_camel_case_keys() {
+        use internet_archive::job::{FileState, JobState};
+        let dto = JobStatusDto {
+            id: "job-1".to_string(),
+            state: JobState::Running,
+            target_collection_id: Some("col-1".to_string()),
+            files: vec![JobFileStatusDto {
+                index: 0,
+                identifier: "some-id".to_string(),
+                file_name: "a.pdf".to_string(),
+                display_file_name: "a.pdf".to_string(),
+                state: FileState::Verified,
+                attempts: 2,
+                error: None,
+                expected_size: Some(100),
+                page_count: Some(3),
+            }],
+            running: true,
+        };
+        let value = serde_json::to_value(&dto).expect("dto serializes");
+        assert_eq!(value["id"], "job-1");
+        assert_eq!(value["state"], "running");
+        assert_eq!(value["targetCollectionId"], "col-1");
+        assert_eq!(value["running"], true);
+        assert_eq!(value["files"][0]["fileName"], "a.pdf");
+        assert_eq!(value["files"][0]["displayFileName"], "a.pdf");
+        assert_eq!(value["files"][0]["expectedSize"], 100);
+        assert_eq!(value["files"][0]["pageCount"], 3);
+        assert!(value.get("target_collection_id").is_none());
+        assert!(value["files"][0].get("file_name").is_none());
+    }
+
+    #[test]
+    fn verified_files_logic_builds_provenance_and_staging_path() {
+        use internet_archive::job::{FileState, ImportTarget, Job, JobFile, JobState};
+        use internet_archive::provenance::{ItemSnapshot, PROVENANCE_KEY};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let pdf = available_pdf("doc.pdf");
+        let mut file = JobFile::from_pdf("some-id", &pdf).expect("available");
+        file.state = FileState::Verified;
+        file.staging_name = Some(internet_archive::store::new_staging_name());
+        file.sha256 = Some("abc123".to_string());
+        file.page_count = Some(7);
+        let staging = file.staging_name.clone().unwrap();
+        let mut job = Job::new(
+            uuid::Uuid::new_v4().hyphenated().to_string(),
+            1_700_000_000,
+            ImportTarget::ExistingCollection {
+                collection_id: "col-1".to_string(),
+            },
+            vec![file],
+        )
+        .expect("job");
+        job.set_job_state(JobState::Ready, 1_700_000_001).unwrap();
+        job.set_job_state(JobState::Running, 1_700_000_002).unwrap();
+        job.items = vec![ItemSnapshot {
+            identifier: "some-id".to_string(),
+            title: Some("Some title".to_string()),
+            creators: vec![],
+            date: None,
+            languages: vec![],
+            collections: vec!["opensource".to_string()],
+            rights: None,
+            license_url: None,
+        }];
+        store.create(&job).unwrap();
+        // The staging file must exist for the path to be meaningful.
+        let dest = store.staging_path(&job.id, &staging).unwrap();
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::write(&dest, b"%PDF-1.4 fake").unwrap();
+        let out = verified_files_logic(&store, &job, 1_700_000_010).expect("verified list");
+        assert_eq!(out.len(), 1);
+        let entry = &out[0];
+        assert_eq!(entry.index, 0);
+        assert_eq!(entry.identifier, "some-id");
+        assert_eq!(entry.page_count, 7);
+        assert_eq!(entry.sha256, "abc123");
+        assert_eq!(entry.item_title, "Some title");
+        // Staging path is absolute and inside the store root.
+        assert!(entry.staging_path.contains("internet-archive"));
+        assert!(
+            std::path::Path::new(&entry.staging_path).starts_with(store.root()),
+            "stagingPath {} not inside {:?}",
+            entry.staging_path,
+            store.root()
+        );
+        let value = serde_json::to_value(entry).expect("dto serializes");
+        assert_eq!(value["fileName"], "doc.pdf");
+        assert_eq!(value["displayFileName"], "doc.pdf");
+        assert_eq!(value["itemTitle"], "Some title");
+        assert_eq!(
+            value["stagingPath"],
+            serde_json::Value::String(entry.staging_path.clone())
+        );
+        assert!(value.get("extraMetadata").is_some());
+        let provenance = &value["extraMetadata"][PROVENANCE_KEY];
+        assert_eq!(provenance["identifier"], "some-id");
+        assert_eq!(provenance["file_name"], "doc.pdf");
+        assert_eq!(provenance["sha256_local"], "abc123");
+        assert_eq!(provenance["page_count"], 7);
+    }
+
+    #[test]
+    fn list_jobs_logic_lists_only_non_terminal() {
+        use internet_archive::job::{FileState, ImportTarget, Job, JobFile, JobState};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = JobStore::new(dir.path().join("internet-archive"));
+        let mk = |state: JobState| {
+            let file = JobFile::from_pdf("some-id", &available_pdf("a.pdf")).expect("pdf");
+            let mut job = Job::new(
+                uuid::Uuid::new_v4().hyphenated().to_string(),
+                1_700_000_000,
+                ImportTarget::ExistingCollection {
+                    collection_id: "col-1".to_string(),
+                },
+                vec![file],
+            )
+            .expect("job");
+            // Drive the state machine legally: Draft -> Ready -> Running -> terminal.
+            if state != JobState::Draft {
+                job.set_job_state(JobState::Ready, 1).unwrap();
+                if state != JobState::Ready {
+                    job.set_job_state(JobState::Running, 2).unwrap();
+                    if state != JobState::Running {
+                        // Settle needs terminal files; force one Failed then settle.
+                        job.files[0].state = FileState::Failed;
+                        let settled = job.settle(3).expect("settles to Failed");
+                        assert_eq!(settled, JobState::Failed);
+                    }
+                }
+            }
+            assert_eq!(job.state, state);
+            job
+        };
+        let running = mk(JobState::Running);
+        let failed = mk(JobState::Failed);
+        store.create(&running).unwrap();
+        store.create(&failed).unwrap();
+        let out = list_jobs_logic(&store).expect("list");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, running.id);
+        let value = serde_json::to_value(&out[0]).expect("dto serializes");
+        assert!(value.get("targetCollectionId").is_some());
+        assert!(value.get("totalFiles").is_some());
     }
 }
