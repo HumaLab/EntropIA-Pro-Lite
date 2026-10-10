@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createRouteLoader, loadRouteView } from './route-loader'
 
+// The mapping is what is under test, not the views: compiling them cold took
+// past the 5 s timeout under the full parallel suite.
+vi.mock('../views/BibliotecaView.svelte', () => ({ default: 'biblioteca-view' }))
+vi.mock('../views/BibliographyWorkView.svelte', () => ({ default: 'bibliography-work-view' }))
+
 describe('createRouteLoader', () => {
   it('shares one promise for repeated loads of the same route', async () => {
     const module = { default: 'item-view' }
@@ -32,10 +37,8 @@ describe('loadRouteView — Biblioteca routes', () => {
   it('loads the Biblioteca views under their route names', async () => {
     const biblioteca = await loadRouteView('biblioteca')
     const work = await loadRouteView('bibliography-work')
-    const BibliotecaView = (await import('../views/BibliotecaView.svelte')).default
-    const BibliographyWorkView = (await import('../views/BibliographyWorkView.svelte')).default
 
-    expect(biblioteca.default).toBe(BibliotecaView)
-    expect(work.default).toBe(BibliographyWorkView)
+    expect(biblioteca.default).toBe('biblioteca-view')
+    expect(work.default).toBe('bibliography-work-view')
   })
 })
