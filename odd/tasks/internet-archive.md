@@ -54,11 +54,16 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
 
 ## Phase 1 tasks (Rust client, no local writes, no downloads)
 
-Module `apps/desktop/src-tauri/src/internet_archive/`. TDD per task (observed
-RED, then GREEN). Fixtures: real responses from Phase 0 copied to
-`apps/desktop/src-tauri/tests/fixtures/internet_archive/`.
+Standalone crate `crates/internet-archive` (precedent `crates/vecscan`), so it
+builds and tests without Tauri's Linux system libraries; only the thin command
+layer (task 11) lives in `src-tauri`. Decided 2026-10-10 with the user: rustup
+1.90.0 installed in the user's home (`~/.cargo`, no PATH change). TDD per task
+(observed RED, then GREEN). Fixtures: real responses from Phase 0 copied to
+`crates/internet-archive/tests/fixtures/`. The crate re-implements the public-IP
+predicates of `navegador/url_policy.rs` (it cannot depend on `src-tauri`);
+unify later.
 
-- [ ] 7. HTTP client with a strict fetch policy (T1.1, T1.7): `https` and port
+- [x] 7. HTTP client with a strict fetch policy (T1.1, T1.7): `https` and port
       443 only, host `archive.org` or `*.archive.org` (suffix boundary), manual
       redirects (max 5) validated hop by hop, public IPs only via the
       `url_policy.rs` predicates (exposed `pub(crate)`), resolved IP pinned for the
@@ -82,6 +87,15 @@ RED, then GREEN). Fixtures: real responses from Phase 0 copied to
       for Lite (no features) and Pro (`local-ml`).
 
 ## Evidence
+
+- 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
+  `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49
+  errors, tests written first). GREEN: 13 passed. Independent verifier:
+  `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
+  (13/13, twice, identical), `cargo check --features test-support`, all exit 0;
+  `target/` and `Cargo.lock` ignored. Parent review of host rule, redirect loop,
+  address pinning and streaming cap: no issues. Follow-up: split `lib.rs` (756
+  lines) into modules in task 8.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
