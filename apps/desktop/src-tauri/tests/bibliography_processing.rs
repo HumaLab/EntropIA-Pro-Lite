@@ -8743,7 +8743,7 @@ fn attachment_page_keeps_pdfs_and_stored_web_snapshots_with_a_parent_and_decodes
         "externo.pdf",
         None,
     );
-    linked["data"]["path"] = serde_json::json!("C:/Libros/externo.pdf");
+    linked["data"]["path"] = serde_json::json!(LINKED_ABSOLUTE_PATH);
     let body = serde_json::json!([
         attachment_row(
             "PDFATT01",
@@ -8830,9 +8830,33 @@ fn attachment_page_keeps_pdfs_and_stored_web_snapshots_with_a_parent_and_decodes
     let linked = &page.attachments[2];
     assert_eq!(
         linked.input.native_path.as_deref(),
-        Some("C:/Libros/externo.pdf"),
+        Some(LINKED_ABSOLUTE_PATH),
         "an absolute data.path backs a linked file without an enclosure"
     );
+}
+
+/// Zotero stores a linked file's `data.path` in the platform's own form, and
+/// only an absolute path on this machine is a readable location.
+#[cfg(windows)]
+const LINKED_ABSOLUTE_PATH: &str = "C:/Libros/externo.pdf";
+#[cfg(not(windows))]
+const LINKED_ABSOLUTE_PATH: &str = "/home/ana/Libros/externo.pdf";
+
+#[cfg(not(windows))]
+#[test]
+fn a_drive_letter_data_path_is_not_a_local_file_off_windows() {
+    use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
+    let mut linked = attachment_row(
+        "LINKED02",
+        Some("WORK0002"),
+        "application/pdf",
+        "linked_file",
+        "externo.pdf",
+        None,
+    );
+    linked["data"]["path"] = serde_json::json!("C:/Libros/externo.pdf");
+    let page = attachment_page_from_json(&serde_json::json!([linked]), None).expect("parses");
+    assert_eq!(page.attachments[0].input.native_path, None);
 }
 
 #[test]
