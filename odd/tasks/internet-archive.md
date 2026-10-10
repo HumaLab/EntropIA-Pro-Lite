@@ -119,7 +119,7 @@ Decided 2026-10-10 with the user: Tauri's Linux system libraries are now
 installed (via `pkexec`), so `src-tauri` builds and tests here in Lite. Always
 `cargo ... --locked` so `Cargo.lock` keeps the `entropia-agent` git source line.
 
-- [ ] 16. T3.0 bounded PDF split (blocking prerequisite): a new streaming split
+- [x] 16. T3.0 bounded PDF split (blocking prerequisite): a new streaming split
       in `src-tauri/src/ocr/pdf.rs` that writes each page as soon as it is
       produced, with `SplitLimits { max_output_bytes, max_duration }`, removing
       partial output and returning no pages when a limit is hit; the command
@@ -205,6 +205,20 @@ installed (via `pkexec`), so `src-tauri` builds and tests here in Lite. Always
   paginated collection, close and reopen without losing the selection, no
   implicit download) holds at crate level: `job.json` survives restart through
   `recover_all`; nothing downloads yet.
+- 2026-10-10, Phase 3 setup: Tauri system libraries installed with `pkexec`
+  (the user typed the password in the system dialog). Lite baseline for
+  `src-tauri` with `--locked`: `cargo check --tests` OK, `ocr::pdf` 88 passed,
+  `acl_manifest_guard` 6 passed, `Cargo.lock` unchanged.
+- 2026-10-10, task 16 (T3.0): `split_pdf_to_files` + `SplitLimits` in
+  `ocr/pdf.rs` (one page in memory at a time, size accounted before writing,
+  time checked between pages, cleanup of only this call's files, marker
+  `demasiado grande para dividir`); shared `serialize_single_page` keeps
+  `split_pdf_to_single_page_bytes` identical for `processing/ocr.rs`.
+  `split_pdf_pages` keeps its signature and uses min(2 GiB, free - 512 MiB) and
+  10 min. RED: 8 compile errors. GREEN: `ocr::pdf` 92 passed. Independent
+  verifier: fmt, clippy `-D warnings`, `ocr::pdf` 92 twice, `processing::ocr` 4,
+  `acl_manifest_guard` 6, no prior test changed, `Cargo.lock` unchanged. Note: if
+  free space cannot be read the budget falls back to the 2 GiB cap.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,

@@ -1685,17 +1685,106 @@ pub fn split_pdf_to_single_page_bytes(bytes: &[u8]) -> Result<Vec<(u32, Vec<u8>)
             .get(&page_number)
             .ok_or_else(|| format!("Missing page {page_number} while splitting"))?;
 
-        let mut single = extract_single_page(&source, page_id)
-            .map_err(|e| format!("Failed to extract page {}: {e}", index + 1))?;
-
-        let mut pdf_bytes = Vec::new();
-        single
-            .save_to(&mut pdf_bytes)
-            .map_err(|e| format!("Failed to save single-page PDF for page {}: {e}", index + 1))?;
+        let pdf_bytes = serialize_single_page(&source, page_id, index as u32 + 1)?;
         pages.push((index as u32 + 1, pdf_bytes));
     }
 
     Ok(pages)
+}
+
+/// Serializes one page of an already-loaded document, shared by the in-memory
+/// and streaming splits so both produce identical bytes.
+fn serialize_single_page(
+    source: &lopdf::Document,
+    page_id: ObjectId,
+    display_number: u32,
+) -> Result<Vec<u8>, String> {
+    let mut single = extract_single_page(source, page_id)
+        .map_err(|e| format!("Failed to extract page {display_number}: {e}"))?;
+
+    let mut pdf_bytes = Vec::new();
+    single
+        .save_to(&mut pdf_bytes)
+        .map_err(|e| format!("Failed to save single-page PDF for page {display_number}: {e}"))?;
+    Ok(pdf_bytes)
+}
+
+/// Bounds for [`split_pdf_to_files`]: the total bytes it may write and how
+/// long it may run. Both stop the split before the disk fills or the import
+/// hangs on a pathological file.
+pub struct SplitLimits {
+    pub max_output_bytes: u64,
+    pub max_duration: std::time::Duration,
+}
+
+/// Removes only the files this call wrote; a pre-existing file stays.
+fn remove_split_files(written: &[(u32, PathBuf)]) {
+    for (_, path) in written {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Splits a PDF straight to `out_dir/{prefix}_page_{n}.pdf`, one page at a time.
+///
+/// Each page is extracted, measured against the running total BEFORE writing,
+/// and flushed to disk immediately, so memory stays at one page instead of the
+/// whole document. When a limit trips — or any page fails — the files this
+/// call wrote are removed and the error is returned.
+pub fn split_pdf_to_files(
+    bytes: &[u8],
+    out_dir: &Path,
+    filename_prefix: &str,
+    limits: &SplitLimits,
+) -> Result<Vec<(u32, PathBuf)>, String> {
+    let source = load_lopdf_document(bytes, "splitting")?;
+    let page_numbers = source.get_pages().keys().copied().collect::<Vec<_>>();
+    if page_numbers.is_empty() {
+        return Err("Cannot split a PDF without pages".to_string());
+    }
+
+    let page_ids = source.get_pages();
+    let started = std::time::Instant::now();
+    let mut written: Vec<(u32, PathBuf)> = Vec::with_capacity(page_numbers.len());
+    let mut running_total: u64 = 0;
+    for (index, page_number) in page_numbers.iter().copied().enumerate() {
+        // Checked between pages: a hung file aborts instead of blocking import.
+        if started.elapsed() >= limits.max_duration {
+            let budget = limits.max_duration.as_secs();
+            remove_split_files(&written);
+            return Err(format!(
+                "PDF demasiado grande para dividir: split exceeded the time budget of {budget}s"
+            ));
+        }
+        let page_id = *page_ids
+            .get(&page_number)
+            .ok_or_else(|| format!("Missing page {page_number} while splitting"))
+            .inspect_err(|_| remove_split_files(&written))?;
+
+        let pdf_bytes = serialize_single_page(&source, page_id, index as u32 + 1)
+            .inspect_err(|_| remove_split_files(&written))?;
+        // Accounted before writing: the exceeding page never touches the disk.
+        if running_total.saturating_add(pdf_bytes.len() as u64) > limits.max_output_bytes {
+            remove_split_files(&written);
+            return Err(format!(
+                "PDF demasiado grande para dividir: page {} would exceed the split budget of {} bytes",
+                index as u32 + 1,
+                limits.max_output_bytes
+            ));
+        }
+
+        let page_number_out = index as u32 + 1;
+        let file_path = out_dir.join(format!("{filename_prefix}_page_{page_number_out}.pdf"));
+        if let Err(error) = std::fs::write(&file_path, &pdf_bytes) {
+            remove_split_files(&written);
+            return Err(format!(
+                "Failed to write single-page PDF for page {page_number_out}: {error}"
+            ));
+        }
+        running_total = running_total.saturating_add(pdf_bytes.len() as u64);
+        written.push((page_number_out, file_path));
+    }
+
+    Ok(written)
 }
 
 /// Attributes a page inherits from the page tree when it does not carry its own.
@@ -2838,6 +2927,114 @@ mod tests {
                 .expect("media box array");
             assert_eq!(media_box[2], Object::Integer(595 + expected_page as i64));
         }
+    }
+
+    #[test]
+    fn split_to_files_matches_in_memory_split() {
+        // The streaming path must serialize each page exactly like the
+        // in-memory split: same count, same bytes, files on disk.
+        let source = many_page_pdf_bytes(3);
+        let expected = split_pdf_to_single_page_bytes(&source).expect("in-memory split");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let limits = SplitLimits {
+            max_output_bytes: 100 * 1024 * 1024,
+            max_duration: std::time::Duration::from_secs(60),
+        };
+
+        let written = split_pdf_to_files(&source, dir.path(), "doc", &limits).expect("streams");
+
+        assert_eq!(written.len(), expected.len());
+        for ((expected_number, expected_bytes), (page_number, path)) in
+            expected.iter().zip(written.iter())
+        {
+            assert_eq!(page_number, expected_number);
+            let on_disk = std::fs::read(path).expect("read split page");
+            assert_eq!(&on_disk, expected_bytes, "page {page_number} bytes differ");
+        }
+    }
+
+    #[test]
+    fn split_to_files_byte_budget_aborts_and_cleans_up() {
+        // A budget below the total must stop before writing the exceeding
+        // page, remove what this call wrote, and keep unrelated files.
+        let source = many_page_pdf_bytes(3);
+        let expected = split_pdf_to_single_page_bytes(&source).expect("in-memory split");
+        let total: u64 = expected.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let keeper = dir.path().join("keep.txt");
+        std::fs::write(&keeper, b"keep").expect("write keeper");
+        let limits = SplitLimits {
+            max_output_bytes: total - 1,
+            max_duration: std::time::Duration::from_secs(60),
+        };
+
+        let error =
+            split_pdf_to_files(&source, dir.path(), "doc", &limits).expect_err("budget must abort");
+
+        assert!(
+            error.contains("demasiado grande para dividir"),
+            "marker message missing: {error}"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name.to_string_lossy().contains("_page_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "page files left behind: {leftovers:?}"
+        );
+        assert_eq!(std::fs::read(&keeper).expect("keeper"), b"keep");
+    }
+
+    #[test]
+    fn split_to_files_zero_duration_aborts_and_cleans_up() {
+        // An already-elapsed budget stops between pages and still removes
+        // the at-most-one page it may have written.
+        let source = many_page_pdf_bytes(3);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let limits = SplitLimits {
+            max_output_bytes: u64::MAX,
+            max_duration: std::time::Duration::ZERO,
+        };
+
+        let error =
+            split_pdf_to_files(&source, dir.path(), "doc", &limits).expect_err("must abort");
+
+        assert!(
+            error.contains("demasiado grande para dividir"),
+            "marker message missing: {error}"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .filter(|name| name.to_string_lossy().contains("_page_"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "page files left behind: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn split_to_files_unwritable_output_returns_error() {
+        // The parent is a regular file, so no page file can be created and
+        // there is nothing of this call to leave behind.
+        let source = many_page_pdf_bytes(2);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"x").expect("write blocker");
+        let out_dir = blocker.join("out");
+        let limits = SplitLimits {
+            max_output_bytes: u64::MAX,
+            max_duration: std::time::Duration::from_secs(60),
+        };
+
+        let result = split_pdf_to_files(&source, &out_dir, "doc", &limits);
+
+        assert!(result.is_err(), "unwritable output must fail");
+        assert!(!out_dir.exists(), "nothing of this call may exist");
+        assert!(blocker.is_file(), "the blocker file stays");
     }
     use crate::runtime::status::{RuntimeCapability, RuntimeState, RuntimeStatus};
     use image::{Rgba, RgbaImage};
