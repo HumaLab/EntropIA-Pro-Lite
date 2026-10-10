@@ -155,3 +155,43 @@ they are the detector's only visible false positives in the whole library.
 - Reprocess candidate sizing: the detector alone marks **1,610 stored page rows in 82
   attachments**; B3's candidate list will add the `sparse`/`empty`/`unreadable` rows the
   quality verdicts already cover (160 `empty`, 161 `sparse`, 1 `unreadable` in this library).
+
+## Detector v2 (detector-old-ocr-noise, 2026-10-10)
+
+After the real reprocess, Abulafia 1950 kept most of its 911 native pages as
+old-OCR garbage that v1 missed: v1's rule 2 judged a page only with 40+ tokens
+of 4+ letters and counted only `.`, `~`, `·` between letters, while this
+garbage is punctuation soup with few whole words. v2 (see
+`BIBLIOGRAPHY_DETECTOR_VERSION` in `ocr/pdf.rs`):
+
+- Rule 2 widened: a digit, U+FFFD or one of `. ~ · " ; , : ! | ^ ` \ { } < >`
+  between two letters; identifier-like tokens (URLs, DOIs, arXiv ids, paths,
+  2+ digits) excluded; flags at 10 % over 10+ judged tokens.
+- Rule 3 new, punctuation soup: 15 % of 20+ whitespace tokens carry no letter
+  or digit and either a quote/tilde-like mark or 2+ distinct punctuation chars.
+- A case-soup clause ("PrelUlliIl") was measured and dropped: it added 40
+  Abulafia pages but flagged camelCase identifiers of born-digital papers in
+  28 more works.
+
+Same database copy method as above (backup of prueba-sync, 587 PDF attachments,
+19,606 stored rows, 19,074 stored-`rich` pages read with PDFium):
+
+| | v1 | v2 |
+|---|---|---|
+| PDFium pages flagged | (see above) | 1,126 (5.90 %) in 8 attachments |
+| Stored rows flagged | 1,610 in 82 attachments | 599 in 21 attachments |
+
+PDFium flags per attachment, read by hand:
+
+| Attachment | Pages | Reading |
+|---|---|---|
+| Abulafia 1950, El problema del yute | 1,036 | old OCR garbage (true positive) |
+| Paz 2016 | 59 | shifted glyph font (true positive) |
+| Kabat et al. 2014 | 25 | substituted glyphs in the body (true positive) |
+| Girbal-Blacha 2017 | 1 | ciphered font layer (true positive) |
+| PaddleOCR 3.0 report, TableLLM, Kjell et al., Pereira 2020 | 5 | code, CSV, R console output (false positives) |
+
+False positives: 5 born-digital pages of 19,074 (0.026 %), all code or data
+that GLM-OCR also reads well. The regular extraction sends flagged pages to
+GLM-OCR automatically (owner rule for scanned books with a bad text layer), so
+this rate is what that rule costs on a born-digital library.
