@@ -78,7 +78,7 @@ unify later.
       `mtime` as string, number or missing), PDF candidate rule D2 (exclude
       `Encrypted` formats, `.lcpdf`, `private: "true"`), cap of 1000 PDFs per item
       with a truncation flag, normalized output.
-- [ ] 10. Input resolution (T1.5): accept a bare identifier, an
+- [x] 10. Input resolution (T1.5): accept a bare identifier, an
       `archive.org/details/<id>` URL or a collection URL; reject anything else; no
       arbitrary endpoints.
 - [ ] 11. Tauri commands `ia_search` and `ia_get_item`: registered in
@@ -110,6 +110,12 @@ unify later.
   lending fixture yields three non-available PDFs (two `Encrypted`, one
   `Private`). Independent verifier after a forced re-lint: fmt, clippy, tests
   42/42 twice, `test-support` check, no prior test lost.
+- 2026-10-10, task 10: `resolve_identifier` (pure; bare id, `/details/<id>`,
+  `/download/<id>` on `archive.org`/`www.archive.org` only; never returns a URL)
+  and `ItemDetails::mediatype` / `is_collection()` (collections share the item URL
+  shape, so the mediatype decides). RED: accept tests failed against a stub,
+  item tests failed to compile. GREEN: 47 passed. Independent verifier: fmt,
+  clippy, 47/47 twice, `Cargo.toml` unchanged, no prior test lost.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,

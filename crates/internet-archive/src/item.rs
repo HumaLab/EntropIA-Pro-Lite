@@ -34,12 +34,26 @@ pub struct ItemDetails {
     pub rights: Option<String>,
     /// First `licenseurl` string, if any.
     pub license_url: Option<String>,
+    /// First `mediatype` string, if any (`collection` for collections:
+    /// items and collections share the same `/details/<id>` URL shape).
+    pub mediatype: Option<String>,
     /// True when `metadata.access-restricted-item` is truthy.
     pub restricted: bool,
     /// PDF-ish files in response order, capped at [`MAX_PDFS_PER_ITEM`].
     pub pdfs: Vec<PdfFile>,
     /// True when more PDF-ish entries existed than were kept.
     pub truncated: bool,
+}
+
+impl ItemDetails {
+    /// True when the item is a collection: `mediatype` equals `collection`
+    /// (case-insensitive). Missing or any other mediatype is not a
+    /// collection.
+    pub fn is_collection(&self) -> bool {
+        self.mediatype
+            .as_deref()
+            .is_some_and(|m| m.trim().eq_ignore_ascii_case("collection"))
+    }
 }
 
 /// One PDF-ish file entry.
@@ -157,6 +171,7 @@ pub(crate) fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDet
         ),
         rights: metadata.get("rights").and_then(first_string),
         license_url: license_url_in(metadata),
+        mediatype: metadata.get("mediatype").and_then(first_string),
         restricted,
         truncated: pdf_seen > pdfs.len(),
         pdfs,
@@ -553,6 +568,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(server.targets(), vec![format!("/metadata/{OPEN_ID}")]);
+    }
+
+    #[test]
+    fn mediatype_from_open_fixture() {
+        let body: Value = serde_json::from_str(OPEN_FIXTURE).unwrap();
+        let details = parse_item_value(OPEN_ID, &body).unwrap();
+        assert_eq!(details.mediatype.as_deref(), Some("texts"));
+        assert!(!details.is_collection());
+    }
+
+    #[test]
+    fn is_collection_table() {
+        for (mediatype, expected) in [
+            (Some("collection"), true),
+            (Some("Collection"), true),
+            (Some("COLLECTION"), true),
+            (Some("texts"), false),
+            (None, false),
+        ] {
+            let metadata = match mediatype {
+                Some(m) => json!({"identifier": "c", "mediatype": m}),
+                None => json!({"identifier": "c"}),
+            };
+            let details = parse_item_value("c", &json!({"metadata": metadata})).unwrap();
+            assert_eq!(details.mediatype.as_deref(), mediatype);
+            assert_eq!(
+                details.is_collection(),
+                expected,
+                "mediatype {mediatype:?} should report is_collection() == {expected}"
+            );
+        }
     }
 
     #[test]

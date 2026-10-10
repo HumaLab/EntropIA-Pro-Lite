@@ -12,6 +12,7 @@ pub mod client;
 pub mod error;
 pub mod item;
 pub mod policy;
+pub mod resolve;
 pub mod search;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -22,6 +23,7 @@ pub use item::{
     Availability, FileSource, ItemDetails, PdfFile, RestrictedReason, MAX_PDFS_PER_ITEM,
 };
 pub use policy::{is_public_ip, FetchPolicy};
+pub use resolve::resolve_identifier;
 pub use search::{Endpoints, SearchItem, SearchPage, SearchQuery};
 
 /// Cap for item metadata payloads.
