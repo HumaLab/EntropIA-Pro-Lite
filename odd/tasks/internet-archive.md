@@ -150,6 +150,32 @@ commands in Phase 4.
 - [x] 19. Display-name sanitizer (§7 point 1): last path segment, same rules as
       `navegador-copy.ts` `safeStem`, always `.pdf`, fallback to the identifier.
 
+## App integration tasks (src-tauri, Lite, built and tested on Linux)
+
+Decided 2026-10-10 with the user: the `ia_*` commands move back from Phase 4
+because `src-tauri` now builds here. Windows keeps only the final build and the
+Pro variant. Command logic lives in plain functions that take their
+dependencies, so it is unit-tested without a running app; the `#[tauri::command]`
+wrappers stay thin. Every command goes into `generate_handler!`, `APP_COMMANDS`
+and `capabilities/default.json` at once. `Cargo.lock` may only gain the
+`internet-archive` entry; the `entropia-agent` source line must stay.
+
+- [ ] 20. Wire the crate: path dependency, `src/internet_archive/` module with
+      shared state (production client, `JobStore` at
+      `<data_dir>/staging/internet-archive`), read-only commands `ia_search`,
+      `ia_list_collection`, `ia_get_item`, `ia_resolve_identifier`.
+- [ ] 21. SQLite `ProvenanceLookup` over `items.metadata` key
+      `__entropia_internet_archive`, compact provenance record (≤ 64 KB, T3.8),
+      and `ia_prepare_import` (creates a `Draft` job and returns its summary).
+- [ ] 22. Job runner: `ia_start_import`, `ia_cancel_import`,
+      `ia_get_import_status`, `ia_list_verified_files`; one job at a time;
+      download, verify, record `sha256` and `page_count`; `recover_all` at
+      startup.
+- [ ] 23. `ia_confirm_file_imported`: validate against SQLite that the item
+      exists, sits in the target collection, carries matching provenance, and is
+      complete (parent asset plus pages 1..N with files on disk); otherwise
+      reject and keep the file `verified` with its staging.
+
 ## Evidence
 
 - 2026-10-10, task 17: `download.rs` streams to `<dest>.partial`, renames only
