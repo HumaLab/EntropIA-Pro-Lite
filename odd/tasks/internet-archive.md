@@ -160,7 +160,7 @@ wrappers stay thin. Every command goes into `generate_handler!`, `APP_COMMANDS`
 and `capabilities/default.json` at once. `Cargo.lock` may only gain the
 `internet-archive` entry; the `entropia-agent` source line must stay.
 
-- [ ] 20. Wire the crate: path dependency, `src/internet_archive/` module with
+- [x] 20. Wire the crate: path dependency, `src/internet_archive/` module with
       shared state (production client, `JobStore` at
       `<data_dir>/staging/internet-archive`), read-only commands `ia_search`,
       `ia_list_collection`, `ia_get_item`, `ia_resolve_identifier`.
@@ -198,6 +198,16 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   length, and always ends in `.pdf`. Empty names fall back to the identifier,
   then `PDF`. Parent wrote it inline (one module). Tests went red on the first
   expectations, then green: 134 passed. `fmt` and `clippy -D warnings` clean.
+- 2026-10-10, task 20: `src-tauri/src/internet_archive/` with `IaState`
+  (production client, `JobStore` at `<data_dir>/staging/internet-archive`,
+  created lazily) and commands `ia_resolve_identifier`, `ia_search`,
+  `ia_list_collection`, `ia_get_item` in all three lists. camelCase DTOs,
+  availability as string tags, `IaError` mapped to `<code>: <message>` with no
+  paths. RED: 7 of 9 tests failed against stubs (and caught `texts_only`
+  defaulting to false through a derived `Default`). GREEN: 9. Independent
+  verifier: fmt, clippy `-D warnings`, `internet_archive` 9, `acl_manifest_guard`
+  6, `ocr::pdf` 92; `Cargo.lock` only gained the `internet-archive` entry and the
+  `entropia-agent` source line is intact.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

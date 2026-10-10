@@ -232,6 +232,10 @@ const APP_COMMANDS: &[&str] = &[
     "sync_delete_notification",
     "sync_mark_notification_read",
     "sync_delete_account",
+    "ia_resolve_identifier",
+    "ia_search",
+    "ia_list_collection",
+    "ia_get_item",
 ];
 
 fn main() {

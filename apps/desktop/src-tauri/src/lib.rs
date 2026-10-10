@@ -19,6 +19,7 @@ pub mod deps;
 mod geo;
 mod image_edit;
 mod instance_guard;
+mod internet_archive;
 mod llm;
 mod navegador;
 mod nlp;
@@ -1007,6 +1008,12 @@ pub fn run() {
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
+            // Internet Archive connector (read-only commands): strict client
+            // plus the job store rooted under the data dir, so dev profiles
+            // get their own staging area. The store creates its directory
+            // lazily on first write, never here.
+            app.manage(internet_archive::IaState::new(&app_dir));
+
             // Managed-runtime lifecycle is local-ml only; the lite build has no runtime to validate.
             #[cfg(feature = "local-ml")]
             {
@@ -1504,6 +1511,10 @@ pub fn run() {
             sync::commands::sync_delete_notification,
             sync::commands::sync_mark_notification_read,
             sync::commands::sync_delete_account,
+            internet_archive::commands::ia_resolve_identifier,
+            internet_archive::commands::ia_search,
+            internet_archive::commands::ia_list_collection,
+            internet_archive::commands::ia_get_item,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
