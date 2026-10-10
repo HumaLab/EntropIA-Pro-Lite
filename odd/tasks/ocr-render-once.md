@@ -17,7 +17,7 @@ with Abulafia at 25/420; paid pages are checkpointed. Branch
   page images; cancel/checkpoint behaviour unchanged.
 - [x] T2 — Optimize the image encode/resize crates in the dev profile (like
   `vecscan`), so debug builds do not spend minutes per page in PNG encoding.
-- [ ] T3 — Resume the paused batch in tauri dev and measure the per-page rate
+- [x] T3 — Resume the paused batch in tauri dev and measure the per-page rate
   until it finishes; check the result (candidates, Abulafia Texto tab).
 
 ## Evidence
@@ -34,3 +34,16 @@ with Abulafia at 25/420; paid pages are checkpointed. Branch
   unchanged). Render+encode ~5.5x faster in dev.
 - Open question for T3: the app measured ~60 s/page, the isolated render
   ~5 s/page, so most of the in-app time is elsewhere.
+- T3 (tauri dev from this branch, prueba-sync): resumed the paused batch at
+  00:34; ~5 min re-reading the native basis after resume, then ~2.5-4 OCR
+  pages/min with the process at ~8 % CPU and one open :443 connection — the
+  remaining bottleneck is the serial GLM-OCR round trip (~15-25 s/page), not
+  local CPU. Batch finished 02:43: 103/103 succeeded, 0 errors, 106 attempts
+  (3 resumes). Candidates scan afterwards: "No hay obras con texto dañado".
+- Follow-up found in T3: Abulafia now has 626 GLM pages (571 clean by a token
+  heuristic) but 911 native pages, ~774 of them still old-OCR garbage
+  (pages 2, 3, 5, 6, 7, 520, 1018, 1379, 1484 sampled). The garbled-text
+  detector has many false negatives on this kind of text layer.
+- Follow-up: serial OCR. The batch scheduler runs one unit at a time and the
+  reprocess forces page-only OCR; re-enabling the GLM window path (up to 100
+  pages per request) for reprocess is the cheaper speedup.
