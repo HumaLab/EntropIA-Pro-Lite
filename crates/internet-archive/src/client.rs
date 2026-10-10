@@ -17,6 +17,10 @@ use crate::{
     USER_AGENT,
 };
 
+/// Stable sort for collection browsing: identifier ascending, so pages
+/// are deterministic across requests.
+const COLLECTION_SORT: &str = "identifier asc";
+
 /// Strict client: validates policy and addresses on every hop, pins the
 /// validated address, follows redirects manually, and caps the body.
 #[derive(Debug, Clone)]
@@ -126,13 +130,63 @@ impl IaClient {
     ///
     /// `rows` is clamped to 1..=100 and `page` to >= 1; a page whose
     /// `page * rows` exceeds 10_000 (the deep-paging limit) is rejected with
-    /// [`IaError::InvalidQuery`] before any request is sent.
+    /// [`IaError::InvalidQuery`] before any request is sent. No `sort[]` is
+    /// sent: result order is whatever the API returns.
     pub async fn search(
         &self,
         endpoints: &Endpoints,
         query: &SearchQuery,
         page: u32,
         rows: u32,
+    ) -> Result<SearchPage, IaError> {
+        self.advanced_search(endpoints, query, page, rows, None)
+            .await
+    }
+
+    /// List one page of a collection with Advanced Search instead of the
+    /// unreliable Scraping API (plan decision D5): the query is built
+    /// through [`SearchQuery`] with `collection` set and `texts_only`, so
+    /// escaping, `mediatype:texts` and the deep-paging rule are shared with
+    /// [`IaClient::search`], plus exactly one `sort[]=identifier asc` pair
+    /// for a stable order. Same `fl[]` fields, clamps and
+    /// [`MAX_SEARCH_BYTES`] cap as `search`.
+    ///
+    /// The identifier follows the shared `^[A-Za-z0-9._-]{1,100}$` rule and
+    /// is rejected with [`IaError::InvalidQuery`] before any request is
+    /// sent.
+    pub async fn list_collection(
+        &self,
+        endpoints: &Endpoints,
+        collection: &str,
+        page: u32,
+        rows: u32,
+    ) -> Result<SearchPage, IaError> {
+        if !is_valid_identifier(collection) {
+            return Err(IaError::InvalidQuery {
+                reason: format!("invalid collection identifier: {collection:?}"),
+            });
+        }
+        let query = SearchQuery {
+            collection: Some(collection.to_string()),
+            texts_only: true,
+            ..SearchQuery::default()
+        };
+        self.advanced_search(endpoints, &query, page, rows, Some(COLLECTION_SORT))
+            .await
+    }
+
+    /// Shared `/advancedsearch.php` request builder behind [`IaClient::search`]
+    /// (no `sort[]`) and [`IaClient::list_collection`] (stable identifier
+    /// sort). The query renders through [`SearchQuery::to_lucene`], `rows`
+    /// clamps to 1..=100, `page` to >= 1, and `page * rows` past 10_000 is
+    /// rejected before any request is sent.
+    async fn advanced_search(
+        &self,
+        endpoints: &Endpoints,
+        query: &SearchQuery,
+        page: u32,
+        rows: u32,
+        sort: Option<&str>,
     ) -> Result<SearchPage, IaError> {
         const MAX_SEARCH_ROWS: u32 = 100;
         const MAX_SEARCH_OFFSET: u64 = 10_000;
@@ -162,6 +216,9 @@ impl IaClient {
             pairs.append_pair("q", &lucene);
             for field in SEARCH_FIELDS {
                 pairs.append_pair("fl[]", field);
+            }
+            if let Some(sort) = sort {
+                pairs.append_pair("sort[]", sort);
             }
             pairs
                 .append_pair("rows", &rows.to_string())
@@ -247,6 +304,173 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
 mod tests {
     use super::*;
     use crate::test_support::TestServer;
+
+    const FIXTURE: &str = include_str!("../tests/fixtures/advancedsearch-mar-del-plata.json");
+
+    fn local_endpoints(server: &TestServer) -> Endpoints {
+        Endpoints::new(Url::parse(server.base()).unwrap())
+    }
+
+    fn local_client() -> IaClient {
+        IaClient::new(FetchPolicy::loopback_for_tests())
+    }
+
+    fn last_target(server: &TestServer) -> Url {
+        let targets = server.targets();
+        let target = targets.last().expect("server should have seen a request");
+        Url::parse(&format!("http://127.0.0.1{target}")).unwrap()
+    }
+
+    fn pairs_of(url: &Url) -> Vec<(String, String)> {
+        url.query_pairs().into_owned().collect()
+    }
+
+    fn get<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[tokio::test]
+    async fn list_collection_request_shape_exact() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        let page = local_client()
+            .list_collection(&endpoints, "opensource", 1, 5)
+            .await
+            .unwrap();
+        assert_eq!(page.num_found, 0);
+        assert!(page.items.is_empty());
+
+        let url = last_target(&server);
+        assert_eq!(url.path(), "/advancedsearch.php");
+        let pairs = pairs_of(&url);
+        assert_eq!(
+            get(&pairs, "q"),
+            Some("collection:(\"opensource\") AND mediatype:texts")
+        );
+        let sorts: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "sort[]")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(sorts, ["identifier asc"]);
+        let fls: Vec<&str> = pairs
+            .iter()
+            .filter(|(k, _)| k == "fl[]")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(
+            fls,
+            [
+                "identifier",
+                "title",
+                "creator",
+                "date",
+                "collection",
+                "access-restricted-item"
+            ]
+        );
+        assert_eq!(get(&pairs, "rows"), Some("5"));
+        assert_eq!(get(&pairs, "page"), Some("1"));
+        assert_eq!(get(&pairs, "output"), Some("json"));
+    }
+
+    #[tokio::test]
+    async fn search_request_shape_has_no_sort() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        local_client()
+            .search(
+                &endpoints,
+                &SearchQuery {
+                    title: Some("Mar del Plata".to_string()),
+                    ..SearchQuery::default()
+                },
+                1,
+                50,
+            )
+            .await
+            .unwrap();
+        let url = last_target(&server);
+        let pairs = pairs_of(&url);
+        assert!(
+            pairs.iter().all(|(k, _)| k != "sort[]"),
+            "search must not send sort[], got {pairs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_collection_invalid_id_rejected_without_request() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        for bad in ["has space", "evil!", "", "a/b"] {
+            let res = local_client().list_collection(&endpoints, bad, 1, 5).await;
+            assert!(
+                matches!(res, Err(IaError::InvalidQuery { .. })),
+                "{bad:?} should be rejected, got {res:?}"
+            );
+        }
+        assert!(
+            server.targets().is_empty(),
+            "no request must be sent, saw {:?}",
+            server.targets()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_collection_deep_paging_rejected_without_request() {
+        let server = TestServer::start(vec![TestServer::json(
+            "/advancedsearch.php",
+            200,
+            r#"{"response":{"numFound":0,"docs":[]}}"#,
+        )]);
+        let endpoints = local_endpoints(&server);
+        let res = local_client()
+            .list_collection(&endpoints, "opensource", 101, 100)
+            .await;
+        assert!(
+            matches!(res, Err(IaError::InvalidQuery { .. })),
+            "got {res:?}"
+        );
+        assert!(
+            server.targets().is_empty(),
+            "no request must be sent, saw {:?}",
+            server.targets()
+        );
+        // The boundary itself is still allowed.
+        local_client()
+            .list_collection(&endpoints, "opensource", 100, 100)
+            .await
+            .unwrap();
+        assert_eq!(server.targets().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_collection_parses_page_tolerantly() {
+        let server = TestServer::start(vec![TestServer::json("/advancedsearch.php", 200, FIXTURE)]);
+        let endpoints = local_endpoints(&server);
+        let page = local_client()
+            .list_collection(&endpoints, "opensource", 1, 3)
+            .await
+            .unwrap();
+        assert_eq!(page.num_found, 283);
+        assert_eq!(page.items.len(), 3);
+        assert_eq!(page.items[0].identifier, "proceedingsofvic00cong");
+    }
 
     #[tokio::test]
     async fn redirect_within_limit_followed() {

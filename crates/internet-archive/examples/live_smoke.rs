@@ -46,6 +46,27 @@ async fn run() -> Result<(), String> {
         page.items.iter().filter(|item| item.restricted).count()
     );
 
+    // Collection browsing goes through Advanced Search (plan decision D5)
+    // with a stable identifier sort. `opensource` is a large, long-lived
+    // top-level collection that is guaranteed to contain texts.
+    let collection = client
+        .list_collection(&endpoints, "opensource", 1, 5)
+        .await
+        .map_err(|e| format!("list collection: {e}"))?;
+    expect(
+        collection.num_found > 0,
+        "collection listing returned no results",
+    )?;
+    expect(
+        !collection.items.is_empty(),
+        "collection listing page has no items",
+    )?;
+    println!(
+        "collection opensource: {} found, {} on page 1",
+        collection.num_found,
+        collection.items.len()
+    );
+
     let open = client
         .get_item(&endpoints, OPEN_ITEM)
         .await

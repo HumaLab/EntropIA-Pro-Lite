@@ -96,7 +96,7 @@ lookup, data-dir wiring, commands) arrive in Phases 3-4 through a trait the
 crate defines. MVP browsing is page by page with explicit selection, so no full
 collection inventory is persisted (plan §1, D5).
 
-- [ ] 12. Collection browsing (T2.1): page through a collection with Advanced
+- [x] 12. Collection browsing (T2.1): page through a collection with Advanced
       Search, `collection:<id>`, stable `sort[]=identifier asc`, reusing the
       search builder and limits.
 - [ ] 13. Job and manifest model (plan §4.2, T2.4): job and file states,
@@ -150,6 +150,13 @@ collection inventory is persisted (plan §1, D5).
   `-D warnings` and `cargo test` 47/47 green after the crate description update.
   Phase 1 acceptance (search and metadata correct, no local writes, no
   downloads, clear errors) met at crate level.
+- 2026-10-10, task 12: `IaClient::list_collection` shares a private
+  `advanced_search` builder with `search` (whose request stays without `sort[]`)
+  and adds one `sort[]=identifier asc`. RED: 5 compile errors
+  (`list_collection` missing). GREEN: 52 passed. Independent verifier: fmt,
+  clippy, 52/52 twice, `Cargo.toml` unchanged, no prior test lost. Live smoke
+  (parent): `opensource` page 1 returned 5 of 1225104 items; all other live checks
+  still pass.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
