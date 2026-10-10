@@ -17,6 +17,7 @@ pub mod job;
 pub mod policy;
 pub mod resolve;
 pub mod search;
+pub mod store;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

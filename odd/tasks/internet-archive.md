@@ -103,7 +103,7 @@ collection inventory is persisted (plan §1, D5).
       validated transitions, idempotent terminal states, and the restart
       normalization rules (`running`→`ready`, `downloading`/`verifying`→`queued`,
       `importing`→`verified`, `cancelling`→`cancelled`). Pure, no I/O.
-- [ ] 14. Job store (T2.2, T2.5, D3): `<staging>/<job_id>/job.json` with atomic
+- [x] 14. Job store (T2.2, T2.5, D3): `<staging>/<job_id>/job.json` with atomic
       writes (temp file, fsync, rename), a schema version, listing and
       reloading jobs after a restart, and corrupt files quarantined instead of
       crashing.
@@ -167,6 +167,14 @@ collection inventory is persisted (plan §1, D5).
   `RestartEffects.needs_reconcile` reports it; the caller keeps a complete item or
   discards a partial one, then deletes staging (Phase 3 must honor this).
   Independent verifier: fmt, clippy, 63/63 twice, module pure.
+- 2026-10-10, task 14: `store.rs` (`JobStore`): ids and staging names only
+  as UUID v4 / `<uuid>.pdf` (traversal impossible by construction); atomic save
+  (tmp, `sync_all`, rename, dir sync); `recover_all` skips symlinks and invalid
+  names, drops leftover tmp, quarantines corrupt `job.json` keeping PDFs, leaves
+  newer schema versions untouched, normalizes and saves, deletes released and
+  orphan staging but never staging pending reconciliation. Added `uuid` and
+  dev-dependency `tempfile`. RED: 16 tests against `todo!()` stubs. GREEN: 79.
+  Independent verifier: fmt, clippy, 79/79 twice, tests confined to temp dirs.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
