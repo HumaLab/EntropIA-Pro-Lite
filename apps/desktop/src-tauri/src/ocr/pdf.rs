@@ -1341,8 +1341,11 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
 /// v3 (detector-shredded-text) adds rule 4, shredded text: pages whose
 /// words came back shredded into 1-2 char fragments ("J.mport.a- Calen-
 /// Impor- ciones") or spaced letters ("u n a t e s i s"), the Abulafia
-/// 1950 rich rows v2 kept native. Measured numbers: pending — T2 fills
-/// them from the prueba-sync copy measurement.
+/// 1950 rich rows v2 kept native. Measured on the stored native rows of
+/// the prueba-sync copy: rule 4 flags 835 rows (Abulafia 1,204 PDFium
+/// pages read by hand as garbage, plus spaced-letter damage in 3 more
+/// works); accepted false positives are TOC dot-leader, math-symbol and
+/// number-table pages, which GLM-OCR also reads well.
 pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 3;
 
 /// Which of the four bibliography-garble rules flag a text.

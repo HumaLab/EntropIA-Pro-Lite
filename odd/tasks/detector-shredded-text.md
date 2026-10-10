@@ -23,7 +23,7 @@ false positives (GLM reads those fine; owner accepts the overtreatment).
 - [x] T1 — Detector v3 in Rust with tests: rule 4 shredded text, version bump
   to 3, unit tests from real samples (Abulafia shred, spaced-letter damage,
   TOC dot leaders and number tables as documented accepted FPs or guards).
-- [ ] T2 — Measure v3 on a DB copy (recreate via the sqlite backup API; the
+- [x] T2 — Measure v3 on a DB copy (recreate via the sqlite backup API; the
   940 MB copy was deleted twice already), update
   odd/reports/native-text-detector-measurement.md with a v3 section.
 - [ ] T3 — Preview in tauri dev, record the new cost. No paid confirm without
@@ -35,3 +35,8 @@ false positives (GLM reads those fine; owner accepts the overtreatment).
   cargo test --lib 2460 passed; bibliography_reprocess 31 passed,
   bibliography_processing 167 passed (run after closing the dev app that
   locked the target exe); clippy -D warnings and fmt clean.
+- T2: measurement test extended to rule 4 by the worker. v3 on a backup of
+  prueba-sync: 1,361 PDFium pages flagged in 22 attachments (rule 4 alone 683;
+  Abulafia 1,204); stored rows 845 in 31 attachments (v2: 599/21). New flags
+  read by hand: shredded leftovers, spaced-letter damage in 3 works (true),
+  TOC/math/table pages (accepted overtreatment). Report updated.
