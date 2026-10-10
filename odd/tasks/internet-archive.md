@@ -38,10 +38,10 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
 - [x] 3. Smoke-test Internet Archive endpoints: Advanced Search, Scraping API,
       Metadata API (`size` as string, `access-restricted-item`, `private`), and
       download redirect hosts (T0.3).
-- [ ] 4. Define the data mapping, multi-PDF policy, duplicates and permissions;
+- [x] 4. Define the data mapping, multi-PDF policy, duplicates and permissions;
       fix the provenance key, confirm job tables stay out of `SYNCED_TABLES`, and
       decide whether job state needs a migration (T0.4, T0.6).
-- [ ] 5. Write the security checklist and test plan (T0.5).
+- [x] 5. Write the security checklist and test plan (T0.5).
 - [ ] 6. Write `docs/internet-archive/auditoria-fase-0.md` with real paths,
       reused functions, required migrations and risks; get the user's go-ahead
       for Phase 1.
@@ -70,3 +70,10 @@ through three Judgment Day passes (the last one approved) on 2026-10-10.
   - Scraping API returned identical items and totals for different queries
     (`collection:americana` and `mediatype:movies AND title:(chaplin)` both
     `total 4391810`, same first ids). Not reliable as observed. Plan gap.
+- 2026-10-10, tasks 4-5: proposed decisions D1-D6 (provenance key
+  `__entropia_internet_archive`; exclude encrypted PDFs; job state in
+  `<data_dir>/staging/internet-archive/<job>/job.json` with no migration; collection
+  browsing via Advanced Search, Scraping API deferred; `*.archive.org` redirect rule
+  kept), security checklist and test plan written to the Phase 0 audit. Real API
+  responses saved as fixtures under `docs/internet-archive/fixtures/` (local).
+  Pending the user's approval (task 6).
