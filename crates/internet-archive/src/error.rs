@@ -25,6 +25,10 @@ pub enum IaError {
     /// The search query is invalid or would page past the allowed window.
     #[error("invalid query: {reason}")]
     InvalidQuery { reason: String },
+    /// The Metadata API answered without an `metadata` object: `{}` is what
+    /// it returns for unknown identifiers.
+    #[error("item not found: {identifier}")]
+    NotFound { identifier: String },
     /// Transport, DNS or timeout failure.
     #[error("network error: {0}")]
     Network(String),

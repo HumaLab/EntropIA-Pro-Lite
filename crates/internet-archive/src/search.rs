@@ -129,14 +129,19 @@ fn trimmed(value: &Option<String>) -> Option<&str> {
     value.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// Validate an item or collection identifier against
+/// `^[A-Za-z0-9._-]{1,100}$`.
+pub(crate) fn is_valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 100
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
 /// Validate a collection identifier against `^[A-Za-z0-9._-]{1,100}$`.
 fn check_collection(collection: &str) -> Result<(), IaError> {
-    let ok = !collection.is_empty()
-        && collection.len() <= 100
-        && collection
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-');
-    if ok {
+    if is_valid_identifier(collection) {
         Ok(())
     } else {
         Err(IaError::InvalidQuery {
@@ -232,7 +237,7 @@ pub(crate) fn parse_search_value(body: &Value) -> SearchPage {
 
 /// Scalar to string: strings as-is (empty becomes `None`), numbers and
 /// bools stringified, everything else `None`.
-fn scalar_string(value: &Value) -> Option<String> {
+pub(crate) fn scalar_string(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => {
             if s.is_empty() {
@@ -249,7 +254,7 @@ fn scalar_string(value: &Value) -> Option<String> {
 
 /// First usable string for scalar fields (`title`, `date`): a bare scalar
 /// stringified, or the first convertible element of an array.
-fn first_string(value: &Value) -> Option<String> {
+pub(crate) fn first_string(value: &Value) -> Option<String> {
     match value {
         Value::Array(items) => items.iter().filter_map(scalar_string).next(),
         _ => scalar_string(value),
@@ -258,7 +263,7 @@ fn first_string(value: &Value) -> Option<String> {
 
 /// String list for `creator`/`collection`: a bare scalar becomes one entry,
 /// an array contributes every convertible entry, missing/null is empty.
-fn string_list(value: Option<&Value>) -> Vec<String> {
+pub(crate) fn string_list(value: Option<&Value>) -> Vec<String> {
     match value {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(items)) => items.iter().filter_map(scalar_string).collect(),
@@ -300,17 +305,24 @@ fn identifier_in(doc: &serde_json::Map<String, Value>) -> Option<String> {
     }
 }
 
-/// True for `"true"` (any case, padded), `true`, `1` and `"1"`; an array
-/// is true when any element matches.
-fn restricted_in(doc: &serde_json::Map<String, Value>) -> bool {
-    match doc.get("access-restricted-item") {
+/// True when `key` in `doc` is `"true"`, `true`, `1` or `"1"`; an array
+/// is true when any element matches. Shared by the search
+/// `access-restricted-item` flag and the per-file `private` flag.
+pub(crate) fn flag_in(doc: &serde_json::Map<String, Value>, key: &str) -> bool {
+    match doc.get(key) {
         None | Some(Value::Null) => false,
         Some(Value::Array(items)) => items.iter().any(scalar_is_truthy),
         Some(single) => scalar_is_truthy(single),
     }
 }
 
-fn scalar_is_truthy(value: &Value) -> bool {
+/// True for `"true"` (any case, padded), `true`, `1` and `"1"`; an array
+/// is true when any element matches.
+fn restricted_in(doc: &serde_json::Map<String, Value>) -> bool {
+    flag_in(doc, "access-restricted-item")
+}
+
+pub(crate) fn scalar_is_truthy(value: &Value) -> bool {
     match value {
         Value::Bool(b) => *b,
         Value::Number(n) => {

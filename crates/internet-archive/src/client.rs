@@ -9,9 +9,13 @@ use serde::de::DeserializeOwned;
 use url::{Host, Url};
 
 use crate::error::IaError;
+use crate::item::{parse_item_value, ItemDetails};
 use crate::policy::FetchPolicy;
-use crate::search::{parse_search_value, Endpoints, SearchPage, SearchQuery};
-use crate::{CONNECT_TIMEOUT, MAX_REDIRECTS, MAX_SEARCH_BYTES, REQUEST_TIMEOUT, USER_AGENT};
+use crate::search::{is_valid_identifier, parse_search_value, Endpoints, SearchPage, SearchQuery};
+use crate::{
+    CONNECT_TIMEOUT, MAX_METADATA_BYTES, MAX_REDIRECTS, MAX_SEARCH_BYTES, REQUEST_TIMEOUT,
+    USER_AGENT,
+};
 
 /// Strict client: validates policy and addresses on every hop, pins the
 /// validated address, follows redirects manually, and caps the body.
@@ -166,6 +170,35 @@ impl IaClient {
         }
         let body: serde_json::Value = self.get_json(url.as_str(), MAX_SEARCH_BYTES).await?;
         Ok(parse_search_value(&body))
+    }
+
+    /// Fetch `/metadata/{identifier}` capped at [`MAX_METADATA_BYTES`] and
+    /// return the tolerant parsed item. The identifier follows the same
+    /// `^[A-Za-z0-9._-]{1,100}$` rule as collections and is rejected with
+    /// [`IaError::InvalidQuery`] before any request is sent; an empty
+    /// object (what the API answers for unknown identifiers) or a response
+    /// without `metadata` maps to [`IaError::NotFound`].
+    pub async fn get_item(
+        &self,
+        endpoints: &Endpoints,
+        identifier: &str,
+    ) -> Result<ItemDetails, IaError> {
+        if !is_valid_identifier(identifier) {
+            return Err(IaError::InvalidQuery {
+                reason: format!("invalid item identifier: {identifier:?}"),
+            });
+        }
+        let mut url = endpoints.base().clone();
+        {
+            let mut segments = url.path_segments_mut().map_err(|_| IaError::InvalidQuery {
+                reason: "endpoint base URL cannot hold path segments".to_string(),
+            })?;
+            segments.clear();
+            segments.push("metadata");
+            segments.push(identifier);
+        }
+        let body: serde_json::Value = self.get_json(url.as_str(), MAX_METADATA_BYTES).await?;
+        parse_item_value(identifier, &body)
     }
 
     /// Resolve the host and reject it when ANY address is non-public. Returns

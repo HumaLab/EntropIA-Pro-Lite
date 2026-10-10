@@ -74,7 +74,7 @@ unify later.
       escaping, validated dates, empty or invalid filters rejected, `rows`
       clamped; request with `fl[]` including `access-restricted-item`; tolerant
       parsing of `numFound`/`docs`.
-- [ ] 9. Metadata API and PDF selection (T1.3, T1.4): tolerant DTOs (`size`/
+- [x] 9. Metadata API and PDF selection (T1.3, T1.4): tolerant DTOs (`size`/
       `mtime` as string, number or missing), PDF candidate rule D2 (exclude
       `Encrypted` formats, `.lcpdf`, `private: "true"`), cap of 1000 PDFs per item
       with a truncation flag, normalized output.
@@ -103,6 +103,13 @@ unify later.
   fmt, clippy `-D warnings`, `cargo test` 30/30 twice, no real network I/O in
   tests, changes confined to the crate. Parent review of `to_lucene`/`quote`: every
   user value quoted after escaping `\` and `"`; unfiltered queries refused.
+- 2026-10-10, task 9: `IaClient::get_item` + `item.rs` (`ItemDetails`,
+  `PdfFile`, `Availability`), real Phase 0 fixtures copied byte-identical.
+  RED: 10 item tests failed against a stub parser. GREEN: 42 passed. Rule order:
+  `Encrypted` > `Private` > `ItemRestricted` > `UnsafeName` > `Available`; the
+  lending fixture yields three non-available PDFs (two `Encrypted`, one
+  `Private`). Independent verifier after a forced re-lint: fmt, clippy, tests
+  42/42 twice, `test-support` check, no prior test lost.
 
 - 2026-10-10, tasks 1-2: two read-only scouts mapped the importer
   (`collection-import.ts`, `file-import.ts`), store (`schema.ts`, `item.repo.ts`,
