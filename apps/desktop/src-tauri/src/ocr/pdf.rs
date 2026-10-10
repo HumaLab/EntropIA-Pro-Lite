@@ -1337,9 +1337,15 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
 /// are the risk to minimize: a flagged page leaves the regular extraction for
 /// GLM-OCR. A case-soup clause ("PrelUlliIl") was measured and dropped: it
 /// added 40 Abulafia pages but flagged camelCase code in 28 more works.
-pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 2;
+///
+/// v3 (detector-shredded-text) adds rule 4, shredded text: pages whose
+/// words came back shredded into 1-2 char fragments ("J.mport.a- Calen-
+/// Impor- ciones") or spaced letters ("u n a t e s i s"), the Abulafia
+/// 1950 rich rows v2 kept native. Measured numbers: pending — T2 fills
+/// them from the prueba-sync copy measurement.
+pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 3;
 
-/// Which of the three bibliography-garble rules flag a text.
+/// Which of the four bibliography-garble rules flag a text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GarbledBibliographyFlags {
     /// Rule 1, glued words: at least half the Latin letters sit in tokens
@@ -1355,6 +1361,11 @@ pub struct GarbledBibliographyFlags {
     /// marks and mixed punctuation, the shape of an old typewritten scan
     /// whose OCR layer answers with punctuation soup and few whole words.
     pub punctuation_soup: bool,
+    /// Rule 4, shredded text: with 30 or more whitespace tokens, when under
+    /// 30 % of them are words (a run of 3+ Latin letters) and at least
+    /// 15 % are shreds (2 or fewer chars, not a short word, not all
+    /// digits) — the page's words came back shredded into fragments.
+    pub shredded_text: bool,
 }
 
 /// True when the bibliography detector flags the text as garbled (B2). Used
@@ -1367,7 +1378,7 @@ pub struct GarbledBibliographyFlags {
 ///
 /// Two independent rules over the eligible tokens (whitespace split minus
 /// URL/DOI/email/domain tokens, punctuation stripped at the edges), plus a
-/// third over the raw whitespace tokens:
+/// third and a fourth over the raw whitespace tokens:
 ///
 /// 1. **Glued words.** Needs 80 Latin letters (ASCII, Latin-1 Supplement,
 ///    Latin Extended-A/B — so spaceless scripts are never judged). Flags
@@ -1384,6 +1395,11 @@ pub struct GarbledBibliographyFlags {
 /// 3. **Punctuation soup.** Needs 20 whitespace tokens (no edge stripping).
 ///    Flags when >= 15 % of them hold no alphanumeric character and either
 ///    carry a quote-or-tilde-like mark or mix punctuation.
+/// 4. **Shredded text.** Needs 30 whitespace tokens. Flags when under
+///    30 % of them are words (a run of 3+ Latin letters) and at least
+///    15 % are shreds (2 or fewer chars, not a short function word, not
+///    all ASCII digits) — the shape of a page whose words came back
+///    shredded into 1-2 char fragments.
 ///
 /// Measured on the 18 984-page prueba-sync copy (abulafia_soup/
 /// abulafia_prose-class pages are the v2 target): rules 2+3 at these
@@ -1391,7 +1407,7 @@ pub struct GarbledBibliographyFlags {
 /// other works (52 works), versus v1's 42 and 56.
 pub fn is_garbled_bibliography_text(text: &str) -> bool {
     let flags = garbled_bibliography_flags(text);
-    flags.glued_words || flags.old_ocr_noise || flags.punctuation_soup
+    flags.glued_words || flags.old_ocr_noise || flags.punctuation_soup || flags.shredded_text
 }
 
 /// The per-rule verdict behind [`is_garbled_bibliography_text`]: the
@@ -1402,6 +1418,7 @@ pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
         glued_words: glued_words_flag(&tokens),
         old_ocr_noise: old_ocr_noise_flag(&tokens),
         punctuation_soup: punctuation_soup_flag(text),
+        shredded_text: shredded_text_flag(text),
     }
 }
 
@@ -1417,6 +1434,12 @@ const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 10;
 const BIBLIOGRAPHY_NOISE_MIN_TOKEN_LETTERS: usize = 4;
 /// Rule 3 needs this many whitespace tokens before it judges a page.
 const BIBLIOGRAPHY_SOUP_MIN_TOKENS: usize = 20;
+/// Rule 4 needs this many whitespace tokens before it judges a page.
+const BIBLIOGRAPHY_SHRED_MIN_TOKENS: usize = 30;
+/// A token counts as a word for rule 4 from this Latin-letter run.
+const BIBLIOGRAPHY_SHRED_WORD_RUN: usize = 3;
+/// A shred token has at most this many characters.
+const BIBLIOGRAPHY_SHRED_MAX_CHARS: usize = 2;
 
 /// The letters rule 1 counts: ASCII, Latin-1 Supplement and Latin
 /// Extended-A/B. `×` (U+00D7) and `÷` (U+00F7) sit inside Latin-1 but are
@@ -1660,6 +1683,70 @@ fn is_punctuation_soup_token(token: &str) -> bool {
         return false;
     };
     chars.any(|c| c != first)
+}
+
+/// The short function words rule 4 never counts as shreds: the 1-2 char
+/// words of the languages in the corpus (es/en/fr/de/pt), matched
+/// case-insensitively.
+const BIBLIOGRAPHY_SHRED_SHORT_WORDS: &[&str] = &[
+    // Spanish
+    "a", "e", "y", "o", "u", "de", "la", "el", "en", "al", "del", "los", "las", "un", "una", "su",
+    "se", "lo", "le", "les", "me", "te", "no", "si", "ni", "que", // English
+    "the", "and", "for", "are", "was", "its", "his", "her", "she", "not", "but", "with", "from",
+    // French
+    "les", "des", "une", "est", "aux", "par", "sur", "dans", // German
+    "der", "die", "das", "und", "von", "mit", // Portuguese
+    "que", "uma", "para", "com",
+];
+
+/// Rule 4, shredded text: at least 30 whitespace tokens, under 30 % words
+/// and at least 15 % shreds — the shape of a page whose words came back
+/// shredded into 1-2 char fragments ("J.mport.a- Calen- Impor- ciones")
+/// or spaced letters ("u n a t e s i s"). Exact integer arithmetic at
+/// both lines (the word line is strict: exactly 30 % does not flag).
+fn shredded_text_flag(text: &str) -> bool {
+    let mut tokens = 0usize;
+    let mut words = 0usize;
+    let mut shreds = 0usize;
+    for token in text.split_whitespace() {
+        tokens += 1;
+        if is_shredded_word_token(token) {
+            words += 1;
+        }
+        if is_shred_token(token) {
+            shreds += 1;
+        }
+    }
+    tokens >= BIBLIOGRAPHY_SHRED_MIN_TOKENS
+        && words * 100 < tokens * 30
+        && shreds * 100 >= tokens * 15
+}
+
+/// A word token for rule 4: it contains a run of 3 or more Latin letters.
+fn is_shredded_word_token(token: &str) -> bool {
+    let mut run = 0usize;
+    for c in token.chars() {
+        if is_latin_letter(c) {
+            run += 1;
+            if run >= BIBLIOGRAPHY_SHRED_WORD_RUN {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+/// A shred token for rule 4: 2 or fewer chars, not a short function word
+/// and not an all-digit number. The digit exclusion keeps number tables
+/// quiet; the short-word list keeps prose function words out.
+fn is_shred_token(token: &str) -> bool {
+    token.chars().count() <= BIBLIOGRAPHY_SHRED_MAX_CHARS
+        && !token.chars().all(|c| c.is_ascii_digit())
+        && !BIBLIOGRAPHY_SHRED_SHORT_WORDS
+            .iter()
+            .any(|word| token.eq_ignore_ascii_case(word))
 }
 
 /// Build a conservative per-page profile for a PDF, synchronously.
@@ -3788,11 +3875,14 @@ mod tests {
 
     // ── Bibliography garble detector (B2, plan-texto-nativo 3.4) ──────────
     //
-    // Three rules, all pure text statistics. Rule 1 (glued words) catches
+    // Three rules became four in v3 (detector-shredded-text), all pure
+    // text statistics. Rule 1 (glued words) catches
     // the lopdf page layer that never saw a space; rule 2 (old OCR noise)
     // catches the dotted artifacts of old recognizers in SPACED text; rule
     // 3 (punctuation soup) catches the old typewritten-scan layers that
-    // answer with punctuation instead of words. The p. 309 fixtures are
+    // answer with punctuation instead of words; rule 4 (shredded text)
+    // catches pages whose words came back shredded into 1-2 char fragments.
+    // The p. 309 fixtures are
     // verbatim from one user library (Abulafia 1950, stored row and PDFium
     // read); the rest pin every false-positive shape the plan names.
     // `is_garbled_text`/`is_quality_text` above are a different detector for
@@ -4058,9 +4148,19 @@ mod tests {
     }
 
     #[test]
-    fn table_of_contents_dot_leaders_stay_clean() {
+    fn toc_dot_leaders_are_rule_4s_documented_false_positive() {
+        // Rules 1-3 stay silent on the dot-leader page, but every lone dot
+        // is a shred token and rule 4 flags it: the documented accepted
+        // false positive of odd/tasks/detector-shredded-text ("TOC
+        // dot-leader and number-table pages as accepted false positives —
+        // GLM reads those fine; the owner accepts the overtreatment").
         let page = [CLEAN_TOC_LINE; 8].join("\n");
-        assert!(!is_garbled_bibliography_text(&page), "{page}");
+        let flags = garbled_bibliography_flags(&page);
+        assert!(!flags.glued_words, "{page}");
+        assert!(!flags.old_ocr_noise, "{page}");
+        assert!(!flags.punctuation_soup, "{page}");
+        assert!(flags.shredded_text, "{page}");
+        assert!(is_garbled_bibliography_text(&page), "{page}");
     }
 
     #[test]
@@ -4089,6 +4189,155 @@ mod tests {
         let english = format!("The state of the art remains steady: {CLEAN_PROSE_FRAGMENT} all appear here in the order the author cites them, and the reader finds nothing but ordinary academic prose, with commas, periods and parentheses used properly. Research on bilingual reading continues with large samples and clear methods, and no page of the chapter shows optical character recognition noise or glued words.");
         assert!(!is_garbled_bibliography_text(&spanish), "{spanish}");
         assert!(!is_garbled_bibliography_text(&english), "{english}");
+    }
+
+    // ── Detector v3 sample corpus (odd/tasks/detector-shredded-text) ────
+    //
+    // Pages whose words came back shredded into 1-2 char fragments: the
+    // Abulafia 1950 rich rows v2 kept native (rule 2 never reached its
+    // judged-token gate and rule 3 excludes single repeated chars), plus
+    // the spaced-letter damage found in other works. Quoted fragments are
+    // verbatim from the measurement samples.
+
+    /// Abulafia 1950, p. 661 (verbatim sample): a shredded table page —
+    /// garbage words ("CU<!Idro", "hilados.Producc/onh7…") in a stream of
+    /// 1-2 char fragments. v2 kept it native (13 % soup, 0 noisy).
+    const ABULAFIA_SHRED_P661: &str = "CU<!Idro N~ 9 YUTE Sogas hilados.Producc/onh7EnSLlslen/. /NI)/AB/?/lAN/CA Desd9 ABRIl. de /932 - MA~:Zo de /94.2. 1-:> I-=:::::: I~ <~ \"\"V --p. '--. L- - \u{a1} :2-===- V ----";
+
+    /// Abulafia 1950, p. 601 (verbatim sample, the whole 29-token page):
+    /// same damage with more shred than word. v2 kept it native (10 %
+    /// soup, 0 noisy).
+    const ABULAFIA_SHRED_P601: &str = "Cuadro Nf:14 I'.U .. .} Vl I YUTE $upe,.r/cie culfiv~oJ.:y en FORMOSA A\u{f1}os 1909-1.944 6/6 6()61 : \\ -<l-----~ 1\"--'r---r--r-, , I I I 1< -, /' \\ I~";
+
+    /// The recognizable leftovers of shredded Abulafia pages (verbatim
+    /// excerpts) between verbatim table rows of 1-2 char fragments ("tables
+    /// of `r--- \u{a1} I , i -=\"`").
+    const ABULAFIA_SHRED_LEFTOVERS: &str = "lJIanufacturas de yute: Importaciones, reexportaciones e Importaciones netas r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\" J.mport.a- Calen- Impor- ciones r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\" Cuadro N~7 G2Il yute: Producc/o'n r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\"";
+
+    /// Spaced-letter damage (verbatim shape): a whole line comes back with
+    /// every letter in its own token ("una tesis de licenciatura").
+    const SPACED_LETTER_DAMAGE: &str = "u n a t e s i s d e l i c e n c i a t u r a";
+
+    #[test]
+    fn shredded_abulafia_fragments_are_flagged() {
+        // Each fragment alone sits under rule 4's 30-token gate; repeated
+        // the page reads as the shredded text it is.
+        let body = format!("{ABULAFIA_SHRED_P661} {ABULAFIA_SHRED_P661}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+        let body = format!("{ABULAFIA_SHRED_P601} {ABULAFIA_SHRED_P601}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+        let flags = garbled_bibliography_flags(ABULAFIA_SHRED_LEFTOVERS);
+        assert!(flags.shredded_text, "{ABULAFIA_SHRED_LEFTOVERS}");
+        assert!(
+            is_garbled_bibliography_text(ABULAFIA_SHRED_LEFTOVERS),
+            "{ABULAFIA_SHRED_LEFTOVERS}"
+        );
+    }
+
+    #[test]
+    fn spaced_letter_damage_is_flagged() {
+        // 22 shred tokens alone; repeated they clear the 30-token gate and
+        // the page goes to OCR instead of staying native.
+        let body = format!("{SPACED_LETTER_DAMAGE} {SPACED_LETTER_DAMAGE}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_v2_flagged_glyph_shift_page_keeps_flagging() {
+        // The shifted-glyph font page v2 flags via rule 3 must still flag
+        // under v3.
+        let body = format!("{SHIFTED_GLYPH_SOUP} {SHIFTED_GLYPH_SOUP}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn ordinary_spanish_and_english_prose_are_not_shredded() {
+        let spanish = "El presente trabajo analiza el efecto de la intervenci\u{f3}n educativa sobre el rendimiento acad\u{e9}mico de los estudiantes de secundaria. Se utiliz\u{f3} un dise\u{f1}o cuasiexperimental con una muestra de 240 participantes distribuidos en dos grupos: control y experimental. Los resultados muestran mejoras significativas en comprensi\u{f3}n lectora y en motivaci\u{f3}n escolar, con p < 0,01 en las dos medidas.";
+        let english = "This paper presents a controlled study of bilingual reading comprehension across two instructional conditions. Participants completed standardized vocabulary and fluency measures before and after a twelve week intervention. Mixed effects models revealed a reliable main effect of condition, with no interaction involving prior proficiency (beta = 0.42, SE = 0.08).";
+        assert!(
+            !garbled_bibliography_flags(spanish).shredded_text,
+            "{spanish}"
+        );
+        assert!(
+            !garbled_bibliography_flags(english).shredded_text,
+            "{english}"
+        );
+        assert!(!is_garbled_bibliography_text(spanish), "{spanish}");
+        assert!(!is_garbled_bibliography_text(english), "{english}");
+    }
+
+    #[test]
+    fn a_short_page_of_garbage_stays_unjudged() {
+        // ABULAFIA_SHRED_P601 is the whole 29-token page: one token under
+        // rule 4's 30-token gate, so it stays unjudged even though every
+        // ratio would flag it.
+        assert!(
+            !garbled_bibliography_flags(ABULAFIA_SHRED_P601).shredded_text,
+            "{ABULAFIA_SHRED_P601}"
+        );
+        assert!(
+            !is_garbled_bibliography_text(ABULAFIA_SHRED_P601),
+            "{ABULAFIA_SHRED_P601}"
+        );
+    }
+
+    #[test]
+    fn rule_4_flags_exactly_at_its_thresholds() {
+        // Gate: 29 whitespace tokens stay unjudged, 30 judge.
+        let short = ["x"; 29].join(" ");
+        assert!(!garbled_bibliography_flags(&short).shredded_text);
+        let long = ["x"; 30].join(" ");
+        assert!(garbled_bibliography_flags(&long).shredded_text);
+        // Word line, strict: 9 words of 30 is exactly 30 % and does not
+        // flag; one word less does. The shred line is satisfied in both.
+        let words = ["palabra"; 9].join(" ");
+        let mixed = format!("{words} {}", ["x"; 21].join(" "));
+        assert!(
+            !garbled_bibliography_flags(&mixed).shredded_text,
+            "9 of 30 words is exactly 30 %"
+        );
+        let words = ["palabra"; 8].join(" ");
+        let mixed = format!("{words} {}", ["x"; 22].join(" "));
+        assert!(
+            garbled_bibliography_flags(&mixed).shredded_text,
+            "8 of 30 words is under 30 %"
+        );
+        // Shred line: 5 shreds of 30 is past 15 % (500 >= 450), 4 is below
+        // (400 < 450). `---` is neutral: 3 chars, no letters.
+        let mixed = format!(
+            "{} {} {}",
+            ["palabra"; 8].join(" "),
+            ["x"; 5].join(" "),
+            ["---"; 17].join(" ")
+        );
+        assert!(
+            garbled_bibliography_flags(&mixed).shredded_text,
+            "5 shreds of 30 is past 15 %"
+        );
+        let mixed = format!(
+            "{} {} {}",
+            ["palabra"; 8].join(" "),
+            ["x"; 4].join(" "),
+            ["---"; 18].join(" ")
+        );
+        assert!(
+            !garbled_bibliography_flags(&mixed).shredded_text,
+            "4 shreds of 30 is below 15 %"
+        );
+    }
+
+    #[test]
+    fn digit_number_tables_stay_clean() {
+        // Plain digit rows are no shreds (the all-digit exclusion) and no
+        // words, so rule 4 stays quiet however long the table runs. (Rows
+        // with lone punctuation separators between the figures are the
+        // accepted false positive of the measurement, like the TOC dots.)
+        let page = ["12 45.6 789 33 21.0 456"; 12].join("\n");
+        assert!(!garbled_bibliography_flags(&page).shredded_text, "{page}");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
     }
 
     /// get_pdfium() must never panic — it should return Err when the native
