@@ -119,7 +119,15 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     gridSpan/vMerge, pgMar 1440); GREEN: focused 96/96; desktop Pro 3507 / Lite 3486 passed,
     UI 847/847, lint, both typechecks and both `vite build`s clean. Audit: high 8 → 6,
     moderate 11 → 10; `docx` brings `jszip` 3.10.2 (patched).
-  - [ ] 2.2.1 (D-02) — `svelte` >= 5.55.7, `devalue` >= 5.9.3.
+  - [x] 2.2.1 (D-02) — `svelte` >= 5.55.7, `devalue` >= 5.9.3. Branch `fix/d02-svelte-devalue`,
+    commit `0b416f08`: svelte 5.55.3 → 5.56.10, devalue 5.7.1 → 5.9.4 (no override needed).
+    5.55.7-5.55.9 leave the TS `?` on optional parameters in the compiled output (fixed in
+    5.56.x, sveltejs/svelte#18448), which broke 6 UI test files with `Expected ',', got '?'`;
+    the ranges (including the UI peer) are `^5.56.10` so installs cannot land there. Checks:
+    frozen install ok; store 374, UI 847, desktop Pro 3507 / Lite 3486 passed; svelte-check 0
+    errors (UI, desktop Pro and Lite); lint clean. Audit: high 6 → 3, moderate 10 → 3, low
+    1 → 0; no svelte/devalue advisory left. The verifier subagent failed twice before any tool
+    call, so these checks ran inline.
   - [ ] 2.2.2 (D-02) — `markdown-it` >= 14.3.1, `linkify-it` >= 5.0.2 (override).
   - [ ] 2.2.3 (D-02) — `drizzle-orm` 0.40 → >= 0.45.2.
   - [ ] 2.2.4 (D-02) — Tiptap 2 → 3: own PR or documented accepted risk (moderate).
