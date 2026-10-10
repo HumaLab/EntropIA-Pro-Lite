@@ -59,6 +59,7 @@ function createMockRawClient() {
   return {
     execute: vi.fn().mockResolvedValue({ rowsAffected: 0 }),
     executeBatch: vi.fn().mockResolvedValue(undefined),
+    executeTransaction: vi.fn().mockResolvedValue(undefined),
     select: vi.fn().mockResolvedValue([]),
   } as unknown as DbClient
 }
@@ -215,72 +216,104 @@ describe('CollectionRepo', () => {
       )
     })
 
-    it('executes batch delete for core tables within a transaction', async () => {
+    it('executes one parameterized transaction for core tables', async () => {
       const rawClient = createMockRawClient()
       const repoWithRaw = new CollectionRepo(db.db, rawClient)
 
       await repoWithRaw.delete('col-1')
 
-      expect(rawClient.executeBatch).toHaveBeenCalledTimes(1)
-      const batchSql = (rawClient.executeBatch as ReturnType<typeof vi.fn>).mock.calls[0]![0]
-      // Core tables (always exist) — in atomic transaction
-      expect(batchSql).toContain('BEGIN')
-      expect(batchSql).toContain('DELETE FROM extractions')
-      expect(batchSql).toContain('DELETE FROM layouts')
-      expect(batchSql).toContain('DELETE FROM llm_results')
-      expect(batchSql).toContain('DELETE FROM assets')
-      expect(batchSql).toContain('DELETE FROM entities')
-      expect(batchSql).toContain('DELETE FROM triples')
-      expect(batchSql).toContain('DELETE FROM notes')
-      expect(batchSql).toContain('DELETE FROM items')
-      expect(batchSql).toContain('DELETE FROM collections')
-      expect(batchSql).toContain('COMMIT')
-      // Optional tables should NOT be in the batch
-      expect(batchSql).not.toContain('DELETE FROM vec_items')
-      expect(batchSql).not.toContain('DELETE FROM embeddings_fallback')
-      expect(batchSql).not.toContain('DELETE FROM fts_index')
+      const executeTransaction = rawClient.executeTransaction as ReturnType<typeof vi.fn>
+      expect(executeTransaction).toHaveBeenCalledOnce()
+      const statements = executeTransaction.mock.calls[0]![0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      const sql = statements.map((statement) => statement.sql).join('\n')
+      // The command owns the transaction; every entry is a single statement.
+      expect(sql).not.toContain('BEGIN')
+      expect(sql).not.toContain('COMMIT')
+      expect(statements.every((statement) => !statement.sql.includes(';'))).toBe(true)
+      expect(sql).toContain('DELETE FROM extractions')
+      expect(sql).toContain('DELETE FROM layouts')
+      expect(sql).toContain('DELETE FROM llm_results')
+      expect(sql).toContain('DELETE FROM assets')
+      expect(sql).toContain('DELETE FROM entities')
+      expect(sql).toContain('DELETE FROM triples')
+      expect(sql).toContain('DELETE FROM notes')
+      expect(sql).toContain('DELETE FROM items')
+      expect(sql).toContain('DELETE FROM collections')
+      // Optional tables should NOT be in the transaction
+      expect(sql).not.toContain('DELETE FROM vec_items')
+      expect(sql).not.toContain('DELETE FROM embeddings_fallback')
+      expect(sql).not.toContain('DELETE FROM fts_index')
       // The item's own index row leaves by rowid inside the same transaction.
-      expect(batchSql).toContain(
+      expect(sql).toContain(
         'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
       )
+      // Ids travel bound, never interpolated into the SQL.
+      expect(statements.some((statement) => statement.sql.includes('col-1'))).toBe(false)
+      expect(
+        statements.every((statement) => statement.params.includes('col-1'))
+      ).toBe(true)
     })
 
-    it('cleans up optional tables after core transaction succeeds', async () => {
+    it('cleans up optional vec_assets after the transaction with bound ids', async () => {
       const rawExecuteMock = vi.fn().mockResolvedValue({ rowsAffected: 0 })
       const rawClient = {
         execute: rawExecuteMock,
         executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction: vi.fn().mockResolvedValue(undefined),
         select: vi.fn().mockResolvedValue([{ id: 'item-1' }]),
       } as unknown as DbClient
       const repoWithRaw = new CollectionRepo(db.db, rawClient)
 
       await repoWithRaw.delete('col-1')
 
-      // Optional tables are cleaned up with individual execute calls
-      const executeCalls = rawExecuteMock.mock.calls.map((c) => c[0] as string)
-      // No full index rebuild: it cost seconds per delete on a large archive.
-      expect(executeCalls.some((sql) => sql.includes('fts_items'))).toBe(false)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_items'))).toBe(false)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM embeddings_fallback'))).toBe(
-        false
+      // The embedding cleanup stays best-effort: its table may not exist.
+      expect(rawExecuteMock).toHaveBeenCalledOnce()
+      expect(rawExecuteMock).toHaveBeenCalledWith(
+        'DELETE FROM vec_assets WHERE item_id IN (?)',
+        ['item-1']
       )
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_assets'))).toBe(true)
     })
 
-    it('escapes single quotes in collection ID to prevent SQL injection', async () => {
+    it('skips the optional cleanup when the collection has no items', async () => {
+      const rawExecuteMock = vi.fn().mockResolvedValue({ rowsAffected: 0 })
+      const rawClient = {
+        execute: rawExecuteMock,
+        executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction: vi.fn().mockResolvedValue(undefined),
+        select: vi.fn().mockResolvedValue([]),
+      } as unknown as DbClient
+      const repoWithRaw = new CollectionRepo(db.db, rawClient)
+
+      await repoWithRaw.delete('col-1')
+
+      expect(rawClient.executeTransaction).toHaveBeenCalledOnce()
+      expect(rawExecuteMock).not.toHaveBeenCalled()
+    })
+
+    it('binds a collection ID with single quotes instead of interpolating it', async () => {
       const rawClient = createMockRawClient()
       const repoWithRaw = new CollectionRepo(db.db, rawClient)
 
       await repoWithRaw.delete("col'; DROP TABLE collections;--")
 
-      const batchSql = (rawClient.executeBatch as ReturnType<typeof vi.fn>).mock.calls[0]![0]
-      expect(batchSql).toContain("col''; DROP TABLE collections;--")
-      expect(batchSql).not.toContain("col'; DROP TABLE collections;--")
+      const statements = (rawClient.executeTransaction as ReturnType<typeof vi.fn>).mock
+        .calls[0]![0] as Array<{ sql: string; params: unknown[] }>
+      expect(
+        statements.some((statement) => statement.sql.includes("col'; DROP TABLE"))
+      ).toBe(false)
+      expect(
+        statements.every((statement) =>
+          statement.params.includes("col'; DROP TABLE collections;--")
+        )
+      ).toBe(true)
     })
 
     it('wraps errors with context message', async () => {
       const rawClient = createMockRawClient()
-      ;(rawClient.executeBatch as ReturnType<typeof vi.fn>).mockRejectedValue(
+      ;(rawClient.executeTransaction as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('constraint violation')
       )
       const repoWithRaw = new CollectionRepo(db.db, rawClient)
@@ -288,7 +321,8 @@ describe('CollectionRepo', () => {
       await expect(repoWithRaw.delete('col-1')).rejects.toThrow(
         'Failed to delete collection col-1: constraint violation'
       )
-      expect(rawClient.executeBatch).toHaveBeenCalledWith('ROLLBACK')
+      // The command is atomic and rolls back server-side; the repo sends no ROLLBACK.
+      expect(rawClient.executeBatch).not.toHaveBeenCalled()
     })
   })
 

@@ -169,13 +169,28 @@ fn execute_batch_on(db: &AppDbState, sql: &str) -> Result<(), String> {
         let allowlist = MigrationDdlAllowlist::embedded();
         for statement in split_sql_statements(sql) {
             let exception = batch_statement_exception(&statement, window_open, allowlist);
-            execute_batch_statement(&conn, &statement, exception)?;
+            if let Err(error) = execute_batch_statement(&conn, &statement, exception) {
+                rollback_open_transaction(&conn);
+                return Err(error);
+            }
         }
         if window_open {
             close_window_when_migrations_finish(&conn, &db.migration_window);
         }
         Ok(())
     })
+}
+
+/// A failed statement after an explicit renderer `BEGIN` leaves the connection
+/// inside a transaction until someone sends `ROLLBACK`. The backend issues that
+/// rollback itself, on the still-locked connection, so no open transaction can
+/// leak into the next IPC call. This is backend SQL, not renderer SQL, so it
+/// runs without the authorizer; a rollback failure is swallowed because the
+/// statement error is the one the renderer must see.
+fn rollback_open_transaction(conn: &Connection) {
+    if !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
 }
 
 /// The scoped exception for one split batch statement: a listed migration DDL
@@ -1048,22 +1063,20 @@ mod tests {
 
     #[test]
     fn rollback_must_go_through_db_execute_batch_not_db_execute() {
-        // #23: Pro's db_execute is DML-only and REJECTS ROLLBACK, so the cascade-
-        // delete repos must roll back via executeBatch (db_execute_batch), which
-        // allows it — matching how their BEGIN/COMMIT are issued. Sending ROLLBACK
-        // through execute silently fails and leaves the transaction open.
+        // Pro's db_execute is DML-only and REJECTS ROLLBACK, so a renderer-issued
+        // rollback that still goes through the batch validator is the only one
+        // accepted today. The backend issues its own rollback for a failed batch
+        // (see the tests below), which never passes through either validator.
         assert!(validate_sql_execute("ROLLBACK").is_err());
         assert!(validate_sql_batch("ROLLBACK", false).is_ok());
     }
 
     #[test]
-    fn cascade_rollback_reverts_partial_delete_and_reopens_autocommit() {
-        // #23 e2e: replica deleteWithCascade (asset.repo.ts) por la ruta REAL —
-        // validadores reales + SQLite real. db_execute de Pro es DML-only y RECHAZA
-        // ROLLBACK, por eso el catch del repo usa executeBatch('ROLLBACK'). El cascade
-        // corre como un batch BEGIN;...;COMMIT; si falla a mitad, el BEGIN deja la txn
-        // abierta y el ROLLBACK por batch debe revertir el delete parcial y devolver la
-        // conexion a autocommit.
+    fn a_failing_batch_rolls_back_its_open_transaction_and_reports_the_error() {
+        // A renderer batch that opens a transaction and fails mid-way must not
+        // leave the connection inside that transaction: the backend rolls it
+        // back on the same locked connection before returning the error, so the
+        // partial delete cannot survive into the next IPC call.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -1073,41 +1086,64 @@ mod tests {
              INSERT INTO extractions (id, asset_id) VALUES ('e1', 'a1');",
         )
         .unwrap();
+        let db = test_db(conn);
 
-        // DELETE a2 (ok) y luego DELETE a1 viola la FK de e1 => el batch aborta antes
-        // del COMMIT, dejando la transaccion abierta con el delete de a2 aplicado.
-        let cascade = "BEGIN;\n\
-            DELETE FROM assets WHERE id = 'a2';\n\
-            DELETE FROM assets WHERE id = 'a1';\n\
-            COMMIT;";
-        validate_sql_batch(cascade, false).expect("el batch del cascade pasa el validador");
+        // The DELETE of a2 applies, then the FK-violating INSERT aborts the
+        // batch before COMMIT.
+        let error = execute_batch_on(
+            &db,
+            "BEGIN;\n\
+             DELETE FROM assets WHERE id = 'a2';\n\
+             INSERT INTO extractions (id, asset_id) VALUES ('e2', 'missing');\n\
+             COMMIT;",
+        )
+        .unwrap_err();
         assert!(
-            conn.execute_batch(cascade).is_err(),
-            "el DELETE de a1 viola la FK de e1: el batch falla antes del COMMIT"
-        );
-        assert!(
-            !conn.is_autocommit(),
-            "tras el batch fallido el BEGIN dejo la transaccion abierta"
+            error.to_lowercase().contains("foreign key"),
+            "unexpected error: {error}"
         );
 
-        // Pro: db_execute es DML-only y rechaza ROLLBACK; el catch debe ir por batch.
-        assert!(
-            validate_sql_execute("ROLLBACK").is_err(),
-            "db_execute de Pro es DML-only: rechaza ROLLBACK (por eso NO se usa execute)"
-        );
-        validate_sql_batch("ROLLBACK", false)
-            .expect("db_execute_batch acepta ROLLBACK: la via correcta del catch en Pro");
-        conn.execute_batch("ROLLBACK")
-            .expect("el ROLLBACK por batch se ejecuta");
-
+        let conn = db.ui_conn.lock().unwrap();
         assert!(
             conn.is_autocommit(),
-            "tras el ROLLBACK la conexion vuelve a autocommit (la txn se cerro)"
+            "the backend must roll back the transaction the failed batch left open"
         );
         let assets: i64 = conn
-            .query_row("SELECT COUNT(*) FROM assets", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(assets, 2, "el ROLLBACK revirtio el DELETE parcial de a2");
+        assert_eq!(
+            assets, 2,
+            "the backend rollback must undo the partial delete"
+        );
+    }
+
+    #[test]
+    fn a_failing_batch_without_an_open_transaction_still_reports_the_error() {
+        // No BEGIN was issued, so there is nothing to roll back; the batch must
+        // still surface the statement error unchanged.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE assets (id TEXT PRIMARY KEY);
+             CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id));
+             INSERT INTO assets (id) VALUES ('a1');",
+        )
+        .unwrap();
+        let db = test_db(conn);
+
+        let error = execute_batch_on(
+            &db,
+            "INSERT INTO extractions (id, asset_id) VALUES ('e2', 'missing');",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_lowercase().contains("foreign key"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            db.ui_conn.lock().unwrap().is_autocommit(),
+            "a batch without BEGIN must stay in autocommit"
+        );
     }
 
     fn setup_db_browser_test_db() -> Connection {

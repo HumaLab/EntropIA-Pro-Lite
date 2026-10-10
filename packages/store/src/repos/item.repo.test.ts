@@ -357,68 +357,113 @@ describe('ItemRepo', () => {
       )
     })
 
-    it('executes batch delete for core tables within a transaction', async () => {
-      const rawExecuteBatchMock = vi.fn().mockResolvedValue(undefined)
+    it('executes one parameterized transaction for core tables', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: rawExecuteBatchMock,
+        executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([]),
       } as unknown as DbClient
       const repoWithRaw = new ItemRepo(db.db, rawClient)
 
       await repoWithRaw.deleteWithCascade('item-1')
 
-      expect(rawExecuteBatchMock).toHaveBeenCalledOnce()
-      const batchSql = rawExecuteBatchMock.mock.calls[0]?.[0] as string
-      // Core tables (always exist) — in atomic transaction
-      expect(batchSql).toContain('BEGIN')
-      expect(batchSql).toContain('DELETE FROM extractions')
-      expect(batchSql).toContain('DELETE FROM layouts')
-      expect(batchSql).toContain('DELETE FROM llm_results')
-      expect(batchSql).toContain('DELETE FROM assets')
-      expect(batchSql).toContain('DELETE FROM entities')
-      expect(batchSql).toContain('DELETE FROM triples')
-      expect(batchSql).toContain('DELETE FROM notes')
-      expect(batchSql).toContain('DELETE FROM items')
-      expect(batchSql).toContain('DELETE FROM collections')
-      expect(batchSql).toContain('COMMIT')
-      expect(batchSql).toContain('item-1')
+      expect(executeTransaction).toHaveBeenCalledOnce()
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      const sql = statements.map((statement) => statement.sql).join('\n')
+      // The command holds the transaction; each entry is a single statement.
+      expect(sql).not.toContain('BEGIN')
+      expect(sql).not.toContain('COMMIT')
+      expect(statements.every((statement) => !statement.sql.includes(';'))).toBe(true)
+      expect(sql).toContain('DELETE FROM extractions')
+      expect(sql).toContain('DELETE FROM layouts')
+      expect(sql).toContain('DELETE FROM llm_results')
+      expect(sql).toContain('DELETE FROM assets')
+      expect(sql).toContain('DELETE FROM entities')
+      expect(sql).toContain('DELETE FROM triples')
+      expect(sql).toContain('DELETE FROM notes')
+      expect(sql).toContain('DELETE FROM items')
+      expect(sql).toContain('DELETE FROM collections')
+      expect(sql).toContain('AND id NOT IN (SELECT DISTINCT collection_id FROM items)')
       // Optional tables should NOT be in the batch
-      expect(batchSql).not.toContain('DELETE FROM vec_items')
-      expect(batchSql).not.toContain('DELETE FROM embeddings_fallback')
-      expect(batchSql).not.toContain('DELETE FROM fts_index')
+      expect(sql).not.toContain('DELETE FROM vec_items')
+      expect(sql).not.toContain('DELETE FROM embeddings_fallback')
+      expect(sql).not.toContain('DELETE FROM fts_index')
       // The item's own index row leaves by rowid inside the same transaction.
-      expect(batchSql).toContain(
+      expect(sql).toContain(
         'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
       )
+      // Ids travel bound, never interpolated into the SQL.
+      expect(statements.some((statement) => statement.sql.includes('item-1'))).toBe(false)
+      expect(
+        statements.some((statement) => statement.params.includes('item-1'))
+      ).toBe(true)
     })
 
-    it('cleans up optional tables after core transaction succeeds', async () => {
-      const rawExecuteMock = vi.fn().mockResolvedValue({ rowsAffected: 0 })
+    it('deletes vec_assets inside the transaction when the table exists', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
+      const select = vi
+        .fn()
+        .mockImplementation(async (sql: string) =>
+          sql.includes('sqlite_master') ? [{ name: 'vec_assets' }] : []
+        )
       const rawClient = {
-        execute: rawExecuteMock,
+        execute: vi.fn().mockResolvedValue({ rowsAffected: 0 }),
         executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction,
+        select,
+      } as unknown as DbClient
+      const repoWithRaw = new ItemRepo(db.db, rawClient)
+
+      await repoWithRaw.deleteWithCascade('item-1')
+
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      const vecStatements = statements.filter((statement) => statement.sql.includes('vec_assets'))
+      expect(vecStatements).toHaveLength(1)
+      expect(vecStatements[0]?.sql).toBe('DELETE FROM vec_assets WHERE item_id = ?')
+      expect(vecStatements[0]?.params).toEqual(['item-1'])
+      expect(select).toHaveBeenCalledWith(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vec_assets'",
+        []
+      )
+      // The embedding cleanup is part of the transaction, not a later execute.
+      expect(rawClient.execute).not.toHaveBeenCalled()
+    })
+
+    it('skips vec_assets when the table does not exist', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
+      const rawClient = {
+        execute: vi.fn().mockResolvedValue({ rowsAffected: 0 }),
+        executeBatch: vi.fn().mockResolvedValue(undefined),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([]),
       } as unknown as DbClient
       const repoWithRaw = new ItemRepo(db.db, rawClient)
 
       await repoWithRaw.deleteWithCascade('item-1')
 
-      // Optional tables are cleaned up with individual execute calls
-      const executeCalls = rawExecuteMock.mock.calls.map((c) => c[0] as string)
-      // No full index rebuild: it cost seconds per delete on a large archive.
-      expect(executeCalls.some((sql) => sql.includes('fts_items'))).toBe(false)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_items'))).toBe(false)
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM embeddings_fallback'))).toBe(
-        false
-      )
-      expect(executeCalls.some((sql) => sql.includes('DELETE FROM vec_assets'))).toBe(true)
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      const sql = statements.map((statement) => statement.sql).join('\n')
+      expect(sql).not.toContain('vec_assets')
+      expect(rawClient.execute).not.toHaveBeenCalled()
     })
 
-    it('rethrows error when batch execution fails', async () => {
+    it('rethrows error when the transaction fails', async () => {
+      const executeTransaction = vi.fn().mockRejectedValue(new Error('constraint violation'))
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: vi.fn().mockRejectedValue(new Error('constraint violation')),
+        executeBatch: vi.fn(),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([]),
       } as unknown as DbClient
       const repoWithRaw = new ItemRepo(db.db, rawClient)
@@ -426,23 +471,33 @@ describe('ItemRepo', () => {
       await expect(repoWithRaw.deleteWithCascade('item-1')).rejects.toThrow(
         'Failed to delete item cascade for item-1: constraint violation'
       )
-      expect(rawClient.executeBatch).toHaveBeenCalledWith('ROLLBACK')
+      // The command is atomic and rolls back server-side; the repo sends no ROLLBACK.
+      expect(executeTransaction).toHaveBeenCalledOnce()
+      expect(rawClient.executeBatch).not.toHaveBeenCalled()
     })
 
-    it('escapes single quotes in item ID to prevent SQL injection', async () => {
-      const rawExecuteBatchMock = vi.fn().mockResolvedValue(undefined)
+    it('binds an item ID with single quotes instead of interpolating it', async () => {
+      const executeTransaction = vi.fn().mockResolvedValue(undefined)
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
-        executeBatch: rawExecuteBatchMock,
+        executeBatch: vi.fn(),
+        executeTransaction,
         select: vi.fn().mockResolvedValue([]),
       } as unknown as DbClient
       const repoWithRaw = new ItemRepo(db.db, rawClient)
 
       await repoWithRaw.deleteWithCascade("item'; DROP TABLE items;--")
 
-      const batchSql = rawExecuteBatchMock.mock.calls[0]?.[0] as string
-      expect(batchSql).toContain("item''; DROP TABLE items;--")
-      expect(batchSql).not.toContain("item'; DROP TABLE items;--")
+      const statements = executeTransaction.mock.calls[0]?.[0] as Array<{
+        sql: string
+        params: unknown[]
+      }>
+      expect(
+        statements.some((statement) => statement.sql.includes("item'; DROP TABLE"))
+      ).toBe(false)
+      expect(
+        statements.some((statement) => statement.params.includes("item'; DROP TABLE items;--"))
+      ).toBe(true)
     })
   })
 
@@ -1376,6 +1431,24 @@ describe('keyset pagination against the real schema', () => {
       executeBatch: async (sql: string) => {
         sqlite.exec(sql)
       },
+      executeTransaction: async (
+        statements: Array<{ sql: string; params?: unknown[] }>
+      ) => {
+        sqlite.exec('BEGIN IMMEDIATE')
+        try {
+          for (const statement of statements) {
+            sqlite
+              .prepare(statement.sql)
+              .run(
+                ...((statement.params ?? []) as Array<null | string | number | bigint | Uint8Array>)
+              )
+          }
+          sqlite.exec('COMMIT')
+        } catch (error) {
+          sqlite.exec('ROLLBACK')
+          throw error
+        }
+      },
     } as unknown as DbClient
 
     const realRepo = new ItemRepo({} as unknown as DrizzleClient, rawClient)
@@ -1406,6 +1479,35 @@ describe('keyset pagination against the real schema', () => {
       expect(matches('alpha')).toBe(0)
       expect(matches('bravo')).toBe(1)
       expect(sqlite.prepare('SELECT COUNT(*) AS n FROM fts_items').get()).toEqual({ n: 4 })
+    })
+  })
+
+  describe('deleting a document auto-cleans its collection', () => {
+    const collectionCount = (sqlite: DatabaseSync, id: string) =>
+      sqlite.prepare('SELECT COUNT(*) AS n FROM collections WHERE id = ?').get(id)
+
+    it('removes a collection that the deleted document emptied', async () => {
+      const { sqlite, repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Alpha', collectionId: 'col-1' },
+        { id: 'doc-b', title: 'Bravo', collectionId: 'col-2' },
+      ])
+
+      await realRepo.deleteWithCascade('doc-a')
+
+      expect(collectionCount(sqlite, 'col-1')).toEqual({ n: 0 })
+      expect(collectionCount(sqlite, 'col-2')).toEqual({ n: 1 })
+    })
+
+    it('keeps a collection that still holds another document', async () => {
+      const { sqlite, repo: realRepo } = createRealDb([
+        { id: 'doc-a', title: 'Alpha', collectionId: 'col-1' },
+        { id: 'doc-b', title: 'Bravo', collectionId: 'col-1' },
+      ])
+
+      await realRepo.deleteWithCascade('doc-a')
+
+      expect(collectionCount(sqlite, 'col-1')).toEqual({ n: 1 })
+      expect(sqlite.prepare('SELECT COUNT(*) AS n FROM items').get()).toEqual({ n: 1 })
     })
   })
 

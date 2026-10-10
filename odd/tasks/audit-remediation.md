@@ -215,6 +215,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       postcss/nanoid via vite, ws via jsdom, source-map-js via coverage; none ships. Follow-up
       for Phase 7 (C-03, supply chain).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
+  - [x] 3.1 (S-02) — SQLite authorizer on the UI connection (S-02a/b/c) + agent-run dev-profile
+    check (S-02d). Branch `fix/s02-sql-authorizer`, PR #41.
+  - [x] 3.2 (A-04) — Rust-side rollback in `db_execute_batch` + cascades on
+    `db_execute_transaction`. Branch `fix/a-04-rollback-cascades`, commit `f6d5f709`.
+    `execute_batch_on` rolls back on the locked connection when a failed statement leaves
+    `!is_autocommit()` (backend SQL, no authorizer; the original error is returned). The
+    runner's catch-ROLLBACK is unaffected: it already swallows the no-transaction error
+    (`ROLLBACK;` with no open txn fails in SQLite, verified). The three cascades
+    (item/asset/collection) run one `executeTransaction` with bound params — same order,
+    same errors, no interpolation; item's `vec_assets` delete joins the txn when the table
+    exists. Checks: Lite `cargo test` 2781 / 0 / 35; store 381; desktop Pro 3510 / Lite 3489;
+    typecheck and lint clean. Left out (reported, not in plan scope): runner.ts:3173 keeps its
+    catch-ROLLBACK (harmless), `deleteIfEmpty` in collection.repo.ts still interpolates one
+    id in a single-statement batch.
   - [ ] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
     Facts: rusqlite 0.31 without `hooks`; renderer SQL runs only on `ui_conn` through
     `db_execute`, `db_execute_batch`, `db_execute_transaction`, `db_select`, `db_select_rows`;
