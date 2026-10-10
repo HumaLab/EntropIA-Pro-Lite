@@ -113,6 +113,21 @@ collection inventory is persisted (plan §1, D5).
       md5, else sha1, else size+mtime) or `New`, against provenance records
       supplied through a trait.
 
+## Phase 3 tasks (download and Corpus association)
+
+Decided 2026-10-10 with the user: Tauri's Linux system libraries are now
+installed (via `pkexec`), so `src-tauri` builds and tests here in Lite. Always
+`cargo ... --locked` so `Cargo.lock` keeps the `entropia-agent` git source line.
+
+- [ ] 16. T3.0 bounded PDF split (blocking prerequisite): a new streaming split
+      in `src-tauri/src/ocr/pdf.rs` that writes each page as soon as it is
+      produced, with `SplitLimits { max_output_bytes, max_duration }`, removing
+      partial output and returning no pages when a limit is hit; the command
+      `split_pdf_pages` uses it with defaults (min of 2 GB and free space minus a
+      reserve; time limit checked between pages); its signature and the TS
+      importer contract are unchanged. The existing in-memory
+      `split_pdf_to_single_page_bytes` stays as is for `processing/ocr.rs`.
+
 ## Evidence
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
