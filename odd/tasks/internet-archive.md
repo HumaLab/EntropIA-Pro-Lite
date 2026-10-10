@@ -186,7 +186,16 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       `ia_get_import_status`, `ia_list_verified_files`; one job at a time;
       download, verify, record `sha256` and `page_count`; `recover_all` at
       startup.
-- [ ] 23. `ia_confirm_file_imported`: validate against SQLite that the item
+- [ ] 23. (Decisions: Rust owns the dedup re-check and the completeness rule.
+      `ia_begin_file_import` answers `import` with the payload,
+      `confirm_existing` for a complete same-version item already in the
+      target, or `discard_partial` for an incomplete one the frontend must
+      remove with `discardFailedImport` before asking again;
+      `ia_fail_file_import` marks a failed frontend import `failed` and frees
+      staging; `ia_list_reconcile` / `ia_finish_reconcile` close the
+      cancelled-while-importing case. Complete = one parent `pdf` asset without
+      parent plus exactly N child assets with page numbers 1..N, all files on
+      disk.) [x] `ia_confirm_file_imported`: validate against SQLite that the item
       exists, sits in the target collection, carries matching provenance, and is
       complete (parent asset plus pages 1..N with files on disk); otherwise
       reject and keep the file `verified` with its staging.
@@ -265,6 +274,17 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   clearing the registry. RED: a concurrent `Importing` change was reverted by
   the runner. GREEN: 43 (twice). Parent ran fmt, clippy, crate 146,
   `acl_manifest_guard` 6, `ocr::pdf` 92; `Cargo.lock` unchanged.
+- 2026-10-10, task 23: `import.rs` with `existing_import` / `is_complete`
+  (parent `pdf` asset without parent, children exactly 1..N, all files on
+  disk; another sha256 is another version) and commands
+  `ia_begin_file_import`, `ia_confirm_file_imported`, `ia_fail_file_import`,
+  `ia_list_reconcile`, `ia_finish_reconcile` in all three lists; data dir kept in
+  `IaState`. SQLite, `jobs` and `reconcile` locks are never nested. RED: 23 of 25
+  tests on stubs. GREEN: 68. Parent review found a false negative: confirmation
+  required the lowest-id complete item, so a correct item failed when an older
+  complete copy existed. Fixed test-first by checking the confirmed item's own
+  completeness (RED observed, then GREEN). Parent ran fmt, clippy, `internet_archive`
+  69 twice, `acl_manifest_guard` 6, `ocr::pdf` 92; `Cargo.lock` unchanged.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

@@ -242,6 +242,11 @@ const APP_COMMANDS: &[&str] = &[
     "ia_get_import_status",
     "ia_list_jobs",
     "ia_list_verified_files",
+    "ia_begin_file_import",
+    "ia_confirm_file_imported",
+    "ia_fail_file_import",
+    "ia_list_reconcile",
+    "ia_finish_reconcile",
 ];
 
 fn main() {

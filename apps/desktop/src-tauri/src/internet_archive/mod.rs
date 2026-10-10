@@ -7,10 +7,11 @@
 //! store persists prepared import jobs for the later download/import tasks.
 
 pub mod commands;
+pub mod import;
 pub mod provenance_db;
 pub mod runner;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use internet_archive::store::{JobStore, RecoveryReconcileEntry};
@@ -54,6 +55,9 @@ pub struct IaState {
     /// import may have been interrupted midway, so these need provenance
     /// reconciliation before their staging may be deleted.
     pub reconcile: Mutex<Vec<RecoveryReconcileEntry>>,
+    /// Resolved data dir (remembered at setup): asset-file existence checks
+    /// resolve stored `assets.path` values against it.
+    pub data_dir: PathBuf,
 }
 
 impl IaState {
@@ -68,6 +72,7 @@ impl IaState {
             active: Mutex::new(None),
             jobs: Mutex::new(()),
             reconcile: Mutex::new(Vec::new()),
+            data_dir: data_dir.to_path_buf(),
         }
     }
 }

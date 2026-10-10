@@ -808,21 +808,21 @@ pub struct VerifiedFileDto {
     pub extra_metadata: serde_json::Value,
 }
 
-fn now_secs() -> u64 {
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
 }
 
-fn emit_job_updated(app: &tauri::AppHandle, job_id: &str) {
+pub(crate) fn emit_job_updated(app: &tauri::AppHandle, job_id: &str) {
     use tauri::Emitter as _;
     if let Err(error) = app.emit("ia://job-updated", serde_json::json!({ "jobId": job_id })) {
         eprintln!("[ia] job-updated emit failed for {job_id}: {error}");
     }
 }
 
-fn job_load_error(error: StoreError) -> String {
+pub(crate) fn job_load_error(error: StoreError) -> String {
     match error {
         StoreError::NotFound(_) => "not_found: import job not found".to_string(),
         StoreError::InvalidId(_) => "invalid_request: invalid job id".to_string(),
@@ -866,6 +866,54 @@ pub(crate) fn job_to_status(job: &Job, running: bool) -> JobStatusDto {
     }
 }
 
+/// One `Verified` file of `job` as the frontend import reads it: absolute
+/// staging path plus the provenance value passed unchanged as
+/// `extraMetadata`. Shared by [`verified_files_logic`] and the task-23
+/// begin handoff so both hand the frontend the same payload.
+pub(crate) fn verified_file_entry(
+    store: &JobStore,
+    job: &Job,
+    index: usize,
+    file: &JobFile,
+    now: u64,
+) -> Result<VerifiedFileDto, String> {
+    let staging_name = file
+        .staging_name
+        .clone()
+        .ok_or_else(|| "io: verified file has no staging file".to_string())?;
+    let sha256 = file
+        .sha256
+        .clone()
+        .filter(|hash| !hash.trim().is_empty())
+        .ok_or_else(|| "io: verified file has no hash".to_string())?;
+    let page_count = file
+        .page_count
+        .ok_or_else(|| "io: verified file has no page count".to_string())?;
+    let dest = store
+        .staging_path(&job.id, &staging_name)
+        .map_err(|_| "io: local storage error".to_string())?;
+    let display = internet_archive::display_file_name(&file.file_name, &file.identifier);
+    let item_title = job
+        .item(&file.identifier)
+        .and_then(|snapshot| snapshot.title.clone())
+        .unwrap_or_else(|| display.strip_suffix(".pdf").unwrap_or(&display).to_string());
+    let provenance = internet_archive::build_provenance(file, job.item(&file.identifier), now)
+        .map_err(|_| "io: cannot build provenance".to_string())?;
+    Ok(VerifiedFileDto {
+        index,
+        identifier: file.identifier.clone(),
+        file_name: file.file_name.clone(),
+        display_file_name: display,
+        item_title,
+        staging_path: dest.display().to_string(),
+        page_count,
+        sha256,
+        extra_metadata: serde_json::json!({
+            internet_archive::PROVENANCE_KEY: provenance,
+        }),
+    })
+}
+
 /// Verified files of `job` with their absolute staging paths and the
 /// provenance value the frontend passes unchanged as `extraMetadata`.
 pub(crate) fn verified_files_logic(
@@ -878,41 +926,7 @@ pub(crate) fn verified_files_logic(
         if file.state != FileState::Verified {
             continue;
         }
-        let staging_name = file
-            .staging_name
-            .clone()
-            .ok_or_else(|| "io: verified file has no staging file".to_string())?;
-        let sha256 = file
-            .sha256
-            .clone()
-            .filter(|hash| !hash.trim().is_empty())
-            .ok_or_else(|| "io: verified file has no hash".to_string())?;
-        let page_count = file
-            .page_count
-            .ok_or_else(|| "io: verified file has no page count".to_string())?;
-        let dest = store
-            .staging_path(&job.id, &staging_name)
-            .map_err(|_| "io: local storage error".to_string())?;
-        let display = internet_archive::display_file_name(&file.file_name, &file.identifier);
-        let item_title = job
-            .item(&file.identifier)
-            .and_then(|snapshot| snapshot.title.clone())
-            .unwrap_or_else(|| display.strip_suffix(".pdf").unwrap_or(&display).to_string());
-        let provenance = internet_archive::build_provenance(file, job.item(&file.identifier), now)
-            .map_err(|_| "io: cannot build provenance".to_string())?;
-        out.push(VerifiedFileDto {
-            index,
-            identifier: file.identifier.clone(),
-            file_name: file.file_name.clone(),
-            display_file_name: display,
-            item_title,
-            staging_path: dest.display().to_string(),
-            page_count,
-            sha256,
-            extra_metadata: serde_json::json!({
-                internet_archive::PROVENANCE_KEY: provenance,
-            }),
-        });
+        out.push(verified_file_entry(store, job, index, file, now)?);
     }
     Ok(out)
 }

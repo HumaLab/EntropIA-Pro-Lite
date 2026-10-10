@@ -1562,6 +1562,11 @@ pub fn run() {
             internet_archive::commands::ia_get_import_status,
             internet_archive::commands::ia_list_jobs,
             internet_archive::commands::ia_list_verified_files,
+            internet_archive::import::ia_begin_file_import,
+            internet_archive::import::ia_confirm_file_imported,
+            internet_archive::import::ia_fail_file_import,
+            internet_archive::import::ia_list_reconcile,
+            internet_archive::import::ia_finish_reconcile,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
