@@ -49,7 +49,9 @@ jobs:
             fi
           fi
 
-          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|src/.*\.rs|scripts/.*\.ps1)$)' >/dev/null; then
+          # Integration tests, capabilities (the ACL tests read them), the
+          # vecscan crate and this workflow change what the Rust jobs check.
+          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^crates/.*\.(rs|toml)$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|(src|tests)/.*\.rs|capabilities/.*\.json|scripts/.*\.ps1)$)' >/dev/null; then
             echo "has_rs_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_rs_changes=false" >> "$GITHUB_OUTPUT"
@@ -99,6 +101,50 @@ jobs:
         env:
           ENTROPIA_REQUIRE_PDFIUM: "1"
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml
+
+  # Lite (no features) on Linux: the Windows jobs never compile the
+  # cfg(not(feature = "local-ml")) and Linux-only code paths (C-01).
+  rust-lite-linux:
+    name: Rust Lite (Linux)
+    needs: [detect-rust-changes]
+    if: needs.detect-rust-changes.outputs.has_rs_changes == 'true'
+    # Same image as the Linux release build.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux system dependencies
+        # Same set as release.yml; libdbus-1-dev backs the keyring
+        # secret-service feature.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            pkg-config
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rustfmt and clippy for the pinned toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Rustfmt (Lite)
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+
+      - name: Clippy (Lite)
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test (Lite)
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
   rust-quality-report:
     name: Rust Quality Report (report-first)
