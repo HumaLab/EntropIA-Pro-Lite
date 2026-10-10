@@ -118,7 +118,7 @@ pub enum RestrictedReason {
 /// Build an [`ItemDetails`] from a raw Metadata API value. Only a missing
 /// (or non-object) `metadata` fails, with [`IaError::NotFound`]: the API
 /// answers `{}` for unknown identifiers. Everything else is tolerant.
-pub(crate) fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDetails, IaError> {
+pub fn parse_item_value(identifier: &str, body: &Value) -> Result<ItemDetails, IaError> {
     let not_found = || IaError::NotFound {
         identifier: identifier.to_string(),
     };

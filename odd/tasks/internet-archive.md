@@ -164,7 +164,7 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
       shared state (production client, `JobStore` at
       `<data_dir>/staging/internet-archive`), read-only commands `ia_search`,
       `ia_list_collection`, `ia_get_item`, `ia_resolve_identifier`.
-- [ ] 21. (21a crate: `ItemSnapshot` kept in the job, `build_provenance` /
+- [x] 21. (21a crate: `ItemSnapshot` kept in the job, `build_provenance` /
       `parse_provenance`; 21b app: lookup and command.) Decisions: Rust builds
       the compact provenance record and the frontend passes it unchanged as
       `extraMetadata`; a job always targets an existing collection (the
@@ -221,6 +221,19 @@ and `capabilities/default.json` at once. `Cargo.lock` may only gain the
   `parse_provenance` and `ProvenanceRecord::from_row`. RED: 4 tests on `todo!()`.
   GREEN: 143. Parent re-ran fmt, clippy and tests, plus `cargo check --locked
   --tests` for the app.
+- 2026-10-10, task 21b: `provenance_db.rs` (`SqliteProvenance` loads rows by
+  provenance identifier in 500-id chunks, `json_valid` guard so one malformed
+  row cannot fail the load; `collection_exists`; one lock, released before any
+  network call) and `ia_prepare_import` (1..=100 selections, 1..=1000 files,
+  identifiers only, collection must exist, unavailable files rejected with their
+  tag, `Draft` job persisted, nothing importable creates no job). The writer
+  asked whether to enable the crate's `test-support` feature on the app
+  dependency; the parent rejected it (it would ship the loopback policy) and
+  instead made the pure `parse_item_value` public so app tests parse the real
+  fixtures without network. RED: provenance 6 and commands 7 on stubs. GREEN:
+  `internet_archive` 29, crate 143, `acl_manifest_guard` 6, `ocr::pdf` 92; fmt and
+  clippy clean in both; `Cargo.lock` unchanged. Note: the provenance query scans
+  `items` (no index on the JSON path); acceptable for the MVP, revisit if slow.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

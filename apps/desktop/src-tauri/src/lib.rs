@@ -1515,6 +1515,7 @@ pub fn run() {
             internet_archive::commands::ia_search,
             internet_archive::commands::ia_list_collection,
             internet_archive::commands::ia_get_item,
+            internet_archive::commands::ia_prepare_import,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

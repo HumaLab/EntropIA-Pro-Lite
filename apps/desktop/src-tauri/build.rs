@@ -236,6 +236,7 @@ const APP_COMMANDS: &[&str] = &[
     "ia_search",
     "ia_list_collection",
     "ia_get_item",
+    "ia_prepare_import",
 ];
 
 fn main() {

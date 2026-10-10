@@ -1,12 +1,13 @@
-//! Internet Archive connector: read-only commands over the shared
-//! `internet-archive` crate (identifier resolution, full-text search,
-//! collection browsing, item metadata with PDF availability).
+//! Internet Archive connector over the shared `internet-archive` crate:
+//! read-only commands (identifier resolution, full-text search, collection
+//! browsing, item metadata with PDF availability) plus import preparation
+//! over an existing collection id.
 //!
 //! The Tauri state lives here; the commands live in [`commands`]. The job
-//! store is held for the later import/download tasks — the read-only
-//! commands below never touch it.
+//! store persists prepared import jobs for the later download/import tasks.
 
 pub mod commands;
+pub mod provenance_db;
 
 use std::path::Path;
 
@@ -21,9 +22,8 @@ pub struct IaState {
     /// API endpoints (production).
     pub endpoints: Endpoints,
     /// Local job store, rooted under the data dir so it follows dev
-    /// profiles. Held for the later import/download tasks; the read-only
-    /// commands never touch it.
-    #[allow(dead_code)]
+    /// profiles. Written by `ia_prepare_import`, consumed by the later
+    /// download/import tasks.
     pub store: JobStore,
 }
 

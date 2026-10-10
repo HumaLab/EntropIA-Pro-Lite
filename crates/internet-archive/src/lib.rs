@@ -32,7 +32,8 @@ pub use download::{
 };
 pub use error::IaError;
 pub use item::{
-    Availability, FileSource, ItemDetails, PdfFile, RestrictedReason, MAX_PDFS_PER_ITEM,
+    parse_item_value, Availability, FileSource, ItemDetails, PdfFile, RestrictedReason,
+    MAX_PDFS_PER_ITEM,
 };
 pub use name::display_file_name;
 pub use policy::{is_public_ip, FetchPolicy};
