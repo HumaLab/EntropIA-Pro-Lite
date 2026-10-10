@@ -19,6 +19,7 @@
     "lint": "eslint src",
     "test": "vitest run",
     "export-schema": "node scripts/export-schema.mjs",
+    "export-migration-ipc": "node scripts/export-migration-ipc.mjs",
     "seed-synthetic-collection": "node scripts/seed-synthetic-collection.mjs"
   }
 }

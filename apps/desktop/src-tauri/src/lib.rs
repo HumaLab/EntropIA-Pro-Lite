@@ -1295,6 +1295,8 @@ pub fn run() {
             db::commands::db_execute_transaction,
             db::commands::db_select,
             db::commands::db_select_rows,
+            db::commands::db_migration_window_begin,
+            db::commands::db_migration_window_end,
             db::commands::db_browser_list_tables,
             db::commands::db_browser_describe_table,
             db::commands::db_browser_query_rows,
