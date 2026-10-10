@@ -341,6 +341,7 @@ vi.mock('$lib/file-import', () => ({
   getAssetUrl: (path: string) => `https://asset.localhost/${path}`,
   duplicateAssetFile: duplicateAssetFileMock,
   deleteAssetFile: deleteAssetFileMock,
+  isOutsideDataDir: () => false,
   resolveStoredAssetPath: (path: string) => path,
 }))
 

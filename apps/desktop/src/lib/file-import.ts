@@ -335,28 +335,53 @@ export function resolveStoredAssetPath(storedPath: string): string {
  * lose the asset.
  */
 export function toStoredAssetPath(absolutePath: string): string {
-  if (cachedDataDir === null) return absolutePath
+  const relative = relativeToDataDir(absolutePath)
+  return relative !== null && relative.startsWith('assets/') ? relative : absolutePath
+}
+
+/**
+ * The path below the data directory, with `/` separators, or `null` when the
+ * path is outside it or the cache has not been primed.
+ */
+function relativeToDataDir(absolutePath: string): string | null {
+  if (cachedDataDir === null) return null
 
   const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '')
   const path = normalize(absolutePath)
   const root = normalize(cachedDataDir)
   // Windows paths are case-insensitive; elsewhere the comparison is exact.
   const matches = path.toLowerCase().startsWith(`${root.toLowerCase()}/`)
-  if (!matches) return absolutePath
+  return matches ? path.slice(root.length + 1) : null
+}
 
-  const relative = path.slice(root.length + 1)
-  return relative.startsWith('assets/') ? relative : absolutePath
+/**
+ * Whether a stored asset path resolves outside the data directory: an
+ * external file that was never copied in. The app never deletes those — they
+ * are the user's files, not the archive's, and the renderer's file-system
+ * scope does not reach them anyway. `false` until the cache is primed.
+ */
+export function isOutsideDataDir(storedPath: string): boolean {
+  return cachedDataDir !== null && relativeToDataDir(resolveStoredAssetPath(storedPath)) === null
 }
 
 /**
  * Delete an asset file from the filesystem.
  *
+ * - A file outside the data directory is never deleted (see
+ *   {@link isOutsideDataDir}); the DB cleanup still proceeds.
  * - If the file does not exist (ENOENT/not-found), logs a warning and returns
  *   successfully — the DB cleanup should still proceed.
  * - If a permission error or other filesystem error occurs, throws so the
  *   caller can abort the deletion flow.
  */
 export async function deleteAssetFile(storedPath: string): Promise<void> {
+  if (isOutsideDataDir(storedPath)) {
+    console.warn(
+      '[file-import] Asset file is outside the archive, leaving it in place:',
+      storedPath
+    )
+    return
+  }
   try {
     await remove(resolveStoredAssetPath(storedPath))
   } catch (e) {
