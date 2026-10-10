@@ -8,8 +8,8 @@ import { quotedImageSize, toDocx } from './export-docx'
  *
  * # Why these tests open the zip
  *
- * Because that is the test that would have caught the incumbent. Spike S4 found
- * `html-docx-js` producing a file Word opens and renders — while containing no
+ * Because that is the test that would have caught the exporter it replaced.
+ * Spike S4 found `html-docx-js` producing a file Word opens and renders — while containing no
  * document model at all: its content is an MHTML blob in `afchunk.mht` and
  * there is no `footnotes.xml` anywhere. Any test that only asked "did we get a
  * file" would have passed on it.
@@ -46,8 +46,9 @@ async function parts(node: Node, extra: Partial<ExportContext> = {}) {
 
 describe('the package has the parts a DOCX has', () => {
   /**
-   * The one that settles it. `html-docx-js` has no `footnotes.xml`, which is
-   * why S4 replaced it; a regression to any wrapper approach fails here first.
+   * The one that settles it. The exporter this replaced, `html-docx-js`, had
+   * no `footnotes.xml`, which is why S4 replaced it; a regression to any
+   * wrapper approach fails here first.
    */
   it('has a real footnotes part', async () => {
     const { names } = await parts(doc(p(text('cuerpo'))))
@@ -104,6 +105,75 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
     expect(body).toContain('<w:tbl>')
     expect(body).toContain('<w:tc>')
     expect(body).toContain('1919')
+  })
+
+  /**
+   * OCR tables and Tiptap's own both carry `colspan`/`rowspan`, and Word reads
+   * them as `w:gridSpan` and `w:vMerge` — without the second, a vertically
+   * merged cell is written twice and the grid below it shifts left.
+   */
+  it('writes colspan as a grid span and rowspan as a vertical merge', async () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [{ type: 'tableHeader', attrs: { colspan: 2 }, content: [p(text('Ancho'))] }],
+        },
+        {
+          type: 'tableRow',
+          content: [
+            { type: 'tableCell', attrs: { rowspan: 2 }, content: [p(text('Marzo'))] },
+            { type: 'tableCell', content: [p(text('Paro'))] },
+          ],
+        },
+        { type: 'tableRow', content: [{ type: 'tableCell', content: [p(text('Acuerdo'))] }] },
+      ],
+    }
+
+    const body = (await parts(doc(table))).read('word/document.xml')!
+
+    expect(body).toContain('<w:gridSpan w:val="2"/>')
+    expect(body).toContain('w:vMerge w:val="restart"')
+    expect(body).toContain('w:vMerge w:val="continue"')
+  })
+
+  /** Tiptap stores the values as strings when it parsed them from HTML. */
+  it('reads a string colspan the way it reads a number', async () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [{ type: 'tableCell', attrs: { colspan: '3' }, content: [p(text('Ancho'))] }],
+        },
+      ],
+    }
+
+    expect((await parts(doc(table))).read('word/document.xml')).toContain('<w:gridSpan w:val="3"/>')
+  })
+
+  it('writes no merge for the default span of one', async () => {
+    const table = {
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [
+            {
+              type: 'tableCell',
+              attrs: { colspan: 1, rowspan: 1 },
+              content: [p(text('Una'))],
+            },
+          ],
+        },
+      ],
+    }
+
+    const body = (await parts(doc(table))).read('word/document.xml')!
+
+    expect(body).not.toContain('w:gridSpan')
+    expect(body).not.toContain('w:vMerge')
   })
 
   it('writes a link as a hyperlink', async () => {
@@ -239,6 +309,28 @@ describe('the obligatory elements of §17.1, as real OOXML', () => {
     }
 
     expect((await parts(doc(list))).read('word/document.xml')).toContain('w:numPr')
+  })
+})
+
+/**
+ * The page margins, when an exporter asks for its own: the printable HTML the
+ * OCR and report exports share is half an inch, Word's default is one.
+ */
+describe('the page setup it is asked for', () => {
+  it('writes the margins it is given', async () => {
+    const files = unzipSync(await toDocx(doc(p(text('cuerpo'))), context, { margins: 720 }))
+
+    expect(strFromU8(files['word/document.xml']!)).toMatch(
+      /<w:pgMar [^>]*w:top="720"[^>]*w:right="720"[^>]*w:bottom="720"[^>]*w:left="720"/
+    )
+  })
+
+  it('keeps Word\u2019s default when it is not asked for anything', async () => {
+    const files = unzipSync(await toDocx(doc(p(text('cuerpo'))), context))
+    const body = strFromU8(files['word/document.xml']!)
+
+    expect(body).toContain('<w:pgMar ')
+    expect(body).not.toMatch(/<w:pgMar [^>]*w:top="720"/)
   })
 })
 
