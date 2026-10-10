@@ -1329,13 +1329,14 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
 /// it (B2, plan-texto-nativo-parte-b 2.2).
 ///
 /// v2 (detector-old-ocr-noise) widened rule 2 (digits and more separators
-/// between letters, replacement-character and case-soup noise, identifier
-/// tokens excluded, 10 % over 10 judged tokens) and added rule 3,
-/// punctuation soup (15 % over 20 whitespace tokens). Measured on the
-/// 18 984-page prueba-sync copy: 582 of the 911 Abulafia 1950 pages and 121
-/// pages of other works (52 works) flag, versus v1's 42 and 56. Born-digital
-/// false positives are the risk to minimize: a flagged page leaves the
-/// regular extraction for GLM-OCR.
+/// between letters, replacement-character noise, identifier tokens excluded,
+/// 10 % over 10 judged tokens) and added rule 3, punctuation soup (15 % over
+/// 20 whitespace tokens). Measured on the stored native rows of the
+/// prueba-sync copy: 542 of the 911 Abulafia 1950 pages and 73 pages of other
+/// works (24 works) flag, versus v1's 42 and 56. Born-digital false positives
+/// are the risk to minimize: a flagged page leaves the regular extraction for
+/// GLM-OCR. A case-soup clause ("PrelUlliIl") was measured and dropped: it
+/// added 40 Abulafia pages but flagged camelCase code in 28 more works.
 pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 2;
 
 /// Which of the three bibliography-garble rules flag a text.
@@ -1573,9 +1574,10 @@ const BIBLIOGRAPHY_NOISE_SEPARATORS: &[char] = &[
     '.', '~', '\u{00B7}', '"', ';', ',', ':', '!', '|', '^', '`', '\\', '{', '}', '<', '>',
 ];
 
-/// Whether the token carries one non-excluded noise occurrence: a U+FFFD, a
-/// digit or [`BIBLIOGRAPHY_NOISE_SEPARATORS`] character between two Latin
-/// letters, or a lowercase-uppercase-lowercase run. The separator checks
+/// Whether the token carries one non-excluded noise occurrence: a U+FFFD, or
+/// a digit or [`BIBLIOGRAPHY_NOISE_SEPARATORS`] character between two Latin
+/// letters. Mixed case alone never counts: camelCase identifiers in
+/// born-digital papers look like it. The separator checks
 /// keep today's exclusions: hyphens and apostrophes never count, the Catalan
 /// geminate "l·l" ("paral·lel", case-insensitive) is not noise, and dotted
 /// abbreviations ("U.S.", "U.S.A.", "N.A.T.O.", "e.g.", "i.e.") are not
@@ -1617,30 +1619,7 @@ fn token_has_old_ocr_noise(token: &str) -> bool {
         }
         return true;
     }
-    token_has_case_soup(token)
-}
-
-/// Case soup inside a word ("PrelUlliIl~r"): a lowercase-uppercase-lowercase
-/// run of Latin letters (accented forms included). Surnames that legitimately
-/// carry one start with a name prefix ("McDonald", "DeLuca", "VanGogh"), so
-/// those never count.
-fn token_has_case_soup(token: &str) -> bool {
-    for prefix in ["Mc", "Mac", "O'", "De", "Di", "La", "Le", "Van"] {
-        if let Some(rest) = token.strip_prefix(prefix) {
-            if rest.chars().next().is_some_and(|c| c.is_uppercase()) {
-                return false;
-            }
-        }
-    }
-    let chars: Vec<char> = token.chars().collect();
-    chars.windows(3).any(|run| {
-        is_latin_letter(run[0])
-            && run[0].is_lowercase()
-            && is_latin_letter(run[1])
-            && run[1].is_uppercase()
-            && is_latin_letter(run[2])
-            && run[2].is_lowercase()
-    })
+    false
 }
 
 /// The marks rule 3 reads as OCR punctuation soup: quote and tilde-like
@@ -4094,6 +4073,14 @@ mod tests {
     fn reference_fragments_stay_clean() {
         let page = [CLEAN_REFS_LINE; 3].join(" ");
         assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn code_identifiers_in_born_digital_prose_stay_clean() {
+        // Cut from a born-digital paper the v2 measurement flagged through
+        // camelCase identifiers; such pages must stay native, not go to OCR.
+        let page = "The model resets the accumulated income (accIncome) to zero, and increase by one their number of lootings (nmrOfLootings). Due to looting, however, an Enterprise may flee from the RebelGroup territory.";
+        assert!(!is_garbled_bibliography_text(page), "{page}");
     }
 
     #[test]
