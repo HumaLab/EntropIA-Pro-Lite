@@ -10,8 +10,9 @@
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",
+    "@types/node": "^25.6.0",
     "typescript": "^5",
-    "vitest": "^3"
+    "vitest": "^4.1.11"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

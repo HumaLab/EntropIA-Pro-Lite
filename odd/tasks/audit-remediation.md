@@ -108,7 +108,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
 
 ## Later phases
 
-- [ ] Phase 2 — vulnerable dependencies (D-01, D-02, D-08, D-03, D-04). Baseline `pnpm audit --prod`:
+- [x] Phase 2 — vulnerable dependencies (D-01, D-02, D-08, D-03, D-04). Baseline `pnpm audit --prod`:
   8 high / 11 moderate / 1 low. One stacked branch per item, on `fix/audit-review-followups`.
   - [x] 2.1 (D-01) — replace `html-docx-js` with `docx` in the OCR export (removes `lodash.merge`,
     `jszip` 2.7). Branch `fix/d01-ocr-docx-export`, commit `10b157a8`. New `ocr-docx.ts` reads the
@@ -194,7 +194,26 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       passed; Lite 3485 + 1 failed: the known `route-loader.test.ts` 5 s timeout (passes alone
       with and without the change; fixed by PR #31, which is not in this stack); typecheck 0
       errors; lint clean.
-  - [ ] 2.5 (D-04) — test tooling (vitest, happy-dom, vite).
+  - [x] 2.5 (D-04) — test tooling (vitest, happy-dom, vite). Branch `chore/d04-test-tooling`,
+    commit `ea592d4c`. Full `pnpm audit` (dev included) had 4 critical: happy-dom < 20, vitest
+    < 3.2.6, tinypool <= 2.1.1 (x2). vitest 3.2.7 still uses tinypool 1.x, so vitest 4.1.11 (no
+    tinypool; also clears vitest/@vitest/mocker < 4.1.11) + @vitest/ui, @vitest/coverage-v8
+    4.1.11, happy-dom 20.14.6, vite 6.4.4. Configs were already vitest-4 shaped.
+    - Surfaced and fixed in tests/config only: @types/node declared in store and UI (vitest 3
+      had leaked it through its type references) and `"node"` in the UI tsconfig types;
+      `vi.fn<() => void>()` in `transcription.test.ts` (vitest 4 mock typing); a no-op
+      `window.prompt` in the UI test setup (gone in happy-dom 20); three desktop tests that
+      asserted after waiting on the wrong signal (CollectionView, DependenciasTab, ItemView),
+      exposed by happy-dom 20 timing. A bisect (vitest 4 + happy-dom 17) proved those three
+      came from happy-dom, not vitest. No production code changed.
+    - Checks: frozen install; audit 0 critical (`--prod --audit-level high` exit 0); store
+      374, UI 847, desktop Pro 3507 passed; Lite 3485 + the known `route-loader.test.ts`
+      timeout (passes alone; fixed by PR #31, not in this stack); typecheck 0 errors (UI,
+      desktop Pro and Lite, store); lint and `pnpm build` clean; coverage-v8 smoke ok.
+    - Not done: unifying jsdom vs happy-dom (22 files force jsdom) — left as is. Remaining
+      dev-only advisories (20 high): brace-expansion and js-yaml via the eslint chain,
+      postcss/nanoid via vite, ws via jsdom, source-map-js via coverage; none ships. Follow-up
+      for Phase 7 (C-03, supply chain).
 - [ ] Phase 3 — SQL IPC and asset protocol hardening (S-02, S-05, A-04, A-05, S-06)
 - [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
 - [ ] Phase 5 — performance and observability (P-01..P-04)

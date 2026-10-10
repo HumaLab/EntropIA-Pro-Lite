@@ -803,7 +803,12 @@ describe('DependenciasTab', () => {
 
     render(DependenciasTab)
 
-    await waitFor(() => expect(progressHandler).toBeDefined())
+    // The listeners register one await at a time after the initial refresh;
+    // wait for the real registrations instead of the vi.fn() placeholders.
+    await waitFor(() => {
+      expect(depsMocks.onRuntimeStatus).toHaveBeenCalled()
+      expect(depsMocks.onRuntimeProgress).toHaveBeenCalled()
+    })
     expect(await screen.findByText(/Runtime dañado/i)).toBeInTheDocument()
     progressHandler?.({
       kind: 'bootstrap',
