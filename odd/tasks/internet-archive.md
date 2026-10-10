@@ -147,7 +147,7 @@ commands in Phase 4.
       risk, input already capped), reject over the page cap with
       `demasiadas páginas`, unreadable PDF with `verificación fallida`. Result
       carries `sha256` and `page_count` for later confirmation.
-- [ ] 19. Display-name sanitizer (§7 point 1): last path segment, same rules as
+- [x] 19. Display-name sanitizer (§7 point 1): last path segment, same rules as
       `navegador-copy.ts` `safeStem`, always `.pdf`, fallback to the identifier.
 
 ## Evidence
@@ -167,6 +167,11 @@ commands in Phase 4.
   that check and its test after review). RED: 5 failing tests against a stub.
   GREEN: 128. SHA-1 is hand-rolled and checked against FIPS 180-4 vectors because
   `sha2` does not include SHA-1.
+- 2026-10-10, task 19: `display_file_name` takes the last path segment, strips
+  controls and `<>:"/\\|?*`, prefixes reserved Windows device names, caps the
+  length, and always ends in `.pdf`. Empty names fall back to the identifier,
+  then `PDF`. Parent wrote it inline (one module). Tests went red on the first
+  expectations, then green: 134 passed. `fmt` and `clippy -D warnings` clean.
 
 - 2026-10-10, task 7: `crates/internet-archive` created (`FetchPolicy`,
   `IaClient::get_json`, `IaError`). RED: `cargo test` failed to compile (49

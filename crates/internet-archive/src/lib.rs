@@ -15,6 +15,7 @@ pub mod download;
 pub mod error;
 pub mod item;
 pub mod job;
+pub mod name;
 pub mod policy;
 pub mod prepare;
 pub mod resolve;
@@ -32,6 +33,7 @@ pub use error::IaError;
 pub use item::{
     Availability, FileSource, ItemDetails, PdfFile, RestrictedReason, MAX_PDFS_PER_ITEM,
 };
+pub use name::display_file_name;
 pub use policy::{is_public_ip, FetchPolicy};
 pub use resolve::resolve_identifier;
 pub use search::{Endpoints, SearchItem, SearchPage, SearchQuery};
