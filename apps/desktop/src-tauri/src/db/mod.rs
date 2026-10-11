@@ -11,6 +11,7 @@ pub mod compact;
 pub(crate) mod migrations;
 pub mod open;
 pub(crate) mod repairs;
+pub(crate) mod schema_audit;
 pub mod sql_split;
 pub mod state;
 pub mod util;
