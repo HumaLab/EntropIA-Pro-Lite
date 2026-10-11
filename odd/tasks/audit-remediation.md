@@ -362,7 +362,15 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     branch, deleted): `review-e05a9ec28196939a` approved, 3 advisory warnings at line 1 of
     `runner.ts`, `migration-files.test.ts` and `generate-migrations.mjs` (text not stored;
     likely the `.ts`-extension import with `@ts-expect-error`).
-  - [ ] 4.2a — canonical dump: TS script over `node:sqlite`, fixture, freshness test, Rust dump fn.
+  - [x] 4.2a — canonical dump. Branch `feat/p4-2a-canonical-schema-dump`, commit `4ab39b67`.
+    `schema-canonical.ts` + `export-schema-canonical` → `tests/fixtures/schema_canonical.json`
+    (298 KB; 215 objects, 82 tables, 88 indexes, 58 migrations) with a freshness test;
+    `db/canonical_dump.rs` computes the same structure. Cross-check: `schema_full.sql` under rusqlite
+    gives the same dump, PRAGMAs included (node:sqlite 3.53.4 vs bundled 3.45.0), except that a real
+    archive's `_migrations` and `layouts` carry runner.ts's runtime DDL text — 4.2b must reproduce it.
+    Store 445, Rust 2798 / 0 / 35. RDD `review-9ed7ebd508ea9dd9` approved, no findings, reviewed
+    without the generated fixture under the user's standing Phase 4 rule (generated,
+    freshness-pinned files over the budget are excluded via a temp branch).
   - [ ] 4.2b — `db/migrations.rs` (atomic per migration, 0020 port, 0032 repair) + tests, not wired.
   - [ ] 4.2c — wire into `setup`; measure startup on a large synthetic archive.
   - [ ] 4.3 — `setup` patches as idempotent repairs, dedup without capture, `fail(...)`; dev profile.

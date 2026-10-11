@@ -77,8 +77,13 @@ solo verifica, y el IPC deja de aceptar DDL.
   volcado y lo compara con el fixture. La CI de Rust no necesita Node.
 - La comparación es **después de las migraciones y antes de la captura de sync**. La captura
   (`ensure_capture`) y las reparaciones de `setup` tienen sus propios tests.
+- **Hallazgo de 4.2a: el texto de `_migrations` y `layouts`.** En una base real, `sqlite_master.sql`
+  de esas dos tablas es el DDL que `runner.ts` ejecuta en tiempo de ejecución (la creación de
+  `_migrations` antes de `0001` y la de `applyLayoutsMigration`), con su propia indentación, no el
+  texto de los `.sql`. El runner Rust tiene que ejecutar ese mismo texto byte a byte; si no, el
+  volcado canónico difiere.
 - **Riesgo conocido.** `node:sqlite` y el SQLite de `rusqlite` 0.31 (`bundled`) son versiones
-  distintas. `sqlite_master.sql` guarda el texto tal como se escribió, así que no varía. Si algún
+  distintas (3.53.4 y 3.45.0). El cruce de 4.2a no mostró diferencias en ningún `PRAGMA`. `sqlite_master.sql` guarda el texto tal como se escribió, así que no varía. Si algún
   `PRAGMA` cambiara de formato entre versiones, el test lo mostraría y se normaliza ese campo,
   documentándolo en el test.
 
