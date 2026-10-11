@@ -1,0 +1,4 @@
+# Generated from packages/store/src/migrations/*.sql by
+# `pnpm --filter @entropia/store generate-migrations`; pinned by the freshness
+# test in packages/store/src/migration-files.test.ts.
+packages/store/src/migrations.generated.ts
