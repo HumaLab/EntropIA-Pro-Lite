@@ -185,7 +185,9 @@ export function renderMigrationIpcFixture(fixture: MigrationIpcFixture): string 
   return `${JSON.stringify(fixture, null, 2)}\n`
 }
 
-export async function recordMigrationIpcFixtureJson(runMigrations: RunMigrationsFn): Promise<string> {
+export async function recordMigrationIpcFixtureJson(
+  runMigrations: RunMigrationsFn
+): Promise<string> {
   return renderMigrationIpcFixture(await recordMigrationIpcFixture(runMigrations))
 }
 
@@ -201,7 +203,9 @@ export function appliedMigrationNames(calls: MigrationIpcCall[]): string[] {
       const name = call.params[0]
       if (typeof name === 'string') names.push(name)
     } else if (call.command === 'db_execute_batch') {
-      const match = call.sql.match(/INSERT INTO _migrations \(name, applied_at\) VALUES \('([^']+)'/)
+      const match = call.sql.match(
+        /INSERT INTO _migrations \(name, applied_at\) VALUES \('([^']+)'/
+      )
       if (match?.[1]) names.push(match[1])
     }
   }

@@ -394,14 +394,10 @@ describe('ItemRepo', () => {
       expect(sql).not.toContain('DELETE FROM embeddings_fallback')
       expect(sql).not.toContain('DELETE FROM fts_index')
       // The item's own index row leaves by rowid inside the same transaction.
-      expect(sql).toContain(
-        'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
-      )
+      expect(sql).toContain('DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE')
       // Ids travel bound, never interpolated into the SQL.
       expect(statements.some((statement) => statement.sql.includes('item-1'))).toBe(false)
-      expect(
-        statements.some((statement) => statement.params.includes('item-1'))
-      ).toBe(true)
+      expect(statements.some((statement) => statement.params.includes('item-1'))).toBe(true)
     })
 
     it('deletes vec_assets inside the transaction when the table exists', async () => {
@@ -492,9 +488,9 @@ describe('ItemRepo', () => {
         sql: string
         params: unknown[]
       }>
-      expect(
-        statements.some((statement) => statement.sql.includes("item'; DROP TABLE"))
-      ).toBe(false)
+      expect(statements.some((statement) => statement.sql.includes("item'; DROP TABLE"))).toBe(
+        false
+      )
       expect(
         statements.some((statement) => statement.params.includes("item'; DROP TABLE items;--"))
       ).toBe(true)
@@ -1431,9 +1427,7 @@ describe('keyset pagination against the real schema', () => {
       executeBatch: async (sql: string) => {
         sqlite.exec(sql)
       },
-      executeTransaction: async (
-        statements: Array<{ sql: string; params?: unknown[] }>
-      ) => {
+      executeTransaction: async (statements: Array<{ sql: string; params?: unknown[] }>) => {
         sqlite.exec('BEGIN IMMEDIATE')
         try {
           for (const statement of statements) {
