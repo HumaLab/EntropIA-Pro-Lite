@@ -1,14 +1,3 @@
--- Recreate the FTS5 index with `contentless_delete=1`.
---
--- `fts_items` is contentless: the text lives in `extractions` and
--- `transcriptions`, and the index only holds tokens. Without this option
--- SQLite has no copy to diff against, so replacing a row ADDS the new tokens
--- and keeps the old ones. Re-running OCR, correcting an extraction or deleting
--- an asset left the previous text permanently searchable.
---
--- The option can only be set at creation, so the index is dropped, recreated
--- and rebuilt from the same source-of-truth query 0018 established.
--- SQLite 3.43+ (the bundled build is 3.45).
 DROP TABLE IF EXISTS fts_items;
 
 CREATE VIRTUAL TABLE fts_items USING fts5(

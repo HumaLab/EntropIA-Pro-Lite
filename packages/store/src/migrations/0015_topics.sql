@@ -1,6 +1,4 @@
--- Migration: 0015_topics
 -- Create topics table and item_topics junction table for reusable topic tagging
-
 CREATE TABLE IF NOT EXISTS topics (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,

@@ -7,4 +7,4 @@ CREATE TABLE IF NOT EXISTS triples (
   created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS triples_item_id_idx ON triples(item_id);
+CREATE INDEX IF NOT EXISTS triples_item_id_idx ON triples(item_id)

@@ -151,9 +151,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(migrationSql).toContain('UPDATE collections')
 
     const mirror = readFileSync(resolve(here, 'migrations/0027_collection_activity.sql'), 'utf8')
-    expect(mirror).toBe(
-      `-- Generated from COLLECTION_ACTIVITY_DDL in ../runner.ts.\n${COLLECTION_ACTIVITY_DDL}\n`
-    )
+    expect(mirror).toBe(`${COLLECTION_ACTIVITY_DDL}\n`)
   })
 
   it('executes llm_results hardening migration with target_type and timestamp normalization', async () => {

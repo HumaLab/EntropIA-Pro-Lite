@@ -51,7 +51,11 @@ solo verifica, y el IPC deja de aceptar DDL.
   compara la lista del módulo con el contenido del directorio, así una migración nueva no puede
   quedar fuera de un runner.
 - Los tests de espejo parciales de `runner.test.ts` (`0023` por contenido, `0028` negativo) quedan
-  cubiertos por el test de identidad y se eliminan.
+  cubiertos por el test de identidad. Se conservan porque siguen documentando el contenido
+  esperado de esas migraciones.
+- **Hecho en 4.1a.** El chequeo encontró 7 archivos faltantes y 19 distintos. Normalizados
+  (sin comentarios, espacios ni `;` finales), solo `0020` difería en SQL: le faltaba
+  `DEFAULT '[]'` en `layouts.blocks`. Manda el registro, porque es lo que aplicó cada base.
 
 ## 3. Cómo se prueba la equivalencia: volcado canónico
 

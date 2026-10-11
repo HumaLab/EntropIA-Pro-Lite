@@ -26,4 +26,4 @@ DROP TABLE entities;
 ALTER TABLE entities_v2 RENAME TO entities;
 
 CREATE INDEX IF NOT EXISTS idx_entities_item_id ON entities(item_id);
-CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(entity_type)
