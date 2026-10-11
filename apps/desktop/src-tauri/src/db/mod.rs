@@ -6,7 +6,6 @@ pub mod authorizer;
 pub(crate) mod canonical_dump;
 pub mod commands;
 pub mod compact;
-pub mod migration_allowlist;
 // Rust port of the renderer migration runner, wired into `setup` at startup
 // (Phase 4.2c). `repairs` wraps it with the idempotent schema repairs (4.3b).
 pub(crate) mod migrations;

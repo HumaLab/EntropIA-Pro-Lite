@@ -274,8 +274,7 @@ function splitStatements(sql: string): string[] {
  * backend applies every migration during setup, before the webview loads, so
  * the renderer only verifies with {@link runMigrations}. Tests and tooling that
  * need a schema built on `node:sqlite` use this applier: the canonical schema
- * fixture (`schema-canonical.ts`), the migration IPC recorder
- * (`migration-ipc-recorder.ts`) and the migration tests in `runner.test.ts`.
+ * fixture (`schema-canonical.ts`) and the migration tests in `runner.test.ts`.
  *
  * - Ensures the `_migrations` tracking table exists
  * - Fetches already-applied migration names

@@ -20,7 +20,6 @@
     "test": "vitest run",
     "export-schema": "node scripts/export-schema.mjs",
     "export-schema-canonical": "node scripts/export-schema-canonical.mjs",
-    "export-migration-ipc": "node scripts/export-migration-ipc.mjs",
     "generate-migrations": "node scripts/generate-migrations.mjs",
     "seed-synthetic-collection": "node scripts/seed-synthetic-collection.mjs"
   }
