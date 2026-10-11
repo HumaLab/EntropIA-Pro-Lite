@@ -10,7 +10,10 @@ import {
 } from './migration-ipc-recorder'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const fixturePath = resolve(here, '../../../apps/desktop/src-tauri/tests/fixtures/migration_ipc.json')
+const fixturePath = resolve(
+  here,
+  '../../../apps/desktop/src-tauri/tests/fixtures/migration_ipc.json'
+)
 
 // Normalize CRLF so the check is stable across platforms / git autocrlf.
 const norm = (s: string) => s.replace(/\r\n/g, '\n')

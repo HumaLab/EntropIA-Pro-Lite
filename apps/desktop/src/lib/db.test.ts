@@ -62,10 +62,7 @@ describe('initDb and the one-shot migration window (S-02c)', () => {
 
     await expect(initDb()).resolves.toBeUndefined()
 
-    expect(warn).toHaveBeenCalledWith(
-      '[db] db_migration_window_begin failed:',
-      expect.any(Error),
-    )
+    expect(warn).toHaveBeenCalledWith('[db] db_migration_window_begin failed:', expect.any(Error))
     expect(mockInitStore).toHaveBeenCalledTimes(1)
     expect(mockInvoke).toHaveBeenCalledWith('db_migration_window_end')
     expect(mockInvoke).toHaveBeenCalledWith('processing_initialize')

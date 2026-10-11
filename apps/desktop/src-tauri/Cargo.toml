@@ -127,9 +127,40 @@ debug-assertions = false
 overflow-checks = false
 
 # `tauri dev` runs an unoptimized build, where scanning ~100k vectors takes
-# many seconds. Only this tiny, non-generic crate is optimized; the rest of the
-# dev build keeps its fast incremental compiles.
+# many seconds or a scanned page PNG-encodes in minutes. Only these hot-path
+# crates are optimized; the rest of the dev build keeps its fast incremental
+# compiles.
 [profile.dev.package.vecscan]
+opt-level = 3
+
+# The selective OCR page render PNG-encodes a ~2550px page through `image`/`png`
+# and their deflate/checksum helpers, and downscales oversized pages with
+# `image`'s Triangle filter. Unoptimized in dev that costs minutes per scanned
+# page; same reasoning as `vecscan` above. Every name below is in Cargo.lock
+# (the PNG encode/resize hot path); the release profiles need no entry — they
+# already optimize every crate.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.adler2]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
 opt-level = 3
 
 [profile.release.package.vecscan]
