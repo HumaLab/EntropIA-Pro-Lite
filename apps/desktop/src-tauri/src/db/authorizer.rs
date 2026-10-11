@@ -41,6 +41,12 @@ pub(crate) enum RendererSqlKind {
 /// list, and every other pragma stays denied outside the migration exception.
 const READ_ONLY_PRAGMAS: &[&str] = &["data_version", "quick_check"];
 
+/// The FTS5 constructor's pragma, needed by every command kind: FTS5 connects
+/// a virtual table on the first use per connection (and after a schema
+/// reset), which can be any renderer statement. It takes no value and only
+/// reads a counter.
+const FTS5_CONSTRUCTOR_PRAGMA: &str = "data_version";
+
 /// The layer-2 policy, kept pure so every rule is exercised by unit tests.
 ///
 /// Returning [`Authorization::Deny`] (never `Ignore`) makes SQLite reject the
@@ -50,7 +56,7 @@ const READ_ONLY_PRAGMAS: &[&str] = &["data_version", "quick_check"];
 /// | Action | Default | Armed migration exception |
 /// |---|---|---|
 /// | ATTACH / DETACH (incl. `VACUUM`) | Deny | Deny |
-/// | any PRAGMA except read-only `data_version` (Batch) | Deny | Allow `defer_foreign_keys` for `DdlKind::Pragma` |
+/// | any PRAGMA except read-only `data_version` (value-less in every kind; any value in Batch) | Deny | Allow `defer_foreign_keys` for `DdlKind::Pragma` |
 /// | `app_settings` read/write/DDL | Deny | Deny |
 /// | write `sync_*` unless accessor is `trg_sync_*` | Deny | Deny |
 /// | DDL on `sync_*` / `trg_sync_*` | Deny | Deny |
@@ -78,7 +84,10 @@ pub(crate) fn authorize(
         // running under its armed exception, or a read-only pragma SQLite
         // itself issues while preparing a batch statement. The window alone
         // never authorizes a write pragma.
-        AuthAction::Pragma { pragma_name, .. } => {
+        AuthAction::Pragma {
+            pragma_name,
+            pragma_value,
+        } => {
             let listed_migration_pragma = kind == RendererSqlKind::Batch
                 && pragma_name.eq_ignore_ascii_case("defer_foreign_keys")
                 && exception.is_some_and(|exception| {
@@ -88,7 +97,9 @@ pub(crate) fn authorize(
                 && READ_ONLY_PRAGMAS
                     .iter()
                     .any(|pragma| pragma_name.eq_ignore_ascii_case(pragma));
-            if listed_migration_pragma || sqlite_read_only {
+            let fts5_constructor =
+                pragma_name.eq_ignore_ascii_case(FTS5_CONSTRUCTOR_PRAGMA) && pragma_value.is_none();
+            if listed_migration_pragma || sqlite_read_only || fts5_constructor {
                 Authorization::Allow
             } else {
                 Authorization::Deny
@@ -547,16 +558,34 @@ mod tests {
     }
 
     #[test]
-    fn the_fts5_vtable_constructor_pragma_stays_available_to_batch_only() {
-        // `CREATE VIRTUAL TABLE ... fts5` makes the module query
-        // `PRAGMA data_version`; it is read-only, so Batch may run it while
-        // the renderer paths never lift anything.
+    fn the_fts5_vtable_constructor_pragma_is_available_to_every_kind() {
+        // FTS5 queries `PRAGMA data_version` when it connects a virtual table,
+        // which can happen under any renderer statement. It is read-only and
+        // takes no value; setting a value stays denied.
+        let constructor_pragma = AuthAction::Pragma {
+            pragma_name: "data_version",
+            pragma_value: None,
+        };
         assert_eq!(
             check(RendererSqlKind::Batch, pragma("data_version")),
             Authorization::Allow
         );
         assert_eq!(
+            check(RendererSqlKind::Single, constructor_pragma),
+            Authorization::Allow
+        );
+        assert_eq!(
             check(RendererSqlKind::Single, pragma("data_version")),
+            Authorization::Deny
+        );
+        assert_eq!(
+            check(
+                RendererSqlKind::Single,
+                AuthAction::Pragma {
+                    pragma_name: "quick_check",
+                    pragma_value: None,
+                },
+            ),
             Authorization::Deny
         );
         assert_eq!(
@@ -998,6 +1027,27 @@ mod tests {
             check_with_exception(RendererSqlKind::Single, Some(&exception), own_trigger),
             Authorization::Deny
         );
+    }
+
+    #[test]
+    fn a_single_statement_can_be_the_first_fts5_use_on_a_connection() {
+        // FTS5 queries `PRAGMA data_version` when it connects a virtual table
+        // on a connection: the first use, or the first after a schema reset.
+        // Since migrations run in Rust (Phase 4.2c), that first use on
+        // `ui_conn` is an ordinary renderer statement, not a migration batch.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fts.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE VIRTUAL TABLE fts_items USING fts5(body);")
+            .unwrap();
+
+        let conn = Connection::open(&path).unwrap();
+        let _guard = RendererSqlAuthorizer::install(&conn, RendererSqlKind::Single, None);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM fts_items", [], |row| row.get(0))
+            .expect("the FTS5 constructor's read-only pragma must not be denied");
+        assert_eq!(count, 0);
     }
 
     #[test]
