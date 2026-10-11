@@ -466,11 +466,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       ≥1.81 sorts may panic). `score_embeddings` now skips non-finite scores (protects
       `vector_leg` and `chunk_vector_leg`).
     - Lite 2818 / 0 / 36; Pro clippy only the 9 known. RDD `review-ed73671f5cfbf6be` approved.
-  - [ ] 5.2b (P-01) — cached vecscan index. **User decision:** invalidate with a SQLite update hook
-    in `open_archive_connection` bumping a process-global generation on any `vec_assets` row change
-    — no migration, `schema_tag` unchanged. Verified: every production write connection to the
-    archive goes through `db/open.rs` (`research*` opens another DB; `rag/baseline.rs` is read-only
-    measurement tooling). Test from the plan: an in-place embedding update is reflected next query.
+  - [~] 5.2b (P-01) — cached vector index: **deferred by user decision** after measuring.
+    - End-to-end `vector_leg` on an on-disk archive (dim 1024, measure profile, median of 5):
+      10k assets 34 ms, 50k assets 172 ms per question; almost all of it is reading the blobs
+      (ranking is ~1 ms since 5.2a). A cache would bring it to ~1 ms.
+    - Cost: an exact cache keeps f32 vectors resident, ~40 MB per 10k assets; the bibliography's
+      int8 `vecscan` index is a quarter of that but only matches an exact scan when the true top-k
+      lands in its shortlist, so it cannot meet the plan's same-ids-same-order acceptance.
+    - Benefit: 30-170 ms on a question that then waits seconds for the LLM; `vec_assets` holds one
+      row per document, so 50k is already a large archive. Not worth the resident memory now.
+    - If revisited: invalidate with a SQLite update hook in `open_archive_connection` bumping a
+      process-global generation on any `vec_assets` row change (user decision: no migration,
+      `schema_tag` unchanged). Verified every production write connection goes through
+      `db/open.rs` (`research*` opens another DB; `rag/baseline.rs` is read-only tooling). Plan
+      test: an in-place embedding update is reflected by the next query.
   - [ ] 5.4 (P-04) — unified backend logging, incremental.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
