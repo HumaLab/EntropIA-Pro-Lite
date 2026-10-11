@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::fs::{self, OpenOptions};
-use std::io::Write as _;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead as _, BufReader, BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -9,6 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const MAX_LOG_ENTRIES: usize = 2_000;
+/// Lines the file may hold before it is rewritten with the newest
+/// `MAX_LOG_ENTRIES`. Counting lines, not bytes, keeps the check free and
+/// deterministic; `MAX_MESSAGE_CHARS` already bounds each line's size.
+const COMPACT_AT_FILE_LINES: usize = 2 * MAX_LOG_ENTRIES;
 const DEFAULT_LOG_ENTRIES_WINDOW: usize = 20;
 const LOG_FILE_NAME: &str = "entropia.log";
 const MAX_MESSAGE_CHARS: usize = 4_000;
@@ -34,6 +38,8 @@ pub struct AppLogEntry {
 struct AppLogsInner {
     entries: VecDeque<AppLogEntry>,
     next_id: u64,
+    /// Lines currently in the file, so appends know when to compact it.
+    file_lines: usize,
 }
 
 #[derive(Debug)]
@@ -47,7 +53,10 @@ pub struct AppLogsState {
 impl AppLogsState {
     pub fn new(log_dir: PathBuf) -> Self {
         let log_file = log_dir.join(LOG_FILE_NAME);
-        let entries = load_existing_entries(&log_file, MAX_LOG_ENTRIES);
+        let (entries, mut file_lines) = load_existing_entries(&log_file, MAX_LOG_ENTRIES);
+        if file_lines > MAX_LOG_ENTRIES && rewrite_log_file(&log_file, &entries).is_ok() {
+            file_lines = entries.len();
+        }
         let next_id = entries
             .iter()
             .map(|entry| entry.id)
@@ -56,7 +65,11 @@ impl AppLogsState {
             .saturating_add(1);
 
         Self {
-            inner: Mutex::new(AppLogsInner { entries, next_id }),
+            inner: Mutex::new(AppLogsInner {
+                entries,
+                next_id,
+                file_lines,
+            }),
             file_lock: Mutex::new(()),
             log_dir,
             log_file,
@@ -80,6 +93,7 @@ impl AppLogsState {
                 .unwrap_or_else(|poison| poison.into_inner());
             inner.entries.clear();
             inner.next_id = 0;
+            inner.file_lines = 0;
         }
 
         let _file_guard = self
@@ -141,8 +155,25 @@ impl AppLogsState {
             return;
         };
 
-        if let Ok(line) = serde_json::to_string(entry) {
-            let _ = writeln!(file, "{line}");
+        let Ok(line) = serde_json::to_string(entry) else {
+            return;
+        };
+        if writeln!(file, "{line}").is_err() {
+            return;
+        }
+        drop(file);
+
+        // `file_lock` is held, so no other append can interleave; `inner` is
+        // only ever taken after it here, never the other way around.
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        inner.file_lines = inner.file_lines.saturating_add(1);
+        if inner.file_lines > COMPACT_AT_FILE_LINES
+            && rewrite_log_file(&self.log_file, &inner.entries).is_ok()
+        {
+            inner.file_lines = inner.entries.len();
         }
     }
 
@@ -217,22 +248,53 @@ fn level_label(level: &AppLogLevel) -> &'static str {
     }
 }
 
-fn load_existing_entries(log_file: &Path, max_entries: usize) -> VecDeque<AppLogEntry> {
-    let Ok(contents) = fs::read_to_string(log_file) else {
-        return VecDeque::new();
+/// Streams the log line by line, keeping the newest `max_entries` parseable
+/// entries, and returns them with the number of lines the file holds.
+/// Corrupt or non-UTF-8 lines are skipped instead of discarding the file.
+fn load_existing_entries(log_file: &Path, max_entries: usize) -> (VecDeque<AppLogEntry>, usize) {
+    let Ok(file) = File::open(log_file) else {
+        return (VecDeque::new(), 0);
     };
 
+    let mut reader = BufReader::new(file);
     let mut entries = VecDeque::new();
-    for line in contents.lines() {
-        let Ok(entry) = serde_json::from_str::<AppLogEntry>(line) else {
+    let mut lines = 0;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        lines += 1;
+        let Ok(entry) = serde_json::from_slice::<AppLogEntry>(line.trim_ascii()) else {
             continue;
         };
         entries.push_back(entry);
-        while entries.len() > max_entries {
+        if entries.len() > max_entries {
             entries.pop_front();
         }
     }
-    entries
+    (entries, lines)
+}
+
+/// Replaces the log with `entries`, through a sibling temporary file and an
+/// atomic rename, so a crash mid-write never leaves a truncated log.
+fn rewrite_log_file(log_file: &Path, entries: &VecDeque<AppLogEntry>) -> std::io::Result<()> {
+    let temp_file = log_file.with_extension("log.tmp");
+    {
+        let mut writer = BufWriter::new(File::create(&temp_file)?);
+        for entry in entries {
+            if let Ok(line) = serde_json::to_string(entry) {
+                writeln!(writer, "{line}")?;
+            }
+        }
+        writer
+            .into_inner()
+            .map_err(|error| error.into_error())?
+            .sync_all()?;
+    }
+    fs::rename(&temp_file, log_file)
 }
 
 pub(crate) fn sanitize_field(value: String, max_chars: usize) -> String {
@@ -478,5 +540,89 @@ mod tests {
             MAX_MESSAGE_CHARS,
         );
         assert!(!out.contains(TOKEN_43), "sanitize_field must redact: {out}");
+    }
+
+    fn entry_line(id: u64) -> String {
+        serde_json::to_string(&AppLogEntry {
+            id,
+            timestamp_ms: id,
+            level: AppLogLevel::Info,
+            source: "test".to_string(),
+            message: format!("entry {id}"),
+        })
+        .unwrap()
+    }
+
+    fn file_line_count(path: &Path) -> usize {
+        fs::read(path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .count()
+    }
+
+    #[test]
+    fn an_oversized_log_is_compacted_to_the_newest_entries_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join(LOG_FILE_NAME);
+        let mut contents = String::new();
+        for id in 0..50_000 {
+            contents.push_str(&entry_line(id));
+            contents.push('\n');
+        }
+        fs::write(&log_file, contents).unwrap();
+
+        let state = AppLogsState::new(dir.path().to_path_buf());
+
+        let entries = state.recent_entries(usize::MAX);
+        assert_eq!(entries.len(), MAX_LOG_ENTRIES);
+        assert_eq!(entries.first().unwrap().id, 50_000 - MAX_LOG_ENTRIES as u64);
+        assert_eq!(entries.last().unwrap().id, 49_999);
+        assert_eq!(file_line_count(&log_file), MAX_LOG_ENTRIES);
+        let reloaded = AppLogsState::new(dir.path().to_path_buf());
+        assert_eq!(reloaded.recent_entries(1)[0].id, 49_999);
+    }
+
+    #[test]
+    fn corrupt_and_non_utf8_lines_do_not_break_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join(LOG_FILE_NAME);
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(entry_line(1).as_bytes());
+        bytes.extend_from_slice(b"\n{not json\n");
+        bytes.extend_from_slice(&[0xff, 0xfe, b'x', b'\n']);
+        bytes.extend_from_slice(entry_line(2).as_bytes());
+        bytes.push(b'\n');
+        fs::write(&log_file, bytes).unwrap();
+
+        let state = AppLogsState::new(dir.path().to_path_buf());
+
+        let ids: Vec<u64> = state
+            .recent_entries(usize::MAX)
+            .iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn appending_compacts_the_file_once_it_doubles_the_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_file = dir.path().join(LOG_FILE_NAME);
+        let state = AppLogsState::new(dir.path().to_path_buf());
+
+        for index in 0..(2 * MAX_LOG_ENTRIES + 10) {
+            state.append(AppLogLevel::Info, "test", format!("line {index}"));
+        }
+
+        let lines = file_line_count(&log_file);
+        assert!(
+            lines <= 2 * MAX_LOG_ENTRIES,
+            "the file must be compacted while appending, has {lines} lines"
+        );
+        assert!(lines >= MAX_LOG_ENTRIES);
+        let reloaded = AppLogsState::new(dir.path().to_path_buf());
+        let last = reloaded.recent_entries(1);
+        assert_eq!(last[0].message, format!("line {}", 2 * MAX_LOG_ENTRIES + 9));
     }
 }
