@@ -30,8 +30,10 @@ export {
   ragChunks,
 } from './schema'
 
-// Migration runner
-export { runMigrations } from './runner'
+// Migrations
+// applyMigrations is the reference TypeScript applier used by tests and
+// tooling; runMigrations is the verify-only gate the renderer calls.
+export { applyMigrations, runMigrations } from './runner'
 
 // Repositories
 export { CollectionRepo } from './repos/collection.repo'

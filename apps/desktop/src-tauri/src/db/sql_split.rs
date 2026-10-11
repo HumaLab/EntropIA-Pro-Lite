@@ -1,12 +1,15 @@
-//! Lexical splitter for renderer SQL batches (S-02b).
+//! Lexical splitter for renderer SQL batches and Rust migration files.
 //!
 //! `split_sql_statements` finds statement boundaries WITHOUT preparing SQL.
-//! Preparing would invoke the renderer authorizer, and a legitimate migration
-//! trigger must stay un-denied until its fingerprint has been checked against
-//! the allowlist (plan §3.1 step 3, order (i)/(ii)). The boundary signal is
-//! SQLite's own lexical `sqlite3_complete()` plus a byte mask that marks every
-//! position inside a string literal, quoted identifier or comment, so only a
-//! real statement-terminating `;` is ever considered a candidate.
+//! Preparing invokes the renderer authorizer (installed on the UI connection
+//! while a renderer command runs), so the splitter must stay purely lexical.
+//! The boundary signal is SQLite's own lexical `sqlite3_complete()` plus a
+//! byte mask that marks every position inside a string literal, quoted
+//! identifier or comment, so only a real statement-terminating `;` is ever
+//! considered a candidate.
+//!
+//! Consumers: the per-statement migration applier in `db/migrations.rs` and
+//! the per-statement batch executor in `db/commands.rs`.
 //!
 //! Text-preservation rule: every returned piece is a contiguous slice of the
 //! input, in order. A candidate `;` only cuts when the slice since the last cut
@@ -17,12 +20,10 @@
 //! a trailing run of whitespace/comments after the last statement, so
 //! concatenating the returned pieces equals the input minus that trailing run.
 
-use sha2::{Digest, Sha256};
-
 /// Splits a multi-statement SQL string into statements.
 ///
 /// Each statement keeps its exact source text, including leading comments and
-/// trailing whitespace. Use [`normalize_for_fingerprint`] before hashing.
+/// trailing whitespace.
 pub fn split_sql_statements(sql: &str) -> Vec<String> {
     let bytes = sql.as_bytes();
     let mask = code_mask(sql);
@@ -153,30 +154,6 @@ fn is_sql_whitespace(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
 }
 
-/// The fingerprint input for `statement`: surrounding whitespace and a single
-/// trailing `;` removed. Comments are deliberately kept — a leading or
-/// interleaved comment changes the fingerprint and the statement is refused.
-pub fn normalize_for_fingerprint(statement: &str) -> &str {
-    let trimmed = statement.trim();
-    match trimmed.strip_suffix(';') {
-        Some(without_semicolon) => without_semicolon.trim_end(),
-        None => trimmed,
-    }
-}
-
-/// Lowercase hex SHA-256 of the normalized statement text.
-pub fn fingerprint(statement: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(normalize_for_fingerprint(statement).as_bytes());
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        use std::fmt::Write;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    hex
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,36 +167,6 @@ BEGIN
   INSERT INTO rag_chunks_fts(chunk_id, text_content)
   VALUES (NEW.id, NEW.text_content);
 END;";
-
-    #[derive(serde::Deserialize)]
-    struct Fixture {
-        calls: Vec<FixtureCall>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct FixtureCall {
-        command: String,
-        sql: String,
-    }
-
-    fn batched_calls() -> Vec<FixtureCall> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/migration_ipc.json");
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-            panic!(
-                "cannot read the migration IPC fixture {}: {error}\n\
-                 Run: pnpm --filter @entropia/store export-migration-ipc",
-                path.display()
-            )
-        });
-        let fixture: Fixture = serde_json::from_str(&text)
-            .unwrap_or_else(|error| panic!("invalid migration IPC fixture: {error}"));
-        fixture
-            .calls
-            .into_iter()
-            .filter(|call| call.command == "db_execute_batch")
-            .collect()
-    }
 
     #[test]
     fn splits_string_literals_containing_semicolons() {
@@ -277,76 +224,21 @@ END;";
     }
 
     #[test]
-    fn normalize_trims_whitespace_and_one_trailing_semicolon() {
-        assert_eq!(normalize_for_fingerprint("  SELECT 1; \n"), "SELECT 1");
-        assert_eq!(normalize_for_fingerprint("SELECT 1;;"), "SELECT 1;");
-        assert_eq!(
-            normalize_for_fingerprint("-- c\nSELECT 1 ;"),
-            "-- c\nSELECT 1"
-        );
-        assert_eq!(normalize_for_fingerprint(""), "");
-        // Comments are NOT removed.
-        assert_eq!(
-            normalize_for_fingerprint("/* c */ SELECT 1;"),
-            "/* c */ SELECT 1"
-        );
-    }
+    fn pieces_keep_every_statement_and_no_text_is_lost() {
+        let sql = "BEGIN;\n\
+                   DELETE FROM notes WHERE content = 'a;b';\n\
+                   INSERT INTO notes (id, content) VALUES ('n-1', 'x -- y');\n\
+                   COMMIT;";
+        let pieces = split_sql_statements(sql);
+        assert_eq!(pieces.len(), 4);
 
-    #[test]
-    fn fingerprint_is_lowercase_hex_sha256_of_the_normalized_text() {
-        let expected = fingerprint("PRAGMA defer_foreign_keys=ON;");
-        assert_eq!(expected.len(), 64);
-        assert!(expected
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
-        assert_eq!(
-            expected,
-            fingerprint("  PRAGMA defer_foreign_keys=ON;  \n"),
-            "normalization must make surrounding whitespace irrelevant"
-        );
-        assert_ne!(
-            expected,
-            fingerprint("/* x */ PRAGMA defer_foreign_keys=ON;"),
-            "a leading comment must change the fingerprint"
-        );
-    }
-
-    #[test]
-    fn fixture_batches_keep_every_statement_and_no_text_is_lost() {
-        let calls = batched_calls();
-        assert!(
-            !calls.is_empty(),
-            "fixture must contain db_execute_batch calls"
-        );
-
-        let mut statements = 0usize;
-        for call in &calls {
-            let pieces = split_sql_statements(&call.sql);
-            assert!(
-                !pieces.is_empty(),
-                "a recorded batch split into zero statements: {:?}",
-                &call.sql[..call.sql.len().min(80)]
-            );
-            statements += pieces.len();
-
-            // Pieces are contiguous slices, so their concatenation is a prefix
-            // of the batch; what is left over may only be gap text.
-            let rejoined = pieces.concat();
-            assert!(
-                call.sql.starts_with(&rejoined),
-                "split pieces are not a contiguous prefix of the batch"
-            );
-            let tail = &call.sql[rejoined.len()..];
-            let tail_mask = code_mask(tail);
-            assert!(
-                !contains_code_token(&tail_mask, tail.as_bytes()),
-                "splitter dropped statement text: {tail:?}"
-            );
-        }
-        assert!(
-            statements > calls.len(),
-            "expected more statements than batches"
-        );
+        // Pieces are contiguous slices, so their concatenation is a prefix of
+        // the batch; what is left over may only be gap text.
+        let rejoined = pieces.concat();
+        assert!(sql.starts_with(&rejoined));
+        let tail = &sql[rejoined.len()..];
+        let tail_mask = code_mask(tail);
+        assert!(!contains_code_token(&tail_mask, tail.as_bytes()));
     }
 
     #[test]
@@ -364,10 +256,13 @@ END;";
             Authorization::Deny
         }));
 
-        for call in batched_calls() {
-            let pieces = split_sql_statements(&call.sql);
-            assert!(!pieces.is_empty());
-        }
+        let sql = format!(
+            "{RAG_CHUNKS_TRIGGER}\n\
+             BEGIN;\n\
+             INSERT INTO t(a) VALUES ('x;y');\n\
+             COMMIT;"
+        );
+        assert_eq!(split_sql_statements(&sql).len(), 4);
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

@@ -409,7 +409,23 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     - Dev profile: fresh install (58, 3 samples), existing archive (up to date), read-only DB →
       error dialog instead of a crash, OK exits. Rust 2822 / 0 / 36; Pro clippy only the 9 known.
       RDD `review-4646c0a48d9ac6c3` approved, no findings.
-  - [ ] 4.4a — TS runner verify-only; DDL closed in the IPC; migration window and fingerprints gone.
+  - [x] 4.4a — renderer verify-only, DDL closed in the IPC (A-01). Branch `feat/p4-4a-close-ddl`.
+    - `8a24eeca`: `runMigrations` verify-only (throws naming missing migrations; unknown extra names
+      ignored so a downgraded app starts); the applier becomes `applyMigrations` for tests/tooling;
+      `initDb` stops calling the migration window. Oracles byte-identical. RDD
+      `review-51766dc9c3053257` approved.
+    - `7bc09cfd`: authorizer = one policy for every renderer command (all CREATE/DROP incl. TEMP and
+      VTABLE, ALTER, REINDEX, ANALYZE denied; only value-less `data_version` pragma allowed);
+      layer-1 rejects a leading CREATE/DROP/ALTER after comment stripping on every command; removed
+      `MigrationWindow`, the window commands, `migration_allowlist.rs` + DDL fingerprint list, the
+      S-02b recorder and `migration_ipc.json`. `DROP TABLE items` RED (returned Ok) → rejected on
+      batch/execute/transaction. Renderer DDL grep: none. Rust 2798 / 0 / 35 (−49 removed, +24),
+      store 446, desktop 3513. RDD `review-dab76603c00a09fa` approved, reviewed without the deleted
+      generated `migration_ipc.json` (standing Phase 4 rule); the full slice and the combined
+      candidate exceeded the budget, so each commit was reviewed alone.
+    - Dev profile: fresh install seeds the samples through renderer DML; Inicio, collection,
+      item, FTS search, Escritura, Investigación, Chat, Colecciones render; no authorizer/DDL
+      errors in the log.
   - [ ] 4.4b — canonical trigger/view audit at startup, tests (a)-(d).
 - [ ] Phase 5 — performance and observability (P-01..P-04)
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
