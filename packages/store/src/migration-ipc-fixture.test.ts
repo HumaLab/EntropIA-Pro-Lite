@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { runMigrations } from './runner'
+import { applyMigrations } from './runner'
 import {
   appliedMigrationNames,
   recordFreshInstallMigrationIpc,
@@ -17,7 +17,7 @@ const norm = (s: string) => s.replace(/\r\n/g, '\n')
 
 describe('migration IPC fixture export', () => {
   it('the checked-in Rust fixture is up to date with the migration runner', async () => {
-    const expected = await recordMigrationIpcFixtureJson(runMigrations)
+    const expected = await recordMigrationIpcFixtureJson(applyMigrations)
     let actual: string
     try {
       actual = readFileSync(fixturePath, 'utf8')
@@ -34,7 +34,7 @@ describe('migration IPC fixture export', () => {
   })
 
   it('records a fresh install that applies every migration through 0058_processing_ner_tasks', async () => {
-    const calls = await recordFreshInstallMigrationIpc(runMigrations)
+    const calls = await recordFreshInstallMigrationIpc(applyMigrations)
     const names = appliedMigrationNames(calls)
 
     expect(names.at(-1)).toBe('0058_processing_ner_tasks')
@@ -42,7 +42,7 @@ describe('migration IPC fixture export', () => {
   })
 
   it('captures the 0032 repair drops separately from the fresh-install calls', async () => {
-    const json = await recordMigrationIpcFixtureJson(runMigrations)
+    const json = await recordMigrationIpcFixtureJson(applyMigrations)
     const fixture = JSON.parse(json) as { repair_drops: string[] }
 
     expect(fixture.repair_drops.length).toBeGreaterThan(0)

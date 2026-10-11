@@ -1,5 +1,5 @@
-// Records the exact `DbClient` calls the real `runMigrations` makes against a
-// fake, from-scratch database, so the Rust side can replay the migration IPC
+// Records the exact `DbClient` calls the reference `applyMigrations` applier
+// makes against a fake, from-scratch database, so the Rust side can replay the
 // sequence (S-02c) without a live SQLite file. Shared by
 // `scripts/export-migration-ipc.mjs` (writes the checked-in fixture) and
 // `src/migration-ipc-fixture.test.ts` (drift guard), so there is exactly one
@@ -35,8 +35,8 @@ export interface MigrationIpcFixture {
   repair_drops: string[]
 }
 
-/** `runMigrations` passed in by the caller to keep this module Node-strippable. */
-export type RunMigrationsFn = (client: DbClient) => Promise<void>
+/** `applyMigrations` passed in by the caller to keep this module Node-strippable. */
+export type ApplyMigrationsFn = (client: DbClient) => Promise<void>
 
 export interface RecordingOptions {
   /** Rows the fake returns for `SELECT name FROM _migrations ORDER BY id`. */
@@ -45,7 +45,7 @@ export interface RecordingOptions {
   sentinelCount?: number
 }
 
-// Fixed clock: `runMigrations` stamps `applied_at` and the layouts backfill
+// Fixed clock: `applyMigrations` stamps `applied_at` and the layouts backfill
 // from `Date.now()`, which would make the checked-in fixture change every run.
 const FIXED_NOW_MS = 1_700_000_000_000
 
@@ -95,7 +95,7 @@ class RecordingDbClient implements DbClient {
     if (sql.includes('FROM _migrations')) {
       return this.applied.map((name) => ({ name })) as T[]
     }
-    // `runMigrations`' 0032 sentinel probe: a fresh install has none of them.
+    // `applyMigrations`' 0032 sentinel probe: a fresh install has none of them.
     if (sql.includes('COUNT(*) AS cnt')) {
       return [{ cnt: this.sentinelCount }] as T[]
     }
@@ -124,21 +124,21 @@ async function withFixedClock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Records the full IPC sequence of a from-scratch `runMigrations`. */
+/** Records the full IPC sequence of a from-scratch `applyMigrations`. */
 export async function recordFreshInstallMigrationIpc(
-  runMigrations: RunMigrationsFn
+  applyMigrations: ApplyMigrationsFn
 ): Promise<MigrationIpcCall[]> {
   const client = new RecordingDbClient({ sentinelCount: 0 })
-  await withFixedClock(() => runMigrations(client))
+  await withFixedClock(() => applyMigrations(client))
   return client.calls
 }
 
 /** Records a run whose 0032 sentinel probe reports a partial, empty state. */
 export async function recordRepairMigrationIpc(
-  runMigrations: RunMigrationsFn
+  applyMigrations: ApplyMigrationsFn
 ): Promise<MigrationIpcCall[]> {
   const client = new RecordingDbClient({ sentinelCount: 1 })
-  await withFixedClock(() => runMigrations(client))
+  await withFixedClock(() => applyMigrations(client))
   return client.calls
 }
 
@@ -173,10 +173,10 @@ export function extractRepairDrops(calls: MigrationIpcCall[]): string[] {
 }
 
 export async function recordMigrationIpcFixture(
-  runMigrations: RunMigrationsFn
+  applyMigrations: ApplyMigrationsFn
 ): Promise<MigrationIpcFixture> {
-  const calls = await recordFreshInstallMigrationIpc(runMigrations)
-  const repairCalls = await recordRepairMigrationIpc(runMigrations)
+  const calls = await recordFreshInstallMigrationIpc(applyMigrations)
+  const repairCalls = await recordRepairMigrationIpc(applyMigrations)
   return { calls, repair_drops: extractRepairDrops(repairCalls) }
 }
 
@@ -185,8 +185,10 @@ export function renderMigrationIpcFixture(fixture: MigrationIpcFixture): string 
   return `${JSON.stringify(fixture, null, 2)}\n`
 }
 
-export async function recordMigrationIpcFixtureJson(runMigrations: RunMigrationsFn): Promise<string> {
-  return renderMigrationIpcFixture(await recordMigrationIpcFixture(runMigrations))
+export async function recordMigrationIpcFixtureJson(
+  applyMigrations: ApplyMigrationsFn
+): Promise<string> {
+  return renderMigrationIpcFixture(await recordMigrationIpcFixture(applyMigrations))
 }
 
 /**

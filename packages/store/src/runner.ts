@@ -222,7 +222,7 @@ async function applyLayoutsMigration(client: DbClient): Promise<void> {
 /**
  * Builds the full application schema as a single SQL string, in migration order,
  * for use as a fixture by the Rust sync tests. Reproduces what a FRESH install
- * ends up with after `runMigrations`:
+ * ends up with after `applyMigrations`:
  *
  * - every registry migration's SQL, applied in sorted (lexicographic) order;
  * - the `0020_layouts` registry entry (a no-op marker) is replaced by the
@@ -267,7 +267,15 @@ function splitStatements(sql: string): string[] {
 }
 
 /**
- * Runs all pending migrations in filename order.
+ * Reference TypeScript migration applier: runs all pending migrations in
+ * filename order and records each one in `_migrations`.
+ *
+ * This is NOT the desktop runtime path anymore. Since Phase 4.2c/4.3 the Rust
+ * backend applies every migration during setup, before the webview loads, so
+ * the renderer only verifies with {@link runMigrations}. Tests and tooling that
+ * need a schema built on `node:sqlite` use this applier: the canonical schema
+ * fixture (`schema-canonical.ts`), the migration IPC recorder
+ * (`migration-ipc-recorder.ts`) and the migration tests in `runner.test.ts`.
  *
  * - Ensures the `_migrations` tracking table exists
  * - Fetches already-applied migration names
@@ -275,7 +283,7 @@ function splitStatements(sql: string): string[] {
  * - Inserts a record into `_migrations` on success
  * - On error: rolls back the transaction and rethrows with the migration name
  */
-export async function runMigrations(client: DbClient): Promise<void> {
+export async function applyMigrations(client: DbClient): Promise<void> {
   // Ensure tracking table exists (idempotent).
   // DDL must go through the batch path: the Tauri db_execute IPC is hardened
   // to DML-only (INSERT/UPDATE/DELETE), so schema statements are rejected there.
@@ -414,5 +422,41 @@ export async function runMigrations(client: DbClient): Promise<void> {
         `Migration "${name}" failed: ${error instanceof Error ? error.message : String(error)}`
       )
     }
+  }
+}
+
+/**
+ * Verify-only migration gate for the renderer (Phase 4.4a).
+ *
+ * The Rust backend has already applied every migration when the webview loads
+ * (Phase 4.2c/4.3), so this only reads `_migrations` and throws when any
+ * registry migration is missing: that is the signal the backend did not
+ * migrate. It performs no write of any kind.
+ *
+ * A missing `_migrations` table is treated as an empty registry — the backend
+ * never migrated. Names present in `_migrations` but absent from
+ * {@link MIGRATIONS} are ignored on purpose: a newer app version may have
+ * written migrations this build does not know about, and a downgrade must
+ * still start (the old applying runner ignored them too).
+ */
+export async function runMigrations(client: DbClient): Promise<void> {
+  let appliedNames: string[]
+  try {
+    const rows = await client.select<{ name: string }>('SELECT name FROM _migrations ORDER BY id')
+    appliedNames = rows.map((row) => row.name)
+  } catch (error) {
+    if (!/no such table.*_migrations/i.test(String(error))) {
+      throw error
+    }
+    appliedNames = []
+  }
+
+  const applied = new Set(appliedNames)
+  const missing = Object.keys(MIGRATIONS)
+    .sort()
+    .filter((name) => !applied.has(name))
+
+  if (missing.length > 0) {
+    throw new Error(`Archive is missing migrations applied by the backend: ${missing.join(', ')}`)
   }
 }

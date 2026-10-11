@@ -9,7 +9,7 @@
 
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from 'node:sqlite'
 // @ts-expect-error Node's type stripping needs the explicit .ts extension; TS bundler resolution flags it.
-import { runMigrations } from './runner.ts'
+import { applyMigrations } from './runner.ts'
 import type { DbClient } from './types'
 
 export interface CanonicalSchemaObject {
@@ -75,7 +75,7 @@ export interface CanonicalSchemaDump {
 /**
  * `DbClient` over a synchronous `node:sqlite` connection. Mirrors the inline
  * adapter used by the runner tests so the export script and the freshness test
- * exercise the real migration runner without a Tauri IPC hop.
+ * exercise the reference migration applier without a Tauri IPC hop.
  */
 export function createNodeSqliteClient(db: DatabaseSync): DbClient {
   return {
@@ -199,13 +199,13 @@ export function canonicalSchemaDump(db: DatabaseSync): CanonicalSchemaDump {
 
 /**
  * Canonical fixture for the Rust side: migrate an empty in-memory database
- * with the real TypeScript runner, then dump it. Pretty-printed with a
+ * with the reference TypeScript applier, then dump it. Pretty-printed with a
  * trailing newline so the checked-in file diffs cleanly.
  */
 export async function buildCanonicalSchemaFixture(): Promise<string> {
   const db = new DatabaseSync(':memory:')
   try {
-    await runMigrations(createNodeSqliteClient(db))
+    await applyMigrations(createNodeSqliteClient(db))
     return `${JSON.stringify(canonicalSchemaDump(db), null, 2)}\n`
   } finally {
     db.close()
