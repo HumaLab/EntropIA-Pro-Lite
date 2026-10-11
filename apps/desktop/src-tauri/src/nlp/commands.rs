@@ -5,6 +5,7 @@
 /// `nlp:error` events asynchronously.
 use super::vector::{cosine_distance, decode_embedding_blob};
 use super::{NlpJob, NlpQueue};
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -54,16 +55,25 @@ fn triples_retired_error(target: &str) -> String {
     )
 }
 
-fn local_embedding_model_dir(db: &AppDbState) -> std::path::PathBuf {
+/// The configured local embedding model directory, read on the blocking pool:
+/// an async command must not lock `ui_conn` on its own thread (A-05b).
+async fn local_embedding_model_dir(db: &AppDbState) -> std::path::PathBuf {
     // The model is cache, not data: it no longer lives beside the database.
     let cache_dir = crate::path_utils::remembered_cache_dir();
     let app_data_dir = cache_dir.as_deref().or_else(|| db.db_path.parent());
-    let configured = db.ui_conn.lock().ok().and_then(|conn| {
-        crate::settings::get_setting(
+    let db = db.clone();
+    let configured = run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        Ok(crate::settings::get_raw_setting(
             &conn,
             super::embeddings::LOCAL_EMBEDDING_MODEL_DIR_SETTING_KEY,
-        )
-    });
+        ))
+    })
+    .await
+    .unwrap_or_default();
     super::embeddings::resolve_local_embedding_model_dir(configured.as_deref(), app_data_dir)
 }
 
@@ -72,13 +82,13 @@ pub async fn embedding_local_model_info(
     db: State<'_, AppDbState>,
 ) -> Result<super::embeddings::LocalEmbeddingModelInfo, String> {
     Ok(super::embeddings::get_local_embedding_model_info(Some(
-        local_embedding_model_dir(&db),
+        local_embedding_model_dir(&db).await,
     )))
 }
 
 #[tauri::command]
 pub async fn embedding_open_models_dir(db: State<'_, AppDbState>) -> Result<(), String> {
-    let models_dir = local_embedding_model_dir(&db);
+    let models_dir = local_embedding_model_dir(&db).await;
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("Failed to create local BGE-M3 model dir: {e}"))?;
 
@@ -111,7 +121,7 @@ pub async fn embedding_download_model(
     db: State<'_, AppDbState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    let model_dir = local_embedding_model_dir(&db);
+    let model_dir = local_embedding_model_dir(&db).await;
     crate::app_logs::info(
         &app_handle,
         "embedding/download",
@@ -801,9 +811,12 @@ pub async fn similar_assets(
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<serde_json::Value, String> {
     let limit = limit.unwrap_or(5) as usize;
-    let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
-
-    similar_assets_from_conn(&conn, &asset_id, limit)
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db.ui_conn.lock().map_err(|e| e.to_string())?;
+        similar_assets_from_conn(&conn, &asset_id, limit)
+    })
+    .await
 }
 
 fn similar_assets_from_conn(

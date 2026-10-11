@@ -25,6 +25,7 @@ use super::zotero_copy::run::{
 use super::zotero_copy::store::{self as zotero_store, LibraryRef, ZoteroCopy};
 use super::zotero_copy::web::WebApiPort;
 use super::{bounds, viewer, UNAVAILABLE};
+use crate::db::commands::run_blocking_db_task;
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
 
@@ -58,12 +59,23 @@ fn describe_folder(
 }
 
 /// The folder saved in the settings, if any (an empty value means none).
-fn chosen_folder(db: &AppDbState) -> Option<PathBuf> {
-    let conn = db.ui_conn.lock().ok()?;
-    crate::settings::get_raw_setting(&conn, DOWNLOAD_DIR_KEY)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+/// Read on the blocking pool: these commands are `async`, so they must not
+/// lock `ui_conn` on their own thread (A-05b).
+async fn chosen_folder(db: &AppDbState) -> Option<PathBuf> {
+    let db = db.clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        Ok(crate::settings::get_raw_setting(&conn, DOWNLOAD_DIR_KEY))
+    })
+    .await
+    .ok()
+    .flatten()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from)
 }
 
 fn ensure_available() -> Result<(), String> {
@@ -96,7 +108,7 @@ pub async fn navegador_open(
     let url = typed(&url)?;
     let bounds = bounds::sanitize(x, y, width, height)?;
     // The first download can come before the view asks for the folder.
-    viewer::set_download_dir(&app, chosen_folder(&db));
+    viewer::set_download_dir(&app, chosen_folder(&db).await);
     viewer::open(&app, url, bounds)
 }
 
@@ -108,7 +120,7 @@ pub async fn navegador_download_dir(
     db: State<'_, AppDbState>,
 ) -> Result<DownloadDir, String> {
     ensure_available()?;
-    let chosen = chosen_folder(&db);
+    let chosen = chosen_folder(&db).await;
     viewer::set_download_dir(&app, chosen.clone());
     Ok(describe_folder(
         chosen.as_deref(),
@@ -128,11 +140,16 @@ pub async fn navegador_set_download_dir(
     ensure_available()?;
     let dir = download::validate_folder(&path).map_err(str::to_string)?;
     {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock error: {e}"))?;
-        crate::settings::persist_setting(&conn, DOWNLOAD_DIR_KEY, &dir.to_string_lossy())?;
+        let db = db.inner().clone();
+        let dir_value = dir.to_string_lossy().into_owned();
+        run_blocking_db_task(move || {
+            let conn = db
+                .ui_conn
+                .lock()
+                .map_err(|e| format!("DB lock error: {e}"))?;
+            crate::settings::persist_setting(&conn, DOWNLOAD_DIR_KEY, &dir_value)
+        })
+        .await?;
     }
     viewer::set_download_dir(&app, Some(dir.clone()));
     Ok(describe_folder(

@@ -71,7 +71,7 @@ pub struct DbBrowserQueryRequest {
 
 /// Run rusqlite work on the blocking thread pool so IPC commands never
 /// execute SQL on the main thread (where the window event loop runs).
-async fn run_blocking_db_task<T, F>(task: F) -> Result<T, String>
+pub(crate) async fn run_blocking_db_task<T, F>(task: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,

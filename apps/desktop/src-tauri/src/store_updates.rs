@@ -17,7 +17,7 @@
 )]
 
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -158,8 +158,12 @@ fn persist_result(db: &Mutex<Connection>, full_name: &str, now: u64, update_avai
 ///
 /// `query` yields the package family of every update Store reports. Timing out
 /// drops the query future, which is what cancels the native operation.
+///
+/// Both cache operations run on the blocking pool (A-05b): this is awaited
+/// from an async task, so locking the database mutex directly here would block
+/// a runtime worker.
 pub(crate) async fn check_installation<Q, Fut>(
-    db: &Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
     installation: &Installation,
     clock: impl Fn() -> u64,
     query: Q,
@@ -169,7 +173,18 @@ where
     Q: FnOnce() -> Fut,
     Fut: Future<Output = Result<Vec<String>, String>>,
 {
-    if let Some(update_available) = read_valid_cache(db, &installation.full_name, clock()) {
+    let now = clock();
+    let cached = {
+        let db = Arc::clone(&db);
+        let full_name = installation.full_name.clone();
+        tokio::task::spawn_blocking(move || read_valid_cache(&db, &full_name, now))
+            .await
+            .unwrap_or_else(|error| {
+                eprintln!("[store-updates] cache read task failed: {error}");
+                None
+            })
+    };
+    if let Some(update_available) = cached {
         return StoreUpdateStatus::from_update_available(update_available);
     }
 
@@ -189,7 +204,15 @@ where
     };
 
     let update_available = main_package_has_update(&update_families, &installation.family_name);
-    persist_result(db, &installation.full_name, clock(), update_available);
+    let now = clock();
+    let full_name = installation.full_name.clone();
+    let db = Arc::clone(&db);
+    if let Err(error) =
+        tokio::task::spawn_blocking(move || persist_result(&db, &full_name, now, update_available))
+            .await
+    {
+        eprintln!("[store-updates] cache write task failed: {error}");
+    }
     StoreUpdateStatus::from_update_available(update_available)
 }
 
@@ -309,7 +332,7 @@ mod native {
             Err(status) => return status,
         };
         check_installation(
-            &db,
+            db,
             &installation,
             unix_now,
             || query_update_families(app),
@@ -419,13 +442,13 @@ mod tests {
         }
     }
 
-    fn db() -> Mutex<Connection> {
+    fn db() -> Arc<Mutex<Connection>> {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
         .unwrap();
-        Mutex::new(conn)
+        Arc::new(Mutex::new(conn))
     }
 
     fn write_cache(db: &Mutex<Connection>, full_name: &str, checked_at: u64, available: bool) {
@@ -444,7 +467,7 @@ mod tests {
 
     /// Runs one check whose query answers `answer` and counts query calls.
     async fn check_with(
-        db: &Mutex<Connection>,
+        db: Arc<Mutex<Connection>>,
         now: u64,
         answer: Result<Vec<String>, String>,
     ) -> (StoreUpdateStatus, usize) {
@@ -479,7 +502,7 @@ mod tests {
     async fn store_updates_main_package_among_optionals_is_an_update() {
         let db = db();
         let answer = families(&["CONICET.SomeOptional_abc", LITE_STORE_FAMILY_NAME]);
-        let (status, _) = check_with(&db, NOW, answer).await;
+        let (status, _) = check_with(db.clone(), NOW, answer).await;
         assert_eq!(status, StoreUpdateStatus::Available);
     }
 
@@ -487,14 +510,14 @@ mod tests {
     async fn store_updates_only_optional_packages_is_not_an_update() {
         let db = db();
         let answer = families(&["CONICET.SomeOptional_abc", "Other.Package_xyz"]);
-        let (status, _) = check_with(&db, NOW, answer).await;
+        let (status, _) = check_with(db.clone(), NOW, answer).await;
         assert_eq!(status, StoreUpdateStatus::UpToDate);
     }
 
     #[tokio::test]
     async fn store_updates_empty_collection_is_up_to_date() {
         let db = db();
-        let (status, _) = check_with(&db, NOW, families(&[])).await;
+        let (status, _) = check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(status, StoreUpdateStatus::UpToDate);
     }
 
@@ -502,7 +525,7 @@ mod tests {
     async fn store_updates_positive_cache_is_reused_before_six_hours() {
         let db = db();
         write_cache(&db, FULL_NAME, NOW - 6 * HOUR + 1, true);
-        let (status, calls) = check_with(&db, NOW, families(&[])).await;
+        let (status, calls) = check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(status, StoreUpdateStatus::Available);
         assert_eq!(calls, 0);
     }
@@ -511,7 +534,7 @@ mod tests {
     async fn store_updates_cache_at_exactly_six_hours_queries_again() {
         let db = db();
         write_cache(&db, FULL_NAME, NOW - 6 * HOUR, true);
-        let (status, calls) = check_with(&db, NOW, families(&[])).await;
+        let (status, calls) = check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(status, StoreUpdateStatus::UpToDate);
         assert_eq!(calls, 1);
     }
@@ -525,7 +548,7 @@ mod tests {
             NOW - HOUR,
             true,
         );
-        let (status, calls) = check_with(&db, NOW, families(&[])).await;
+        let (status, calls) = check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(status, StoreUpdateStatus::UpToDate);
         assert_eq!(calls, 1);
     }
@@ -534,7 +557,7 @@ mod tests {
     async fn store_updates_cache_from_the_future_is_ignored() {
         let db = db();
         write_cache(&db, FULL_NAME, NOW + HOUR, true);
-        let (status, calls) = check_with(&db, NOW, families(&[])).await;
+        let (status, calls) = check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(status, StoreUpdateStatus::UpToDate);
         assert_eq!(calls, 1);
         assert_eq!(stored_cache(&db).unwrap().checked_at_unix_seconds, NOW);
@@ -544,7 +567,8 @@ mod tests {
     async fn store_updates_corrupt_cache_is_ignored_and_replaced() {
         let db = db();
         set_setting(&db.lock().unwrap(), CACHE_KEY, "{not json").unwrap();
-        let (status, calls) = check_with(&db, NOW, families(&[LITE_STORE_FAMILY_NAME])).await;
+        let (status, calls) =
+            check_with(db.clone(), NOW, families(&[LITE_STORE_FAMILY_NAME])).await;
         assert_eq!(status, StoreUpdateStatus::Available);
         assert_eq!(calls, 1);
         assert!(stored_cache(&db).unwrap().update_available);
@@ -553,7 +577,7 @@ mod tests {
     #[tokio::test]
     async fn store_updates_success_is_persisted_with_the_installation() {
         let db = db();
-        check_with(&db, NOW, families(&[])).await;
+        check_with(db.clone(), NOW, families(&[])).await;
         assert_eq!(
             stored_cache(&db),
             Some(StoreUpdateCache {
@@ -568,7 +592,7 @@ mod tests {
     async fn store_updates_failure_does_not_renew_the_cache() {
         let db = db();
         write_cache(&db, FULL_NAME, NOW - 7 * HOUR, true);
-        let (status, calls) = check_with(&db, NOW, Err("store down".to_string())).await;
+        let (status, calls) = check_with(db.clone(), NOW, Err("store down".to_string())).await;
         assert_eq!(status, StoreUpdateStatus::Unavailable);
         assert_eq!(calls, 1);
         assert_eq!(
@@ -581,7 +605,7 @@ mod tests {
     async fn store_updates_timeout_is_unavailable_and_writes_nothing() {
         let db = db();
         let status = check_installation(
-            &db,
+            db.clone(),
             &lite(),
             || NOW,
             || async {
@@ -598,8 +622,8 @@ mod tests {
     #[tokio::test]
     async fn store_updates_failed_cache_write_keeps_the_valid_result() {
         // No app_settings table: reading misses and writing fails.
-        let db = Mutex::new(Connection::open_in_memory().unwrap());
-        let (status, _) = check_with(&db, NOW, families(&[LITE_STORE_FAMILY_NAME])).await;
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        let (status, _) = check_with(db.clone(), NOW, families(&[LITE_STORE_FAMILY_NAME])).await;
         assert_eq!(status, StoreUpdateStatus::Available);
     }
 
