@@ -180,6 +180,12 @@ fn hybrid_retrieve(
     ))
 }
 
+/// How many times `limit` the partial selection ranks before applying the
+/// text filter. Four keeps the sorted window small (96 rows for the default
+/// `rag_candidates_per_leg` of 24) while the historical full sort remains as
+/// the fallback, so this is pure work saved on the common path.
+const VECTOR_LEG_SELECTION_FACTOR: usize = 4;
+
 /// Pierna vectorial: kNN por similitud coseno sobre `vec_assets`, restringida
 /// a assets con texto (extracción O transcripción no vacía, mismo idioma que
 /// `summarize_asset_embedding_coverage`). Devuelve asset_ids ordenados (mejor
@@ -197,14 +203,13 @@ pub(crate) fn vector_leg(
     let mut stmt = conn
         .prepare("SELECT v.asset_id, v.embedding FROM vec_assets v")
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
-    let mut scored = score_embeddings(
+    let scored = score_embeddings(
         &mut stmt,
         [],
         query_embedding,
         min_similarity,
         "RAG vector query",
     )?;
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // The text requirement is checked on the ranked candidates, best first,
     // until `limit` pass. Filtering in the scan read every page's text on
@@ -219,19 +224,89 @@ pub(crate) fn vector_leg(
                               AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)",
         )
         .map_err(|e| format!("Failed to prepare RAG vector text check: {e}"))?;
+    rank_assets_with_text(scored, limit, |asset_id| {
+        has_text
+            .query_row([asset_id], |row| row.get(0))
+            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))
+    })
+}
+
+/// Walks `candidates` in ranking order and collects the ids that have text
+/// until `limit` are found.
+fn collect_with_text<'a>(
+    candidates: impl Iterator<Item = &'a (String, f64)>,
+    limit: usize,
+    with_text: &mut impl FnMut(&str) -> Result<bool, String>,
+) -> Result<Vec<String>, String> {
     let mut ranked = Vec::with_capacity(limit);
-    for (asset_id, _) in scored {
+    for (asset_id, _) in candidates {
         if ranked.len() == limit {
             break;
         }
-        let with_text: bool = has_text
-            .query_row([&asset_id], |row| row.get(0))
-            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))?;
-        if with_text {
-            ranked.push(asset_id);
+        if with_text(asset_id)? {
+            ranked.push(asset_id.clone());
         }
     }
     Ok(ranked)
+}
+
+/// Ranks `scored` (scan order is the tie-break) and returns the first `limit`
+/// ids that have text.
+///
+/// The historical implementation stable-sorted every score on every question.
+/// A fixed bounded heap before the text filter is NOT equivalent: the walk has
+/// to keep going until `limit` candidates survive, and with more than the
+/// window size of high-scoring textless vectors a window alone would silently
+/// drop valid candidates. So only the best
+/// `limit * VECTOR_LEG_SELECTION_FACTOR` candidates are selected and sorted,
+/// and the historical full sort is the fallback when the window yields fewer
+/// than `limit` ids with text. The original scan index is the explicit
+/// secondary key, so the unstable partition cannot reorder score ties away
+/// from the stable sort's order.
+fn rank_assets_with_text<F>(
+    mut scored: Vec<(String, f64)>,
+    limit: usize,
+    mut with_text: F,
+) -> Result<Vec<String>, String>
+where
+    F: FnMut(&str) -> Result<bool, String>,
+{
+    if limit == 0 || scored.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let budget = limit.saturating_mul(VECTOR_LEG_SELECTION_FACTOR);
+    if scored.len() > budget {
+        let mut order: Vec<usize> = (0..scored.len()).collect();
+        let by_score = |left: &usize, right: &usize| {
+            scored[*right]
+                .1
+                .partial_cmp(&scored[*left].1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.cmp(right))
+        };
+        order.select_nth_unstable_by(budget - 1, by_score);
+        order[..budget].sort_by(by_score);
+        let ranked = collect_with_text(
+            order[..budget].iter().map(|&index| &scored[index]),
+            limit,
+            &mut with_text,
+        )?;
+        if ranked.len() == limit {
+            return Ok(ranked);
+        }
+        // Fewer than `limit` assets inside the window have text: fall through
+        // to the historical full sort and walk, which still finds the
+        // remaining candidates past the window (in the same order).
+    }
+
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    collect_with_text(scored.iter(), limit, &mut with_text)
 }
 
 /// Streams `(id, embedding)` rows and returns each id with its cosine
@@ -2649,5 +2724,263 @@ mod tests {
             asset_ids.contains(&"asset-referent"),
             "the referent resolved only by the rewritten query must also be retrieved"
         );
+    }
+
+    // ── Partial selection equivalence (Phase 5.2a) ───────────────────────────
+
+    /// The historical ranking, kept as the test reference: stable full sort by
+    /// score descending and a walk that collects ids with text until `limit`.
+    /// Ties keep scan order; `partial_cmp` falling back to `Equal` mirrors the
+    /// production comparator (and its unspecified handling of NaN scores).
+    fn reference_vector_rank(
+        mut scored: Vec<(String, f64)>,
+        limit: usize,
+        with_text: &HashSet<String>,
+    ) -> Vec<String> {
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut ranked = Vec::new();
+        for (asset_id, _) in &scored {
+            if ranked.len() == limit {
+                break;
+            }
+            if with_text.contains(asset_id) {
+                ranked.push(asset_id.clone());
+            }
+        }
+        ranked
+    }
+
+    fn run_partial_selection(
+        scored: &[(String, f64)],
+        limit: usize,
+        with_text: &HashSet<String>,
+    ) -> Vec<String> {
+        rank_assets_with_text(scored.to_vec(), limit, |asset_id| {
+            Ok(with_text.contains(asset_id))
+        })
+        .expect("ranking should succeed")
+    }
+
+    /// Scores descending by index, `count` rows; only the ids in `text` have
+    /// text. Scan order equals the vector order, like the production scan.
+    fn scored_rows(count: usize, text: &[usize]) -> (Vec<(String, f64)>, HashSet<String>) {
+        let scored: Vec<(String, f64)> = (0..count)
+            .map(|index| (format!("asset-{index:04}"), 1.0 - index as f64 / 100_000.0))
+            .collect();
+        let with_text: HashSet<String> = text
+            .iter()
+            .map(|index| format!("asset-{index:04}"))
+            .collect();
+        (scored, with_text)
+    }
+
+    #[test]
+    fn partial_selection_matches_the_full_sort_when_every_asset_has_text() {
+        let all: Vec<usize> = (0..500).collect();
+        let (scored, with_text) = scored_rows(500, &all);
+
+        let got = run_partial_selection(&scored, 24, &with_text);
+
+        assert_eq!(got.len(), 24);
+        assert_eq!(got, reference_vector_rank(scored.clone(), 24, &with_text));
+    }
+
+    /// The case a fixed bounded heap breaks: the best `limit * factor`
+    /// candidates all lack text, so the walk must continue past the window.
+    #[test]
+    fn partial_selection_falls_back_when_the_window_has_no_assets_with_text() {
+        let text: Vec<usize> = (240..300).collect();
+        let (scored, with_text) = scored_rows(300, &text);
+
+        let got = run_partial_selection(&scored, 24, &with_text);
+
+        assert_eq!(got.len(), 24, "the fallback must fill the limit: {got:?}");
+        assert_eq!(got[0], "asset-0240");
+        assert_eq!(got, reference_vector_rank(scored.clone(), 24, &with_text));
+    }
+
+    /// Ties straddle the window boundary on purpose: every score is equal, so
+    /// the result is pure scan order and the unstable partition must not
+    /// reorder it.
+    #[test]
+    fn partial_selection_keeps_scan_order_for_score_ties() {
+        let scored: Vec<(String, f64)> = (0..1_000)
+            .map(|index| (format!("asset-{index:04}"), 0.5))
+            .collect();
+        let with_text: HashSet<String> = (0..1_000)
+            .filter(|index| index % 2 == 1)
+            .map(|index| format!("asset-{index:04}"))
+            .collect();
+        let expected: Vec<String> = (0..48)
+            .filter(|index| index % 2 == 1)
+            .map(|index| format!("asset-{index:04}"))
+            .collect();
+
+        let got = run_partial_selection(&scored, 24, &with_text);
+
+        assert_eq!(got, expected);
+        assert_eq!(got, reference_vector_rank(scored.clone(), 24, &with_text));
+    }
+
+    #[test]
+    fn partial_selection_handles_limits_larger_than_the_candidate_set() {
+        let scored = vec![
+            ("asset-a".to_string(), 0.9),
+            ("asset-b".to_string(), 0.5),
+            ("asset-c".to_string(), 0.1),
+        ];
+        let with_text: HashSet<String> = ["asset-a", "asset-b", "asset-c"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let got = run_partial_selection(&scored, 50, &with_text);
+
+        assert_eq!(got, vec!["asset-a", "asset-b", "asset-c"]);
+        assert_eq!(got, reference_vector_rank(scored.clone(), 50, &with_text));
+
+        // Same set with only the two weakest assets carrying text.
+        let with_text: HashSet<String> = ["asset-b", "asset-c"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let got = run_partial_selection(&scored, 50, &with_text);
+        assert_eq!(got, vec!["asset-b", "asset-c"]);
+        assert_eq!(got, reference_vector_rank(scored, 50, &with_text));
+    }
+
+    #[test]
+    fn partial_selection_returns_nothing_for_an_empty_candidate_set() {
+        let got = run_partial_selection(&[], 10, &HashSet::new());
+        assert!(got.is_empty());
+    }
+
+    /// Triangulation: random sizes, duplicate scores (many ties, including
+    /// across the window boundary) and random text subsets must all match the
+    /// reference walk exactly.
+    #[test]
+    fn partial_selection_matches_the_reference_on_randomized_sets() {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for case in 0..60 {
+            let len = (next() % 2_500) as usize;
+            let distinct_scores = 1 + (next() % 25) as usize;
+            let scored: Vec<(String, f64)> = (0..len)
+                .map(|index| {
+                    (
+                        format!("asset-{index:05}"),
+                        (next() % distinct_scores as u64) as f64,
+                    )
+                })
+                .collect();
+
+            let text_count = (next() as usize) % (len + 1);
+            let mut with_text = HashSet::new();
+            for _ in 0..text_count {
+                let index = (next() as usize) % len;
+                with_text.insert(scored[index].0.clone());
+            }
+
+            let limit = (next() % 40) as usize;
+            let expected = reference_vector_rank(scored.clone(), limit, &with_text);
+            let got = run_partial_selection(&scored, limit, &with_text);
+            assert_eq!(
+                got, expected,
+                "case {case}: len {len}, limit {limit}, {text_count} assets with text"
+            );
+        }
+    }
+
+    /// Measurement of the ranking step alone (no SQLite): the historical full
+    /// stable sort and walk versus the partial selection, on
+    /// `CANONICAL_EMBEDDING_DIMENSIONS`-wide vectors. Ignored by default — it
+    /// is a measurement, not an assertion about the machine it runs on.
+    ///
+    /// ```text
+    /// cargo test --profile measure --lib vector_leg_ranking_cost -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measurement, not a correctness assertion"]
+    fn vector_leg_ranking_cost() {
+        use std::time::{Duration, Instant};
+
+        const LIMIT: usize = 24; // `rag_candidates_per_leg` default
+        const RUNS: usize = 5;
+
+        fn median(mut times: Vec<Duration>) -> Duration {
+            times.sort_unstable();
+            times[times.len() / 2]
+        }
+
+        /// Deterministic cosine similarities against a one-hot query, one per
+        /// synthetic vector. Each vector is generated and dropped row by row:
+        /// 200k of them stored at once would be ~780 MB, which is why the
+        /// production scan streams blobs instead of collecting them.
+        fn synthetic_scored_rows(count: usize) -> Vec<(String, f64)> {
+            let mut state = 0x5EED_u64;
+            let mut next = move || {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state % 2001) as f32 / 1000.0 - 1.0
+            };
+            (0..count)
+                .map(|index| {
+                    let first = next();
+                    let mut squared_norm = (first * first) as f64;
+                    for _ in 1..CANONICAL_EMBEDDING_DIMENSIONS {
+                        let value = next();
+                        squared_norm += (value * value) as f64;
+                    }
+                    let similarity = if squared_norm > 0.0 {
+                        first as f64 / squared_norm.sqrt()
+                    } else {
+                        0.0
+                    };
+                    (format!("asset-{index:06}"), similarity)
+                })
+                .collect()
+        }
+
+        for count in [10_000usize, 50_000, 200_000] {
+            let scored = synthetic_scored_rows(count);
+            let with_text: HashSet<String> = scored.iter().map(|(id, _)| id.clone()).collect();
+            let mut old_times = Vec::with_capacity(RUNS);
+            let mut new_times = Vec::with_capacity(RUNS);
+
+            for _ in 0..RUNS {
+                let old_input = scored.clone();
+                let started = Instant::now();
+                let old = reference_vector_rank(old_input, LIMIT, &with_text);
+                old_times.push(started.elapsed());
+
+                let new_input = scored.clone();
+                let started = Instant::now();
+                let new = rank_assets_with_text(new_input, LIMIT, |asset_id| {
+                    Ok(with_text.contains(asset_id))
+                })
+                .expect("ranking should succeed");
+                new_times.push(started.elapsed());
+
+                assert_eq!(new, old, "the partial selection must match the old ranking");
+            }
+
+            println!(
+                "vector_leg_ranking_cost: {count:>6} rows  dims {CANONICAL_EMBEDDING_DIMENSIONS}  limit {LIMIT}  old median {:?}  new median {:?}",
+                median(old_times),
+                median(new_times)
+            );
+        }
     }
 }
