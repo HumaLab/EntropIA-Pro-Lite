@@ -1,4 +1,7 @@
 {
+  "build": {
+    "beforeBundleCommand": "powershell -NoProfile -NonInteractive -File src-tauri/scripts/prepare-webview2-repair.ps1"
+  },
   "bundle": {
     "windows": {
       "webviewInstallMode": {
