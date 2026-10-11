@@ -31,9 +31,9 @@ The failing MSI returned `0x80040828` / `-2147219416` from `ForceInvokeWebView2B
 ## Tasks
 
 - [ ] MSI-1 (umbrella) — OPEN until MSI-1a/1b/1c all verified; no task done without commits observed.
-- [ ] MSI-1a — Secure staging module with own tests (`windows/webview2_stage.rs`). Worker implementation + focused verification in working tree; native review and commit pending (parent-owned, COMMIT not yet).
-- [ ] MSI-1b — Checked runner / only-already-installed exit policy with own tests (`windows/webview2-repair.rs`). Ordering fix + direct-run regression in working tree (Linux 14/14, Windows EXPECTED 16, CI pending); native review and commit pending (parent-owned, COMMIT not yet).
-- [ ] MSI-1c — Windows pre-bundle/MSI wiring + TS regression (hook path fix + structural test, fragment, conf, TS tests). Worker implementation + focused verification in working tree; native review and commit pending (parent-owned, COMMIT not yet).
+- [ ] MSI-1a — Secure staging module with own tests (`windows/webview2_stage.rs`). Source COMMITTED `cf5a17d3349d9496d60344d1515b28f3ccd8702f` on base `ad684a7a2ae6189c43cd2164fb8942a1924b6618` (copied existing full base id from doc) + APPROVED native MEDIUM consolidated reliability `review-7cd79104cbc70ada` (ACK authority burned target `95ce3db22cfe8c403ea2caa1f4f8f9964fc76ba9eccb6e339e752fe584f8facf`). Actual unit 530 lines (stage 463 + doc 67), one honest cohesive oversize, cached selected feature-branch-chain, no repeated split. Checkbox remains OPEN; Windows verification delegated to MSI-2.
+- [ ] MSI-1b — Checked runner / only-already-installed exit policy with own tests (`windows/webview2-repair.rs`). Ordering fix + direct-run regression in working tree (Linux 14/14, Windows EXPECTED 16, CI pending); preparing commit 2; native review and commit pending (parent-owned, COMMIT not yet).
+- [ ] MSI-1c — Windows pre-bundle/MSI wiring + TS regression (hook path fix + structural test, fragment, conf, TS tests). Package native pending; native review and commit pending (parent-owned, COMMIT not yet).
 - [ ] MSI-2 — Push the verified commit; dispatch and verify Windows Lite-only CI and installer provenance.
 - [ ] MSI-3 — Install the matching MSI in the authorized guest and verify version, startup and preserved public test data.
 
@@ -49,7 +49,7 @@ The failing MSI returned `0x80040828` / `-2147219416` from `ForceInvokeWebView2B
 
 ## Evidence and next step
 
-MSI-1 umbrella OPEN (uncommitted, no native approval/CI). No commits/push/CI/guest/PR by this worker; parent owns boundaries/delivery. No PR chain claimed. Prior baseline 710+45=755 retained for sizing; forecast ~360 failed (honest oversize, no minification).
+MSI-1a source COMMITTED+APPROVED milestone (commit `cf5a17d3349d9496d60344d1515b28f3ccd8702f`; review `review-7cd79104cbc70ada`), but MSI-1 umbrella remains OPEN until MSI-1a/1b/1c all Windows-verified via MSI-2. Advisory IDs `R3-001` WARNING (stage 229-320) / `R3-002` SUGGESTION (60-70) / `R3-003` SUGGESTION (131-136) NOT blocking / NOT correction / reopen. Post-ACK: candidate cache cleanup deferred (RO incident); valid clean registered tree `b6c..`, directories 555, no Locks, HEAD unchanged; preserve view fresh INSPECT before next START; not authority corruption, no reset/cleanup permission. Independent FINAL local checks: stage 6 / runner 14 / full Lite 3553 passed, 28 skipped. Windows native 16 EXPECTED not observed until MSI-2 CI. No commits/push/CI/guest/PR by this worker; parent owns boundaries/delivery. Source work-units only on feat current branch for later authorized feature-chain PR preparation; no actual PR created/permission implied. Document immutable reviewed boundaries, not accumulated branch. No PR chain claimed. Exclude `.pi/` and old task docs. Prior baseline 710+45=755 retained for sizing; forecast ~360 failed (honest oversize, no minification).
 
 Focused verification (foreground, observed):
 - `rustc --edition=2021 --test apps/desktop/src-tauri/windows/webview2_stage.rs -o /tmp/entropia-webview2-stage-tests && /tmp/entropia-webview2-stage-tests`: 6/6 PASS (Linux portable; 2 Windows-only lock/hold tests cfg-gated for CI).
