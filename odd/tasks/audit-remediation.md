@@ -348,9 +348,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
   `odd/plans/plan-migraciones-rust.md` (invariants: identical `_migrations` names, no new rows,
   `schema_tag` unchanged, same canonical dump, `applied_at` in seconds, capture semantics kept).
   One stacked branch + PR + RDD per unit.
-  - [x] 4.0 — design doc. Branch `feat/phase4-migrations-design`.
-  - [ ] 4.1a — the 7 missing `.sql` (0007, 0011-0014, 0019, 0025) + identity test `.sql` = registry.
-  - [ ] 4.1b — TS registry generated from the `.sql` files + freshness test.
+  - [x] 4.0 — design doc. Branch `feat/phase4-migrations-design`, commit `b09f6490`, PR #46.
+  - [x] 4.1a — `.sql` files byte-identical to the registry. Branch
+    `feat/p4-1a-migration-sql-files`, commit `81e0a034`. Found 7 missing and 19 differing files;
+    normalized, only 0020 differed in SQL (its file lacked `DEFAULT '[]'` on `layouts.blocks`).
+    The registry wins: files rewritten, header comments dropped, 0020 holds `LAYOUTS_DDL`.
+    `migration-files.test.ts` RED 27 → GREEN. RDD `review-b166c9500d706937` approved.
+  - [x] 4.1b — TS registry generated from the `.sql` files (`generate-migrations.mjs` →
+    `migrations.generated.ts`), rationale comments to `migrations/NOTES.md`, freshness test.
+    Commit `b68f30e9`; runner.ts 3182 → 418 lines. Oracles byte-identical: `migration_ipc.json`
+    and `schema_full.sql`. Store 441, desktop 3514, Rust 2795 / 0 / 35. RDD over budget with the
+    144 KB generated module; by user decision reviewed as a reduced candidate without it (temp
+    branch, deleted): `review-e05a9ec28196939a` approved, 3 advisory warnings at line 1 of
+    `runner.ts`, `migration-files.test.ts` and `generate-migrations.mjs` (text not stored;
+    likely the `.ts`-extension import with `@ts-expect-error`).
   - [ ] 4.2a — canonical dump: TS script over `node:sqlite`, fixture, freshness test, Rust dump fn.
   - [ ] 4.2b — `db/migrations.rs` (atomic per migration, 0020 port, 0032 repair) + tests, not wired.
   - [ ] 4.2c — wire into `setup`; measure startup on a large synthetic archive.
