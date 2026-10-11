@@ -89,9 +89,7 @@ describe('asset protocol scope', () => {
   it('keeps the runtime grant in asset_scope.rs aligned with the static scope', () => {
     const source = readFileSync(resolve(tauriRoot, 'src/asset_scope.rs'), 'utf8')
     const expected = [
-      ...rustSubdirs(source, 'ASSET_DATA_DIRS').map(
-        (dir) => `$DATA/com.entropia.shared/${dir}/**`
-      ),
+      ...rustSubdirs(source, 'ASSET_DATA_DIRS').map((dir) => `$DATA/com.entropia.shared/${dir}/**`),
       ...rustSubdirs(source, 'ASSET_CACHE_DIRS').map(
         (dir) => `$LOCALDATA/com.entropia.shared/${dir}/**`
       ),
