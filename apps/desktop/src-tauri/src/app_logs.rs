@@ -240,6 +240,22 @@ fn append(
     let _ = app_handle.emit("logs://entry", entry);
 }
 
+/// The sink the `logging` facade uses for `warn`/`error` records: same entry
+/// and same `logs://entry` event as [`append`], without the stderr echo (the
+/// facade already wrote the record there). It must never call `log::` macros:
+/// that would recurse through the facade that calls it.
+pub(crate) fn record(
+    app_handle: &AppHandle,
+    level: AppLogLevel,
+    source: impl Into<String>,
+    message: impl Into<String>,
+) {
+    let entry = app_handle
+        .state::<AppLogsState>()
+        .append(level, source, message);
+    let _ = app_handle.emit("logs://entry", entry);
+}
+
 fn level_label(level: &AppLogLevel) -> &'static str {
     match level {
         AppLogLevel::Info => "info",

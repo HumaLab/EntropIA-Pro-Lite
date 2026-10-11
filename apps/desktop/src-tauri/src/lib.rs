@@ -22,6 +22,7 @@ mod geo;
 mod image_edit;
 mod instance_guard;
 mod llm;
+mod logging;
 mod navegador;
 mod nlp;
 mod ocr;
@@ -225,7 +226,7 @@ fn processing_commit_observer(
                                     item_id: item_id.clone(),
                                 })
                         {
-                            eprintln!("[processing] OCR follow-up FTS failed: {error}");
+                            log::warn!(target: "processing", "OCR follow-up FTS failed: {error}");
                         }
                         match processing::repository::ensure_system_batch(&conn, "repair") {
                             Ok(batch) => {
@@ -256,23 +257,31 @@ fn processing_commit_observer(
                                                 &contract.hash,
                                             )
                                         {
-                                            eprintln!(
-                                                "[processing] follow-up admit failed: {error}"
+                                            log::warn!(
+                                                target: "processing",
+                                                "follow-up admit failed: {error}"
                                             );
                                         }
                                     }
-                                    Err(error) => eprintln!(
-                                        "[processing] follow-up contract unresolved: {error}",
+                                    Err(error) => log::warn!(
+                                        target: "processing",
+                                        "follow-up contract unresolved: {error}",
                                     ),
                                 }
                             }
                             Err(error) => {
-                                eprintln!("[processing] repair batch unavailable: {error}")
+                                log::warn!(
+                                    target: "processing",
+                                    "repair batch unavailable: {error}"
+                                )
                             }
                         }
                     }
                 }
-                Err(error) => eprintln!("[processing] follow-up connection failed: {error}"),
+                Err(error) => log::warn!(
+                    target: "processing",
+                    "follow-up connection failed: {error}"
+                ),
             }
         }
         processing::scheduler::EngineOutput::BibliographyExtract(_) => {
@@ -314,7 +323,7 @@ fn processing_commit_observer(
                     &app_handle.state::<geo::GeoQueue>(),
                     &ner.item_id,
                 ) {
-                    eprintln!("[processing] NER follow-up geocoding failed: {error}");
+                    log::warn!(target: "processing", "NER follow-up geocoding failed: {error}");
                 }
             }
         }
@@ -523,7 +532,7 @@ fn attach_close_orchestration(app_handle: &tauri::AppHandle) {
     use std::sync::atomic::Ordering;
 
     let Some(window) = app_handle.get_webview_window("main") else {
-        eprintln!("[app/close] main window not found: close orchestration not attached");
+        log::warn!(target: "app/close", "main window not found: close orchestration not attached");
         return;
     };
     let handler_handle = app_handle.clone();
@@ -642,6 +651,11 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The logging facade goes first: setup diagnostics below already route
+    // through it, and records emitted before an AppHandle is attached still
+    // reach stderr.
+    logging::init();
+
     // Suppress Windows error dialogs and CRT debug assertions that block the
     // process when native libraries crash.
     // This must run before any other initialization.
@@ -702,7 +716,7 @@ pub fn run() {
                 splash::finish_now(&dialog_handle);
                 let log_path = std::env::temp_dir().join(STARTUP_ERROR_LOG);
                 let _ = std::fs::write(&log_path, format!("{context}\n{detail}\n"));
-                eprintln!("{PRODUCT_NAME} startup error: {context}: {detail}");
+                log::error!(target: "setup", "{PRODUCT_NAME} startup error: {context}: {detail}");
                 let (title, body) = startup_error_dialog(context, &detail, &log_path);
                 show_setup_dialog(&dialog_handle, &title, body, MessageDialogKind::Error);
                 detail.into()
@@ -719,8 +733,9 @@ pub fn run() {
                 })?;
             // Which archive this run opened, on stderr as early as possible so
             // `tauri dev` shows it before anything else happens.
-            eprintln!(
-                "[setup] {}",
+            log::info!(
+                target: "setup",
+                "{}",
                 dev_profile::startup_line(
                     dev_profile::active(),
                     dev_profile::sync_server(),
@@ -753,7 +768,7 @@ pub fn run() {
                 // refusing to start over it would lock someone out of their
                 // documents. Logged and carried on, as before the guard existed.
                 Err(instance_guard::GuardError::Unavailable(error)) => {
-                    eprintln!("[setup] instance guard unavailable: {error}");
+                    log::warn!(target: "setup", "instance guard unavailable: {error}");
                 }
             }
 
@@ -775,7 +790,7 @@ pub fn run() {
             // still opens — refusing to start over a cache move would deny
             // someone their documents to tidy a directory.
             if let Err(error) = migrate_cache_out_of_data_dir(&app_dir, &cache_dir) {
-                eprintln!("[setup] cache move skipped: {error}");
+                log::warn!(target: "setup", "cache move skipped: {error}");
             }
 
             // The asset protocol serves exactly the subdirectories the webview
@@ -793,6 +808,8 @@ pub fn run() {
             })?;
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
+            // Now `warn`/`error` records also land in the app's own log.
+            logging::attach_app(app.handle().clone());
             app.manage(store_updates::StoreUpdateState::new());
             navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
@@ -867,7 +884,7 @@ pub fn run() {
             // already accepts an absolute path, so its absence degrades to the
             // behaviour that shipped before it existed.
             if let Err(error) = install_relative_asset_path_guard(&ui_conn, &app_dir) {
-                eprintln!("[setup] relative asset-path guard not installed: {error}");
+                log::warn!(target: "setup", "relative asset-path guard not installed: {error}");
             }
 
             // One startup pipeline brings the archive schema up to date: the
@@ -882,14 +899,15 @@ pub fn run() {
                 migrations.applied.first().copied(),
                 migrations.applied.last().copied(),
             ) {
-                eprintln!(
-                    "[setup] migrations: applied {} ({}..{})",
+                log::info!(
+                    target: "setup",
+                    "migrations: applied {} ({}..{})",
                     migrations.applied.len(),
                     first,
                     last
                 );
             } else {
-                eprintln!("[setup] migrations: up to date");
+                log::info!(target: "setup", "migrations: up to date");
             }
 
             // Phase 4.4b: the renderer could run DDL before Phase 4.4a, so a
@@ -907,8 +925,9 @@ pub fn run() {
             settings::log_renderer_written_backend_settings(&ui_conn);
             let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
             if secret_migration.migrated > 0 {
-                eprintln!(
-                    "[setup] Migrated {} API credential(s) to the system credential store",
+                log::info!(
+                    target: "setup",
+                    "Migrated {} API credential(s) to the system credential store",
                     secret_migration.migrated
                 );
             }
@@ -917,14 +936,12 @@ pub fn run() {
                     "Could not migrate API credential(s) for: {}. Legacy values were preserved.",
                     secret_migration.failed_keys.join(", ")
                 );
-                eprintln!("[setup] {message}");
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
             if secret_migration.storage_cleanup_failed {
                 let message =
                     "API credentials moved to the system credential store, but SQLite storage cleanup could not be completed"
                         .to_string();
-                eprintln!("[setup] {message}");
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
 
@@ -960,7 +977,6 @@ pub fn run() {
                     .inner()
                     .validate_startup(&app.handle().clone())
                 {
-                    eprintln!("[runtime] startup validation failed: {error}");
                     app_logs::error(
                         &app.handle().clone(),
                         "runtime",
@@ -978,7 +994,6 @@ pub fn run() {
                 match deps::probe_all_once(deps_state.inner(), db_state.inner()).await {
                     Ok(results) => {
                         deps::emit_probe_complete(&app_handle_deps, &results);
-                        eprintln!("[deps] Startup check: {} deps checked", results.len());
                         app_logs::info(
                             &app_handle_deps,
                             "deps",
@@ -986,7 +1001,6 @@ pub fn run() {
                         );
                     }
                     Err(err) => {
-                        eprintln!("[deps] Startup check failed: {err}");
                         app_logs::error(
                             &app_handle_deps,
                             "deps",
@@ -1147,9 +1161,12 @@ pub fn run() {
             // tables that already exist; the frontend re-invokes sync_ensure_capture
             // after initStore() to cover the rest. Non-fatal — never block startup.
             match sync::ensure_capture_on_path(&db_path) {
-                Ok(()) => eprintln!("[sync] capture triggers ensured at setup"),
+                Ok(()) => log::info!(target: "sync", "capture triggers ensured at setup"),
                 Err(error) => {
-                    eprintln!("[sync] capture bootstrap failed (will retry from UI): {error}")
+                    log::warn!(
+                        target: "sync",
+                        "capture bootstrap failed (will retry from UI): {error}"
+                    )
                 }
             }
 
@@ -1158,8 +1175,12 @@ pub fn run() {
             // rename. Best-effort — never blocks startup.
             match sync::blobs::cleanup_orphan_parts(&app_dir) {
                 Ok(0) => {}
-                Ok(removed) => eprintln!("[sync] cleaned {removed} orphan .part file(s)"),
-                Err(error) => eprintln!("[sync] orphan .part cleanup failed: {error}"),
+                Ok(removed) => {
+                    log::info!(target: "sync", "cleaned {removed} orphan .part file(s)")
+                }
+                Err(error) => {
+                    log::warn!(target: "sync", "orphan .part cleanup failed: {error}")
+                }
             }
 
             // Saved web captures: remove what a crash or a failed delete left in
@@ -1178,11 +1199,17 @@ pub fn run() {
             let sync_engine = sync::engine::start_engine(app.handle().clone(), db_path.clone());
             app.manage(sync_engine);
             if dev_profile::sync_disabled() {
-                eprintln!("[sync] disabled in the dev profile: no engine, no keyring access");
+                log::info!(
+                    target: "sync",
+                    "disabled in the dev profile: no engine, no keyring access"
+                );
             } else if let Some(server) = dev_profile::sync_server() {
-                eprintln!("[sync] dev profile syncs with {server} only (profile-scoped keyring entry)");
+                log::info!(
+                    target: "sync",
+                    "dev profile syncs with {server} only (profile-scoped keyring entry)"
+                );
             } else {
-                eprintln!("[sync] engine spawned (gated until capture + session)");
+                log::info!(target: "sync", "engine spawned (gated until capture + session)");
             }
 
             // Close orchestration (app-close.ts handshake): durably flush the
@@ -1214,7 +1241,11 @@ pub fn run() {
                             true
                         });
                     }) {
-                        eprintln!("[linux-setup] Failed to configure webview media permissions: {}", e);
+                        log::warn!(
+                            target: "linux-setup",
+                            "Failed to configure webview media permissions: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -1494,7 +1525,10 @@ fn migrate_legacy_app_dir(app_dir: &Path) -> Result<(), String> {
     // which is new, so an existing install cannot carry a stale one.
     let migration_marker = legacy_migration_marker_path(app_dir);
     if migration_marker.exists() {
-        eprintln!("[setup] legacy app dir convergence already completed — skipping");
+        log::info!(
+            target: "setup",
+            "legacy app dir convergence already completed — skipping"
+        );
         return Ok(());
     }
 
@@ -1528,16 +1562,18 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
         // with it, so a failed rename falls through to the file-by-file move.
         match fs::rename(legacy_dir, app_dir) {
             Ok(()) => {
-                eprintln!(
-                    "[setup] migrated legacy app dir: {} -> {}",
+                log::info!(
+                    target: "setup",
+                    "migrated legacy app dir: {} -> {}",
                     legacy_dir.display(),
                     app_dir.display()
                 );
                 return Ok(());
             }
             Err(error) => {
-                eprintln!(
-                    "[setup] whole-directory rename unavailable ({error}) — moving entry by entry: {} -> {}",
+                log::warn!(
+                    target: "setup",
+                    "whole-directory rename unavailable ({error}) — moving entry by entry: {} -> {}",
                     legacy_dir.display(),
                     app_dir.display()
                 );
@@ -1557,8 +1593,9 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
     // files. The walk is cheap anyway: it renames, and skips what the target
     // already has.
     move_missing_recursive(legacy_dir, app_dir)?;
-    eprintln!(
-        "[setup] merged legacy app dir into current app dir: {} -> {}",
+    log::info!(
+        target: "setup",
+        "merged legacy app dir into current app dir: {} -> {}",
         legacy_dir.display(),
         app_dir.display()
     );
@@ -1590,8 +1627,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
 
     if !current_db.exists() {
         copy_sqlite_bundle(&legacy_db, &current_db)?;
-        eprintln!(
-            "[setup] copied legacy sqlite bundle into new app dir: {} -> {}",
+        log::info!(
+            target: "setup",
+            "copied legacy sqlite bundle into new app dir: {} -> {}",
             legacy_db.display(),
             current_db.display()
         );
@@ -1603,8 +1641,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     let current_score = sqlite_richness_score(&current_db).unwrap_or(0);
 
     if legacy_score <= current_score {
-        eprintln!(
-            "[setup] keeping current sqlite bundle (current_score={current_score}, legacy_score={legacy_score})"
+        log::info!(
+            target: "setup",
+            "keeping current sqlite bundle (current_score={current_score}, legacy_score={legacy_score})"
         );
         return Ok(());
     }
@@ -1612,8 +1651,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     backup_sqlite_bundle(&current_db)?;
     remove_sqlite_bundle(&current_db)?;
     copy_sqlite_bundle(&legacy_db, &current_db)?;
-    eprintln!(
-        "[setup] restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
+    log::warn!(
+        target: "setup",
+        "restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
     );
     reset_sync_reconciliation_if_applicable(&current_db)?;
     Ok(())
@@ -1845,7 +1885,10 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
         .unwrap_or(false);
 
     if !has_assets_table {
-        eprintln!("[setup] assets table not found — skipping legacy asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets table not found — skipping legacy asset-path migration"
+        );
         return Ok(());
     }
 
@@ -1858,7 +1901,10 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
         .unwrap_or(false);
 
     if !has_path_column {
-        eprintln!("[setup] assets.path column not found — skipping legacy asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets.path column not found — skipping legacy asset-path migration"
+        );
         return Ok(());
     }
 
@@ -1929,8 +1975,9 @@ fn migrate_cache_out_of_data_dir(data_dir: &Path, cache_dir: &Path) -> Result<us
     }
 
     if moved > 0 {
-        eprintln!(
-            "[setup] moved {moved} cache directories out of the data directory: {} -> {}",
+        log::info!(
+            target: "setup",
+            "moved {moved} cache directories out of the data directory: {} -> {}",
             data_dir.display(),
             cache_dir.display()
         );
@@ -2011,7 +2058,6 @@ fn log_schema_audit(app_handle: &tauri::AppHandle, report: &db::schema_audit::Sc
     };
 
     if report.is_clean() {
-        eprintln!("[setup] schema audit: ok ({cost})");
         app_logs::info(
             app_handle,
             "schema-audit",
@@ -2027,17 +2073,16 @@ fn log_schema_audit(app_handle: &tauri::AppHandle, report: &db::schema_audit::Sc
             object.name,
             object.reason.describe()
         );
-        eprintln!("{message}");
         app_logs::warn(app_handle, "schema-audit", message);
     }
     for name in &report.recreated {
         let message =
             format!("[setup] schema audit: restored \"{name}\" from the canonical definition");
-        eprintln!("{message}");
         app_logs::warn(app_handle, "schema-audit", message);
     }
-    eprintln!(
-        "[setup] schema audit: {} dropped, {} restored ({cost})",
+    log::warn!(
+        target: "setup",
+        "schema audit: {} dropped, {} restored ({cost})",
         report.dropped.len(),
         report.recreated.len()
     );
@@ -2061,7 +2106,10 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
     })?;
 
     if !table_exists(&conn, "assets") {
-        eprintln!("[setup] assets table not found — skipping relative asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets table not found — skipping relative asset-path migration"
+        );
         return Ok(0);
     }
 
@@ -2128,7 +2176,7 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
         .map_err(|error| format!("Failed to commit the relative asset-path migration: {error}"))?;
 
     if rewritten > 0 {
-        eprintln!("[setup] rewrote {rewritten} asset paths as relative keys");
+        log::info!(target: "setup", "rewrote {rewritten} asset paths as relative keys");
     }
     Ok(rewritten)
 }

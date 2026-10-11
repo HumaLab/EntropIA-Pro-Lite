@@ -306,8 +306,9 @@ mod tests {
 
         let before = canonical_schema_dump(&conn).expect("dump before");
         let report = audit_and_repair(&mut conn, dir.path()).expect("audit");
-        eprintln!(
-            "[schema-audit] clean-path canonical build: {} ms",
+        log::info!(
+            target: "schema-audit",
+            "clean-path canonical build: {} ms",
             report.canonical_build_ms
         );
 
