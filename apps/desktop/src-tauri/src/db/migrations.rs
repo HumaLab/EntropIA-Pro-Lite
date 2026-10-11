@@ -225,11 +225,15 @@ pub(crate) struct MigrationError {
 }
 
 impl MigrationError {
-    fn new(migration: &'static str, error: impl std::fmt::Display) -> Self {
-        Self {
-            migration,
-            message: error.to_string(),
-        }
+    fn new(migration: &'static str, error: rusqlite::Error) -> Self {
+        // rusqlite's Display for input errors appends the statement and the
+        // offset; for `execute_batch` that is the whole migration file, far
+        // too much for the startup dialog. Keep SQLite's own message.
+        let message = match error {
+            rusqlite::Error::SqlInputError { msg, .. } => msg,
+            other => other.to_string(),
+        };
+        Self { migration, message }
     }
 }
 
@@ -494,6 +498,7 @@ mod tests {
     use super::*;
     use crate::db::canonical_dump::{canonical_schema_dump, CanonicalSchemaDump};
     use serde_json::Value;
+    use std::time::{Duration, Instant};
 
     const CANONICAL_FIXTURE: &str = include_str!("../../tests/fixtures/schema_canonical.json");
     const FIXED_CLOCK_MS: i64 = 1_700_000_000_123;
@@ -876,6 +881,23 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_batch_reports_sqlite_message_without_the_migration_sql() {
+        // rusqlite's Display for input errors appends the whole statement,
+        // which for an atomic migration is the entire file; the startup dialog
+        // must show SQLite's message only.
+        static CUSTOM: &[Migration] = &[Migration {
+            name: "0001_broken_batch",
+            sql: "CREATE TABLE batch_t (id INTEGER PRIMARY KEY);\nCREATE TABLE batch_t (id INTEGER PRIMARY KEY);",
+            kind: MigrationKind::Atomic,
+        }];
+        let mut conn = test_connection();
+        let error = apply_migrations_with(&mut conn, CUSTOM, &fixed_clock())
+            .expect_err("the duplicate table must fail");
+        assert_eq!(error.migration, "0001_broken_batch");
+        assert_eq!(error.message, "table batch_t already exists");
+    }
+
+    #[test]
     fn a_failing_migration_rolls_back_its_statements_and_keeps_earlier_work() {
         static CUSTOM: &[Migration] = &[
             Migration {
@@ -955,6 +977,129 @@ mod tests {
             "the atomic batch must roll back"
         );
         assert!(!registry_row_exists(&conn, "0001_atomic_duplicate"));
+    }
+
+    /// Fills the pre-0034 schema with a synthetic large archive: one
+    /// collection, `items` items each carrying one asset, one extraction and
+    /// one transcription, every text about `text_bytes` long. 0034's rebuild
+    /// reads exactly items/assets/extractions/transcriptions (0018 and 0034
+    /// SQL), so all four tables carry rows.
+    fn seed_synthetic_archive(conn: &Connection, items: u64, text_bytes: usize) {
+        const FILLER: &str = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore";
+        let mut body = String::with_capacity(text_bytes + FILLER.len());
+        while body.len() < text_bytes {
+            body.push_str(FILLER);
+            body.push(' ');
+        }
+
+        conn.execute_batch("BEGIN")
+            .expect("begin the seed transaction");
+        conn.execute(
+            "INSERT INTO collections (id, name, created_at, updated_at)
+             VALUES ('collection-1', 'Synthetic', 0, 0)",
+            [],
+        )
+        .expect("insert the collection");
+        {
+            let mut insert_item = conn
+                .prepare(
+                    "INSERT INTO items (id, title, collection_id, created_at, updated_at)
+                     VALUES (?1, ?2, 'collection-1', 0, 0)",
+                )
+                .expect("prepare the item insert");
+            let mut insert_asset = conn
+                .prepare(
+                    "INSERT INTO assets (id, item_id, path, type, created_at)
+                     VALUES (?1, ?2, ?3, 'pdf', 0)",
+                )
+                .expect("prepare the asset insert");
+            let mut insert_extraction = conn
+                .prepare(
+                    "INSERT INTO extractions (id, asset_id, text_content, method, created_at)
+                     VALUES (?1, ?2, ?3, 'native', 0)",
+                )
+                .expect("prepare the extraction insert");
+            let mut insert_transcription = conn
+                .prepare(
+                    "INSERT INTO transcriptions (id, asset_id, text_content, model, created_at)
+                     VALUES (?1, ?2, ?3, 'synthetic', 0)",
+                )
+                .expect("prepare the transcription insert");
+
+            for index in 0..items {
+                let id = index.to_string();
+                insert_item
+                    .execute(params![format!("item-{id}"), format!("Item {id}")])
+                    .expect("insert an item");
+                insert_asset
+                    .execute(params![
+                        format!("asset-{id}"),
+                        format!("item-{id}"),
+                        format!("assets/{id}.pdf")
+                    ])
+                    .expect("insert an asset");
+                insert_extraction
+                    .execute(params![
+                        format!("extraction-{id}"),
+                        format!("asset-{id}"),
+                        format!("item {id} {body}")
+                    ])
+                    .expect("insert an extraction");
+                insert_transcription
+                    .execute(params![
+                        format!("transcription-{id}"),
+                        format!("asset-{id}"),
+                        format!("audio {id} {body}")
+                    ])
+                    .expect("insert a transcription");
+            }
+        }
+        conn.execute_batch("COMMIT")
+            .expect("commit the seed transaction");
+    }
+
+    /// Plan §6 risk probe, not a regression gate: times the migrations left
+    /// after the 0033 cut on a synthetic large archive (10k items, one asset,
+    /// one ~2 KB extraction and one ~2 KB transcription each). Run it
+    /// deliberately, in release:
+    ///
+    /// ```text
+    /// cargo test --release --lib -- --ignored measure_upgrade --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measurement probe; run explicitly with cargo test --release -- --ignored"]
+    fn measure_upgrade_from_0033_on_a_large_archive() {
+        const ITEM_COUNT: u64 = 10_000;
+        const TEXT_BYTES: usize = 2_048;
+
+        let cut = registry_index_after("0033_processing_source_invalidation");
+        let mut conn = test_connection();
+        apply_migrations_with(&mut conn, &REGISTRY[..=cut], &fixed_clock())
+            .expect("apply through the 0033 cut");
+        seed_synthetic_archive(&conn, ITEM_COUNT, TEXT_BYTES);
+
+        let mut total = Duration::ZERO;
+        for index in cut + 1..REGISTRY.len() {
+            let name = REGISTRY[index].name;
+            let started = Instant::now();
+            let report = apply_migrations_with(&mut conn, &REGISTRY[..=index], &fixed_clock())
+                .expect("apply the next migration");
+            let elapsed = started.elapsed();
+            assert_eq!(
+                report.applied,
+                vec![name],
+                "the step must apply only {name}"
+            );
+            total += elapsed;
+            if elapsed.as_millis() > 50 {
+                println!("measure_upgrade: {name} took {} ms", elapsed.as_millis());
+            }
+        }
+        println!(
+            "measure_upgrade_from_0033_on_a_large_archive: {} migrations, {ITEM_COUNT} items, {TEXT_BYTES} bytes/text, total {} ms",
+            REGISTRY.len() - cut - 1,
+            total.as_millis()
+        );
     }
 
     #[test]
