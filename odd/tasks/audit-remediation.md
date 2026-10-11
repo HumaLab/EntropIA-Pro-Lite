@@ -344,7 +344,19 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       (`authorizer.rs`); R2 small readability notes in `migration_allowlist.rs:92-113` and
       `migration-ipc-recorder.ts:56-57,102-107`; R1 the rebuild exception drops capture
       triggers until `sync_ensure_capture` (by design, see S-02c).
-- [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02)
+- [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02). Design:
+  `odd/plans/plan-migraciones-rust.md` (invariants: identical `_migrations` names, no new rows,
+  `schema_tag` unchanged, same canonical dump, `applied_at` in seconds, capture semantics kept).
+  One stacked branch + PR + RDD per unit.
+  - [x] 4.0 — design doc. Branch `feat/phase4-migrations-design`.
+  - [ ] 4.1a — the 7 missing `.sql` (0007, 0011-0014, 0019, 0025) + identity test `.sql` = registry.
+  - [ ] 4.1b — TS registry generated from the `.sql` files + freshness test.
+  - [ ] 4.2a — canonical dump: TS script over `node:sqlite`, fixture, freshness test, Rust dump fn.
+  - [ ] 4.2b — `db/migrations.rs` (atomic per migration, 0020 port, 0032 repair) + tests, not wired.
+  - [ ] 4.2c — wire into `setup`; measure startup on a large synthetic archive.
+  - [ ] 4.3 — `setup` patches as idempotent repairs, dedup without capture, `fail(...)`; dev profile.
+  - [ ] 4.4a — TS runner verify-only; DDL closed in the IPC; migration window and fingerprints gone.
+  - [ ] 4.4b — canonical trigger/view audit at startup, tests (a)-(d).
 - [ ] Phase 5 — performance and observability (P-01..P-04)
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
