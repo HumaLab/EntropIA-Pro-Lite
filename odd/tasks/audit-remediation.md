@@ -454,8 +454,23 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     66 runtime tests pass with `local-ml`, plus helper tests vs the one-shot digest (empty, small,
     multi-buffer) and a missing-file error. Lite 2811 / 0 / 35 unchanged; Pro clippy only the 9
     known. RDD `review-89473222c0de6219` approved, no findings.
-  - [ ] 5.2 (P-01) — RAG vector search: partial selection, then a cached index. Needs a decision on
-    cache invalidation first (a trigger/version column is a new migration and raises `schema_tag`).
+  - [x] 5.2a (P-01) — RAG partial selection. Branch `fix/p5-2a-rag-partial-selection`.
+    - `a545a7c0`: `rank_assets_with_text` selects the top limit×4 (score desc, scan index asc),
+      sorts only that window, walks it with the text filter and falls back to the old full stable
+      sort when fewer than `limit` survive. Exact equivalence vs the old algorithm (60 randomized
+      cases, ties at the boundary, forced fallback, limit > set, empty); RED vs a fallback-less
+      stub. Ranking cost (measure profile, dim 1024): 10k 626→210 µs, 50k 3.17→0.98 ms, 200k
+      15.8→4.0 ms.
+    - `75a7c02e`: found while reviewing — a stored vector with NaN/inf scored NaN, ranked first
+      (RED: ["asset-nan","asset-inf","asset-ok"]) and breaks the comparator's total order (Rust
+      ≥1.81 sorts may panic). `score_embeddings` now skips non-finite scores (protects
+      `vector_leg` and `chunk_vector_leg`).
+    - Lite 2818 / 0 / 36; Pro clippy only the 9 known. RDD `review-ed73671f5cfbf6be` approved.
+  - [ ] 5.2b (P-01) — cached vecscan index. **User decision:** invalidate with a SQLite update hook
+    in `open_archive_connection` bumping a process-global generation on any `vec_assets` row change
+    — no migration, `schema_tag` unchanged. Verified: every production write connection to the
+    archive goes through `db/open.rs` (`research*` opens another DB; `rag/baseline.rs` is read-only
+    measurement tooling). Test from the plan: an in-place embedding update is reflected next query.
   - [ ] 5.4 (P-04) — unified backend logging, incremental.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
