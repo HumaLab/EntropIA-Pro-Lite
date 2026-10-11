@@ -19,8 +19,10 @@ import { describe, expect, it } from 'vitest'
  */
 
 const SRC_TAURI = resolve(import.meta.dirname, '../../src-tauri')
-// Tauri runs beforeBundleCommand with the frontend CWD (apps/desktop per
-// upstream CLI 2.12.1 dirs.frontend), not src-tauri itself.
+// DESKTOP_ROOT is the selected workspace package root (apps/desktop). The
+// pnpm --filter selector anchors exec CWD there (probed independently from
+// repo root, apps/desktop and src-tauri); no claim is made about the
+// bundler's own CWD. Never resolve the hook against src-tauri itself.
 const DESKTOP_ROOT = resolve(SRC_TAURI, '..')
 const FRAGMENT = readFileSync(
   resolve(SRC_TAURI, 'windows/fragments/force-webview2-bootstrapper.wxs'),
@@ -101,16 +103,35 @@ describe('pre-bundle hook wiring', () => {
     expect(command).not.toMatch(/Bypass|Unrestricted/i)
   })
 
-  it('resolves the -File hook path against the frontend root to a real file', () => {
+  it('scopes the hook through the workspace package selector', () => {
+    const command = WINDOWS_CONF.build?.beforeBundleCommand ?? ''
+    // The MSI-2 failure proved a bare relative -File path cannot rely on the
+    // bundler CWD (the actual CI CWD was never logged). The pnpm --filter
+    // selector anchors exec CWD at the selected package root (apps/desktop,
+    // probed independently from repo root, apps/desktop and src-tauri), so
+    // the hook must run through the workspace scope, not a bare powershell.
+    expect(
+      command,
+      'beforeBundleCommand must start with the workspace selector',
+    ).toMatch(/^pnpm --filter @entropia-pro\/desktop exec /)
+    expect(command).toContain('powershell')
+    const match = command.match(/-File\s+(['"]?)([^\s'"]+)\1/)
+    expect(match, 'beforeBundleCommand must pass a -File script path').not.toBeNull()
+    const resolved = resolve(DESKTOP_ROOT, match![2]!)
+    expect(existsSync(resolved), resolved + ' must exist').toBe(true)
+  })
+
+  it('resolves the -File hook path against the selected package root to a real file', () => {
     const command = WINDOWS_CONF.build?.beforeBundleCommand ?? ''
     const match = command.match(/-File\s+(['"]?)([^\s'"]+)\1/)
     expect(match, 'beforeBundleCommand must pass a -File script path').not.toBeNull()
     const fileArg = match![2]!
-    // Frontend-relative: Tauri runs the hook with frontend CWD (apps/desktop),
-    // so the argument must start with src-tauri/ to reach the real script.
+    // Package-relative: pnpm --filter anchors exec at the selected package
+    // root (apps/desktop), so the argument must start with src-tauri/ to
+    // reach the real script.
     expect(
       fileArg,
-      '-File argument must be frontend-relative under src-tauri/',
+      '-File argument must be package-relative under src-tauri/',
     ).toMatch(/^src-tauri\//)
     const resolved = resolve(DESKTOP_ROOT, fileArg)
     expect(existsSync(resolved), resolved + ' must exist').toBe(true)
