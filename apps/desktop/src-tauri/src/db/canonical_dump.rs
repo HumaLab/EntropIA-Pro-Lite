@@ -237,27 +237,17 @@ mod tests {
     /// The TS runner creates `_migrations` inline before applying 0001, and
     /// 0020 creates `layouts` from `applyLayoutsMigration()` rather than from
     /// its `.sql` file, whose text `schema_full.sql` carries. Those two
-    /// statements are copied verbatim from `packages/store/src/runner.ts` so a
-    /// real TS-migrated database's `sqlite_master.sql` text is reproduced; the
-    /// `CREATE TABLE IF NOT EXISTS` in the migration files then becomes the
-    /// no-op it is at runtime. Everything else still comes from
-    /// `schema_full.sql`.
-    const RUNTIME_BOOTSTRAP: &str = r#"CREATE TABLE IF NOT EXISTS _migrations (
-      id    INTEGER PRIMARY KEY AUTOINCREMENT,
-      name  TEXT    NOT NULL UNIQUE,
-      applied_at INTEGER NOT NULL
-    );
-CREATE TABLE IF NOT EXISTS layouts (
-      id TEXT PRIMARY KEY,
-      asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-      regions TEXT NOT NULL,
-      blocks TEXT NOT NULL DEFAULT '[]',
-      model TEXT NOT NULL,
-      image_width INTEGER NOT NULL,
-      image_height INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-"#;
+    /// statements are the shared constants in `db::migrations`, so this test
+    /// and the Rust runner execute byte-identical text; the `CREATE TABLE IF
+    /// NOT EXISTS` in the migration files then becomes the no-op it is at
+    /// runtime. Everything else still comes from `schema_full.sql`.
+    fn runtime_bootstrap() -> String {
+        format!(
+            "{}\n{}",
+            crate::db::migrations::MIGRATIONS_TABLE_DDL,
+            crate::db::migrations::LAYOUTS_RUNTIME_DDL
+        )
+    }
 
     /// Reports the first differences instead of dumping two 300 KB JSON
     /// blobs; arrays are deterministically ordered on both sides, so positions
@@ -331,7 +321,7 @@ CREATE TABLE IF NOT EXISTS layouts (
             serde_json::from_str(CANONICAL_FIXTURE).expect("parse the canonical fixture");
 
         let conn = Connection::open_in_memory().expect("open in-memory db");
-        conn.execute_batch(RUNTIME_BOOTSTRAP)
+        conn.execute_batch(&runtime_bootstrap())
             .expect("apply the runtime bootstrap statements");
         conn.execute_batch(SCHEMA_FIXTURE)
             .expect("apply schema_full.sql");
