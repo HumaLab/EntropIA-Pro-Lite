@@ -228,7 +228,25 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     exists. Checks: Lite `cargo test` 2781 / 0 / 35; store 381; desktop Pro 3510 / Lite 3489;
     typecheck and lint clean. Left out (reported, not in plan scope): runner.ts:3173 keeps its
     catch-ROLLBACK (harmless), `deleteIfEmpty` in collection.repo.ts still interpolates one
-    id in a single-statement batch.
+    id in a single-statement batch. RDD `review-3cdc11f5789e7062` approved; PR #42.
+  - [x] 3.3 (S-05) — asset protocol scope. Branch `fix/s05-asset-protocol-scope`, commit
+    `1cbe7a10`. Inventory corrected the plan: thumbnails live in the CACHE dir
+    (`ocr/commands.rs:497`), and the Navegador viewer opens the saved PDF from the archive's
+    `web-captures/` (`pdf_capture_file`), never from `navegador/downloads` (that quarantine path
+    never reaches the frontend); audio previews and dictation scratch go through the fs plugin.
+    Served: `$DATA/…/{assets,writing-images,writing-crops,web-captures}/**` and
+    `$LOCALDATA/…/thumbnails/**`; deny `**/*.sqlite*` and `**/web-captures/**/*.html`. One
+    list in `asset_scope.rs`, granted from the resolved dirs at setup with `forbid_file` for the
+    four database files (`forbid_file` cannot take globs; the config deny covers the rest).
+    Tests: TS config equality + Rust-list alignment (4); mock-app post-setup scope (2). Checks:
+    Lite `cargo test` 2783 / 0 / 35; desktop Pro 3514 / Lite 3493; typecheck, lint clean.
+    Manual acceptance (agent-run, profile `s05-scope`, Lite + `navegador` feature, Xvfb):
+    collection thumbnails, image and PDF asset in the item viewer, and a Navegador-saved PDF
+    in its viewer all render; from devtools, `fetch(convertFileSrc(…))` returns 200 for the
+    five served dirs and 403 for `entropia.sqlite`, `entropia.sqlite-wal`, capture HTML,
+    `temp/` and `research/`. Stale wording left for later: `dev_profile.rs` module doc
+    (configs "cover the whole shared roots") and `file-import.ts:~413` (thumbnails in
+    app_data_dir).
   - [ ] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
     Facts: rusqlite 0.31 without `hooks`; renderer SQL runs only on `ui_conn` through
     `db_execute`, `db_execute_batch`, `db_execute_transaction`, `db_select`, `db_select_rows`;

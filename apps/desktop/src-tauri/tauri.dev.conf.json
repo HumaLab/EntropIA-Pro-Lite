@@ -4,7 +4,20 @@
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DATA/com.entropia.shared/**/*", "$LOCALDATA/com.entropia.shared/**/*"]
+        "scope": {
+          "allow": [
+            "$DATA/com.entropia.shared/assets/**",
+            "$DATA/com.entropia.shared/writing-images/**",
+            "$DATA/com.entropia.shared/writing-crops/**",
+            "$DATA/com.entropia.shared/web-captures/**",
+            "$LOCALDATA/com.entropia.shared/thumbnails/**"
+          ],
+          "deny": [
+            "$DATA/com.entropia.shared/**/*.sqlite*",
+            "$LOCALDATA/com.entropia.shared/**/*.sqlite*",
+            "$DATA/com.entropia.shared/**/web-captures/**/*.html"
+          ]
+        }
       }
     },
     "windows": [

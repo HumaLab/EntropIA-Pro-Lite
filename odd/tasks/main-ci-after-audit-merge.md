@@ -16,7 +16,7 @@ Branch: `fix/main-ci-after-audit-merge` (from `origin/main` 42c60e8d).
 - [x] 1. Run prettier on the 7 flagged files.
 - [x] 2. Measure the impact: does pdf-extract 0.12 change the OCR candidate list for the recovered-page fixture and for real Form XObject pages?
 - [x] 3. Fix the test or the candidacy code, per the decision from task 2.
-- [ ] 4. Open the PR to `main`, get CI green (including Windows), merge.
+- [x] 4. Open the PR to `main`, get CI green (including Windows), merge.
 - [ ] 5. Rebase-free update of #44 onto the repaired `main`, CI green, merge.
 
 ## Evidence
@@ -32,7 +32,10 @@ Branch: `fix/main-ci-after-audit-merge` (from `origin/main` 42c60e8d).
   operator: lopdf does not recurse into `Do`, pdf-extract 0.12 recurses but only
   handles `Tj`/`TJ`, PDFium reads it. Candidates stay `[1, 2]`.
   `cargo test --locked --test bibliography_processing`: 167 passed, PDFium ran (not skipped).
-- Task 4 (in progress): PR #47 opened. CI `Lint & Typecheck` and `Build` pass. `Test`
+- Task 4: PR #47 merged as `c9050072`, all CI green (Windows 1h8m). PR #47 opened. CI `Lint & Typecheck` and `Build` pass. `Test`
   failed: `collection-load-cost.test.ts` imports `node:sqlite`, which vitest 4 (#40) cannot
   bundle in the happy-dom client environment on Node 22. Local Node 24 hid it. Fix:
-  `@vitest-environment node` pragma, verified on Node 22.
+  `@vitest-environment node` pragma, verified on Node 22 (`8e2bed45`).
+- Task 5: merged `origin/main` into `fix/s05-asset-protocol-scope` (`da134be4`); #44 also
+  carries `f67a7335` (asset scope tests moved to `tests/asset_scope.rs`, fixing the
+  0xc0000139 lib-harness launch failure).
