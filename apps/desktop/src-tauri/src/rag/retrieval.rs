@@ -338,6 +338,11 @@ fn score_embeddings<P: rusqlite::Params>(
             continue;
         };
         let similarity = 1.0 - distance;
+        // A blob holding NaN or infinity scores NaN: it would rank first and
+        // break the total order the ranking's sort and selection rely on.
+        if !similarity.is_finite() {
+            continue;
+        }
         if min_similarity > 0.0 && similarity < min_similarity {
             continue;
         }
@@ -1871,6 +1876,32 @@ mod tests {
     }
 
     // ── OCR en retrieval (Cambio 1) ──────────────────────────────────────────
+
+    #[test]
+    fn vector_leg_skips_embeddings_whose_score_is_not_finite() {
+        // A stored vector holding NaN or infinity (a corrupt or synced blob)
+        // scores NaN. Ranking with it would break the comparator's total
+        // order, which sort_by and select_nth_unstable_by may panic on.
+        let conn = setup_rag_db();
+        for (asset, vector) in [
+            ("asset-nan", [f32::NAN, 0.0, 0.0]),
+            ("asset-inf", [f32::INFINITY, 0.0, 0.0]),
+            ("asset-ok", [1.0, 0.0, 0.0]),
+        ] {
+            insert_ocr_doc(
+                &conn,
+                ("col-1", "Archivo"),
+                (&format!("item-{asset}"), "Documento"),
+                asset,
+                "Texto del documento",
+                Some(&vector),
+            );
+        }
+
+        let ranked =
+            vector_leg(&conn, &[1.0, 0.0, 0.0], 10, 0.0).expect("vector leg should succeed");
+        assert_eq!(ranked, vec!["asset-ok".to_string()]);
+    }
 
     #[test]
     fn vector_leg_includes_ocr_only_assets() {
