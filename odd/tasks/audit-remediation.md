@@ -394,7 +394,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `fail()` never maps under Xvfb (process stays alive behind the splash) — likely pre-existing
       on Linux, since `fail()` is unchanged; verify and fix with 4.3's acceptance.
     - Rust 2814 / 0 / 36; Pro clippy only the 9 known. RDD `review-3461ac275bca68c2` approved.
-  - [ ] 4.3 — `setup` patches as idempotent repairs, dedup without capture, `fail(...)`; dev profile.
+  - [x] 4.3 — `setup` patches as idempotent repairs (A-02). Branch `feat/p4-3-setup-repairs`.
+    - `3651d2ea` (4.3a): setup's dialogs (`fail()` and "EntropIA ya está abierta") used
+      `blocking_show` on the main thread; on Linux rfd queues the GTK dialog on the GLib context
+      that thread owns and then blocks it, so the dialog never mapped and the app hung behind the
+      splash. `show_setup_dialog` shows it non-blocking and iterates the context until dismissed
+      (`glib` 0.18, already in the lockfile). Verified both dialogs appear and OK exits.
+    - `dd0bfe3e` (4.3b): `db/repairs.rs::migrate_archive` = pre repairs (dedup + unique indexes,
+      method CHECK, llm_results, 0017 fallbacks, app_settings) → `apply_migrations` → post
+      (`ensure_layouts_schema`, then the pre repairs as no-ops). Dedups inside
+      `without_sync_capture` (moved to `sync/capture.rs`; RED: one 'D' oplog row). All setup
+      `.expect` → `fail(...)`. Empty-archive oracle = fixture + exactly the two backend-owned
+      tables (`app_settings`, `ocr_correction_backups`), which every archive had since first launch.
+    - Dev profile: fresh install (58, 3 samples), existing archive (up to date), read-only DB →
+      error dialog instead of a crash, OK exits. Rust 2822 / 0 / 36; Pro clippy only the 9 known.
+      RDD `review-4646c0a48d9ac6c3` approved, no findings.
   - [ ] 4.4a — TS runner verify-only; DDL closed in the IPC; migration window and fingerprints gone.
   - [ ] 4.4b — canonical trigger/view audit at startup, tests (a)-(d).
 - [ ] Phase 5 — performance and observability (P-01..P-04)
