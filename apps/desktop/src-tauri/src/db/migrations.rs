@@ -259,6 +259,26 @@ pub(crate) fn apply_migrations(conn: &mut Connection) -> Result<MigrationReport,
     })
 }
 
+/// Applies the registry through `name` (inclusive) on `conn`, so a test can
+/// build an archive at a historical migration cut. Test-only: production code
+/// always applies every pending migration through [`apply_migrations`].
+#[cfg(test)]
+pub(crate) fn apply_migrations_through(
+    conn: &mut Connection,
+    name: &str,
+) -> Result<MigrationReport, MigrationError> {
+    let index = REGISTRY
+        .iter()
+        .position(|migration| migration.name == name)
+        .unwrap_or_else(|| panic!("the registry is missing {name}"));
+    apply_migrations_with(conn, &REGISTRY[..=index], &|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0)
+    })
+}
+
 /// Injectable core: `registry` pins the migration set and `clock` returns the
 /// current unix time in milliseconds, so tests control both.
 fn apply_migrations_with(

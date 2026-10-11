@@ -8,9 +8,10 @@ pub mod commands;
 pub mod compact;
 pub mod migration_allowlist;
 // Rust port of the renderer migration runner, wired into `setup` at startup
-// (Phase 4.2c).
+// (Phase 4.2c). `repairs` wraps it with the idempotent schema repairs (4.3b).
 pub(crate) mod migrations;
 pub mod open;
+pub(crate) mod repairs;
 pub mod sql_split;
 pub mod state;
 pub mod util;

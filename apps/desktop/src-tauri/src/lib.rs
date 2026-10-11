@@ -58,10 +58,10 @@ use geo::GeoQueue;
 use llm::LlmQueue;
 use nlp::NlpQueue;
 use rusqlite::Connection;
-use rusqlite::OptionalExtension;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use sync::capture::without_sync_capture;
 use tauri::Manager;
 use transcription::TranscriptionQueue;
 
@@ -870,124 +870,30 @@ pub fn run() {
                 eprintln!("[setup] relative asset-path guard not installed: {error}");
             }
 
-            // Normalize legacy duplicates and enforce one-row-per-asset semantics
-            // for extractions/transcriptions so Rust workers can use real UPSERT.
-            // Fresh installs may not have these tables yet (created later by JS migrations),
-            // so this must be conditional.
-            let has_extractions_table = table_exists(&ui_conn, "extractions");
-            let has_transcriptions_table = table_exists(&ui_conn, "transcriptions");
-            let mut legacy_uniques_sql = String::new();
-
-            if has_extractions_table {
-                legacy_uniques_sql.push_str(
-                    "DELETE FROM extractions
-                     WHERE rowid NOT IN (
-                       SELECT MAX(rowid) FROM extractions GROUP BY asset_id
-                     );
-                     CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_asset_id_unique
-                     ON extractions(asset_id);",
+            // One startup pipeline brings the archive schema up to date: the
+            // idempotent repairs legacy archives need, then every pending store
+            // migration, then the repairs once more so a fresh install reaches
+            // on its first boot the schema older installs reached on their
+            // second. A failing repair or migration returns `Err`, and
+            // `fail(...)` shows the dialog instead of ending the process.
+            let migrations = db::repairs::migrate_archive(&mut ui_conn)
+                .map_err(|error| fail(error.context(), error.detail()))?;
+            if let (Some(first), Some(last)) = (
+                migrations.applied.first().copied(),
+                migrations.applied.last().copied(),
+            ) {
+                eprintln!(
+                    "[setup] migrations: applied {} ({}..{})",
+                    migrations.applied.len(),
+                    first,
+                    last
                 );
-            }
-
-            if has_transcriptions_table {
-                legacy_uniques_sql.push_str(
-                    "DELETE FROM transcriptions
-                     WHERE rowid NOT IN (
-                       SELECT MAX(rowid) FROM transcriptions GROUP BY asset_id
-                     );
-                     CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_asset_id_unique
-                     ON transcriptions(asset_id);",
-                );
-            }
-
-            if !legacy_uniques_sql.is_empty() {
-                ui_conn
-                    .execute_batch(&legacy_uniques_sql)
-                    .expect("Failed to enforce unique asset_id indexes for extraction/transcription");
             } else {
-                eprintln!(
-                    "[setup] extractions/transcriptions tables not found — skipping legacy unique-index enforcement"
-                );
+                eprintln!("[setup] migrations: up to date");
             }
-
-            // Migrate extractions.method CHECK constraint: remove the legacy
-            // `CHECK(method IN ('native', 'ocr'))` which blocked modern OCR methods
-            // like 'paddle', 'paddle_vl', 'pdf_paddle', and 'pdf_paddle_vl'.
-            migrate_extractions_method_check(&ui_conn)
-                .expect("Failed to migrate extractions method CHECK constraint");
-            llm::ensure_llm_results_schema(&ui_conn)
-                .expect("Failed to migrate llm_results table");
-
-            ensure_layouts_schema(&ui_conn)
-                .map_err(|e| format!("Failed to migrate layouts table: {e}"))
-                .expect("Failed to migrate layouts table");
-            let modern_schema_bootstrapped =
-                migration_applied(&ui_conn, "0017_vec_assets").unwrap_or(false);
-
-            if !modern_schema_bootstrapped && table_exists(&ui_conn, "assets") {
-                // Legacy fallback for databases that haven't run JS migrations yet.
-                let has_sort_index: bool = ui_conn
-                    .prepare("SELECT sort_index FROM assets LIMIT 0")
-                    .map(|mut stmt| {
-                        let _ = stmt.query_map([], |_| Ok(()));
-                        true
-                    })
-                    .unwrap_or(false);
-
-                if !has_sort_index {
-                    ui_conn
-                        .execute_batch(
-                            "ALTER TABLE assets ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0;
-                             CREATE INDEX IF NOT EXISTS idx_assets_item_sort ON assets(item_id, sort_index);",
-                        )
-                        .map_err(|e| format!("Failed to add sort_index column to assets: {e}"))
-                        .expect("Failed to add sort_index column");
-                    eprintln!("[setup] Added sort_index column to assets table");
-                }
-
-                let has_notes_asset_id: bool = ui_conn
-                    .prepare("SELECT asset_id FROM notes LIMIT 0")
-                    .map(|mut stmt| {
-                        let _ = stmt.query_map([], |_| Ok(()));
-                        true
-                    })
-                    .unwrap_or(false);
-
-                if !has_notes_asset_id {
-                    ui_conn
-                        .execute_batch(
-                            "ALTER TABLE notes ADD COLUMN asset_id TEXT;
-                             ALTER TABLE entities ADD COLUMN asset_id TEXT;
-                             ALTER TABLE triples ADD COLUMN asset_id TEXT;
-                             CREATE INDEX IF NOT EXISTS idx_notes_asset_id ON notes(asset_id);
-                             CREATE INDEX IF NOT EXISTS idx_entities_asset_id ON entities(asset_id);
-                             CREATE INDEX IF NOT EXISTS idx_triples_asset_id ON triples(asset_id);",
-                        )
-                        .map_err(|e| format!("Failed to add asset_id columns: {e}"))
-                        .expect("Failed to add asset_id columns");
-                    eprintln!("[setup] Added asset_id columns to notes, entities, triples");
-                }
-            } else if !modern_schema_bootstrapped {
-                eprintln!(
-                    "[setup] assets table not found — skipping legacy fallback schema patching"
-                );
-            }
-
-            // Create app_settings table for user configuration (API keys, preferences).
-            // Keep this outside the legacy fallback so modern-schema databases get it too.
-            ui_conn
-                .execute_batch(
-                    "CREATE TABLE IF NOT EXISTS app_settings (
-                        key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL
-                    );",
-                )
-                .map_err(|e| format!("Failed to create app_settings table: {e}"))
-                .expect("Failed to create app_settings table");
-            eprintln!("[setup] app_settings table ensured");
 
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
-                .expect("Failed to migrate legacy default OpenRouter model");
+                .map_err(|e| fail("No se pudo actualizar la configuración guardada.", e))?;
             settings::log_renderer_written_backend_settings(&ui_conn);
             let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
             if secret_migration.migrated > 0 {
@@ -1012,36 +918,17 @@ pub fn run() {
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
 
-            // Pending store migrations run here, after every pre-migration
-            // repair above and before the worker connection opens. The repairs
-            // must keep running first, exactly as the renderer's runner saw
-            // them: `legacy_uniques_sql` dedups extractions/transcriptions
-            // before 0016 creates its unique indexes. Sync capture is ensured
-            // later in `setup`, so on a first launch it covers every table
-            // these migrations create.
-            let migrations = migrate_archive(&mut ui_conn)
-                .map_err(|detail| fail("No se pudo actualizar la base de datos.", detail))?;
-            if let (Some(first), Some(last)) = (
-                migrations.applied.first().copied(),
-                migrations.applied.last().copied(),
-            ) {
-                eprintln!(
-                    "[setup] migrations: applied {} ({}..{})",
-                    migrations.applied.len(),
-                    first,
-                    last
-                );
-            } else {
-                eprintln!("[setup] migrations: up to date");
-            }
-
             let research = research::ResearchState::new(app_dir.clone(), db_path.clone())
                 .map_err(|e| fail("No se pudo abrir el estado de investigaciones.", e))?;
             app.manage(research);
 
             // OCR worker connection
-            let worker_conn = db::open::open_archive_connection(&db_path)
-                .expect("Failed to open SQLite database (worker)");
+            let worker_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
+                fail(
+                    &format!("No se pudo abrir la base de datos {}.", db_path.display()),
+                    e,
+                )
+            })?;
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
@@ -1925,34 +1812,6 @@ fn move_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs a startup rewrite of asset rows without queueing it for sync.
-///
-/// An asset's `path` is a device-local key: sync sends a `rel_path` derived from
-/// it, so rewriting it changes nothing another device should see. Left to the
-/// capture triggers, the rewrite pushed every asset as a fresh edit, which could
-/// revive one that another device had deleted together with its item. The
-/// triggers stand down while `applying` is `1`; the previous value comes back
-/// afterwards. Run it inside the caller's transaction so both land together.
-fn without_sync_capture<T>(
-    conn: &Connection,
-    work: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    if !table_exists(conn, "sync_meta") {
-        return work();
-    }
-    let previous = crate::sync::session::meta_get(conn, "applying")?;
-    crate::sync::session::meta_set(conn, "applying", "1")?;
-    let result = work()?;
-    match previous {
-        Some(value) => crate::sync::session::meta_set(conn, "applying", &value)?,
-        None => {
-            conn.execute("DELETE FROM sync_meta WHERE key = 'applying'", [])
-                .map_err(|error| format!("Failed to restore the sync capture flag: {error}"))?;
-        }
-    }
-    Ok(result)
-}
-
 fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), String> {
     let Some(parent_dir) = app_dir.parent() else {
         return Ok(());
@@ -2212,243 +2071,9 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
     Ok(rewritten)
 }
 
-fn migration_applied(conn: &Connection, name: &str) -> Result<bool, String> {
-    let has_migrations_table: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations' LIMIT 1",
-            [],
-            |_row| Ok(true),
-        )
-        .unwrap_or(false);
-
-    if !has_migrations_table {
-        return Ok(false);
-    }
-
-    let found: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM _migrations WHERE name = ?1 LIMIT 1",
-            rusqlite::params![name],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| format!("Failed to check migration '{name}': {e}"))?;
-
-    Ok(found.is_some())
-}
-
-/// Applies the pending store migrations at startup and maps a failure to the
-/// Spanish detail `fail(...)` shows and logs, naming the migration that broke.
-fn migrate_archive(conn: &mut Connection) -> Result<db::migrations::MigrationReport, String> {
-    db::migrations::apply_migrations(conn).map_err(|error| {
-        format!(
-            "La migración \"{}\" de la base de datos falló: {}",
-            error.migration, error.message
-        )
-    })
-}
-
-/// Migrate the `extractions` table to remove the legacy CHECK constraint
-/// on the `method` column that only allowed 'native' and 'ocr'.
-/// PaddleOCR uses methods like 'paddle', 'paddle_vl', 'pdf_paddle', and 'pdf_paddle_vl'.
-/// SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
-fn migrate_extractions_method_check(conn: &Connection) -> Result<(), String> {
-    // Check if the CHECK constraint exists by attempting an insert with a new method value.
-    // If it succeeds, no migration needed.
-    let has_check: bool = conn
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='extractions'")
-        .and_then(|mut stmt| {
-            stmt.query_row([], |row| {
-                let sql: String = row.get(0)?;
-                Ok(sql.contains("CHECK(method IN"))
-            })
-        })
-        .unwrap_or(false);
-
-    if !has_check {
-        eprintln!(
-            "[setup] extractions.method: no legacy CHECK constraint found — skipping migration"
-        );
-        return Ok(());
-    }
-
-    eprintln!("[setup] Migrating extractions table to remove legacy method CHECK constraint...");
-
-    conn.execute_batch(
-        "BEGIN TRANSACTION;
-         CREATE TABLE extractions_new (
-           id TEXT PRIMARY KEY,
-           asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-           text_content TEXT NOT NULL,
-           method TEXT NOT NULL,
-           confidence REAL,
-           created_at INTEGER NOT NULL
-         );
-         INSERT INTO extractions_new SELECT * FROM extractions;
-         DROP TABLE extractions;
-         ALTER TABLE extractions_new RENAME TO extractions;
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_asset_id_unique ON extractions(asset_id);
-         COMMIT;",
-    )
-    .map_err(|e| format!("Failed to migrate extractions table: {e}"))?;
-
-    eprintln!("[setup] extractions.method CHECK constraint removed successfully");
-    Ok(())
-}
-
-fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
-    // `layouts.asset_id` references `assets`, which only the store migrations create. Until
-    // they have run, store migration 0020 owns `layouts`; touching it here would leave a
-    // table whose writes fail with `no such table: main.assets` while foreign keys are on.
-    if !table_exists(conn, "assets") {
-        eprintln!("[setup] assets table not found — leaving layouts to the store migrations");
-        return Ok(());
-    }
-
-    let has_layouts_table: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='layouts' LIMIT 1",
-            [],
-            |_row| Ok(true),
-        )
-        .unwrap_or(false);
-
-    if !has_layouts_table {
-        conn.execute_batch(
-            "CREATE TABLE layouts (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_layouts_asset_id ON layouts(asset_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id);",
-        )
-        .map_err(|e| format!("Failed to create layouts table: {e}"))?;
-        eprintln!("[setup] layouts table created with blocks column");
-        return Ok(());
-    }
-
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(layouts)")
-        .map_err(|e| format!("Failed to inspect layouts schema: {e}"))?;
-
-    let columns = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("Failed to read layouts schema: {e}"))?;
-
-    let mut has_blocks = false;
-    for column in columns {
-        if column.map_err(|e| format!("Failed to read layouts column: {e}"))? == "blocks" {
-            has_blocks = true;
-            break;
-        }
-    }
-    drop(stmt);
-
-    if !has_blocks {
-        eprintln!("[setup] Migrating legacy layouts table to add blocks column...");
-        conn.execute_batch(
-            "BEGIN TRANSACTION;
-             CREATE TABLE layouts_new (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-             );
-             INSERT INTO layouts_new (
-                id, asset_id, regions, blocks, model, image_width, image_height, created_at
-             )
-             SELECT
-                id,
-                asset_id,
-                regions,
-                '[]' AS blocks,
-                model,
-                image_width,
-                image_height,
-                created_at
-             FROM layouts;
-             DROP TABLE layouts;
-             ALTER TABLE layouts_new RENAME TO layouts;
-             COMMIT;",
-        )
-        .map_err(|e| format!("Failed to migrate layouts table: {e}"))?;
-    }
-
-    conn.execute_batch(
-        "DELETE FROM layouts
-         WHERE rowid NOT IN (
-           SELECT MAX(rowid) FROM layouts GROUP BY asset_id
-         );
-         CREATE INDEX IF NOT EXISTS idx_layouts_asset_id ON layouts(asset_id);
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id);",
-    )
-    .map_err(|e| format!("Failed to finalize layouts schema: {e}"))?;
-
-    eprintln!("[setup] layouts schema ensured");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fk_connection() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        conn
-    }
-
-    #[test]
-    fn ensure_layouts_schema_waits_for_the_store_to_create_assets() {
-        let conn = fk_connection();
-
-        ensure_layouts_schema(&conn).unwrap();
-
-        assert!(!table_exists(&conn, "layouts"));
-    }
-
-    #[test]
-    fn ensure_layouts_schema_survives_a_half_bootstrapped_archive() {
-        // A previous launch created `layouts` but the store never created `assets`.
-        let conn = fk_connection();
-        conn.execute_batch(
-            "CREATE TABLE layouts (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            );",
-        )
-        .unwrap();
-
-        ensure_layouts_schema(&conn).unwrap();
-    }
-
-    #[test]
-    fn ensure_layouts_schema_creates_layouts_once_assets_exists() {
-        let conn = fk_connection();
-        conn.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY);")
-            .unwrap();
-
-        ensure_layouts_schema(&conn).unwrap();
-        ensure_layouts_schema(&conn).unwrap();
-
-        assert!(table_exists(&conn, "layouts"));
-    }
 
     #[test]
     fn product_name_matches_the_variant_tauri_config() {
@@ -2458,27 +2083,6 @@ mod tests {
         let config = include_str!("../tauri.lite.conf.json");
         let config: serde_json::Value = serde_json::from_str(config).unwrap();
         assert_eq!(config["productName"].as_str(), Some(PRODUCT_NAME));
-    }
-
-    #[test]
-    fn migrate_archive_names_the_failing_migration_in_the_detail() {
-        let mut conn = fk_connection();
-        // 0020 recreates `layouts` with `IF NOT EXISTS`, then ALTERs it and
-        // dedups by `asset_id`; this planted table lacks that column, so the
-        // migration fails and its name must reach the dialog detail.
-        conn.execute_batch("CREATE TABLE layouts (id TEXT PRIMARY KEY);")
-            .unwrap();
-
-        let detail = migrate_archive(&mut conn).expect_err("0020 must fail on this archive");
-
-        assert!(
-            detail.contains("0020_layouts"),
-            "the detail must name the migration: {detail}"
-        );
-        assert!(
-            detail.contains("asset_id"),
-            "the detail must keep the SQLite message: {detail}"
-        );
     }
 
     #[test]
@@ -2543,71 +2147,6 @@ mod tests {
                 "{url} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn migrate_extractions_method_check_removes_legacy_check_and_preserves_upsert_target() {
-        let conn = Connection::open_in_memory().expect("open in-memory db");
-        conn.execute_batch(
-            "CREATE TABLE assets (id TEXT PRIMARY KEY);
-             INSERT INTO assets(id) VALUES ('asset-1');
-             CREATE TABLE extractions (
-               id TEXT PRIMARY KEY,
-               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-               text_content TEXT NOT NULL,
-               method TEXT NOT NULL CHECK(method IN ('native', 'ocr')),
-               confidence REAL,
-               created_at INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_extractions_asset_id ON extractions(asset_id);",
-        )
-        .expect("create legacy schema");
-
-        migrate_extractions_method_check(&conn).expect("migrate extractions schema");
-
-        let create_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='extractions'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("read migrated table sql");
-        assert!(!create_sql.contains("CHECK(method IN"));
-
-        conn.execute(
-            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-             VALUES ('ext-1', 'asset-1', 'first', 'paddle_vl', NULL, 1)
-             ON CONFLICT(asset_id) DO UPDATE SET
-               text_content = excluded.text_content,
-               method = excluded.method,
-               confidence = excluded.confidence,
-               created_at = excluded.created_at",
-            [],
-        )
-        .expect("insert modern OCR method");
-
-        conn.execute(
-            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-             VALUES ('ext-2', 'asset-1', 'updated', 'pdf_paddle_vl', NULL, 2)
-             ON CONFLICT(asset_id) DO UPDATE SET
-               text_content = excluded.text_content,
-               method = excluded.method,
-               confidence = excluded.confidence,
-               created_at = excluded.created_at",
-            [],
-        )
-        .expect("upsert by asset_id");
-
-        let (text, method, count): (String, String, i64) = conn
-            .query_row(
-                "SELECT text_content, method, (SELECT COUNT(*) FROM extractions) FROM extractions WHERE asset_id = 'asset-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("read upserted extraction");
-        assert_eq!(text, "updated");
-        assert_eq!(method, "pdf_paddle_vl");
-        assert_eq!(count, 1);
     }
 
     // ------------------------------------------------------------------
