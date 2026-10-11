@@ -371,7 +371,14 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     Store 445, Rust 2798 / 0 / 35. RDD `review-9ed7ebd508ea9dd9` approved, no findings, reviewed
     without the generated fixture under the user's standing Phase 4 rule (generated,
     freshness-pinned files over the budget are excluded via a temp branch).
-  - [ ] 4.2b — `db/migrations.rs` (atomic per migration, 0020 port, 0032 repair) + tests, not wired.
+  - [x] 4.2b — `db/migrations.rs`, not wired. Branch `feat/p4-2b-rust-migration-runner`, commit
+    `60b9456f`. `include_str!` registry (58; 27 atomic, pinned against runner.ts), runtime
+    `_migrations`/`layouts` DDL text shared with canonical_dump, every migration in `BEGIN IMMEDIATE
+    … COMMIT` with its row (A-03), `applied_at` in seconds, per-statement `duplicate column name`
+    tolerance only where TS had it, 0020 and the three 0032 cases ported, `MigrationError` instead
+    of panics. Empty DB == `schema_canonical.json` exactly (RED with a wrong `_migrations` text).
+    13 tests; Rust 2811 / 0 / 35; Pro clippy only the 9 known. Accepted divergences: all migrations
+    transactional; lexical splitting. RDD `review-95a9008a2b9c8fc5` approved, no findings.
   - [ ] 4.2c — wire into `setup`; measure startup on a large synthetic archive.
   - [ ] 4.3 — `setup` patches as idempotent repairs, dedup without capture, `fail(...)`; dev profile.
   - [ ] 4.4a — TS runner verify-only; DDL closed in the IPC; migration window and fingerprints gone.
