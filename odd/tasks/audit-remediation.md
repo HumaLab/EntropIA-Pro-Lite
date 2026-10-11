@@ -480,7 +480,18 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `schema_tag` unchanged). Verified every production write connection goes through
       `db/open.rs` (`research*` opens another DB; `rag/baseline.rs` is read-only tooling). Plan
       test: an in-place embedding update is reflected by the next query.
-  - [ ] 5.4 (P-04) — unified backend logging, incremental.
+  - [ ] 5.4 (P-04) — unified backend logging, incremental. One unit per area.
+    - [x] 5.4a — facade + guard + setup. Branch `feat/p5-4a-backend-logging`, commit `ebc40ecf`.
+      `logging.rs` (`log` 0.4, already in the lockfile): stderr `[<target>] <message>`
+      byte-identical to the old eprintln lines; our crate's warn/error also persisted to
+      `app_logs` once attached; dependency records stderr-only at Warn+. lib.rs, db/repairs.rs,
+      db/schema_audit.rs migrated. Parent review caught and fixed two regressions before commit:
+      paired eprintln+app_logs sites had lost their persisted Spanish entries (8 restored
+      byte-for-byte), and dependency warnings would have reached the user's log. Ratchet
+      `tests/eprintln_ratchet.rs` + baseline; eprintln 387 → 330. Lite 2828 / 0 / 37; Pro clippy
+      only the 9 known. Dev profile: stderr format and persisted entries unchanged. RDD
+      `review-39fda39543844f3f` approved, no findings.
+    - [ ] 5.4b — sync. - [ ] 5.4c — runtime and deps. - [ ] 5.4d — processing, ocr, llm, nlp.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
