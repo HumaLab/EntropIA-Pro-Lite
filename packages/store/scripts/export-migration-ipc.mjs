@@ -14,7 +14,10 @@ import { runMigrations } from '../src/runner.ts'
 import { recordMigrationIpcFixtureJson } from '../src/migration-ipc-recorder.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const fixturePath = resolve(here, '../../../apps/desktop/src-tauri/tests/fixtures/migration_ipc.json')
+const fixturePath = resolve(
+  here,
+  '../../../apps/desktop/src-tauri/tests/fixtures/migration_ipc.json'
+)
 
 const json = await recordMigrationIpcFixtureJson(runMigrations)
 await mkdir(dirname(fixturePath), { recursive: true })
