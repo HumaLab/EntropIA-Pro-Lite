@@ -822,7 +822,7 @@ pub fn run() {
             })?;
 
             // UI connection — used by Tauri IPC commands
-            let ui_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
+            let mut ui_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
                 fail(
                     &format!("No se pudo abrir la base de datos {}.", db_path.display()),
                     e,
@@ -979,6 +979,29 @@ pub fn run() {
                         .to_string();
                 eprintln!("[setup] {message}");
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
+            }
+
+            // Pending store migrations run here, after every pre-migration
+            // repair above and before the worker connection opens. The repairs
+            // must keep running first, exactly as the renderer's runner saw
+            // them: `legacy_uniques_sql` dedups extractions/transcriptions
+            // before 0016 creates its unique indexes. Sync capture is ensured
+            // later in `setup`, so on a first launch it covers every table
+            // these migrations create.
+            let migrations = migrate_archive(&mut ui_conn)
+                .map_err(|detail| fail("No se pudo actualizar la base de datos.", detail))?;
+            if let (Some(first), Some(last)) = (
+                migrations.applied.first().copied(),
+                migrations.applied.last().copied(),
+            ) {
+                eprintln!(
+                    "[setup] migrations: applied {} ({}..{})",
+                    migrations.applied.len(),
+                    first,
+                    last
+                );
+            } else {
+                eprintln!("[setup] migrations: up to date");
             }
 
             let research = research::ResearchState::new(app_dir.clone(), db_path.clone())
@@ -2183,6 +2206,17 @@ fn migration_applied(conn: &Connection, name: &str) -> Result<bool, String> {
     Ok(found.is_some())
 }
 
+/// Applies the pending store migrations at startup and maps a failure to the
+/// Spanish detail `fail(...)` shows and logs, naming the migration that broke.
+fn migrate_archive(conn: &mut Connection) -> Result<db::migrations::MigrationReport, String> {
+    db::migrations::apply_migrations(conn).map_err(|error| {
+        format!(
+            "La migración \"{}\" de la base de datos falló: {}",
+            error.migration, error.message
+        )
+    })
+}
+
 /// Migrate the `extractions` table to remove the legacy CHECK constraint
 /// on the `method` column that only allowed 'native' and 'ocr'.
 /// PaddleOCR uses methods like 'paddle', 'paddle_vl', 'pdf_paddle', and 'pdf_paddle_vl'.
@@ -2393,6 +2427,27 @@ mod tests {
         let config = include_str!("../tauri.lite.conf.json");
         let config: serde_json::Value = serde_json::from_str(config).unwrap();
         assert_eq!(config["productName"].as_str(), Some(PRODUCT_NAME));
+    }
+
+    #[test]
+    fn migrate_archive_names_the_failing_migration_in_the_detail() {
+        let mut conn = fk_connection();
+        // 0020 recreates `layouts` with `IF NOT EXISTS`, then ALTERs it and
+        // dedups by `asset_id`; this planted table lacks that column, so the
+        // migration fails and its name must reach the dialog detail.
+        conn.execute_batch("CREATE TABLE layouts (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        let detail = migrate_archive(&mut conn).expect_err("0020 must fail on this archive");
+
+        assert!(
+            detail.contains("0020_layouts"),
+            "the detail must name the migration: {detail}"
+        );
+        assert!(
+            detail.contains("asset_id"),
+            "the detail must keep the SQLite message: {detail}"
+        );
     }
 
     #[test]

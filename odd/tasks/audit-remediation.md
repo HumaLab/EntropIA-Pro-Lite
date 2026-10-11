@@ -379,7 +379,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     of panics. Empty DB == `schema_canonical.json` exactly (RED with a wrong `_migrations` text).
     13 tests; Rust 2811 / 0 / 35; Pro clippy only the 9 known. Accepted divergences: all migrations
     transactional; lexical splitting. RDD `review-95a9008a2b9c8fc5` approved, no findings.
-  - [ ] 4.2c — wire into `setup`; measure startup on a large synthetic archive.
+  - [x] 4.2c — Rust applies the migrations at startup. Branch `feat/p4-2c-wire-rust-migrations`.
+    - `b2216048` fix: FTS5's constructor `PRAGMA data_version` (no value) allowed for Single
+      renderer statements. Found in the dev-profile run: on a fresh archive the first FTS5 use on
+      `ui_conn` is now a `db_select`, which S-02 denied ("Restricted SQL statement" on Inicio,
+      sample collections half seeded). Integration test RED "vtable constructor failed".
+    - `84be8c1b`: `apply_migrations` on `ui_conn` after the schema repairs, before
+      `worker_conn`/`AppDbState`/capture; `MigrationError` → `fail(...)` with SQLite's message
+      only (rusqlite's appended migration SQL dropped, test RED first); `[setup] migrations:` log.
+      Upgrade 0033→0058 on 10k items: 248 ms (0034 FTS rebuild 222 ms).
+    - Dev profile (Lite, Xvfb): fresh install applied 58, 54 `trg_sync_*`, 3 sample collections,
+      no error; existing archive with 0058 pending applied 1, data intact; forced 0058 failure →
+      `fail()` reached, logged, nothing committed (57 rows). **For 4.3:** the GTK dialog of
+      `fail()` never maps under Xvfb (process stays alive behind the splash) — likely pre-existing
+      on Linux, since `fail()` is unchanged; verify and fix with 4.3's acceptance.
+    - Rust 2814 / 0 / 36; Pro clippy only the 9 known. RDD `review-3461ac275bca68c2` approved.
   - [ ] 4.3 — `setup` patches as idempotent repairs, dedup without capture, `fail(...)`; dev profile.
   - [ ] 4.4a — TS runner verify-only; DDL closed in the IPC; migration window and fingerprints gone.
   - [ ] 4.4b — canonical trigger/view audit at startup, tests (a)-(d).
