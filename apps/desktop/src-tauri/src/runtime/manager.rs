@@ -13,7 +13,6 @@ use crate::runtime::status::{
     RuntimeStatus,
 };
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1266,9 +1265,8 @@ fn emit_bootstrap_progress<F>(
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path)
-        .map_err(|error| format!("Failed to read {} for checksum: {error}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    super::hash::sha256_file_streaming(path)
+        .map_err(|error| format!("Failed to read {} for checksum: {error}", path.display()))
 }
 
 /// Recompute the SHA-256 of the manifest's CRITICAL entries (python/uv
@@ -1614,6 +1612,7 @@ mod tests {
     use crate::runtime::download::test_support::{build_signed_release, runtime_archive_bytes};
     use crate::runtime::manifest::ManifestEntry;
     use base64::Engine;
+    use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
     #[test]

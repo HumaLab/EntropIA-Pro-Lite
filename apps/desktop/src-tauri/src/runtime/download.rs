@@ -574,13 +574,12 @@ fn verify_extracted_runtime(
         if !target.exists() {
             return Err(format!("Extracted runtime entry missing: {}", entry.path));
         }
-        let bytes = fs::read(&target).map_err(|error| {
+        let sha256 = super::hash::sha256_file_streaming(&target).map_err(|error| {
             format!(
                 "Failed to read extracted entry {}: {error}",
                 target.display()
             )
         })?;
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
         if sha256 != entry.sha256 {
             return Err(format!(
                 "Extracted runtime checksum mismatch for {}",
