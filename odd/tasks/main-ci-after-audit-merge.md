@@ -32,3 +32,7 @@ Branch: `fix/main-ci-after-audit-merge` (from `origin/main` 42c60e8d).
   operator: lopdf does not recurse into `Do`, pdf-extract 0.12 recurses but only
   handles `Tj`/`TJ`, PDFium reads it. Candidates stay `[1, 2]`.
   `cargo test --locked --test bibliography_processing`: 167 passed, PDFium ran (not skipped).
+- Task 4 (in progress): PR #47 opened. CI `Lint & Typecheck` and `Build` pass. `Test`
+  failed: `collection-load-cost.test.ts` imports `node:sqlite`, which vitest 4 (#40) cannot
+  bundle in the happy-dom client environment on Node 22. Local Node 24 hid it. Fix:
+  `@vitest-environment node` pragma, verified on Node 22.
