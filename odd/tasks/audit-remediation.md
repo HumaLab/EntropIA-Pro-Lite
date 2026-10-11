@@ -344,7 +344,8 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       (`authorizer.rs`); R2 small readability notes in `migration_allowlist.rs:92-113` and
       `migration-ipc-recorder.ts:56-57,102-107`; R1 the rebuild exception drops capture
       triggers until `sync_ensure_capture` (by design, see S-02c).
-- [ ] Phase 4 — migrations unified in Rust (A-01, A-03, A-02). Design:
+- [x] Phase 4 — migrations unified in Rust (A-01, A-03, A-02). PR stack #46 → #48 → #49 → #50 →
+  #51 → #52 → #53 → #54. Design:
   `odd/plans/plan-migraciones-rust.md` (invariants: identical `_migrations` names, no new rows,
   `schema_tag` unchanged, same canonical dump, `applied_at` in seconds, capture semantics kept).
   One stacked branch + PR + RDD per unit.
@@ -426,7 +427,17 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     - Dev profile: fresh install seeds the samples through renderer DML; Inicio, collection,
       item, FTS search, Escritura, Investigación, Chat, Colecciones render; no authorizer/DDL
       errors in the log.
-  - [ ] 4.4b — canonical trigger/view audit at startup, tests (a)-(d).
+  - [x] 4.4b — canonical trigger/view audit at startup. Branch `feat/p4-4b-trigger-view-audit`,
+    commit `c1f7646f`. `db/schema_audit.rs` builds the canonical schema in memory (apply_migrations
+    + asset-path guard triggers + ensure_capture: 45 migration triggers, 54 `trg_sync_*`, 2 guards,
+    0 views; no other production creator), compares every trigger/view by (type, name) with exact
+    tbl_name + sql, drops divergent/extra ones and recreates canonical ones (`trg_sync_*` via
+    `drop_all_sync_triggers` + `ensure_capture`) in one transaction, before the renderer gets
+    `ui_conn`; findings to `app_logs` (warn). Canonical build ~65 ms per startup (debug). Tests
+    (a)-(d) + view, clean, idempotent, guards survive; RED with the repair short-circuited. Rust
+    2808 / 0 / 35. Dev profile: a copy of a real archive with a planted trigger, a planted view and
+    a hijacked `collection_activity_items_update` → 3 dropped, 1 restored byte-identical, next start
+    "ok". RDD `review-d44fe8c944ffb916` approved, no findings.
 - [ ] Phase 5 — performance and observability (P-01..P-04)
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)

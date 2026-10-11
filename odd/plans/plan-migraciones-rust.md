@@ -1,6 +1,7 @@
 # Plan: migraciones unificadas en Rust (Fase 4)
 
-Estado: **diseño aprobado para implementar por partes.** Fecha: 2026-10-11.
+Estado: **implementado** (4.0 a 4.4b, PRs #46 a #54; detalle y evidencia en
+`odd/tasks/audit-remediation.md`, Fase 4). Fecha: 2026-10-11.
 Origen: `plan.md`, Fase 4 (A-01, A-02, A-03). Este documento es el paso 4.0: fija las reglas
 antes de tocar código. Las referencias `archivo:línea` son de la rama `feat/phase4-migrations-design`.
 
