@@ -1,6 +1,5 @@
 -- Enforce one extraction/transcription row per asset to enable true UPSERT.
 -- Keep the most recent row (largest rowid) if any legacy duplicates exist.
-
 DELETE FROM extractions
 WHERE rowid NOT IN (
   SELECT MAX(rowid) FROM extractions GROUP BY asset_id

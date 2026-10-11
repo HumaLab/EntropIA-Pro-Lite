@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS transcriptions (
   confidence REAL,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_transcriptions_asset_id ON transcriptions(asset_id);
+CREATE INDEX IF NOT EXISTS idx_transcriptions_asset_id ON transcriptions(asset_id)

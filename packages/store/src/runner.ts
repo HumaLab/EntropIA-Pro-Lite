@@ -86,7 +86,7 @@ ${activityTriggers('llm_results', llmResultScope)}
 // Migration registry — SQL inlined as strings for Tauri bundling.
 // Cannot use dynamic fs reads at runtime in a Tauri webview.
 // ---------------------------------------------------------------------------
-const MIGRATIONS: Record<string, string> = {
+export const MIGRATIONS: Record<string, string> = {
   '0001_initial': `
 -- Migration tracking table
 CREATE TABLE IF NOT EXISTS _migrations (

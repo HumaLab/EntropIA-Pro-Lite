@@ -1,6 +1,3 @@
--- Migration: 0002_metadata_search
--- Adds search_text generated column and performance indexes
-
 -- Add search_text generated column for LIKE queries
 ALTER TABLE items ADD COLUMN search_text TEXT GENERATED ALWAYS AS (
   COALESCE(title, '') || ' ' || COALESCE(json(metadata), '')
