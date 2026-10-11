@@ -6287,15 +6287,15 @@ fn bomb_page_stream(text: Option<&str>) -> Stream {
     stream
 }
 
-/// JD6-A-003's scenario. Page 1 hides its text where only PDFium finds it: an
-/// inline image first (pdf-extract silently drops everything after it) and
-/// then a Form XObject (lopdf's per-page extractor never recurses into `Do`),
-/// while PDFium reads the form's text. Page 2 is a decompression bomb: the
-/// unreadable sibling whose OCR candidacy must not move.
+/// JD6-A-003's scenario. Page 1 hides its text where only PDFium finds it: a
+/// Form XObject shown with the `'` operator (lopdf's per-page extractor never
+/// recurses into `Do`, and pdf-extract 0.12 recurses into the form but only
+/// handles `Tj`/`TJ`, so both stay blank), while PDFium reads the form's
+/// text. Page 2 is a decompression bomb: the unreadable sibling whose OCR
+/// candidacy must not move.
 fn pdf_with_recovered_page_and_bomb_page() -> Vec<u8> {
-    let page_one = "q BI /W 1 /H 1 /CS /G /BPC 8 ID \u{80} EI Q /Fm1 Do";
     make_pdf_with_contents(
-        vec![text_page_stream(page_one), bomb_page_stream(None)],
+        vec![text_page_stream("/Fm1 Do"), bomb_page_stream(None)],
         |index, font_id| {
             (index == 0).then(|| {
                 Stream::new(
@@ -6305,7 +6305,7 @@ fn pdf_with_recovered_page_and_bomb_page() -> Vec<u8> {
                         "BBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
                         "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
                     },
-                    b"BT /F1 12 Tf 50 700 Td (Hola mundo recuperado del formulario) Tj ET".to_vec(),
+                    b"BT /F1 12 Tf 50 700 Td (Hola mundo recuperado del formulario) ' ET".to_vec(),
                 )
             })
         },
@@ -6404,15 +6404,16 @@ fn a_pdfium_recovered_page_beside_an_unreadable_one_keeps_the_baseline_ocr_candi
         return;
     }
     let pdf = pdf_with_recovered_page_and_bomb_page();
-    // The construction IS the verdict: pdf-extract reads nothing (the inline
-    // image eats the page) and lopdf reads nothing from page 1 (its extractor
-    // never recurses into a Form XObject), so the pre-part-A basis is blank
-    // and the unreadable page is an OCR candidate exactly as before part A.
+    // The construction IS the verdict: pdf-extract reads nothing (it recurses
+    // into the Form XObject but only handles `Tj`/`TJ`, missing the `'`
+    // operator) and lopdf reads nothing from page 1 (its extractor never
+    // recurses into a Form XObject), so the pre-part-A basis is blank and the
+    // unreadable page is an OCR candidate exactly as before part A.
     let whole = entropia_desktop_lib::bibliography::processing::pdf_extract_text(&pdf)
         .expect("pdf-extract runs");
     assert!(
         whole.trim().is_empty(),
-        "pdf-extract must read nothing here (the inline-image quirk): {whole:?}"
+        "pdf-extract must read nothing here (the apostrophe-in-form construction): {whole:?}"
     );
     let lopdf_only = read_native_page_texts(&pdf, 2, PageTextDecoder::Lopdf).expect("lopdf reads");
     assert!(
