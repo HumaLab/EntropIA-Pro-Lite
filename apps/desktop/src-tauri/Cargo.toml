@@ -77,6 +77,8 @@ hound = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
+# The setup dialogs iterate GLib's main context themselves (lib.rs show_setup_dialog).
+glib = "0.18"
 # Cloud-sync stores session tokens in the OS secret service (DESIGN §6.x).
 keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
 

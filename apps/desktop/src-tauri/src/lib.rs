@@ -111,6 +111,43 @@ fn startup_error_dialog(context: &str, detail: &str, log_path: &Path) -> (String
     )
 }
 
+/// Shows a modal dialog from `setup` and returns once it is dismissed.
+///
+/// `setup` runs on the main thread, where `blocking_show` deadlocks on Linux:
+/// rfd queues the GTK dialog on the GLib main context this thread owns, then
+/// blocks this same thread waiting for the answer, so the dialog never maps
+/// and the app hangs behind the splash. There the dialog is shown without
+/// blocking and the context is iterated until it is dismissed, the way
+/// `gtk_dialog_run` does.
+fn show_setup_dialog(
+    handle: &tauri::AppHandle,
+    title: &str,
+    body: String,
+    kind: tauri_plugin_dialog::MessageDialogKind,
+) {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog = handle.dialog().message(body).title(title).kind(kind);
+    #[cfg(target_os = "linux")]
+    {
+        let (dismissed, wait) = std::sync::mpsc::channel();
+        let context = glib::MainContext::default();
+        let waker = context.clone();
+        // The callback runs on the plugin's worker thread; waking the context
+        // keeps `iteration(true)` from sleeping past the dismissal.
+        dialog.show(move |_| {
+            let _ = dismissed.send(());
+            waker.wakeup();
+        });
+        while wait.try_recv().is_err() {
+            context.iteration(true);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dialog.blocking_show();
+    }
+}
+
 #[cfg(debug_assertions)]
 fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.dev.conf.json"))?;
@@ -652,7 +689,7 @@ pub fn run() {
             splash::open(&app.handle().clone());
             splash::start_watchdog(&app.handle().clone());
 
-            use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+            use tauri_plugin_dialog::MessageDialogKind;
             // On a clean/varied Windows PC the data dir or DB can be unreachable
             // (redirected/roaming AppData, read-only or full disk, AV locking the
             // freshly-created folder). SetErrorMode above suppresses the OS crash
@@ -667,12 +704,7 @@ pub fn run() {
                 let _ = std::fs::write(&log_path, format!("{context}\n{detail}\n"));
                 eprintln!("{PRODUCT_NAME} startup error: {context}: {detail}");
                 let (title, body) = startup_error_dialog(context, &detail, &log_path);
-                dialog_handle
-                    .dialog()
-                    .message(body)
-                    .title(title)
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
+                show_setup_dialog(&dialog_handle, &title, body, MessageDialogKind::Error);
                 detail.into()
             };
 
@@ -706,16 +738,15 @@ pub fn run() {
                 }
                 Err(instance_guard::GuardError::AlreadyRunning) => {
                     splash::finish_now(app.handle());
-                    app.handle()
-                        .dialog()
-                        .message(
-                            "Ya hay una EntropIA abierta (Lite, Pro o de desarrollo).\n\n\
-                             Cerrala antes de abrir esta: dos abiertas a la vez sobre la misma \
-                             base de datos pueden dañarla.",
-                        )
-                        .title("EntropIA ya está abierta")
-                        .kind(MessageDialogKind::Warning)
-                        .blocking_show();
+                    show_setup_dialog(
+                        app.handle(),
+                        "EntropIA ya está abierta",
+                        "Ya hay una EntropIA abierta (Lite, Pro o de desarrollo).\n\n\
+                         Cerrala antes de abrir esta: dos abiertas a la vez sobre la misma \
+                         base de datos pueden dañarla."
+                            .to_string(),
+                        MessageDialogKind::Warning,
+                    );
                     return Err("another EntropIA instance holds the archive".into());
                 }
                 // The guard failing is not evidence of another instance, and
