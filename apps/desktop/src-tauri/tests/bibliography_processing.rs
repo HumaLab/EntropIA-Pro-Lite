@@ -12440,13 +12440,20 @@ fn p3_sync_eta_uses_the_running_extraction_page_rate_and_excludes_its_attempt() 
     );
 
     let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let elapsed_ms = repository::now_ms() - now;
     let eta = status
         .eta_ms
         .expect("the running extraction measures its own page rate");
     // 7 remaining pages × 20 000 ms/page plus 1 queued attachment × 1000 ms.
+    // The rate reads the real clock, so the attempt is 60 000 + δ ms old by
+    // then (δ = the time spent seeding above): the ETA is
+    // 7 × ⌊(60 000 + δ) / 3⌋ + 1000, i.e. 141 000 plus 7/3 ms per ms of δ.
+    // Bound it with the δ measured here instead of a fixed window, which a
+    // slow runner overshoots.
+    let max_eta = 141_000 + 7 * (elapsed_ms / 3 + 1);
     assert!(
-        (141_000..=143_000).contains(&eta),
-        "page-rate ETA plus the queued average, got {eta}"
+        (141_000..=max_eta).contains(&eta),
+        "page-rate ETA plus the queued average, got {eta} (max {max_eta} after {elapsed_ms} ms)"
     );
 }
 
