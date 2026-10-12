@@ -1,9 +1,14 @@
 name: Engine pin bump
 
 # Moves the research engine pin in Cargo.lock to the tip of EntropIA-Agent's
-# main, and lets main see the new pin only after CI passed on that exact
-# commit. Pushes made with GITHUB_TOKEN never trigger workflows, so CI is
-# dispatched explicitly: workflow_dispatch is the one event they can start.
+# main and proposes it as a pull request once CI passed on that exact commit.
+# The bot never pushes to main (audit finding D-05): a maintainer merges the PR.
+# Pushes and PRs made with GITHUB_TOKEN never trigger workflows, so CI is
+# dispatched explicitly (workflow_dispatch is the one event they can start);
+# that run reports its checks on the same SHA the PR points at.
+#
+# Requires the repository setting "Allow GitHub Actions to create and approve
+# pull requests" (Settings > Actions > General > Workflow permissions).
 
 on:
   schedule:
@@ -11,7 +16,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # push the bump branch and fast-forward main
+  contents: write # push the bump branch (never main)
+  pull-requests: write # open or update the bump PR
   actions: write # dispatch CI and follow its run
 
 concurrency:
@@ -95,13 +101,26 @@ jobs:
           fi
           gh run watch "$run_id" --exit-status --interval 60
 
-      # No force: if main moved while CI ran, the push is rejected and the next
-      # run redoes the bump on top of the new main.
-      - name: Fast-forward main to the tested bump
+      # The tested bump becomes a PR. A run that finds one already open only
+      # refreshes its title: the force-push above moved the PR's head, and the
+      # CI run dispatched above already reported on that SHA.
+      - name: Open or update the bump pull request
         if: steps.update.outputs.changed == 'true'
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          PIN: ${{ steps.update.outputs.pin }}
           BUMP_SHA: ${{ steps.commit.outputs.sha }}
         run: |
-          git push origin "$BUMP_SHA:refs/heads/main"
-          git push origin --delete "$BUMP_BRANCH"
+          title="build(deps): move the research engine pin to ${PIN:0:7}"
+          existing=$(gh pr list --head "$BUMP_BRANCH" --base main --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title"
+            echo "Updated PR #$existing to $BUMP_SHA"
+            exit 0
+          fi
+          body=$(printf '%s\n\n%s\n' \
+            "Automated bump of the EntropIA-Agent pin in Cargo.lock to \`$PIN\`." \
+            "CI passed on $BUMP_SHA (dispatched by the Engine pin bump workflow). Merge to update main.")
+          gh pr create --base main --head "$BUMP_BRANCH" --title "$title" --body "$body"
