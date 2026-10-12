@@ -152,7 +152,7 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
                 break;
             }
             Err(e) => {
-                eprintln!("[transcription] Symphonia decode loop ended: {e}");
+                log::warn!(target: "transcription", "Symphonia decode loop ended: {e}");
                 break;
             }
         };
@@ -164,7 +164,7 @@ fn decode_symphonia(path: &str) -> Result<AudioData, String> {
         let decoded = match decoder.decode(&packet) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("[transcription] Failed to decode packet: {e}");
+                log::info!(target: "transcription", "Failed to decode packet: {e}");
                 continue;
             }
         };

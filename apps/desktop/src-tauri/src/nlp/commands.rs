@@ -363,8 +363,9 @@ pub(crate) fn admit_backfill(
         )?;
         requested += 1;
     }
-    eprintln!(
-        "[nlp/embeddings] EMBED backfill admitted force={force} limit={limit:?} requested={requested}"
+    log::info!(
+        target: "nlp/embeddings",
+        "EMBED backfill admitted force={force} limit={limit:?} requested={requested}"
     );
     Ok(AssetEmbeddingBackfillReport {
         force,

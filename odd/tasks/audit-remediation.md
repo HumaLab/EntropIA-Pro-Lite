@@ -513,7 +513,12 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       which has no logger under `cargo test`, so they no longer print (fix with one shared test
       logger in 5.4f); a level/icon mismatch in `pdf.rs:272`; an inconsistent target in
       `mod.rs:1241`; `debug_viz` dump failures at debug level.
-    - [ ] 5.4e — llm, nlp, transcription, rag (~102).
+    - [x] 5.4e — llm, nlp, transcription, rag. Branch `feat/p5-4e-ml-logging`, commit `21d346c5`.
+      102 sites; compound prefixes (`[llm-local][correction]`) via a `log_target` helper with a
+      regression test; 5 paired transcription eprintlns deleted keeping `app_logs`. Parent review
+      moved an undecodable audio packet (per packet) and auto-title discarded (per conversation)
+      from warn to info. No API key at any level. eprintln 172 → 70. Lite 2829 / 0 / 37; Pro the
+      four modules 478 pass. RDD `review-da6064ce226ef5e5` approved, no findings.
     - [ ] 5.4f — the rest (~70) + shared test logger.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)

@@ -119,8 +119,9 @@ impl WhisperEngine {
             ));
         }
 
-        eprintln!(
-            "[transcription] Engine configured: python={}, script={}, model={}, compute_type={}",
+        log::info!(
+            target: "transcription",
+            "Engine configured: python={}, script={}, model={}, compute_type={}",
             config.python_path.display(),
             config.script_path.display(),
             config.model_size,
@@ -140,7 +141,10 @@ impl WhisperEngine {
         audio_path: &str,
         duration_ms: u64,
     ) -> Result<TranscriptionResult, String> {
-        eprintln!("[transcription] Spawning Python transcription for: {audio_path}");
+        log::info!(
+            target: "transcription",
+            "Spawning Python transcription for: {audio_path}"
+        );
 
         let mut cmd = Command::new(&self.config.python_path);
         apply_windows_no_window(&mut cmd);
@@ -272,8 +276,9 @@ impl WhisperEngine {
             .collect::<Vec<_>>()
             .join(" ");
 
-        eprintln!(
-            "[transcription] Python transcription complete: {} segments, {} chars, lang={}",
+        log::info!(
+            target: "transcription",
+            "Python transcription complete: {} segments, {} chars, lang={}",
             segments.len(),
             full_text.len(),
             language

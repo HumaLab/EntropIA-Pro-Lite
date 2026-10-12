@@ -260,7 +260,10 @@ pub(crate) async fn rerank_candidates(
 
 #[cfg(not(feature = "local-ml"))]
 fn warn_fallback(reason: &str) {
-    eprintln!("[rag] Lite reranking unavailable ({reason}); preserving RRF order");
+    log::warn!(
+        target: "rag",
+        "Lite reranking unavailable ({reason}); preserving RRF order"
+    );
 }
 
 #[cfg(feature = "local-ml")]
@@ -330,8 +333,9 @@ pub(crate) fn rerank_candidates_local(
     match result {
         Ok(ranked) => ranked,
         Err(reason) => {
-            eprintln!(
-                "[rag] Local reranking unavailable ({}); preserving RRF order",
+            log::warn!(
+                target: "rag",
+                "Local reranking unavailable ({}); preserving RRF order",
                 reason.reason()
             );
             candidates

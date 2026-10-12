@@ -141,8 +141,9 @@ impl AssemblyAiConfig {
                 Ok(contents) => match parse_and_validate(&contents) {
                     Ok(config) => {
                         if config.schemas.is_empty() {
-                            eprintln!(
-                                "[assemblyai] provider-compatibility.json at {} has no schemas; using built-in defaults",
+                            log::warn!(
+                                target: "assemblyai",
+                                "provider-compatibility.json at {} has no schemas; using built-in defaults",
                                 path.display()
                             );
                             return AssemblyAiConfig::default();
@@ -150,8 +151,9 @@ impl AssemblyAiConfig {
                         return config;
                     }
                     Err(error) => {
-                        eprintln!(
-                            "[assemblyai] provider-compatibility.json at {} is invalid: {error}; using built-in defaults",
+                        log::warn!(
+                            target: "assemblyai",
+                            "provider-compatibility.json at {} is invalid: {error}; using built-in defaults",
                             path.display()
                         );
                         return AssemblyAiConfig::default();
