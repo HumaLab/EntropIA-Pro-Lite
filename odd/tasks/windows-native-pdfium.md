@@ -15,9 +15,9 @@ Guest UUID: `d9e70790-1faa-488b-a23a-a622d99cb202`. Installed Lite source: `3b0e
 - Defender classified diagnostic `powershell -enc` command lines as `Trojan:Win32/Commando.A!ml`; recorded status Removed. One explicitly authorized Windows Security UAC was accepted to read details. No remediation or exception was made. Plain existing-console checks subsequently succeeded without a new alert. This does not establish a false positive.
 
 ## Tasks
-1. [pending] Validated; evidence commit pending authorization — R4 readonly probe prepared/audited (subset ~50-line diff, all guards kept); V3 FAIL preserved as history. Safety: never commit without user explicit Native Doc Git grant.
-2. [pending] Validated; evidence commit pending authorization — R4 executed once via existing console: guest hash match, plain compile PASS, ONE Run PASS `R4_CORRELATION_PASS` + True. No security exception/restore/kill/reimport.
-3. [in_progress] Documentation done pending human commit — consolidate PASS evidence and reconcile parent W4/task 27 (native Pdfium subcheck PASS; W4/27 remain OPEN). Safety: never commit without user explicit Native Doc Git grant; 615 Pro CI commit grant is different and still NOT used.
+1. [done] Evidence recorded in first work-unit commit `f42b2672843d34f53d6aaa668edd1f4ac361ee24` — R4 readonly probe prepared/audited (subset ~50-line diff, all guards kept); V3 FAIL preserved as history.
+2. [done] Evidence recorded in first work-unit commit `f42b2672843d34f53d6aaa668edd1f4ac361ee24` — R4 executed once via existing console: guest hash match, plain compile PASS, ONE Run PASS `R4_CORRELATION_PASS` + True. No security exception/restore/kill/reimport.
+3. [done] Evidence recorded in first work-unit commit `f42b2672843d34f53d6aaa668edd1f4ac361ee24` (shared source work-unit first commit) — PASS evidence consolidated; parent W4/task 27 reconciliation: native Pdfium subcheck PASS; W4/27 remain OPEN. 615 Pro CI commit grant still NOT used.
 
 ## Probe constraints
 Use Windows system SQLite readonly open; require main DB readonly. Check ROW/DONE and all finalize/close return codes; retain failed-close handles and prevent unsafe rerun. Restrict canonical file paths to approved guest public roots; reject traversal/reparse points. Query only the fresh asset and its parent/item lineage plus bounded integrity/counts. Never use private-method reflection or the old fixed 4/14 `P.Run()` after this import. Require all backup DB referenced paths to be covered by the 17-file manifest, not equal cardinality. Print and classify manifest-only paths; retain all 17 backup/live file hashes and exact original item assignments.
@@ -44,3 +44,9 @@ Diagnostic fixtures have no meaningful product-unit RED; independently inspect s
 
 ## Recovery
 Current short checkpoint: Engram `odd/windows-native-pdfium/tasks`. Parent files: `odd/tasks/windows-validation-sandbox.md`, `odd/tasks/internet-archive.md`. Their previous full mirrors need reconciliation; do not assume earlier mirror writes succeeded. Latest observations: 630 native acceptance PASS; 629 path-set semantics; 624 plain checks; 625 corrected criteria; 616 security details. Current compact feature mirror is maintained by the parent; full mirrors of the older parent task files remain pending reconciliation.
+
+## Closure — native Pdfium acceptance work unit
+- First commit (LOCAL at this edit, no PUSH claimed yet): `f42b2672843d34f53d6aaa668edd1f4ac361ee24` `docs: record Windows Lite native Pdfium acceptance`.
+- Ref/scope: branch `feat/internet-archive`; single path `odd/tasks/windows-native-pdfium.md` only; no product source/tests/build changes.
+- Verification: passive docs, no meaningful RED; independent runtime/source audits observed; no app build or workspace suites rerun; no secrets beyond public guest fixture/usernames/pins.
+- Remaining: whole W4/task 27 stay OPEN; Pro artifact-only workflow/build not exercised; second commit closes this doc work unit only.
