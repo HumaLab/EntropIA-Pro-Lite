@@ -497,7 +497,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       info). No paired app_logs sites. eprintln 330 → 319. Lite 2828 / 0 / 37. Not observable in
       a dev profile (engine disabled there). RDD `review-859cdbb6c24b2037` approved, four lenses
       (high tier: `sync/apply.rs` starts processes), no findings.
-    - [ ] 5.4c — runtime and deps. - [ ] 5.4d — processing, ocr, llm, nlp.
+    - [x] 5.4c — deps and Python discovery (runtime had no eprintln left). Branch
+      `feat/p5-4c-runtime-deps-logging`, commit `d07e55d3`. 52 sites: 49 → `log::` with the old
+      prefix as target (per-candidate probes stay info; final "no Python with module X" is a
+      cached warn), 3 paired `deps_reset` eprintlns deleted keeping the Spanish `app_logs::warn`
+      byte-for-byte. eprintln 319 → 267. Lite 2828 / 0 / 37; Pro `deps::`/`python_discovery::`
+      73 pass. RDD `review-c761c3a3117587a9` approved, no findings.
+    - [ ] 5.4d — processing, ocr, llm, nlp (and the rest).
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
