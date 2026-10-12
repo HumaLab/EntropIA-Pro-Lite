@@ -53,8 +53,8 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build",
-    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
-    "lint": "eslint src",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "lint": "eslint src --max-warnings 0",
     "test": "vitest run"
   }
 }
