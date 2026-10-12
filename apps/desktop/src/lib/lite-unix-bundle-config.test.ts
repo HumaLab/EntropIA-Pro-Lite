@@ -100,12 +100,29 @@ describe('Lite Linux bundle identity (tauri.lite.linux.conf.json)', () => {
     expect(desktop).toMatch(/^Icon=\{\{icon\}\}$/m)
   })
 
-  it('keeps every Linux resource and adds the pinned Pdfium library', () => {
-    const resources = liteLinux.bundle?.resources ?? []
-    for (const resource of linux.bundle?.resources ?? []) {
-      expect(resources).toContain(resource)
+  it('ships what Lite reads at runtime, with the pinned Pdfium library', () => {
+    // Same runtime set as the Windows Lite overlay, with libpdfium.so (from
+    // fetch-pdfium.sh linux-x64) in place of pdfium.dll and no vc-runtime.
+    expect(liteLinux.bundle?.resources).toEqual([
+      'resources/provider-compatibility.json',
+      'resources/lib/LICENSE',
+      'resources/fonts/LICENSE',
+      'resources/pdfium/libpdfium.so',
+      'resources/pdfium/LICENSE',
+    ])
+  })
+
+  it('leaves out the local-ml payload: uv, models, runtime pack and Python scripts (E-01)', () => {
+    for (const resource of liteLinux.bundle?.resources ?? []) {
+      expect(resource).not.toMatch(/tools\/uv|models\/|runtime-pack|^scripts\//)
     }
-    expect(resources).toContain('resources/pdfium/libpdfium.so')
+  })
+
+  it('only narrows the Linux resource list, adding nothing but Pdfium', () => {
+    for (const resource of liteLinux.bundle?.resources ?? []) {
+      if (resource.startsWith('resources/pdfium/')) continue
+      expect(linux.bundle?.resources).toContain(resource)
+    }
   })
 
   it('replaces the package the 1.0.5 .deb installed under the old name', () => {

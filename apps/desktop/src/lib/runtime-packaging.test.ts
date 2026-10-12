@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -180,14 +181,95 @@ describe('runtime pack packaging', () => {
     // be a real-enough library. The runtime-pack `.so` stubs are a deliberate
     // fixture (replaced by the bootstrap download, never loaded directly), so
     // they are out of scope here.
-    const tiny = [resolve(tauriRoot, 'resources/lib'), resolve(tauriRoot, 'resources/pdfium')]
-      .flatMap((dir) => findTinySharedLibraries(dir))
+    const tiny = [
+      resolve(tauriRoot, 'resources/lib'),
+      resolve(tauriRoot, 'resources/pdfium'),
+    ].flatMap((dir) => findTinySharedLibraries(dir))
     expect(tiny).toEqual([])
+  })
+
+  it('keeps every Lite bundle free of the Pro payload', () => {
+    const liteConfigNames = readdirSync(tauriRoot).filter((name) =>
+      /^tauri\.lite(\.[a-z]+)?\.conf\.json$/.test(name)
+    )
+    expect(liteConfigNames).toEqual(
+      expect.arrayContaining([
+        'tauri.lite.conf.json',
+        'tauri.lite.linux.conf.json',
+        'tauri.lite.macos.conf.json',
+        'tauri.lite.windows.conf.json',
+      ])
+    )
+
+    // Lite has no local ML: no models, runtime pack, uv or Python sidecars.
+    const proOnly = [
+      /^resources\/models\//,
+      /^resources\/runtime-pack\//,
+      /^resources\/tools\/uv\//,
+      /^scripts\/.*\.py$/,
+    ]
+    for (const name of liteConfigNames) {
+      const resources =
+        (
+          JSON.parse(readRepoFile('apps/desktop/src-tauri', name)) as {
+            bundle?: { resources?: string[] }
+          }
+        ).bundle?.resources ?? []
+      for (const resource of resources) {
+        for (const pattern of proOnly) {
+          expect(resource, `${name}: ${resource}`).not.toMatch(pattern)
+        }
+      }
+    }
+
+    // Windows-only payload must not leak into the Unix Lite overlays: build.rs
+    // stages vc-runtime only for windows-msvc, so the glob would match nothing
+    // and fail the bundle.
+    for (const name of ['tauri.lite.linux.conf.json', 'tauri.lite.macos.conf.json']) {
+      const raw = readRepoFile('apps/desktop/src-tauri', name)
+      expect(raw, name).not.toMatch(/\.dll\b/)
+      expect(raw, name).not.toContain('vc-runtime')
+    }
+
+    // Every Lite Linux resource is a literal path that a clean checkout has, or
+    // that `fetch-pdfium.sh linux-x64` writes. No globs: one that matches
+    // nothing fails the bundle.
+    const tracked = new Set(
+      execFileSync('git', ['ls-files', '--', 'apps/desktop/src-tauri'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .filter(Boolean)
+    )
+    const fetchedByPdfiumScript = ['resources/pdfium/libpdfium.so', 'resources/pdfium/LICENSE']
+    const liteLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.lite.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    expect(liteLinuxResources).toEqual(expect.arrayContaining(fetchedByPdfiumScript))
+    for (const resource of liteLinuxResources) {
+      expect(resource, resource).not.toMatch(/[*?[{]/)
+      const available =
+        tracked.has(`apps/desktop/src-tauri/${resource}`) ||
+        fetchedByPdfiumScript.includes(resource)
+      expect(available, `${resource} is neither tracked nor fetched`).toBe(true)
+    }
+  })
+
+  it('checks the built Lite .deb for Pdfium and against the Pro payload', () => {
+    const litePreview = readRepoFile('.github/workflows/lite-preview.yml')
+    expect(litePreview).toContain("grep -qE '/resources/pdfium/libpdfium\\.so$'")
+    expect(litePreview).toContain("grep -E '/(models|runtime-pack|tools/uv)/|\\.py$|\\.dll$'")
   })
 
   it('fetches the real Linux Pdfium for the Pro release build', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
-    const fetchIndex = releaseWorkflow.indexOf('bash apps/desktop/scripts/fetch-pdfium.sh linux-x64')
+    const fetchIndex = releaseWorkflow.indexOf(
+      'bash apps/desktop/scripts/fetch-pdfium.sh linux-x64'
+    )
     const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
     expect(fetchIndex).toBeGreaterThan(-1)
     expect(buildIndex).toBeGreaterThan(-1)
