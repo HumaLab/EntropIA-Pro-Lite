@@ -8,8 +8,10 @@ short" on the 49-byte `libpdfium.so`, and `libonnxruntime.so` is 54 bytes.
 They are kept only as audit provenance. They are NOT native libraries, must
 never enter a bundle, and no build step reads them. The real Linux Pdfium is
 downloaded by `apps/desktop/scripts/fetch-pdfium.sh linux-x64` into
-`src-tauri/resources/pdfium/` (gitignored) and bundled from there by
-`tauri.linux.conf.json` and `tauri.lite.linux.conf.json`.
+`src-tauri/resources/pdfium/` (gitignored) and bundled from there by the
+explicit release overlays `tauri.pro.linux.conf.json` and
+`tauri.lite.linux.conf.json`. The auto-merged `tauri.linux.conf.json` does not
+list it, so `cargo build` on Linux works without the download.
 
 The Pdfium resolver in `src/ocr/pdf.rs` rejects any candidate that is not a
 native shared object (ELF/PE/Mach-O/fat magic, at least 1 MiB), so even an
