@@ -1,6 +1,11 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+#[path = "build_support/bootstrap_guard.rs"]
+mod bootstrap_guard;
+
+use bootstrap_guard::{bootstrap_guard_error, BootstrapGuardInput};
+
 /// Every command registered with `generate_handler!` in `src/lib.rs`. tauri-build
 /// turns each into an `allow-<name>` / `deny-<name>` permission (underscores become
 /// dashes), and the presence of this manifest is what makes Tauri check app
@@ -286,48 +291,51 @@ fn embed_common_controls_manifest_for_tests() {
     );
 }
 
-/// Fail a release build that would ship a lean/fixture runtime-pack with no baked
-/// download source. Such an installer dead-ends on a clean machine
-/// (`RuntimeState::BlockedSourceUnavailable`, no recovery), so it must never be
-/// produced — not even by a plain local `cargo build --release` / `tauri build`.
-/// Debug builds and macOS (which ships no runtime-pack) are unaffected.
+/// Fail a Pro (`local-ml`) release build that would ship a lean/fixture
+/// runtime-pack with no baked download source. Such an installer dead-ends on a
+/// clean machine (`RuntimeState::BlockedSourceUnavailable`, no recovery), so it
+/// must never be produced — not even by a plain local `cargo build --release` /
+/// `tauri build`. Lite builds are skipped: without the feature the runtime is
+/// compiled out and every reader of these variables is `#[cfg(feature =
+/// "local-ml")]` (src/settings.rs). Debug builds and macOS (which ships no
+/// runtime-pack) are unaffected. The decision itself lives in
+/// `build_support/bootstrap_guard.rs`, shared with tests/bootstrap_guard.rs.
 fn guard_lean_bootstrap_source() {
-    if env::var("PROFILE").unwrap_or_default() != "release" {
-        return;
-    }
-    let platform = match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
-        "windows" => "windows-x86_64",
-        "linux" => "linux-x86_64",
+    // Check the cheap rules first, so the manifest is not even read when the
+    // guard cannot possibly fire (debug, Lite, macOS, ...).
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let local_ml = env::var("CARGO_FEATURE_LOCAL_ML").is_ok();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let platform = match (profile.as_str(), local_ml, target_os.as_str()) {
+        ("release", true, "windows") => "windows-x86_64",
+        ("release", true, "linux") => "linux-x86_64",
         _ => return,
     };
-    let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
-        return;
+    let manifest = env::var("CARGO_MANIFEST_DIR").ok().and_then(|dir| {
+        std::fs::read_to_string(
+            PathBuf::from(dir)
+                .join("resources")
+                .join("runtime-pack")
+                .join(platform)
+                .join("manifest.json"),
+        )
+        .ok()
+    });
+    let manifest_url = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL").unwrap_or_default();
+    let public_key_id = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID").unwrap_or_default();
+    let public_key_base64 =
+        env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64").unwrap_or_default();
+    let input = BootstrapGuardInput {
+        profile: &profile,
+        target_os: &target_os,
+        local_ml,
+        manifest: manifest.as_deref(),
+        manifest_url: &manifest_url,
+        public_key_id: &public_key_id,
+        public_key_base64: &public_key_base64,
     };
-    let manifest_path = PathBuf::from(&manifest_dir)
-        .join("resources")
-        .join("runtime-pack")
-        .join(platform)
-        .join("manifest.json");
-    let Ok(manifest) = std::fs::read_to_string(&manifest_path) else {
-        return;
-    };
-    let compact: String = manifest.chars().filter(|c| !c.is_whitespace()).collect();
-    let bundles_real_release = compact.contains("\"payload_profile\":\"release\"")
-        && compact.contains("\"release_injection_required\":false");
-    if bundles_real_release {
-        return;
-    }
-
-    let url = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL").unwrap_or_default();
-    let key = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64").unwrap_or_default();
-    if url.trim().is_empty() || key.trim().is_empty() {
-        panic!(
-            "Release build for {platform} bundles a non-release (fixture) runtime-pack, but \
-             ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL / _PUBLIC_KEY_BASE64 are not baked in. A lean \
-             installer with no signed download source dead-ends on a clean machine. Set the bootstrap \
-             env vars (see .github/workflows/release.yml) before a release build, or bundle a real \
-             release runtime-pack."
-        );
+    if let Some(message) = bootstrap_guard_error(&input) {
+        panic!("{message}");
     }
 }
 

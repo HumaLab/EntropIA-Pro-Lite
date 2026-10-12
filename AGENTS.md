@@ -35,7 +35,7 @@
 ## Tauri/Rust gotchas
 
 - `apps/desktop/src-tauri/src/lib.rs` swaps the whole `deps` module by feature: `deps/mod.rs` for `local-ml`, `deps/mod_lite.rs` otherwise. Keep the command/struct surface aligned across variants.
-- Release builds can fail closed in `build.rs` if a fixture runtime-pack is bundled without `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL` and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64`.
+- Pro (`local-ml`) release builds for Windows/Linux fail closed in `build.rs` if a fixture runtime-pack is bundled and any of `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `_PUBLIC_KEY_ID`, `_PUBLIC_KEY_BASE64` is missing; Lite builds need none.
 - Windows release builds stage VC runtime DLLs from `ENTROPIA_VC_RUNTIME_DIR` or `%WINDIR%\System32`; missing required DLLs panic in `build.rs`.
 
 ## Frontend/test quirks

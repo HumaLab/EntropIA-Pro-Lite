@@ -79,7 +79,7 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri
 > - In PowerShell `$env:VITE_LOCAL_ML` **persists for the session** → set it on every variant switch (or open a new terminal). In bash it goes inline: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
 > - Lite uses `identifier com.entropia.lite` → **separate app data** from Pro (you can run both without clobbering each other).
 > - Lite's `tauri build` produces the **`.exe` (NSIS) + `.msi`**; the final Store **MSIX** comes from the repack (see _Release &amp; installers_).
-> - With the committed fixture `runtime-pack`, a Windows/Linux release `tauri build` requires `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). The workflow sets them for both Pro and Lite; `tauri dev` does not need them. The current `build.rs` guard runs for both variants even though Lite does not use local AI.
+> - With the committed fixture `runtime-pack`, a Windows/Linux **Pro** (`--features local-ml`) release `tauri build` requires all three variables `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). **Lite needs none**: without `local-ml` the runtime is compiled out and the `build.rs` guard does not run. `tauri dev` does not need them either.
 
 ### Validate
 
