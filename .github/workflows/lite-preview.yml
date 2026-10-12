@@ -219,7 +219,8 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Pinned Pdfium, shipped under resources/pdfium by tauri.lite.linux.conf.json.
+      # Pinned Pdfium, shipped under resources/pdfium by tauri.lite.linux.conf.json,
+      # whose resource list is only this plus the license and provider files.
       - name: Fetch Pdfium (linux-x64)
         run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
 
@@ -237,7 +238,17 @@ jobs:
           mkdir -p "$RUNNER_TEMP/lite-linux"
           cp "$DEB" "$RUNNER_TEMP/lite-linux/"
           dpkg-deb -I "$DEB"
-          dpkg-deb -c "$DEB"
+          CONTENTS="$(dpkg-deb -c "$DEB")"
+          printf '%s\n' "$CONTENTS"
+          # E-01: Lite ships Pdfium and none of the Pro or Windows payload.
+          if ! grep -qE '/resources/pdfium/libpdfium\.so$' <<<"$CONTENTS"; then
+            echo "::error::Lite .deb does not contain resources/pdfium/libpdfium.so"
+            exit 1
+          fi
+          if grep -E '/(models|runtime-pack|tools/uv)/|\.py$|\.dll$' <<<"$CONTENTS"; then
+            echo "::error::Lite .deb ships Pro or Windows payload (entries listed above)"
+            exit 1
+          fi
           ls -la "$RUNNER_TEMP/lite-linux"
 
       - uses: actions/upload-artifact@v4

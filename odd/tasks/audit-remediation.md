@@ -548,8 +548,22 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     floor is duplicated between the test helper and `pdf.rs` (suggestion); the fixtures README
     named the wrong config (fixed in the docs commit). Not run: a real `tauri build` of the Pro
     `.deb` (MNN compile, CI covers it).
-  - [ ] 6.2 — Lite Linux without the Pro payload (E-01): minimal neutral resource list, tests, and
-    a clean-checkout `tauri build --bundles deb` with `dpkg -c` check.
+  - [x] 6.2 — Lite Linux without the Pro payload (E-01). Branch `fix/p6-2-lite-linux-resources`,
+    commit `321cda5f`. `tauri.lite.linux.conf.json` lists only `provider-compatibility.json`,
+    `lib/LICENSE`, `fonts/LICENSE` and the fetched `pdfium/{libpdfium.so,LICENSE}`.
+    `lite-preview.yml` (also the release's Lite .deb) now fails if the package lacks
+    `libpdfium.so` or holds `models/`, `runtime-pack/`, `tools/uv/`, `*.py` or `*.dll`.
+    `lite-unix-bundle-config.test.ts` had pinned E-01 itself (Lite must keep every Pro Linux
+    resource); rewritten like the Windows Lite tests. Checks: clean worktree (`/tmp/s62-wt`)
+    `fetch-pdfium.sh linux-x64` + Lite `tauri build --bundles deb` exit 0, no glob error, 24 MiB
+    .deb with only the five resources under `/usr/lib/entropia-lite` (libpdfium.so 5,996,800 B),
+    guard OK; desktop 3519 / 0 / 7; lint 0 errors. RDD `review-670521d78cb4d478` approved (high
+    tier, four lenses: shell in `lite-preview.yml`). Two runs failed on the relay first (header
+    timeout, then xAI 403 out of credits); the user switched `review-resilience` to
+    `opencode-go/mimo-v2.6-pro` in `~/.pi/gentle-ai/models.json`. Advisories (readability):
+    the Pro-payload denylist is duplicated across the two test files; the workflow guard is
+    pinned by literal strings; the new Lite test in `runtime-packaging.test.ts` checks several
+    things at once; the `(E-01)` tag in a test name is unexplained; some format churn.
   - [ ] 6.3 — `build.rs` guard (E-03): skip without `local-ml`, require all three vars in Pro; drop
     runtime vars from the Lite jobs; docs.
   - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists
