@@ -2437,7 +2437,7 @@ pub(crate) mod passage_tests {
             .expect("an active generation");
         let started = Instant::now();
         let index = super::super::vector_index::index_for(&conn, &gen).expect("build");
-        eprintln!(
+        println!(
             "BENCH build {:?}  rows {}  dims {}  memory {:.1} MB",
             started.elapsed(),
             index.len(),
@@ -2446,7 +2446,7 @@ pub(crate) mod passage_tests {
         );
         let started = Instant::now();
         super::super::vector_index::index_for(&conn, &gen).expect("cached");
-        eprintln!("BENCH fingerprint+cache hit {:?}", started.elapsed());
+        println!("BENCH fingerprint+cache hit {:?}", started.elapsed());
 
         // Stored vectors, lightly perturbed, as realistic queries.
         let mut queries: Vec<Vec<f32>> = Vec::new();
@@ -2506,7 +2506,7 @@ pub(crate) mod passage_tests {
                 .take(20)
                 .map(|r| &r.0)
                 .eq(want.iter().take(20).map(|r| &r.0));
-            eprintln!(
+            println!(
                 "BENCH q{n} index {warm:?}  exact-scan {exact:?}  overlap@20 {}/20  @50 {}/50  @200 {}/200  same-order@20 {same_order_20}",
                 overlap(20), overlap(50), overlap(200)
             );

@@ -2,24 +2,3 @@
 # Format: `path count`, path relative to src/, one line per file with occurrences.
 # Regenerate deliberately with: cargo test --test eprintln_ratchet -- --ignored
 app_logs.rs 1
-asset_integrity.rs 4
-asset_sweep.rs 3
-bibliography/ingest.rs 1
-bibliography/processing.rs 7
-bibliography/retrieval.rs 3
-bibliography/web_upload.rs 1
-db/compact.rs 2
-geo/mod.rs 3
-navegador/mod.rs 1
-navegador/sources.rs 4
-navegador/sweep.rs 2
-path_utils.rs 2
-processing/ocr.rs 2
-processing/recovery.rs 5
-processing/repository.rs 1
-processing/scheduler.rs 4
-settings.rs 13
-splash.rs 2
-store_updates.rs 7
-writing/commands.rs 1
-writing/zotero/mirror.rs 1

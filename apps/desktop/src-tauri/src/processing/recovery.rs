@@ -104,17 +104,19 @@ fn spawn_checkpoint_cleanup(db_path: std::path::PathBuf) {
             match run_checkpoint_cleanup(&db_path) {
                 Ok(line) => {
                     if let Some(line) = line {
-                        eprintln!("{line}");
+                        log::info!(target: "processing", "{line}");
                     }
                 }
-                Err(error) => eprintln!("[processing] checkpoint cleanup skipped: {error}"),
+                Err(error) => {
+                    log::warn!(target: "processing", "checkpoint cleanup skipped: {error}")
+                }
             }
             // Same background thread: build the bibliography vector index now,
             // so the first passage search of the session does not pay for it.
             warm_bibliography_vector_index(&db_path);
         });
     if let Err(error) = spawned {
-        eprintln!("[processing] checkpoint cleanup not started: {error}");
+        log::warn!(target: "processing", "checkpoint cleanup not started: {error}");
     }
 }
 
@@ -134,8 +136,9 @@ fn warm_bibliography_vector_index(db_path: &Path) {
         .ok();
     if let Some(generation_id) = generation {
         if let Err(error) = crate::bibliography::vector_index::warm(&conn, &generation_id) {
-            eprintln!(
-                "[bibliography] vector index warm-up skipped: {}: {}",
+            log::warn!(
+                target: "bibliography",
+                "vector index warm-up skipped: {}: {}",
                 error.code, error.message
             );
         }
@@ -166,7 +169,7 @@ pub fn run_checkpoint_cleanup(db_path: &Path) -> Result<Option<String>, String> 
             .to_string(),
     };
     Ok(Some(format!(
-        "[processing] checkpoint cleanup: deleted {} checkpoints ({} bytes) of finished tasks in {} batches; {space}",
+        "checkpoint cleanup: deleted {} checkpoints ({} bytes) of finished tasks in {} batches; {space}",
         purge.rows, purge.bytes, purge.batches
     )))
 }
@@ -244,8 +247,9 @@ pub fn recover_session(
             conn,
             repository::now_ms(),
         ) {
-            eprintln!(
-                "[recovery] generation repair skipped: {}: {}",
+            log::warn!(
+                target: "recovery",
+                "generation repair skipped: {}: {}",
                 error.code, error.message
             );
         }

@@ -325,7 +325,7 @@ mod tests {
         let provider = PaddleOcrProvider::new(model_dir)
             .expect("PaddleOCR init failed — are model files in resources/models/ocr/?");
 
-        log::info!(target: "test", "PaddleOCR provider initialized: {}", provider.name());
+        println!("PaddleOCR provider initialized: {}", provider.name());
 
         // Load a test image — use the project's existing test image
         // CARGO_MANIFEST_DIR = .../apps/desktop/src-tauri
@@ -339,14 +339,13 @@ mod tests {
         let test_image_path = workspace_root.join("rust_style_binary.png");
 
         if !test_image_path.exists() {
-            log::info!(target: "test", "Skipping — test image not found at {test_image_path:?}");
+            println!("Skipping — test image not found at {test_image_path:?}");
             return;
         }
 
         let image_bytes = std::fs::read(&test_image_path).expect("Failed to read test image");
 
-        log::info!(
-            target: "test",
+        println!(
             "Running PaddleOCR on {:?} ({} bytes)...",
             test_image_path,
             image_bytes.len()
@@ -356,11 +355,10 @@ mod tests {
             .recognize(&image_bytes)
             .expect("PaddleOCR recognition failed");
 
-        log::info!(target: "test", "Method: {}", output.method);
-        log::info!(target: "test", "Text length: {} chars", output.text.len());
-        log::info!(target: "test", "Regions: {}", output.regions.len());
-        log::info!(
-            target: "test",
+        println!("Method: {}", output.method);
+        println!("Text length: {} chars", output.text.len());
+        println!("Regions: {}", output.regions.len());
+        println!(
             "First 200 chars of text:\n{}",
             &output.text.chars().take(200).collect::<String>()
         );
@@ -381,7 +379,7 @@ mod tests {
             "PaddleOCR should provide bounding boxes for detected regions"
         );
 
-        log::info!(target: "test", "✅ PaddleOCR integration test passed!");
+        println!("✅ PaddleOCR integration test passed!");
     }
 
     #[test]

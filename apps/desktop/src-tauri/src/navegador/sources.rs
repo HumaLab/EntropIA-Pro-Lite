@@ -580,7 +580,10 @@ pub fn delete_source(
     // Its copies to Zotero are records of this source; the Zotero items stay. A
     // failure here never fails the delete.
     if let Err(error) = super::zotero_copy::store::forget_source(conn, source_id) {
-        eprintln!("[navegador] source {source_id} deleted, its Zotero copy rows stayed: {error}");
+        log::warn!(
+            target: "navegador",
+            "source {source_id} deleted, its Zotero copy rows stayed: {error}"
+        );
     }
 
     // The rows are gone. The files follow, and nothing here fails the delete:
@@ -589,8 +592,9 @@ pub fn delete_source(
         Located::Missing => false,
         Located::Dir(dir) => !capture_files::remove_dir_contents(&dir).dir_removed,
         Located::Refused(reason) => {
-            eprintln!(
-                "[navegador] source {source_id} deleted, its folder was not touched: {reason}"
+            log::warn!(
+                target: "navegador",
+                "source {source_id} deleted, its folder was not touched: {reason}"
             );
             true
         }
@@ -1298,7 +1302,7 @@ mod tests {
             }
         };
         if !made {
-            eprintln!("skipped: this machine cannot create a directory link");
+            println!("skipped: this machine cannot create a directory link");
             return;
         }
 
@@ -1471,7 +1475,7 @@ mod tests {
         #[cfg(unix)]
         let linked = std::os::unix::fs::symlink(elsewhere.path(), &link).is_ok();
         if !linked {
-            eprintln!("skipped: this machine cannot create a directory link");
+            println!("skipped: this machine cannot create a directory link");
             return;
         }
         env.add_pdf("c1", "s1", SHA_A, Some("web-captures/s1/c1.pdf"));

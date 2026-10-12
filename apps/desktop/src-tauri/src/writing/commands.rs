@@ -108,7 +108,7 @@ pub async fn writing_save_document(
         let revision = repository::save_document(&mut conn, save)?;
         // The history is a safety net, never a reason to fail a save.
         if let Err(error) = versions::auto_snapshot_after_save(&conn, &document_id) {
-            eprintln!("[writing] automatic version skipped: {}", error.message);
+            log::warn!(target: "writing", "automatic version skipped: {}", error.message);
         }
         Ok(revision)
     })

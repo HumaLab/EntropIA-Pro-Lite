@@ -2998,7 +2998,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         if !dll.exists() {
-            log::info!(target: "pdf", "pdfium native library not available — skipping crop geometry test");
+            println!("pdfium native library not available — skipping crop geometry test");
             return;
         }
         use_dev_pdfium();
@@ -3650,7 +3650,7 @@ mod tests {
     #[test]
     fn pinned_pdfium_library_renders_a_pdf_page() {
         let Ok(lib) = std::env::var("ENTROPIA_PDFIUM_PROBE_LIB") else {
-            log::info!(target: "pdf", "ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
+            println!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
             return;
         };
         let bindings = Pdfium::bind_to_library(&lib).expect("bind pinned pdfium");

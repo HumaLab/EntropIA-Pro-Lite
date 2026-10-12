@@ -73,7 +73,7 @@ pub fn open(app: &AppHandle) {
             let _ = OPENED_AT.set(Instant::now());
         }
         Err(error) => {
-            eprintln!("[splash] could not open the startup window: {error}");
+            log::warn!(target: "splash", "could not open the startup window: {error}");
             reveal_main(app);
         }
     }
@@ -124,8 +124,9 @@ pub fn start_watchdog(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(WATCHDOG).await;
         if handle.get_webview_window(SPLASH_LABEL).is_some() {
-            eprintln!(
-                "[splash] the frontend never signalled readiness after {}s — revealing the main window",
+            log::warn!(
+                target: "splash",
+                "the frontend never signalled readiness after {}s — revealing the main window",
                 WATCHDOG.as_secs()
             );
             finish_now(&handle);
