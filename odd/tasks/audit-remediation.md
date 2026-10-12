@@ -531,6 +531,35 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       per-key set never resets within a session; identical scheduler match arms; doc wording of the
       "repeats go to stderr" comments (true: release max level is Info).
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
+  - [x] 6.1 — real Pdfium in the Pro Linux .deb (E-02). Branch `fix/p6-1-pro-linux-pdfium`,
+    commit `01107569`. The Pro ubuntu leg of `release.yml` runs `fetch-pdfium.sh linux-x64` and
+    bundles through a new explicit overlay `tauri.pro.linux.conf.json` (the Linux resource list
+    plus `resources/pdfium/{libpdfium.so,LICENSE}`). Pdfium is deliberately NOT in
+    `tauri.linux.conf.json`: Tauri merges that file into every Linux build, `cargo test` included,
+    and fails on a missing resource (`cargo check` with `resources/pdfium` removed was the probe).
+    The 49/54-byte text stubs moved to `tests/fixtures/resource-audit/*.fixture`; the empty
+    `resources/lib/linux-x86_64/**/*` glob left both Linux configs (a zero-match glob fails the
+    bundle; user approved). The resolver in `ocr/pdf.rs` skips non-native candidates (ELF/PE/
+    Mach-O/fat magic and >= 1 MiB) and falls through. Checks: fmt, Lite clippy clean, Lite
+    2833 / 0 / 37, Pro clippy only the 9 known, Pro `ocr::pdf` 94 / 0 / 3, desktop 3515 / 0 / 7
+    (first run hit the known flaky timeout), lint 0 errors. RDD `review-f3308e788c8c0ff4`
+    approved (high tier, four lenses: shell in `release.yml`; the first group run died with
+    "Stream ended without finish_reason", the reoffered group passed). Advisories: the 1 MiB
+    floor is duplicated between the test helper and `pdf.rs` (suggestion); the fixtures README
+    named the wrong config (fixed in the docs commit). Not run: a real `tauri build` of the Pro
+    `.deb` (MNN compile, CI covers it).
+  - [ ] 6.2 — Lite Linux without the Pro payload (E-01): minimal neutral resource list, tests, and
+    a clean-checkout `tauri build --bundles deb` with `dpkg -c` check.
+  - [ ] 6.3 — `build.rs` guard (E-03): skip without `local-ml`, require all three vars in Pro; drop
+    runtime vars from the Lite jobs; docs.
+  - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists
+    on `EntropIA-Pro-Lite` before switching; contract test; keep the old URL served.
+  - [ ] 6.5 — single version source (C-04): derive `StoreVersion`/`.msix` name; extend the version
+    consistency test; optional `version:bump`.
+  - [ ] 6.6 — binary provenance (D-07): `resources/CHECKSUMS.sha256` + check. Medium-term choice
+    (download at build time vs keep in git) is the user's.
+  - [ ] 6.7 — minor config (E-04): dev window title, `additionalWatchFolders`, shared
+    `USER_AGENT`, `rust:quality:report` without `pwsh`.
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
