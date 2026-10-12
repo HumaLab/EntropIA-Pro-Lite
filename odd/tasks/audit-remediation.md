@@ -627,8 +627,29 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     finishing the stale files (check still catches them); test/declaration list duplication;
     the attach jobs' `gh release upload "${{ github.ref_name }}"` has the same injection pattern
     (Phase 7).
-  - [ ] 6.6 — binary provenance (D-07): `resources/CHECKSUMS.sha256` + check. Medium-term choice
-    (download at build time vs keep in git) is the user's.
+  - [x] 6.6 — binary provenance (D-07); user asked for "best practice" (2026-10-12). Branch
+    `fix/p6-6-binary-provenance`, commits `646b914b` and `67205d1f`.
+    `apps/desktop/src-tauri/binary-provenance.json` pins all 13 tracked binaries (path, sha256,
+    size, kind, version, provenance; upstream entries add archive URL + archive sha256 + member).
+    `apps/desktop/scripts/verify-binaries.mjs`: `check` (offline: schema, size/hash, every tracked
+    binary-extension file listed; also run by vitest in CI) and `verify-upstream` (downloads each
+    pinned archive, extracts the member, compares bytes); `.github/workflows/verify-binaries.yml`
+    weekly, on PRs touching binaries, and on demand. Verified: `pdfium.dll` byte-identical to
+    bblanchon/pdfium-binaries chromium/7543 win-x64; both `uv.exe` byte-identical to Astral uv
+    0.6.14 (zips match the published .sha256). The README had the wrong pdfium origin (fixed).
+    - Not reproducible: the three OCR `.mnn` (source model and conversion not recorded) and the
+      hand-captured base MSIX; hashes pinned, origin marked unknown.
+    - Deliberately NOT moved to a build-time download: `tauri.windows.conf.json` is merged into
+      every Windows build (CI `cargo test` included), so it needs a fetch step in every Windows
+      job and in local dev, plus Windows validation; history keeps the blobs anyway.
+    - `artifacts/msix/EntropIALite-Store-HLab-1.0.5.0.msix` (9 MB) is an old release output no
+      build reads; listed as `release-output`, removal is the user's call.
+    - Checks: 17 provenance tests (RED first in both commits), desktop 3550 / 0 / 7 before the
+      hardening, lint 0 errors, `binaries:check` 13 files OK, `binaries:verify-upstream` 3/3 OK.
+      RDD `review-f6bea9161325f803` (first commit; `review-risk` GLM kept ending streams, the user
+      moved it to `opencode-go/mimo-v2.6-pro`) and `review-8f0b62aa7437ca41` (hardening: member
+      and archive-name traversal, report-all instead of fail-fast, same-length tamper test,
+      binary-extension PR trigger), both approved.
   - [ ] 6.7 — minor config (E-04): dev window title, `additionalWatchFolders`, shared
     `USER_AGENT`, `rust:quality:report` without `pwsh`.
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)

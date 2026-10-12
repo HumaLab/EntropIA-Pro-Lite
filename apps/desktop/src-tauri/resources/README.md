@@ -4,10 +4,23 @@
 
 Este directorio está reservado para recursos Tauri bundleados.
 
+## Procedencia de los binarios
+
+Cada binario commiteado está pinneado (sha256, tamaño y origen) en `apps/desktop/src-tauri/binary-provenance.json`.
+
+- `pnpm binaries:check` valida el manifiesto y que cada binario trackeado esté listado con su hash correcto.
+- `pnpm binaries:verify-upstream` descarga los binarios upstream y comprueba que coincidan byte a byte con su release pinneado.
+
+CI corre ambos comandos cada semana y en cada PR que toque estos paths.
+
+`lib/pdfium.dll` (bblanchon/pdfium-binaries `chromium/7543`) y los `uv.exe` (Astral `0.6.14`) están verificados byte-idénticos a sus releases. Por ahora siguen en git: `tauri.windows.conf.json` se fusiona en todo build de Windows (incluido `cargo test` en CI), así que moverlos a una descarga de build-time exige un paso de fetch en cada job de Windows y en dev local, más validación en Windows. Borrarlos no achicaría el repositorio sin una reescritura de historia acordada con el equipo.
+
+Los modelos `.mnn` y el MSIX base están vendoreados sin fuente pública reproducible: sus hashes están pinneados y su origen debería documentarse la próxima vez que se regeneren. Los nombres indican modelos PaddleOCR PP-OCRv5 / PP-LCNet convertidos a MNN; no se registró la versión del modelo fuente ni la herramienta/versión de conversión.
+
 ## Librerías nativas
 
 - `lib/pdfium.dll` — librería nativa Pdfium para renderizado PDF (Windows x86_64).
-  Descargar desde [pdfium-render releases](https://github.com/ajrcarey/pdfium-render/releases).
+  Proveniente de bblanchon/pdfium-binaries `chromium/7543`; hash y origen pinneados en `binary-provenance.json`.
   La DLL se resuelve en runtime con una búsqueda de 3 niveles (bundleado → dev → librería del sistema).
   Ver `resources/lib/.gitkeep` para más detalles.
 - `lib/linux-x86_64/` — **eliminado**. Sus antiguos _fixtures_ de texto (49/54 B) se movieron a `tests/fixtures/resource-audit/` como artefactos de auditoría. Los bundles Linux ya no los incluyen: Pdfium para Linux se descarga con `apps/desktop/scripts/fetch-pdfium.sh linux-x64` a `resources/pdfium/libpdfium.so` (+ `LICENSE`) y lo bundlean los overlays explícitos de release `tauri.pro.linux.conf.json` y `tauri.lite.linux.conf.json` (no el `tauri.linux.conf.json` que se fusiona solo, así `cargo build` en Linux no necesita la descarga); el resolutor de `src/ocr/pdf.rs` descarta candidatos que no sean una librería nativa (magic ELF/PE/Mach-O/fat y ≥ 1 MiB).
