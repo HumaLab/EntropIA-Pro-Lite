@@ -263,13 +263,15 @@ pub fn init_pdfium_path(app_handle: &tauri::AppHandle) {
     }
 
     match cached.as_ref() {
-        Some(path) => eprintln!(
-            "[pdf] ✅ Pdfium native library resolved: {}",
+        Some(path) => log::info!(
+            target: "pdf",
+            "✅ Pdfium native library resolved: {}",
             path.display()
         ),
         None => {
-            eprintln!(
-                "[pdf] ℹ️ Pdfium no se resolvió desde runtime/resources dev; se intentará la librería del sistema ({})",
+            log::warn!(
+                target: "pdf",
+                "ℹ️ Pdfium no se resolvió desde runtime/resources dev; se intentará la librería del sistema ({})",
                 dll_name_display()
             )
         }
@@ -589,12 +591,14 @@ pub(crate) fn ensure_pdfium_path_without_runtime_dir(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
         );
         match &resolved {
-            Some(path) => eprintln!(
-                "[pdf] ✅ Pdfium incluida resuelta sin runtime de ML: {}",
+            Some(path) => log::info!(
+                target: "pdf",
+                "✅ Pdfium incluida resuelta sin runtime de ML: {}",
                 path.display()
             ),
-            None => eprintln!(
-                "[pdf] ℹ️ Sin Pdfium incluida ({}) ni en el checkout de desarrollo; la lectura por página usa lopdf",
+            None => log::warn!(
+                target: "pdf",
+                "ℹ️ Sin Pdfium incluida ({}) ni en el checkout de desarrollo; la lectura por página usa lopdf",
                 dll_name_display()
             ),
         }
@@ -621,12 +625,14 @@ pub fn ensure_pdfium_path_with_hydrated_runtime(app_handle: &tauri::AppHandle) -
         #[cfg(feature = "local-ml")]
         let resolved = resolved.or_else(|| existing_managed_pdfium_path(app_handle));
         match &resolved {
-            Some(path) => eprintln!(
-                "[pdf] ✅ Pdfium resuelta para el render de páginas: {}",
+            Some(path) => log::info!(
+                target: "pdf",
+                "✅ Pdfium resuelta para el render de páginas: {}",
                 path.display()
             ),
-            None => eprintln!(
-                "[pdf] ℹ️ Sin Pdfium incluida ni copia hidratada del runtime ({})",
+            None => log::warn!(
+                target: "pdf",
+                "ℹ️ Sin Pdfium incluida ni copia hidratada del runtime ({})",
                 dll_name_display()
             ),
         }
@@ -681,8 +687,9 @@ fn get_pdfium() -> Result<GuardedPdfium, String> {
     let bindings = match cached_path.as_ref() {
         // Initialized with a resolved DLL path — try that first, then system library
         Some(path) => Pdfium::bind_to_library(path).or_else(|path_err| {
-            eprintln!(
-                "[pdf] Failed to load pdfium from resolved path ({}): {path_err} — trying system library",
+            log::warn!(
+                target: "pdf",
+                "Failed to load pdfium from resolved path ({}): {path_err} — trying system library",
                 path.display()
             );
             Pdfium::bind_to_system_library()
@@ -896,7 +903,8 @@ fn maybe_decrypt_pdf_extract(
             pdf_extract::encryption::DecryptionError::IncorrectPassword,
         ) = error
         {
-            eprintln!(
+            log::warn!(
+                target: "pdf",
                 "Encrypted documents must be decrypted with a password using \
                  {{extract_text|extract_text_from_mem|output_doc}}_encrypted"
             );
@@ -3191,7 +3199,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         if !dll.exists() {
-            eprintln!("[pdf] pdfium native library not available — skipping crop geometry test");
+            log::info!(target: "pdf", "pdfium native library not available — skipping crop geometry test");
             return;
         }
         use_dev_pdfium();
@@ -3843,7 +3851,7 @@ mod tests {
     #[test]
     fn pinned_pdfium_library_renders_a_pdf_page() {
         let Ok(lib) = std::env::var("ENTROPIA_PDFIUM_PROBE_LIB") else {
-            eprintln!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
+            log::info!(target: "pdf", "ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
             return;
         };
         let bindings = Pdfium::bind_to_library(&lib).expect("bind pinned pdfium");

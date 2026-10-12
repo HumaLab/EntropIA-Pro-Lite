@@ -503,7 +503,18 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       cached warn), 3 paired `deps_reset` eprintlns deleted keeping the Spanish `app_logs::warn`
       byte-for-byte. eprintln 319 → 267. Lite 2828 / 0 / 37; Pro `deps::`/`python_discovery::`
       73 pass. RDD `review-c761c3a3117587a9` approved, no findings.
-    - [ ] 5.4d — processing, ocr, llm, nlp (and the rest).
+    - [x] 5.4d — OCR. Branch `feat/p5-4d-ocr-logging`, commit `09dbe5b7`. 95 sites: warn 22,
+      info 49, debug 20 (`debug_viz.rs`, debug-only), 4 paired PaddleOCR-VL eprintlns deleted
+      keeping the Spanish `app_logs::warn`. Parent review moved per-region/per-page pipeline
+      decisions (tiny region skipped, layout bypassed, low-confidence rotation skipped) from warn to
+      info so one page cannot flood the user's log. eprintln 267 → 172. Lite 2828 / 0 / 37; Pro
+      `ocr::` 216 pass. RDD `review-081f1c63296dc86f` approved (four lenses, high tier:
+      `debug_viz.rs` starts processes). Advisories: test-only skip messages now go through `log`,
+      which has no logger under `cargo test`, so they no longer print (fix with one shared test
+      logger in 5.4f); a level/icon mismatch in `pdf.rs:272`; an inconsistent target in
+      `mod.rs:1241`; `debug_viz` dump failures at debug level.
+    - [ ] 5.4e — llm, nlp, transcription, rag (~102).
+    - [ ] 5.4f — the rest (~70) + shared test logger.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)

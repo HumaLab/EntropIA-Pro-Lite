@@ -20,13 +20,6 @@ nlp/commands.rs 1
 nlp/embeddings.rs 3
 nlp/mod.rs 25
 nlp/text_provider.rs 2
-ocr/commands.rs 2
-ocr/debug_viz.rs 20
-ocr/layout_onnx.rs 14
-ocr/mod.rs 21
-ocr/paddle.rs 15
-ocr/paddle_vl.rs 13
-ocr/pdf.rs 10
 path_utils.rs 2
 processing/ocr.rs 2
 processing/recovery.rs 5

@@ -57,7 +57,7 @@ where
     let mut write_error = None;
     let traversal = render_pages(&mut |page_idx, page_count, png_data| {
         if page_idx == 0 {
-            eprintln!("[render_pdf_pages] Rendering {page_count} pages from PDF");
+            log::info!(target: "render_pdf_pages", "Rendering {page_count} pages from PDF");
         }
 
         let page_number = (page_idx + 1) as u32;
@@ -79,7 +79,7 @@ where
             page_number,
             png_path: normalize_windows_path_string(&file_path),
         });
-        eprintln!("[render_pdf_pages] Rendered page {page_number}/{page_count}");
+        log::info!(target: "render_pdf_pages", "Rendered page {page_number}/{page_count}");
         Ok(())
     });
 
