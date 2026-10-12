@@ -119,6 +119,8 @@ export const SETTINGS_KEYS = {
   GLM_OCR_API_KEY: 'glm_ocr_api_key',
   ZOTERO_API_KEY: 'zotero_api_key',
   HLAB_PUBLISH_KEY: 'hlab_publish_key',
+  /** Vercel AI Gateway key, the fallback when OpenRouter fails (T-45). */
+  VERCEL_AI_GATEWAY_API_KEY: 'vercel_ai_gateway_api_key',
   OCRH_MODE: 'ocrh_mode',
   LANGUAGE: 'language',
   UI_ZOOM_FACTOR: 'ui_zoom_factor',

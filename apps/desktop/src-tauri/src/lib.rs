@@ -964,6 +964,20 @@ pub fn run() {
             // worth logging, not worth making startup wait on or fail over.
             asset_integrity::spawn_startup_scan(db_path.clone(), app_dir.clone());
 
+            // The Vercel AI Gateway fallback key (T-45), off the startup path:
+            // reading it may touch the system credential store.
+            {
+                let db_path = db_path.clone();
+                std::thread::spawn(move || {
+                    if let Ok(conn) = db::open::open_archive_connection(&db_path) {
+                        llm::openrouter::set_fallback_key(settings::get_setting(
+                            &conn,
+                            settings::VERCEL_AI_GATEWAY_API_KEY,
+                        ));
+                    }
+                });
+            }
+
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
