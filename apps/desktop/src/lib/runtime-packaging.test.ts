@@ -364,6 +364,27 @@ describe('runtime pack packaging', () => {
     expect(ciWorkflow).toContain('src/lib/runtime-packaging.test.ts')
   })
 
+  it('bakes the manifest URL that the bootstrap publish workflow prints (C-02)', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
+
+    // publish-runtime-bootstrap.yml uploads to `github.repository` under its
+    // `release_tag` input and prints exactly this URL for the release build to bake.
+    expect(publishWorkflow).toContain(
+      'https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}/manifest.json'
+    )
+    const defaultTag = /release_tag:[\s\S]*?default: '([^']+)'/.exec(publishWorkflow)?.[1]
+    expect(defaultTag).toBe('runtime-bootstrap')
+
+    // The canonical repository name. HumaLab/EntropIA-Pro is its old name: GitHub
+    // still redirects it, so binaries built with that URL keep working, but new
+    // builds must not depend on the redirect.
+    const baked = /ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: (\S+)/.exec(releaseWorkflow)?.[1]
+    expect(baked).toBe(
+      `https://github.com/HumaLab/EntropIA-Pro-Lite/releases/download/${defaultTag}/manifest.json`
+    )
+  })
+
   it('scopes the bootstrap download source to the Pro release job', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
     const litePreviewWorkflow = readRepoFile('.github/workflows/lite-preview.yml')
