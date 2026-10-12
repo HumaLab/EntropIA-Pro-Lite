@@ -230,7 +230,7 @@ pub async fn pull_loop<A: SyncApi>(
     // Files of assets a remote tombstone deleted (queued in the same transaction
     // as the delete; removed now that it committed, never failing the cycle).
     if let Err(e) = crate::sync::asset_files::drain_asset_file_removals(conn, app_data_dir) {
-        eprintln!("[sync] asset file cleanup skipped: {e}");
+        log::warn!(target: "sync", "asset file cleanup skipped: {e}");
     }
 
     // Step 7: drain the blob download queue (temp + verify + rename; per-blob

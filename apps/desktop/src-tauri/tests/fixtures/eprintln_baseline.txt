@@ -44,10 +44,6 @@ rag/reranker.rs 2
 settings.rs 13
 splash.rs 2
 store_updates.rs 7
-sync/apply.rs 1
-sync/asset_files.rs 3
-sync/engine.rs 6
-sync/pull.rs 1
 transcription/assemblyai/config.rs 2
 transcription/assemblyai/mod.rs 4
 transcription/audio.rs 2
