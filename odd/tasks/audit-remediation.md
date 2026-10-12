@@ -611,8 +611,22 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `materialize_linux_*` exists; `build-runtime-pack.yml` is Windows-only) and re-add the Pro
       Linux leg; make the "runtime no disponible" UI distinguish "no entry for this
       version/platform" from "manifest not published" (`DependenciasTab.svelte:638-665`).
-  - [ ] 6.5 — single version source (C-04): derive `StoreVersion`/`.msix` name; extend the version
-    consistency test; optional `version:bump`.
+  - [x] 6.5 — single version source (C-04). Branch `fix/p6-5-single-version-source`, commits
+    `96ececc6` and `ce79a117`. `apps/desktop/package.json` is the single source;
+    `apps/desktop/scripts/version.mjs` (`print [--store]`, `check [--tag]`, `bump x.y.z`) verifies or
+    rewrites the nine derived declarations (Cargo.toml, the `entropia-pro-desktop` Cargo.lock
+    entry only, both tauri confs, both runtime-pack manifests, the ps1 default + help, msix README)
+    with anchored token edits, all-or-nothing. `release.yml` runs `check` (with the tag on tag
+    pushes) before both builds and derives the Store version, so it holds no version literal; the
+    ref reaches bash through env (script injection, RDD advisory on the first commit). Root
+    `pnpm version:check` / `pnpm version:bump`; README/README.en/msix README/AGENTS.md updated.
+    Checks: 10 version tests + packaging tests (RED first in both commits), desktop 3536 / 0 / 7
+    before the hardening, lint 0 errors, `version:check` OK at 1.0.20, `--tag v1.0.19` exits 1.
+    RDD `review-efb9235e3b8b7ee5` (first commit) and `review-5169d28b6f77103a` (hardening), both
+    approved. Remaining advisories: retrying a half-failed bump reports "already at X" instead of
+    finishing the stale files (check still catches them); test/declaration list duplication;
+    the attach jobs' `gh release upload "${{ github.ref_name }}"` has the same injection pattern
+    (Phase 7).
   - [ ] 6.6 — binary provenance (D-07): `resources/CHECKSUMS.sha256` + check. Medium-term choice
     (download at build time vs keep in git) is the user's.
   - [ ] 6.7 — minor config (E-04): dev window title, `additionalWatchFolders`, shared
