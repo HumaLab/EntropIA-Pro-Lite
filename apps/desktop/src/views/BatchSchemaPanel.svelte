@@ -21,6 +21,7 @@
     type ExtractionRecordRow,
     type ExtractionSchema,
   } from '$lib/extraction-schemas'
+  import OpenrouterModelList from '../components/OpenrouterModelList.svelte'
 
   /**
    * Extraction with a user-defined schema (T-51), under the batch operations.
@@ -210,6 +211,10 @@
           hint={t('batch.schemaModelHint')}
         />
       </div>
+      <OpenrouterModelList
+        selected={editing.model}
+        onchoose={(id) => editing && (editing.model = id)}
+      />
       {#each editing.fields as field, index (index)}
         <div class="schema-panel__field">
           <Input bind:value={field.name} label={t('batch.schemaFieldName')} />
