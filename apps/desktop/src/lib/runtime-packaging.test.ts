@@ -180,14 +180,18 @@ describe('runtime pack packaging', () => {
     // be a real-enough library. The runtime-pack `.so` stubs are a deliberate
     // fixture (replaced by the bootstrap download, never loaded directly), so
     // they are out of scope here.
-    const tiny = [resolve(tauriRoot, 'resources/lib'), resolve(tauriRoot, 'resources/pdfium')]
-      .flatMap((dir) => findTinySharedLibraries(dir))
+    const tiny = [
+      resolve(tauriRoot, 'resources/lib'),
+      resolve(tauriRoot, 'resources/pdfium'),
+    ].flatMap((dir) => findTinySharedLibraries(dir))
     expect(tiny).toEqual([])
   })
 
   it('fetches the real Linux Pdfium for the Pro release build', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
-    const fetchIndex = releaseWorkflow.indexOf('bash apps/desktop/scripts/fetch-pdfium.sh linux-x64')
+    const fetchIndex = releaseWorkflow.indexOf(
+      'bash apps/desktop/scripts/fetch-pdfium.sh linux-x64'
+    )
     const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
     expect(fetchIndex).toBeGreaterThan(-1)
     expect(buildIndex).toBeGreaterThan(-1)
