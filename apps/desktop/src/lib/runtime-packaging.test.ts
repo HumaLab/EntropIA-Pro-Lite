@@ -322,7 +322,7 @@ describe('runtime pack packaging', () => {
     expect(releaseWorkflow).not.toContain('"platform":"ubuntu-22.04"')
     const includeLine = /^\s*include: \$\{\{ fromJSON\((.*)\) \}\}$/m.exec(releaseWorkflow)
     expect(includeLine).not.toBeNull()
-    const matrices = [...includeLine![1].matchAll(/'\[(.*?)\]'/g)].map(
+    const matrices = [...(includeLine?.[1] ?? '').matchAll(/'\[(.*?)\]'/g)].map(
       (match) => JSON.parse(`[${match[1]}]`) as { platform: string; runtime_platform?: string }[]
     )
     expect(matrices.length).toBe(3)
