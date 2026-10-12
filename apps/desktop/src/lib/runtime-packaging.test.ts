@@ -290,9 +290,48 @@ describe('runtime pack packaging', () => {
     )
     expect(fetchStep).toContain("if: matrix.platform == 'ubuntu-22.04'")
 
-    // The Pro Linux leg bundles through the explicit overlay that lists Pdfium.
-    expect(releaseWorkflow).toContain('--config apps/desktop/src-tauri/tauri.pro.linux.conf.json')
+    // Pro Linux is out of the matrix until a linux-x86_64 runtime pack is
+    // published, but the explicit overlay that lists Pdfium stays in the tree
+    // for when the leg returns.
+    expect(existsSync(resolve(tauriRoot, 'tauri.pro.linux.conf.json'))).toBe(true)
     expect(releaseWorkflow).not.toContain('--config apps/desktop/src-tauri/tauri.linux.conf.json')
+  })
+
+  it('gates the Pro release build on a published runtime for its exact version and platform', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+
+    // The app resolves its bootstrap release with an exact (app_version,
+    // platform) match, so the gate must run before the expensive build.
+    const gateIndex = releaseWorkflow.indexOf(
+      '- name: Require a published runtime for this Pro build'
+    )
+    const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
+    expect(gateIndex).toBeGreaterThan(-1)
+    expect(buildIndex).toBeGreaterThan(-1)
+    expect(gateIndex).toBeLessThan(buildIndex)
+
+    const gateStep = releaseWorkflow.slice(gateIndex, buildIndex)
+    expect(gateStep).toContain('check-runtime-bootstrap.mjs')
+    expect(gateStep).toContain("if: matrix.runtime_platform != ''")
+    expect(gateStep).toContain('--manifest-url "$ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"')
+    expect(gateStep).toContain('shell: bash')
+
+    // Pro Linux stays out of the matrix until a linux-x86_64 runtime pack is
+    // published. Every remaining entry declares its runtime_platform (macOS
+    // ships no runtime-pack, hence the empty string).
+    expect(releaseWorkflow).not.toContain('"platform":"ubuntu-22.04"')
+    const includeLine = /^\s*include: \$\{\{ fromJSON\((.*)\) \}\}$/m.exec(releaseWorkflow)
+    expect(includeLine).not.toBeNull()
+    const matrices = [...includeLine![1].matchAll(/'\[(.*?)\]'/g)].map(
+      (match) => JSON.parse(`[${match[1]}]`) as { platform: string; runtime_platform?: string }[]
+    )
+    expect(matrices.length).toBe(3)
+    const entries = matrices.flat()
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      expect(entry).toHaveProperty('runtime_platform')
+      expect(entry.platform).not.toBe('ubuntu-22.04')
+    }
   })
 
   it('ships fixture runtime-pack manifests for windows and linux with concrete payload files', () => {
