@@ -2590,8 +2590,9 @@ pub fn publish_bibliography_profile_output(
         &output.generation_id,
         processing_repository::now_ms(),
     ) {
-        eprintln!(
-            "[bibliography] generation {} activation deferred: {}: {}",
+        log::warn!(
+            target: "bibliography",
+            "generation {} activation deferred: {}: {}",
             output.generation_id, error.code, error.message
         );
     }
@@ -3552,8 +3553,9 @@ impl BibliographyExtractExecutor {
                             }
                             match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
                                 ExecOutput::Fatal { .. } => {
-                                    eprintln!(
-                                        "[bibliography] whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
+                                    log::warn!(
+                                        target: "bibliography",
+                                        "whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
                                     );
                                 }
                                 other => return Err(other),
@@ -3636,8 +3638,9 @@ impl BibliographyExtractExecutor {
                         // stay whole-task: backoff and user fixes must not
                         // masquerade as partial success.
                         Ok(PageOcrOutcome::Failed { message }) => {
-                            eprintln!(
-                                "[bibliography] OCR of page {} failed: {message}",
+                            log::warn!(
+                                target: "bibliography",
+                                "OCR of page {} failed: {message}",
                                 page.page_number
                             );
                             ocr_failed_pages.push(page.page_number);
@@ -3653,8 +3656,9 @@ impl BibliographyExtractExecutor {
                             // exactly as before.
                             match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
                                 ExecOutput::Fatal { message, .. } => {
-                                    eprintln!(
-                                        "[bibliography] OCR of page {} failed: {message}",
+                                    log::warn!(
+                                        target: "bibliography",
+                                        "OCR of page {} failed: {message}",
                                         page.page_number
                                     );
                                     ocr_failed_pages.push(page.page_number);
@@ -3903,7 +3907,7 @@ fn record_page_progress(
             Err(ExecOutput::Stopped)
         }
         Err(error) => {
-            eprintln!("[bibliography] could not record extraction progress: {error}");
+            log::warn!(target: "bibliography", "could not record extraction progress: {error}");
             Ok(())
         }
     }
@@ -3920,8 +3924,9 @@ fn record_page_progress(
 pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText {
     let text = crate::ocr::markup::ocr_markup_to_text(&text);
     if text.trim().is_empty() {
-        eprintln!(
-            "[bibliography] page {}: no text recognized",
+        log::info!(
+            target: "bibliography",
+            "page {}: no text recognized",
             page.page_number
         );
         if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
@@ -4298,8 +4303,9 @@ pub fn read_native_page_texts_with_cancel(
                         }
                     }
                     Err(error) => {
-                        eprintln!(
-                            "[bibliography] PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
+                        log::warn!(
+                            target: "bibliography",
+                            "PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
                         );
                         break;
                     }

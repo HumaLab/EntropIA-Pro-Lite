@@ -127,7 +127,7 @@ impl GeoQueue {
             let conn = match crate::db::open::open_archive_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[geo] Failed to open worker DB connection: {e}");
+                    log::error!(target: "geo", "Failed to open worker DB connection: {e}");
                     return;
                 }
             };
@@ -140,7 +140,7 @@ impl GeoQueue {
             {
                 Ok(client) => client,
                 Err(e) => {
-                    eprintln!("[geo] Failed to build HTTP client: {e}");
+                    log::error!(target: "geo", "Failed to build HTTP client: {e}");
                     return;
                 }
             };
@@ -268,7 +268,7 @@ impl GeoQueue {
                 }
             }
 
-            eprintln!("[geo] Worker loop ended — channel closed.");
+            log::info!(target: "geo", "Worker loop ended — channel closed.");
         });
     }
 }

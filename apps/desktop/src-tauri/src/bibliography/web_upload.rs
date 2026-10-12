@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn live_upload_round_trips_a_file() {
         if std::env::var("ZSB_LIVE_ZOTERO_WRITE").is_err() {
-            eprintln!("skipping live web upload: ZSB_LIVE_ZOTERO_WRITE is not set");
+            println!("skipping live web upload: ZSB_LIVE_ZOTERO_WRITE is not set");
             return;
         }
         let key = std::fs::read_to_string("C:/Users/agusn/.zsb/zotero_key.txt")

@@ -242,11 +242,29 @@ pub fn set_log_sink(sink: impl Fn(&str, &str) + Send + Sync + 'static) {
     let _ = LOG_SINK.set(Box::new(sink));
 }
 
+/// Logs a failure of the scheduler's retry loop. The loop retries every few
+/// seconds, so a persistent problem (an archive that cannot be opened, a
+/// failing tick) would otherwise write the same warning to the user's app log
+/// hundreds of times an hour and push out everything else. Only the first
+/// failure of a run is a warning; repeats go to stderr until the loop recovers.
+fn log_loop_failure(already_failing: &mut bool, message: std::fmt::Arguments<'_>) {
+    if *already_failing {
+        log::info!(target: "processing", "{message}");
+    } else {
+        log::warn!(target: "processing", "{message}");
+    }
+    *already_failing = true;
+}
+
 /// Records one line; `level` is "info", "warn" or "error".
 pub fn log_line(level: &str, message: &str) {
     match LOG_SINK.get() {
         Some(sink) => sink(level, message),
-        None => eprintln!("[processing] {message}"),
+        None => match level {
+            "error" => log::error!(target: "processing", "{message}"),
+            "warn" => log::warn!(target: "processing", "{message}"),
+            _ => log::info!(target: "processing", "{message}"),
+        },
     }
 }
 
@@ -621,6 +639,7 @@ pub fn start_scheduler(
                 db_path: db_path.clone(),
             };
             let mut backoff: Duration;
+            let mut loop_failing = false;
             loop {
                 if stop.load(Ordering::SeqCst) {
                     break;
@@ -630,10 +649,13 @@ pub fn start_scheduler(
                     // startup resolves itself once they commit. Only real
                     // ownership failures deserve a log line every retry.
                     match super::recovery::recover_once_if_needed(&db_path) {
-                        Ok(Some(summary)) if summary.peer_alive => {}
-                        Ok(_) => {}
+                        Ok(Some(summary)) if summary.peer_alive => loop_failing = false,
+                        Ok(_) => loop_failing = false,
                         Err(error) if error.starts_with(super::repository::SCHEMA_NOT_READY) => {}
-                        Err(error) => eprintln!("[processing] ownership retry failed: {error}"),
+                        Err(error) => log_loop_failure(
+                            &mut loop_failing,
+                            format_args!("ownership retry failed: {error}"),
+                        ),
                     }
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
@@ -657,19 +679,27 @@ pub fn start_scheduler(
                             },
                         ) {
                             Ok(RunOneOutcome::Idle) => {
+                                loop_failing = false;
                                 backoff = Duration::from_secs(2);
                             }
                             Ok(_) => {
+                                loop_failing = false;
                                 backoff = Duration::from_millis(100);
                             }
                             Err(error) => {
-                                eprintln!("[processing] tick failed: {error}");
+                                log_loop_failure(
+                                    &mut loop_failing,
+                                    format_args!("tick failed: {error}"),
+                                );
                                 backoff = Duration::from_secs(5);
                             }
                         }
                     }
                     Err(error) => {
-                        eprintln!("[processing] cannot open archive: {error}");
+                        log_loop_failure(
+                            &mut loop_failing,
+                            format_args!("cannot open archive: {error}"),
+                        );
                         backoff = Duration::from_secs(5);
                     }
                 }

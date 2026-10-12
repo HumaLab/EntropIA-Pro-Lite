@@ -97,7 +97,7 @@ pub(crate) fn applicable_installation(
     match read {
         IdentityRead::NoIdentity => Err(StoreUpdateStatus::Skipped),
         IdentityRead::Failed(error) => {
-            eprintln!("[store-updates] identity read failed: {error}");
+            log::warn!(target: "store-updates", "identity read failed: {error}");
             Err(StoreUpdateStatus::Unavailable)
         }
         IdentityRead::Found(installation) if installation.family_name == LITE_STORE_FAMILY_NAME => {
@@ -121,7 +121,7 @@ fn read_valid_cache(db: &Mutex<Connection>, full_name: &str, now: u64) -> Option
     let cache: StoreUpdateCache = match serde_json::from_str(&raw) {
         Ok(cache) => cache,
         Err(error) => {
-            eprintln!("[store-updates] ignoring unreadable cache: {error}");
+            log::warn!(target: "store-updates", "ignoring unreadable cache: {error}");
             return None;
         }
     };
@@ -147,8 +147,9 @@ fn persist_result(db: &Mutex<Connection>, full_name: &str, now: u64, update_avai
             set_setting(&conn, CACHE_KEY, &value).map_err(|error| error.to_string())
         });
     if let Err(error) = result {
-        eprintln!(
-            "[store-updates] cache write failed, result kept for this session only \
+        log::warn!(
+            target: "store-updates",
+            "cache write failed, result kept for this session only \
              (persistence across restarts not guaranteed): {error}"
         );
     }
@@ -180,7 +181,7 @@ where
         tokio::task::spawn_blocking(move || read_valid_cache(&db, &full_name, now))
             .await
             .unwrap_or_else(|error| {
-                eprintln!("[store-updates] cache read task failed: {error}");
+                log::warn!(target: "store-updates", "cache read task failed: {error}");
                 None
             })
     };
@@ -191,12 +192,13 @@ where
     let update_families = match tokio::time::timeout(timeout, query()).await {
         Ok(Ok(families)) => families,
         Ok(Err(error)) => {
-            eprintln!("[store-updates] query failed: {error}");
+            log::warn!(target: "store-updates", "query failed: {error}");
             return StoreUpdateStatus::Unavailable;
         }
         Err(_) => {
-            eprintln!(
-                "[store-updates] query timed out after {}s",
+            log::warn!(
+                target: "store-updates",
+                "query timed out after {}s",
                 timeout.as_secs_f32()
             );
             return StoreUpdateStatus::Unavailable;
@@ -211,7 +213,7 @@ where
         tokio::task::spawn_blocking(move || persist_result(&db, &full_name, now, update_available))
             .await
     {
-        eprintln!("[store-updates] cache write task failed: {error}");
+        log::warn!(target: "store-updates", "cache write task failed: {error}");
     }
     StoreUpdateStatus::from_update_available(update_available)
 }

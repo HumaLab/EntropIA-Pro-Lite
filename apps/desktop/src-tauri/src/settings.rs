@@ -74,6 +74,25 @@ static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 static SETTINGS_KEY_LOCKS: LazyLock<Mutex<HashMap<String, &'static Mutex<()>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Keys already reported as unresolvable this session. Secret settings are
+/// read on every remote LLM/OCR request, so a missing or unreadable credential
+/// would otherwise write the same warning to the user's app log on each call;
+/// it is a warning once per key, then stderr only.
+static UNRESOLVABLE_SECRET_KEYS: LazyLock<Mutex<std::collections::HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+fn log_unresolvable_secret(key: &str, message: std::fmt::Arguments<'_>) {
+    let first_time = UNRESOLVABLE_SECRET_KEYS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(key.to_string());
+    if first_time {
+        log::warn!(target: "settings", "{message}");
+    } else {
+        log::info!(target: "settings", "{message}");
+    }
+}
+
 /// [`SETTINGS_KEY_LOCKS`]' guard for `key`; `None` for non-secret keys, which
 /// never touch the credential store.
 fn lock_setting_key(key: &str) -> Option<MutexGuard<'static, ()>> {
@@ -258,7 +277,10 @@ fn set_setting_with_store(
         // Row first, then the secret (today's semantics): a credential-store
         // failure only leaves an orphaned entry and never fails the command.
         if let Err(error) = store.delete(key) {
-            eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+            log::warn!(
+                target: "settings",
+                "Setting row deleted but credential cleanup failed: {error}"
+            );
         }
     }
     Ok(())
@@ -278,7 +300,7 @@ fn resume_work_after_setting_change_outside_ui_conn(db_path: &std::path::Path, k
             resume_work_after_setting_change(&conn, key);
         }
         Err(error) => {
-            eprintln!("[settings] Could not resume configuration-blocked work: {error}");
+            log::warn!(target: "settings", "Could not resume configuration-blocked work: {error}");
         }
     }
 }
@@ -299,8 +321,9 @@ pub fn log_renderer_written_backend_settings(conn: &rusqlite::Connection) {
         })
         .unwrap_or_default();
     if !keys.is_empty() {
-        eprintln!(
-            "[settings] Renderer-written settings found ({}); release builds ignore a stored runtime bootstrap source when a built-in one is set, and the legacy Zotero data directory is never read",
+        log::warn!(
+            target: "settings",
+            "Renderer-written settings found ({}); release builds ignore a stored runtime bootstrap source when a built-in one is set, and the legacy Zotero data directory is never read",
             keys.join(", ")
         );
     }
@@ -328,14 +351,15 @@ fn resume_configuration_blocked_with(
     match resume(conn) {
         Ok(resumed) => {
             if resumed > 0 {
-                eprintln!(
-                    "[settings] Resumed {resumed} queue unit(s) blocked on {engine} configuration"
+                log::info!(
+                    target: "settings",
+                    "Resumed {resumed} queue unit(s) blocked on {engine} configuration"
                 );
             }
             resumed
         }
         Err(error) => {
-            eprintln!("[settings] Could not resume configuration-blocked work: {error}");
+            log::warn!(target: "settings", "Could not resume configuration-blocked work: {error}");
             0
         }
     }
@@ -460,7 +484,10 @@ fn delete_setting_with_store(
     }
     if is_secret_setting_key(key) {
         if let Err(error) = store.delete(key) {
-            eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+            log::warn!(
+                target: "settings",
+                "Setting row deleted but credential cleanup failed: {error}"
+            );
         }
     }
     Ok(())
@@ -554,14 +581,20 @@ fn resolve_reference_logged(
     match resolve_setting_ref(reference, store) {
         Ok(value) => {
             if matches!(reference, SettingRef::Secret { .. }) && value.is_none() {
-                eprintln!(
-                    "[settings] Protected setting '{key}' references a missing credential store entry"
+                log_unresolvable_secret(
+                    key,
+                    format_args!(
+                        "Protected setting '{key}' references a missing credential store entry"
+                    ),
                 );
             }
             value
         }
         Err(error) => {
-            eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
+            log_unresolvable_secret(
+                key,
+                format_args!("Failed to resolve protected setting '{key}': {error}"),
+            );
             None
         }
     }
@@ -642,12 +675,16 @@ fn read_setting_for_ipc(
     if matches!(reference, SettingRef::Secret { .. }) {
         match resolve_setting_ref(&reference, store) {
             Ok(Some(_)) => {}
-            Ok(None) => eprintln!(
-                "[settings] Protected setting '{key}' references a missing credential store entry"
+            Ok(None) => log_unresolvable_secret(
+                key,
+                format_args!(
+                    "Protected setting '{key}' references a missing credential store entry"
+                ),
             ),
-            Err(error) => {
-                eprintln!("[settings] Failed to resolve protected setting '{key}': {error}");
-            }
+            Err(error) => log_unresolvable_secret(
+                key,
+                format_args!("Failed to resolve protected setting '{key}': {error}"),
+            ),
         }
     }
     Ok(reference
@@ -794,7 +831,10 @@ fn persist_setting_with(
         if value.trim().is_empty() {
             write_setting_row(conn, key, value)?;
             if let Err(error) = delete(key) {
-                eprintln!("[settings] Setting row deleted but credential cleanup failed: {error}");
+                log::warn!(
+                    target: "settings",
+                    "Setting row deleted but credential cleanup failed: {error}"
+                );
             }
             return Ok(());
         }
@@ -957,7 +997,7 @@ pub fn record_work_opened(
 /// logged and never fails the read it decorates.
 pub fn record_work_opened_best_effort(conn: &rusqlite::Connection, item_id: &str, now_ms: i64) {
     if let Err(error) = record_work_opened(conn, item_id, now_ms) {
-        eprintln!("[settings] Could not record opened work {item_id}: {error}");
+        log::warn!(target: "settings", "Could not record opened work {item_id}: {error}");
     }
 }
 
@@ -970,7 +1010,10 @@ pub fn recently_opened_entries(conn: &rusqlite::Connection) -> Vec<RecentlyOpene
     match serde_json::from_str(&raw) {
         Ok(entries) => entries,
         Err(error) => {
-            eprintln!("[settings] Discarding a corrupt recently-opened works list: {error}");
+            log::warn!(
+                target: "settings",
+                "Discarding a corrupt recently-opened works list: {error}"
+            );
             Vec::new()
         }
     }

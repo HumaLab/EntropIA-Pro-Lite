@@ -2386,8 +2386,9 @@ pub fn admit_stale_profile_demands(
     if let Err(error) =
         crate::bibliography::generation::activate_complete_staging_generations(conn, now_ms())
     {
-        eprintln!(
-            "[bibliography] generation repair skipped: {}: {}",
+        log::warn!(
+            target: "bibliography",
+            "generation repair skipped: {}: {}",
             error.code, error.message
         );
     }

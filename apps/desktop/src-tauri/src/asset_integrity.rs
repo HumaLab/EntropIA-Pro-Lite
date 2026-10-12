@@ -116,11 +116,11 @@ fn asset_file_present(stored: &str, data_dir: &Path) -> bool {
     }
 }
 
-/// The single `[setup]`-style line a startup scan logs, in the style of the
-/// other `eprintln!("[setup] …")` lines this module runs alongside.
+/// The message of the single `[setup]` line a startup scan logs; the
+/// `setup` target supplies the bracket prefix.
 fn format_integrity_log_line(report: &AssetIntegrityReport) -> String {
     format!(
-        "[setup] asset integrity: checked {}, missing {}",
+        "asset integrity: checked {}, missing {}",
         report.checked, report.missing
     )
 }
@@ -156,10 +156,10 @@ pub fn spawn_startup_scan(db_path: std::path::PathBuf, data_dir: std::path::Path
     std::thread::spawn(
         move || match crate::db::open::open_archive_connection(&db_path) {
             Ok(conn) => match reconcile_assets(&conn, &data_dir, MISSING_SAMPLE_CAP) {
-                Ok(report) => eprintln!("{}", format_integrity_log_line(&report)),
-                Err(error) => eprintln!("[setup] asset integrity scan failed: {error}"),
+                Ok(report) => log::info!(target: "setup", "{}", format_integrity_log_line(&report)),
+                Err(error) => log::warn!(target: "setup", "asset integrity scan failed: {error}"),
             },
-            Err(error) => eprintln!("[setup] asset integrity scan skipped: {error}"),
+            Err(error) => log::warn!(target: "setup", "asset integrity scan skipped: {error}"),
         },
     );
 }
@@ -290,7 +290,7 @@ mod tests {
 
         assert_eq!(
             format_integrity_log_line(&report),
-            "[setup] asset integrity: checked 4133, missing 1"
+            "asset integrity: checked 4133, missing 1"
         );
     }
 }

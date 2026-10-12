@@ -12,6 +12,13 @@
 //! literals) and counting all is deterministic. Comments count too, so never
 //! mention the token in a source comment unless the count is intended.
 //!
+//! The one occurrence left in `src/app_logs.rs` is deliberate and permanent:
+//! it is the stderr echo of an entry the user's app log just persisted, so the
+//! baseline is expected to settle at exactly `app_logs.rs 1` once every other
+//! module routes its diagnostics through the facade. `println!` is never
+//! counted: it is the test-harness channel (`--nocapture`), not a raw stderr
+//! write.
+//!
 //! - A file above its baseline → failure (a new `eprintln!` was added).
 //! - A file with `eprintln!` and no baseline entry → failure (new use).
 //! - A file below its baseline → pass, with a hint to refresh the baseline.
