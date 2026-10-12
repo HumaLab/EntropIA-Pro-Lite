@@ -438,7 +438,19 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     2808 / 0 / 35. Dev profile: a copy of a real archive with a planted trigger, a planted view and
     a hijacked `collection_activity_items_update` → 3 dropped, 1 restored byte-identical, next start
     "ok". RDD `review-d44fe8c944ffb916` approved, no findings.
-- [ ] Phase 5 — performance and observability (P-01..P-04)
+- [ ] Phase 5 — performance and observability (P-01..P-04). One stacked branch + PR + RDD per unit.
+  - [x] 5.1 (P-02) — app log bounded and streamed. Branch `fix/p5-1-app-log-rotation`, commit
+    `b3c11a50`. `load_existing_entries` streams with `read_until` (corrupt and non-UTF-8 lines
+    skipped one by one; before, one bad byte made `read_to_string` fail and the whole history
+    vanish), a file over 2,000 lines is rewritten at startup, appends compact once the file passes
+    4,000 lines, and `rewrite_log_file` goes through a synced temp file + rename. Tests RED first:
+    50,000-line log → 2,000 entries and 2,000 file lines; corrupt/non-UTF-8 lines; append
+    compaction. Rust 2811 / 0 / 35; Pro clippy only the 9 known. RDD `review-1b455d8c3d432daa`
+    approved, no findings.
+  - [ ] 5.3 (P-03) — streaming SHA-256 for the runtime pack.
+  - [ ] 5.2 (P-01) — RAG vector search: partial selection, then a cached index. Needs a decision on
+    cache invalidation first (a trigger/version column is a new migration and raises `schema_tag`).
+  - [ ] 5.4 (P-04) — unified backend logging, incremental.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
