@@ -9,10 +9,6 @@ bibliography/processing.rs 7
 bibliography/retrieval.rs 3
 bibliography/web_upload.rs 1
 db/compact.rs 2
-deps/checks.rs 5
-deps/install.rs 17
-deps/mod.rs 4
-deps/mod_lite.rs 1
 geo/mod.rs 3
 llm/engine.rs 6
 llm/mod.rs 27
@@ -36,7 +32,6 @@ processing/ocr.rs 2
 processing/recovery.rs 5
 processing/repository.rs 1
 processing/scheduler.rs 4
-python_discovery.rs 25
 rag/commands.rs 8
 rag/intent.rs 2
 rag/query_rewrite.rs 2
