@@ -59,7 +59,6 @@ function loadManifest(root) {
   }
 }
 
-/** Schema problems of a parsed manifest, as `<path or field>: <problem>` lines. */
 /**
  * The member is joined under a fresh extraction dir and handed to tar/unzip, so
  * it must stay inside that dir: relative, forward slashes only, no '..'.
@@ -79,6 +78,7 @@ function isSafeArchiveName(url) {
   }
 }
 
+/** Schema problems of a parsed manifest, as `<path or field>: <problem>` lines. */
 export function validateManifest(manifest) {
   if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['manifest: must be a JSON object']
