@@ -491,7 +491,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `tests/eprintln_ratchet.rs` + baseline; eprintln 387 → 330. Lite 2828 / 0 / 37; Pro clippy
       only the 9 known. Dev profile: stderr format and persisted entries unchanged. RDD
       `review-39fda39543844f3f` approved, no findings.
-    - [ ] 5.4b — sync. - [ ] 5.4c — runtime and deps. - [ ] 5.4d — processing, ocr, llm, nlp.
+    - [x] 5.4b — sync. Branch `feat/p5-4b-sync-logging`, commit `0f44e40f`. 11 eprintln → `log::`
+      with target `sync` (engine start failures → error, now persisted to the user's log;
+      asset-file removal/cleanup and pulled-page FK diagnostics → warn; engine ready/shutdown →
+      info). No paired app_logs sites. eprintln 330 → 319. Lite 2828 / 0 / 37. Not observable in
+      a dev profile (engine disabled there). RDD `review-859cdbb6c24b2037` approved, four lenses
+      (high tier: `sync/apply.rs` starts processes), no findings.
+    - [ ] 5.4c — runtime and deps. - [ ] 5.4d — processing, ocr, llm, nlp.
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
