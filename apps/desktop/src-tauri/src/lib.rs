@@ -1,7 +1,7 @@
 mod app_logs;
 mod archive_close;
 mod asset_integrity;
-mod asset_scope;
+pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
 pub mod bibliography;

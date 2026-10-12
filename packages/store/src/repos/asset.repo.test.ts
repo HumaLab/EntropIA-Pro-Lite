@@ -716,8 +716,9 @@ describe('AssetRepo', () => {
       const selectResult = createChainMock([asset])
       ;(db.db.select as ReturnType<typeof vi.fn>).mockReturnValue(selectResult.proxy)
 
-      const executeTransaction = vi.fn().mockImplementation(
-        async (statements: Array<{ sql: string; params?: unknown[] }>) => {
+      const executeTransaction = vi
+        .fn()
+        .mockImplementation(async (statements: Array<{ sql: string; params?: unknown[] }>) => {
           for (const { sql } of statements) {
             if (sql.includes('DELETE FROM extractions')) {
               tables.extractions = tables.extractions.filter((row) => row.asset_id !== 'asset-1')
@@ -747,8 +748,7 @@ describe('AssetRepo', () => {
               tables.assets = tables.assets.filter((row) => row.id !== 'asset-1')
             }
           }
-        }
-      )
+        })
       const rawClient = {
         execute: vi.fn().mockResolvedValue({ rowsAffected: 1 }),
         executeBatch: vi.fn().mockResolvedValue(undefined),
@@ -803,12 +803,8 @@ describe('AssetRepo', () => {
         sql: string
         params: unknown[]
       }>
-      expect(
-        statements.some((statement) => statement.sql.includes("asset-'quoted"))
-      ).toBe(false)
-      expect(
-        statements.every((statement) => statement.params.includes("asset-'quoted"))
-      ).toBe(true)
+      expect(statements.some((statement) => statement.sql.includes("asset-'quoted"))).toBe(false)
+      expect(statements.every((statement) => statement.params.includes("asset-'quoted"))).toBe(true)
     })
 
     it('rethrows error when the transaction fails', async () => {

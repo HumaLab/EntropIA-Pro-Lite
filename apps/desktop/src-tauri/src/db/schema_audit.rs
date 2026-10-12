@@ -259,7 +259,9 @@ mod tests {
     use crate::db::repairs::migrate_archive;
     use crate::install_relative_asset_path_guard;
     use crate::sync::capture::ensure_capture;
-    use crate::sync::test_support::{oplog_count_for, set_session_with_capture, trg_sync_count};
+    use crate::sync::test_support::{
+        oplog_count, oplog_count_for, set_session_with_capture, trg_sync_count,
+    };
     use rusqlite::OptionalExtension;
 
     /// Mirrors the shape `setup` builds before the audit: the full archive
@@ -547,6 +549,188 @@ mod tests {
             "the canonical trigger must survive dropping its namesake view"
         );
         assert!(report.recreated.is_empty());
+    }
+
+    #[test]
+    fn an_archive_migrated_with_historical_trigger_text_is_repaired_without_touching_data_or_oplog()
+    {
+        // Historical divergence (f324927a, 2026-10-01): 0045, 0048 and 0052
+        // rebuild processing_tasks/processing_batch_tasks, and before that fix
+        // the rebuilds dropped processing_tasks_settle_dependents (created by
+        // 0038) without restoring it. Archives that applied those migrations
+        // pre-fix — and never re-ran a rebuild — carry no such trigger row in
+        // sqlite_master. No fixture file holds the old text: the historical
+        // shape is the ABSENCE of the row, reproduced with one DROP.
+        let dir = tempfile::tempdir().expect("tempdir");
+        // archived_db runs the app's own pipeline (migrate_archive, the guard,
+        // ensure_capture), so trg_sync_* exist exactly as at startup.
+        let mut conn = archived_db(dir.path());
+
+        // Seed data rows in tables the affected triggers touch, BEFORE capture
+        // is enabled: the collection_activity cascade would otherwise queue
+        // its own capture rows and the oplog could not serve as a precise
+        // delta gauge below.
+        conn.execute(
+            "INSERT INTO collections(id, name, created_at, updated_at)
+             VALUES('c-hist', 'Historical', 1, 1)",
+            [],
+        )
+        .expect("seed collection");
+        conn.execute(
+            "INSERT INTO collections(id, name, created_at, updated_at)
+             VALUES('c-raw', 'Unversioned', 1, 1)",
+            [],
+        )
+        .expect("seed unversioned collection");
+        conn.execute(
+            "INSERT INTO items(id, title, collection_id, created_at, updated_at)
+             VALUES('i-hist', 'Item', 'c-hist', 1, 1)",
+            [],
+        )
+        .expect("seed item");
+        conn.execute(
+            "INSERT INTO processing_tasks(id, kind, asset_id_snapshot, state, created_at, updated_at)
+             VALUES('t-hist', 'ocr', 'a-hist', 'pending', 1, 1)",
+            [],
+        )
+        .expect("seed queue task");
+        // Mark sync as capturing, the way the code detects it.
+        set_session_with_capture(&conn);
+        // Simulate already-synced rows: a reseed must never re-enqueue them.
+        // c-raw is deliberately left unversioned: any rebuild-triggered reseed
+        // would enqueue exactly one 'U' row for it and turn the delta nonzero.
+        conn.execute(
+            "INSERT INTO sync_row_versions(table_name, row_id, server_seq)
+             VALUES('collections', 'c-hist', 7), ('items', 'i-hist', 8)",
+            [],
+        )
+        .expect("version the seeded rows");
+        let oplog_before = oplog_count(&conn);
+        assert_eq!(oplog_before, 0, "the oplog starts empty");
+
+        // Historical shape: the settle trigger is gone (pre-f324927a 0045/0048/0052).
+        conn.execute_batch("DROP TRIGGER IF EXISTS processing_tasks_settle_dependents;")
+            .expect("drop the settle trigger");
+        assert!(sql_of(&conn, "trigger", "processing_tasks_settle_dependents").is_none());
+
+        // Whitespace-only divergence: byte-identical modulo spaces must still
+        // be caught — names prove nothing, only the exact definition does.
+        let canonical = build_canonical(dir.path()).expect("build canonical");
+        let activity_sql = sql_of(&canonical, "trigger", "collection_activity_items_update")
+            .expect("canonical activity sql");
+        let whitespaced = activity_sql.replacen("AFTER UPDATE", "AFTER  UPDATE", 1);
+        assert_ne!(whitespaced, activity_sql);
+        assert_eq!(
+            whitespaced.split_whitespace().collect::<Vec<_>>(),
+            activity_sql.split_whitespace().collect::<Vec<_>>(),
+            "the planted difference must be whitespace-only"
+        );
+        conn.execute_batch(&format!(
+            "DROP TRIGGER collection_activity_items_update; {whitespaced}"
+        ))
+        .expect("plant the whitespace trigger");
+
+        // a) the audit reports the divergent objects — and nothing unrelated.
+        let report = audit_and_repair(&mut conn, dir.path()).expect("audit");
+        assert_eq!(
+            report.dropped,
+            vec![DroppedObject {
+                object_type: "trigger".to_string(),
+                name: "collection_activity_items_update".to_string(),
+                reason: DropReason::DefinitionDiffers,
+            }],
+            "only the whitespace-divergent trigger is dropped: {report:?}"
+        );
+        assert_eq!(
+            report.recreated,
+            vec![
+                "collection_activity_items_update".to_string(),
+                "processing_tasks_settle_dependents".to_string(),
+            ],
+            "the missing historical trigger is recreated too: {report:?}"
+        );
+
+        // b) every trigger/view now equals the canonical set.
+        assert_eq!(
+            read_objects(&conn).expect("real objects"),
+            read_objects(&canonical).expect("canonical objects"),
+            "sqlite_master must match the canonical trigger/view set"
+        );
+
+        // c) seeded data rows are unchanged (counts and values).
+        for (table, id) in [
+            ("collections", "c-hist"),
+            ("collections", "c-raw"),
+            ("items", "i-hist"),
+            ("processing_tasks", "t-hist"),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE id = '{id}'"),
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("count the seeded row");
+            assert_eq!(count, 1, "the seeded {table} row must survive");
+        }
+        let collection: (String, String) = conn
+            .query_row(
+                "SELECT id, name FROM collections WHERE id = 'c-hist'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read the collection");
+        assert_eq!(collection, ("c-hist".to_string(), "Historical".to_string()));
+        let item: (String, String, String) = conn
+            .query_row(
+                "SELECT id, title, collection_id FROM items WHERE id = 'i-hist'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read the item");
+        assert_eq!(
+            item,
+            (
+                "i-hist".to_string(),
+                "Item".to_string(),
+                "c-hist".to_string()
+            )
+        );
+        let task: (String, String, String) = conn
+            .query_row(
+                "SELECT id, kind, state FROM processing_tasks WHERE id = 't-hist'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read the queue task");
+        assert_eq!(
+            task,
+            (
+                "t-hist".to_string(),
+                "ocr".to_string(),
+                "pending".to_string()
+            )
+        );
+
+        // d) sync triggers exist and the oplog reseed is bounded: neither the
+        // versioned rows nor the unversioned c-raw row are re-enqueued, so
+        // the oplog delta is exactly zero.
+        assert_eq!(trg_sync_count(&conn), 54, "every sync trigger is back");
+        assert_eq!(
+            oplog_count(&conn),
+            oplog_before,
+            "the audit must not re-enqueue any row"
+        );
+        assert_eq!(oplog_count_for(&conn, "collections"), 0);
+        assert_eq!(oplog_count_for(&conn, "items"), 0);
+
+        // e) a second audit run reports no divergence (idempotent).
+        assert!(
+            audit_and_repair(&mut conn, dir.path())
+                .expect("second audit")
+                .is_clean(),
+            "the audit must be idempotent"
+        );
     }
 
     #[test]
