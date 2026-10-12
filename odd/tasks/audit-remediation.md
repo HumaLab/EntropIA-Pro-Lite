@@ -591,6 +591,26 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     - Found while checking (not in 6.4 scope, needs a decision): the signed manifest lists only
       `windows-x86_64` releases. The Pro Linux .deb (6.1) has a baked source but no Linux runtime
       to download, so its local-ML runtime cannot bootstrap.
+  - [x] 6.4b — fail-closed Pro runtime release gate (follow-up to C-02; user chose "best practice",
+    2026-10-12). Branch `fix/p6-4b-runtime-release-gate`, commit `83a3b999`. Verified by code
+    reading: the app picks the manifest entry with the exact `(app_version, platform)` of its
+    bundled pack (`runtime/bootstrap.rs:97`, `manifest.rs:123`), and the published manifest
+    (generated 2026-06-20) only has windows-x86_64 for app 0.1.1-0.1.3 and 1.0.5, so Pro releases
+    since 1.0.6 shipped without a downloadable runtime (not runtime-tested). New
+    `apps/desktop/scripts/check-runtime-bootstrap.mjs` (exit 0 found / 1 missing with the
+    published pairs and the remedy / 2 usage or fetch errors) runs in `release.yml` before the
+    Rust/Tauri build for every matrix entry with a `runtime_platform`; the Pro Linux leg is out of
+    the matrix until a linux-x86_64 runtime pack exists (Pdfium step and overlay kept). README/
+    README.en: Pro is Windows-only for now, Linux users get Lite. Live: 1.0.20 exits 1, 1.0.5
+    exits 0. Desktop 3529 / 0 / 7, lint 0 errors. RDD `review-c8d8c5066ab8e3a0` approved (first
+    group run lost `review-risk` to a provider 500; the reoffered group passed). Advisories:
+    `fetch` has no timeout (WARNING; add `AbortSignal.timeout`), two readability suggestions.
+    - Consequence: the next Pro tag stops until "Build Runtime Pack" + "Publish Runtime
+      Bootstrap" publish `(version, windows-x86_64)`.
+    - Follow-ups: publish a linux-x86_64 runtime pack (new Linux build pipeline: no
+      `materialize_linux_*` exists; `build-runtime-pack.yml` is Windows-only) and re-add the Pro
+      Linux leg; make the "runtime no disponible" UI distinguish "no entry for this
+      version/platform" from "manifest not published" (`DependenciasTab.svelte:638-665`).
   - [ ] 6.5 — single version source (C-04): derive `StoreVersion`/`.msix` name; extend the version
     consistency test; optional `version:bump`.
   - [ ] 6.6 — binary provenance (D-07): `resources/CHECKSUMS.sha256` + check. Medium-term choice

@@ -15,7 +15,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 | LLM / NER / RAG         | Gemma 4 local + OpenRouter; spaCy local para NER        | OpenRouter (Gemma 4 por defecto)                                                                  |
 | Embeddings              | BGE-M3 local (ONNX) + OpenRouter (`baai/bge-m3`)        | OpenRouter (`baai/bge-m3`)                                                                        |
 | Runtime ML nativo       | sí (se descarga al 1er uso)                             | no                                                                                                |
-| Instalador              | Windows: NSIS + MSI (GitHub) · Linux: DEB (GitHub)      | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: DMG universal (GitHub) · Linux: DEB (GitHub) |
+| Instalador              | Windows: NSIS + MSI (GitHub)                            | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: DMG universal (GitHub) · Linux: DEB (GitHub) |
 | Identificador Tauri     | `com.entropia.pro.desktop`                              | `com.entropia.lite`                                                                               |
 | Identidad MSIX de Store | —                                                       | `CONICET.EntropIALite`                                                                            |
 | Se construye con        | `--features local-ml` + `VITE_LOCAL_ML=1`               | features default lean + `VITE_LOCAL_ML=0`                                                         |
@@ -25,7 +25,7 @@ EntropIA organiza colecciones, procesa imágenes/PDFs/audio, y enriquece resulta
 ## Guía rápida
 
 - **Manual de usuario**: [Manual de usuario](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — guía completa de uso, en español.
-- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Disponibles en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`. Pro para Linux todavía no se publica: su runtime local de IA necesita un pack `linux-x86_64` que aún no existe, así que por ahora Linux se cubre con **EntropIA Lite**. Disponibles en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) o `.exe`/`.msi`; macOS (Apple Silicon e Intel): `.dmg` universal; Linux x64 (Ubuntu 22.04 o posterior): `.deb`. Todos en [Releases del repo](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: el `.dmg` no está notarizado por Apple. La primera vez, macOS bloquea la apertura: abrí **Configuración del Sistema → Privacidad y seguridad** y tocá **Abrir de todos modos**.
   - **Linux**: las claves de API se guardan en el llavero del sistema (gnome-keyring o KWallet). Ubuntu de escritorio ya lo trae; en instalaciones mínimas, instalá `gnome-keyring` y creá un llavero predeterminado.
@@ -136,7 +136,7 @@ Flujo de release de Pro:
 
 1. **Build Runtime Pack** → arma el runtime-pack fresco (artifact `runtime-archive`).
 2. **Publish Runtime Bootstrap** con ese `runtime_pack_run_id` → parte el archivo bajo el límite de 2 GiB por asset, sube las partes al tag `runtime-bootstrap` y publica un `manifest.json` firmado.
-3. Push del tag `v*` → el workflow **Release** construye NSIS + MSI en Windows y DEB en Linux, con la URL del manifiesto + la clave pública **horneadas** en el binario.
+3. Push del tag `v*` → el workflow **Release** construye NSIS + MSI solo en Windows (Pro Linux queda fuera hasta que exista el runtime `linux-x86_64`), con la URL del manifiesto + la clave pública **horneadas** en el binario. Antes de compilar, el workflow **se niega a construir Pro** si el manifiesto firmado no tiene una entrada para la versión de app y la plataforma exactas (`apps/desktop/scripts/check-runtime-bootstrap.mjs`).
 
 **Lite — instaladores en GitHub + MSIX para la Store.** El job `build-lite` del workflow **Release** construye la variante lean con `--bundles nsis,msi`; el job `attach-lite-installers` adjunta el `.exe` (NSIS) + `.msi` al release de GitHub (descargables igual que los de Pro). En paralelo, el `.msi` alimenta el **repack** de un MSIX base capturado (`apps/desktop/src-tauri/msix/`), reescribiendo la identidad a `CONICET.EntropIALite` + la versión; el `.msix` sin firmar (la Store lo firma) queda sólo como artifact de Actions para Partner Center, no como asset del release.
 
