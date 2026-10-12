@@ -1,0 +1,41 @@
+name: Verify Binaries
+
+# Keeps the committed-binary manifest honest (audit finding D-07). Every
+# git-tracked binary must be listed and hashed; upstream entries must still be
+# byte-identical to their pinned release archive. The weekly schedule catches a
+# moved or withdrawn upstream release even when no PR touches these paths.
+
+on:
+  pull_request:
+    paths:
+      - apps/desktop/src-tauri/binary-provenance.json
+      - apps/desktop/scripts/verify-binaries.mjs
+      - apps/desktop/src-tauri/resources/**
+      - apps/desktop/src-tauri/msix/**
+      - artifacts/**
+      - .github/workflows/verify-binaries.yml
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-binaries:
+    name: Verify binary provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Check manifest and tracked binaries (offline)
+        run: node apps/desktop/scripts/verify-binaries.mjs check
+
+      - name: Verify upstream archives
+        run: node apps/desktop/scripts/verify-binaries.mjs verify-upstream

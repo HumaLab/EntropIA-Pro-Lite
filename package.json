@@ -8,6 +8,8 @@
     "pnpm": ">=9 <10"
   },
   "scripts": {
+    "binaries:check": "node apps/desktop/scripts/verify-binaries.mjs check",
+    "binaries:verify-upstream": "node apps/desktop/scripts/verify-binaries.mjs verify-upstream",
     "dev": "turbo dev",
     "build": "turbo build",
     "desktop:dev:isolated": "pnpm --filter @entropia-pro/desktop tauri:dev:isolated",

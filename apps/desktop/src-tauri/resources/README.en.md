@@ -4,10 +4,23 @@
 
 This directory is reserved for bundled Tauri resources.
 
+## Binary provenance
+
+Every committed binary is pinned (sha256, size and origin) in `apps/desktop/src-tauri/binary-provenance.json`.
+
+- `pnpm binaries:check` validates the manifest and that every tracked binary is listed with the right hash.
+- `pnpm binaries:verify-upstream` downloads the upstream binaries and checks that they match their pinned release byte for byte.
+
+CI runs both commands weekly and on every PR that touches these paths.
+
+`lib/pdfium.dll` (bblanchon/pdfium-binaries `chromium/7543`) and the `uv.exe` files (Astral `0.6.14`) are verified byte-identical to their releases. They stay in git for now: `tauri.windows.conf.json` is merged into every Windows build (CI `cargo test` included), so moving them to a build-time download needs a fetch step in every Windows job and in local dev, plus Windows validation. Deleting them would not shrink the repository without a history rewrite agreed with the team.
+
+The `.mnn` models and the base MSIX are vendored with no reproducible public source: their hashes are pinned and their origin should be documented the next time they are regenerated. The names indicate PaddleOCR PP-OCRv5 / PP-LCNet models converted to MNN; the source model version and the conversion tool/version were not recorded.
+
 ## Native libraries
 
 - `lib/pdfium.dll` — Pdfium native library for PDF rendering (Windows x86_64).
-  Download from [pdfium-render releases](https://github.com/ajrcarey/pdfium-render/releases).
+  Sourced from bblanchon/pdfium-binaries `chromium/7543`; hash and origin pinned in `binary-provenance.json`.
   The DLL is resolved at runtime with a 3-tier search (bundled → dev → system library).
   See `resources/lib/.gitkeep` for details.
 - `lib/linux-x86_64/` — **removed**. Its old text fixtures (49/54 B) moved to `tests/fixtures/resource-audit/` as audit artifacts. Linux bundles no longer include them: Linux Pdfium is downloaded by `apps/desktop/scripts/fetch-pdfium.sh linux-x64` into `resources/pdfium/libpdfium.so` (+ `LICENSE`) and bundled by the explicit release overlays `tauri.pro.linux.conf.json` and `tauri.lite.linux.conf.json` (not by the auto-merged `tauri.linux.conf.json`, so `cargo build` on Linux does not need the download); the resolver in `src/ocr/pdf.rs` rejects candidates that are not native libraries (ELF/PE/Mach-O/fat magic and >= 1 MiB).
