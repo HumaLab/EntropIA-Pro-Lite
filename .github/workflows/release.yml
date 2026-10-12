@@ -23,15 +23,6 @@ env:
   PNPM_VERSION: 9.15.4
   MACOSX_DEPLOYMENT_TARGET: '10.15'
   CMAKE_OSX_DEPLOYMENT_TARGET: '10.15'
-  # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
-  # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
-  # the real runtime at first launch from this ed25519-signed source, published by
-  # the Publish Runtime Bootstrap workflow. These three vars are read at COMPILE time
-  # via option_env!() (settings.rs) and pinned by build.rs rerun-if-env-changed.
-  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
-
 jobs:
   build:
     name: Build ${{ matrix.name }}
@@ -47,6 +38,17 @@ jobs:
         # Default manual dispatch stays Windows-only; `all` adds macOS + Linux.
         include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') }}
     runs-on: ${{ matrix.platform }}
+    # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
+    # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
+    # the real runtime at first launch from this ed25519-signed source, published by
+    # the Publish Runtime Bootstrap workflow. These three vars are read at COMPILE time
+    # via option_env!() (settings.rs) and pinned by build.rs rerun-if-env-changed.
+    # Pro-only: Lite has no `local-ml` feature, so build.rs skips the guard and its
+    # installers must not bake a download source at all.
+    env:
+      ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
+      ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
+      ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -151,18 +153,14 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Build the lean MSI (local-ml compiled out by the default lean feature set). The
-      # bootstrap env vars are KEPT: build.rs guard_lean_bootstrap_source() is gated on
-      # PROFILE=release + target_os, NOT on the cargo feature, so it still requires a
-      # baked download source for the fixture runtime-pack present in the source tree.
+      # Build the lean MSI (local-ml compiled out by the default lean feature set).
+      # Lite builds without `local-ml`, so build.rs skips guard_lean_bootstrap_source()
+      # entirely and no runtime download source is baked into the installer.
       - name: Build lean Tauri installers (NSIS + MSI)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_LOCAL_ML: '0'
-          ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL }}
-          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID }}
-          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64 }}
         with:
           # No release params: tauri-action only builds (does not create/touch a release).
           # The NSIS .exe + WiX .msi are the distributable Lite installers (attached to the

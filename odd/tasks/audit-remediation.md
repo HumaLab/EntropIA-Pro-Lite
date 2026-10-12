@@ -564,8 +564,19 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     the Pro-payload denylist is duplicated across the two test files; the workflow guard is
     pinned by literal strings; the new Lite test in `runtime-packaging.test.ts` checks several
     things at once; the `(E-01)` tag in a test name is unexplained; some format churn.
-  - [ ] 6.3 — `build.rs` guard (E-03): skip without `local-ml`, require all three vars in Pro; drop
-    runtime vars from the Lite jobs; docs.
+  - [x] 6.3 — `build.rs` guard (E-03). Branch `fix/p6-3-build-rs-guard`, commit `c5e89b2a`. The
+    decision moved to `build_support/bootstrap_guard.rs` (std-only pure function, `#[path]`-shared
+    by `build.rs` and `tests/bootstrap_guard.rs`): skips non-release, Lite (no
+    `CARGO_FEATURE_LOCAL_ML`), non-Windows/Linux, unreadable manifest and real release packs;
+    otherwise requires all three `ENTROPIA_RUNTIME_BOOTSTRAP_*` and names the missing ones (the old
+    guard ignored `_PUBLIC_KEY_ID`). `release.yml` had the vars at workflow level, so Lite jobs saw
+    them too: moved to the Pro `build` job; removed from `build-lite` and `lite-preview.yml`.
+    README/README.en/AGENTS.md updated. Checks: 9 guard tests; Lite `cargo check --release`
+    without vars passes; Pro `--features local-ml` release without vars panics naming all three,
+    with dummy vars passes; Lite 2842 / 0 / 37; Pro clippy only the 9 known; desktop
+    3520 / 0 / 7; lint 0 errors. RDD `review-f48afa5cf83d94cd` approved (high tier, four lenses).
+    Advisory: the cheap early rules (profile/feature/OS) are duplicated between `build.rs` and the
+    module.
   - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists
     on `EntropIA-Pro-Lite` before switching; contract test; keep the old URL served.
   - [ ] 6.5 — single version source (C-04): derive `StoreVersion`/`.msix` name; extend the version

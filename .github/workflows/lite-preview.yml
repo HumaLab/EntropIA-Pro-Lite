@@ -20,13 +20,6 @@ env:
   PNPM_VERSION: 9.15.4
   MACOSX_DEPLOYMENT_TARGET: '10.15'
   CMAKE_OSX_DEPLOYMENT_TARGET: '10.15'
-  # Same signed bootstrap source as release.yml. build.rs guard_lean_bootstrap_source()
-  # requires it for Linux release builds (the fixture runtime-pack is bundled);
-  # macOS ships no runtime-pack and the guard skips it, but baking the same source
-  # keeps both legs identical to a real release build.
-  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
   # Lite frontend.
   VITE_LOCAL_ML: '0'
 

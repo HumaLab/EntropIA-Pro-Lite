@@ -78,6 +78,15 @@ function allEntries(manifest: RuntimePackFixtureManifest): ManifestEntry[] {
   ]
 }
 
+/** Top-level job body: its `  <name>:` key up to the next job key at the same indentation. */
+function topLevelJobText(workflow: string, job: string): string {
+  const start = workflow.indexOf(`\n  ${job}:`)
+  expect(start).toBeGreaterThanOrEqual(0)
+  const body = workflow.slice(start + 1)
+  const next = body.search(/\n {2}[a-z][a-z0-9_-]*:/)
+  return next === -1 ? body : body.slice(0, next)
+}
+
 describe('runtime pack packaging', () => {
   it('isolates platform-specific bundle resources', () => {
     const baseConfig = JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.conf.json')) as {
@@ -353,6 +362,33 @@ describe('runtime pack packaging', () => {
     expect(ciWorkflow).toContain('runtime-pack-smoke')
     expect(ciWorkflow).toContain('--root apps/desktop/src-tauri/target/runtime-pack')
     expect(ciWorkflow).toContain('src/lib/runtime-packaging.test.ts')
+  })
+
+  it('scopes the bootstrap download source to the Pro release job', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const litePreviewWorkflow = readRepoFile('.github/workflows/lite-preview.yml')
+    const bootstrapVars = [
+      'ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL',
+      'ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID',
+      'ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64',
+    ] as const
+
+    // Lite compiles the runtime out (`local-ml` off), so build.rs skips the
+    // bootstrap guard and no download source may be baked into those builds.
+    expect(litePreviewWorkflow).not.toContain('ENTROPIA_RUNTIME_BOOTSTRAP')
+    expect(topLevelJobText(releaseWorkflow, 'build-lite')).not.toContain(
+      'ENTROPIA_RUNTIME_BOOTSTRAP'
+    )
+
+    // Pro still bakes all three variables, and only in its own job: the job-level
+    // env is where the per-step `${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_* }}` refs resolve.
+    const proJob = topLevelJobText(releaseWorkflow, 'build')
+    for (const variable of bootstrapVars) {
+      expect(proJob).toContain(variable)
+    }
+    expect(releaseWorkflow.slice(0, releaseWorkflow.indexOf('\njobs:'))).not.toContain(
+      'ENTROPIA_RUNTIME_BOOTSTRAP'
+    )
   })
 
   it('documents fixture scope and the lean download-at-launch model', () => {
