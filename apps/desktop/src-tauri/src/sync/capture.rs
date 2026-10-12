@@ -170,7 +170,11 @@ fn base_table_exists(conn: &Connection, table: &str) -> bool {
 }
 
 /// Drops all `trg_sync_*` triggers currently installed (DESIGN §6.1.2 upgrade).
-fn drop_all_sync_triggers(conn: &Connection) -> Result<(), String> {
+///
+/// Shared with the startup schema audit (Phase 4.4b): a sync trigger whose
+/// body differs from the canonical one is dropped here and recreated by
+/// [`ensure_capture`], because `create_trigger_sql` uses `IF NOT EXISTS`.
+pub(crate) fn drop_all_sync_triggers(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_sync_%'")
         .map_err(|e| format!("Failed to list sync triggers: {e}"))?;

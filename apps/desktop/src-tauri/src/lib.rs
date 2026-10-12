@@ -892,6 +892,16 @@ pub fn run() {
                 eprintln!("[setup] migrations: up to date");
             }
 
+            // Phase 4.4b: the renderer could run DDL before Phase 4.4a, so a
+            // planted trigger or view may still be installed under a
+            // legitimate name. Compare the whole trigger/view set against a
+            // canonical in-memory build and repair every divergence, still
+            // before `AppDbState` hands `ui_conn` to the renderer. Failing
+            // here is a dialog, never a silently unaudited archive.
+            let schema_audit = db::schema_audit::audit_and_repair(&mut ui_conn, &app_dir)
+                .map_err(|error| fail("No se pudo verificar la base de datos.", error))?;
+            log_schema_audit(&app.handle().clone(), &schema_audit);
+
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
                 .map_err(|e| fail("No se pudo actualizar la configuración guardada.", e))?;
             settings::log_renderer_written_backend_settings(&ui_conn);
@@ -1943,7 +1953,13 @@ fn migrate_cache_out_of_data_dir(data_dir: &Path, cache_dir: &Path) -> Result<us
 /// External files that were never copied in keep absolute paths, so the guard
 /// only refuses a path *under the data directory* — which is precisely the
 /// class the migration is responsible for.
-fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Result<(), String> {
+///
+/// `pub(crate)` because the startup schema audit rebuilds the guard triggers
+/// in its canonical in-memory database (Phase 4.4b).
+pub(crate) fn install_relative_asset_path_guard(
+    conn: &Connection,
+    data_dir: &Path,
+) -> Result<(), String> {
     if !table_exists(conn, "assets") {
         return Ok(());
     }
@@ -1977,6 +1993,54 @@ fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Resu
 
     conn.execute_batch(&statement)
         .map_err(|error| format!("Failed to install the relative asset-path guard: {error}"))
+}
+
+/// Publishes the Phase 4.4b schema-audit outcome: one `ok` line when the
+/// trigger/view set matched the canonical one, one line per repaired object
+/// when it did not. The canonical-build cost is part of every line because
+/// the audit rebuilds that database on each startup.
+fn log_schema_audit(app_handle: &tauri::AppHandle, report: &db::schema_audit::SchemaAuditReport) {
+    let budget = db::schema_audit::CANONICAL_BUILD_BUDGET_MS;
+    let cost = if report.canonical_build_ms > budget {
+        format!(
+            "canonical build {} ms, over the {} ms debug budget",
+            report.canonical_build_ms, budget
+        )
+    } else {
+        format!("canonical build {} ms", report.canonical_build_ms)
+    };
+
+    if report.is_clean() {
+        eprintln!("[setup] schema audit: ok ({cost})");
+        app_logs::info(
+            app_handle,
+            "schema-audit",
+            format!("Schema audit: ok ({cost})"),
+        );
+        return;
+    }
+
+    for object in &report.dropped {
+        let message = format!(
+            "[setup] schema audit: dropped {} \"{}\" ({})",
+            object.object_type,
+            object.name,
+            object.reason.describe()
+        );
+        eprintln!("{message}");
+        app_logs::warn(app_handle, "schema-audit", message);
+    }
+    for name in &report.recreated {
+        let message =
+            format!("[setup] schema audit: restored \"{name}\" from the canonical definition");
+        eprintln!("{message}");
+        app_logs::warn(app_handle, "schema-audit", message);
+    }
+    eprintln!(
+        "[setup] schema audit: {} dropped, {} restored ({cost})",
+        report.dropped.len(),
+        report.recreated.len()
+    );
 }
 
 /// Rewrite absolute `assets.path` values into keys relative to the data
