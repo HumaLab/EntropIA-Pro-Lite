@@ -43,10 +43,10 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "runs lint-typecheck post-checkout forensics before pnpm setup" {
     $jobIndex = $script:workflow.IndexOf("lint-typecheck:")
-    $checkoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@v6", $jobIndex)
+    $checkoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@", $jobIndex)
     $postCheckoutForensicsIndex = $script:workflow.IndexOf("Run pnpm post-checkout forensics (lint-typecheck)", $jobIndex)
-    $pnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
-    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $pnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@", $jobIndex)
+    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $jobIndex)
 
     Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must contain lint-typecheck job"
     Assert-True -Condition ($checkoutIndex -gt $jobIndex) -Message "lint-typecheck job must include checkout step"
@@ -63,9 +63,9 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "runs lint-typecheck post-pnpm-setup forensics between pnpm and setup-node" {
     $jobIndex = $script:workflow.IndexOf("lint-typecheck:")
-    $pnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
+    $pnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@", $jobIndex)
     $postPnpmForensicsIndex = $script:workflow.IndexOf("Run pnpm post-pnpm-setup forensics (lint-typecheck)", $jobIndex)
-    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $jobIndex)
 
     Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must contain lint-typecheck job"
     Assert-True -Condition ($pnpmSetupIndex -gt $jobIndex) -Message "lint-typecheck job must include pnpm/action-setup"
@@ -81,7 +81,7 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "runs lint-typecheck post-setup-node forensics between setup-node and pre-install" {
     $jobIndex = $script:workflow.IndexOf("lint-typecheck:")
-    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $nodeSetupIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $jobIndex)
     $postNodeForensicsIndex = $script:workflow.IndexOf("Run pnpm post-setup-node forensics (lint-typecheck)", $jobIndex)
     $preInstallForensicsIndex = $script:workflow.IndexOf("Run pnpm pre-install forensics (lint-typecheck)", $jobIndex)
 
@@ -100,7 +100,7 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
   It "uploads lint-typecheck forensics artifact with always policy" {
     Assert-Match -Value $script:workflow -Pattern "Upload pnpm pre-install forensics \(lint-typecheck\)" -Message "workflow must include lint-typecheck forensics upload step"
     Assert-Match -Value $script:workflow -Pattern "Upload pnpm pre-install forensics \(lint-typecheck\)[\s\S]*?if:\s*always\(\)" -Message "lint-typecheck forensics upload must run with if: always()"
-    Assert-Match -Value $script:workflow -Pattern "Upload pnpm pre-install forensics \(lint-typecheck\)[\s\S]*?uses:\s*actions/upload-artifact@v7" -Message "lint-typecheck forensics upload must use actions/upload-artifact@v7"
+    Assert-Match -Value $script:workflow -Pattern "Upload pnpm pre-install forensics \(lint-typecheck\)[\s\S]*?uses:\s*actions/upload-artifact@[0-9a-f]{40} # v7\." -Message "lint-typecheck forensics upload must use actions/upload-artifact@v7"
     Assert-Match -Value $script:workflow -Pattern "Upload pnpm pre-install forensics \(lint-typecheck\)[\s\S]*?\.ci-evidence/pnpm-preinstall/lint-typecheck/" -Message "lint-typecheck forensics upload must publish lint-typecheck evidence folder"
   }
 
@@ -200,10 +200,10 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
   }
 
   It "pins expected Node versions and disables setup-node pnpm caching in install jobs" {
-    Assert-Match -Value $script:workflow -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "rust-quality-report setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "lint-typecheck:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "lint-typecheck setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "test:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "test setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
-    Assert-Match -Value $script:workflow -Pattern "build:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "build setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "rust-quality-report setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "lint-typecheck:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "lint-typecheck setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "test:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "test setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
+    Assert-Match -Value $script:workflow -Pattern "build:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22[\s\S]*?package-manager-cache:\s*false" -Message "build setup-node must pin Node 22 and explicitly disable package-manager auto-cache"
 
     Assert-True -Condition (-not ($script:workflow -match "cache:\s*pnpm")) -Message "workflow must not configure setup-node with cache: pnpm"
   }
@@ -226,7 +226,7 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "restores canonical lockfile after setup-node and before pre-install forensics in test and build" {
     $testJobIndex = $script:workflow.IndexOf("test:")
-    $testSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $testJobIndex)
+    $testSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $testJobIndex)
     $testRestoreIndex = $script:workflow.IndexOf("Restore canonical lockfile (test)", $testJobIndex)
     $testForensicsIndex = $script:workflow.IndexOf("Run pnpm pre-install forensics (test)", $testJobIndex)
     $testInstallIndex = $script:workflow.IndexOf("name: Install dependencies", $testJobIndex)
@@ -238,7 +238,7 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
     Assert-True -Condition ($testInstallIndex -gt $testForensicsIndex) -Message "test install must run after pre-install forensics"
 
     $buildJobIndex = $script:workflow.IndexOf("build:")
-    $buildSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $buildJobIndex)
+    $buildSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $buildJobIndex)
     $buildRestoreIndex = $script:workflow.IndexOf("Restore canonical lockfile (build)", $buildJobIndex)
     $buildForensicsIndex = $script:workflow.IndexOf("Run pnpm pre-install forensics (build)", $buildJobIndex)
     $buildInstallIndex = $script:workflow.IndexOf("name: Install dependencies", $buildJobIndex)
@@ -254,9 +254,9 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
   }
 
   It "pins pnpm/action-setup id and uses explicit pnpm bin path in install for lint, test and build" {
-    Assert-Match -Value $script:workflow -Pattern 'lint-typecheck:[\s\S]*?- uses: pnpm/action-setup@v6[\s\S]*?id:\s*pnpm_setup' -Message "lint-typecheck pnpm/action-setup must define id: pnpm_setup"
-    Assert-Match -Value $script:workflow -Pattern 'test:[\s\S]*?- uses: pnpm/action-setup@v6[\s\S]*?id:\s*pnpm_setup' -Message "test pnpm/action-setup must define id: pnpm_setup"
-    Assert-Match -Value $script:workflow -Pattern 'build:[\s\S]*?- uses: pnpm/action-setup@v6[\s\S]*?id:\s*pnpm_setup' -Message "build pnpm/action-setup must define id: pnpm_setup"
+    Assert-Match -Value $script:workflow -Pattern 'lint-typecheck:[\s\S]*?- uses: pnpm/action-setup@[0-9a-f]{40} # v6\.[\s\S]*?id:\s*pnpm_setup' -Message "lint-typecheck pnpm/action-setup must define id: pnpm_setup"
+    Assert-Match -Value $script:workflow -Pattern 'test:[\s\S]*?- uses: pnpm/action-setup@[0-9a-f]{40} # v6\.[\s\S]*?id:\s*pnpm_setup' -Message "test pnpm/action-setup must define id: pnpm_setup"
+    Assert-Match -Value $script:workflow -Pattern 'build:[\s\S]*?- uses: pnpm/action-setup@[0-9a-f]{40} # v6\.[\s\S]*?id:\s*pnpm_setup' -Message "build pnpm/action-setup must define id: pnpm_setup"
 
     Assert-Match -Value $script:workflow -Pattern 'lint-typecheck:[\s\S]*?name:\s*Install dependencies[\s\S]*?steps\.pnpm_setup\.outputs\.bin_dest' -Message "lint-typecheck install must use steps.pnpm_setup.outputs.bin_dest"
     Assert-Match -Value $script:workflow -Pattern 'test:[\s\S]*?name:\s*Install dependencies[\s\S]*?steps\.pnpm_setup\.outputs\.bin_dest' -Message "test install must use steps.pnpm_setup.outputs.bin_dest"
@@ -329,13 +329,13 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
 
   It "aligns test and build pre-install sequence with post-checkout/post-pnpm/post-node forensics, classification, and YAML parse" {
     $testJobIndex = $script:workflow.IndexOf("test:")
-    $testCheckoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@v6", $testJobIndex)
+    $testCheckoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@", $testJobIndex)
     $testPostCheckoutForensicsIndex = $script:workflow.IndexOf("Run pnpm post-checkout forensics (test)", $testJobIndex)
     $testPostCheckoutUploadIndex = $script:workflow.IndexOf("Upload pnpm post-checkout forensics (test)", $testJobIndex)
-    $testPnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@v6", $testJobIndex)
+    $testPnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@", $testJobIndex)
     $testPostPnpmForensicsIndex = $script:workflow.IndexOf("Run pnpm post-pnpm-setup forensics (test)", $testJobIndex)
     $testPostPnpmUploadIndex = $script:workflow.IndexOf("Upload pnpm post-pnpm-setup forensics (test)", $testJobIndex)
-    $testSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $testJobIndex)
+    $testSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $testJobIndex)
     $testPostNodeForensicsIndex = $script:workflow.IndexOf("Run pnpm post-setup-node forensics (test)", $testJobIndex)
     $testPostNodeUploadIndex = $script:workflow.IndexOf("Upload pnpm post-setup-node forensics (test)", $testJobIndex)
     $testRestoreIndex = $script:workflow.IndexOf("Restore canonical lockfile (test)", $testJobIndex)
@@ -361,13 +361,13 @@ Describe "ci pnpm pre-install forensics workflow contracts" {
     Assert-True -Condition ($testInstallIndex -gt $testYamlParseIndex) -Message "test install must run after YAML parse"
 
     $buildJobIndex = $script:workflow.IndexOf("build:")
-    $buildCheckoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@v6", $buildJobIndex)
+    $buildCheckoutIndex = $script:workflow.IndexOf("- uses: actions/checkout@", $buildJobIndex)
     $buildPostCheckoutForensicsIndex = $script:workflow.IndexOf("Run pnpm post-checkout forensics (build)", $buildJobIndex)
     $buildPostCheckoutUploadIndex = $script:workflow.IndexOf("Upload pnpm post-checkout forensics (build)", $buildJobIndex)
-    $buildPnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@v6", $buildJobIndex)
+    $buildPnpmSetupIndex = $script:workflow.IndexOf("- uses: pnpm/action-setup@", $buildJobIndex)
     $buildPostPnpmForensicsIndex = $script:workflow.IndexOf("Run pnpm post-pnpm-setup forensics (build)", $buildJobIndex)
     $buildPostPnpmUploadIndex = $script:workflow.IndexOf("Upload pnpm post-pnpm-setup forensics (build)", $buildJobIndex)
-    $buildSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@v6", $buildJobIndex)
+    $buildSetupNodeIndex = $script:workflow.IndexOf("- uses: actions/setup-node@", $buildJobIndex)
     $buildPostNodeForensicsIndex = $script:workflow.IndexOf("Run pnpm post-setup-node forensics (build)", $buildJobIndex)
     $buildPostNodeUploadIndex = $script:workflow.IndexOf("Upload pnpm post-setup-node forensics (build)", $buildJobIndex)
     $buildRestoreIndex = $script:workflow.IndexOf("Restore canonical lockfile (build)", $buildJobIndex)
