@@ -102,8 +102,8 @@ jobs:
           gh run watch "$run_id" --exit-status --interval 60
 
       # The tested bump becomes a PR. A run that finds one already open only
-      # refreshes its title: the force-push above moved the PR's head, and the
-      # CI run dispatched above already reported on that SHA.
+      # refreshes its title and body: the force-push above moved the PR's head,
+      # and the CI run dispatched above already reported on that SHA.
       - name: Open or update the bump pull request
         if: steps.update.outputs.changed == 'true'
         shell: bash
@@ -113,14 +113,14 @@ jobs:
           BUMP_SHA: ${{ steps.commit.outputs.sha }}
         run: |
           title="build(deps): move the research engine pin to ${PIN:0:7}"
-          existing=$(gh pr list --head "$BUMP_BRANCH" --base main --state open \
-            --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh pr edit "$existing" --title "$title"
-            echo "Updated PR #$existing to $BUMP_SHA"
-            exit 0
-          fi
           body=$(printf '%s\n\n%s\n' \
             "Automated bump of the EntropIA-Agent pin in Cargo.lock to \`$PIN\`." \
             "CI passed on $BUMP_SHA (dispatched by the Engine pin bump workflow). Merge to update main.")
+          existing=$(gh pr list --head "$BUMP_BRANCH" --base main --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$title" --body "$body"
+            echo "Updated PR #$existing to $BUMP_SHA"
+            exit 0
+          fi
           gh pr create --base main --head "$BUMP_BRANCH" --title "$title" --body "$body"

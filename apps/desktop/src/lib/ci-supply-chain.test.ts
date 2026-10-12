@@ -67,6 +67,11 @@ describe('engine pin bump goes through a pull request (D-05)', () => {
     expect(workflow).toMatch(/gh pr list[^\n]*--head "\$BUMP_BRANCH"/)
   })
 
+  it('refreshes title and body together when the PR already exists', () => {
+    // The body names the pin and the tested SHA; a reused PR must not keep the old ones.
+    expect(workflow).toMatch(/gh pr edit "\$existing" --title "\$title" --body "\$body"/)
+  })
+
   it('keeps the explicit CI dispatch, since GITHUB_TOKEN events start no workflows', () => {
     expect(workflow).toContain('gh workflow run ci.yml --ref "$BUMP_BRANCH"')
     const permissions = /\npermissions:\n((?: {2}.*\n)+)/.exec(workflow)?.[1] ?? ''
