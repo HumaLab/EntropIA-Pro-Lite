@@ -409,7 +409,7 @@ pub fn emit_probe_complete(
     };
 
     if let Err(error) = app.emit("deps://complete", payload) {
-        eprintln!("[deps] Failed to emit dependency completion event: {error}");
+        log::warn!(target: "deps", "Failed to emit dependency completion event: {error}");
     }
 }
 
@@ -668,7 +668,6 @@ pub async fn deps_reset(
         }
         match remove_dir_all_with_retry(&path).await {
             Ok(()) => {
-                eprintln!("[deps] Reset deleted: {}", path.display());
                 crate::app_logs::warn(
                     &app,
                     "deps",
@@ -676,7 +675,6 @@ pub async fn deps_reset(
                 );
             }
             Err(e) => {
-                eprintln!("[deps] Reset could not delete {}: {e}", path.display());
                 crate::app_logs::warn(
                     &app,
                     "deps",
@@ -739,7 +737,6 @@ pub async fn deps_reset(
         ));
     }
 
-    eprintln!("[deps] Reset complete — dependency state invalidated");
     crate::app_logs::warn(&app, "deps", "Reset de dependencias completado");
     Ok(())
 }

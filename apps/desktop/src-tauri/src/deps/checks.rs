@@ -91,8 +91,9 @@ pub async fn probe_one(
         Ok(_) => DependencyStatus::Missing,
         // Timeout
         Err(_) => {
-            eprintln!(
-                "[deps/checks] probe timed out for '{}' using {}",
+            log::warn!(
+                target: "deps/checks",
+                "probe timed out for '{}' using {}",
                 dep.display_name,
                 python_path.display()
             );
@@ -149,7 +150,7 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
                 }
                 Ok(_) => DependencyStatus::Missing,
                 Err(_) => {
-                    eprintln!("[deps/checks] probe timed out for '{display_name}'");
+                    log::warn!(target: "deps/checks", "probe timed out for '{display_name}'");
                     DependencyStatus::Missing
                 }
             };
@@ -167,7 +168,7 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
                     results.insert(id, status);
                 }
                 Err(e) => {
-                    eprintln!("[deps/checks] probe task panicked: {e}");
+                    log::error!(target: "deps/checks", "probe task panicked: {e}");
                 }
             }
         }
@@ -176,8 +177,9 @@ pub async fn probe_all(python_path: &Path) -> HashMap<DependencyId, DependencySt
     match timeout(Duration::from_secs(GLOBAL_PROBE_TIMEOUT_SECS), collect_all).await {
         Ok(()) => {}
         Err(_) => {
-            eprintln!(
-                "[deps/checks] global probe timeout ({GLOBAL_PROBE_TIMEOUT_SECS} s) — marking remaining deps Unknown"
+            log::warn!(
+                target: "deps/checks",
+                "global probe timeout ({GLOBAL_PROBE_TIMEOUT_SECS} s) — marking remaining deps Unknown"
             );
             // Abort any tasks still running.
             join_set.abort_all();
@@ -468,8 +470,9 @@ fn resolve_runtime_python_candidates(mut candidates: Vec<PathBuf>) -> Option<Pat
             .unwrap_or(true);
 
         if should_log {
-            eprintln!(
-                "[deps/checks] Using runtime Python fallback (critical deps OK, optional score={}): {}",
+            log::warn!(
+                target: "deps/checks",
+                "Using runtime Python fallback (critical deps OK, optional score={}): {}",
                 optional_score,
                 path.display()
             );
