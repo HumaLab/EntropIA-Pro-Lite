@@ -666,6 +666,16 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       one lens), no findings.
 
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
+  - [x] 7.1 — Dependabot + blocking audit (C-03). Branch `ci/p7-1-dependabot-audit`, commit
+    `56bdecf6`. `.github/dependabot.yml`: npm (`/`), cargo (`/apps/desktop/src-tauri`),
+    github-actions, weekly, minor+patch grouped. `ci.yml` job `audit`: `pnpm audit --prod
+    --audit-level high` (lockfile only) and `cargo audit` from `apps/desktop/src-tauri`
+    (cargo-audit 0.22.2 `--locked`), blocking from the start (today: prod npm 0 high, 1 moderate =
+    the accepted Tiptap risk; cargo audit exit 0 with its 7 documented warnings). Test
+    `ci-supply-chain.test.ts` RED first. RDD `review-7c46bd4ebcd49d84` approved (high tier; one
+    CRITICAL resilience finding refuted by the refuter). Advisories: action refs not SHA-pinned
+    yet (7.3), the cargo-audit assertion is loose, the dependabot comment anticipates 7.3, and
+    `cargo install` on every run is slow.
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
