@@ -89,8 +89,11 @@ fn trace_stage(enabled: bool, stage: &str, elapsed: std::time::Duration, detail:
     if !enabled {
         return;
     }
-    eprintln!(
-        "[rag][trace] stage={stage} ms={} {detail}",
+    // Target `rag][trace`: the facade wraps it as `[rag][trace]`, keeping the
+    // old stable line byte-identical (the space only follows the last `]`).
+    log::info!(
+        target: "rag][trace",
+        "stage={stage} ms={} {detail}",
         elapsed.as_millis()
     );
 }
@@ -580,8 +583,9 @@ pub async fn rag_ask(
         {
             Ok(ranked) => ranked,
             Err(_) => {
-                eprintln!(
-                    "[rag] Local reranking unavailable (worker failed); preserving RRF order"
+                log::warn!(
+                    target: "rag",
+                    "Local reranking unavailable (worker failed); preserving RRF order"
                 );
                 fallback
             }
@@ -884,8 +888,9 @@ async fn persist_exchange_or_warn(
     {
         Ok(id) => Some(id),
         Err(error) => {
-            eprintln!(
-                "[rag] No se pudo persistir el intercambio (la respuesta se devuelve igual): {error}"
+            log::warn!(
+                target: "rag",
+                "No se pudo persistir el intercambio (la respuesta se devuelve igual): {error}"
             );
             None
         }
@@ -1075,12 +1080,13 @@ pub async fn rag_generate_conversation_title(
         {
             Ok(Ok(raw)) => raw,
             Ok(Err(error)) => {
-                eprintln!("[rag] Titulado automático descartado: {error}");
+                log::info!(target: "rag", "Titulado automático descartado: {error}");
                 return Ok(None);
             }
             Err(_) => {
-                eprintln!(
-                    "[rag] Titulado automático descartado: sin respuesta en {}s",
+                log::info!(
+                    target: "rag",
+                    "Titulado automático descartado: sin respuesta en {}s",
                     TITLE_GENERATION_TIMEOUT.as_secs()
                 );
                 return Ok(None);
@@ -1088,7 +1094,10 @@ pub async fn rag_generate_conversation_title(
         };
 
     let Some(title) = sanitize_generated_title(&generated) else {
-        eprintln!("[rag] Titulado automático descartado: título inválido o genérico");
+        log::info!(
+            target: "rag",
+            "Titulado automático descartado: título inválido o genérico"
+        );
         return Ok(None);
     };
 
@@ -1285,7 +1294,10 @@ fn embed_query_local(db_path: &std::path::Path, question: &str) -> Option<Vec<f3
     match result {
         Ok(embedding) => Some(embedding),
         Err(error) => {
-            eprintln!("[rag] Pierna vectorial deshabilitada (se usa solo FTS): {error}");
+            log::warn!(
+                target: "rag",
+                "Pierna vectorial deshabilitada (se usa solo FTS): {error}"
+            );
             None
         }
     }
@@ -1342,8 +1354,9 @@ fn resolve_answer_mode(conn: &Connection) -> (RagAnswerMode, String) {
                 model,
             );
         }
-        eprintln!(
-            "[rag] llm_mode pide OpenRouter pero no hay API key; usando el motor Gemma local"
+        log::warn!(
+            target: "rag",
+            "llm_mode pide OpenRouter pero no hay API key; usando el motor Gemma local"
         );
     }
 

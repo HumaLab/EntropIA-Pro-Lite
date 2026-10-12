@@ -159,7 +159,6 @@ pub async fn transcribe_dictation(
     match (transcription_result, cleanup_result) {
         (Ok(result), Ok(())) => Ok(result.text.trim().to_string()),
         (Ok(result), Err(cleanup_error)) => {
-            eprintln!("[transcription] Dictation cleanup warning: {cleanup_error}");
             crate::app_logs::warn(
                 &app_handle,
                 "transcription",

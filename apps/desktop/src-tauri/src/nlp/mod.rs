@@ -102,7 +102,10 @@ pub fn enqueue_entity_refresh_for_item(nlp_queue: &NlpQueue, item_id: &str) -> R
     // Dedup: if this item is already pending or in-progress for NER, skip.
     if let Ok(mut pending) = nlp_queue.ner_pending.lock() {
         if pending.contains(item_id) {
-            eprintln!("[nlp/ner] Skipping duplicate ExtractEntities enqueue for item_id={item_id}");
+            log::info!(
+                target: "nlp/ner",
+                "Skipping duplicate ExtractEntities enqueue for item_id={item_id}"
+            );
             return Ok(());
         }
         pending.insert(item_id.to_string());
@@ -159,8 +162,9 @@ impl NlpQueue {
                 if let Ok(mut pending) = self.fts_pending.lock() {
                     if let Some(needs_rerun) = pending.get_mut(item_id) {
                         *needs_rerun = true;
-                        eprintln!(
-                            "[nlp/fts] Coalescing duplicate IndexFts enqueue for item_id={item_id}"
+                        log::info!(
+                            target: "nlp/fts",
+                            "Coalescing duplicate IndexFts enqueue for item_id={item_id}"
                         );
                         return Ok(());
                     }
@@ -171,8 +175,9 @@ impl NlpQueue {
             NlpJob::ExtractEntitiesForAsset { asset_id, .. } => {
                 if let Ok(mut pending) = self.asset_ner_pending.lock() {
                     if !pending.insert(asset_id.clone()) {
-                        eprintln!(
-                            "[nlp/ner] Coalescing duplicate ExtractEntitiesForAsset enqueue for asset_id={asset_id}"
+                        log::info!(
+                            target: "nlp/ner",
+                            "Coalescing duplicate ExtractEntitiesForAsset enqueue for asset_id={asset_id}"
                         );
                         return Ok(());
                     }
@@ -233,14 +238,14 @@ impl NlpQueue {
             let conn = match crate::db::open::open_archive_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[nlp] Failed to open worker DB connection: {e}");
+                    log::error!(target: "nlp", "Failed to open worker DB connection: {e}");
                     return;
                 }
             };
 
             if table_exists(&conn, "entities") {
                 if let Err(e) = ensure_entities_schema(&conn) {
-                    eprintln!("[nlp] Failed to migrate entities schema: {e}");
+                    log::warn!(target: "nlp", "Failed to migrate entities schema: {e}");
                 }
             }
 
@@ -256,20 +261,23 @@ impl NlpQueue {
                 );
                 CREATE INDEX IF NOT EXISTS idx_vec_assets_item_id ON vec_assets(item_id)",
             ) {
-                eprintln!("[nlp] Failed to create embedding tables: {e} — embedding storage will be unavailable");
+                log::error!(
+                    target: "nlp",
+                    "Failed to create embedding tables: {e} — embedding storage will be unavailable"
+                );
             }
 
             while let Some(job) = receiver.recv().await {
                 match job {
                     NlpJob::IndexFts { item_id } => {
                         emit_progress(&app_handle, &item_id, None, "fts", 10);
-                        eprintln!("[nlp/fts] Reindex start: item_id={item_id}");
+                        log::info!(target: "nlp/fts", "Reindex start: item_id={item_id}");
                         let result = tokio::task::block_in_place(|| {
                             fts::index_item_from_db(&conn, &item_id)
                         });
                         match result {
                             Ok(_) => {
-                                eprintln!("[nlp/fts] Reindex complete: item_id={item_id}");
+                                log::info!(target: "nlp/fts", "Reindex complete: item_id={item_id}");
                                 emit_progress(&app_handle, &item_id, None, "fts", 100);
                                 emit_complete(&app_handle, &item_id, None, "fts", None);
                                 schedule_fts_follow_up(&db_path, &sender, &fts_pending, &item_id);
@@ -309,8 +317,9 @@ impl NlpQueue {
                                 // persist (the delete-then-insert would wipe existing Gemma/manual
                                 // automatic entities). Preserve what's already stored.
                                 if text_present && final_entities.is_empty() {
-                                    eprintln!(
-                                        "[nlp/ner] NER returned 0 entities for non-empty text — preserving existing entities item_id={item_id}"
+                                    log::info!(
+                                        target: "nlp/ner",
+                                        "NER returned 0 entities for non-empty text — preserving existing entities item_id={item_id}"
                                     );
                                     emit_progress(&app_handle, &item_id, None, "ner", 100);
                                     emit_complete(&app_handle, &item_id, None, "ner", Some(0));
@@ -335,8 +344,9 @@ impl NlpQueue {
                                     &app_handle.state::<crate::geo::GeoQueue>(),
                                     &item_id,
                                 ) {
-                                    eprintln!(
-                                        "[geo] Failed to auto-enqueue geocoding after NER: {e}"
+                                    log::warn!(
+                                        target: "geo",
+                                        "Failed to auto-enqueue geocoding after NER: {e}"
                                     );
                                 }
                             }
@@ -378,8 +388,9 @@ impl NlpQueue {
                                 // Gemma ('llm') entities. Preserve them; only clear when the text
                                 // itself is genuinely empty (intentional clear).
                                 if text_present && final_entities.is_empty() {
-                                    eprintln!(
-                                        "[nlp/ner] Asset NER returned 0 entities for non-empty text — preserving existing entities item_id={item_id} asset_id={asset_id}"
+                                    log::info!(
+                                        target: "nlp/ner",
+                                        "Asset NER returned 0 entities for non-empty text — preserving existing entities item_id={item_id} asset_id={asset_id}"
                                     );
                                     emit_progress(
                                         &app_handle,
@@ -422,7 +433,10 @@ impl NlpQueue {
                                     &app_handle.state::<crate::geo::GeoQueue>(),
                                     &item_id,
                                 ) {
-                                    eprintln!("[geo] Failed to auto-enqueue geocoding after asset NER: {e}");
+                                    log::warn!(
+                                        target: "geo",
+                                        "Failed to auto-enqueue geocoding after asset NER: {e}"
+                                    );
                                 }
                             }
                             Err(e) => emit_error(&app_handle, &item_id, Some(&asset_id), "ner", &e),
@@ -448,7 +462,7 @@ pub(crate) fn ensure_embed_engine_for_current_settings(
     let config = match embeddings::config_from_settings(conn) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("[nlp/embeddings] Engine init blocked: {error}");
+            log::warn!(target: "nlp/embeddings", "Engine init blocked: {error}");
             *cached = None;
             *last_init_error = Some(error);
             return None;
@@ -461,7 +475,10 @@ pub(crate) fn ensure_embed_engine_for_current_settings(
             return Some(Arc::clone(&cached_engine.engine));
         }
 
-        eprintln!("[nlp/embeddings] Embedding settings changed; reinitializing engine");
+        log::info!(
+            target: "nlp/embeddings",
+            "Embedding settings changed; reinitializing engine"
+        );
     }
 
     match init_embed_engine_from_config(config) {
@@ -474,7 +491,7 @@ pub(crate) fn ensure_embed_engine_for_current_settings(
             Some(engine)
         }
         Err(error) => {
-            eprintln!("[nlp/embeddings] Engine unavailable: {error}");
+            log::warn!(target: "nlp/embeddings", "Engine unavailable: {error}");
             *cached = None;
             *last_init_error = Some(error);
             None
@@ -489,7 +506,7 @@ pub(crate) fn try_init_embed_engine_result(
     let config = match embeddings::config_from_settings(conn) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("[nlp/embeddings] Engine init blocked: {error}");
+            log::warn!(target: "nlp/embeddings", "Engine init blocked: {error}");
             return Err(error);
         }
     };
@@ -502,15 +519,17 @@ fn init_embed_engine_from_config(
 ) -> Result<Arc<EmbeddingEngine>, String> {
     match EmbeddingEngine::init(config) {
         Ok(engine) => {
-            eprintln!(
-                "[nlp/embeddings] {} engine ready (lazy init)",
+            log::info!(
+                target: "nlp/embeddings",
+                "{} engine ready (lazy init)",
                 engine.provider_name()
             );
             Ok(Arc::new(engine))
         }
         Err(e) => {
-            eprintln!(
-                "[nlp/embeddings] Engine init failed: {e} — embedding jobs will degrade gracefully"
+            log::warn!(
+                target: "nlp/embeddings",
+                "Engine init failed: {e} — embedding jobs will degrade gracefully"
             );
             Err(e)
         }
@@ -682,10 +701,16 @@ pub(crate) async fn run_configured_ner_input(
     match run_spacy_ner(app_handle, db_path, &input).await {
         Ok(entities) if !entities.is_empty() => return Ok(entities),
         Ok(_) => {
-            eprintln!("[nlp/ner] spaCy returned 0 entities; trying configured LLM fallback")
+            log::info!(
+                target: "nlp/ner",
+                "spaCy returned 0 entities; trying configured LLM fallback"
+            )
         }
         Err(error) => {
-            eprintln!("[nlp/ner] spaCy NER unavailable; using configured LLM fallback: {error}")
+            log::warn!(
+                target: "nlp/ner",
+                "spaCy NER unavailable; using configured LLM fallback: {error}"
+            )
         }
     }
 
@@ -875,7 +900,10 @@ fn schedule_fts_follow_up(
                 break;
             }
         }
-        eprintln!("[nlp/fts] Reindex follow-up after settled queue work: item_id={item_id}");
+        log::info!(
+            target: "nlp/fts",
+            "Reindex follow-up after settled queue work: item_id={item_id}"
+        );
         if sender
             .send(NlpJob::IndexFts {
                 item_id: item_id.clone(),
@@ -961,7 +989,10 @@ pub fn start_embedding_scheduler(db_path: PathBuf) {
         let conn = match crate::db::open::open_archive_connection(&db_path) {
             Ok(conn) => conn,
             Err(error) => {
-                eprintln!("[nlp/embeddings] Failed to open scheduler DB connection: {error}");
+                log::error!(
+                    target: "nlp/embeddings",
+                    "Failed to open scheduler DB connection: {error}"
+                );
                 return;
             }
         };
@@ -972,7 +1003,7 @@ pub fn start_embedding_scheduler(db_path: PathBuf) {
             let candidates = match scan_embedding_repair_candidates_at(&conn, now_ms) {
                 Ok(candidates) => candidates,
                 Err(error) => {
-                    eprintln!("[nlp/embeddings] EMBED repair scan failed: {error}");
+                    log::warn!(target: "nlp/embeddings", "EMBED repair scan failed: {error}");
                     continue;
                 }
             };
@@ -984,14 +1015,18 @@ pub fn start_embedding_scheduler(db_path: PathBuf) {
             match enqueue_embedding_repair_candidates(&conn, &candidates) {
                 Ok(admitted) => {
                     if admitted > 0 {
-                        eprintln!(
-                            "[nlp/embeddings] EMBED repair scheduler admitted {} of {} candidate(s)",
+                        log::info!(
+                            target: "nlp/embeddings",
+                            "EMBED repair scheduler admitted {} of {} candidate(s)",
                             admitted,
                             candidates.len()
                         );
                     }
                 }
-                Err(error) => eprintln!("[nlp/embeddings] EMBED repair admit failed: {error}"),
+                Err(error) => log::warn!(
+                    target: "nlp/embeddings",
+                    "EMBED repair admit failed: {error}"
+                ),
             }
         }
     });

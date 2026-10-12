@@ -359,8 +359,9 @@ impl OpenRouterClient {
                     if attempt >= Self::MAX_ATTEMPTS || !failure.is_retryable() {
                         return Err(failure.message());
                     }
-                    eprintln!(
-                        "[openrouter] attempt {attempt} failed ({}); retrying once",
+                    log::warn!(
+                        target: "openrouter",
+                        "attempt {attempt} failed ({}); retrying once",
                         failure.message()
                     );
                     attempt += 1;

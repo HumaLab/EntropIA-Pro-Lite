@@ -301,8 +301,9 @@ pub(crate) fn ensure_default_model_downloaded_if_missing(
         )
     })?;
     let download = prepare_local_model_download(db_path, &filename, &source_url)?;
-    eprintln!(
-        "{LLM_LOCAL_PREFIX} Default Gemma model missing; starting controlled auto-download from default source"
+    log::info!(
+        target: log_target(LLM_LOCAL_PREFIX),
+        "Default Gemma model missing; starting controlled auto-download from default source"
     );
     let managed_dir = self::download::open_managed_models_dir(&download.models_dir)?;
     self::download::download_model_file(
@@ -330,7 +331,7 @@ pub(crate) fn get_or_init_local_gemma_engine(
 
     ensure_default_model_downloaded_if_missing(conn, db_path, app_handle)?;
     let model_path = resolve_model_path(db_path);
-    eprintln!("{LLM_LOCAL_PREFIX} OCRC configured as text-only (multimodal disabled)");
+    log::info!(target: "llm-local", "OCRC configured as text-only (multimodal disabled)");
     let engine = LlmEngine::init(LlmConfig {
         model_path,
         n_ctx: 4096,
@@ -503,6 +504,17 @@ fn llm_job_prefix(use_cloud: bool, job: &LlmJob) -> String {
         Some(suffix) => format!("{}[{}]", llm_prefix(use_cloud), suffix),
         None => llm_prefix(use_cloud).to_string(),
     }
+}
+
+/// Facade target for a legacy log prefix. The facade formats stderr as
+/// `[<target>] <message>`, so a compound prefix like `[llm-local][correction]`
+/// keeps its old byte-identical line only when the outer brackets are the
+/// facade's own: stripping them leaves `llm-local][correction`.
+fn log_target(prefix: &str) -> &str {
+    prefix
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .unwrap_or(prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -1193,15 +1205,20 @@ fn parse_triples_json(raw: &str, log_prefix: &str) -> Vec<LlmTriple> {
             );
 
             if valid_triples.is_empty() {
-                eprintln!("{log_prefix}[triples] failed to parse any triples");
-                eprintln!(
-                    "{log_prefix}[triples] normalized_preview=\"{}\", candidate_preview=\"{}\"",
+                log::warn!(
+                    target: log_target(&format!("{log_prefix}[triples]")),
+                    "failed to parse any triples"
+                );
+                log::debug!(
+                    target: log_target(&format!("{log_prefix}[triples]")),
+                    "normalized_preview=\"{}\", candidate_preview=\"{}\"",
                     preview_for_log(&normalized_content, 220),
                     preview_for_log(&json_candidate, 220),
                 );
             } else {
-                eprintln!(
-                    "{log_prefix}[triples] parse fallback ok: parsed={}, object_candidates={}, candidate_preview=\"{}\"",
+                log::debug!(
+                    target: log_target(&format!("{log_prefix}[triples]")),
+                    "parse fallback ok: parsed={}, object_candidates={}, candidate_preview=\"{}\"",
                     valid_triples.len(),
                     normalized_content.matches('{').count(),
                     preview_for_log(&json_candidate, 220),
@@ -1370,9 +1387,9 @@ fn run_asset_job_blocking(
                 Err(error) if llm_mode != "auto" || api_key.is_empty() => {
                     return Err(format!("Local LLM unavailable: {error}"))
                 }
-                Err(error) => eprintln!(
-                    "{LLM_LOCAL_PREFIX}[{}] local engine failed, falling back to remote: {error}",
-                    job.job_name()
+                Err(error) => log::warn!(
+                    target: log_target(&format!("{LLM_LOCAL_PREFIX}[{}]", job.job_name())),
+                    "local engine failed, falling back to remote: {error}"
                 ),
             }
         }
@@ -1503,7 +1520,7 @@ impl LlmQueue {
             let conn = match crate::db::open::open_archive_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("{LLM_PREFIX} Failed to open worker DB connection: {e}");
+                    log::error!(target: log_target(LLM_PREFIX), "Failed to open worker DB connection: {e}");
                     return;
                 }
             };
@@ -1515,15 +1532,19 @@ impl LlmQueue {
                     value TEXT NOT NULL
                  );",
             ) {
-                eprintln!("{LLM_PREFIX} Warning: could not create app_settings table: {e}");
+                log::warn!(
+                    target: log_target(LLM_PREFIX),
+                    "Warning: could not create app_settings table: {e}"
+                );
             }
 
             #[cfg(feature = "local-ml")]
-            eprintln!(
-                "{LLM_PREFIX} Worker ready; provider is selected from settings, and the local engine initializes only when selected"
+            log::info!(
+                target: log_target(LLM_PREFIX),
+                "Worker ready; provider is selected from settings, and the local engine initializes only when selected"
             );
             #[cfg(not(feature = "local-ml"))]
-            eprintln!("{LLM_PREFIX} Worker ready; remote provider only in this build");
+            log::info!(target: log_target(LLM_PREFIX), "Worker ready; remote provider only in this build");
             #[cfg(feature = "local-ml")]
             let mut engine: Option<SharedLocalLlmEngine> = None;
             #[cfg(feature = "local-ml")]
@@ -1531,7 +1552,10 @@ impl LlmQueue {
 
             // Ensure llm_results table exists and legacy rows are normalized.
             if let Err(e) = ensure_llm_results_schema(&conn) {
-                eprintln!("{LLM_PREFIX} Warning: could not create llm_results table: {e}");
+                log::warn!(
+                    target: log_target(LLM_PREFIX),
+                    "Warning: could not create llm_results table: {e}"
+                );
             }
 
             // Main worker loop
@@ -1581,7 +1605,10 @@ impl LlmQueue {
                         continue;
                     }
 
-                    eprintln!("{job_log_prefix} Running job '{job_name}' for {id} via remote API");
+                    log::info!(
+                        target: log_target(&job_log_prefix),
+                        "Running job '{job_name}' for {id} via remote API"
+                    );
                     match prepare_remote_job_request(
                         &conn,
                         &job,
@@ -1612,7 +1639,10 @@ impl LlmQueue {
                         if engine.is_none() {
                             let init_db_path = db_path.clone();
                             let init_app_handle = app_handle.clone();
-                            eprintln!("{LLM_LOCAL_PREFIX} Initializing local LLM engine on demand for job '{job_name}'");
+                            log::info!(
+                                target: "llm-local",
+                                "Initializing local LLM engine on demand for job '{job_name}'"
+                            );
                             match tokio::task::spawn_blocking(move || {
                                 let init_conn =
                                     crate::db::open::open_archive_connection(&init_db_path)
@@ -1630,21 +1660,25 @@ impl LlmQueue {
                             .await
                             {
                                 Ok(Ok(resolved_engine)) => {
-                                    eprintln!("{LLM_LOCAL_PREFIX} Engine ready (lazy local init)");
+                                    log::info!(target: "llm-local", "Engine ready (lazy local init)");
                                     available.store(true, Ordering::Relaxed);
                                     init_error = None;
                                     engine = Some(resolved_engine);
                                 }
                                 Ok(Err(error)) => {
-                                    eprintln!("{LLM_LOCAL_PREFIX} Engine unavailable after lazy local init: {error}");
+                                    log::warn!(
+                                        target: "llm-local",
+                                        "Engine unavailable after lazy local init: {error}"
+                                    );
                                     init_error = Some(format!(
                                         "Engine unavailable after lazy local init: {error}"
                                     ));
                                 }
                                 Err(error) => {
-                                    eprintln!(
-                                    "{LLM_LOCAL_PREFIX} Engine lazy local init panicked: {error}"
-                                );
+                                    log::warn!(
+                                        target: "llm-local",
+                                        "Engine lazy local init panicked: {error}"
+                                    );
                                     init_error =
                                         Some(format!("Engine lazy local init panicked: {error}"));
                                 }
@@ -1653,9 +1687,10 @@ impl LlmQueue {
 
                         match &engine {
                             Some(e) => {
-                                eprintln!(
-                                "{job_log_prefix} Running job '{job_name}' for {id} via local engine"
-                            );
+                                log::info!(
+                                    target: log_target(&job_log_prefix),
+                                    "Running job '{job_name}' for {id} via local engine"
+                                );
                                 tokio::task::block_in_place(|| {
                                     let engine = e.lock().map_err(|error| {
                                         format!("Local LLM engine lock poisoned: {error}")
@@ -1666,9 +1701,10 @@ impl LlmQueue {
                             None => {
                                 if llm_mode == "auto" && !api_key.is_empty() {
                                     let fallback_log_prefix = llm_job_prefix(true, &job);
-                                    eprintln!(
-                                    "{fallback_log_prefix} Local LLM engine unavailable; falling back to remote provider for job '{job_name}' on {id}"
-                                );
+                                    log::warn!(
+                                        target: log_target(&fallback_log_prefix),
+                                        "Local LLM engine unavailable; falling back to remote provider for job '{job_name}' on {id}"
+                                    );
                                     match prepare_remote_job_request(
                                         &conn,
                                         &job,
@@ -1716,7 +1752,10 @@ impl LlmQueue {
                                 continue;
                             }
                             Err(error) => {
-                                eprintln!("{job_log_prefix} Warning: failed to persist result for {id}/{job_name}: {error}");
+                                log::warn!(
+                                    target: log_target(&job_log_prefix),
+                                    "Warning: failed to persist result for {id}/{job_name}: {error}"
+                                );
                                 generated.output
                             }
                         };
@@ -1724,22 +1763,51 @@ impl LlmQueue {
                         // so the Semantic Triples section UI shows LLM-extracted triples.
                         match &job {
                             LlmJob::ExtractTriples { item_id } => {
-                                match store_triples_for_item(&conn, item_id, &output, &job_log_prefix) {
-                                    Ok(count) => eprintln!("{job_log_prefix} Stored {count} triples for item {item_id}"),
-                                    Err(e) => eprintln!("{job_log_prefix} Warning: failed to store triples for item {item_id}: {e}"),
+                                match store_triples_for_item(
+                                    &conn,
+                                    item_id,
+                                    &output,
+                                    &job_log_prefix,
+                                ) {
+                                    Ok(count) => log::info!(
+                                        target: log_target(&job_log_prefix),
+                                        "Stored {count} triples for item {item_id}"
+                                    ),
+                                    Err(e) => log::warn!(
+                                        target: log_target(&job_log_prefix),
+                                        "Warning: failed to store triples for item {item_id}: {e}"
+                                    ),
                                 }
                             }
                             LlmJob::ExtractTriplesAsset { asset_id } => {
                                 // Resolve item_id from asset_id for the triples table
                                 match crate::nlp::lookup_item_id_for_asset(&conn, asset_id) {
                                     Ok(Some(item_id)) => {
-                                        match store_triples_for_asset(&conn, &item_id, asset_id, &output, &job_log_prefix) {
-                                            Ok(count) => eprintln!("{job_log_prefix} Stored {count} triples for asset {asset_id}"),
-                                            Err(e) => eprintln!("{job_log_prefix} Warning: failed to store triples for asset {asset_id}: {e}"),
+                                        match store_triples_for_asset(
+                                            &conn,
+                                            &item_id,
+                                            asset_id,
+                                            &output,
+                                            &job_log_prefix,
+                                        ) {
+                                            Ok(count) => log::info!(
+                                                target: log_target(&job_log_prefix),
+                                                "Stored {count} triples for asset {asset_id}"
+                                            ),
+                                            Err(e) => log::warn!(
+                                                target: log_target(&job_log_prefix),
+                                                "Warning: failed to store triples for asset {asset_id}: {e}"
+                                            ),
                                         }
                                     }
-                                    Ok(None) => eprintln!("{job_log_prefix} Warning: no item_id found for asset {asset_id}, skipping triples storage"),
-                                    Err(e) => eprintln!("{job_log_prefix} Warning: failed to lookup item_id for asset {asset_id}: {e}"),
+                                    Ok(None) => log::warn!(
+                                        target: log_target(&job_log_prefix),
+                                        "Warning: no item_id found for asset {asset_id}, skipping triples storage"
+                                    ),
+                                    Err(e) => log::warn!(
+                                        target: log_target(&job_log_prefix),
+                                        "Warning: failed to lookup item_id for asset {asset_id}: {e}"
+                                    ),
                                 }
                             }
                             _ => {} // Other job types don't produce triples
@@ -1754,7 +1822,7 @@ impl LlmQueue {
                 }
             }
 
-            eprintln!("{LLM_LOCAL_PREFIX} Worker loop ended — channel closed.");
+            log::info!(target: "llm-local", "Worker loop ended — channel closed.");
         });
     }
 }
@@ -2238,8 +2306,9 @@ async fn execute_remote_job_request(
             })
             .await
             .map_err(|error| format!("OCR correction visual preparation panicked: {error}"))??;
-            eprintln!(
-                "[llm-remote][correction] multimodal request model={} image_mime={} image_bytes={} prompt_chars={}",
+            log::info!(
+                target: log_target("[llm-remote][correction]"),
+                "multimodal request model={} image_mime={} image_bytes={} prompt_chars={}",
                 request.generation.model,
                 image.mime_type(),
                 image.payload_bytes(),
@@ -2539,6 +2608,24 @@ fn prepare_remote_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_target_keeps_compound_prefixes_byte_identical() {
+        // The facade prints `[<target>] <message>`; stripping only the outer
+        // brackets of the legacy prefix must reproduce the old stderr line.
+        for prefix in [
+            "[llm]",
+            "[llm-local]",
+            "[llm-local][correction]",
+            "[llm-local][triples][triples]",
+            "[rag][rewrite]",
+        ] {
+            assert_eq!(
+                format!("[{}] message", log_target(prefix)),
+                format!("{prefix} message")
+            );
+        }
+    }
 
     #[cfg(feature = "local-ml")]
     fn settings_db() -> rusqlite::Connection {

@@ -199,12 +199,13 @@ impl LlmEngine {
         let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
             .map_err(|e| format!("Failed to load model {}: {e}", config.model_path.display()))?;
 
-        eprintln!(
-            "[llm-local] Model loaded: {} (n_ctx={})",
+        log::info!(
+            target: "llm-local",
+            "Model loaded: {} (n_ctx={})",
             config.model_path.display(),
             config.n_ctx
         );
-        eprintln!("[llm-local] Running in text-only mode");
+        log::info!(target: "llm-local", "Running in text-only mode");
 
         Ok(Self {
             backend,
@@ -250,8 +251,9 @@ impl LlmEngine {
         }
         let effective_max_tokens = max_tokens.min(available);
         if effective_max_tokens < max_tokens {
-            eprintln!(
-                "{log_prefix} Reducing max_tokens from {max_tokens} to {effective_max_tokens} \
+            log::info!(
+                target: super::log_target(log_prefix),
+                "Reducing max_tokens from {max_tokens} to {effective_max_tokens} \
                  (prompt={n_prompt}/n_ctx={n_ctx})"
             );
         }
@@ -275,8 +277,9 @@ impl LlmEngine {
         let ctx_n_ubatch = ctx.n_ubatch();
         let ctx_n_ctx = ctx.n_ctx();
 
-        eprintln!(
-            "{log_prefix} generate request: prompt_chars={prompt_chars}, prompt_tokens={n_prompt}, requested_max_tokens={max_tokens}, effective_max_tokens={effective_max_tokens}, n_ctx={ctx_n_ctx}, n_batch={ctx_n_batch}, n_ubatch={ctx_n_ubatch}"
+        log::debug!(
+            target: super::log_target(log_prefix),
+            "generate request: prompt_chars={prompt_chars}, prompt_tokens={n_prompt}, requested_max_tokens={max_tokens}, effective_max_tokens={effective_max_tokens}, n_ctx={ctx_n_ctx}, n_batch={ctx_n_batch}, n_ubatch={ctx_n_ubatch}"
         );
 
         let n_len = n_prompt + effective_max_tokens;
@@ -407,8 +410,9 @@ impl LlmEngine {
         let sanitized = Self::sanitize_text_output(&raw);
 
         if raw.trim() != sanitized {
-            eprintln!(
-                "[llm-local][correction] sanitized model output: raw_len={}, sanitized_len={}, raw_preview=\"{}\", sanitized_preview=\"{}\"",
+            log::debug!(
+                target: super::log_target("[llm-local][correction]"),
+                "sanitized model output: raw_len={}, sanitized_len={}, raw_preview=\"{}\", sanitized_preview=\"{}\"",
                 raw.chars().count(),
                 sanitized.chars().count(),
                 Self::preview_for_log(&raw, 220),
@@ -443,8 +447,9 @@ impl LlmEngine {
         let sanitized = Self::sanitize_json_array_output(&raw);
 
         if raw.trim() != sanitized {
-            eprintln!(
-                "[llm-local][triples] sanitized model output: raw_len={}, sanitized_len={}, raw_preview=\"{}\", sanitized_preview=\"{}\"",
+            log::debug!(
+                target: super::log_target("[llm-local][triples]"),
+                "sanitized model output: raw_len={}, sanitized_len={}, raw_preview=\"{}\", sanitized_preview=\"{}\"",
                 raw.chars().count(),
                 sanitized.chars().count(),
                 Self::preview_for_log(&raw, 220),

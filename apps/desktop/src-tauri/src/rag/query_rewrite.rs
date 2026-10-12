@@ -93,12 +93,18 @@ pub(crate) async fn rewrite_query(
         Ok(raw) => match normalize_rewrite(original, &raw) {
             Some(query) => RewriteOutcome::Applied(query),
             None => {
-                eprintln!("[rag] Query rewrite output rejected; using the original query");
+                log::warn!(
+                    target: "rag",
+                    "Query rewrite output rejected; using the original query"
+                );
                 RewriteOutcome::Skipped
             }
         },
         Err(_) => {
-            eprintln!("[rag] Query rewrite unavailable; using the original query");
+            log::warn!(
+                target: "rag",
+                "Query rewrite unavailable; using the original query"
+            );
             RewriteOutcome::Failed
         }
     }
