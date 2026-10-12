@@ -101,6 +101,20 @@ const STARTUP_ERROR_LOG: &str = "entropia-pro-startup-error.log";
 #[cfg(not(feature = "local-ml"))]
 const STARTUP_ERROR_LOG: &str = "entropia-lite-startup-error.log";
 
+/// One User-Agent for every outgoing HTTP client.
+///
+/// The version comes from Cargo, so it cannot drift from the shipped app the
+/// way per-client literals did; `package.json` is the source of truth and
+/// `pnpm version:check` keeps Cargo in sync. Nominatim's usage policy requires
+/// an identifying User-Agent. The sync client is the one deliberate exception:
+/// it sends `EntropIA-Desktop-Sync/1.0`, a sync protocol identifier the server
+/// may rely on (see `src/sync/http.rs`).
+pub(crate) const USER_AGENT: &str = concat!(
+    "EntropIA-Desktop/",
+    env!("CARGO_PKG_VERSION"),
+    " (historical-research-app)"
+);
+
 /// Title and body of the dialog shown when setup cannot start the app.
 fn startup_error_dialog(context: &str, detail: &str, log_path: &Path) -> (String, String) {
     (
@@ -149,20 +163,23 @@ fn show_setup_dialog(
     }
 }
 
+/// Title for the main window in development.
+///
+/// Debug builds set it at runtime, which is why the static `tauri.dev.conf.json`
+/// title stays variant-neutral. This is the value actually shown, so Pro dev
+/// never displays "EntropIA Lite".
+#[cfg(debug_assertions)]
+fn development_window_title() -> String {
+    format!("{PRODUCT_NAME} (dev)")
+}
+
 #[cfg(debug_assertions)]
 fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.dev.conf.json"))?;
-    let title = config
-        .pointer("/app/windows/0/title")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            std::io::Error::other("tauri.dev.conf.json is missing the main window title")
-        })?;
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| std::io::Error::other("main window is unavailable"))?;
 
-    window.set_title(title)?;
+    window.set_title(&development_window_title())?;
     Ok(())
 }
 
@@ -2184,6 +2201,20 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn development_window_title_names_the_variant_and_the_dev_marker() {
+        let title = development_window_title();
+        assert!(title.starts_with(PRODUCT_NAME));
+        assert!(title.ends_with(" (dev)"));
+    }
+
+    #[test]
+    fn user_agent_uses_the_cargo_version() {
+        assert!(USER_AGENT.starts_with("EntropIA-Desktop/"));
+        assert!(USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
+    }
 
     #[test]
     fn product_name_matches_the_variant_tauri_config() {

@@ -105,7 +105,7 @@ pub struct AssemblyAiClient {
 impl AssemblyAiClient {
     pub fn new(api_key: String) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
             .expect("Failed to build reqwest client");

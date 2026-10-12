@@ -826,7 +826,7 @@ struct RequestFailure {
 impl OpenRouterEmbeddingClient {
     fn http_client() -> Result<reqwest::blocking::Client, String> {
         reqwest::blocking::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| format!("Failed to build OpenRouter embedding client: {e}"))
