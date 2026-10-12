@@ -702,6 +702,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     everywhere (newly in ci.yml x5 and engine-pin-bump.yml). One mapping script that refuses
     unknown pairs; SHAs resolved via the GitHub API. Tests RED first. RDD
     `review-6ab70ec8acc468a6` approved (two suggestions).
+  - [x] 7.4 — pnpm forensics removed (C-05). Branch `ci/p7-4-ci-forensics` (on 7.3).
+    - `41663756`: prettier on four test files left unformatted earlier in the stack, which made
+      CI's "Format check" fail on every stacked PR.
+    - `cb10d8ab` (7.4a): ci.yml loses the 40 forensics/classification/YAML-parse/upload steps (10
+      per job in rust-quality-report, lint-typecheck, test, build; -299 lines, nothing added) and
+      the three forensics suites from the Pester gate. Kept: `Restore canonical lockfile`,
+      `id: pnpm_setup`, Node 22 setup-node, the explicit pnpm bin install. Evidence: the 18
+      classification reports of the last 5 CI runs all say `lockfile_anomaly_detected: False`,
+      `runtime_inconsistent: False`. Tests RED first (`ci-supply-chain.test.ts`, Pester).
+    - `0503bb38` (7.4b): the two scripts and three suites deleted. Local Pester (Linux): 68
+      passed, 3 failed (Windows-only MSIX icons; baseline 101/9).
+    - RDD `review-f4d6872c9a954435` (format + 7.4a, high tier) approved, one advisory: if the
+      lockfile anomaly returns, the diagnostics are gone. Accepted: the restore mitigation stays
+      and the scripts are recoverable from git history (`cb10d8ab^`). RDD
+      `review-a0e3cd641a90c0e3` (7.4b, medium) approved, no findings.
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
