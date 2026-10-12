@@ -1,0 +1,95 @@
+name: Windows Pro validation
+
+# Isolated artifact-only validation for the Windows Pro (local-ml) installers.
+# Triggered ONLY by pushes to feat/internet-archive that touch this workflow
+# file; documentation-only pushes do not retrigger the ~35-60 min MNN build.
+# Never creates a GitHub release: artifacts only.
+on:
+  push:
+    branches:
+      - feat/internet-archive
+    paths:
+      - .github/workflows/windows-pro-validation.yml
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 9.15.4
+  # Same signed bootstrap source as the release pipeline. build.rs requires a baked
+  # download source for release builds that ship the fixture runtime-pack.
+  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
+  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
+  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
+
+jobs:
+  build-windows-pro:
+    name: Build Windows Pro (NSIS + MSI)
+    runs-on: windows-latest
+    # Cold MNN compilation from source can take 35-60 minutes.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Restore canonical lockfile
+        run: git checkout -- pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
+
+      # Plain `pnpm exec tauri build` from apps/desktop: the release-creating
+      # Tauri GitHub Action is deliberately avoided so no token, tag, or
+      # release parameter can ever attach this run to a release.
+      # The Windows resource overlay (hooks.nsh, WebView2 repair hook, VC
+      # runtime staging, Pro resources) applies via tauri.windows.conf.json.
+      - name: Build Pro installers (NSIS + MSI)
+        working-directory: apps/desktop
+        env:
+          VITE_LOCAL_ML: '1'
+          ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL }}
+          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID }}
+          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64 }}
+        run: pnpm exec tauri build --features local-ml --bundles nsis,msi --config src-tauri/tauri.windows.conf.json
+
+      # Explicit presence guard for BOTH installer types: the upload step
+      # below must never succeed with only one of them.
+      - name: Guard NSIS + MSI presence
+        shell: pwsh
+        run: |
+          $nsis = Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $nsis) { throw "No NSIS installer found under apps/desktop/src-tauri/target/release/bundle/nsis" }
+          $msi = Get-ChildItem -Path "apps/desktop/src-tauri/target/release/bundle/msi" -Filter "*.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msi) { throw "No MSI installer found under apps/desktop/src-tauri/target/release/bundle/msi" }
+          Write-Host "NSIS installer: $($nsis.FullName) ($($nsis.Length) bytes)"
+          Write-Host "MSI installer:  $($msi.FullName) ($($msi.Length) bytes)"
+
+      - name: Upload Windows Pro installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pro-installers
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
