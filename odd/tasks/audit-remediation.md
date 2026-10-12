@@ -577,8 +577,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     3520 / 0 / 7; lint 0 errors. RDD `review-f48afa5cf83d94cd` approved (high tier, four lenses).
     Advisory: the cheap early rules (profile/feature/OS) are duplicated between `build.rs` and the
     module.
-  - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists
-    on `EntropIA-Pro-Lite` before switching; contract test; keep the old URL served.
+  - [x] 6.4 — canonical runtime manifest URL (C-02). Branch `fix/p6-4-runtime-manifest-url`,
+    commit `3d8d7cd5`. Checked first (2026-10-12): `HumaLab/EntropIA-Pro` is this repository's old
+    name (same repo id 1269759651, GitHub redirects); the `runtime-bootstrap` release exists on
+    `EntropIA-Pro-Lite` (manifest.json + 4 parts, 2026-06-19) and both URLs return 200 for the
+    same asset. `release.yml` now bakes the canonical URL, exactly what
+    `publish-runtime-bootstrap.yml` prints for `github.repository` + default tag; the comment
+    records that releases up to 1.0.20 keep the old URL compiled in, so no repository may ever be
+    created under the old name. Test RED on the old URL, then GREEN. RDD `review-7dea197ed4de09ed`
+    approved (high tier; first group run lost `review-risk` to "Stream ended without
+    finish_reason", the reoffered group passed). Advisories: the test hardcodes the repository
+    name and parses YAML with regexes.
+    - Found while checking (not in 6.4 scope, needs a decision): the signed manifest lists only
+      `windows-x86_64` releases. The Pro Linux .deb (6.1) has a baked source but no Linux runtime
+      to download, so its local-ML runtime cannot bootstrap.
   - [ ] 6.5 — single version source (C-04): derive `StoreVersion`/`.msix` name; extend the version
     consistency test; optional `version:bump`.
   - [ ] 6.6 — binary provenance (D-07): `resources/CHECKSUMS.sha256` + check. Medium-term choice
