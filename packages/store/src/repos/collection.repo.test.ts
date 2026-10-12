@@ -247,14 +247,10 @@ describe('CollectionRepo', () => {
       expect(sql).not.toContain('DELETE FROM embeddings_fallback')
       expect(sql).not.toContain('DELETE FROM fts_index')
       // The item's own index row leaves by rowid inside the same transaction.
-      expect(sql).toContain(
-        'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE'
-      )
+      expect(sql).toContain('DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE')
       // Ids travel bound, never interpolated into the SQL.
       expect(statements.some((statement) => statement.sql.includes('col-1'))).toBe(false)
-      expect(
-        statements.every((statement) => statement.params.includes('col-1'))
-      ).toBe(true)
+      expect(statements.every((statement) => statement.params.includes('col-1'))).toBe(true)
     })
 
     it('cleans up optional vec_assets after the transaction with bound ids', async () => {
@@ -271,10 +267,9 @@ describe('CollectionRepo', () => {
 
       // The embedding cleanup stays best-effort: its table may not exist.
       expect(rawExecuteMock).toHaveBeenCalledOnce()
-      expect(rawExecuteMock).toHaveBeenCalledWith(
-        'DELETE FROM vec_assets WHERE item_id IN (?)',
-        ['item-1']
-      )
+      expect(rawExecuteMock).toHaveBeenCalledWith('DELETE FROM vec_assets WHERE item_id IN (?)', [
+        'item-1',
+      ])
     })
 
     it('skips the optional cleanup when the collection has no items', async () => {
@@ -301,9 +296,7 @@ describe('CollectionRepo', () => {
 
       const statements = (rawClient.executeTransaction as ReturnType<typeof vi.fn>).mock
         .calls[0]![0] as Array<{ sql: string; params: unknown[] }>
-      expect(
-        statements.some((statement) => statement.sql.includes("col'; DROP TABLE"))
-      ).toBe(false)
+      expect(statements.some((statement) => statement.sql.includes("col'; DROP TABLE"))).toBe(false)
       expect(
         statements.every((statement) =>
           statement.params.includes("col'; DROP TABLE collections;--")
