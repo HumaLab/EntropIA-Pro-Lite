@@ -121,20 +121,22 @@ impl PaddleOcrProvider {
         let ori_model = {
             let ori_path = model_dir.join(ORI_MODEL_FILENAME);
             if !ori_path.exists() {
-                eprintln!(
-                    "[OCR] Orientation model not found at {} — rotation correction disabled",
+                log::warn!(
+                    target: "OCR",
+                    "Orientation model not found at {} — rotation correction disabled",
                     ori_path.display()
                 );
                 None
             } else {
                 match ocr_rs::OriModel::from_file(&ori_path, None) {
                     Ok(m) => {
-                        eprintln!("[OCR] ✅ Orientation model loaded — automatic rotation correction enabled");
+                        log::info!(target: "OCR", "✅ Orientation model loaded — automatic rotation correction enabled");
                         Some(m)
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[OCR] ⚠️ Orientation model found at {} but failed to load: {e} — rotation correction disabled",
+                        log::warn!(
+                            target: "OCR",
+                            "⚠️ Orientation model found at {} but failed to load: {e} — rotation correction disabled",
                             ori_path.display()
                         );
                         None
@@ -209,16 +211,18 @@ impl PaddleOcrProvider {
         match ori.classify(&img) {
             Ok(result) => {
                 if result.is_valid(ORI_CONFIDENCE_THRESHOLD) && result.angle != 0 {
-                    eprintln!(
-                        "[OCR] Orientation correction: rotating {}° (confidence: {:.2}%)",
+                    log::info!(
+                        target: "OCR",
+                        "Orientation correction: rotating {}° (confidence: {:.2}%)",
                         result.angle,
                         result.confidence * 100.0
                     );
                     rotate_image(&img, result.angle)
                 } else {
                     if result.angle != 0 {
-                        eprintln!(
-                            "[OCR] Orientation detected {}° but confidence too low ({:.2}% < {:.0}%) — skipping rotation",
+                        log::info!(
+                            target: "OCR",
+                            "Orientation detected {}° but confidence too low ({:.2}% < {:.0}%) — skipping rotation",
                             result.angle,
                             result.confidence * 100.0,
                             ORI_CONFIDENCE_THRESHOLD * 100.0
@@ -228,8 +232,9 @@ impl PaddleOcrProvider {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "[OCR] Orientation classification failed: {e} — proceeding without rotation"
+                log::warn!(
+                    target: "OCR",
+                    "Orientation classification failed: {e} — proceeding without rotation"
                 );
                 img
             }
@@ -280,7 +285,7 @@ fn rotate_image(img: &image::DynamicImage, angle: i32) -> image::DynamicImage {
         180 => img.rotate180(),
         270 => img.rotate270(),
         _ => {
-            eprintln!("[OCR] Unexpected orientation angle {angle}° — not rotating");
+            log::warn!(target: "OCR", "Unexpected orientation angle {angle}° — not rotating");
             img.clone()
         }
     }
@@ -320,7 +325,7 @@ mod tests {
         let provider = PaddleOcrProvider::new(model_dir)
             .expect("PaddleOCR init failed — are model files in resources/models/ocr/?");
 
-        eprintln!("[test] PaddleOCR provider initialized: {}", provider.name());
+        log::info!(target: "test", "PaddleOCR provider initialized: {}", provider.name());
 
         // Load a test image — use the project's existing test image
         // CARGO_MANIFEST_DIR = .../apps/desktop/src-tauri
@@ -334,14 +339,15 @@ mod tests {
         let test_image_path = workspace_root.join("rust_style_binary.png");
 
         if !test_image_path.exists() {
-            eprintln!("[test] Skipping — test image not found at {test_image_path:?}");
+            log::info!(target: "test", "Skipping — test image not found at {test_image_path:?}");
             return;
         }
 
         let image_bytes = std::fs::read(&test_image_path).expect("Failed to read test image");
 
-        eprintln!(
-            "[test] Running PaddleOCR on {:?} ({} bytes)...",
+        log::info!(
+            target: "test",
+            "Running PaddleOCR on {:?} ({} bytes)...",
             test_image_path,
             image_bytes.len()
         );
@@ -350,11 +356,12 @@ mod tests {
             .recognize(&image_bytes)
             .expect("PaddleOCR recognition failed");
 
-        eprintln!("[test] Method: {}", output.method);
-        eprintln!("[test] Text length: {} chars", output.text.len());
-        eprintln!("[test] Regions: {}", output.regions.len());
-        eprintln!(
-            "[test] First 200 chars of text:\n{}",
+        log::info!(target: "test", "Method: {}", output.method);
+        log::info!(target: "test", "Text length: {} chars", output.text.len());
+        log::info!(target: "test", "Regions: {}", output.regions.len());
+        log::info!(
+            target: "test",
+            "First 200 chars of text:\n{}",
             &output.text.chars().take(200).collect::<String>()
         );
 
@@ -374,7 +381,7 @@ mod tests {
             "PaddleOCR should provide bounding boxes for detected regions"
         );
 
-        eprintln!("[test] ✅ PaddleOCR integration test passed!");
+        log::info!(target: "test", "✅ PaddleOCR integration test passed!");
     }
 
     #[test]

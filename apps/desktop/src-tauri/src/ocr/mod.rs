@@ -1238,8 +1238,9 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
     let img = match image::load_from_memory(bytes) {
         Ok(img) => img,
         Err(e) => {
-            eprintln!(
-                "[OCRH] Could not decode image for downscale check: {e}. Using original bytes."
+            log::warn!(
+                target: "OCRH",
+                "Could not decode image for downscale check: {e}. Using original bytes."
             );
             return bytes.to_vec();
         }
@@ -1253,8 +1254,9 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
     let exceeds_pixels = total_pixels > PADDLE_VL_MAX_PIXELS as u64;
 
     if !exceeds_dim && !exceeds_pixels {
-        eprintln!(
-            "[OCRH] Image size {}x{} ({:.2} MP) OK, no downscale needed",
+        log::info!(
+            target: "OCRH",
+            "Image size {}x{} ({:.2} MP) OK, no downscale needed",
             w,
             h,
             total_pixels as f64 / 1_000_000.0
@@ -1269,8 +1271,9 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
     let new_w = ((w as f32) * scale).round().max(1.0) as u32;
     let new_h = ((h as f32) * scale).round().max(1.0) as u32;
 
-    eprintln!(
-        "[OCRH] Downscaling {}x{} ({:.2} MP) → {}x{} ({:.2} MP) for PaddleVL",
+    log::info!(
+        target: "OCRH",
+        "Downscaling {}x{} ({:.2} MP) → {}x{} ({:.2} MP) for PaddleVL",
         w,
         h,
         total_pixels as f64 / 1_000_000.0,
@@ -1285,7 +1288,7 @@ fn maybe_downscale_for_paddlevl(bytes: &[u8]) -> Vec<u8> {
     // Re-encode as PNG (lossless, preserves text sharpness)
     let mut out = Vec::with_capacity(bytes.len() / 2);
     if let Err(e) = resized.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png) {
-        eprintln!("[OCRH] Re-encode failed: {e}. Using original bytes.");
+        log::warn!(target: "OCRH", "Re-encode failed: {e}. Using original bytes.");
         return bytes.to_vec();
     }
 
@@ -1319,10 +1322,11 @@ fn should_bypass_layout(
 ) -> bool {
     if regions.len() < 2 {
         if regions.is_empty() {
-            eprintln!("[OCRL] Bypassing layout: 0 regions detected");
+            log::info!(target: "OCRL", "Bypassing layout: 0 regions detected");
         } else {
-            eprintln!(
-                "[OCRL] Bypassing layout: only 1 region detected (insufficient segmentation)"
+            log::info!(
+                target: "OCRL",
+                "Bypassing layout: only 1 region detected (insufficient segmentation)"
             );
         }
         return true;
@@ -1337,8 +1341,9 @@ fn should_bypass_layout(
         let region_area = (region.bbox.width as u64) * (region.bbox.height as u64);
         let ratio = (region_area as f64) / (total_area as f64);
         if ratio > 0.60 {
-            eprintln!(
-                "[OCRL] Bypassing layout: region {:?} covers {:.1}% of the image (>60% threshold)",
+            log::info!(
+                target: "OCRL",
+                "Bypassing layout: region {:?} covers {:.1}% of the image (>60% threshold)",
                 region.label,
                 ratio * 100.0
             );
@@ -1378,7 +1383,7 @@ fn crop_region(
 
     // Skip regions that are too small — cannot produce useful OCR.
     if crop_w < 10 || crop_h < 10 {
-        eprintln!("[ocr] Skipping region too small: {crop_w}x{crop_h} at ({x1},{y1})");
+        log::info!(target: "ocr", "Skipping region too small: {crop_w}x{crop_h} at ({x1},{y1})");
         return None;
     }
 
@@ -1479,7 +1484,7 @@ async fn process_pdf(
                 {
                     Ok(result) => return Ok(result),
                     Err(error) => {
-                        eprintln!("[OCRH] GLM-OCR failed in auto mode for {asset_id}, falling back to local OCRH: {error}");
+                        log::warn!(target: "OCRH", "GLM-OCR failed in auto mode for {asset_id}, falling back to local OCRH: {error}");
                     }
                 }
             }
@@ -1515,8 +1520,9 @@ async fn process_pdf(
         }
         _ => {
             // Native text failed quality check — render ALL pages and OCR them.
-            eprintln!(
-                "[pdf] Native text failed quality check, falling back to multi-page PDF→image→OCR"
+            log::warn!(
+                target: "pdf",
+                "Native text failed quality check, falling back to multi-page PDF→image→OCR"
             );
 
             initialize_pdfium_for_pdf(bytes, || init_pdfium_path(app_handle));
@@ -1529,7 +1535,7 @@ async fn process_pdf(
                     .map_err(|e| format!("PDF page count task panicked: {e}"))?
                     .map_err(|e| format!("Failed to get PDF page count: {e}"))?;
 
-            eprintln!("[pdf] Processing {page_count} page(s) via OCR fallback");
+            log::info!(target: "pdf", "Processing {page_count} page(s) via OCR fallback");
 
             let mut all_text = String::new();
             let mut all_regions: Vec<provider::OcrRegion> = Vec::new();
@@ -1584,7 +1590,7 @@ async fn process_pdf(
                                 ));
 
                                 if let Err(e) = std::fs::write(&temp_path, &vl_bytes) {
-                                     eprintln!("[OCRH] Failed to write temp file for PaddleVL on PDF page {}: {e}. Falling back to PaddleOCR light.", page_idx + 1);
+                                     log::warn!(target: "OCRH", "Failed to write temp file for PaddleVL on PDF page {}: {e}. Falling back to PaddleOCR light.", page_idx + 1);
                                      return provider_clone
                                          .recognize(&page_image)
                                          .map(|output| (output, None))
@@ -1594,7 +1600,7 @@ async fn process_pdf(
                                 let temp_path_str = match temp_path.to_str() {
                                     Some(s) => s.to_string(),
                                     None => {
-                                         eprintln!("[OCRH] Invalid temp path for PaddleVL on PDF page {}. Falling back.", page_idx + 1);
+                                         log::warn!(target: "OCRH", "Invalid temp path for PaddleVL on PDF page {}. Falling back.", page_idx + 1);
                                          return provider_clone
                                              .recognize(&page_image)
                                              .map(|output| (output, None))
@@ -1620,10 +1626,6 @@ async fn process_pdf(
                                         ))
                                     }
                                     Err(e) => {
-                                        eprintln!(
-                                            "[OCRH] PaddleVL failed for PDF page {}: {e}. Falling back to PaddleOCR light.",
-                                            page_idx + 1
-                                        );
                                         crate::app_logs::warn(
                                             &app_handle_for_page,
                                             "ocrh",
@@ -1639,10 +1641,6 @@ async fn process_pdf(
                                     }
                                 }
                             } else {
-                                eprintln!(
-                                    "[OCRH] PaddleVL engine unavailable for PDF page {}. Falling back to PaddleOCR light.",
-                                    page_idx + 1
-                                );
                                 crate::app_logs::warn(
                                     &app_handle_for_page,
                                     "ocrh",
@@ -1841,7 +1839,7 @@ async fn process_image_high(
             {
                 Ok(result) => return Ok(result),
                 Err(error) => {
-                    eprintln!("[OCRH] GLM-OCR failed in auto mode for {asset_id}, falling back to local OCRH: {error}");
+                    log::warn!(target: "OCRH", "GLM-OCR failed in auto mode for {asset_id}, falling back to local OCRH: {error}");
                 }
             }
         }
@@ -1873,8 +1871,9 @@ async fn process_image_high(
                 .join(format!("entropia_paddlevl_{}.png", uuid::Uuid::new_v4()));
 
             if let Err(e) = std::fs::write(&temp_path, &vl_bytes) {
-                eprintln!(
-                    "[OCRH] Failed to write temp file for PaddleVL for {asset_id_owned}: {e}. \
+                log::warn!(
+                    target: "OCRH",
+                    "Failed to write temp file for PaddleVL for {asset_id_owned}: {e}. \
                      Falling back to PaddleOCR light."
                 );
                 return provider_clone
@@ -1890,8 +1889,9 @@ async fn process_image_high(
             let temp_path_str = match temp_path.to_str() {
                 Some(s) => s.to_string(),
                 None => {
-                    eprintln!(
-                        "[OCRH] Invalid temp path for PaddleVL for {asset_id_owned}. \
+                    log::warn!(
+                        target: "OCRH",
+                        "Invalid temp path for PaddleVL for {asset_id_owned}. \
                          Falling back to PaddleOCR light."
                     );
                     return provider_clone
@@ -1918,8 +1918,9 @@ async fn process_image_high(
                             original_height,
                         );
                     }
-                    eprintln!(
-                        "[OCRH] PaddleVL detected {} blocks for {asset_id_owned}",
+                    log::info!(
+                        target: "OCRH",
+                        "PaddleVL detected {} blocks for {asset_id_owned}",
                         vl_output.blocks.len()
                     );
                     Ok(ProcessedOcrOutput {
@@ -1929,10 +1930,6 @@ async fn process_image_high(
                     })
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[OCRH] PaddleVL failed for {asset_id_owned}: {e}. \
-                         Falling back to PaddleOCR light."
-                    );
                     crate::app_logs::warn(
                         &app_handle_for_high,
                         "ocrh",
@@ -1958,9 +1955,6 @@ async fn process_image_high(
         return Ok(output);
     }
 
-    eprintln!(
-        "[OCRH] PaddleVL engine unavailable for {asset_id}. Falling back to PaddleOCR light."
-    );
     crate::app_logs::warn(
         app_handle,
         "ocrh",
