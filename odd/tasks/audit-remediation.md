@@ -438,7 +438,8 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     2808 / 0 / 35. Dev profile: a copy of a real archive with a planted trigger, a planted view and
     a hijacked `collection_activity_items_update` → 3 dropped, 1 restored byte-identical, next start
     "ok". RDD `review-d44fe8c944ffb916` approved, no findings.
-- [ ] Phase 5 — performance and observability (P-01..P-04). One stacked branch + PR + RDD per unit.
+- [x] Phase 5 — performance and observability (P-01..P-04). One stacked branch + PR + RDD per unit.
+  PRs #55 → #56 → #57 → #59 → #60 → #61 → #62 → #63 → #64. 5.2b deferred by user decision.
   - [x] 5.1 (P-02) — app log bounded and streamed. Branch `fix/p5-1-app-log-rotation`, commit
     `b3c11a50`. `load_existing_entries` streams with `read_until` (corrupt and non-UTF-8 lines
     skipped one by one; before, one bad byte made `read_to_string` fail and the whole history
@@ -480,7 +481,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `schema_tag` unchanged). Verified every production write connection goes through
       `db/open.rs` (`research*` opens another DB; `rag/baseline.rs` is read-only tooling). Plan
       test: an in-place embedding update is reflected by the next query.
-  - [ ] 5.4 (P-04) — unified backend logging, incremental. One unit per area.
+  - [x] 5.4 (P-04) — unified backend logging, incremental. One unit per area. eprintln 387 → 1.
     - [x] 5.4a — facade + guard + setup. Branch `feat/p5-4a-backend-logging`, commit `ebc40ecf`.
       `logging.rs` (`log` 0.4, already in the lockfile): stderr `[<target>] <message>`
       byte-identical to the old eprintln lines; our crate's warn/error also persisted to
@@ -519,7 +520,16 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       moved an undecodable audio packet (per packet) and auto-title discarded (per conversation)
       from warn to info. No API key at any level. eprintln 172 → 70. Lite 2829 / 0 / 37; Pro the
       four modules 478 pass. RDD `review-da6064ce226ef5e5` approved, no findings.
-    - [ ] 5.4f — the rest (~70) + shared test logger.
+    - [x] 5.4f — the rest. Branch `feat/p5-4f-remaining-logging`, commit `45c261f1`. 68 production
+      sites migrated, 2 paired eprintlns deleted keeping `app_logs`; only `app_logs.rs`'s own echo
+      remains (eprintln 70 → 1, baseline = `app_logs.rs 1`). Parent added rate limiting where
+      persisted warnings would repeat: the scheduler retry loop (warn on the first failure of a run,
+      info until it recovers) and unresolvable secret settings (warn once per key per session).
+      Test-only diagnostics use `println!` instead of a test logger (captured by the harness, shown
+      with `--nocapture`). Lite 2829 / 0 / 37; Pro lib 2791 / 0 / 14. RDD `review-74260b4df6fedb86`
+      approved (four lenses, high tier: `store_updates.rs` starts processes). Advisories: the
+      per-key set never resets within a session; identical scheduler match arms; doc wording of the
+      "repeats go to stderr" comments (true: release max level is Info).
 - [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
