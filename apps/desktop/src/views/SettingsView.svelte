@@ -121,6 +121,7 @@
   import LogsTab from './LogsTab.svelte'
   import BatchProcessingTab from './BatchProcessingTab.svelte'
   import AppearanceTab from './AppearanceTab.svelte'
+  import BackupTab from './BackupTab.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
@@ -147,6 +148,7 @@
     | 'dependencias'
     | 'batch'
     | 'logs'
+    | 'backup'
     | 'appearance'
   let activeTab = $state<SettingsTab>(isCriticalMissing() ? 'dependencias' : 'api')
 
@@ -1583,6 +1585,9 @@
         <TabButton active={activeTab === 'logs'} onclick={() => (activeTab = 'logs')}>
           {t('settings.logsTab')}
         </TabButton>
+        <TabButton active={activeTab === 'backup'} onclick={() => (activeTab = 'backup')}>
+          {t('settings.backupTab')}
+        </TabButton>
         <TabButton active={activeTab === 'appearance'} onclick={() => (activeTab = 'appearance')}>
           {t('settings.appearanceTab')}
         </TabButton>
@@ -2927,6 +2932,8 @@
       <LogsTab />
     {:else if activeTab === 'batch'}
       <BatchProcessingTab />
+    {:else if activeTab === 'backup'}
+      <BackupTab />
     {:else if activeTab === 'appearance'}
       <AppearanceTab />
     {/if}

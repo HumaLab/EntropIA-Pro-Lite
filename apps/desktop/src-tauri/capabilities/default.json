@@ -31,6 +31,8 @@
     "allow-bibliography-search-works",
     "allow-bibliography-open-passage",
     "allow-zotero-data-dir-grant",
+    "allow-backup-dir-grant",
+    "allow-backup-run-now",
     "allow-bibliography-passage-context",
     "allow-bibliography-library-status",
     "allow-bibliography-search-passages",
