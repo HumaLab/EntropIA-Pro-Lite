@@ -13,6 +13,7 @@
 - Focus a package: `pnpm --filter @entropia-pro/desktop test`, `pnpm --filter @entropia/ui typecheck`, `pnpm --filter @entropia/store test`.
 - Focus one Vitest file by passing args through the package script, e.g. `pnpm --filter @entropia-pro/desktop test -- src/lib/ocr.test.ts`.
 - Frontend Lite typecheck needs the variant env: `VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck`.
+- Bump the app version only with `pnpm version:bump x.y.z`: `apps/desktop/package.json` is the single source of truth and the script rewrites every derived declaration; `pnpm version:check` verifies all of them.
 - Rust quality helper exists at root: `pnpm rust:quality:report`.
 
 ## Dev profile (never run `tauri dev` on the real archive with a new migration)
