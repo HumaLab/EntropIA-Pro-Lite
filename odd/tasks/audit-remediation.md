@@ -447,7 +447,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     50,000-line log → 2,000 entries and 2,000 file lines; corrupt/non-UTF-8 lines; append
     compaction. Rust 2811 / 0 / 35; Pro clippy only the 9 known. RDD `review-1b455d8c3d432daa`
     approved, no findings.
-  - [ ] 5.3 (P-03) — streaming SHA-256 for the runtime pack.
+  - [x] 5.3 (P-03) — streaming SHA-256 for the runtime pack. Branch
+    `fix/p5-3-streaming-runtime-hash`, commit `529d36b3`. `runtime/hash.rs::sha256_file_streaming`
+    (1 MiB chunks, `local-ml` only like the rest of the module) replaces the whole-file reads in
+    `download.rs` (post-extraction check) and `manager.rs::file_sha256`. Behaviour-preserving: the
+    66 runtime tests pass with `local-ml`, plus helper tests vs the one-shot digest (empty, small,
+    multi-buffer) and a missing-file error. Lite 2811 / 0 / 35 unchanged; Pro clippy only the 9
+    known. RDD `review-89473222c0de6219` approved, no findings.
   - [ ] 5.2 (P-01) — RAG vector search: partial selection, then a cached index. Needs a decision on
     cache invalidation first (a trigger/version column is a new migration and raises `schema_tag`).
   - [ ] 5.4 (P-04) — unified backend logging, incremental.
