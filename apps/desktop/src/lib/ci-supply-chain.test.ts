@@ -54,6 +54,28 @@ describe('CI supply chain (C-03)', () => {
   })
 })
 
+describe('pnpm forensics are gone (C-05)', () => {
+  const workflow = readRepoFile('.github/workflows/ci.yml')
+
+  it('keeps ci.yml free of pnpm forensics diagnostics', () => {
+    expect(workflow).not.toContain('forensics')
+    expect(workflow).not.toContain('pnpm-preinstall-classify')
+    expect(workflow).not.toContain('.ci-evidence')
+  })
+
+  for (const job of ['rust-quality-report', 'lint-typecheck', 'test', 'build']) {
+    it(`restores the canonical lockfile before installing dependencies in ${job}`, () => {
+      const body = jobText(workflow, job)
+      const restore = body.indexOf('Restore canonical lockfile')
+      const install = body.indexOf('Install dependencies')
+
+      expect(body).toContain('Restore canonical lockfile')
+      expect(body).toContain('Install dependencies')
+      expect(restore).toBeLessThan(install)
+    })
+  }
+})
+
 describe('engine pin bump goes through a pull request (D-05)', () => {
   const workflow = readRepoFile('.github/workflows/engine-pin-bump.yml')
 
