@@ -47,7 +47,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Validate payload source inputs
         shell: bash
@@ -78,7 +78,7 @@ jobs:
 
       - name: Download payload source artifact
         if: inputs.payload_source_artifact != ''
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ inputs.payload_source_artifact }}
           path: ${{ runner.temp }}/runtime-payload-source
@@ -153,7 +153,7 @@ jobs:
 
       - name: Upload runtime payload artifact
         if: ${{ !inputs.fixture }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runtime-payloads
           path: ${{ runner.temp }}/runtime-payloads
@@ -161,7 +161,7 @@ jobs:
 
       - name: Upload fixture runtime payload artifact
         if: ${{ inputs.fixture }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runtime-payloads-fixture
           path: ${{ runner.temp }}/runtime-payloads
