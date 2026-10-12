@@ -45,8 +45,12 @@ jobs:
     # via option_env!() (settings.rs) and pinned by build.rs rerun-if-env-changed.
     # Pro-only: Lite has no `local-ml` feature, so build.rs skips the guard and its
     # installers must not bake a download source at all.
+    # The URL is the one publish-runtime-bootstrap.yml prints for this repository
+    # (C-02). Releases up to 1.0.20 baked the old repository name, HumaLab/EntropIA-Pro,
+    # which GitHub redirects here; never create a repository with that name, or
+    # those installs lose their runtime source.
     env:
-      ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
+      ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro-Lite/releases/download/runtime-bootstrap/manifest.json
       ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
       ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
     steps:
