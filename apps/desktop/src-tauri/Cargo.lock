@@ -1515,6 +1515,7 @@ dependencies = [
  "imageproc",
  "keyring",
  "llama-cpp-2",
+ "log",
  "lopdf 0.45.0",
  "md-5 0.10.6",
  "ndarray",

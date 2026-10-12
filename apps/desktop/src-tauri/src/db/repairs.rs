@@ -148,8 +148,9 @@ fn dedup_asset_rows_and_unique_indexes(conn: &Connection) -> Result<(), String> 
     let has_transcriptions_table = table_exists(conn, "transcriptions");
 
     if !has_extractions_table && !has_transcriptions_table {
-        eprintln!(
-            "[setup] extractions/transcriptions tables not found — skipping legacy unique-index enforcement"
+        log::info!(
+            target: "setup",
+            "extractions/transcriptions tables not found — skipping legacy unique-index enforcement"
         );
         return Ok(());
     }
@@ -202,13 +203,17 @@ fn migrate_extractions_method_check(conn: &Connection) -> Result<(), String> {
         .unwrap_or(false);
 
     if !has_check {
-        eprintln!(
-            "[setup] extractions.method: no legacy CHECK constraint found — skipping migration"
+        log::info!(
+            target: "setup",
+            "extractions.method: no legacy CHECK constraint found — skipping migration"
         );
         return Ok(());
     }
 
-    eprintln!("[setup] Migrating extractions table to remove legacy method CHECK constraint...");
+    log::info!(
+        target: "setup",
+        "Migrating extractions table to remove legacy method CHECK constraint..."
+    );
 
     conn.execute_batch(
         "BEGIN TRANSACTION;
@@ -228,7 +233,7 @@ fn migrate_extractions_method_check(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("Failed to migrate extractions table: {error}"))?;
 
-    eprintln!("[setup] extractions.method CHECK constraint removed successfully");
+    log::info!(target: "setup", "extractions.method CHECK constraint removed successfully");
     Ok(())
 }
 
@@ -243,7 +248,10 @@ fn apply_legacy_asset_column_fallbacks(conn: &Connection) -> Result<(), String> 
     }
 
     if !table_exists(conn, "assets") {
-        eprintln!("[setup] assets table not found — skipping legacy fallback schema patching");
+        log::info!(
+            target: "setup",
+            "assets table not found — skipping legacy fallback schema patching"
+        );
         return Ok(());
     }
 
@@ -262,7 +270,7 @@ fn apply_legacy_asset_column_fallbacks(conn: &Connection) -> Result<(), String> 
              CREATE INDEX IF NOT EXISTS idx_assets_item_sort ON assets(item_id, sort_index);",
         )
         .map_err(|error| format!("Failed to add sort_index column to assets: {error}"))?;
-        eprintln!("[setup] Added sort_index column to assets table");
+        log::info!(target: "setup", "Added sort_index column to assets table");
     }
 
     let has_notes_asset_id: bool = conn
@@ -283,7 +291,7 @@ fn apply_legacy_asset_column_fallbacks(conn: &Connection) -> Result<(), String> 
              CREATE INDEX IF NOT EXISTS idx_triples_asset_id ON triples(asset_id);",
         )
         .map_err(|error| format!("Failed to add asset_id columns: {error}"))?;
-        eprintln!("[setup] Added asset_id columns to notes, entities, triples");
+        log::info!(target: "setup", "Added asset_id columns to notes, entities, triples");
     }
 
     Ok(())
@@ -327,7 +335,7 @@ fn ensure_app_settings_table(conn: &Connection) -> Result<(), String> {
         );",
     )
     .map_err(|error| format!("Failed to create app_settings table: {error}"))?;
-    eprintln!("[setup] app_settings table ensured");
+    log::info!(target: "setup", "app_settings table ensured");
     Ok(())
 }
 
@@ -340,7 +348,10 @@ fn ensure_app_settings_table(conn: &Connection) -> Result<(), String> {
 /// foreign keys are on.
 fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
     if !table_exists(conn, "assets") {
-        eprintln!("[setup] assets table not found — leaving layouts to the store migrations");
+        log::info!(
+            target: "setup",
+            "assets table not found — leaving layouts to the store migrations"
+        );
         return Ok(());
     }
 
@@ -368,7 +379,7 @@ fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id);",
         )
         .map_err(|error| format!("Failed to create layouts table: {error}"))?;
-        eprintln!("[setup] layouts table created with blocks column");
+        log::info!(target: "setup", "layouts table created with blocks column");
         return Ok(());
     }
 
@@ -390,7 +401,7 @@ fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
     drop(stmt);
 
     if !has_blocks {
-        eprintln!("[setup] Migrating legacy layouts table to add blocks column...");
+        log::info!(target: "setup", "Migrating legacy layouts table to add blocks column...");
         conn.execute_batch(
             "BEGIN TRANSACTION;
              CREATE TABLE layouts_new (
@@ -437,7 +448,7 @@ fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("Failed to finalize layouts schema: {error}"))
     })?;
 
-    eprintln!("[setup] layouts schema ensured");
+    log::info!(target: "setup", "layouts schema ensured");
     Ok(())
 }
 
