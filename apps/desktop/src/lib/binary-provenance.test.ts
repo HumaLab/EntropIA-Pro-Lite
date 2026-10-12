@@ -146,10 +146,12 @@ describe('binary provenance check', () => {
     const content = Buffer.from('original bytes')
     const root = makeTempRepo({ 'a.dll': content })
     writeManifest(root, [fixtureEntry('a.dll', content)])
-    writeFileSync(join(root, 'a.dll'), Buffer.from('tampered bytes!'))
+    // Same length, one byte flipped: only the digest comparison can catch it.
+    writeFileSync(join(root, 'a.dll'), Buffer.from('Original bytes'))
     const result = runScript(root, ['check'])
     expect(result.status).toBe(1)
-    expect(result.output).toContain('a.dll')
+    expect(result.output).toContain('a.dll: sha256')
+    expect(result.output).not.toContain('a.dll: size')
   })
 
   it('fails when a listed file is missing', () => {
@@ -228,6 +230,54 @@ describe('binary provenance verify-upstream', () => {
     writeManifest(root, [entry])
     const result = runScript(root, ['verify-upstream', '--cache', buildCacheDir(archive)])
     expect(result.status).toBe(1)
+  })
+})
+
+describe('binary provenance path safety', () => {
+  it.each(['../escape.dll', '/etc/x.dll', 'bin/../../x.dll', 'bin\\x.dll'])(
+    'rejects the upstream member %s',
+    (member) => {
+      const payload = Buffer.from('upstream payload bytes')
+      const root = makeTempRepo({ 'bin/x.dll': payload })
+      const archive = buildTgz(root, payload)
+      const entry = upstreamEntry('bin/x.dll', payload, archive)
+      ;(entry.source as Record<string, string>).member = member
+      writeManifest(root, [entry])
+      const result = runScript(root, ['check'])
+      expect(result.status).toBe(1)
+      expect(result.output).toContain('source.member')
+    }
+  )
+
+  it('rejects an archive URL whose file name decodes to a path', () => {
+    const payload = Buffer.from('upstream payload bytes')
+    const root = makeTempRepo({ 'bin/x.dll': payload })
+    const archive = buildTgz(root, payload)
+    const entry = upstreamEntry('bin/x.dll', payload, archive)
+    ;(entry.source as Record<string, string>).url = 'https://example.invalid/a/..%2F..%2Fx.tgz'
+    writeManifest(root, [entry])
+    const result = runScript(root, ['check'])
+    expect(result.status).toBe(1)
+    expect(result.output).toContain('source.url')
+  })
+})
+
+describe('binary provenance verify-upstream reports every entry', () => {
+  it('keeps checking after an entry fails to download or extract', () => {
+    const payload = Buffer.from('upstream payload bytes')
+    const root = makeTempRepo({ 'bin/x.dll': payload, 'bin/y.dll': payload })
+    const archive = buildTgz(root, payload)
+    // The first entry names a member the archive lacks; the second is fine and
+    // must still be checked and reported.
+    const broken = upstreamEntry('bin/x.dll', payload, archive)
+    ;(broken.source as Record<string, string>).member = 'bin/missing.dll'
+    const good = upstreamEntry('bin/y.dll', payload, archive)
+    ;(good.source as Record<string, string>).member = 'bin/x.dll'
+    writeManifest(root, [broken, good])
+    const result = runScript(root, ['verify-upstream', '--cache', buildCacheDir(archive)])
+    expect(result.status).toBe(2)
+    expect(result.output).toContain('bin/x.dll:')
+    expect(result.output).toContain('bin/y.dll: OK')
   })
 })
 

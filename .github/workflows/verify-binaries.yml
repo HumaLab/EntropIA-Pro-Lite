@@ -14,6 +14,16 @@ on:
       - apps/desktop/src-tauri/msix/**
       - artifacts/**
       - .github/workflows/verify-binaries.yml
+      # A binary added anywhere else must also trigger the coverage check.
+      - '**/*.exe'
+      - '**/*.dll'
+      - '**/*.so'
+      - '**/*.dylib'
+      - '**/*.mnn'
+      - '**/*.onnx'
+      - '**/*.msix'
+      - '**/*.zip'
+      - '**/*.tgz'
   schedule:
     - cron: '17 6 * * 1'
   workflow_dispatch:

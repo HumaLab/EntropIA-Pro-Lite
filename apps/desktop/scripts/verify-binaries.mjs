@@ -60,6 +60,25 @@ function loadManifest(root) {
 }
 
 /** Schema problems of a parsed manifest, as `<path or field>: <problem>` lines. */
+/**
+ * The member is joined under a fresh extraction dir and handed to tar/unzip, so
+ * it must stay inside that dir: relative, forward slashes only, no '..'.
+ */
+function isSafeMember(member) {
+  if (member === '' || member.startsWith('/') || member.includes('\\')) return false
+  return member.split('/').every((segment) => segment !== '' && segment !== '..')
+}
+
+/** The decoded URL basename becomes a file name in the cache or download dir. */
+function isSafeArchiveName(url) {
+  try {
+    const name = cacheFileName(url)
+    return !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..'
+  } catch {
+    return false
+  }
+}
+
 export function validateManifest(manifest) {
   if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['manifest: must be a JSON object']
@@ -119,6 +138,8 @@ export function validateManifest(manifest) {
       } else {
         if (typeof source.url !== 'string' || !source.url.startsWith('https://')) {
           problems.push(`${where}: source.url must be an https URL`)
+        } else if (!isSafeArchiveName(source.url)) {
+          problems.push(`${where}: source.url must end in a plain archive file name`)
         }
         if (
           typeof source.archive_sha256 !== 'string' ||
@@ -128,8 +149,10 @@ export function validateManifest(manifest) {
             `${where}: source.archive_sha256 must be a 64-character lowercase hex digest`
           )
         }
-        if (typeof source.member !== 'string' || source.member === '') {
-          problems.push(`${where}: source.member must be a non-empty string`)
+        if (typeof source.member !== 'string' || !isSafeMember(source.member)) {
+          problems.push(
+            `${where}: source.member must be a relative forward-slash path without '..' segments`
+          )
         }
       }
     } else if (entry.source !== undefined) {
@@ -249,6 +272,7 @@ export async function verifyUpstream(root, options = {}) {
   }
   const tempDirs = []
   let exitCode = 0
+  let toolFailure = false
   try {
     for (const entry of manifest.binaries.filter((candidate) => candidate.kind === 'upstream')) {
       try {
@@ -278,14 +302,16 @@ export async function verifyUpstream(root, options = {}) {
           console.log(`${entry.path}: OK`)
         }
       } catch (error) {
+        // Report it and keep going: one unreachable archive must not hide the
+        // state of every other upstream binary.
         console.error(`${entry.path}: ${error.message}`)
-        return 2
+        toolFailure = true
       }
     }
   } finally {
     for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
   }
-  return exitCode
+  return toolFailure ? 2 : exitCode
 }
 
 /** Parses the CLI arguments into `{ command, root, cacheDir }` or `{ error }`. */
