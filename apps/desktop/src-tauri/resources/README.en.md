@@ -26,6 +26,7 @@ This directory is reserved for bundled Tauri resources.
 - `payload_profile: fixture` means these packs are structurally real and bundleable, but they are NOT the final heavy release payloads.
 - `release_injection_required: true` in the fixture means the in-repo pack is NOT the final heavy runtime: the app obtains it at runtime, not from the installer.
 - The managed runtime and its bootstrap belong exclusively to **EntropIA Pro** (`local-ml`). **EntropIA Lite** uses remote providers and does not download or consume this local runtime.
+- The Lite overlays (`tauri.lite.windows.conf.json`, `tauri.lite.linux.conf.json`, `tauri.lite.macos.conf.json`) replace the resource list with the minimal set (provider compatibility, licenses, Pdfium), so Lite ships no models, runtime pack, uv, or scripts.
 - **Distribution model: lean installer.** The installer ships only the fixture; the AI runtime (~2.2GB) is hosted separately (tag `runtime-bootstrap`, split under 2 GiB per asset + ed25519-signed) and the app downloads and verifies it (signature + sha256) on first use. The runtime is not injected into the installer, because NSIS/WiX do not support bundles >2GB.
 - **In-repo now**: runtime-pack layout, manifest contract, fixture bundle globs, assembly wiring, smoke checks, and explicit offline ownership boundaries.
 

@@ -1,5 +1,11 @@
 {
   "bundle": {
+    "resources": [
+      "resources/provider-compatibility.json",
+      "resources/lib/LICENSE",
+      "resources/fonts/LICENSE",
+      "resources/pdfium/LICENSE"
+    ],
     "macOS": {
       "frameworks": ["resources/pdfium/libpdfium.dylib"]
     }

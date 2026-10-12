@@ -549,7 +549,17 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     named the wrong config (fixed in the docs commit). Not run: a real `tauri build` of the Pro
     `.deb` (MNN compile, CI covers it).
   - [ ] 6.2 — Lite Linux without the Pro payload (E-01): minimal neutral resource list, tests, and
-    a clean-checkout `tauri build --bundles deb` with `dpkg -c` check.
+    a clean-checkout `tauri build --bundles deb` with `dpkg -c` check. Branch
+    `fix/p6-2-lite-minimal-resources`. Scope extended (user approved): `tauri.lite.macos.conf.json`
+    sets no `resources`, so the Lite `.dmg` inherits the base list (`models/ner`, `models/ocr`,
+    three `.py` scripts) — same E-01 defect. Only Pdfium reads `resource_dir()` in Lite
+    (`ocr/pdf.rs:318`); models and scripts resolve from the managed runtime or the dev tree.
+    - [x] 6.2a — RED: tests over the *effective* merged Lite config per platform (base +
+      platform + lite + lite platform overlay, Tauri merge-patch: arrays replace).
+    - [x] 6.2b — GREEN: minimal lists in `tauri.lite.linux.conf.json` and
+      `tauri.lite.macos.conf.json` (macOS adds `resources/pdfium/LICENSE`).
+    - [x] 6.2c — docs (`resources/README*`, this file). RED 4 failed / 10 passed (Linux and macOS leaked models, scripts, READMEs, runtime-pack); GREEN 14 / 0 / 0; lint 0 errors.
+    - [ ] 6.2d — clean-checkout Lite `.deb` build in WSL Ubuntu + `dpkg -c`.
   - [ ] 6.3 — `build.rs` guard (E-03): skip without `local-ml`, require all three vars in Pro; drop
     runtime vars from the Lite jobs; docs.
   - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists

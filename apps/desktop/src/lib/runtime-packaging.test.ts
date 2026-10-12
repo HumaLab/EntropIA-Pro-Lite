@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -302,5 +303,137 @@ describe('runtime pack packaging', () => {
     expect(windowsAssemblyNotes).toContain('resources/lib/pdfium.dll')
     expect(linuxAssemblyNotes).toContain('python/bin/python3')
     expect(linuxAssemblyNotes).toContain('resources/lib/libonnxruntime.so')
+  })
+})
+
+describe('lite minimal bundle resources (effective Tauri config)', () => {
+  type LitePlatform = 'linux' | 'macos' | 'windows'
+
+  const LITE_LINUX_RESOURCES = [
+    'resources/provider-compatibility.json',
+    'resources/lib/LICENSE',
+    'resources/fonts/LICENSE',
+    'resources/pdfium/libpdfium.so',
+    'resources/pdfium/LICENSE',
+  ]
+
+  const LITE_MACOS_RESOURCES = [
+    'resources/provider-compatibility.json',
+    'resources/lib/LICENSE',
+    'resources/fonts/LICENSE',
+    'resources/pdfium/LICENSE',
+  ]
+
+  // Produced by apps/desktop/scripts/fetch-pdfium.sh, not tracked in git.
+  const PDFIUM_GENERATED = new Set(['resources/pdfium/libpdfium.so', 'resources/pdfium/LICENSE'])
+
+  function isMergeObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+  }
+
+  // JSON merge patch (RFC 7396): objects merge recursively, arrays and
+  // scalars replace, null deletes. Matches how Tauri 2 merges --config files.
+  function mergePatch(target: unknown, patch: unknown): unknown {
+    if (!isMergeObject(patch)) return patch
+    const output: Record<string, unknown> = isMergeObject(target) ? { ...target } : {}
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) {
+        delete output[key]
+      } else if (key in output) {
+        output[key] = mergePatch(output[key], value)
+      } else {
+        output[key] = mergePatch(undefined, value)
+      }
+    }
+    return output
+  }
+
+  function readTauriConfigIfExists(fileName: string): Record<string, unknown> | undefined {
+    const full = resolve(tauriRoot, fileName)
+    if (!existsSync(full)) return undefined
+    return JSON.parse(readFileSync(full, 'utf8')) as Record<string, unknown>
+  }
+
+  function effectiveLiteConfig(platform: LitePlatform): Record<string, unknown> {
+    const autoPlatformFile =
+      platform === 'linux'
+        ? 'tauri.linux.conf.json'
+        : platform === 'macos'
+          ? 'tauri.macos.conf.json'
+          : 'tauri.windows.conf.json'
+    const litePlatformFile =
+      platform === 'linux'
+        ? 'tauri.lite.linux.conf.json'
+        : platform === 'macos'
+          ? 'tauri.lite.macos.conf.json'
+          : 'tauri.lite.windows.conf.json'
+    let effective: unknown = {}
+    for (const fileName of [
+      'tauri.conf.json',
+      autoPlatformFile,
+      'tauri.lite.conf.json',
+      litePlatformFile,
+    ]) {
+      const patch = readTauriConfigIfExists(fileName)
+      if (patch !== undefined) effective = mergePatch(effective, patch)
+    }
+    return effective as Record<string, unknown>
+  }
+
+  function effectiveLiteResources(platform: LitePlatform): string[] {
+    const effective = effectiveLiteConfig(platform)
+    const bundle = (effective.bundle ?? {}) as { resources?: unknown }
+    const resources = bundle.resources ?? []
+    expect(Array.isArray(resources)).toBe(true)
+    return resources as string[]
+  }
+
+  it.each(['linux', 'macos', 'windows'] as const)(
+    'effective Lite %s resources ship no Pro-only payload',
+    (platform) => {
+      for (const resource of effectiveLiteResources(platform)) {
+        expect(resource).not.toContain('models/')
+        expect(resource).not.toContain('runtime-pack/')
+        expect(resource).not.toContain('tools/uv/')
+        expect(resource).not.toContain('scripts/')
+        expect(resource.endsWith('.py')).toBe(false)
+        expect(resource).not.toContain('README')
+      }
+    }
+  )
+
+  it.each(['linux', 'macos'] as const)(
+    'effective Lite %s resources ship no Windows-only payload',
+    (platform) => {
+      for (const resource of effectiveLiteResources(platform)) {
+        expect(resource).not.toContain('.dll')
+        expect(resource).not.toContain('vc-runtime')
+      }
+    }
+  )
+
+  it('effective Lite linux resources are exactly the minimal set', () => {
+    const resources = effectiveLiteResources('linux')
+    expect([...resources].sort()).toEqual([...LITE_LINUX_RESOURCES].sort())
+    for (const resource of resources) {
+      expect(resource).not.toContain('*')
+      if (PDFIUM_GENERATED.has(resource)) continue
+      expect(() =>
+        execFileSync('git', ['ls-files', '--error-unmatch', resource], {
+          cwd: tauriRoot,
+          stdio: 'ignore',
+        })
+      ).not.toThrow()
+    }
+  })
+
+  it('effective Lite macos resources are exactly the minimal set and keep the Pdfium framework', () => {
+    const resources = effectiveLiteResources('macos')
+    expect([...resources].sort()).toEqual([...LITE_MACOS_RESOURCES].sort())
+    const effective = effectiveLiteConfig('macos')
+    const bundle = effective.bundle as { macOS?: { frameworks?: unknown } }
+    const frameworks = bundle.macOS?.frameworks ?? []
+    expect(Array.isArray(frameworks)).toBe(true)
+    expect(frameworks).toContain('resources/pdfium/libpdfium.dylib')
   })
 })
