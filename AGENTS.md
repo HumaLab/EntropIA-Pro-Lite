@@ -29,6 +29,7 @@
 - Use `pnpm exec tauri ...`, not `pnpm tauri ... -- ...`; pnpm can eat the first `--` and break Cargo arg forwarding.
 - PowerShell keeps `$env:VITE_LOCAL_ML` for the whole session; reset it when switching variants.
 - Pro dev/build uses `--features local-ml` and may compile MNN from source on first Windows build (~30 min). Do not trigger full Tauri builds casually.
+- Pro Linux `.deb`: run `bash scripts/fetch-pdfium.sh linux-x64` first, then build with `--config src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb`. Pdfium is listed only in that explicit overlay (and the Lite Linux one): `tauri.linux.conf.json` is merged into every Linux build, `cargo test` included, so it must not reference the downloaded file.
 - Lite Windows build command shape: `pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi`; do not add `--features local-ml`. The second overlay replaces the shared Windows resource list so Pro-only payload (uv, models, runtime pack, scripts) stays out.
 
 ## Tauri/Rust gotchas

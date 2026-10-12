@@ -45,7 +45,7 @@ jobs:
       matrix:
         # Tag pushes build Windows + Linux so the draft release includes the .deb.
         # Default manual dispatch stays Windows-only; `all` adds macOS + Linux.
-        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') }}
+        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') }}
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -88,6 +88,14 @@ jobs:
       - name: Install frontend dependencies
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
+
+      # Pinned Pdfium, fetched into resources/pdfium and bundled by the
+      # explicit tauri.pro.linux.conf.json overlay (E-02). It is not listed in
+      # tauri.linux.conf.json: Tauri merges that file into every Linux build,
+      # cargo test included, and fails on a missing resource.
+      - name: Fetch Pdfium (linux-x64)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
 
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.

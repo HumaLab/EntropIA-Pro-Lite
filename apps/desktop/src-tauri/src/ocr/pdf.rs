@@ -51,7 +51,8 @@ use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId};
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -334,7 +335,7 @@ fn resolve_pdfium_dll_path_from_roots(
         let managed = managed_resource_path(root, "lib").join(&dll_name);
         #[cfg(not(feature = "local-ml"))]
         let managed = root.join("resources").join("lib").join(&dll_name);
-        if managed.exists() {
+        if let Some(managed) = first_usable_candidate(std::iter::once(managed)) {
             return Some(managed);
         }
     }
@@ -344,17 +345,18 @@ fn resolve_pdfium_dll_path_from_roots(
     // candidates. The runtime-free resolver probes the broader host-filtered
     // list instead (`resolve_bundled_pdfium_path`).
     if let Some(resource_dir) = bundled_resource_dir {
-        for bundled in bundled_pdfium_candidate_paths(resource_dir, &dll_name) {
-            if bundled.exists() {
-                return Some(strip_windows_prefix(bundled));
-            }
+        if let Some(bundled) =
+            first_usable_candidate(bundled_pdfium_candidate_paths(resource_dir, &dll_name))
+        {
+            return Some(strip_windows_prefix(bundled));
         }
     }
 
-    for dev_path in dev_pdfium_candidate_paths(manifest_dir, dll_name.to_string_lossy().as_ref()) {
-        if dev_path.exists() {
-            return Some(strip_windows_prefix(dev_path));
-        }
+    if let Some(dev_path) = first_usable_candidate(dev_pdfium_candidate_paths(
+        manifest_dir,
+        dll_name.to_string_lossy().as_ref(),
+    )) {
+        return Some(strip_windows_prefix(dev_path));
     }
 
     None
@@ -371,13 +373,8 @@ fn resolve_bundled_pdfium_path(
     resource_dir: Option<&std::path::Path>,
     manifest_dir: &std::path::Path,
 ) -> Option<PathBuf> {
-    for candidate in host_pdfium_candidate_paths(resource_dir, manifest_dir) {
-        if candidate.exists() {
-            return Some(strip_windows_prefix(candidate));
-        }
-    }
-
-    None
+    first_usable_candidate(host_pdfium_candidate_paths(resource_dir, manifest_dir))
+        .map(strip_windows_prefix)
 }
 
 /// The candidates [`resolve_bundled_pdfium_path`] may probe: the current
@@ -388,14 +385,15 @@ fn resolve_bundled_pdfium_path(
 /// installer that uses them:
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
-/// - Lite Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
-///   (`bundle.resources` in tauri.lite.linux.conf.json);
+/// - Lite and Pro Linux: `resources/pdfium/libpdfium.so` under
+///   `/usr/lib/<productName>` (`bundle.resources` in
+///   tauri.lite.linux.conf.json and tauri.pro.linux.conf.json);
 /// - Pro/Lite Windows installers, the Store MSIX repack and `tauri dev`
 ///   (whose resource dir is `target/debug`): `resources/lib/<dll>`
 ///   (`bundle.resources` in tauri.windows.conf.json / tauri.lite.windows.conf.json);
-/// - Pro Linux: `resources/lib/linux-x86_64/libpdfium.so`
-///   (`bundle.resources` in tauri.linux.conf.json) — the host's own
-///   `<os>-<arch>` subdir.
+/// - an optional `<os>-<arch>` subdir under `resources/lib/`: the host's own
+///   one only. No installer ships it anymore; per-arch packs and dev
+///   checkouts may.
 ///
 /// The dev candidates follow exactly where the pre-part-A code had them and
 /// in its order (the flat host path first): `CARGO_MANIFEST_DIR/resources/lib`
@@ -422,7 +420,8 @@ fn host_pdfium_candidate_paths(resource_dir: Option<&Path>, manifest_dir: &Path)
         // `resources/lib/<dll>`.
         candidates.push(resource_dir.join("resources").join("lib").join(&dll_name));
         // Pro Linux (and any per-arch pack): `resources/lib/<os>-<arch>/<dll>`
-        // — the HOST subdir only.
+        // — the HOST subdir only. No installer ships it anymore; this stays a
+        // pack/dev fallback behind the resources/pdfium layout.
         if let Some(platform) = host_platform_resource_dir() {
             candidates.push(
                 resource_dir
@@ -464,7 +463,8 @@ fn host_platform_resource_dir() -> Option<&'static str> {
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
 /// - Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
-///   (`bundle.resources` in tauri.lite.linux.conf.json);
+///   (`bundle.resources` in tauri.lite.linux.conf.json and
+///   tauri.pro.linux.conf.json);
 /// - Windows: `resources\lib\pdfium.dll` beside the exe (`bundle.resources` in
 ///   tauri.windows.conf.json for NSIS/MSI, and repack-store-msix.ps1 for the
 ///   Store MSIX). Pro finds its managed runtime copy first; Lite has only this.
@@ -559,6 +559,78 @@ fn ensure_cached_pdfium_path(
         *cached = resolved.clone();
     }
     resolved
+}
+
+/// The minimum size of a plausible Pdfium build. The real library is tens of
+/// megabytes; anything below this floor is a placeholder or a stub — the
+/// 49-byte text file named `libpdfium.so` the Linux installer used to ship is
+/// the reason this gate exists (E-02).
+const MIN_NATIVE_LIBRARY_BYTES: u64 = 1024 * 1024;
+
+/// The first four bytes of every native shared-object container
+/// pdfium-render can load, read as a big-endian `u32`. PE (`MZ`) is only two
+/// bytes and is matched separately.
+const NATIVE_LIBRARY_MAGICS_BE: &[u32] = &[
+    0x7f45_4c46, // ELF: \x7fELF
+    0xfeed_face, // Mach-O 32-bit, big-endian file order
+    0xfeed_facf, // Mach-O 64-bit, big-endian file order
+    0xcefa_edfe, // Mach-O 32-bit, little-endian file order
+    0xcffa_edfe, // Mach-O 64-bit, little-endian file order
+    0xcafe_babe, // fat/universal
+    0xbeba_feca, // fat/universal, byte-swapped
+];
+
+/// Whether `path` can be a real Pdfium shared library: an existing file, at
+/// least [`MIN_NATIVE_LIBRARY_BYTES`] long, opening with one of the native
+/// shared-object magics. A candidate that fails is logged and refused, so the
+/// resolver walks on instead of binding a stub that would fail at `dlopen`
+/// (E-02). Absent candidates are silent — most probed layouts are expected to
+/// be missing.
+fn usable_native_library(path: &Path) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return false,
+    };
+    if metadata.len() < MIN_NATIVE_LIBRARY_BYTES {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: {} bytes is below the {} byte minimum for a native shared library",
+            path.display(),
+            metadata.len(),
+            MIN_NATIVE_LIBRARY_BYTES
+        );
+        return false;
+    }
+
+    let mut header = [0u8; 4];
+    if let Err(error) = File::open(path).and_then(|mut file| file.read_exact(&mut header)) {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: unreadable header ({error})",
+            path.display()
+        );
+        return false;
+    }
+    if header[..2] == *b"MZ" || NATIVE_LIBRARY_MAGICS_BE.contains(&u32::from_be_bytes(header)) {
+        true
+    } else {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: header {header:02x?} is not a native shared-library magic",
+            path.display()
+        );
+        false
+    }
+}
+
+/// The single candidate gate of every Pdfium lookup: the first candidate
+/// [`usable_native_library`] accepts, in order. Invalid stubs are logged and
+/// skipped there, so they cannot shadow a later valid candidate or the system
+/// library.
+fn first_usable_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find(|candidate| usable_native_library(candidate))
 }
 
 /// Resolves the Pdfium library the bundle carries — and nothing else. Unlike
@@ -667,7 +739,7 @@ where
     let managed = managed_resource_path(&root, "lib").join(&dll_name);
     #[cfg(not(feature = "local-ml"))]
     let managed = root.join("resources").join("lib").join(&dll_name);
-    managed.exists().then(|| strip_windows_prefix(managed))
+    first_usable_candidate(std::iter::once(managed)).map(strip_windows_prefix)
 }
 
 /// Initialize a Pdfium instance without panicking.
@@ -3062,7 +3134,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed_dll.parent().expect("lib parent")).expect("create lib dir");
-        std::fs::write(&managed_dll, b"pdfium").expect("write dll");
+        write_fake_native_library(&managed_dll);
 
         let resolved =
             resolve_pdfium_dll_path_from_roots(Some(runtime_dir.path()), None, manifest_dir.path());
@@ -3080,7 +3152,7 @@ mod tests {
             .join("linux-x86_64")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(arch_specific.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&arch_specific, b"pdfium").expect("write");
+        write_fake_native_library(&arch_specific);
 
         let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
@@ -3102,7 +3174,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(runtime_pack.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&runtime_pack, b"pdfium").expect("write");
+        write_fake_native_library(&runtime_pack);
 
         let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
@@ -3131,9 +3203,18 @@ mod tests {
         let lib = resource_dir.join("resources").join("pdfium").join(name);
         #[cfg(target_os = "windows")]
         let lib = resource_dir.join("resources").join("lib").join(name);
-        std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&lib, b"pdfium").expect("write");
+        write_fake_native_library(&lib);
         lib
+    }
+
+    /// A ≥ 1 MiB file with an ELF header: a candidate the hardened resolver
+    /// accepts. Nothing loads it — the bytes only need to pass the
+    /// native-library gate, which ignores files that cannot be a real Pdfium.
+    fn write_fake_native_library(path: &Path) {
+        let mut bytes = vec![0u8; 1024 * 1024];
+        bytes[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, bytes).expect("write fake native library");
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -3176,7 +3257,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(dev.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&dev, b"pdfium").expect("write");
+        write_fake_native_library(&dev);
 
         let resolved =
             resolve_pdfium_dll_path_from_roots(None, Some(&resource_dir), manifest_dir.path());
@@ -3196,7 +3277,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&managed, b"pdfium").expect("write");
+        write_fake_native_library(&managed);
         let resource_dir = install.path().join("Contents").join("Resources");
         std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
         bundled_pdfium_fixture(&resource_dir);
@@ -3235,7 +3316,7 @@ mod tests {
                 "the macOS corpus list is the Frameworks layout, unchanged"
             );
         }
-        // Lite Linux deb: `resources/pdfium/<dll>` under `/usr/lib/<productName>`.
+        // Lite/Pro Linux deb: `resources/pdfium/<dll>` under `/usr/lib/<productName>`.
         #[cfg(target_os = "linux")]
         {
             let flat_resource_dir = PathBuf::from("install-root");
@@ -3263,9 +3344,10 @@ mod tests {
 
     /// The runtime-free resolver's own candidate list covers the layouts the
     /// installers ship for THIS host (JD5-B-005) — untagged dirs every host
-    /// probes (`resources/pdfium/<dll>` Lite, `resources/lib/<dll>` Pro
-    /// Windows + `tauri dev`), the host's own `<os>-<arch>` subdir (Pro
-    /// Linux), and the macOS Frameworks dir beside `Contents/Resources`.
+    /// probes (`resources/pdfium/<dll>` Lite/Pro Linux, `resources/lib/<dll>`
+    /// Pro Windows + `tauri dev`), the host's own `<os>-<arch>` subdir (legacy
+    /// per-arch packs / dev checkouts), and the macOS Frameworks dir beside
+    /// `Contents/Resources`.
     #[test]
     fn the_bundled_resolver_covers_the_host_layouts() {
         let dll = Pdfium::pdfium_platform_library_name();
@@ -3286,8 +3368,8 @@ mod tests {
             candidates.contains(&resource_dir.join("resources").join("lib").join(&dll)),
             "Pro Windows / dev layout resources/lib missing from {candidates:?}"
         );
-        // Pro Linux deb: `resources/lib/<host os>-<arch>/<dll>` — the host's
-        // own subdir only.
+        // Per-arch pack / dev checkout: `resources/lib/<host os>-<arch>/<dll>`
+        // — the host's own subdir only. No installer ships it anymore.
         if let Some(platform) = host_platform_resource_dir() {
             assert!(
                 candidates.contains(
@@ -3297,7 +3379,7 @@ mod tests {
                         .join(platform)
                         .join(&dll)
                 ),
-                "Pro Linux layout resources/lib/{platform} missing from {candidates:?}"
+                "per-arch pack layout resources/lib/{platform} missing from {candidates:?}"
             );
         }
         // macOS bundles put the library in `Contents/Frameworks`, beside the
@@ -3321,7 +3403,7 @@ mod tests {
         let lite = tempdir().expect("lite install");
         let lite_lib = lite.path().join("resources").join("pdfium").join(&dll);
         std::fs::create_dir_all(lite_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&lite_lib, b"fake").expect("write");
+        write_fake_native_library(&lite_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(lite.path()), manifest_dir.path()),
             Some(strip_windows_prefix(lite_lib)),
@@ -3332,14 +3414,14 @@ mod tests {
         let windows = tempdir().expect("windows install");
         let windows_lib = windows.path().join("resources").join("lib").join(&dll);
         std::fs::create_dir_all(windows_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&windows_lib, b"fake").expect("write");
+        write_fake_native_library(&windows_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(windows.path()), manifest_dir.path()),
             Some(strip_windows_prefix(windows_lib)),
             "Pro Windows / dev layout"
         );
 
-        // Pro Linux: resources/lib/<host os>-<arch>/<dll>.
+        // Per-arch pack / dev checkout: resources/lib/<host os>-<arch>/<dll>.
         if let Some(platform) = host_platform_resource_dir() {
             let linux = tempdir().expect("per-arch install");
             let linux_lib = linux
@@ -3349,11 +3431,11 @@ mod tests {
                 .join(platform)
                 .join(&dll);
             std::fs::create_dir_all(linux_lib.parent().expect("parent")).expect("mkdir");
-            std::fs::write(&linux_lib, b"fake").expect("write");
+            write_fake_native_library(&linux_lib);
             assert_eq!(
                 resolve_bundled_pdfium_path(Some(linux.path()), manifest_dir.path()),
                 Some(strip_windows_prefix(linux_lib)),
-                "Pro Linux layout"
+                "per-arch pack layout"
             );
         }
 
@@ -3361,11 +3443,131 @@ mod tests {
         let dev = tempdir().expect("dev checkout");
         let dev_lib = dev.path().join("resources").join("lib").join(&dll);
         std::fs::create_dir_all(dev_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&dev_lib, b"fake").expect("write");
+        write_fake_native_library(&dev_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(None, dev.path()),
             Some(strip_windows_prefix(dev_lib)),
             "dev checkout layout"
+        );
+    }
+
+    /// E-02: a text file named like the library (the 49-byte Linux fixture)
+    /// must not be accepted just because it exists; the resolver logs it and
+    /// keeps walking to the next candidate.
+    #[test]
+    fn the_bundled_resolver_skips_a_text_file_named_like_the_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let text_stub = install.path().join("resources").join("pdfium").join(&dll);
+        std::fs::create_dir_all(text_stub.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &text_stub,
+            b"fixture bundled pdfium for linux resource audit\n",
+        )
+        .expect("write stub");
+        let real = install.path().join("resources").join("lib").join(&dll);
+        write_fake_native_library(&real);
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(real)),
+            "the text stub must be skipped, not returned as the library"
+        );
+    }
+
+    /// A native library (ELF magic, ≥ 1 MiB) is accepted in the first layout
+    /// that carries one — later valid candidates never win over it.
+    #[test]
+    fn the_bundled_resolver_accepts_a_large_native_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let lib = install.path().join("resources").join("pdfium").join(&dll);
+        write_fake_native_library(&lib);
+        write_fake_native_library(&install.path().join("resources").join("lib").join(&dll));
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(lib))
+        );
+    }
+
+    /// A truncated native library (ELF magic but below the 1 MiB floor) is
+    /// skipped like any other stub: the next candidate resolves.
+    #[test]
+    fn the_bundled_resolver_skips_a_truncated_native_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let truncated = install.path().join("resources").join("pdfium").join(&dll);
+        std::fs::create_dir_all(truncated.parent().expect("parent")).expect("mkdir");
+        let mut bytes = vec![0u8; 4096];
+        bytes[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        std::fs::write(&truncated, bytes).expect("write truncated");
+
+        let next = if let Some(platform) = host_platform_resource_dir() {
+            install
+                .path()
+                .join("resources")
+                .join("lib")
+                .join(platform)
+                .join(&dll)
+        } else {
+            install.path().join("resources").join("lib").join(&dll)
+        };
+        write_fake_native_library(&next);
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(next)),
+            "a truncated ELF must be skipped for the next candidate"
+        );
+    }
+
+    /// Every shared-object container pdfium-render can load passes the gate
+    /// (ELF, PE, the four Mach-O orders and both fat orders); a short file or
+    /// a text file never does.
+    #[test]
+    fn the_native_library_gate_recognizes_every_supported_container() {
+        let dir = tempdir().expect("gate dir");
+        let accepted: &[(&str, [u8; 4])] = &[
+            ("elf", [0x7f, b'E', b'L', b'F']),
+            ("pe", [b'M', b'Z', 0x90, 0x00]),
+            ("macho32-be", [0xfe, 0xed, 0xfa, 0xce]),
+            ("macho64-be", [0xfe, 0xed, 0xfa, 0xcf]),
+            ("macho32-le", [0xce, 0xfa, 0xed, 0xfe]),
+            ("macho64-le", [0xcf, 0xfa, 0xed, 0xfe]),
+            ("fat-be", [0xca, 0xfe, 0xba, 0xbe]),
+            ("fat-le", [0xbe, 0xba, 0xfe, 0xca]),
+        ];
+        for (name, magic) in accepted {
+            let path = dir.path().join(name);
+            let mut bytes = vec![0u8; MIN_NATIVE_LIBRARY_BYTES as usize];
+            bytes[..4].copy_from_slice(magic);
+            std::fs::write(&path, bytes).expect("write candidate");
+            assert!(usable_native_library(&path), "{name} must pass the gate");
+        }
+
+        let text = dir.path().join("text");
+        std::fs::write(&text, b"fixture bundled pdfium for linux resource audit\n")
+            .expect("write text");
+        assert!(
+            !usable_native_library(&text),
+            "a text file must not pass the gate"
+        );
+
+        let short = dir.path().join("short-elf");
+        std::fs::write(&short, [0x7f, b'E', b'L', b'F']).expect("write short");
+        assert!(
+            !usable_native_library(&short),
+            "an ELF below the size floor must not pass the gate"
+        );
+
+        let missing = dir.path().join("missing");
+        assert!(
+            !usable_native_library(&missing),
+            "a missing candidate must not pass the gate"
         );
     }
 
@@ -3402,8 +3604,7 @@ mod tests {
             .join(foreign_platform)
             .join(&dll);
         for lib in [&host_lib, &foreign_lib] {
-            std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
-            std::fs::write(lib, b"fake").expect("write");
+            write_fake_native_library(lib);
         }
         assert_eq!(
             resolve_bundled_pdfium_path(Some(mixed.path()), manifest_dir.path()),
@@ -3419,7 +3620,7 @@ mod tests {
             .join(foreign_platform)
             .join(&dll);
         std::fs::create_dir_all(foreign_only_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&foreign_only_lib, b"fake").expect("write");
+        write_fake_native_library(&foreign_only_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(foreign_only.path()), manifest_dir.path()),
             None,
@@ -3461,7 +3662,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&managed, b"fake").expect("write");
+        write_fake_native_library(&managed);
 
         let calls = RefCell::new(Vec::new());
         let resolved = existing_managed_pdfium_path_with(|| {

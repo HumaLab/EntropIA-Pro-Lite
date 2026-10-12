@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -51,6 +51,21 @@ function readPackManifest(platform: string): RuntimePackFixtureManifest {
   ) as RuntimePackFixtureManifest
 }
 
+/** Shared libraries under `dir` smaller than 1 MiB: stubs `dlopen` rejects. */
+function findTinySharedLibraries(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  const tiny: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = resolve(dir, entry.name)
+    if (entry.isDirectory()) {
+      tiny.push(...findTinySharedLibraries(full))
+    } else if (entry.isFile() && entry.name.endsWith('.so') && statSync(full).size < 1024 * 1024) {
+      tiny.push(full)
+    }
+  }
+  return tiny
+}
+
 function allEntries(manifest: RuntimePackFixtureManifest): ManifestEntry[] {
   return [
     ...manifest.python_files,
@@ -100,8 +115,14 @@ describe('runtime pack packaging', () => {
     expect(windowsResources).not.toContain('resources/lib/linux-x86_64/**/*')
     expect(windowsResources).not.toContain('resources/runtime-pack/linux-x86_64/**/*')
 
-    expect(linuxResources).toContain('resources/lib/linux-x86_64/**/*')
+    expect(linuxResources).not.toContain('resources/lib/linux-x86_64/**/*')
     expect(linuxResources).toContain('resources/runtime-pack/linux-x86_64/**/*')
+    // Tauri merges tauri.linux.conf.json into every Linux build, `cargo build`
+    // and `cargo test` included, and fails when a listed resource is missing.
+    // The fetched Pdfium therefore lives in the explicit Pro Linux release
+    // overlay, so a fresh Linux checkout still compiles without the network.
+    expect(linuxResources).not.toContain('resources/pdfium/libpdfium.so')
+    expect(linuxResources).not.toContain('resources/pdfium/LICENSE')
     expect(linuxResources).not.toContain('resources/lib/pdfium.dll')
     expect(linuxResources).not.toContain('resources/tools/uv/windows-x86_64/*')
     expect(linuxResources).not.toContain('resources/tools/uv/windows-aarch64/*')
@@ -110,6 +131,77 @@ describe('runtime pack packaging', () => {
 
     expect(liteConfig.bundle?.resources).toBeUndefined()
     expect(liteConfig.bundle?.targets).toBeUndefined()
+  })
+
+  it('ships the fetched Linux Pdfium and never a stub shared library', () => {
+    const linuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    const proLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.pro.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    const liteLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.lite.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+
+    // Bundle resource arrays replace each other when configs merge, so the Pro
+    // overlay must restate every Pro Linux resource and add only Pdfium.
+    expect(proLinuxResources).toEqual([
+      ...linuxResources,
+      'resources/pdfium/libpdfium.so',
+      'resources/pdfium/LICENSE',
+    ])
+
+    for (const resources of [proLinuxResources, liteLinuxResources]) {
+      expect(resources).toContain('resources/pdfium/libpdfium.so')
+      expect(resources).toContain('resources/pdfium/LICENSE')
+      expect(resources).not.toContain('resources/lib/linux-x86_64/**/*')
+    }
+
+    // The text fixtures moved to the test tree; no Linux bundle glob points at
+    // their old resource paths anymore.
+    for (const fixture of ['libpdfium.so', 'libonnxruntime.so']) {
+      expect(existsSync(resolve(tauriRoot, 'resources/lib/linux-x86_64', fixture))).toBe(false)
+      expect(
+        existsSync(resolve(tauriRoot, 'tests/fixtures/resource-audit', `${fixture}.fixture`))
+      ).toBe(true)
+    }
+
+    // Any `*.so` a Linux resource glob can reach under the native-lib dirs must
+    // be a real-enough library. The runtime-pack `.so` stubs are a deliberate
+    // fixture (replaced by the bootstrap download, never loaded directly), so
+    // they are out of scope here.
+    const tiny = [resolve(tauriRoot, 'resources/lib'), resolve(tauriRoot, 'resources/pdfium')]
+      .flatMap((dir) => findTinySharedLibraries(dir))
+    expect(tiny).toEqual([])
+  })
+
+  it('fetches the real Linux Pdfium for the Pro release build', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const fetchIndex = releaseWorkflow.indexOf('bash apps/desktop/scripts/fetch-pdfium.sh linux-x64')
+    const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
+    expect(fetchIndex).toBeGreaterThan(-1)
+    expect(buildIndex).toBeGreaterThan(-1)
+    expect(fetchIndex).toBeLessThan(buildIndex)
+
+    const fetchStep = releaseWorkflow.slice(
+      releaseWorkflow.lastIndexOf('- name:', fetchIndex),
+      buildIndex
+    )
+    expect(fetchStep).toContain("if: matrix.platform == 'ubuntu-22.04'")
+
+    // The Pro Linux leg bundles through the explicit overlay that lists Pdfium.
+    expect(releaseWorkflow).toContain('--config apps/desktop/src-tauri/tauri.pro.linux.conf.json')
+    expect(releaseWorkflow).not.toContain('--config apps/desktop/src-tauri/tauri.linux.conf.json')
   })
 
   it('ships fixture runtime-pack manifests for windows and linux with concrete payload files', () => {

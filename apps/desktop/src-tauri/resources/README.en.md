@@ -10,7 +10,7 @@ This directory is reserved for bundled Tauri resources.
   Download from [pdfium-render releases](https://github.com/ajrcarey/pdfium-render/releases).
   The DLL is resolved at runtime with a 3-tier search (bundled → dev → system library).
   See `resources/lib/.gitkeep` for details.
-- `lib/linux-x86_64/` — Linux native-library placeholders and documented handoff paths for release runtime payloads.
+- `lib/linux-x86_64/` — **removed**. Its old text fixtures (49/54 B) moved to `tests/fixtures/resource-audit/` as audit artifacts. Linux bundles no longer include them: Linux Pdfium is downloaded by `apps/desktop/scripts/fetch-pdfium.sh linux-x64` into `resources/pdfium/libpdfium.so` (+ `LICENSE`) and bundled by the explicit release overlays `tauri.pro.linux.conf.json` and `tauri.lite.linux.conf.json` (not by the auto-merged `tauri.linux.conf.json`, so `cargo build` on Linux does not need the download); the resolver in `src/ocr/pdf.rs` rejects candidates that are not native libraries (ELF/PE/Mach-O/fat magic and >= 1 MiB).
 - Release runtime payloads may also inject ONNX Runtime under `runtime-pack/<platform>/resources/lib/` when validated ONNX consumers require it.
 
 ## Bundled tools
