@@ -548,7 +548,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     floor is duplicated between the test helper and `pdf.rs` (suggestion); the fixtures README
     named the wrong config (fixed in the docs commit). Not run: a real `tauri build` of the Pro
     `.deb` (MNN compile, CI covers it).
-  - [ ] 6.2 — Lite Linux without the Pro payload (E-01): minimal neutral resource list, tests, and
+  - [x] 6.2 — Lite Linux without the Pro payload (E-01): minimal neutral resource list, tests, and
     a clean-checkout `tauri build --bundles deb` with `dpkg -c` check. Branch
     `fix/p6-2-lite-minimal-resources`. Scope extended (user approved): `tauri.lite.macos.conf.json`
     sets no `resources`, so the Lite `.dmg` inherits the base list (`models/ner`, `models/ocr`,
@@ -559,7 +559,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     - [x] 6.2b — GREEN: minimal lists in `tauri.lite.linux.conf.json` and
       `tauri.lite.macos.conf.json` (macOS adds `resources/pdfium/LICENSE`).
     - [x] 6.2c — docs (`resources/README*`, this file). RED 4 failed / 10 passed (Linux and macOS leaked models, scripts, READMEs, runtime-pack); GREEN 14 / 0 / 0; lint 0 errors.
-    - [ ] 6.2d — clean-checkout Lite `.deb` build in WSL Ubuntu + `dpkg -c`.
+    - [x] 6.2d — clean-checkout Lite build. WSL Ubuntu has no Node/Rust and Docker was down, so
+      `lite-preview.yml` was dispatched on the branch (run `38290287530`, commit `0a000300`): all 8
+      jobs green (Pdfium tests ubuntu/macos, Lite macOS universal, Lite `.deb`, smoke 22.04/24.04,
+      smoke macOS arm64/x86_64). `dpkg-deb -c` lists exactly `resources/{provider-compatibility.json,
+      lib/LICENSE,fonts/LICENSE,pdfium/libpdfium.so,pdfium/LICENSE}`; no models, runtime-pack, uv,
+      `.py`, `.dll` or READMEs. RDD `review-3f17871c734a4237` approved (medium tier, reliability
+      lens), no findings.
   - [ ] 6.3 — `build.rs` guard (E-03): skip without `local-ml`, require all three vars in Pro; drop
     runtime vars from the Lite jobs; docs.
   - [ ] 6.4 — canonical runtime manifest URL (C-02): verify the `runtime-bootstrap` release exists
