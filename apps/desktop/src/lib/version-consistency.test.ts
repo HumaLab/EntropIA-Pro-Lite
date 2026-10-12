@@ -173,6 +173,46 @@ describe('version single source of truth (C-04)', () => {
     expect(fixtureSnapshot(root)).toEqual(before)
   })
 
+  it('bump to the current version says so instead of reporting a bad pattern', () => {
+    const root = makeTempRepo()
+    const before = fixtureSnapshot(root)
+    const current = runVersionScript(['print', '--root', root]).stdout.trim()
+
+    const result = runVersionScript(['bump', current, '--root', root])
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(`already at ${current}`)
+    expect(result.stderr).not.toContain('pattern not found')
+    expect(fixtureSnapshot(root)).toEqual(before)
+  })
+
+  it('refuses a source version that is not strict x.y.z', () => {
+    const root = makeTempRepo()
+    const packageJson = join(root, 'apps/desktop/package.json')
+    const text = readFileSync(packageJson, 'utf8')
+    writeFileSync(
+      packageJson,
+      text.replace(/"version": "[^"]+"/, '"version": "1.0.20; Remove-Item x"')
+    )
+
+    for (const args of [['print'], ['print', '--store'], ['check']]) {
+      const result = runVersionScript([...args, '--root', root])
+      expect(result.status, args.join(' ')).toBe(1)
+      expect(result.stdout, args.join(' ')).toBe('')
+    }
+  })
+
+  it('release.yml passes the ref to the version check through env, never inline', () => {
+    const releaseYml = readRepoFile('.github/workflows', 'release.yml')
+    // `${{ }}` inside `run:` is pasted into the script before bash parses it, so a
+    // crafted tag name would execute; env vars are data (script injection).
+    for (const block of releaseYml.split(/\n(?= {6}- name: )/)) {
+      if (!block.includes('version.mjs')) continue
+      const run = block.slice(block.indexOf('run: |'))
+      expect(run, block).not.toContain('${{ github.ref')
+      expect(block, block).toContain('REF_NAME: ${{ github.ref_name }}')
+    }
+  })
+
   it('release.yml derives the Store version instead of hardcoding it', () => {
     const releaseYml = readRepoFile('.github/workflows', 'release.yml')
     expect(releaseYml).not.toMatch(/\d+\.\d+\.\d+\.0/)

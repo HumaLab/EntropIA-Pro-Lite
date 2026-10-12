@@ -28,6 +28,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** The one hand-edited declaration; every other value derives from it. */
 export const SOURCE_PATH = 'apps/desktop/package.json'
+/** Strict x.y.z: the only shape every declaration and the Store version accept. */
+const VERSION_PATTERN = /^\d+\.\d+\.\d+$/
 
 const STORE_SUFFIX = '.0'
 
@@ -107,6 +109,11 @@ export function readSourceVersion(root) {
   const text = readFileSync(resolve(root, SOURCE_PATH), 'utf8')
   const [value] = extractValues(DECLARATIONS[0], text)
   if (!value) throw new Error(`no version found in ${SOURCE_PATH}`)
+  // Everything downstream (the Store version handed to PowerShell, the tag
+  // check, the bump) trusts this value, so refuse anything but x.y.z here.
+  if (!VERSION_PATTERN.test(value)) {
+    throw new Error(`${SOURCE_PATH} version "${value}" is not strict x.y.z`)
+  }
   return value
 }
 
@@ -208,8 +215,14 @@ function runBump(args) {
   if (positionals.length !== 1 || !nextVersion) {
     throw new Error(`bump needs exactly one <x.y.z> version\n${USAGE}`)
   }
-  if (!/^\d+\.\d+\.\d+$/.test(nextVersion)) {
+  if (!VERSION_PATTERN.test(nextVersion)) {
     console.error(`invalid version "${nextVersion}": expected strict x.y.z (e.g. 1.2.3)`)
+    return 1
+  }
+
+  const currentVersion = readSourceVersion(options.root)
+  if (nextVersion === currentVersion) {
+    console.error(`version: already at ${currentVersion}; nothing to bump`)
     return 1
   }
 

@@ -86,9 +86,13 @@ jobs:
       # build starts.
       - name: Check version consistency
         shell: bash
+        # The ref goes through env, never `${{ }}` inside run: (script injection).
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            node apps/desktop/scripts/version.mjs check --tag "${{ github.ref_name }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            node apps/desktop/scripts/version.mjs check --tag "$REF_NAME"
           else
             node apps/desktop/scripts/version.mjs check
           fi
@@ -178,9 +182,13 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        # The ref goes through env, never `${{ }}` inside run: (script injection).
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            node apps/desktop/scripts/version.mjs check --tag "${{ github.ref_name }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            node apps/desktop/scripts/version.mjs check --tag "$REF_NAME"
           else
             node apps/desktop/scripts/version.mjs check
           fi
