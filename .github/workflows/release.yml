@@ -137,7 +137,7 @@ jobs:
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.
       - name: Build Tauri application
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pin the Pro frontend to local-ml=on (today this is unset and defaults to '1'
@@ -210,7 +210,7 @@ jobs:
       # Lite builds without `local-ml`, so build.rs skips guard_lean_bootstrap_source()
       # entirely and no runtime download source is baked into the installer.
       - name: Build lean Tauri installers (NSIS + MSI)
-        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_LOCAL_ML: '0'
