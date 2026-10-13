@@ -39,6 +39,8 @@ const APP_COMMANDS: &[&str] = &[
     "bibliography_search_works",
     "bibliography_open_passage",
     "zotero_data_dir_grant",
+    "backup_dir_grant",
+    "backup_run_now",
     "bibliography_passage_context",
     "bibliography_library_status",
     "bibliography_search_passages",

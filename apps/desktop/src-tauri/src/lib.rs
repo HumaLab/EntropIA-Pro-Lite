@@ -4,6 +4,7 @@ mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
+mod backup;
 pub mod bibliography;
 mod db;
 mod dev_profile;
@@ -997,6 +998,9 @@ pub fn run() {
             // worth logging, not worth making startup wait on or fail over.
             asset_integrity::spawn_startup_scan(db_path.clone(), app_dir.clone());
 
+            // Scheduled backups (T-47): checks hourly whether one is due.
+            backup::spawn_scheduler(db_path.clone());
+
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
@@ -1313,6 +1317,8 @@ pub fn run() {
             bibliography::commands::bibliography_search_works,
             bibliography::commands::bibliography_open_passage,
             bibliography::commands::zotero_data_dir_grant,
+            backup::backup_dir_grant,
+            backup::backup_run_now,
             bibliography::commands::bibliography_passage_context,
             bibliography::commands::bibliography_library_status,
             bibliography::commands::bibliography_search_passages,
