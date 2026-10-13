@@ -25,8 +25,8 @@ catalogs:
       specifier: ^2.26.4
       version: 2.27.2
     '@tiptap/extension-subscript':
-      specifier: ^2.26.4
-      version: 2.27.3
+      specifier: ^3.31.4
+      version: 3.31.4
     '@tiptap/extension-superscript':
       specifier: ^2.26.4
       version: 2.27.3
@@ -188,7 +188,7 @@ importers:
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-subscript':
         specifier: 'catalog:'
-        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+        version: 3.31.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-superscript':
         specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
@@ -333,7 +333,7 @@ importers:
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-subscript':
         specifier: 'catalog:'
-        version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
+        version: 3.31.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-superscript':
         specifier: 'catalog:'
         version: 2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
@@ -1201,10 +1201,11 @@ packages:
     peerDependencies:
       '@tiptap/core': ^2.7.0
 
-  '@tiptap/extension-subscript@2.27.3':
-    resolution: {integrity: sha512-x5Q1UVHLVP24wteh0xMSnwQ59WDKwNDOH0HzgbJ/UrDnN4f9H/haflQ4yZL0xdT2cYpvzJGPBugi2iKLcpeZjg==}
+  '@tiptap/extension-subscript@3.31.4':
+    resolution: {integrity: sha512-90gg5+av98JxdVTIR7PcZWIJj/fMI+3SJlIXIYBhpU6I7ZE02rUPz4DWluSlzNB04TFy+f4++CyB0wBiCwxpQQ==}
     peerDependencies:
-      '@tiptap/core': ^2.7.0
+      '@tiptap/core': 3.31.4
+      '@tiptap/pm': 3.31.4
 
   '@tiptap/extension-superscript@2.27.3':
     resolution: {integrity: sha512-dLZ9FBG6w5xlEeEsDR8T0nmI3ZDAYgLdkb/+bj8yOkzIUAbf9eDsE3HgqUrHPIm/7h9arJydnrdgOaxVDVlldg==}
@@ -3364,9 +3365,10 @@ snapshots:
     dependencies:
       '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
 
-  '@tiptap/extension-subscript@2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))':
+  '@tiptap/extension-subscript@3.31.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)':
     dependencies:
       '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
+      '@tiptap/pm': 2.27.2
 
   '@tiptap/extension-superscript@2.27.3(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))':
     dependencies:
