@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * What opening a collection costs, before and after the pagination work.
  *
