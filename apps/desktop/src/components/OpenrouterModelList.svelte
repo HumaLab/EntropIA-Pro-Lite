@@ -1,21 +1,35 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { ActionIcon, ToolbarMenu, type ToolbarMenuItem } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import { testOpenrouterConnection, type ModelInfo } from '$lib/settings'
   import { requestSettingsTab } from '$lib/settings-tab-request'
   import { workspace } from '$lib/workspace'
 
   /**
-   * The suggested OpenRouter models, the same list Configuración shows. It
-   * loads the catalog with the saved credential; without one, or offline,
-   * nothing shows and the model field stays editable by hand.
+   * A model picker fed by the OpenRouter catalog, the same suggestions
+   * Configuración shows. It loads the catalog with the saved credential;
+   * without one, the field is replaced by a note pointing at Configuración.
+   * No free-text input: the list is the only way to pick.
    */
-  let { selected = '', onchoose }: { selected?: string; onchoose: (id: string) => void } = $props()
+  let {
+    selected = '',
+    onchoose,
+    label,
+    emptyLabel,
+  }: {
+    selected?: string
+    onchoose: (id: string) => void
+    /** Field label, shown next to the menu. */
+    label: string
+    /** The "no model of its own" option (the general model applies). */
+    emptyLabel: string
+  } = $props()
 
   const currentLocale = locale
   let models = $state<ModelInfo[]>([])
-  /** No saved credential: the list cannot load, so say where to add one. */
   let noKey = $state(false)
+  const uid = `openrouter-model-${Math.random().toString(36).slice(2, 8)}`
 
   onMount(() => {
     let alive = true
@@ -39,54 +53,76 @@
       .slice(0, 15)
   )
 
+  const items = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: '',
+      label: emptyLabel,
+      checked: selected === '',
+      onselect: () => onchoose(''),
+    },
+    ...suggested.map((m) => ({
+      kind: 'radio' as const,
+      id: m.id,
+      label: `${m.id} · ${Math.round(m.context_length / 1024)}k`,
+      checked: selected === m.id,
+      onselect: () => onchoose(m.id),
+    })),
+  ])
+
   function openApiSettings() {
     requestSettingsTab('api')
     workspace.navigateActive({ name: 'settings' })
   }
 </script>
 
-{#if noKey}
-  <p class="settings__model-list-nokey">
-    {$currentLocale && t('settings.modelList.noKey')}
-    <button type="button" class="settings__model-list-link" onclick={openApiSettings}>
-      {$currentLocale && t('settings.modelList.openSettings')}
-    </button>
-  </p>
-{:else if suggested.length > 0}
-  <div class="settings__model-list">
-    <p class="settings__model-list-title">
-      {$currentLocale && t('settings.suggestedModels')}
-    </p>
-    {#each suggested as m (m.id)}
-      <button
-        class="settings__model-option"
-        type="button"
-        class:selected={selected === m.id}
-        onclick={() => onchoose(m.id)}
-      >
-        <span class="settings__model-id">{m.id}</span>
-        <span class="settings__model-ctx">{Math.round(m.context_length / 1024)}k ctx</span>
+<div class="model-picker">
+  <span class="model-picker__label" id="{uid}-label">{label}</span>
+  {#if noKey}
+    <p class="model-picker__nokey">
+      {$currentLocale && t('settings.modelList.noKey')}
+      <button type="button" class="model-picker__link" onclick={openApiSettings}>
+        {$currentLocale && t('settings.modelList.openSettings')}
       </button>
-    {/each}
-  </div>
-{/if}
+    </p>
+  {:else}
+    <ToolbarMenu {label} {items}>
+      {#snippet trigger(props, { open })}
+        <button
+          type="button"
+          class="menu-select"
+          class:menu-select--open={open}
+          aria-labelledby="{uid}-label {uid}-value"
+          disabled={suggested.length === 0}
+          {...props}
+        >
+          <span id="{uid}-value">{selected || emptyLabel}</span>
+          <ActionIcon name="chevron-down" size={12} />
+        </button>
+      {/snippet}
+    </ToolbarMenu>
+  {/if}
+</div>
 
 <style>
-  /* The same classes and tokens as Configuración (`settings__model-*` in
-     SettingsView), so both lists look the same. */
-  .settings__model-list {
-    max-height: 240px;
-    overflow-y: auto;
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-surface);
-    background: color-mix(in srgb, var(--color-surface-glass) 72%, transparent);
+  .model-picker {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
-  .settings__model-list-nokey {
+  .model-picker__label {
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
   }
-  .settings__model-list-link {
+
+  .model-picker__nokey {
+    margin: 0;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  .model-picker__link {
     border: none;
     background: transparent;
     padding: 0;
@@ -96,45 +132,38 @@
     cursor: pointer;
   }
 
-  .settings__model-list-title {
-    padding: var(--space-2) var(--space-3);
-    font-size: var(--font-size-xs);
-    color: var(--color-text-secondary);
-    border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-  }
-  .settings__model-option {
-    display: flex;
-    justify-content: space-between;
+  /* Same trigger as the schema menu above it: the app's own menu, never a
+     native <select>, whose popup the operating system paints. */
+  .menu-select {
+    display: inline-flex;
     align-items: center;
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    text-align: left;
-    transition: background-color var(--transition-smooth);
-  }
-  .settings__model-option:hover {
-    background: color-mix(in srgb, var(--color-surface-glass) 82%, transparent);
-  }
-
-  .settings__model-option.selected {
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-glass));
-    font-weight: var(--font-weight-medium);
-  }
-
-  .settings__model-option + .settings__model-option {
-    border-top: 1px solid var(--color-border-subtle);
-  }
-
-  .settings__model-id {
+    gap: var(--space-1);
+    align-self: flex-start;
+    max-width: 100%;
+    min-height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-control);
+    background: var(--surface-input);
     color: var(--color-text-primary);
+    font-family: var(--font-ui);
+    font-size: var(--font-size-xs);
+    cursor: pointer;
   }
 
-  .settings__model-ctx {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
+  .menu-select:hover,
+  .menu-select--open {
+    background: var(--surface-toolbar);
+    border-color: var(--border-panel);
+  }
+
+  .menu-select:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .menu-select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 </style>
