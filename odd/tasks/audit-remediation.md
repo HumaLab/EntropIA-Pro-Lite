@@ -773,7 +773,15 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     history not rewritten). `abb024a2`: MSIX 1.0.5.0 untracked (local copy kept), its
     `binary-provenance.json` entry dropped (13 → 12; `binaries:check` OK, test 17/17), and
     `clippy.toml`'s reason no longer cites a docs/ spec. RDD `review-089528703b0dc113` approved.
-  - [ ] 8.7 — pin MCP versions in `opencode.json`, drop the personal serena path (R-02)
+  - [x] 8.7 — pin MCP versions in `opencode.json`, drop personal paths (R-02). Branch
+    `chore/p8-7-opencode-pins`, commit `5a0810a9`. shadcn 4.21.4, figma-developer-mcp 0.13.2,
+    tauri-mcp-server 0.13.1, playwright mcp 0.0.83, mcp-sqlite-server 1.4.1 pinned; serena AND
+    semgrep (both `C:\Users\agusn\...`) removed with their permission keys. New
+    `dev-config.test.ts` guards (exact versions, `--package=`/`cmd /c` aware; no absolute
+    executable paths) read the index copy (`git show :opencode.json`): locally the file is
+    skip-worktree (the user's personal Linux variant), which this change left untouched
+    (committed via `hash-object` + `update-index --cacheinfo`, flag restored). RED on the old
+    file, 7/7 on the new. RDD `review-bf447ca54ea1bc64` approved.
   - [ ] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03)
   - [ ] 8.9 + 8.12 — align AGENTS.md/README; shallow-clone audit note (R-05, R-04)
   - [ ] 8.10 — split large files only when touched for another reason (A-06): no forced work
