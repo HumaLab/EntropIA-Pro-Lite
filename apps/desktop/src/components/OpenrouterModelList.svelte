@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { locale, t } from '$lib/i18n'
   import { testOpenrouterConnection, type ModelInfo } from '$lib/settings'
+  import { requestSettingsTab } from '$lib/settings-tab-request'
+  import { workspace } from '$lib/workspace'
 
   /**
    * The suggested OpenRouter models, the same list Configuración shows. It
@@ -12,6 +14,8 @@
 
   const currentLocale = locale
   let models = $state<ModelInfo[]>([])
+  /** No saved credential: the list cannot load, so say where to add one. */
+  let noKey = $state(false)
 
   onMount(() => {
     let alive = true
@@ -19,7 +23,9 @@
       .then((list) => {
         if (alive) models = Array.isArray(list) ? list : []
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        if (alive) noKey = String(err).includes('No protected credential')
+      })
     return () => {
       alive = false
     }
@@ -32,9 +38,21 @@
       )
       .slice(0, 15)
   )
+
+  function openApiSettings() {
+    requestSettingsTab('api')
+    workspace.navigateActive({ name: 'settings' })
+  }
 </script>
 
-{#if suggested.length > 0}
+{#if noKey}
+  <p class="settings__model-list-nokey">
+    {$currentLocale && t('settings.modelList.noKey')}
+    <button type="button" class="settings__model-list-link" onclick={openApiSettings}>
+      {$currentLocale && t('settings.modelList.openSettings')}
+    </button>
+  </p>
+{:else if suggested.length > 0}
   <div class="settings__model-list">
     <p class="settings__model-list-title">
       {$currentLocale && t('settings.suggestedModels')}
@@ -62,6 +80,20 @@
     border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
     border-radius: var(--radius-surface);
     background: color-mix(in srgb, var(--color-surface-glass) 72%, transparent);
+  }
+
+  .settings__model-list-nokey {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+  .settings__model-list-link {
+    border: none;
+    background: transparent;
+    padding: 0;
+    font: inherit;
+    color: var(--color-accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .settings__model-list-title {
