@@ -213,6 +213,28 @@ describe('version single source of truth (C-04)', () => {
     }
   })
 
+  it('release.yml never pastes github context into a run script', () => {
+    const releaseYml = readRepoFile('.github/workflows', 'release.yml')
+    const runs = releaseYml
+      .split(/\n(?= {6}- name: )/)
+      .filter((block) => block.includes('run: |'))
+      .map((block) => {
+        // Only the script body: lines indented under `run: |` (a step's last block
+        // would otherwise run on into the next job's header).
+        const [, ...rest] = block.slice(block.indexOf('run: |')).split('\n')
+        const end = rest.findIndex((line) => line.trim() !== '' && !line.startsWith(' '.repeat(10)))
+        return (end < 0 ? rest : rest.slice(0, end)).join('\n')
+      })
+    for (const run of runs) expect(run, run).not.toContain('${{ github.')
+    // The runner exports both as default env vars; quoted, they stay data.
+    const uploads = runs.filter((run) => run.includes('gh release upload'))
+    expect(uploads).toHaveLength(2)
+    for (const run of uploads) {
+      expect(run, run).toContain('gh release upload "$GITHUB_REF_NAME"')
+      expect(run, run).toContain('--repo "$GITHUB_REPOSITORY"')
+    }
+  })
+
   it('release.yml derives the Store version instead of hardcoding it', () => {
     const releaseYml = readRepoFile('.github/workflows', 'release.yml')
     expect(releaseYml).not.toMatch(/\d+\.\d+\.\d+\.0/)

@@ -315,7 +315,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" lite-installers/* --clobber --repo "${{ github.repository }}"
+          gh release upload "$GITHUB_REF_NAME" lite-installers/* --clobber --repo "$GITHUB_REPOSITORY"
 
   # EntropIA Lite for macOS (universal .dmg) and Ubuntu (.deb), built and
   # smoke-tested by the same workflow used for previews. Tag pushes and `all`
@@ -355,4 +355,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la lite-unix
-          gh release upload "${{ github.ref_name }}" lite-unix/* --clobber --repo "${{ github.repository }}"
+          gh release upload "$GITHUB_REF_NAME" lite-unix/* --clobber --repo "$GITHUB_REPOSITORY"

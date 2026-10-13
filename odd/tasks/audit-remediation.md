@@ -665,7 +665,8 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       desktop 3561 / 0 / 7, lint 0 errors. RDD `review-b9452c4932783608` approved (medium tier,
       one lens), no findings.
 
-- [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
+- [x] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05). PRs #74–#78 (stacked); #75 merges only
+  after the user enables "Actions can create PRs" (needs `gh auth refresh -s admin:org`).
   - [x] 7.1 — Dependabot + blocking audit (C-03). Branch `ci/p7-1-dependabot-audit`, commit
     `56bdecf6`. `.github/dependabot.yml`: npm (`/`), cargo (`/apps/desktop/src-tauri`),
     github-actions, weekly, minor+patch grouped. `ci.yml` job `audit`: `pnpm audit --prod
@@ -717,6 +718,16 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       lockfile anomaly returns, the diagnostics are gone. Accepted: the restore mitigation stays
       and the scripts are recoverable from git history (`cb10d8ab^`). RDD
       `review-a0e3cd641a90c0e3` (7.4b, medium) approved, no findings.
+  - [x] 7.5 — release upload refs through env (follow-up of the 6.5 advisory; not in plan.md).
+    Branch `ci/p7-5-release-ref-env`, commit `567e9319`. The two `gh release upload` steps in
+    `release.yml` used `"${{ github.ref_name }}"` / `"${{ github.repository }}"` inside `run:` (a
+    crafted tag name is legal and would run as code); now `"$GITHUB_REF_NAME"` /
+    `"$GITHUB_REPOSITORY"` (ubuntu-latest, bash). Test RED first in `version-consistency.test.ts`:
+    no release.yml run script contains `${{ github.`. User decision (2026-10-12): release.yml
+    only; the other 7 workflows' run-script interpolations (`inputs.*`, `matrix.*`,
+    `runner.temp`, step outputs; none externally controllable) are a Phase 8 follow-up. RDD
+    `review-44d52487155f2baa` approved; advisories (test parser is dense, assumes 10-space
+    script indentation) accepted: a layout change fails the test loudly, never silently.
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes
