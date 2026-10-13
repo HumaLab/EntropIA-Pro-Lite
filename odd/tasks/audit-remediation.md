@@ -768,7 +768,11 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     2.5.8 becomes a direct dependency (Cargo.lock gains only the edge). 3 new tests (RED =
     compile, function returned `()`); 8/8; fmt + Lite clippy `-D warnings` clean (Pro clippy
     not run: no cfg-gated code touched). RDD `review-87239090435bf592` approved, no findings.
-  - [ ] 8.6 — untrack `docs/` and the unused MSIX (R-01)
+  - [x] 8.6 — untrack `docs/` and the unused MSIX (R-01). Branch `chore/p8-6-untrack-private`.
+    `e8ac9d48`: `git rm -r --cached docs/` (29 files; docs-only, RDD-exempt; local copy kept,
+    history not rewritten). `abb024a2`: MSIX 1.0.5.0 untracked (local copy kept), its
+    `binary-provenance.json` entry dropped (13 → 12; `binaries:check` OK, test 17/17), and
+    `clippy.toml`'s reason no longer cites a docs/ spec. RDD `review-089528703b0dc113` approved.
   - [ ] 8.7 — pin MCP versions in `opencode.json`, drop the personal serena path (R-02)
   - [ ] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03)
   - [ ] 8.9 + 8.12 — align AGENTS.md/README; shallow-clone audit note (R-05, R-04)

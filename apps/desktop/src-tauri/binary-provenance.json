@@ -124,15 +124,6 @@
         "archive_sha256": "93b29fc234758e381df461d7638ff73d0f08bdf3a0dc37923b1ee0b9e442ca3f",
         "member": "uv.exe"
       }
-    },
-    {
-      "path": "artifacts/msix/EntropIALite-Store-HLab-1.0.5.0.msix",
-      "sha256": "e3aebfdbf83b0a608f12a7f1bf8081c9089fac5419e15192fc2f27c598550ca7",
-      "size": 8979842,
-      "kind": "release-output",
-      "name": "EntropIA Lite Store MSIX (HLab)",
-      "version": "1.0.5.0",
-      "provenance": "Release output: the EntropIA Lite Store MSIX 1.0.5.0 added in commit 67d87c38; no build reads it."
     }
   ]
 }

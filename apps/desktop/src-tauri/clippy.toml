@@ -6,5 +6,5 @@
 # Without this lint the shared-directory design degrades silently: one forgotten
 # call site writes to a directory nobody reads, and no test notices.
 disallowed-methods = [
-  { path = "tauri::path::PathResolver::app_data_dir", reason = "use crate::path_utils::data_dir — see docs/superpowers/specs/2026-09-08-shared-data-directory-design.md" },
+  { path = "tauri::path::PathResolver::app_data_dir", reason = "use crate::path_utils::data_dir — the one archive Lite, Pro and dev share (see its doc comment)" },
 ]
