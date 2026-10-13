@@ -13,7 +13,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use entropia_desktop_lib::bibliography::processing::read_native_extraction_basis_with_cancel;
+use entropia_desktop_lib::bibliography::processing::{
+    read_native_extraction_basis_with_cancel, BIBLIOGRAPHY_DETECTOR_VERSION,
+};
 use entropia_desktop_lib::bibliography::repository::{
     upsert_attachment, upsert_connection, upsert_item, upsert_library, AttachmentInput,
     BibliographicItemInput, ExtractionRow, LibraryType, PageTextRow, SourceOrigin,
@@ -648,7 +650,9 @@ fn candidates_exclude_a_successful_reprocess_of_the_current_file() {
 
     let task = admit_extract_task(&conn, &attachment_id);
     settle_task(&conn, &task, "succeeded", None);
-    plant_receipt(&conn, &task, receipt(1, 4242));
+    // The receipt must name the CURRENT detector version: the exclusion is
+    // keyed on it, so the fixture reads it from the constant, not a literal.
+    plant_receipt(&conn, &task, receipt(BIBLIOGRAPHY_DETECTOR_VERSION, 4242));
     assert!(
         reprocess_candidates(&conn).expect("candidates").is_empty(),
         "the current file already went through a reprocess at this detector version"
@@ -711,7 +715,10 @@ fn a_successful_reprocess_with_failed_pages_stays_a_candidate() {
         &task,
         serde_json::json!({
             "attachmentId": attachment_id,
-            "reprocess": { "planHash": "cafebabe", "detectorVersion": 1 },
+            "reprocess": {
+                "planHash": "cafebabe",
+                "detectorVersion": BIBLIOGRAPHY_DETECTOR_VERSION
+            },
             "sourceMtime": TEST_MTIME,
             "sourceBytes": 4242,
             "ocrFailedPages": [1],
