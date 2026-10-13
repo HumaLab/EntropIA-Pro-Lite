@@ -1244,7 +1244,7 @@
           </span>
           <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
           <span
-            class="batch-ops__hinted"
+            class="batch-ops__hinted batch-ops__action-slot"
             use:tooltip={missingOpenrouterKey ? t('batch.needsOpenrouterKey') : undefined}
           >
             <Button
@@ -1590,7 +1590,8 @@
     border-top: 1px solid var(--border-subtle);
   }
 
-  .batch-ops :global(.batch-ops__action) {
+  /* The push to the right belongs to the wrapper now: the button sits inside it. */
+  .batch-ops__action-slot {
     margin-inline-start: auto;
   }
 

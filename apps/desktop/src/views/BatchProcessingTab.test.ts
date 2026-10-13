@@ -1155,9 +1155,9 @@ describe('the collection picker reflows and truncates', () => {
   it('sends the analyze action to the end of its line without leaving the flow', () => {
     // `position: absolute` or a float would put it over the label it follows
     // the moment the strip wraps; an auto start margin cannot overlap anything.
-    expect(ruleFor('.batch-ops :global(.batch-ops__action) {')).toMatch(
-      /margin-inline-start:\s*auto/
-    )
+    // The margin sits on the wrapper that carries the tooltip, not on the
+    // button: inside the wrapper the button's own margin pushes against nothing.
+    expect(ruleFor('.batch-ops__action-slot {')).toMatch(/margin-inline-start:\s*auto/)
     expect(ruleFor('.batch-ops {')).toMatch(/flex-wrap:\s*wrap/)
   })
 
