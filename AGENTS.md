@@ -15,13 +15,14 @@
 - Frontend Lite typecheck needs the variant env: `VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck`.
 - Bump the app version only with `pnpm version:bump x.y.z`: `apps/desktop/package.json` is the single source of truth and the script rewrites every derived declaration; `pnpm version:check` verifies all of them.
 - Adding or replacing a committed binary requires updating `apps/desktop/src-tauri/binary-provenance.json`; run `pnpm binaries:check`. Upstream binaries must stay byte-identical to their pinned release (`pnpm binaries:verify-upstream`).
-- Rust quality helper exists at root: `pnpm rust:quality:report`.
+- Rust quality helper exists at root: `pnpm rust:quality:report` (on Linux/macOS it needs PowerShell 7, `pwsh`).
 
 ## Dev profile (never run `tauri dev` on the real archive with a new migration)
 
 - `tauri dev` opens the same archive as the installed app (`%APPDATA%\com.entropia.shared`) and finds its sync session in the OS keyring. A new migration applied there is irreversible, and one sync raises the account's `schema_tag` for every device.
 - Debug builds only: set `ENTROPIA_DEV_PROFILE=<name>` (`A-Z a-z 0-9 - _`, max 32) before `pnpm exec tauri dev`. Data goes to `<data>/com.entropia.shared/dev-profiles/<name>`, cache likewise under `%LOCALAPPDATA%`; sync is off (no engine, no keyring, sync commands answer `sync_disabled_in_dev_profile`). Release builds never read the variable. See `src-tauri/src/dev_profile.rs`.
 - Check the startup line first: `[setup] profile=dev:<name> data_dir=... sync=disabled`. If it says `profile=shared`, close the app.
+- `tauri.conf.json` watches no sibling checkout: to hot-reload over a local `EntropIA-Agent` checkout, rerun dev with `pnpm exec tauri dev --config '{"build":{"additionalWatchFolders":["../../../../EntropIA-Agent/src"]}}'` (paths are relative to `apps/desktop/src-tauri`).
 
 ## Pro vs Lite variant rules
 

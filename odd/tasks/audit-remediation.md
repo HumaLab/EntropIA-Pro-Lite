@@ -530,7 +530,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       approved (four lenses, high tier: `store_updates.rs` starts processes). Advisories: the
       per-key set never resets within a session; identical scheduler match arms; doc wording of the
       "repeats go to stderr" comments (true: release max level is Info).
-- [ ] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04)
+- [x] Phase 6 — packaging and release (E-02 fix, E-01, E-03, C-02, C-04, D-07, E-04) — PRs #65–#70, #72, #73
   - [x] 6.1 — real Pdfium in the Pro Linux .deb (E-02). Branch `fix/p6-1-pro-linux-pdfium`,
     commit `01107569`. The Pro ubuntu leg of `release.yml` runs `fetch-pdfium.sh linux-x64` and
     bundles through a new explicit overlay `tauri.pro.linux.conf.json` (the Linux resource list
@@ -650,8 +650,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       moved it to `opencode-go/mimo-v2.6-pro`) and `review-8f0b62aa7437ca41` (hardening: member
       and archive-name traversal, report-all instead of fail-fast, same-length tamper test,
       binary-extension PR trigger), both approved.
-  - [ ] 6.7 — minor config (E-04): dev window title, `additionalWatchFolders`, shared
-    `USER_AGENT`, `rust:quality:report` without `pwsh`.
+  - [x] 6.7 — minor config (E-04). Branch `fix/p6-7-minor-config`, commit `08742180`.
+    - Dev window title: `apply_development_window_title` put the `tauri.dev.conf.json` title
+      ("EntropIA Lite") on every debug build, Pro included; now `"{PRODUCT_NAME} (dev)"`, and the
+      dev config title is variant-neutral.
+    - `crate::USER_AGENT` (`EntropIA-Desktop/<CARGO_PKG_VERSION> (historical-research-app)`)
+      for the five clients that sent `0.1`; the sync client keeps `EntropIA-Desktop-Sync/1.0`
+      (protocol identifier). `tests/user_agent_ratchet.rs` blocks new literals.
+    - `additionalWatchFolders` (a sibling `EntropIA-Agent` checkout that does not exist in a clone)
+      removed; inline `--config` recipe in AGENTS.md / README.
+    - `rust:quality:report` goes through `apps/desktop/scripts/run-powershell.mjs` (`pwsh`, then
+      Windows PowerShell on win32, exit 127 with guidance).
+    - Checks: RED first; Lite 2845 / 0 / 37, Lite clippy clean, Pro clippy only the 9 known,
+      desktop 3561 / 0 / 7, lint 0 errors. RDD `review-b9452c4932783608` approved (medium tier,
+      one lens), no findings.
+
 - [ ] Phase 7 — CI supply chain (C-03, D-05, D-06, C-05)
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 

@@ -23,7 +23,7 @@
     "test:ui": "vitest --ui",
     "version:check": "node apps/desktop/scripts/version.mjs check",
     "version:bump": "node apps/desktop/scripts/version.mjs bump",
-    "rust:quality:report": "powershell -NoProfile -File ./apps/desktop/src-tauri/scripts/rust-quality-contract.ps1"
+    "rust:quality:report": "node apps/desktop/scripts/run-powershell.mjs ./apps/desktop/src-tauri/scripts/rust-quality-contract.ps1"
   },
   "devDependencies": {
     "@eslint/js": "^9",

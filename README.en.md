@@ -74,6 +74,7 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri
 
 > - `tauri.lite.windows.conf.json` keeps what only Pro uses (uv, models, runtime pack, Python scripts) out of the Windows installers. Without it the build still works, but weighs about 100 MB more.
 > - Use **`pnpm exec tauri`** (not `pnpm tauri … -- …`): pnpm eats the first `--` and breaks arg passing to Cargo.
+> - No sibling checkout is watched by default: to hot-reload over a local `EntropIA-Agent` checkout, run `pnpm exec tauri dev --config '{"build":{"additionalWatchFolders":["../../../../EntropIA-Agent/src"]}}'` (paths are relative to `apps/desktop/src-tauri`).
 > - To run it from the **repo root** without `cd`, use `pnpm --filter @entropia-pro/desktop exec tauri ...`.
 > - Lite is Cargo's lean default. Do not pass `--features local-ml` when using `tauri.lite.conf.json`.
 > - In PowerShell `$env:VITE_LOCAL_ML` **persists for the session** → set it on every variant switch (or open a new terminal). In bash it goes inline: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
