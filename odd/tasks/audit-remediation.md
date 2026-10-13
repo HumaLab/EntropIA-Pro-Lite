@@ -676,6 +676,18 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     CRITICAL resilience finding refuted by the refuter). Advisories: action refs not SHA-pinned
     yet (7.3), the cargo-audit assertion is loose, the dependabot comment anticipates 7.3, and
     `cargo install` on every run is slow.
+  - [x] 7.2 — engine pin bump through a PR (D-05). Branch `ci/p7-2-engine-bump-pr`, commits
+    `c340ffbd` and `7c82f839`. `engine-pin-bump.yml` no longer pushes to main: after the
+    dispatched CI run passes it opens a PR from `bot/engine-pin-bump` (or refreshes title and body
+    of the open one). Permissions `contents: write` (bump branch), `pull-requests: write`,
+    `actions: write`; the explicit `gh workflow run ci.yml` stays (GITHUB_TOKEN events start no
+    workflows). Tests RED first. RDD `review-edd5c8bd5437d18f` (stale body on reuse → fixed in
+    `7c82f839`) and `review-6441a57e3ea6749e`, both approved.
+    - Repo settings found (2026-10-12, read-only): "Allow GitHub Actions to create and approve
+      pull requests" is OFF (`can_approve_pull_request_reviews=false`), so `gh pr create` with
+      GITHUB_TOKEN fails until it is enabled. `main` has no classic protection; ruleset "HLab"
+      only blocks deletion and non-fast-forward, so it does NOT require PRs. Both changes are the
+      user's (admin settings).
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes

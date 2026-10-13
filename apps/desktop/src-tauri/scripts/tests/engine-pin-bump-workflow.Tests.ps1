@@ -68,17 +68,17 @@ Describe "engine-pin-bump workflow" {
     Assert-Match -Value $content -Pattern "gh workflow run ci\.yml --ref" -Message "the bump must dispatch CI on its branch"
   }
 
-  It "advances main only after CI passes on the bumped commit" {
+  It "proposes the bump as a pull request only after CI passes on the bumped commit" {
     $content = Read-Workflow -Path $script:bumpPath
 
     $watch = [regex]::Match($content, "gh run watch [^\r\n]*")
-    $mainPush = [regex]::Match($content, "git push [^\r\n]*refs/heads/main[^\r\n]*")
+    $prCreate = [regex]::Match($content, "gh pr create [^\r\n]*")
     Assert-True -Condition $watch.Success -Message "the bump must wait for the CI run"
-    Assert-True -Condition $mainPush.Success -Message "the bump must push the tested commit to main"
+    Assert-True -Condition $prCreate.Success -Message "the bump must open a pull request for the tested commit"
     Assert-Match -Value $content -Pattern 'select\(\.headSha == ' -Message "the watched CI run must be the one for the bumped commit"
     Assert-Match -Value $watch.Value -Pattern "--exit-status" -Message "a failed CI run must stop the bump"
-    Assert-True -Condition ($watch.Index -lt $mainPush.Index) -Message "main must move only after CI finished"
-    Assert-True -Condition ($mainPush.Value -notmatch '--force|\s\+|"\+') -Message "main must only fast-forward, never be forced"
+    Assert-True -Condition ($watch.Index -lt $prCreate.Index) -Message "the pull request must be proposed only after CI finished"
+    Assert-True -Condition ($content -notmatch 'git push [^\r\n]*refs/heads/main') -Message "the bump must never push to main (audit D-05)"
   }
 
   Context "deciding whether the engine moved" {

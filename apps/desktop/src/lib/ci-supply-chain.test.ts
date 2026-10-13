@@ -53,3 +53,30 @@ describe('CI supply chain (C-03)', () => {
     expect(audit).not.toMatch(/\|\|\s*true/)
   })
 })
+
+describe('engine pin bump goes through a pull request (D-05)', () => {
+  const workflow = readRepoFile('.github/workflows/engine-pin-bump.yml')
+
+  it('never pushes to main directly', () => {
+    expect(workflow).not.toMatch(/refs\/heads\/main/)
+    expect(workflow).not.toMatch(/git push[^\n]*\bmain\b/)
+  })
+
+  it('opens or reuses a pull request for the tested bump', () => {
+    expect(workflow).toContain('gh pr create')
+    expect(workflow).toMatch(/gh pr list[^\n]*--head "\$BUMP_BRANCH"/)
+  })
+
+  it('refreshes title and body together when the PR already exists', () => {
+    // The body names the pin and the tested SHA; a reused PR must not keep the old ones.
+    expect(workflow).toMatch(/gh pr edit "\$existing" --title "\$title" --body "\$body"/)
+  })
+
+  it('keeps the explicit CI dispatch, since GITHUB_TOKEN events start no workflows', () => {
+    expect(workflow).toContain('gh workflow run ci.yml --ref "$BUMP_BRANCH"')
+    const permissions = /\npermissions:\n((?: {2}.*\n)+)/.exec(workflow)?.[1] ?? ''
+    expect(permissions).toMatch(/contents: write/)
+    expect(permissions).toMatch(/pull-requests: write/)
+    expect(permissions).toMatch(/actions: write/)
+  })
+})
