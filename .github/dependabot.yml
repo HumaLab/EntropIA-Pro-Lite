@@ -1,0 +1,38 @@
+# Dependency updates (audit finding C-03). One weekly run per ecosystem; minor
+# and patch bumps arrive grouped in a single PR so they stay reviewable, major
+# bumps keep their own PR. github-actions also keeps the SHA-pinned `uses:`
+# lines current (Phase 7.3).
+version: 2
+updates:
+  - package-ecosystem: npm
+    # pnpm workspace root: package.json + pnpm-lock.yaml cover every package.
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: cargo
+    directory: /apps/desktop/src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - minor
+          - patch
