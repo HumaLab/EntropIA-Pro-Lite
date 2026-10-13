@@ -71,7 +71,7 @@ url = "2.5"
 httpdate = "1"
 sha2 = "0.10"
 md-5 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 ed25519-dalek = { version = "2", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary
 # source audio to a PCM16 WAV the webview <audio> element can play.
