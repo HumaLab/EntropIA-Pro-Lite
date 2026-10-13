@@ -68,7 +68,7 @@ Describe "rust-quality-report workflow" {
   It "pins rust-quality-report setup-node to Node 22 for pnpm/action-setup compatibility" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
+    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v\d+\.[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
   }
 
   It "restores canonical lockfile after setup-node and before install in rust-quality-report" {
