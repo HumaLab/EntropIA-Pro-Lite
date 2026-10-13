@@ -204,17 +204,13 @@
     <div class="schema-panel__editor">
       <div class="schema-panel__row">
         <Input bind:value={editing.name} label={t('batch.schemaName')} />
-        <Input
-          bind:value={editing.model}
+        <OpenrouterModelList
+          selected={editing.model}
+          onchoose={(id) => editing && (editing.model = id)}
           label={t('batch.schemaModel')}
-          placeholder={t('batch.schemaModelPlaceholder')}
-          hint={t('batch.schemaModelHint')}
+          emptyLabel={t('batch.schemaModelPlaceholder')}
         />
       </div>
-      <OpenrouterModelList
-        selected={editing.model}
-        onchoose={(id) => editing && (editing.model = id)}
-      />
       {#each editing.fields as field, index (index)}
         <div class="schema-panel__field">
           <Input bind:value={field.name} label={t('batch.schemaFieldName')} />

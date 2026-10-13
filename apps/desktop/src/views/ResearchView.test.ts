@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { locale } from '$lib/i18n'
+import { DEFAULT_OPENROUTER_MODEL } from '$lib/settings'
 
 const { invokeMock, navigateMock, forgetResearchMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
@@ -349,8 +350,12 @@ describe('ResearchView modelo de la investigación', () => {
     })
   }
 
+  /** The model menu trigger: its accessible name is "Modelo <value>". */
   function modelBox() {
-    return screen.getByRole('textbox', { name: 'Modelo' }) as HTMLInputElement
+    return screen.getByRole('button', { name: /^Modelo / })
+  }
+  function modelValue() {
+    return modelBox().textContent?.trim() ?? ''
   }
 
   async function writeQuestion() {
@@ -374,7 +379,7 @@ describe('ResearchView modelo de la investigación', () => {
   it('manda en el create el modelo efectivo por defecto', async () => {
     backend({ ragModel: 'google/gemma-4-26b-a4b-it' })
     render(ResearchView)
-    await waitFor(() => expect(modelBox().value).toBe('google/gemma-4-26b-a4b-it'))
+    await waitFor(() => expect(modelValue()).toBe('google/gemma-4-26b-a4b-it'))
 
     await writeQuestion()
     await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
@@ -388,15 +393,19 @@ describe('ResearchView modelo de la investigación', () => {
   it('sin rag_model el modelo efectivo es el general de OpenRouter', async () => {
     backend({ openrouterModel: 'openrouter/mistral-7b' })
     render(ResearchView)
-    await waitFor(() => expect(modelBox().value).toBe('openrouter/mistral-7b'))
+    await waitFor(() => expect(modelValue()).toBe('openrouter/mistral-7b'))
   })
 
   it('el modelo editado viaja en el create', async () => {
-    backend({ ragModel: 'google/gemma-4-26b-a4b-it' })
+    backend({
+      ragModel: 'google/gemma-4-26b-a4b-it',
+      models: [{ id: 'meta/llama-3.3-70b', name: 'Llama 3.3 70B', context_length: 131072 }],
+    })
     render(ResearchView)
-    await waitFor(() => expect(modelBox().value).toBe('google/gemma-4-26b-a4b-it'))
+    await waitFor(() => expect(modelValue()).toBe('google/gemma-4-26b-a4b-it'))
 
-    await fireEvent.input(modelBox(), { target: { value: 'meta/llama-3.3-70b' } })
+    await fireEvent.click(modelBox())
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: /meta\/llama-3.3-70b/ }))
     await writeQuestion()
     await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
 
@@ -410,7 +419,7 @@ describe('ResearchView modelo de la investigación', () => {
     backend()
     render(ResearchView)
     await waitFor(() => expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument())
-    expect(modelBox().value).toBe('')
+    expect(modelValue()).toBe(DEFAULT_OPENROUTER_MODEL)
 
     await writeQuestion()
     await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
@@ -428,11 +437,16 @@ describe('ResearchView modelo de la investigación', () => {
       ],
     })
     render(ResearchView)
-    await waitFor(() =>
-      expect(screen.getByText('Modelos sugeridos desde OpenRouter')).toBeInTheDocument()
-    )
+    await waitFor(() => expect(modelBox()).toBeEnabled())
 
-    await fireEvent.click(screen.getByRole('button', { name: /meta\/llama-3.3-70b/ }))
-    expect(modelBox().value).toBe('meta/llama-3.3-70b')
+    await fireEvent.click(modelBox())
+    const options = screen.getAllByRole('menuitemradio').map((o) => o.textContent?.trim())
+    expect(options).toEqual([
+      DEFAULT_OPENROUTER_MODEL,
+      'meta/llama-3.3-70b · 128k',
+      'qwen/qwen-2.5-7b · 32k',
+    ])
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: /qwen\/qwen-2.5-7b/ }))
+    expect(modelValue()).toBe('qwen/qwen-2.5-7b')
   })
 })

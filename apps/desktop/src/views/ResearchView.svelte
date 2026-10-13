@@ -535,13 +535,12 @@
                OpenRouter»). El valor viaja en el create y el motor lo congela
                en el job. -->
           <div class="research-form__field">
-            <Input
+            <OpenrouterModelList
+              selected={researchModel}
+              onchoose={chooseModel}
               label={$currentLocale && t('research.modelLabel')}
-              type="text"
-              bind:value={researchModel}
-              placeholder={DEFAULT_OPENROUTER_MODEL}
+              emptyLabel={DEFAULT_OPENROUTER_MODEL}
             />
-            <OpenrouterModelList selected={researchModel} onchoose={chooseModel} />
           </div>
 
           <div class="research-form__evidence">
