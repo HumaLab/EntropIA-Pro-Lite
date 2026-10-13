@@ -728,8 +728,11 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `runner.temp`, step outputs; none externally controllable) are a Phase 8 follow-up. RDD
     `review-44d52487155f2baa` approved; advisories (test parser is dense, assumes 10-space
     script indentation) accepted: a layout change fails the test loudly, never silently.
-- [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06). Started
-  2026-10-12 (user: "arrancá y no pares hasta terminar"). One stacked branch/PR per unit on 7.5.
+- [x] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06). Started and
+  closed 2026-10-12 (user: "arrancá y no pares hasta terminar"). Stacked PRs #79–#84, #100 and the
+  docs PR, on 7.5. `auditoria.md` gains "Estado de la remediación (2026-10-12)": one row per
+  finding (45) with status and phase/PR, plus the plan §6 measurement (pnpm audit --prod 0
+  high/critical, cargo audit 0 vulnerabilities, eprintln! 1 — re-measured).
   - User decisions (2026-10-12): `docs/` is NOT public — untrack it (`git rm -r --cached`, local
     copy kept, published history not rewritten); `artifacts/msix/...1.0.5.0.msix` leaves the repo
     (`git rm --cached`, local copy kept) and its `binary-provenance.json` entry goes.
@@ -782,10 +785,21 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     skip-worktree (the user's personal Linux variant), which this change left untouched
     (committed via `hash-object` + `update-index --cacheinfo`, flag restored). RED on the old
     file, 7/7 on the new. RDD `review-bf447ca54ea1bc64` approved.
-  - [ ] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03)
-  - [ ] 8.9 + 8.12 — align AGENTS.md/README; shallow-clone audit note (R-05, R-04)
-  - [ ] 8.10 — split large files only when touched for another reason (A-06): no forced work
-  - [ ] 8.11 — code signing (C-06): budget decision, recorded as open; no code
+  - [x] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03).
+    Branch `docs/p8-8-docs-hygiene`, commit `1544655c` (docs-only). The 123 code comments citing
+    the plans by bare filename still resolve (unique names) and were left alone. The root manual
+    (452 lines, drifted) now points to the published manual and its source
+    (`manual/manual-usuario/`, a superset of its topics).
+  - [x] 8.9 + 8.12 — align AGENTS.md/README; shallow-clone audit note (R-05, R-04). Commit
+    `07c4074c` (docs-only). R-05 as audited was already fixed (6.3 + README CI paragraph); fixed
+    the newer drifts instead: AGENTS' "ESLint allows `any`" (now zero-warning rule), README CI
+    paragraph (audit job, zero warnings, Rust Lite job), README release paragraph (guard and
+    bootstrap vars are Pro-only since 6.3). AGENTS gains an "Auditing history" note (R-04).
+  - [x] 8.10 — split large files only when touched for another reason (A-06). No file was
+    touched for another reason in a way that warranted a split (`lib.rs` got a 30-line
+    validator change in 8.5); nothing forced, per the plan.
+  - [x] 8.11 — code signing (C-06). Budget decision, no code: stays open for the team (plan §4
+    item 5: OV/EV or Azure Trusted Signing for Windows, Apple Developer ID for the DMG).
 
 ## Notes
 
