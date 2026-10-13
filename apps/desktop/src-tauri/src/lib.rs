@@ -441,7 +441,8 @@ fn processing_terminal_observer(
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    validate_external_url(&url)?;
+    // Open the validated, re-serialized form, never the caller's spelling.
+    let url = validate_external_url(&url)?;
 
     #[cfg(target_os = "windows")]
     let mut command = {
@@ -471,7 +472,10 @@ fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_external_url(url: &str) -> Result<(), String> {
+/// Check a URL the frontend asks the OS to open and return the string to hand
+/// to the opener: the exact Store listing as is, otherwise the URL as parsed
+/// and re-serialized by `url::Url` (http/https, a host, no credentials).
+fn validate_external_url(url: &str) -> Result<String, String> {
     if url.trim() != url {
         return Err("External URL must not contain leading or trailing whitespace".to_string());
     }
@@ -479,7 +483,7 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     // The Lite Store listing, by exact equality: no other product, parameter or
     // spelling of the scheme gets through.
     if store_updates::STORE_UPDATES_SUPPORTED && url == store_updates::STORE_PRODUCT_URI {
-        return Ok(());
+        return Ok(url.to_string());
     }
 
     if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -493,7 +497,19 @@ fn validate_external_url(url: &str) -> Result<(), String> {
         return Err("External URL contains unsafe characters".to_string());
     }
 
-    Ok(())
+    let parsed =
+        url::Url::parse(url).map_err(|error| format!("External URL is not valid: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only HTTP(S) URLs are allowed".to_string());
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("External URL must name a host".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("External URL must not carry credentials".to_string());
+    }
+
+    Ok(parsed.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -2264,6 +2280,48 @@ mod tests {
         assert!(validate_external_url("https://example.com|calc.exe").is_err());
         assert!(validate_external_url(" https://example.com").is_err());
         assert!(validate_external_url("https://example.com/path with spaces").is_err());
+    }
+
+    #[test]
+    fn validate_external_url_requires_a_host() {
+        for url in ["https://", "http://", "https://:443/path"] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_external_url_rejects_credentials() {
+        for url in [
+            "https://github.com@evil.example/",
+            "https://user:pass@example.com/",
+        ] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_external_url_returns_the_reserialized_url() {
+        // What gets opened is the parsed form, not the caller's spelling: the
+        // host is lowercased and IDNA-encoded, and a backslash cannot smuggle a
+        // second authority past the parser.
+        assert_eq!(
+            validate_external_url("https://Example.COM/a?b=1#c").unwrap(),
+            "https://example.com/a?b=1#c"
+        );
+        assert_eq!(
+            validate_external_url("https://münchen.de/").unwrap(),
+            "https://xn--mnchen-3ya.de/"
+        );
+        assert_eq!(
+            validate_external_url("https://example.com\\@evil.example/").unwrap(),
+            "https://example.com/@evil.example/"
+        );
     }
 
     #[test]
