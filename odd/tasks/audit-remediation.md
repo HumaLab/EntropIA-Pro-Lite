@@ -761,7 +761,13 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `convertLegacyNoteTextToHtml` (escaped, paragraphed) instead of returning raw `<p>`-wrapped
     markup; DOM path unchanged. Tests RED first (`document` stubbed); NoteEditor 40/40. RDD
     `review-46789f4484391e38` approved, no findings.
-  - [ ] 8.5 — `validate_external_url` via `url::Url` (S-07)
+  - [x] 8.5 — `validate_external_url` via `url::Url` (S-07). Branch `fix/p8-5-external-url`,
+    commit `2da12fd9`. After the existing prefix/denylist checks the URL is parsed with
+    `url::Url` (http/https, non-empty host, no credentials) and the function returns the
+    re-serialized string, which `open_external_url` now opens; exact Store URI unchanged. `url`
+    2.5.8 becomes a direct dependency (Cargo.lock gains only the edge). 3 new tests (RED =
+    compile, function returned `()`); 8/8; fmt + Lite clippy `-D warnings` clean (Pro clippy
+    not run: no cfg-gated code touched). RDD `review-87239090435bf592` approved, no findings.
   - [ ] 8.6 — untrack `docs/` and the unused MSIX (R-01)
   - [ ] 8.7 — pin MCP versions in `opencode.json`, drop the personal serena path (R-02)
   - [ ] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03)
