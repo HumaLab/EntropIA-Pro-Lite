@@ -72,7 +72,7 @@ httpdate = "1"
 sha2 = "0.10"
 md-5 = "0.11"
 base64 = "0.23"
-ed25519-dalek = { version = "2", optional = true }
+ed25519-dalek = { version = "3", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary
 # source audio to a PCM16 WAV the webview <audio> element can play.
 symphonia = { version = "0.5", features = ["all"] }
