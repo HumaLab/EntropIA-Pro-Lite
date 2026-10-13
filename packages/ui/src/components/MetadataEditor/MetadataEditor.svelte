@@ -25,9 +25,10 @@
     emptyText: '',
   }
 
-  const labels = $derived.by(
-    (): MetadataEditorResolvedLabels => ({ ...defaultLabels, ...labelsProp })
-  )
+  const labels = $derived.by((): MetadataEditorResolvedLabels => ({
+    ...defaultLabels,
+    ...labelsProp,
+  }))
 
   interface MetadataRow {
     key: string

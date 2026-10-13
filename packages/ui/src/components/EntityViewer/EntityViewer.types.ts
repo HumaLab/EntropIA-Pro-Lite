@@ -1,11 +1,5 @@
 export type EntityType =
-  | 'person'
-  | 'place'
-  | 'date'
-  | 'institution'
-  | 'organization'
-  | 'misc'
-  | 'custom'
+  'person' | 'place' | 'date' | 'institution' | 'organization' | 'misc' | 'custom'
 
 export interface Entity {
   id: string

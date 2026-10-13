@@ -121,9 +121,7 @@ export async function investigationReportBytes(
 
 /** How a download ended. `null` is a closed file dialog, which says nothing. */
 export type InvestigationDownload =
-  | { kind: 'saved'; path: string }
-  | { kind: 'cancelled' }
-  | { kind: 'failed'; message: string }
+  { kind: 'saved'; path: string } | { kind: 'cancelled' } | { kind: 'failed'; message: string }
 
 /**
  * Asks where to put it and writes it.
