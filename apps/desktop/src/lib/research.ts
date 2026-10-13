@@ -1,20 +1,9 @@
 import { invoke } from '@tauri-apps/api/core'
 
 export type ResearchJobStatus =
-  | 'planned'
-  | 'running'
-  | 'paused'
-  | 'awaiting_human'
-  | 'done'
-  | 'failed'
+  'planned' | 'running' | 'paused' | 'awaiting_human' | 'done' | 'failed'
 export type ResearchJobPhase =
-  | 'coverage'
-  | 'design'
-  | 'plan'
-  | 'clarification'
-  | 'execution'
-  | 'verification'
-  | 'report'
+  'coverage' | 'design' | 'plan' | 'clarification' | 'execution' | 'verification' | 'report'
 
 /** Modalidad de informe: perfila las preguntas, el plan y la redacción. */
 export interface ResearchModality {

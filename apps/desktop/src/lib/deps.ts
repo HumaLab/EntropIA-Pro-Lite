@@ -18,13 +18,7 @@ const OFF = import.meta.env.VITE_LOCAL_ML !== '1'
 // ---------------------------------------------------------------------------
 
 export type DependencyId =
-  | 'Python'
-  | 'Fastembed'
-  | 'PaddlePaddle'
-  | 'PaddleOcr'
-  | 'FasterWhisper'
-  | 'Spacy'
-  | 'SpacyModelEs'
+  'Python' | 'Fastembed' | 'PaddlePaddle' | 'PaddleOcr' | 'FasterWhisper' | 'Spacy' | 'SpacyModelEs'
 
 export type DependencyStatus =
   | { type: 'unknown' }

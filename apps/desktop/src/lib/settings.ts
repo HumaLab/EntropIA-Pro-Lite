@@ -93,9 +93,7 @@ export type ZoteroKeyInfo = {
 }
 
 export type ZoteroKeyCheck =
-  | ({ state: 'valid' } & ZoteroKeyInfo)
-  | { state: 'invalid_key' }
-  | { state: 'unreachable' }
+  ({ state: 'valid' } & ZoteroKeyInfo) | { state: 'invalid_key' } | { state: 'unreachable' }
 
 /** Check a Zotero key against api.zotero.org. A blank key checks the stored one. */
 export function verifyZoteroKey(apiKey: string): Promise<ZoteroKeyCheck> {
