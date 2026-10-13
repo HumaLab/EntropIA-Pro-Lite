@@ -1249,7 +1249,7 @@
           >
             <Button
               class="batch-ops__action"
-              variant="secondary"
+              variant="primary"
               size="sm"
               disabled={selectedCount === 0 ||
                 (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId) ||
@@ -1288,7 +1288,7 @@
                 {t('batch.discard')}
               </Button>
               <Button
-                variant="secondary"
+                variant="primary"
                 size="sm"
                 disabled={starting || !draft.planningDone}
                 onclick={handleStart}
