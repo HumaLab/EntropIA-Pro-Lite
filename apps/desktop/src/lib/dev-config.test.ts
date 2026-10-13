@@ -98,3 +98,50 @@ describe('run-powershell.mjs', () => {
     expect(chooseWithNode('linux', [])).toBeNull()
   })
 })
+
+describe('opencode.json MCP servers (R-02)', () => {
+  interface McpServer {
+    type: 'local' | 'remote'
+    command?: string[]
+  }
+  // The committed (index) copy, not the working file: a developer may keep a
+  // personal opencode.json under `git update-index --skip-worktree`.
+  const committedConfig = (): string => {
+    try {
+      return execFileSync('git', ['show', ':opencode.json'], { cwd: repoRoot, encoding: 'utf8' })
+    } catch {
+      return readFileSync(resolve(repoRoot, 'opencode.json'), 'utf8')
+    }
+  }
+  const config = JSON.parse(committedConfig()) as { mcp: Record<string, McpServer> }
+  const local = Object.entries(config.mcp).filter(([, server]) => server.type === 'local')
+
+  it('pins every npm package an MCP server runs to an exact version', () => {
+    // With `--package=` flags those name the packages (the positional is then
+    // a bin name); otherwise the first non-flag argument after the runner (and
+    // `dlx`) is the package. `node@<major>` only selects the Node runtime. A
+    // Windows `cmd /c` wrapper is looked through.
+    for (const [name, server] of local) {
+      const command = server.command ?? []
+      const [runner, ...args] =
+        command[0] === 'cmd' && command[1]?.toLowerCase() === '/c' ? command.slice(2) : command
+      if (runner !== 'npx' && runner !== 'pnpm') continue
+      const flagged = args.filter((arg) => arg.startsWith('--package=')).map((arg) => arg.slice(10))
+      const packages = flagged.length
+        ? flagged.filter((spec) => !/^node@\d+$/.test(spec))
+        : args.filter((arg) => arg !== 'dlx' && !arg.startsWith('-')).slice(0, 1)
+      expect(packages.length, name).toBeGreaterThan(0)
+      for (const spec of packages) {
+        expect(spec, `${name}: ${spec}`).toMatch(/^(@[\w.-]+\/)?[\w.-]+@\d+\.\d+\.\d+$/)
+      }
+    }
+  })
+
+  it('runs no executable from a personal absolute path', () => {
+    for (const [name, server] of local) {
+      const executable = server.command?.[0] ?? ''
+      expect(executable, name).not.toMatch(/^([A-Za-z]:[\\/]|\/|~)/)
+      expect(executable, name).not.toMatch(/Users[\\/]|home[\\/]/)
+    }
+  })
+})
