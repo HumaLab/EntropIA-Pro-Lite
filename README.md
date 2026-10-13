@@ -127,11 +127,11 @@ La unificación es un **strangler** sobre el código de Pro: toda la inferencia 
 - El **frontend** lee `VITE_LOCAL_ML`: en Lite esconde DependenciasTab, los banners de deps y la UI de modelos locales, y la marca pasa a "EntropIA Lite".
 - La **lista de comandos Tauri es idéntica** en ambas variantes; solo ramifican los cuerpos (el brazo Lite devuelve healthy/no-op, como hacía EntropIA Lite).
 
-En cada push/PR, CI ejecuta lint, typecheck y tests del workspace con el frontend Pro, además del typecheck y los tests desktop con `VITE_LOCAL_ML=0`; también construye el frontend Pro. Cuando cambian archivos Rust/Tauri relevantes, el contrato de features de Windows compila y enlaza Pro y Lite como gates bloqueantes.
+En cada push/PR, CI ejecuta lint, typecheck y tests del workspace con el frontend Pro, además del typecheck y los tests desktop con `VITE_LOCAL_ML=0`; también construye el frontend Pro y audita las dependencias (`pnpm audit --prod --audit-level high` y `cargo audit`, bloqueante). Lint y svelte-check fallan ante cualquier warning. Cuando cambian archivos Rust/Tauri relevantes, el contrato de features de Windows compila y enlaza Pro y Lite, y el job Rust Lite de Linux corre `rustfmt`, `clippy` y `cargo test`, como gates bloqueantes.
 
 ## Release e instaladores
 
-**Pro — instalador liviano + descarga al 1er uso.** El runtime de IA (~2.2GB) no entra en un instalador Windows (NSIS y WiX fallan por encima de ~2GB). El instalador incluye el fixture chico de `runtime-pack` y la app descarga el runtime real al primer uso desde una fuente remota firmada (ed25519), verificando firma + sha256 antes de confiar en él. Para Windows/Linux, `build.rs` falla cerrado si cualquier build de release embebe el fixture sin una fuente de bootstrap horneada; el workflow **Release** la define para Pro y Lite.
+**Pro — instalador liviano + descarga al 1er uso.** El runtime de IA (~2.2GB) no entra en un instalador Windows (NSIS y WiX fallan por encima de ~2GB). El instalador incluye el fixture chico de `runtime-pack` y la app descarga el runtime real al primer uso desde una fuente remota firmada (ed25519), verificando firma + sha256 antes de confiar en él. Para Windows/Linux, `build.rs` falla cerrado si un build de release de Pro (`local-ml`) embebe el fixture sin una fuente de bootstrap horneada; Lite no descarga runtime y no pasa por ese chequeo. El workflow **Release** define las variables solo para Pro.
 
 Flujo de release de Pro:
 

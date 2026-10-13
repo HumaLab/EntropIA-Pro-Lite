@@ -127,11 +127,11 @@ The unification is a **strangler** over the Pro code: all local inference lives 
 - The **frontend** reads `VITE_LOCAL_ML`: in Lite it hides DependenciasTab, the deps banners, and the local-model UI, and the brand becomes "EntropIA Lite".
 - The **Tauri command list is identical** in both variants; only the bodies branch (the Lite arm returns healthy/no-op, like EntropIA Lite did).
 
-On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite as blocking gates.
+On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend and audits dependencies (`pnpm audit --prod --audit-level high` and `cargo audit`, blocking). Lint and svelte-check fail on any warning. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite, and the Linux Rust Lite job runs `rustfmt`, `clippy`, and `cargo test`, as blocking gates.
 
 ## Release &amp; installers
 
-**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if any release build embeds the fixture without a baked bootstrap source; the **Release** workflow sets it for both Pro and Lite.
+**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if a Pro (`local-ml`) release build embeds the fixture without a baked bootstrap source; Lite downloads no runtime and skips that check. The **Release** workflow sets the variables for Pro only.
 
 Pro release flow:
 

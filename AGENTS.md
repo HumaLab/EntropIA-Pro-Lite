@@ -56,10 +56,14 @@
 
 ## Style constraints already encoded in config
 
-- ESLint warnings allow `_`-prefixed unused args/vars, rest-sibling stripping, and `any`; do not “fix” those patterns blindly.
+- Zero warnings: `lint` runs `eslint src --max-warnings 0` and the desktop/ui `typecheck` runs svelte-check with `--fail-on-warnings`, so any warning fails the check. The config allows `_`-prefixed unused args/vars and rest-sibling stripping; do not “fix” those patterns blindly. `no-explicit-any` is a warning, so type the value (or justify an `eslint-disable-next-line` on that line). A deliberate init-time prop capture takes `// svelte-ignore state_referenced_locally` plus a one-line reason.
 - Svelte runes dependency expressions intentionally disable `@typescript-eslint/no-unused-expressions` in `.svelte` files.
 - Empty catches are allowed only for best-effort localStorage-style access in `.svelte` files.
 - Icons go through `ActionIcon`, never around it. `no-restricted-imports` fails the build on a direct `@tabler/icons-svelte-runes` import anywhere under `apps/**` or `packages/**`; to add an icon, add its name to `ACTION_ICON_NAMES` and map it in `ActionIcon.svelte`. Genuinely non-icon SVG — charts, viewer overlays, third-party brand marks — is allowlisted in `eslint.config.js` rather than exempted by hand.
+
+## Auditing history
+
+- A shallow clone (`--depth N`) grafts its oldest visible commit, which then shows the whole tree as one huge change under an unrelated message. Do not read that as a real commit; fetch full history (`git fetch --unshallow`) before blaming or dating anything.
 
 ## Task board (hlab.com.ar)
 
