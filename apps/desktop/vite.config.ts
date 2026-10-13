@@ -95,6 +95,8 @@ export default defineConfig({
       'drizzle-orm/sqlite-core',
       'drizzle-orm/sqlite-proxy',
       'leaflet',
+      // The 3D relation graph (T-46), loaded on demand but prebundled like the rest.
+      '3d-force-graph',
       'pdfjs-dist',
       'svelte',
       'svelte/store',

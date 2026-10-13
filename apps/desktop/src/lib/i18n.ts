@@ -1791,6 +1791,14 @@ const es = {
   'collectionAnalysis.tabsAria': 'Vistas de análisis',
   'collectionAnalysis.vizTab': 'Visualización',
   'collectionAnalysis.settingsTab': 'Parámetros',
+  'collectionAnalysis.graphTab': 'Relaciones 3D',
+  'collectionAnalysis.graphLoading': 'Armando el grafo…',
+  'collectionAnalysis.graphError': 'No se pudo armar el grafo de relaciones.',
+  'collectionAnalysis.graphEmpty':
+    'Todavía no hay relaciones. Se extraen en Configuración → Lotes, con el paso de relaciones.',
+  'collectionAnalysis.graphSummary':
+    '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla.',
+  'collectionAnalysis.graphHidden': 'Se ocultan {count} nombres con pocas relaciones.',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
     'No hay texto extraído en esta colección. Ejecutá OCR o transcripción en los documentos.',
@@ -4395,6 +4403,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.tabsAria': 'Analysis views',
   'collectionAnalysis.vizTab': 'Visualization',
   'collectionAnalysis.settingsTab': 'Settings',
+  'collectionAnalysis.graphTab': '3D relations',
+  'collectionAnalysis.graphLoading': 'Building the graph…',
+  'collectionAnalysis.graphError': 'The relation graph could not be built.',
+  'collectionAnalysis.graphEmpty':
+    'No relations yet. They are extracted in Settings → Batch, with the relations step.',
+  'collectionAnalysis.graphSummary':
+    '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it.',
+  'collectionAnalysis.graphHidden': '{count} names with few relations are hidden.',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':
     'There is no extracted text in this collection. Run OCR or transcription on the documents.',

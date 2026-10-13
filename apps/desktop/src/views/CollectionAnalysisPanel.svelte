@@ -26,6 +26,7 @@
     type CollectionAnalysisSettings,
   } from '$lib/analysis-settings'
   import { Panel, Button, TabList, TabButton, IconButton, ActionIcon } from '@entropia/ui'
+  import RelationGraph3D from '../components/RelationGraph3D.svelte'
 
   let { collectionId, refreshToken }: { collectionId: string; refreshToken: number } = $props()
 
@@ -40,7 +41,7 @@
   let frequencies = $state<WordFrequency[]>([])
   let settings = $state<CollectionAnalysisSettings>(defaultAnalysisSettings())
   let stopwordsInput = $state('')
-  let activeTab = $state<'viz' | 'settings'>('viz')
+  let activeTab = $state<'viz' | 'graph' | 'settings'>('viz')
 
   const fetchGuard = new LatestRequestGuard()
   const computeGuard = new LatestRequestGuard()
@@ -288,6 +289,15 @@
       {translate('collectionAnalysis.vizTab')}
     </TabButton>
     <TabButton
+      active={activeTab === 'graph'}
+      class="analysis-panel-tab"
+      onclick={() => {
+        activeTab = 'graph'
+      }}
+    >
+      {translate('collectionAnalysis.graphTab')}
+    </TabButton>
+    <TabButton
       active={activeTab === 'settings'}
       class="analysis-panel-tab"
       onclick={() => {
@@ -433,6 +443,10 @@
           </svg>
         </section>
       {/if}
+    </div>
+
+    <div class="analysis-pane" class:is-hidden={activeTab !== 'graph'}>
+      <RelationGraph3D {collectionId} {refreshToken} active={activeTab === 'graph'} />
     </div>
 
     <div class="analysis-pane settings-pane" class:is-hidden={activeTab !== 'settings'}>
