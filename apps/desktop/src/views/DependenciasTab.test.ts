@@ -230,6 +230,27 @@ describe('DependenciasTab', () => {
     for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
   })
 
+  // A failed registration used to abandon the listeners that had already
+  // landed: the sequential array literal never completed, so nothing called
+  // their unlisten (same leak class as the destroy race above).
+  it('releases the listeners already registered and shows a banner when a later registration fails', async () => {
+    const unlistens: Array<ReturnType<typeof vi.fn>> = []
+    depsMocks.listen.mockImplementation(async (name: string) => {
+      if (name === 'embedding:download_progress') throw new Error('listen failed')
+      const unlisten = vi.fn()
+      unlistens.push(unlisten)
+      return unlisten
+    })
+
+    render(DependenciasTab)
+
+    await waitFor(() => {
+      expect(unlistens).toHaveLength(3)
+      for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+    })
+    expect(await screen.findByText(/Error al registrar listeners/)).toBeInTheDocument()
+  })
+
   it('registers no listener when the tab is gone before the initial refresh settles', async () => {
     let resolveCheck: ((results: unknown[]) => void) | undefined
     depsMocks.checkAllDeps.mockImplementation(
