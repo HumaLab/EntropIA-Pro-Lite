@@ -104,6 +104,7 @@
   } from '$lib/reranker'
   import { isCriticalMissing, onCriticalMissingChange } from '$lib/deps'
   import { LOCAL_ML } from '$lib/capabilities'
+  import { registerListeners } from '$lib/register-listeners'
   import { PRODUCT_NAME } from '$lib/product'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import {
@@ -432,10 +433,10 @@
   let localModelSourceUrl = $state('')
   let localModelFilename = $state('')
   let downloadUnlisteners: UnlistenFn[] = []
-  // The download listeners register one `await listen(...)` at a time,
-  // starting synchronously in onMount (no earlier await to bail after). A
-  // view destroyed meanwhile releases the ones that land afterwards, and
-  // every handler ignores what Tauri still delivers in between (drop-dup fix).
+  // The download listeners register one at a time through the shared
+  // helper, starting in onMount with no earlier await to bail after. A view
+  // destroyed meanwhile releases the ones that land afterwards, and every
+  // handler ignores what Tauri still delivers in between (drop-dup fix).
   let destroyed = false
   let embeddingDownloading = $state(false)
   let embeddingDownloadPct = $state(0)
@@ -689,74 +690,91 @@
     // Listen to local model download events (Pro-only local inference wiring).
     // These events never fire under the API-only build — skip the dead listeners.
     if (!LOCAL_ML) return
-    const registered: UnlistenFn[] = [
-      await listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
-        if (destroyed) return
-        downloading = true
-        downloadPct = event.payload.pct
-        downloadError = null
-      }),
-      await listen<LlmDownloadCompletePayload>('llm:download_complete', async () => {
-        if (destroyed) return
-        downloading = false
-        downloadPct = 100
-        downloadError = null
-        localModel = await llmLocalModelInfo().catch(() => null)
-        localAvailable = localModel?.available ?? false
-      }),
-      await listen<LlmDownloadErrorPayload>('llm:download_error', (event) => {
-        if (destroyed) return
-        downloading = false
-        downloadPct = 0
-        downloadError = event.payload.error
-      }),
-      await listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
-        if (destroyed) return
-        embeddingDownloading = true
-        embeddingDownloadPct = event.payload.pct
-        embeddingDownloadFile = event.payload.file
-        embeddingDownloadError = null
-      }),
-      await listen<EmbeddingDownloadCompletePayload>('embedding:download_complete', async () => {
-        if (destroyed) return
-        embeddingDownloading = false
-        embeddingDownloadPct = 100
-        embeddingDownloadFile = ''
-        embeddingDownloadError = null
-        localEmbeddingModel = await embeddingLocalModelInfo().catch(() => null)
-      }),
-      await listen<EmbeddingDownloadErrorPayload>('embedding:download_error', (event) => {
-        if (destroyed) return
-        embeddingDownloading = false
-        embeddingDownloadPct = 0
-        embeddingDownloadFile = ''
-        embeddingDownloadError = event.payload.error
-      }),
-      await listen<RerankerDownloadProgressPayload>('reranker:download_progress', (event) => {
-        if (destroyed) return
-        rerankerDownloading = true
-        rerankerDownloadPct = event.payload.pct
-        rerankerDownloadFile = event.payload.file
-        rerankerDownloadError = null
-      }),
-      await listen<RerankerDownloadCompletePayload>('reranker:download_complete', async () => {
-        if (destroyed) return
-        rerankerDownloading = false
-        rerankerDownloadPct = 100
-        rerankerDownloadFile = ''
-        rerankerDownloadError = null
-        localRerankerModel = await rerankerLocalModelInfo().catch(() => null)
-      }),
-      await listen<RerankerDownloadErrorPayload>('reranker:download_error', (event) => {
-        if (destroyed) return
-        rerankerDownloading = false
-        rerankerDownloadPct = 0
-        rerankerDownloadFile = ''
-        rerankerDownloadError = event.payload.error
-      }),
-    ]
-    if (destroyed) registered.forEach((fn) => fn())
-    else downloadUnlisteners.push(...registered)
+    try {
+      const registered = await registerListeners(
+        [
+          () =>
+            listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
+              if (destroyed) return
+              downloading = true
+              downloadPct = event.payload.pct
+              downloadError = null
+            }),
+          () =>
+            listen<LlmDownloadCompletePayload>('llm:download_complete', async () => {
+              if (destroyed) return
+              downloading = false
+              downloadPct = 100
+              downloadError = null
+              localModel = await llmLocalModelInfo().catch(() => null)
+              localAvailable = localModel?.available ?? false
+            }),
+          () =>
+            listen<LlmDownloadErrorPayload>('llm:download_error', (event) => {
+              if (destroyed) return
+              downloading = false
+              downloadPct = 0
+              downloadError = event.payload.error
+            }),
+          () =>
+            listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
+              if (destroyed) return
+              embeddingDownloading = true
+              embeddingDownloadPct = event.payload.pct
+              embeddingDownloadFile = event.payload.file
+              embeddingDownloadError = null
+            }),
+          () =>
+            listen<EmbeddingDownloadCompletePayload>('embedding:download_complete', async () => {
+              if (destroyed) return
+              embeddingDownloading = false
+              embeddingDownloadPct = 100
+              embeddingDownloadFile = ''
+              embeddingDownloadError = null
+              localEmbeddingModel = await embeddingLocalModelInfo().catch(() => null)
+            }),
+          () =>
+            listen<EmbeddingDownloadErrorPayload>('embedding:download_error', (event) => {
+              if (destroyed) return
+              embeddingDownloading = false
+              embeddingDownloadPct = 0
+              embeddingDownloadFile = ''
+              embeddingDownloadError = event.payload.error
+            }),
+          () =>
+            listen<RerankerDownloadProgressPayload>('reranker:download_progress', (event) => {
+              if (destroyed) return
+              rerankerDownloading = true
+              rerankerDownloadPct = event.payload.pct
+              rerankerDownloadFile = event.payload.file
+              rerankerDownloadError = null
+            }),
+          () =>
+            listen<RerankerDownloadCompletePayload>('reranker:download_complete', async () => {
+              if (destroyed) return
+              rerankerDownloading = false
+              rerankerDownloadPct = 100
+              rerankerDownloadFile = ''
+              rerankerDownloadError = null
+              localRerankerModel = await rerankerLocalModelInfo().catch(() => null)
+            }),
+          () =>
+            listen<RerankerDownloadErrorPayload>('reranker:download_error', (event) => {
+              if (destroyed) return
+              rerankerDownloading = false
+              rerankerDownloadPct = 0
+              rerankerDownloadFile = ''
+              rerankerDownloadError = event.payload.error
+            }),
+        ],
+        () => destroyed
+      )
+      downloadUnlisteners.push(...registered)
+    } catch (e) {
+      // Best-effort wiring: the helper already released what had landed, and
+      // the view stays usable without download feedback.
+      console.error('[SettingsView] Failed to register download listeners:', e)
+    }
   }
 
   function maskKey(key: string, prefixLength = 4): string {

@@ -748,7 +748,14 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     private-use placeholders before strong/emphasis, then restored (labels keep emphasis,
     destinations and code stay literal; placeholder chars stripped from input). 6 tests RED
     first; callers' 13 test files 217/217. RDD `review-ce5e44b8de150100` approved, no findings.
-  - [ ] 8.3 — shared `registerDownloadListeners()` with partial-failure cleanup (Q-03)
+  - [x] 8.3 — shared listener registration with partial-failure cleanup (Q-03). Branch
+    `fix/p8-3-download-listeners`, commit `bf4a73a1`. New `$lib/register-listeners`
+    (`registerListeners(factories, isCancelled)`: sequential; on a rejection releases what landed,
+    guarded, then rethrows; cancelled → release all, return []). SettingsView (9 events) and
+    DependenciasTab (11) use it; handlers unchanged (`git diff -w`). A registration failure no
+    longer escapes onMount: SettingsView logs, DependenciasTab shows its error banner. Helper +
+    one regression test per component RED first; Pro 118/5 skipped, Lite 108/15. RDD
+    `review-d8f6db4d8b1399f0` approved, no findings.
   - [ ] 8.4 — `sanitizeNoteHtml` escapes when there is no DOM (Q-04)
   - [ ] 8.5 — `validate_external_url` via `url::Url` (S-07)
   - [ ] 8.6 — untrack `docs/` and the unused MSIX (R-01)
