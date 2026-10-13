@@ -123,6 +123,7 @@
   import BatchProcessingTab from './BatchProcessingTab.svelte'
   import AppearanceTab from './AppearanceTab.svelte'
   import BackupTab from './BackupTab.svelte'
+  import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
 
@@ -2143,6 +2144,8 @@
             </div>
           </section>
         </Card>
+
+        <VercelFallbackCard />
 
         {#if LOCAL_ML}
           <Card>

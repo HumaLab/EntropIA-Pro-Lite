@@ -1,10 +1,40 @@
-use std::{io::Cursor, path::Path, time::Duration};
+use std::{io::Cursor, path::Path, sync::RwLock, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 
 use super::generation::OpenRouterGenerationParams;
+
+// ---------------------------------------------------------------------------
+// Fallback provider (T-45)
+// ---------------------------------------------------------------------------
+
+/// Vercel AI Gateway: OpenAI-compatible, with the same `provider/model` ids.
+const VERCEL_AI_GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1/chat/completions";
+
+/// The Vercel AI Gateway key, when the user stored one. Kept here because the
+/// clients are built in many places with only the OpenRouter key; settings
+/// refresh it on startup and whenever the key is saved or deleted.
+static FALLBACK_KEY: RwLock<Option<String>> = RwLock::new(None);
+
+pub fn set_fallback_key(key: Option<String>) {
+    let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    *FALLBACK_KEY.write().unwrap_or_else(|p| p.into_inner()) = key;
+}
+
+fn fallback_key() -> Option<String> {
+    FALLBACK_KEY
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+/// OpenRouter-only variant suffixes (`:free`, `:nitro`) mean nothing to the
+/// gateway; the `provider/model` part is shared.
+fn fallback_model(model: &str) -> String {
+    model.split(':').next().unwrap_or(model).to_string()
+}
 
 // ---------------------------------------------------------------------------
 // OpenRouter API types
@@ -93,6 +123,19 @@ impl RequestFailure {
         match self {
             Self::Transport { .. } => true,
             Self::Status { status, .. } => status.is_server_error(),
+            Self::Payload(_) => false,
+        }
+    }
+
+    /// Whether OpenRouter itself is the problem, so another provider may
+    /// answer: unreachable, 5xx, rate-limited (429) or out of credits (402).
+    /// Other 4xx (bad model, prompt too long) would fail there too.
+    fn should_fall_back(&self) -> bool {
+        match self {
+            Self::Transport { .. } => true,
+            Self::Status { status, .. } => {
+                status.is_server_error() || matches!(status.as_u16(), 402 | 429)
+            }
             Self::Payload(_) => false,
         }
     }
@@ -294,6 +337,8 @@ fn normalize_image_as_bounded_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
 // OpenRouter client
 // ---------------------------------------------------------------------------
 
+const OPENROUTER_CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+
 pub struct OpenRouterClient {
     client: reqwest::Client,
     api_key: String,
@@ -348,16 +393,50 @@ impl OpenRouterClient {
             .await
     }
 
-    /// Sends the request, retrying at most once and only for failures that are
-    /// safe to repeat (see [`RequestFailure::is_retryable`]).
+    /// When OpenRouter fails for reasons of its own and a Vercel AI Gateway key
+    /// is stored, the same request goes there once (T-45).
     async fn send_request(&self, request: ChatCompletionRequest) -> Result<String, String> {
+        let failure = match self.send_to_openrouter(&request).await {
+            Ok(answer) => return Ok(answer),
+            Err(failure) => failure,
+        };
+        let Some(key) = fallback_key().filter(|_| failure.should_fall_back()) else {
+            return Err(failure.message());
+        };
+        log::warn!(
+            target: "openrouter",
+            "OpenRouter failed ({}); trying the Vercel AI Gateway",
+            failure.message()
+        );
+        let mut fallback = request;
+        fallback.model = fallback_model(&fallback.model);
+        self.try_send_request(VERCEL_AI_GATEWAY_URL, &key, &fallback)
+            .await
+            .map_err(|second| {
+                format!(
+                    "{} — Vercel AI Gateway also failed: {}",
+                    failure.message(),
+                    second.message()
+                )
+            })
+    }
+
+    /// Sends the request to OpenRouter, retrying at most once and only for
+    /// failures that are safe to repeat (see [`RequestFailure::is_retryable`]).
+    async fn send_to_openrouter(
+        &self,
+        request: &ChatCompletionRequest,
+    ) -> Result<String, RequestFailure> {
         let mut attempt = 1;
         loop {
-            match self.try_send_request(&request).await {
+            match self
+                .try_send_request(OPENROUTER_CHAT_URL, &self.api_key, request)
+                .await
+            {
                 Ok(answer) => return Ok(answer),
                 Err(failure) => {
                     if attempt >= Self::MAX_ATTEMPTS || !failure.is_retryable() {
-                        return Err(failure.message());
+                        return Err(failure);
                     }
                     log::warn!(
                         target: "openrouter",
@@ -372,12 +451,14 @@ impl OpenRouterClient {
 
     async fn try_send_request(
         &self,
+        url: &str,
+        api_key: &str,
         request: &ChatCompletionRequest,
     ) -> Result<String, RequestFailure> {
         let response = self
             .client
-            .post("https://openrouter.ai/api/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .post(url)
+            .header("Authorization", format!("Bearer {api_key}"))
             .header("HTTP-Referer", "https://hlab.com.ar/")
             .header("X-Title", "EntropIA")
             .json(request)
@@ -560,6 +641,40 @@ mod tests {
         assert!(!context_too_long.is_retryable());
         // The completion may already have been billed; never send it twice.
         assert!(!payload.is_retryable());
+    }
+
+    #[test]
+    fn only_openrouter_side_failures_fall_back_to_vercel() {
+        let status = |code: u16| RequestFailure::Status {
+            status: reqwest::StatusCode::from_u16(code).unwrap(),
+            body: String::new(),
+        };
+        let transport = RequestFailure::Transport {
+            message: "dns".to_string(),
+            timeout: false,
+        };
+        assert!(transport.should_fall_back());
+        assert!(status(502).should_fall_back());
+        assert!(status(429).should_fall_back());
+        assert!(status(402).should_fall_back());
+        assert!(!status(400).should_fall_back());
+        assert!(!status(401).should_fall_back());
+        assert!(!RequestFailure::Payload("x".to_string()).should_fall_back());
+    }
+
+    #[test]
+    fn the_fallback_model_drops_openrouter_variants() {
+        assert_eq!(fallback_model("openai/gpt-4o-mini"), "openai/gpt-4o-mini");
+        assert_eq!(
+            fallback_model("meta-llama/llama-3.3-70b:free"),
+            "meta-llama/llama-3.3-70b"
+        );
+    }
+
+    #[test]
+    fn a_blank_fallback_key_is_no_key() {
+        set_fallback_key(Some("  ".to_string()));
+        assert_eq!(fallback_key(), None);
     }
 
     #[test]
