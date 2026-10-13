@@ -159,11 +159,9 @@ export function sanitizeNoteHtml(content: string | null | undefined): string {
   const raw = content?.trim() ?? ''
   if (!raw) return ''
 
-  if (typeof document === 'undefined') {
-    return isLegacyPlainTextNoteContent(raw)
-      ? convertLegacyNoteTextToHtml(raw)
-      : wrapInlineOnlyHtml(raw)
-  }
+  // Without a DOM the allowlist below cannot run, so markup is shown as the
+  // text it is: escaped and paragraphed, never passed through raw.
+  if (typeof document === 'undefined') return convertLegacyNoteTextToHtml(raw)
 
   const source = createFragmentFromHtml(raw)
   if (!source) return ''
