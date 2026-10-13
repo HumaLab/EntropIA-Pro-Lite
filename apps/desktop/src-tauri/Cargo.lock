@@ -1537,7 +1537,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokenizers",
  "tokio",
  "url",

@@ -29,7 +29,7 @@ rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 fs2 = "0.4"
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-fs = "2.6.0"
-thiserror = "1"
+thiserror = "2"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
 pdf-extract = "0.12"
 lopdf = "0.45"
