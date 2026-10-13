@@ -40,8 +40,7 @@ export type ValidationFailure = {
 export type ValidationResult = { ok: true } | ValidationFailure
 
 export type ParseResult =
-  | ({ ok: true } & { document: CanonicalDocument; repair: RepairReport })
-  | ValidationFailure
+  ({ ok: true } & { document: CanonicalDocument; repair: RepairReport }) | ValidationFailure
 
 /** A fresh manuscript: one empty paragraph, at the current schema version. */
 export function emptyDocument(): CanonicalDocument {
