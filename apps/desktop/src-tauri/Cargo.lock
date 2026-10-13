@@ -1517,7 +1517,7 @@ dependencies = [
  "llama-cpp-2",
  "log",
  "lopdf 0.45.0",
- "md-5 0.10.6",
+ "md-5 0.11.0",
  "ndarray",
  "ocr-rs",
  "once_cell",
