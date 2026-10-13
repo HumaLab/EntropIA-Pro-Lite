@@ -1799,7 +1799,7 @@ mod tests {
             std::fs::create_dir_all(parent).expect("create parent");
         }
         std::fs::write(&path, bytes).expect("write file");
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     #[tokio::test]

@@ -1357,7 +1357,7 @@ impl Executor for BibliographySyncExecutor {
                 unit_key: format!("page:{start}"),
                 input_fingerprint: task.input_fingerprint.clone(),
                 contract_hash: task.contract_hash.clone(),
-                payload_checksum: format!("{:x}", Sha256::digest(payload.as_bytes())),
+                payload_checksum: hex::encode(Sha256::digest(payload.as_bytes())),
                 payload,
             };
             match persist_page(ctx, task, &run, &checkpoint, start, next_start, &page) {
@@ -2369,7 +2369,7 @@ impl BibliographyProfileExecutor {
                     digest.update(staged[index].input_hash.as_bytes());
                     digest.update([0_u8]);
                 }
-                format!("{:x}", digest.finalize())
+                hex::encode(digest.finalize())
             };
             let key = format!(
                 "chunk-wave:{}:{}",
@@ -2662,7 +2662,7 @@ pub struct BibliographyExtractComputeOutput {
 }
 
 fn extraction_text_hash(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    hex::encode(Sha256::digest(text.as_bytes()))
 }
 
 /// The verdict over the text a reader gets: GLM-OCR answers tables as HTML,

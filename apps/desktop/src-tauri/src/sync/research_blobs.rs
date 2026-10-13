@@ -213,7 +213,7 @@ pub(crate) async fn ensure_research_report_installed<A: SyncApi>(
         .await
         .map_err(|error| pending_from_sync("blob GET", error))?;
     let bytes = read_bounded_response(response, manifest.size, max_blob_bytes).await?;
-    if format!("{:x}", Sha256::digest(&bytes)) != manifest.sha256 {
+    if hex::encode(Sha256::digest(&bytes)) != manifest.sha256 {
         return Err(ResearchBlobPending::new(
             ResearchBlobPendingKind::DownloadInvalid,
             format!(
@@ -263,8 +263,7 @@ where
     F: FnOnce(&Path, &Path),
 {
     validate_report_manifest(job_id, manifest, None)?;
-    if bytes.len() as u64 != manifest.size
-        || format!("{:x}", Sha256::digest(bytes)) != manifest.sha256
+    if bytes.len() as u64 != manifest.size || hex::encode(Sha256::digest(bytes)) != manifest.sha256
     {
         return Err(ResearchBlobPending::new(
             ResearchBlobPendingKind::DownloadInvalid,
@@ -463,7 +462,7 @@ fn prove_local_report(
             ),
         ));
     }
-    if format!("{:x}", Sha256::digest(&bytes)) != manifest.sha256 {
+    if hex::encode(Sha256::digest(&bytes)) != manifest.sha256 {
         return Err(ResearchBlobPending::new(
             ResearchBlobPendingKind::LocalContentChanged,
             format!(
@@ -509,8 +508,7 @@ fn local_report_state(
             )))
         }
     };
-    if bytes.len() as u64 == manifest.size
-        && format!("{:x}", Sha256::digest(&bytes)) == manifest.sha256
+    if bytes.len() as u64 == manifest.size && hex::encode(Sha256::digest(&bytes)) == manifest.sha256
     {
         Ok(LocalReportState::Exact)
     } else {

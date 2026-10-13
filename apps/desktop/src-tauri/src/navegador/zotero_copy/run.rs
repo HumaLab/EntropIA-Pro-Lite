@@ -1125,7 +1125,7 @@ mod tests {
         let dir = data.path().join("web-captures").join("src1");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("cap-pdf.pdf"), PDF).unwrap();
-        let sha = format!("{:x}", Sha256::digest(PDF));
+        let sha = hex::encode(Sha256::digest(PDF));
         conn.execute(
             "INSERT INTO web_captures (id, web_source_id, accessed_at, final_url, kind, mime_type, rel_path, sha256, hash_of, size_bytes, title, created_at)
              VALUES ('cap-pdf', 'src1', '2026-10-02T09:30:00Z', 'https://a.test/x.pdf', 'pdf', 'application/pdf', 'web-captures/src1/cap-pdf.pdf', ?1, 'pdf', ?2, NULL, 1)",
@@ -1356,7 +1356,7 @@ mod tests {
         let env = env();
         let row = store::request(&env.conn, "src1", Some("cap-pdf"), &personal()).unwrap();
         let mut port = FakePort::open();
-        let sha = format!("{:x}", Sha256::digest(PDF));
+        let sha = hex::encode(Sha256::digest(PDF));
         port.children = vec![json!({"data": {"itemType": "attachment",
             "title": format!("Captura web {}.pdf", &sha[..8])}})];
         *port.finds.borrow_mut() = VecDeque::from([Ok(vec![hit("OLDKEY22", "webpage")])]);
@@ -1637,7 +1637,7 @@ mod tests {
     fn a_pdf_already_attached_is_recognised_up_front() {
         let env = env();
         let mut port = FakePort::open();
-        let sha = format!("{:x}", Sha256::digest(PDF));
+        let sha = hex::encode(Sha256::digest(PDF));
         port.children = vec![json!({"data": {"title": format!("Captura web {}.pdf", &sha[..8])}})];
         *port.finds.borrow_mut() = VecDeque::from([Ok(vec![hit("OLDKEY22", "webpage")])]);
         assert_eq!(status(&env, &port, Some("cap-pdf")).pdf, "already_there");
@@ -2236,7 +2236,7 @@ mod tests {
     fn a_pdf_zotero_shows_locally_is_not_looked_up_again() {
         let web = pdf_web();
         let mut port = existing_port();
-        let sha = format!("{:x}", Sha256::digest(PDF));
+        let sha = hex::encode(Sha256::digest(PDF));
         port.children = vec![json!({"data": {"title": attachment_title(&sha)}})];
         let (_env, done) = pdf_copy(&web, &port);
         let detail = done.detail.unwrap();
@@ -2251,7 +2251,7 @@ mod tests {
     /// does not.
     fn add_pdf_capture(env: &Env, id: &str, accessed_at: &str, bytes: Option<&[u8]>) -> String {
         let content = bytes.unwrap_or(b"%PDF-1.4 missing");
-        let sha = format!("{:x}", Sha256::digest(content));
+        let sha = hex::encode(Sha256::digest(content));
         let rel = format!("web-captures/src1/{id}.pdf");
         if let Some(bytes) = bytes {
             std::fs::write(env.data.path().join(&rel), bytes).unwrap();

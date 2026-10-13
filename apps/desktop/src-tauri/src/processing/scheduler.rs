@@ -120,7 +120,7 @@ impl ExecCtx {
         ).optional().map_err(|e| e.to_string())?;
         drop(conn);
         if let Some((payload, checksum)) = saved {
-            if format!("{:x}", Sha256::digest(payload.as_bytes())) == checksum {
+            if hex::encode(Sha256::digest(payload.as_bytes())) == checksum {
                 if let Ok(value) = serde_json::from_str(&payload) {
                     return Ok(value);
                 }
@@ -132,7 +132,7 @@ impl ExecCtx {
             unit_key: key.to_string(),
             input_fingerprint: task.input_fingerprint.clone(),
             contract_hash: task.contract_hash.clone(),
-            payload_checksum: format!("{:x}", Sha256::digest(payload.as_bytes())),
+            payload_checksum: hex::encode(Sha256::digest(payload.as_bytes())),
             payload,
         };
         self.checkpoint(task, &checkpoint)?;

@@ -452,7 +452,7 @@ pub fn image_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let path_hash = Sha256::digest(asset_path.as_bytes());
-    format!("image-{asset_id}-{path_hash:x}.png")
+    format!("image-{asset_id}-{}.png", hex::encode(path_hash))
 }
 
 /// Decode one image, shrink it, and write the PNG thumbnail.

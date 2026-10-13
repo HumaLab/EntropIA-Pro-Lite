@@ -502,13 +502,13 @@ fn report_bytes() -> Vec<u8> {
 fn manifest_for(bytes: &[u8]) -> Value {
     json!({
         "rel_path": "report.md",
-        "sha256": format!("{:x}", Sha256::digest(bytes)),
+        "sha256": hex::encode(Sha256::digest(bytes)),
         "size": bytes.len()
     })
 }
 
 fn hash_of(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn queued_ids(conn: &Connection) -> Vec<String> {
