@@ -86,6 +86,46 @@ describe('renderMarkdown', () => {
     expect(out).toBe('<p>click</p>')
   })
 
+  describe('inline spans emphasis must not reach (Q-02)', () => {
+    const anchor = (href: string, label: string) =>
+      `<a href="${href}" rel="noopener noreferrer" target="_blank">${label}</a>`
+
+    it('keeps asterisks inside a link destination', () => {
+      expect(renderMarkdown('[x](https://a.com/*b*)')).toBe(
+        `<p>${anchor('https://a.com/*b*', 'x')}</p>`
+      )
+    })
+
+    it('keeps underscores inside a link destination', () => {
+      expect(renderMarkdown('[x](https://a.com/__b__)')).toBe(
+        `<p>${anchor('https://a.com/__b__', 'x')}</p>`
+      )
+    })
+
+    it('keeps Markdown inside inline code literal', () => {
+      expect(renderMarkdown('`**no**`')).toBe('<p><code>**no**</code></p>')
+      expect(renderMarkdown('`__init__` y `*args`')).toBe(
+        '<p><code>__init__</code> y <code>*args</code></p>'
+      )
+    })
+
+    it('does not turn a link written inside code into an anchor', () => {
+      expect(renderMarkdown('`[a](https://x.com)`')).toBe('<p><code>[a](https://x.com)</code></p>')
+    })
+
+    it('still formats a link label and the text around it', () => {
+      expect(renderMarkdown('*a* [**b**](https://a.com/*c*) **d** `e`')).toBe(
+        `<p><em>a</em> ${anchor('https://a.com/*c*', '<strong>b</strong>')} <strong>d</strong> <code>e</code></p>`
+      )
+    })
+
+    it('formats the label of a neutralized link like plain text', () => {
+      expect(renderMarkdown('[**click**](javascript:alert(1))')).toBe(
+        '<p><strong>click</strong></p>'
+      )
+    })
+  })
+
   it('separates a list and a following paragraph', () => {
     const out = renderMarkdown('- item\n\nTexto final')
     expect(out).toBe('<ul><li>item</li></ul><p>Texto final</p>')
