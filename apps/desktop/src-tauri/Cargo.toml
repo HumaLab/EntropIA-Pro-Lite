@@ -66,6 +66,8 @@ hayagriva = { version = "0.10.1", features = ["archive", "csl-json"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls", "rustls-tls-native-roots"] }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 urlencoding = "2"
+# Already in the tree through reqwest/tauri; direct for validate_external_url.
+url = "2.5"
 httpdate = "1"
 sha2 = "0.10"
 md-5 = "0.10"
