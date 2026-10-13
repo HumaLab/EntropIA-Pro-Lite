@@ -69,7 +69,7 @@ urlencoding = "2"
 # Already in the tree through reqwest/tauri; direct for validate_external_url.
 url = "2.5"
 httpdate = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 md-5 = "0.11"
 base64 = "0.23"
 ed25519-dalek = { version = "2", optional = true }
