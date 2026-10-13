@@ -14,7 +14,7 @@
 //! For every PDF attachment with stored `bibliographic_page_texts` rows the
 //! measurement resolves the file with the app's own resolver, reads the
 //! stored-`rich` pages with the part-A PDFium reader, and reports how the
-//! detector splits them (rule 1 vs rule 2), plus how many STORED page texts
+//! detector splits them (rules 1-4), plus how many STORED page texts
 //! it flags — the size of the reprocess candidate list. Full page texts
 //! never leave the process; samples carry at most 200 characters.
 
@@ -100,7 +100,7 @@ impl Rng {
 struct FlaggedPage {
     attachment_id: String,
     page: i64,
-    rule: &'static str,
+    rule: String,
     preview: String,
 }
 
@@ -133,10 +133,14 @@ fn measure_bibliography_detector_on_db_copy() {
     let mut rich_pages_with_pdfium_text = 0usize;
     let mut pdfium_rule1 = 0usize;
     let mut pdfium_rule2 = 0usize;
+    let mut pdfium_rule3 = 0usize;
+    let mut pdfium_rule4 = 0usize;
     let mut pdfium_flagged = 0usize;
     let mut stored_flagged = 0usize;
     let mut stored_rule1 = 0usize;
     let mut stored_rule2 = 0usize;
+    let mut stored_rule3 = 0usize;
+    let mut stored_rule4 = 0usize;
     let mut stored_flagged_rich = 0usize;
     let mut stored_flagged_attachments: HashSet<String> = HashSet::new();
     let mut pdfium_flagged_attachments: HashSet<String> = HashSet::new();
@@ -171,7 +175,17 @@ fn measure_bibliography_detector_on_db_copy() {
             if flags.old_ocr_noise {
                 stored_rule2 += 1;
             }
-            if flags.glued_words || flags.old_ocr_noise {
+            if flags.punctuation_soup {
+                stored_rule3 += 1;
+            }
+            if flags.shredded_text {
+                stored_rule4 += 1;
+            }
+            if flags.glued_words
+                || flags.old_ocr_noise
+                || flags.punctuation_soup
+                || flags.shredded_text
+            {
                 stored_flagged += 1;
                 if page.quality == "rich" {
                     stored_flagged_rich += 1;
@@ -222,22 +236,27 @@ fn measure_bibliography_detector_on_db_copy() {
             };
             rich_pages_with_pdfium_text += 1;
             let flags = garbled_bibliography_flags(&text);
-            let mut rule = "";
+            let mut rules: Vec<&str> = Vec::new();
             if flags.glued_words {
                 pdfium_rule1 += 1;
-                rule = "rule 1 (glued words)";
+                rules.push("rule 1 (glued words)");
             }
             if flags.old_ocr_noise {
                 pdfium_rule2 += 1;
-                if rule.is_empty() {
-                    rule = "rule 2 (old OCR noise)";
-                } else {
-                    rule = "rule 1 + rule 2";
-                }
+                rules.push("rule 2 (old OCR noise)");
             }
-            if rule.is_empty() {
+            if flags.punctuation_soup {
+                pdfium_rule3 += 1;
+                rules.push("rule 3 (punctuation soup)");
+            }
+            if flags.shredded_text {
+                pdfium_rule4 += 1;
+                rules.push("rule 4 (shredded text)");
+            }
+            if rules.is_empty() {
                 continue;
             }
+            let rule = rules.join(" + ");
             pdfium_flagged += 1;
             pdfium_flagged_attachments.insert(attachment_id.clone());
             *pdfium_flagged_per_attachment
@@ -246,7 +265,7 @@ fn measure_bibliography_detector_on_db_copy() {
             all_flagged.push(FlaggedPage {
                 attachment_id: attachment_id.clone(),
                 page: i64::from(number),
-                rule,
+                rule: rule.clone(),
                 preview: text.chars().take(200).collect(),
             });
             // Reservoir sampling keeps 30 pages of the flagged stream.
@@ -255,7 +274,7 @@ fn measure_bibliography_detector_on_db_copy() {
                 sample.push(FlaggedPage {
                     attachment_id: attachment_id.clone(),
                     page: i64::from(number),
-                    rule,
+                    rule: rule.clone(),
                     preview: text.chars().take(200).collect(),
                 });
             } else {
@@ -264,7 +283,7 @@ fn measure_bibliography_detector_on_db_copy() {
                     sample[slot] = FlaggedPage {
                         attachment_id: attachment_id.clone(),
                         page: i64::from(number),
-                        rule,
+                        rule: rule.clone(),
                         preview: text.chars().take(200).collect(),
                     };
                 }
@@ -291,8 +310,10 @@ fn measure_bibliography_detector_on_db_copy() {
     println!();
     println!("- flagged by rule 1 (glued words): {pdfium_rule1}");
     println!("- flagged by rule 2 (old OCR noise): {pdfium_rule2}");
+    println!("- flagged by rule 3 (punctuation soup): {pdfium_rule3}");
+    println!("- flagged by rule 4 (shredded text): {pdfium_rule4}");
     println!(
-        "- flagged by either rule: {pdfium_flagged} ({:.2} % of scanned)",
+        "- flagged by any rule: {pdfium_flagged} ({:.2} % of scanned)",
         pct(pdfium_flagged, rich_pages_with_pdfium_text)
     );
     println!(
@@ -325,8 +346,10 @@ fn measure_bibliography_detector_on_db_copy() {
     println!();
     println!("- flagged by rule 1 (glued words): {stored_rule1}");
     println!("- flagged by rule 2 (old OCR noise): {stored_rule2}");
+    println!("- flagged by rule 3 (punctuation soup): {stored_rule3}");
+    println!("- flagged by rule 4 (shredded text): {stored_rule4}");
     println!(
-        "- flagged by either rule: {stored_flagged} ({:.2} % of stored rows)",
+        "- flagged by any rule: {stored_flagged} ({:.2} % of stored rows)",
         pct(stored_flagged, pages_stored)
     );
     println!("- of those, stored quality `rich`: {stored_flagged_rich}");
