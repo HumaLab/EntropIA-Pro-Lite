@@ -2231,11 +2231,6 @@ describe('bibliographic embedding generations migration (0050)', () => {
     }
   }
 
-  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
-    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
-      Object.values
-    )
-
   it('registers 0050 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
     await applyMigrations(client)

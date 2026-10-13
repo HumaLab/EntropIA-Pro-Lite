@@ -8,8 +8,8 @@
     "tauri": "tauri",
     "tauri:dev:isolated": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build:isolated": "tauri build --config src-tauri/tauri.dev.conf.json",
-    "typecheck": "svelte-check --tsconfig ./tsconfig.json",
-    "lint": "eslint src",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "lint": "eslint src --max-warnings 0",
     "test": "vitest run"
   },
   "dependencies": {

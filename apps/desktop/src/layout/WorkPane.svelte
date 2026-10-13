@@ -32,10 +32,14 @@
 
   let { paneId }: { paneId: string } = $props()
 
+  // `paneId` is fixed for this instance's lifetime: AppShell keys each mounted
+  // WorkPane by its tab id, so a tab switch remounts it.
+  // svelte-ignore state_referenced_locally
   const nav = workspace.navigationFor(paneId)
   // One call per mounted WorkPane instance, at init — AppShell (Task 2.3)
   // keys each instance by its tab id, so a tab switch remounts WorkPane and
   // re-binds the context to the newly active tab.
+  // svelte-ignore state_referenced_locally
   setPaneNavigation(nav, paneId)
 
   // A webview-wide Tauri drop event (`onDragDropEvent`, Task 3.5) needs each

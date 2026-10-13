@@ -16,7 +16,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src --max-warnings 0",
     "test": "vitest run",
     "export-schema": "node scripts/export-schema.mjs",
     "export-schema-canonical": "node scripts/export-schema-canonical.mjs",

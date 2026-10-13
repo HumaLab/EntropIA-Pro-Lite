@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 const { workspaceRef } = vi.hoisted(() => ({
   workspaceRef: {
@@ -13,9 +13,9 @@ vi.mock('$lib/workspace', () => ({
 import { CREATE_COLLECTION_EVENT, requestCreateCollection } from './document-explorer'
 
 describe('requestCreateCollection', () => {
-  // `any`: vi.spyOn's overload resolution does not narrow cleanly through a
-  // pre-declared ReturnType, and the project's lint config allows `any` here.
-  let dispatchSpy: any
+  // Typed spy: `MockInstance<typeof window.dispatchEvent>` records the real
+  // `Event` signature, so the call reads below need no escaping cast.
+  let dispatchSpy: MockInstance<typeof window.dispatchEvent>
 
   beforeEach(() => {
     workspaceRef.navigateActive.mockReset()

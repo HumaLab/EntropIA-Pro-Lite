@@ -256,7 +256,7 @@ describe('capture script: robustness', () => {
           toString: () => {
             throw new Error('nested')
           },
-        } // eslint-disable-line no-throw-literal
+        }
       },
     })
     try {

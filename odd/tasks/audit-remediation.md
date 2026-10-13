@@ -728,7 +728,31 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     `runner.temp`, step outputs; none externally controllable) are a Phase 8 follow-up. RDD
     `review-44d52487155f2baa` approved; advisories (test parser is dense, assumes 10-space
     script indentation) accepted: a layout change fails the test loudly, never silently.
-- [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
+- [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06). Started
+  2026-10-12 (user: "arrancá y no pares hasta terminar"). One stacked branch/PR per unit on 7.5.
+  - User decisions (2026-10-12): `docs/` is NOT public — untrack it (`git rm -r --cached`, local
+    copy kept, published history not rewritten); `artifacts/msix/...1.0.5.0.msix` leaves the repo
+    (`git rm --cached`, local copy kept) and its `binary-provenance.json` entry goes.
+  - [x] 8.1 — Svelte/ESLint warnings (Q-01). Branch `fix/p8-1-warnings`.
+    - `cd0e692c`: desktop svelte-check had 1 ERROR (`runtime-packaging.test.ts:325`, from 6.4b
+      `83a3b999`), so CI's Typecheck failed from PR #69 on; capture narrowed.
+    - `d7d2be1f`: `reducedMotion` in `EntropicConstellation.svelte` is `$state` (real bug: the
+      motion class never dropped for reduced-motion users; regression test RED first); 7
+      deliberate init-time captures get a justified `svelte-ignore state_referenced_locally`; 6
+      ESLint warnings fixed (typed spy, `Slice.empty` handlePaste, dead helper, stale disable).
+      `lint` = `eslint src --max-warnings 0` (desktop, ui, store); desktop/ui `typecheck` =
+      svelte-check `--fail-on-warnings` (Pro and Lite at 0/0).
+    - RDD `review-7ae51e221a1dd525` (medium) approved, no findings.
+  - [ ] 8.2 — `renderMarkdown` placeholders for inline code and links (Q-02)
+  - [ ] 8.3 — shared `registerDownloadListeners()` with partial-failure cleanup (Q-03)
+  - [ ] 8.4 — `sanitizeNoteHtml` escapes when there is no DOM (Q-04)
+  - [ ] 8.5 — `validate_external_url` via `url::Url` (S-07)
+  - [ ] 8.6 — untrack `docs/` and the unused MSIX (R-01)
+  - [ ] 8.7 — pin MCP versions in `opencode.json`, drop the personal serena path (R-02)
+  - [ ] 8.8 — move `plan-editor.md`/`plan-lote.md` to `odd/plans/`; `Manual-de-Uso.md` → link (R-03)
+  - [ ] 8.9 + 8.12 — align AGENTS.md/README; shallow-clone audit note (R-05, R-04)
+  - [ ] 8.10 — split large files only when touched for another reason (A-06): no forced work
+  - [ ] 8.11 — code signing (C-06): budget decision, recorded as open; no code
 
 ## Notes
 
