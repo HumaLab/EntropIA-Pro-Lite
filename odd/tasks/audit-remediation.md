@@ -733,6 +733,14 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
   docs PR, on 7.5. `auditoria.md` gains "Estado de la remediación (2026-10-12)": one row per
   finding (45) with status and phase/PR, plus the plan §6 measurement (pnpm audit --prod 0
   high/critical, cargo audit 0 vulnerabilities, eprintln! 1 — re-measured).
+  - Integration (2026-10-12): #65–#74 were merged into `main` meanwhile, and `main` carried its own
+    fix of the same typecheck error (`97853be9`), which conflicted with 8.1's `cd0e692c`.
+    `origin/main` was merged into #75's branch and propagated up the stack by merges (no rebase,
+    no force-push; done in a temp worktree because `opencode.json` is skip-worktree here); at 8.1
+    the conflict took `main`'s version (file identical to `main`). Full check of the integrated
+    tip: format, lint 0 warnings, typecheck Pro/Lite 0/0, store 446, ui 849, desktop Pro 3591/7,
+    Lite 3569/29, cargo fmt/clippy/test Lite 2865/0/37, binaries 12 OK, version 1.0.20, Pester
+    68/3 (Windows-only MSIX icons).
   - User decisions (2026-10-12): `docs/` is NOT public — untrack it (`git rm -r --cached`, local
     copy kept, published history not rewritten); `artifacts/msix/...1.0.5.0.msix` leaves the repo
     (`git rm --cached`, local copy kept) and its `binary-provenance.json` entry goes.
