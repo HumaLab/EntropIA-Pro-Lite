@@ -688,6 +688,20 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       GITHUB_TOKEN fails until it is enabled. `main` has no classic protection; ruleset "HLab"
       only blocks deletion and non-fast-forward, so it does NOT require PRs. Both changes are the
       user's (admin settings).
+    - User decision (2026-10-12, "hagamos todo" + chose "PR obligatorio para todos"): ruleset
+      "HLab" (id 24813692) now also has a `pull_request` rule on `main`, 0 required approvals, no
+      bypass actors, merge/squash/rebase allowed. Direct pushes to main are rejected for everyone,
+      including the nightly bump still on main until #75 merges (its bump stays on its branch).
+      Enabling "Actions can create PRs" failed: the HumaLab org disallows it (409), and the gh token
+      lacks `admin:org`; the user must run `gh auth refresh -h github.com -s admin:org` so it can
+      be enabled at org then repo level.
+  - [x] 7.3 — SHA-pinned actions (D-06). Branch `ci/p7-3-pin-actions`, commit `6d7b1475`. Every
+    third-party `uses:` is `@<sha> # vX.Y.Z`, newest release of the major already in use (major
+    bumps left to Dependabot). upload-artifact unified on v7, download-artifact on v6 (all
+    downloads by name). dtolnay/rust-toolchain pinned to a master SHA with `toolchain: 1.90.0`
+    everywhere (newly in ci.yml x5 and engine-pin-bump.yml). One mapping script that refuses
+    unknown pairs; SHAs resolved via the GitHub API. Tests RED first. RDD
+    `review-6ab70ec8acc468a6` approved (two suggestions).
 - [ ] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06)
 
 ## Notes

@@ -51,10 +51,10 @@ jobs:
       BAKED_PUBLIC_KEY: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.11'
 
@@ -69,7 +69,7 @@ jobs:
           echo "ASSET_PREFIX=runtime-pack-windows-x86_64-${{ inputs.pack_version }}.zip" >> "$GITHUB_ENV"
 
       - name: Download runtime-archive artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: runtime-archive
           path: ${{ runner.temp }}/archive

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -78,5 +78,48 @@ describe('engine pin bump goes through a pull request (D-05)', () => {
     expect(permissions).toMatch(/contents: write/)
     expect(permissions).toMatch(/pull-requests: write/)
     expect(permissions).toMatch(/actions: write/)
+  })
+})
+
+describe('workflow actions are pinned (D-06)', () => {
+  const workflowDir = resolve(repoRoot, '.github/workflows')
+  const workflows = readdirSync(workflowDir)
+    .filter((name) => /\.ya?ml$/.test(name))
+    .map((name) => ({ name, text: readRepoFile(`.github/workflows/${name}`) }))
+  const usesLines = workflows.flatMap(({ name, text }) =>
+    text
+      .split('\n')
+      .filter((line) => /^\s*(-\s+)?uses:/.test(line))
+      .map((line) => ({ name, line: line.trim().replace(/^-\s+/, '') }))
+  )
+
+  it('pins every third-party action to a full commit SHA with its version noted', () => {
+    const external = usesLines.filter(({ line }) => !/uses:\s*\.\//.test(line))
+    expect(external.length).toBeGreaterThan(0)
+    for (const { name, line } of external) {
+      expect(line, name).toMatch(/^uses: [\w.-]+\/[\w.-]+@[0-9a-f]{40} # \S+/)
+    }
+  })
+
+  it('uses one major per artifact action across all workflows', () => {
+    for (const action of ['actions/upload-artifact', 'actions/download-artifact']) {
+      const majors = new Set(
+        usesLines
+          .filter(({ line }) => line.includes(`${action}@`))
+          .map(({ line }) => /# (v\d+)/.exec(line)?.[1])
+      )
+      expect([...majors], action).toHaveLength(1)
+    }
+  })
+
+  it('installs the rust-toolchain.toml channel wherever rust-toolchain runs', () => {
+    const channel = /channel\s*=\s*"([^"]+)"/.exec(readRepoFile('rust-toolchain.toml'))?.[1]
+    expect(channel).toBeDefined()
+    for (const { name, text } of workflows) {
+      const blocks = text.split(/\n(?=\s*-\s)/).filter((b) => b.includes('dtolnay/rust-toolchain@'))
+      for (const block of blocks) {
+        expect(block, name).toContain(`toolchain: ${channel}`)
+      }
+    }
   })
 })

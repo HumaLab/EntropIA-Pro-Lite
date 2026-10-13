@@ -73,10 +73,10 @@ Describe "rust-quality-report workflow" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
     $jobIndex = $content.IndexOf("rust-quality-report:")
-    $checkoutIndex = $content.IndexOf("- uses: actions/checkout@v6", $jobIndex)
+    $checkoutIndex = $content.IndexOf("- uses: actions/checkout@", $jobIndex)
     $postCheckoutForensicsIndex = $content.IndexOf("Run pnpm post-checkout forensics (rust-quality-report)", $jobIndex)
-    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@", $jobIndex)
+    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@", $jobIndex)
 
     Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
     Assert-True -Condition ($checkoutIndex -gt $jobIndex) -Message "rust-quality-report must include checkout step"
@@ -88,7 +88,7 @@ Describe "rust-quality-report workflow" {
   It "pins rust-quality-report setup-node to Node 22 for pnpm/action-setup compatibility" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
+    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v6\.[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
   }
 
   It "uploads rust post-checkout forensics to a distinct evidence path" {
@@ -103,9 +103,9 @@ Describe "rust-quality-report workflow" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
     $jobIndex = $content.IndexOf("rust-quality-report:")
-    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
+    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@", $jobIndex)
     $postPnpmForensicsIndex = $content.IndexOf("Run pnpm post-pnpm-setup forensics (rust-quality-report)", $jobIndex)
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@", $jobIndex)
 
     Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
     Assert-True -Condition ($pnpmSetupIndex -gt $jobIndex) -Message "rust-quality-report must include pnpm/action-setup"
@@ -125,7 +125,7 @@ Describe "rust-quality-report workflow" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
     $jobIndex = $content.IndexOf("rust-quality-report:")
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
+    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@", $jobIndex)
     $postNodeForensicsIndex = $content.IndexOf("Run pnpm post-setup-node forensics (rust-quality-report)", $jobIndex)
     $preInstallForensicsIndex = $content.IndexOf("Run pnpm pre-install forensics (rust-quality-report)", $jobIndex)
 
@@ -192,7 +192,7 @@ Describe "rust-quality-report workflow" {
   It "pins pnpm/action-setup id and uses explicit pnpm bin path in rust-quality-report install" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?- uses: pnpm/action-setup@v6[\s\S]*?id:\s*pnpm_setup' -Message "rust-quality-report pnpm/action-setup must define id: pnpm_setup"
+    Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?- uses: pnpm/action-setup@[0-9a-f]{40} # v6\.[\s\S]*?id:\s*pnpm_setup' -Message "rust-quality-report pnpm/action-setup must define id: pnpm_setup"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?steps\.pnpm_setup\.outputs\.bin_dest' -Message "rust-quality-report install must use steps.pnpm_setup.outputs.bin_dest"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?Write-Host\s+"pnpm_bin=' -Message "rust-quality-report install must print pnpm binary path"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?&\s*\$pnpmExe\s+-v' -Message "rust-quality-report install must print pnpm version from pinned binary"
