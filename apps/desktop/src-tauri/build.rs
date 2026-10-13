@@ -254,7 +254,8 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/runtime-pack/windows-x86_64/manifest.json");
     println!("cargo:rerun-if-changed=resources/runtime-pack/linux-x86_64/manifest.json");
 
-    embed_common_controls_manifest_for_tests();
+    println!("cargo:rerun-if-changed=windows/app-manifest.xml");
+    embed_common_controls_manifest_for_all_targets();
     guard_lean_bootstrap_source();
     ensure_windows_vc_runtime_glob_exists();
     stage_windows_vc_runtime();
@@ -264,31 +265,45 @@ fn main() {
     // native ML libraries use the dynamic CRT (see tests/vc_runtime_guard.rs).
     if let Err(error) = tauri_build::try_build(
         tauri_build::Attributes::new()
-            .windows_attributes(tauri_build::WindowsAttributes::new().static_vc_runtime(false))
+            .windows_attributes(
+                tauri_build::WindowsAttributes::new_without_app_manifest().static_vc_runtime(false),
+            )
             .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
     ) {
         panic!("tauri-build failed: {error:#}");
     }
 }
 
-/// The Tauri runtime imports `TaskDialogIndirect`, which only exists in Common
-/// Controls v6. tauri-build embeds that manifest in the app binary, but a test
-/// executable that links the runtime (tests/app_acl.rs) has none and dies at
-/// load with STATUS_ENTRYPOINT_NOT_FOUND before running a single test. Scoped to
-/// test targets so it can never collide with the manifest tauri-build embeds
-/// in the binary.
-fn embed_common_controls_manifest_for_tests() {
+/// Every Windows MSVC executable of this package — the app binary, the
+/// integration-test binaries and the lib unit-test harness — needs the Common
+/// Controls v6 manifest. The Tauri runtime imports `TaskDialogIndirect`, which
+/// only exists in Common Controls v6; a binary without the manifest dies at
+/// load with STATUS_ENTRYPOINT_NOT_FOUND before running a single test.
+///
+/// tauri-build embeds its default app manifest only into bins (its `.res` is
+/// linked via `cargo:rustc-link-arg-bins`), so the lib test harness never got
+/// one; `cargo:rustc-link-arg-tests` only reaches integration-test targets
+/// (`tests/*.rs`), not the lib harness either. Hence the recurring 0xc0000139.
+///
+/// Following Tauri's own guidance for `tauri::test` users, tauri-build's
+/// manifest is disabled (`WindowsAttributes::new_without_app_manifest`, kept
+/// alongside `.static_vc_runtime(false)` below) and the repo-owned copy at
+/// `windows/app-manifest.xml` — same content as tauri-build's default — is
+/// embedded into EVERY target of this package with the plain (unsuffixed)
+/// `cargo:rustc-link-arg`. tauri-build's `.res` still carries the icon and
+/// version info, just no manifest, so the app binary keeps exactly one
+/// manifest and nothing collides (no duplicate RT_MANIFEST, no CVT1100/LNK).
+fn embed_common_controls_manifest_for_all_targets() {
     let is_windows_msvc = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     if !is_windows_msvc {
         return;
     }
-    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
-    println!(
-        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
-         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
-         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
-    );
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+        .join("windows")
+        .join("app-manifest.xml");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
 
 /// Fail a Pro (`local-ml`) release build that would ship a lean/fixture
