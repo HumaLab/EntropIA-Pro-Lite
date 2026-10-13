@@ -7,6 +7,7 @@
   import { locale, t } from '$lib/i18n'
   import { getStore } from '$lib/db'
   import { LOCAL_ML } from '$lib/capabilities'
+  import { settingsGet, SETTINGS_KEYS } from '$lib/settings'
   import {
     batchProgress,
     batchStore,
@@ -75,6 +76,13 @@
   let runTriples = $state(false)
   // A user-defined schema (T-51) the batch also runs; '' runs none.
   let schemaId = $state('')
+  // Under Lite, embeddings, entities, triples and schemas are OpenRouter calls:
+  // without the key «Analizar selección» could only fail later, out of sight.
+  // Unknown until read (and when the read answers nothing) means not blocked.
+  let hasOpenrouterKey = $state(true)
+  const missingOpenrouterKey = $derived(
+    !LOCAL_ML && !hasOpenrouterKey && (runEmbeddings || runNer || runTriples || Boolean(schemaId))
+  )
   // A saved flow (T-52) is these five choices under a name.
   const flowSteps = $derived<BatchFlowSteps>({
     ocr: runOcr,
@@ -683,6 +691,13 @@
   onMount(() => {
     void loadCollections()
     void loadLists()
+    if (!LOCAL_ML) {
+      settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
+        .then((key) => {
+          if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
+        })
+        .catch(() => {})
+    }
     const unsubscribeStore = batchStore.subscribe((summary) => {
       const init = summary.init
       if (init?.recovered && !recoveryDismissed) {
@@ -1227,17 +1242,24 @@
               >{t('batch.opTriples')}</Checkbox
             >
           </span>
-          <Button
-            class="batch-ops__action"
-            variant="secondary"
-            size="sm"
-            disabled={selectedCount === 0 ||
-              (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId) ||
-              analyzing}
-            onclick={handleAnalyze}
+          <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
+          <span
+            class="batch-ops__hinted"
+            use:tooltip={missingOpenrouterKey ? t('batch.needsOpenrouterKey') : undefined}
           >
-            {t('batch.analyze')}
-          </Button>
+            <Button
+              class="batch-ops__action"
+              variant="secondary"
+              size="sm"
+              disabled={selectedCount === 0 ||
+                (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId) ||
+                missingOpenrouterKey ||
+                analyzing}
+              onclick={handleAnalyze}
+            >
+              {t('batch.analyze')}
+            </Button>
+          </span>
         </div>
         <BatchSchemaPanel bind:schemaId />
         {#if draft && draftId}

@@ -445,6 +445,8 @@ const es = {
   'batch.error': 'No se pudo completar la acción: {error}',
   'batch.loadError': 'No se pudo cargar el procesamiento por lote: {error}',
   'batch.schemaNotReady': 'La base todavía está migrando. Reintentá en un momento.',
+  'batch.needsOpenrouterKey':
+    'Primero cargá tu API key de OpenRouter, en Ajustes → OpenRouter. Sin ella no se pueden pedir embeddings, entidades, tripletes ni esquemas.',
   'batch.statusIdle': 'Sin actividad',
   'batch.statusRunning': 'Procesando {count}',
   'batch.statusBibliography':
@@ -1589,7 +1591,8 @@ const es = {
   'settings.model': 'Modelo generativo',
   'settings.modelPlaceholder': 'google/gemma-4-26b-a4b-it',
   'settings.suggestedModels': 'Modelos sugeridos desde OpenRouter',
-  'settings.modelList.noKey': 'Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.',
+  'settings.modelList.noKey':
+    'Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.',
   'settings.modelList.openSettings': 'Ir a Configuración',
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
@@ -3583,6 +3586,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.error': 'Could not complete the action: {error}',
   'batch.loadError': 'Could not load batch processing: {error}',
   'batch.schemaNotReady': 'The database is still migrating. Try again in a moment.',
+  'batch.needsOpenrouterKey':
+    'Load your OpenRouter API key first, under Settings → OpenRouter. Without it, embeddings, entities, triples and schemas cannot be requested.',
   'batch.statusIdle': 'Idle',
   'batch.statusRunning': 'Processing {count}',
   'batch.statusBibliography':

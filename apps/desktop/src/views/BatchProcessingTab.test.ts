@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import BatchProcessingTab from './BatchProcessingTab.svelte'
 import { batchStore } from '$lib/batch-processing'
+import { LOCAL_ML } from '$lib/capabilities'
 
 const mockInvoke = vi.mocked(invoke)
 
@@ -187,6 +188,32 @@ describe('BatchProcessingTab batch controls', () => {
 
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
   })
+
+  it.runIf(!LOCAL_ML)(
+    'without an OpenRouter key the analyze button is off and says why',
+    async () => {
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+        if (command === 'settings_get') return null
+        return undefined
+      })
+      render(BatchProcessingTab)
+
+      await screen.findByText('Legajo 1')
+      await fireEvent.click(screen.getByText('Legajo 1'))
+
+      const analyze = screen.getByRole('button', { name: 'Analizar selección' })
+      await waitFor(() => expect(analyze).toBeDisabled())
+      expect(analyze.closest('[data-tooltip]')).toHaveAttribute(
+        'data-tooltip',
+        expect.stringContaining('Primero cargá tu API key de OpenRouter')
+      )
+
+      // OCR alone goes through GLM, not OpenRouter: unticking the rest frees the button.
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Embeddings' }))
+      await waitFor(() => expect(analyze).toBeEnabled())
+    }
+  )
 
   it('sends entities when asked and says how many documents will go through it', async () => {
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
