@@ -7,6 +7,75 @@
 
 ---
 
+## Estado de la remediación (2026-10-12)
+
+El plan de `plan.md` se ejecutó fase por fase como PRs apilados, desde #26 hasta #100, todavía sin mergear a `main` al momento de escribir esta sección. El detalle por tarea (tests, commits y revisión) está en `odd/tasks/audit-remediation.md`; acá se resume el estado de cada hallazgo.
+
+| Hallazgo | Severidad           | Estado             | Fase / PR                  | Nota                                                                                      |
+| -------- | ------------------- | ------------------ | -------------------------- | ----------------------------------------------------------------------------------------- |
+| S-01     | Alta                | Resuelto           | 1.2 · #28; 1.2b            | Scope `fs` acotado; `entropia.sqlite*` denegado en tests ACL.                             |
+| S-02     | Alta                | Resuelto           | 3.1 · #41                  | Authorizer SQLite y ventana de migración; DDL cerrado en 4.4.                             |
+| S-03     | Alta (solo Pro)     | Resuelto           | 1.1                        | La fuente compilada del runtime no se puede pisar desde el renderer.                      |
+| S-04     | Alta                | Resuelto           | 1.3 · #27                  | `prosemirror-view` 1.42.6 por override; pegado verificado a mano.                         |
+| S-05     | Media               | Resuelto           | 3.3 · #44                  | Scope `asset` acotado; `.sqlite` y capturas HTML denegados.                               |
+| S-06     | Baja                | Resuelto           | 3.4 · #45                  | Llavero resuelto fuera del lock de `ui_conn`; locks por clave.                            |
+| S-07     | Info                | Resuelto           | 8.5                        | `validate_external_url` parsea y re-serializa con `url::Url`.                             |
+| D-01     | Media               | Resuelto           | 2.1                        | `html-docx-js` reemplazado por `docx` en la exportación del OCR.                          |
+| D-02     | Media               | Parcial            | 2.2.1–2.2.4                | Tiptap 3: riesgo aceptado (2.2.4); svelte, devalue, markdown-it y drizzle actualizados.   |
+| D-08     | Media               | Resuelto           | 2.3                        | 0 vulnerabilidades; quick-xml RUSTSEC-2026-0194/0195 ignorado en `audit.toml` (decisión). |
+| D-03     | Baja                | Resuelto           | 2.4                        | `plugin-sql` fuera; Tiptap y leaflet en el catálogo de pnpm.                              |
+| D-04     | Baja                | Resuelto           | 2.5                        | vitest 4, happy-dom 20 y vite 6.4.4; 0 avisos critical.                                   |
+| D-05     | Media               | Parcial            | 7.2 · #75                  | Bump por PR, sin push a `main`; falta habilitar «Actions can create PRs» (org).           |
+| D-06     | Baja                | Resuelto           | 7.3 · #76                  | Acciones fijadas por SHA; artifact unificado.                                             |
+| D-07     | Baja                | Parcial            | 6.6 · #72                  | Procedencia pinneada; origen de los 3 `.mnn` y del MSIX base, desconocido.                |
+| C-01     | Media               | Resuelto           | 0.2                        | Job `rust-lite-linux` (fmt, clippy, test) en la CI.                                       |
+| C-02     | Media               | Resuelto           | 6.4 · #68; 6.4b · #69      | URL canónica del manifiesto; gate de runtime fail-closed.                                 |
+| C-03     | Baja                | Resuelto           | 7.1 · #74                  | Dependabot y job de auditoría bloqueante.                                                 |
+| C-04     | Baja                | Resuelto           | 6.5 · #70                  | `package.json` como fuente única; `pnpm version:check`/`bump`.                            |
+| C-05     | Info                | Resuelto           | 7.4 · #77                  | Forensics de pnpm eliminados (−299 líneas) y suites Pester.                               |
+| C-06     | Info                | Abierto (decisión) | 8.11                       | Firma de código: presupuesto pendiente, sin cambios de código.                            |
+| A-01     | Media               | Resuelto           | 4.4a, 4.4b · stack #46–#54 | Migraciones unificadas en Rust; el runner TS solo verifica.                               |
+| A-02     | Media               | Resuelto           | 4.2c, 4.3 · stack #46–#54  | Setup sin `panic`: fallo muestra diálogo; dedup una sola vez.                             |
+| A-03     | Baja                | Resuelto           | 4.2b · stack #46–#54       | Todas las migraciones en `BEGIN IMMEDIATE … COMMIT`.                                      |
+| A-04     | Baja                | Resuelto           | 3.2 · #42                  | Rollback del lado Rust; cascadas con parámetros.                                          |
+| A-05     | Baja                | Resuelto           | 3.4 · #45                  | Los comandos async ya no bloquean; guard de 25 violaciones.                               |
+| A-06     | Info                | Sin acción         | 8.10                       | Se parte solo al tocar; ninguno lo ameritó todavía.                                       |
+| P-01     | Media               | Parcial            | 5.2a · #57; 5.2b           | Selección parcial hecha; índice en caché (5.2b) diferido por decisión.                    |
+| P-02     | Media               | Resuelto           | 5.1 · #55                  | Log acotado (2.000/4.000 líneas) y lectura en streaming.                                  |
+| P-03     | Baja                | Resuelto           | 5.3 · #56                  | SHA-256 en streaming con `BufReader` de 1 MiB.                                            |
+| P-04     | Baja                | Resuelto           | 5.4a–5.4f · #59–#64        | `eprintln!` 387 → 1 (`app_logs.rs`), con ratchet en tests.                                |
+| E-01     | Media               | Resuelto           | 6.2 · #66                  | Lite Linux sin payload de Pro; guard en `lite-preview`.                                   |
+| E-02     | Media (a verificar) | Parcial            | 6.1 · #65; 6.4b · #69      | Pdfium real resuelto; Pro Linux fuera de releases hasta el runtime pack linux-x86_64.     |
+| E-03     | Baja                | Resuelto           | 6.3 · #67                  | Guard exige las tres variables y exime a Lite.                                            |
+| E-04     | Baja                | Resuelto           | 6.7 · #73                  | Título dev, `USER_AGENT`, watchFolders y `pwsh` corregidos.                               |
+| Q-05     | Media               | Resuelto           | 0.1                        | `cargo test` Lite en Linux verde; ahora cubierto por la CI.                               |
+| Q-01     | Baja                | Resuelto           | 8.1                        | `reducedMotion` con `$state`; lint y typecheck en 0 warnings.                             |
+| Q-02     | Baja                | Resuelto           | 8.2                        | Placeholders para código inline y enlaces antes del énfasis.                              |
+| Q-03     | Info                | Resuelto           | 8.3                        | Helper `registerListeners` con limpieza parcial.                                          |
+| Q-04     | Info                | Resuelto           | 8.4                        | Sin DOM, `sanitizeNoteHtml` escapa en lugar de devolver crudo.                            |
+| R-01     | Media               | Resuelto           | 8.6                        | `docs/` y el MSIX 1.0.5.0 fuera del índice (copias locales).                              |
+| R-02     | Baja                | Resuelto           | 8.7                        | MCP con versión fija; rutas personales eliminadas.                                        |
+| R-03     | Baja                | Resuelto           | 8.8                        | Planes a `odd/plans/`; manual de la raíz como enlace.                                     |
+| R-04     | Info                | Resuelto           | 8.9 + 8.12                 | Nota sobre clones superficiales en `AGENTS.md`.                                           |
+| R-05     | Info                | Resuelto           | 8.9                        | `AGENTS.md` y README alineados con la CI y el guard.                                      |
+
+### Medición actual
+
+Estado de la batería de §6 de `plan.md` al 2026-10-12. Cada fila indica si el valor se volvió a medir ese día o si sale de `odd/tasks/audit-remediation.md`.
+
+| Verificación                                  | Estado actual                                                                            | Fuente               |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
+| `cargo test` Lite en Linux y en CI            | 0 fallos (local 2845/0/37); job `rust-lite-linux` (0.2)                                  | según odd/tasks      |
+| `pnpm audit --prod` high/critical             | 0 high/critical; 1 moderate (Tiptap, riesgo aceptado)                                    | re-medido 2026-10-12 |
+| `pnpm audit` (dev) critical                   | 0 critical; 20 high, 12 moderate, 2 low (tooling de test)                                | re-medido 2026-10-12 |
+| `cargo audit`                                 | 0 vulnerabilidades; 7 warnings permitidos (6 crates); quick-xml ignorado en `audit.toml` | re-medido 2026-10-12 |
+| Tests de evasión SQL / ACL `fs`               | Existen y pasan (`app_acl` 15/15, authorizer, guard de locks)                            | según odd/tasks      |
+| Escritura `fs` fuera de `com.entropia.shared` | Denegada por test ACL                                                                    | según odd/tasks      |
+| Fuentes de la versión de la app               | 1 fuente (`apps/desktop/package.json`) con `version:check`                               | según odd/tasks      |
+| `eprintln!` en el backend                     | 1 (`app_logs.rs`), desde 387                                                             | re-medido 2026-10-12 |
+
+---
+
 ## 1. Resumen ejecutivo
 
 El código está muy por encima de la media: tiene una cobertura de tests muy alta (más de 4.700 tests JS en verde y una suite Rust extensa), comentarios que explican el _por qué_, y defensas pensadas en casi todos los bordes (sanitización de HTML, política de URLs del navegador embebido, firma ed25519 del runtime, `enclosed_name` al descomprimir, llavero del sistema para secretos, `ensure_within_dir` para rutas, ACL de Tauri probada con tests).
@@ -51,6 +120,8 @@ Se instalaron dependencias con `pnpm install --frozen-lockfile` (Node 22.22, pnp
 | `pnpm audit --prod`                                              | ⚠️ 21 avisos (9 high, 11 moderate, 1 low). Ver D-01/D-02/D-03                                                                                                                                     |
 | `pnpm audit` (incluye dev)                                       | ⚠️ 70 avisos (4 critical, 37 high, 26 moderate, 3 low). Los critical son de tooling de test (vitest/tinypool/happy-dom). Ver D-04                                                                 |
 | Búsqueda de secretos (regex de claves conocidas)                 | ✅ sin claves reales en archivos versionados                                                                                                                                                      |
+
+Las cifras de esta tabla corresponden a la fecha de la auditoría original (2026-10-09). El estado actual, con las mediciones repetidas al cierre de la remediación, está en la sección «Estado de la remediación (2026-10-12)».
 
 Además se hizo revisión manual de: superficie IPC/ACL de Tauri, CSP, plugin `fs`, protocolo `asset`, validadores SQL, gestión de secretos, bootstrap/descarga del runtime de Pro, navegador embebido, sanitización de HTML en el frontend, apertura de URLs y procesos, sincronización (TLS), runner de migraciones, workflows de CI/release, empaquetado por variante, binarios versionados e higiene del repo.
 
