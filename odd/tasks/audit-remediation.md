@@ -743,7 +743,11 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `lint` = `eslint src --max-warnings 0` (desktop, ui, store); desktop/ui `typecheck` =
       svelte-check `--fail-on-warnings` (Pro and Lite at 0/0).
     - RDD `review-7ae51e221a1dd525` (medium) approved, no findings.
-  - [ ] 8.2 — `renderMarkdown` placeholders for inline code and links (Q-02)
+  - [x] 8.2 — `renderMarkdown` placeholders for inline code and links (Q-02). Branch
+    `fix/p8-2-markdown-inline`, commit `53d6f44d`. Code spans then links are parked behind
+    private-use placeholders before strong/emphasis, then restored (labels keep emphasis,
+    destinations and code stay literal; placeholder chars stripped from input). 6 tests RED
+    first; callers' 13 test files 217/217. RDD `review-ce5e44b8de150100` approved, no findings.
   - [ ] 8.3 — shared `registerDownloadListeners()` with partial-failure cleanup (Q-03)
   - [ ] 8.4 — `sanitizeNoteHtml` escapes when there is no DOM (Q-04)
   - [ ] 8.5 — `validate_external_url` via `url::Url` (S-07)
