@@ -756,7 +756,11 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     longer escapes onMount: SettingsView logs, DependenciasTab shows its error banner. Helper +
     one regression test per component RED first; Pro 118/5 skipped, Lite 108/15. RDD
     `review-d8f6db4d8b1399f0` approved, no findings.
-  - [ ] 8.4 — `sanitizeNoteHtml` escapes when there is no DOM (Q-04)
+  - [x] 8.4 — `sanitizeNoteHtml` escapes when there is no DOM (Q-04). Branch
+    `fix/p8-4-sanitize-no-dom`, commit `3e4481d4`. Without `document` the input goes through
+    `convertLegacyNoteTextToHtml` (escaped, paragraphed) instead of returning raw `<p>`-wrapped
+    markup; DOM path unchanged. Tests RED first (`document` stubbed); NoteEditor 40/40. RDD
+    `review-46789f4484391e38` approved, no findings.
   - [ ] 8.5 — `validate_external_url` via `url::Url` (S-07)
   - [ ] 8.6 — untrack `docs/` and the unused MSIX (R-01)
   - [ ] 8.7 — pin MCP versions in `opencode.json`, drop the personal serena path (R-02)
