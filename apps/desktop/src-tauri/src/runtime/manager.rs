@@ -1,6 +1,6 @@
 use crate::runtime::bootstrap::{
     bootstrap_operation_from_plan, fetch_remote_catalog, BootstrapController, BootstrapPlan,
-    BootstrapRemoteCatalog,
+    BootstrapRemoteCatalog, BootstrapUnavailableReason,
 };
 use crate::runtime::download::download_and_activate_remote_runtime;
 use crate::runtime::manifest::RuntimeManifest;
@@ -79,6 +79,7 @@ impl RuntimeManager {
                     ],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             }
@@ -778,6 +779,7 @@ fn inspect_runtime(
             ],
             bootstrap_eligible: true,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: Some(RuntimeOperation {
                 kind: RuntimeOperationKind::Bootstrap,
                 stage: RuntimeOperationStage::Checking,
@@ -840,6 +842,7 @@ fn inspect_runtime(
         ],
         bootstrap_eligible: true,
         bootstrap_required: true,
+        blocked_reason: None,
         active_operation: Some(RuntimeOperation {
             kind: RuntimeOperationKind::Bootstrap,
             stage: RuntimeOperationStage::Checking,
@@ -1317,6 +1320,7 @@ fn healthy_status(pack_version: &str) -> RuntimeStatus {
         guidance: vec![],
         bootstrap_eligible: false,
         bootstrap_required: false,
+        blocked_reason: None,
         active_operation: None,
     }
 }
@@ -1333,7 +1337,10 @@ where
         .reason
         .clone()
         .unwrap_or_else(|| "Bootstrap source unavailable".to_string());
-    let offline = reason.to_ascii_lowercase().contains("offline");
+    let offline = match &plan.unavailable_reason {
+        Some(typed) => *typed == BootstrapUnavailableReason::Offline,
+        None => reason.to_ascii_lowercase().contains("offline"),
+    };
     let state = if offline {
         RuntimeState::BlockedOffline
     } else {
@@ -1377,6 +1384,7 @@ fn classify_bootstrap_failure(manifest: &RuntimeManifest, error: String) -> Runt
         }],
         bootstrap_eligible: retryable,
         bootstrap_required: true,
+        blocked_reason: None,
         active_operation: Some(RuntimeOperation {
             kind: RuntimeOperationKind::Bootstrap,
             stage: RuntimeOperationStage::Blocked,
@@ -1419,6 +1427,7 @@ fn blocked_bootstrap_status(
         ],
         bootstrap_eligible: plan.eligible,
         bootstrap_required: true,
+        blocked_reason: plan.unavailable_reason.clone(),
         active_operation: Some(RuntimeOperation {
             kind: RuntimeOperationKind::Bootstrap,
             stage: RuntimeOperationStage::Blocked,
@@ -1445,6 +1454,7 @@ fn incompatible_missing_manifest_status(error: String) -> RuntimeStatus {
         ],
         bootstrap_eligible: false,
         bootstrap_required: false,
+        blocked_reason: None,
         active_operation: None,
     }
 }
@@ -1483,6 +1493,7 @@ fn compatibility_status(manifest: &RuntimeManifest) -> Option<RuntimeStatus> {
             guidance: vec![],
             bootstrap_eligible: false,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: None,
         },
         manifest,
@@ -1518,6 +1529,7 @@ fn compatibility_status(manifest: &RuntimeManifest) -> Option<RuntimeStatus> {
         guidance: fixture_guidance(manifest),
         bootstrap_eligible: bootstrap_plan.eligible,
         bootstrap_required: bootstrap_plan.required,
+        blocked_reason: None,
         active_operation: bootstrap_operation_from_plan(&bootstrap_plan),
     })
 }
@@ -1539,6 +1551,7 @@ fn platform_incompatible_status(platform: &str, pack_version: &str) -> RuntimeSt
         ],
         bootstrap_eligible: false,
         bootstrap_required: false,
+        blocked_reason: None,
         active_operation: None,
     }
 }
@@ -1566,6 +1579,7 @@ fn app_version_incompatible_status(app_version: &str, pack_version: &str) -> Run
         ],
         bootstrap_eligible: false,
         bootstrap_required: false,
+        blocked_reason: None,
         active_operation: None,
     }
 }
@@ -1608,9 +1622,12 @@ mod tests {
     use super::*;
     use crate::runtime::bootstrap::{
         BootstrapPlanSource, BootstrapRemoteCatalog, BootstrapRemoteSource,
+        BootstrapUnavailableReason,
     };
     use crate::runtime::download::test_support::{build_signed_release, runtime_archive_bytes};
-    use crate::runtime::manifest::ManifestEntry;
+    use crate::runtime::manifest::{
+        BootstrapManifestIndex, BootstrapReleaseManifest, ManifestEntry,
+    };
     use base64::Engine;
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
@@ -2004,6 +2021,69 @@ mod tests {
             .details
             .iter()
             .any(|detail| detail.contains("manifest not published")));
+        assert!(status.bootstrap_required);
+    }
+
+    #[test]
+    fn ensure_ready_or_bootstrap_reports_no_matching_release_when_manifest_lacks_this_version() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let manager = RuntimeManager::new();
+        let status = manager
+            .ensure_ready_or_bootstrap_for_tests(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::Available {
+                    source: BootstrapRemoteSource {
+                        manifest_url: "https://example.com/bootstrap.json".to_string(),
+                        public_key_id: "entropia-root".to_string(),
+                    },
+                    index: BootstrapManifestIndex {
+                        channel: "stable".to_string(),
+                        generated_at: "2026-05-06T00:00:00Z".to_string(),
+                        releases: vec![BootstrapReleaseManifest {
+                            app_version: "0.0.0-no-match".to_string(),
+                            platform: crate::runtime::paths::current_runtime_platform(),
+                            pack_version: "2026.05.1".to_string(),
+                            archive_url: "https://example.com/runtime-pack.zip".to_string(),
+                            additional_part_urls: Vec::new(),
+                            archive_sha256: "sha".to_string(),
+                            archive_size: 99,
+                            signature: "sig".to_string(),
+                        }],
+                    },
+                },
+                |_| {},
+            )
+            .expect("blocked status should be returned");
+
+        assert_eq!(status.state, RuntimeState::BlockedSourceUnavailable);
+        assert_eq!(
+            status.blocked_reason,
+            Some(BootstrapUnavailableReason::NoMatchingRelease)
+        );
         assert!(status.bootstrap_required);
     }
 

@@ -526,6 +526,87 @@ describe('DependenciasTab', () => {
     expect(screen.getByText(/^Capacidades afectadas:/i)).toBeInTheDocument()
   })
 
+  it('shows a dedicated no_matching_release message when the manifest has no entry for this version', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['No bootstrap release matches app_version=1.0.19 platform=windows-x86_64'],
+      guidance: ['Reintentá cuando cambien las condiciones o se publique una fuente válida.'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      blockedReason: 'no_matching_release',
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(
+      await screen.findByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/aún no está publicado/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the generic source-unavailable text when no blocked reason is present', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['Trusted remote bootstrap source wiring is not implemented yet'],
+      guidance: ['Reintentá cuando exista una fuente confiable'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(await screen.findByText(/aún no está publicado/)).toBeInTheDocument()
+    expect(
+      screen.queryByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).not.toBeInTheDocument()
+  })
+
   it('labels healthy embedded runtime without a managed venv honestly', async () => {
     depsMocks.getUvStatus.mockResolvedValueOnce({
       uv_ready: true,

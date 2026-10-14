@@ -667,6 +667,13 @@
                 Conectate a internet y volvé a verificar. Mientras tanto, las capacidades locales
                 (OCR, transcripción y NLP) quedan en pausa.
               </span>
+            {:else if runtimeStatus?.blockedReason === 'no_matching_release'}
+              <strong>Esta versión de EntropIA Pro todavía no tiene su runtime publicado.</strong>
+              <span>
+                El manifiesto firmado existe, pero no incluye un runtime para esta versión y
+                plataforma. No es un problema de tu equipo: actualizá EntropIA Pro a la última
+                versión o volvé a verificar más tarde.
+              </span>
             {:else}
               <strong>Todavía no hay una fuente de descarga confiable para el runtime.</strong>
               <span>

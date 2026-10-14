@@ -3106,6 +3106,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -3138,6 +3139,7 @@ mod tests {
                     guidance: vec!["Reintentá cuando exista una fuente firmada".to_string()],
                     bootstrap_eligible: false,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
