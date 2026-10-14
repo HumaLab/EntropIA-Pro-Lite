@@ -105,6 +105,9 @@ export function buildImportSummary(result: ImportClassifiedPathsResult): ImportS
   }
 }
 
+// Same absolute-path rule as file-import.ts: drive letter, UNC or POSIX root.
+const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
+
 async function readAssetSize(path: string): Promise<number | null> {
   try {
     const metadata = await stat(path)
@@ -146,7 +149,11 @@ async function splitPdfIntoPageAssets(
       path: page.pdf_path,
       type: 'pdf',
       sortIndex: page.page_number - 1,
-      size: await readAssetSize(page.pdf_path),
+      // split_pdf_pages returns stored keys relative to the data directory;
+      // the fs plugin scope only accepts absolute paths.
+      size: await readAssetSize(
+        ABSOLUTE_PATH.test(page.pdf_path) ? page.pdf_path : await join(dataDir, page.pdf_path)
+      ),
       parentAssetId,
       pageNumber: page.page_number,
     })
