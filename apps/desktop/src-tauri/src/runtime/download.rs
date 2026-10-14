@@ -521,11 +521,15 @@ fn extract_archive_to_staging(archive_path: &Path, staging_path: &Path) -> Resul
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("Failed to read archive entry #{index}: {error}"))?;
+        let entry_name = entry
+            .name()
+            .map_err(|error| format!("Archive entry #{index} has an invalid name: {error}"))?
+            .into_owned();
         let Some(safe_name) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
-            return Err(format!("Archive entry {} has an unsafe path", entry.name()));
+            return Err(format!("Archive entry {entry_name} has an unsafe path"));
         };
         let output_path = staging_path.join(safe_name);
-        if entry.name().ends_with('/') {
+        if entry_name.ends_with('/') {
             fs::create_dir_all(&output_path).map_err(|error| {
                 format!(
                     "Failed to create extracted directory {}: {error}",
@@ -549,9 +553,8 @@ fn extract_archive_to_staging(archive_path: &Path, staging_path: &Path) -> Resul
                 output_path.display()
             )
         })?;
-        std::io::copy(&mut entry, &mut output_file).map_err(|error| {
-            format!("Failed to extract archive entry {}: {error}", entry.name())
-        })?;
+        std::io::copy(&mut entry, &mut output_file)
+            .map_err(|error| format!("Failed to extract archive entry {entry_name}: {error}"))?;
     }
 
     Ok(())
