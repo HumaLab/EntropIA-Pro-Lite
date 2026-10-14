@@ -217,6 +217,52 @@ impl RuntimeManager {
         Ok(status)
     }
 
+    /// T4 (S1, S8): one-shot background bootstrap after `validate_startup`.
+    ///
+    /// Starts the bootstrap at most once per process through the T2
+    /// single-flight `ops_lock` (a second call while running reports busy
+    /// and opens no second fetch) and returns immediately — startup never
+    /// waits on the transfer. Skips silently unless the pack is a fixture
+    /// with a configured source in a release runtime outside dev profiles
+    /// and tests; the validated status is already emitted, so a skip needs
+    /// no further action (T5 owns the banner copy).
+    ///
+    /// The worker is intentionally thinner than the `runtime_bootstrap_start`
+    /// command worker in `mod.rs`: a fresh process cannot have an armed
+    /// cancel flag or an in-flight transfer to stay quiet about, so there is
+    /// nothing to disarm or re-emit. The single-flight lock and the
+    /// cancellable T2 download core are shared, not duplicated.
+    pub fn trigger_startup_bootstrap(&self, app_handle: &AppHandle, status: &RuntimeStatus) {
+        let worker_app = app_handle.clone();
+        match trigger_startup_bootstrap_with(
+            status,
+            StartupBootstrapGate::live(),
+            "runtime_startup_bootstrap",
+            move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    RuntimeManager::new().ensure_ready_or_bootstrap_unlocked(&worker_app)
+                }));
+                match outcome {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("[runtime] startup auto-bootstrap ended: {error}");
+                    }
+                    Err(_) => {
+                        eprintln!("[runtime] startup auto-bootstrap worker panicked");
+                    }
+                }
+            },
+        ) {
+            // Fire-and-forget like the T2 command: dropping the handle
+            // detaches the worker, which owns the ops-lock guard until the
+            // transfer ends (progress/completion flow through the existing
+            // `runtime://progress` and `runtime://status` emissions).
+            StartupBootstrapOutcome::Started(_worker) => {}
+            StartupBootstrapOutcome::AlreadyRunning => {}
+            StartupBootstrapOutcome::Skipped(_reason) => {}
+        }
+    }
+
     pub fn hydrated_runtime_root(
         &self,
         app_handle: &AppHandle,
@@ -609,6 +655,110 @@ impl RuntimeManager {
             remote_downloader,
             on_progress,
         )
+    }
+}
+
+/// T4 (S1, S8) startup auto-bootstrap gate: the three S8 skip layers as
+/// explicit inputs so tests can exercise each one without the network.
+/// `live()` is the production combination.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StartupBootstrapGate {
+    /// False in any debug build (`tauri dev`, `cargo test`, local debug).
+    /// Chosen as `!cfg!(debug_assertions)` — a compile-time gate that needs
+    /// no runtime configuration — because only signed release artifacts may
+    /// pull ~2.4 GB on their own. It alone already protects `cargo test`,
+    /// but S8 forbids relying on it alone, hence the two layers below.
+    pub release_runtime: bool,
+    /// True while a dev profile is active (`ENTROPIA_DEV_PROFILE`), read
+    /// through the established `dev_profile::active()` slot, which setup
+    /// activates before `validate_startup` runs.
+    pub dev_profile_active: bool,
+    /// True under `cfg(test)`, so even a `cargo test --release` run could
+    /// never auto-download.
+    pub automated_test: bool,
+}
+
+impl StartupBootstrapGate {
+    pub fn live() -> Self {
+        Self {
+            release_runtime: !cfg!(debug_assertions),
+            dev_profile_active: crate::dev_profile::active().is_some(),
+            automated_test: cfg!(test),
+        }
+    }
+}
+
+/// Why a startup trigger did not start a transfer. Order is part of the
+/// contract: the release gate is checked first so a debug test binary
+/// reports `NotReleaseBuild` (not `AutomatedTest`), which is what lets
+/// `startup_skips_in_debug_builds` prove the debug gate from inside
+/// `cargo test` itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StartupBootstrapSkip {
+    NotReleaseBuild,
+    DevProfileActive,
+    AutomatedTest,
+    NotFixturePack,
+    SourceNotConfigured,
+}
+
+/// Pure S1/S8 decision: `None` means "start", otherwise the skip reason.
+/// Reuses the T3 status truth (`Fixture` + `bootstrap_eligible`, i.e. a
+/// configured source) — no new status field needed.
+pub(crate) fn startup_bootstrap_skip_reason(
+    status: &RuntimeStatus,
+    gate: StartupBootstrapGate,
+) -> Option<StartupBootstrapSkip> {
+    if !gate.release_runtime {
+        return Some(StartupBootstrapSkip::NotReleaseBuild);
+    }
+    if gate.dev_profile_active {
+        return Some(StartupBootstrapSkip::DevProfileActive);
+    }
+    if gate.automated_test {
+        return Some(StartupBootstrapSkip::AutomatedTest);
+    }
+    if status.state != RuntimeState::Fixture {
+        return Some(StartupBootstrapSkip::NotFixturePack);
+    }
+    if !status.bootstrap_eligible {
+        return Some(StartupBootstrapSkip::SourceNotConfigured);
+    }
+    None
+}
+
+/// Outcome of a startup trigger attempt: skipped without side effects,
+/// worker spawned holding the single-flight lock, or a transfer already
+/// running (no second fetch opened).
+pub(crate) enum StartupBootstrapOutcome<T> {
+    Skipped(StartupBootstrapSkip),
+    Started(std::thread::JoinHandle<T>),
+    AlreadyRunning,
+}
+
+/// Testable T4 trigger core: gate check first (no lock touched on skip),
+/// then the T2 `spawn_bootstrap_download` path — the single-flight logic
+/// lives there, never here.
+pub(crate) fn trigger_startup_bootstrap_with<F, T>(
+    status: &RuntimeStatus,
+    gate: StartupBootstrapGate,
+    operation: &str,
+    run: F,
+) -> StartupBootstrapOutcome<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    match startup_bootstrap_skip_reason(status, gate) {
+        Some(reason) => StartupBootstrapOutcome::Skipped(reason),
+        None => match crate::runtime::download::spawn_bootstrap_download(operation, run) {
+            crate::runtime::download::BootstrapSpawn::Started(worker) => {
+                StartupBootstrapOutcome::Started(worker)
+            }
+            crate::runtime::download::BootstrapSpawn::AlreadyRunning => {
+                StartupBootstrapOutcome::AlreadyRunning
+            }
+        },
     }
 }
 
@@ -3585,5 +3735,470 @@ mod tests {
 
         assert!(error.contains("resources/runtime-pack/windows-x86_64"));
         assert!(!error.contains(env!("CARGO_MANIFEST_DIR")));
+    }
+
+    // ---- T4 (S1, S8) startup auto-bootstrap trigger ----
+    //
+    // The trigger fires once per process after `validate_startup`: an
+    // eligible fixture pack in a release runtime starts exactly one
+    // background transfer through the T2 single-flight `ops_lock`, and
+    // every other combination skips without opening a fetch, touching
+    // the lock, or reaching the network.
+
+    fn fixture_status_for_startup(eligible: bool) -> RuntimeStatus {
+        RuntimeStatus {
+            state: RuntimeState::Fixture,
+            pack_version: Some("2026.05.0".to_string()),
+            repair_needed: false,
+            repair_available: eligible,
+            summary: "Runtime de IA pendiente de descarga para test".to_string(),
+            blocked_capabilities: blocked_capabilities(),
+            details: vec![],
+            guidance: vec![],
+            bootstrap_eligible: eligible,
+            bootstrap_required: true,
+            active_operation: None,
+        }
+    }
+
+    fn release_gate_for_startup_tests() -> StartupBootstrapGate {
+        StartupBootstrapGate {
+            release_runtime: true,
+            dev_profile_active: false,
+            automated_test: false,
+        }
+    }
+
+    #[test]
+    fn startup_downloads_once_on_a_fixture_pack() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        let status = fixture_status_for_startup(true);
+        let gate = release_gate_for_startup_tests();
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        let entered = std::sync::Arc::new(AtomicBool::new(false));
+        let released = std::sync::Arc::new(AtomicBool::new(false));
+        let make_run = || {
+            let fetches = fetches.clone();
+            let entered = entered.clone();
+            let released = released.clone();
+            move || {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                entered.store(true, Ordering::SeqCst);
+                while !released.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        };
+
+        // Bounded retry: the single-flight lock is process-global, so an
+        // unrelated runtime test may hold it briefly while this test starts.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let handle = loop {
+            match trigger_startup_bootstrap_with(&status, gate, "t4-downloads-once", make_run()) {
+                StartupBootstrapOutcome::Started(handle) => break handle,
+                StartupBootstrapOutcome::AlreadyRunning => {
+                    if Instant::now() > deadline {
+                        panic!("ops lock stayed busy past 30s");
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                StartupBootstrapOutcome::Skipped(reason) => {
+                    panic!("eligible fixture in release mode must start, got {reason:?}")
+                }
+            }
+        };
+
+        // Wait until the worker is genuinely in flight (bounded so the
+        // suite can never hang if the scheduler stalls).
+        let entered_deadline = Instant::now() + Duration::from_secs(10);
+        while !entered.load(Ordering::SeqCst) {
+            if Instant::now() > entered_deadline {
+                panic!("startup worker must enter the background transfer");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // Second trigger while running: idempotent, no second fetch, and it
+        // returns promptly instead of blocking on the in-flight transfer.
+        match trigger_startup_bootstrap_with(&status, gate, "t4-downloads-once-second", make_run())
+        {
+            StartupBootstrapOutcome::AlreadyRunning => {}
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("second trigger while running must not open a second fetch")
+            }
+            StartupBootstrapOutcome::Skipped(reason) => {
+                panic!("second trigger while running must report busy, got {reason:?}")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "exactly one background transfer for two triggers"
+        );
+
+        released.store(true, Ordering::SeqCst);
+        handle.join().expect("worker joins");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "releasing the worker must not start another transfer"
+        );
+    }
+
+    #[test]
+    fn startup_skips_when_disabled_or_in_a_dev_profile() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        let make_run = || {
+            let fetches = fetches.clone();
+            move || {
+                fetches.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+
+        // No source configured (T3 ineligible fixture): skip, no fetch.
+        match trigger_startup_bootstrap_with(
+            &fixture_status_for_startup(false),
+            release_gate_for_startup_tests(),
+            "t4-skips-disabled",
+            make_run(),
+        ) {
+            StartupBootstrapOutcome::Skipped(reason) => assert_eq!(
+                reason,
+                StartupBootstrapSkip::SourceNotConfigured,
+                "ineligible fixture must skip as SourceNotConfigured"
+            ),
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("an ineligible fixture must never open a fetch")
+            }
+            StartupBootstrapOutcome::AlreadyRunning => {
+                panic!("ineligible fixture must skip, not report busy")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "skipped start opens no fetch"
+        );
+
+        // Dev profile active: skip even with an eligible fixture, no fetch.
+        let dev_gate = StartupBootstrapGate {
+            dev_profile_active: true,
+            ..release_gate_for_startup_tests()
+        };
+        match trigger_startup_bootstrap_with(
+            &fixture_status_for_startup(true),
+            dev_gate,
+            "t4-skips-dev-profile",
+            make_run(),
+        ) {
+            StartupBootstrapOutcome::Skipped(reason) => assert_eq!(
+                reason,
+                StartupBootstrapSkip::DevProfileActive,
+                "dev profile must skip as DevProfileActive"
+            ),
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("a dev profile must never open a fetch")
+            }
+            StartupBootstrapOutcome::AlreadyRunning => {
+                panic!("dev profile must skip, not report busy")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "skipped start opens no fetch"
+        );
+
+        // Skipping leaves no state behind: the single-flight lock is still
+        // free (bounded probe — an unrelated test may hold it briefly).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match crate::runtime::ops_lock::try_acquire("t4-skip-probe") {
+                Ok(_guard) => break,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => panic!("skip path must not hold the ops lock: {error}"),
+            }
+        }
+    }
+
+    #[test]
+    fn startup_skips_in_debug_builds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // `cargo test` is itself a debug build: the live gate must report a
+        // non-release runtime here, which is exactly the production guard
+        // that keeps `tauri dev` and test runs from ever auto-downloading.
+        let live = StartupBootstrapGate::live();
+        assert!(
+            !live.release_runtime,
+            "the live gate must say non-release inside the debug test build"
+        );
+
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        let outcome = trigger_startup_bootstrap_with(
+            &fixture_status_for_startup(true),
+            live,
+            "t4-skips-debug",
+            {
+                let fetches = fetches.clone();
+                move || {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        );
+        match outcome {
+            // The release gate wins over every other layer, so a debug
+            // test binary reports NotReleaseBuild (not AutomatedTest).
+            StartupBootstrapOutcome::Skipped(reason) => assert_eq!(
+                reason,
+                StartupBootstrapSkip::NotReleaseBuild,
+                "debug build must skip as NotReleaseBuild"
+            ),
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("a debug build must never open a fetch")
+            }
+            StartupBootstrapOutcome::AlreadyRunning => {
+                panic!("debug build must skip, not report busy")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "skipped start opens no fetch"
+        );
+
+        // Second S8 layer: even a release build under `cfg(test)` skips, so
+        // a `cargo test --release` run could never auto-download either.
+        let release_test_gate = StartupBootstrapGate {
+            automated_test: true,
+            ..release_gate_for_startup_tests()
+        };
+        match trigger_startup_bootstrap_with(
+            &fixture_status_for_startup(true),
+            release_test_gate,
+            "t4-skips-automated-test",
+            {
+                let fetches = fetches.clone();
+                move || {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        ) {
+            StartupBootstrapOutcome::Skipped(reason) => assert_eq!(
+                reason,
+                StartupBootstrapSkip::AutomatedTest,
+                "test run must skip as AutomatedTest"
+            ),
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("an automated test run must never open a fetch")
+            }
+            StartupBootstrapOutcome::AlreadyRunning => {
+                panic!("test run must skip, not report busy")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "skipped start opens no fetch"
+        );
+    }
+
+    #[test]
+    fn startup_skips_when_pack_is_not_a_fixture() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut healthy = fixture_status_for_startup(true);
+        healthy.state = RuntimeState::Healthy;
+        healthy.bootstrap_eligible = false;
+        healthy.bootstrap_required = false;
+
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        match trigger_startup_bootstrap_with(
+            &healthy,
+            release_gate_for_startup_tests(),
+            "t4-skips-healthy",
+            {
+                let fetches = fetches.clone();
+                move || {
+                    fetches.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        ) {
+            StartupBootstrapOutcome::Skipped(reason) => assert_eq!(
+                reason,
+                StartupBootstrapSkip::NotFixturePack,
+                "healthy pack must skip as NotFixturePack"
+            ),
+            StartupBootstrapOutcome::Started(_) => {
+                panic!("a healthy runtime must never re-trigger a bootstrap")
+            }
+            StartupBootstrapOutcome::AlreadyRunning => {
+                panic!("healthy pack must skip, not report busy")
+            }
+        }
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            0,
+            "skipped start opens no fetch"
+        );
+    }
+
+    #[test]
+    fn startup_resumes_after_restart() {
+        use crate::runtime::download::test_support::{build_signed_release, runtime_archive_bytes};
+        use crate::runtime::download::{
+            bootstrap_download_plan_paths,
+            download_and_activate_remote_runtime_with_ranged_fetch_and_cancel, FetchResponse,
+        };
+        use std::io::{Cursor, Read};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        struct FailAfter {
+            remaining: Vec<u8>,
+        }
+
+        impl Read for FailAfter {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.remaining.is_empty() {
+                    return Err(std::io::Error::other("simulated mid-download crash"));
+                }
+                let chunk = buf.len().min(self.remaining.len());
+                buf[..chunk].copy_from_slice(&self.remaining[..chunk]);
+                self.remaining.drain(..chunk);
+                Ok(chunk)
+            }
+        }
+
+        let app_data_dir = tempdir().expect("app data dir");
+        let archive_bytes = runtime_archive_bytes();
+        let (release, public_key) = build_signed_release(&archive_bytes);
+        let cut = 100usize.min(archive_bytes.len() / 2).max(1);
+        let prefix = archive_bytes[..cut].to_vec();
+
+        // First launch dies mid-download (network failure): T1 keeps the
+        // partial plus durable resume state — the "app closed" simulation.
+        let error = download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_url, _range| {
+                Ok(FetchResponse {
+                    reader: FailAfter {
+                        remaining: prefix.clone(),
+                    },
+                    resumed: false,
+                    content_range_start: None,
+                    range_not_satisfiable: false,
+                })
+            },
+            None,
+            &mut |_| {},
+        )
+        .expect_err("interrupted download must fail");
+        assert!(
+            error.contains("Failed while reading"),
+            "unexpected error: {error}"
+        );
+        let tmp = bootstrap_download_plan_paths(
+            app_data_dir.path(),
+            &release.pack_version,
+            "runtime-pack.zip",
+        )
+        .archive_path
+        .with_extension("download.tmp");
+        assert_eq!(
+            fs::metadata(&tmp).expect("tmp metadata").len(),
+            cut as u64,
+            "crash must keep the staged prefix"
+        );
+
+        // Second launch: the startup trigger resumes with Range from the
+        // kept offset instead of restarting from zero.
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fetches = std::sync::Arc::new(AtomicUsize::new(0));
+        let status = fixture_status_for_startup(true);
+        let make_run = || {
+            let bytes = archive_bytes.clone();
+            let release = release.clone();
+            let public_key = public_key.clone();
+            let data_dir = app_data_dir.path().to_path_buf();
+            let observed = observed.clone();
+            let fetches = fetches.clone();
+            move || {
+                fetches.fetch_add(1, Ordering::SeqCst);
+                download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+                    "https://example.com/runtime/bootstrap.json",
+                    &release,
+                    &data_dir,
+                    &public_key,
+                    |_url, range| {
+                        observed
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(range);
+                        let from = range.expect("resume must carry a Range offset") as usize;
+                        Ok(FetchResponse {
+                            reader: Cursor::new(bytes[from..].to_vec()),
+                            resumed: true,
+                            content_range_start: Some(from as u64),
+                            range_not_satisfiable: false,
+                        })
+                    },
+                    None,
+                    &mut |_| {},
+                )
+            }
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let handle = loop {
+            match trigger_startup_bootstrap_with(
+                &status,
+                release_gate_for_startup_tests(),
+                "t4-resume",
+                make_run(),
+            ) {
+                StartupBootstrapOutcome::Started(handle) => break handle,
+                StartupBootstrapOutcome::AlreadyRunning => {
+                    if Instant::now() > deadline {
+                        panic!("ops lock stayed busy past 30s");
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                StartupBootstrapOutcome::Skipped(reason) => {
+                    panic!("eligible fixture in release mode must start, got {reason:?}")
+                }
+            }
+        };
+        let outcome = handle
+            .join()
+            .expect("worker joins")
+            .expect("resumed bootstrap must succeed");
+        assert_eq!(
+            fetches.load(Ordering::SeqCst),
+            1,
+            "one trigger, one transfer"
+        );
+        assert_eq!(
+            *observed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![Some(cut as u64)],
+            "the second trigger must resume with Range at the kept offset"
+        );
+        assert_eq!(
+            fs::read(&outcome.archive_path).expect("final archive"),
+            archive_bytes
+        );
+        assert!(outcome.managed_root.join("manifest.json").is_file());
     }
 }
