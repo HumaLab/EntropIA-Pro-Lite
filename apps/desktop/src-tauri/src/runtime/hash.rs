@@ -24,7 +24,7 @@ pub(crate) fn sha256_file_streaming(path: &Path) -> std::io::Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -44,7 +44,7 @@ mod tests {
             .map(|index| (index % 251) as u8)
             .collect();
         for bytes in [&b""[..], &b"python"[..], &multi_buffer[..]] {
-            assert_eq!(hash_of(bytes), format!("{:x}", Sha256::digest(bytes)));
+            assert_eq!(hash_of(bytes), hex::encode(Sha256::digest(bytes)));
         }
     }
 

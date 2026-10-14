@@ -460,7 +460,7 @@ fn hash_file(path: &Path) -> std::io::Result<String> {
         }
         hasher.update(&block[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// A source with its captures; `None` when there is no such source.
@@ -1489,7 +1489,7 @@ mod tests {
 
     fn digest(bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     impl Env {

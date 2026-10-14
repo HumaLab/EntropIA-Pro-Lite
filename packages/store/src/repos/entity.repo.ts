@@ -17,13 +17,7 @@ export type NewEntity = {
 }
 
 export type EntityType =
-  | 'person'
-  | 'place'
-  | 'date'
-  | 'institution'
-  | 'organization'
-  | 'misc'
-  | 'custom'
+  'person' | 'place' | 'date' | 'institution' | 'organization' | 'misc' | 'custom'
 
 function assertCoordinates(latitude: number, longitude: number) {
   if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {

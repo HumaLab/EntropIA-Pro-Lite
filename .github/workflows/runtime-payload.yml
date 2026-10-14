@@ -78,7 +78,7 @@ jobs:
 
       - name: Download payload source artifact
         if: inputs.payload_source_artifact != ''
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ inputs.payload_source_artifact }}
           path: ${{ runner.temp }}/runtime-payload-source

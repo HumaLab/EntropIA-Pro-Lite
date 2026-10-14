@@ -11,13 +11,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 export type ZoteroCopyState =
-  | 'queued'
-  | 'waiting'
-  | 'running'
-  | 'copied'
-  | 'linked'
-  | 'failed'
-  | 'cancelled'
+  'queued' | 'waiting' | 'running' | 'copied' | 'linked' | 'failed' | 'cancelled'
 
 /** What a run found, as Rust recorded it. */
 export type ZoteroCopyDetail = {
@@ -93,12 +87,7 @@ export type ZoteroLibraryChoice = {
 export type ZoteroDrain = { reachable: boolean; copies: ZoteroCopy[] }
 
 export type ZoteroLaunch =
-  | 'already_running'
-  | 'started'
-  | 'not_found'
-  | 'too_soon'
-  | 'unsupported'
-  | 'spawn_failed'
+  'already_running' | 'started' | 'not_found' | 'too_soon' | 'unsupported' | 'spawn_failed'
 
 export function navegadorZoteroRequest(
   sourceId: string,

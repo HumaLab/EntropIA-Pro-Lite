@@ -645,7 +645,7 @@ fn verify_part(part: &Path, max: u64) -> Result<Verified, &'static str> {
     }
     Ok(Verified {
         size: seen,
-        sha256: format!("{:x}", hasher.finalize()),
+        sha256: hex::encode(hasher.finalize()),
     })
 }
 

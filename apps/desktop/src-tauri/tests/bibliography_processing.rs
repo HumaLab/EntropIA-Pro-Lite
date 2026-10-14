@@ -670,7 +670,7 @@ fn batch_task_reads_keep_an_unknown_bibliography_total_explicit() {
         )
         .expect("current first-page checkpoint");
     let stale_payload = r#"{"next_start":2,"total":99,"items":[]}"#;
-    let stale_checksum = format!("{:x}", Sha256::digest(stale_payload.as_bytes()));
+    let stale_checksum = hex::encode(Sha256::digest(stale_payload.as_bytes()));
     conn.execute(
         "INSERT INTO processing_checkpoints
             (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -6905,7 +6905,7 @@ fn ocr_checkpoints_resume_without_resending_content() {
     // have left it: correct fingerprint, contract, and checksum.
     let cached = "Texto ya reconocido en un intento anterior con longitud suficiente";
     let payload = serde_json::to_string(&cached.to_string()).expect("payload json");
-    let checksum = format!("{:x}", sha2::Sha256::digest(payload.as_bytes()));
+    let checksum = hex::encode(sha2::Sha256::digest(payload.as_bytes()));
     conn.execute(
         "INSERT INTO processing_checkpoints
            (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -11787,7 +11787,7 @@ fn seed_stored_texts(
             item_id: item_id.to_string(),
             page_count: 1,
             method: "native".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(extraction_text.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(extraction_text.as_bytes())),
             text_chars: extraction_text.chars().count() as i64,
             quality: quality.to_string(),
             text_content: extraction_text.to_string(),
@@ -11803,7 +11803,7 @@ fn seed_stored_texts(
             attachment_id: attachment_id.to_string(),
             page_number: 1,
             method: "native".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(page_text.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(page_text.as_bytes())),
             text_chars: page_text.chars().count() as i64,
             quality: quality.to_string(),
             text_content: page_text.to_string(),
@@ -12344,7 +12344,7 @@ fn plant_running_extraction(conn: &rusqlite::Connection, fixture: RunningExtract
     .expect("open attempt");
     for (index, (unit_key, created_at)) in landings.iter().enumerate() {
         let payload = format!("\"pagina landing {index}\"");
-        let checksum = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let checksum = hex::encode(Sha256::digest(payload.as_bytes()));
         conn.execute(
             "INSERT INTO processing_checkpoints
                (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -12766,7 +12766,7 @@ fn chunking_never_carries_html_tags_into_passages() {
             attachment_id,
             page_number: 1,
             method: "ocr".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(OCR_TABLE_HTML.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(OCR_TABLE_HTML.as_bytes())),
             text_chars: OCR_TABLE_HTML.chars().count() as i64,
             quality: "empty".to_string(),
             text_content: OCR_TABLE_HTML.to_string(),
