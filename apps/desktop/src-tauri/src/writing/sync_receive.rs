@@ -820,7 +820,7 @@ fn scoped_child_id(kind: &str, document_id: &str, semantic_identity: &str, salt:
     digest.update(semantic_identity.as_bytes());
     digest.update([0]);
     digest.update(salt.to_le_bytes());
-    format!("writing-sync-{kind}-{:x}", digest.finalize())
+    format!("writing-sync-{kind}-{}", hex::encode(digest.finalize()))
 }
 
 fn json_text(field: &str, value: &Value) -> WritingResult<String> {

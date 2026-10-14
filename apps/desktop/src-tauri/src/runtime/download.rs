@@ -302,7 +302,7 @@ where
         ));
     }
 
-    let archive_sha256 = format!("{:x}", hasher.finalize());
+    let archive_sha256 = hex::encode(hasher.finalize());
     if archive_sha256 != release.archive_sha256 {
         return Err(format!(
             "Downloaded runtime archive checksum mismatch: expected {}, got {}",
@@ -684,7 +684,7 @@ pub(crate) mod test_support {
         let signing_key = SigningKey::from_bytes(&[11u8; 32]);
         let unsigned = sample_release(
             String::new(),
-            format!("{:x}", Sha256::digest(archive_bytes)),
+            hex::encode(Sha256::digest(archive_bytes)),
             archive_bytes.len() as u64,
         );
         let signature = signing_key.sign(unsigned.signature_payload().as_bytes());
@@ -723,13 +723,13 @@ pub(crate) mod test_support {
                 uv_relpath: "uv/bin/uv".to_string(),
                 python_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "python/bin/python3".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"python")),
+                    sha256: hex::encode(Sha256::digest(b"python")),
                     size: 6,
                     executable: !cfg!(windows),
                 }],
                 uv_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "uv/bin/uv".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"uv")),
+                    sha256: hex::encode(Sha256::digest(b"uv")),
                     size: 2,
                     executable: true,
                 }],
@@ -844,7 +844,7 @@ mod tests {
             pack_version: "2026.05.1".to_string(),
             archive_url: "https://example.com/runtime-pack.zip.part1".to_string(),
             additional_part_urls: vec!["https://example.com/runtime-pack.zip.part2".to_string()],
-            archive_sha256: format!("{:x}", Sha256::digest(&archive_bytes)),
+            archive_sha256: hex::encode(Sha256::digest(&archive_bytes)),
             archive_size: archive_bytes.len() as u64,
             signature: String::new(),
         };
@@ -989,7 +989,7 @@ mod tests {
                 uv_relpath: "uv/bin/uv".to_string(),
                 python_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "python/bin/python3".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"python")),
+                    sha256: hex::encode(Sha256::digest(b"python")),
                     size: 6,
                     executable: !cfg!(windows),
                 }],

@@ -765,8 +765,8 @@ mod tests {
         std::fs::write(&python_path, b"python").expect("write python");
         std::fs::write(&uv_path, b"uv").expect("write uv");
         std::fs::write(&venv_python, b"venv-python").expect("write venv python");
-        let python_sha = format!("{:x}", sha2::Sha256::digest(b"python"));
-        let uv_sha = format!("{:x}", sha2::Sha256::digest(b"uv"));
+        let python_sha = hex::encode(sha2::Sha256::digest(b"python"));
+        let uv_sha = hex::encode(sha2::Sha256::digest(b"uv"));
         std::fs::write(
             managed_root.join("manifest.json"),
             serde_json::to_vec_pretty(&crate::runtime::manifest::RuntimeManifest {

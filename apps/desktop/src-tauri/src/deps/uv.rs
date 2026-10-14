@@ -170,7 +170,7 @@ fn verify_pinned_uv_sha256(path: &Path, expected: &str) -> Result<(), String> {
             path.display()
         )
     })?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
+    let actual = hex::encode(Sha256::digest(&bytes));
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
@@ -981,7 +981,7 @@ mod tests {
         let exe = dir.path().join(UV_EXECUTABLE_NAME);
         let bytes = b"pinned-uv-bytes";
         fs::write(&exe, bytes).expect("write fake uv");
-        let expected = format!("{:x}", Sha256::digest(bytes));
+        let expected = hex::encode(Sha256::digest(bytes));
 
         assert!(
             verify_pinned_uv_sha256(&exe, &expected).is_ok(),

@@ -279,7 +279,7 @@ fn validate_envelope_and_manifest<'a>(
         }
     }
 
-    let fingerprint = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+    let fingerprint = hex::encode(Sha256::digest(canonical.as_bytes()));
     Ok((limits, fingerprint, files))
 }
 
@@ -496,7 +496,7 @@ fn read_upload_bytes(
                 format!("cannot read verified attachment {path:?}: {error}"),
             )
         })?;
-    if bytes.len() as u64 != entry.size || format!("{:x}", Sha256::digest(&bytes)) != entry.sha256 {
+    if bytes.len() as u64 != entry.size || hex::encode(Sha256::digest(&bytes)) != entry.sha256 {
         return Err(WritingBlobPending::new(
             WritingBlobPendingKind::LocalContentChanged,
             format!(

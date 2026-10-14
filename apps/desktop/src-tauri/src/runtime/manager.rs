@@ -1700,7 +1700,7 @@ mod tests {
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(&path, bytes).expect("write file");
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     fn sample_manifest(platform: &str, python_sha: &str, uv_sha: &str) -> RuntimeManifest {
