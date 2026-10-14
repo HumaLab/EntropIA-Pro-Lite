@@ -1,13 +1,15 @@
 name: Windows Pro validation
 
 # Isolated artifact-only validation for the Windows Pro (local-ml) installers.
-# Triggered ONLY by pushes to feat/internet-archive that touch this workflow
-# file; documentation-only pushes do not retrigger the ~35-60 min MNN build.
+# Triggered ONLY by pushes to feat/internet-archive or
+# feat/runtime-auto-bootstrap that touch this workflow file;
+# documentation-only pushes do not retrigger the ~35-60 min MNN build.
 # Never creates a GitHub release: artifacts only.
 on:
   push:
     branches:
       - feat/internet-archive
+      - feat/runtime-auto-bootstrap
     paths:
       - .github/workflows/windows-pro-validation.yml
 
