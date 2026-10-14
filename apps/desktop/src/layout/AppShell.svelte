@@ -18,9 +18,14 @@
   import {
     getRuntimeStatus,
     onRuntimeStatus,
+    onRuntimeProgress,
     repairRuntime,
+    startRuntimeBootstrap,
+    cancelRuntimeDownload,
+    formatBootstrapSize,
     runtimeBlocksCurrentUse,
     shouldShowRuntimeRepairAction,
+    type RuntimeOperation,
     type RuntimeStatus,
   } from '$lib/runtime'
   import { LOCAL_ML, NAVEGADOR } from '$lib/capabilities'
@@ -311,6 +316,11 @@
   let depsResults = $state<DepCheckResult[]>([])
   let runtimeStatus = $state<RuntimeStatus | null>(null)
   let uvStatus = $state<UvStatusResult | null>(null)
+  // Latest bootstrap transfer snapshot from `runtime://progress` events.
+  // The status snapshot's `activeOperation` is the fallback (it is what
+  // paints first when T4 auto-started the download before mount).
+  let runtimeProgress = $state<RuntimeOperation | null>(null)
+  let bootstrapBusy = $state(false)
 
   const hasCriticalMissing = $derived(
     depsResults.some(
@@ -339,6 +349,41 @@
   const blockedRuntimeCapabilities = $derived(
     runtimeBlocksActiveCapabilities ? (runtimeStatus?.blockedCapabilities ?? []).join(', ') : ''
   )
+  // The transfer the banner reports on: live progress events win, the
+  // status snapshot covers the auto-started download on first paint.
+  const bootstrapOperation = $derived(
+    runtimeProgress ?? runtimeStatus?.activeOperation ?? null
+  )
+  const isBootstrapDownloading = $derived(
+    bootstrapOperation?.stage === 'downloading' || runtimeStatus?.state === 'downloading'
+  )
+  // Failed/offline (`blocked` + retryable) and eligible-but-pending
+  // fixture banners offer a retry — this is the action users stuck on the
+  // fixture banner without a button were missing.
+  const showBootstrapRetry = $derived(
+    !isBootstrapDownloading &&
+      runtimeStatus?.bootstrapEligible === true &&
+      bootstrapOperation?.retryable === true
+  )
+  const bootstrapPercent = $derived.by(() => {
+    const op = bootstrapOperation
+    if (!isBootstrapDownloading || !op) return null
+    if (op.progressPercent != null)
+      return Math.max(0, Math.min(100, Math.round(op.progressPercent)))
+    if (op.downloadedBytes != null && op.totalBytes)
+      return Math.max(0, Math.min(100, Math.round((op.downloadedBytes / op.totalBytes) * 100)))
+    return null
+  })
+  const bootstrapProgressLabel = $derived.by(() => {
+    const op = bootstrapOperation
+    if (!isBootstrapDownloading || !op) return null
+    const downloaded = formatBootstrapSize(op.downloadedBytes)
+    const total = formatBootstrapSize(op.totalBytes)
+    if (downloaded && total && bootstrapPercent != null)
+      return `${downloaded} de ${total} (${bootstrapPercent} %)`
+    if (bootstrapPercent != null) return `${bootstrapPercent} %`
+    return op.summary
+  })
 
   // Critical-missing is announced through a single persistent channel: the
   // actionable deps banner in <main> (see template below). The TopBar badge is
@@ -350,6 +395,7 @@
 
   let unlistenDepsComplete: (() => void) | undefined
   let unlistenRuntimeStatus: (() => void) | undefined
+  let unlistenRuntimeProgress: (() => void) | undefined
   let stopNavegadorLifecycle: (() => void) | undefined
 
   onMount(async () => {
@@ -385,6 +431,19 @@
 
     unlistenRuntimeStatus = await onRuntimeStatus((status) => {
       runtimeStatus = status
+      // A status that is no longer downloading ends the transfer the
+      // progress events were describing — drop the stale snapshot so the
+      // banner falls back to the status payload (pending, retryable, done).
+      if (status.state !== 'downloading' && status.activeOperation?.stage !== 'downloading') {
+        runtimeProgress = null
+      }
+    })
+
+    unlistenRuntimeProgress = await onRuntimeProgress((operation) => {
+      // DependenciasTab owns the full operation panel; the banner only
+      // tracks the bootstrap transfer, never a repair.
+      if (operation.kind !== 'bootstrap') return
+      runtimeProgress = operation
     })
 
     void Promise.all([getRuntimeStatus(), getUvStatus()])
@@ -401,6 +460,7 @@
     document.removeEventListener('keydown', handleKeydown)
     unlistenDepsComplete?.()
     unlistenRuntimeStatus?.()
+    unlistenRuntimeProgress?.()
     stopNavegadorLifecycle?.()
   })
 
@@ -421,6 +481,35 @@
       uvStatus = uv
     } catch (error) {
       console.error('[AppShell] runtime repair failed', error)
+    }
+  }
+
+  async function handleBootstrapRetry() {
+    bootstrapBusy = true
+    try {
+      const status = await startRuntimeBootstrap()
+      runtimeStatus = status
+      if (status.state !== 'downloading' && status.activeOperation?.stage !== 'downloading') {
+        runtimeProgress = null
+      }
+    } catch (error) {
+      console.error('[AppShell] runtime bootstrap retry failed', error)
+    } finally {
+      bootstrapBusy = false
+    }
+  }
+
+  async function handleBootstrapCancel() {
+    bootstrapBusy = true
+    try {
+      // A user cancel is quiet by design (T2): the backend keeps the
+      // partial for resume and re-emits the pending status, which clears
+      // the progress snapshot through the status listener above.
+      if (await cancelRuntimeDownload()) runtimeProgress = null
+    } catch (error) {
+      console.error('[AppShell] runtime bootstrap cancel failed', error)
+    } finally {
+      bootstrapBusy = false
     }
   }
 
@@ -588,11 +677,50 @@
               {#if runtimeStatus?.guidance?.length}
                 <span>{runtimeStatus.guidance[0]}</span>
               {/if}
+              {#if isBootstrapDownloading && bootstrapProgressLabel}
+                <div class="deps-banner__progress">
+                  <span>{bootstrapProgressLabel}</span>
+                  {#if bootstrapPercent != null}
+                    <div
+                      class="deps-banner__bar"
+                      role="progressbar"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow={bootstrapPercent}
+                      aria-label="Progreso de descarga del runtime"
+                    >
+                      <div
+                        class="deps-banner__bar-fill"
+                        style:width={`${bootstrapPercent}%`}
+                      ></div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
             {#if shouldShowRuntimeRepairAction(runtimeStatus)}
               <button class="deps-banner__btn" type="button" onclick={handleRuntimeRepair}>
                 <ActionIcon name="wrench" size={16} />
                 Reparar runtime
+              </button>
+            {/if}
+            {#if isBootstrapDownloading}
+              <button
+                class="deps-banner__btn"
+                type="button"
+                onclick={handleBootstrapCancel}
+                disabled={bootstrapBusy}
+              >
+                Pausar descarga
+              </button>
+            {:else if showBootstrapRetry}
+              <button
+                class="deps-banner__btn"
+                type="button"
+                onclick={handleBootstrapRetry}
+                disabled={bootstrapBusy}
+              >
+                Reintentar descarga
               </button>
             {/if}
           </div>
@@ -989,6 +1117,28 @@
 
   .deps-banner__copy strong {
     color: var(--color-text-primary);
+  }
+
+  /* Bootstrap download progress: label plus a thin fill bar under the copy. */
+  .deps-banner__progress {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-top: var(--space-1);
+  }
+
+  .deps-banner__bar {
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: rgba(245, 158, 11, 0.18);
+  }
+
+  .deps-banner__bar-fill {
+    height: 100%;
+    border-radius: var(--radius-sm);
+    background: var(--color-warning);
+    transition: width var(--transition-base);
   }
 
   /* Leading icon + label: the arrow glyph these buttons used to end with said

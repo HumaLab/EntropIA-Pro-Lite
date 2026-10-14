@@ -4,6 +4,9 @@ import {
   getRuntimeStatus,
   getRuntimeBootstrapPlan,
   repairRuntime,
+  startRuntimeBootstrap,
+  cancelRuntimeDownload,
+  formatBootstrapSize,
   onRuntimeStatus,
   onRuntimeProgress,
   runtimeCanBootstrapAutomatically,
@@ -90,6 +93,55 @@ describe('runtime client', () => {
 
     expect(invoke).toHaveBeenCalledWith('runtime_get_bootstrap_plan')
     expect(result.source).toBe('trusted_remote')
+  })
+
+  it.runIf(LOCAL_ML)('startRuntimeBootstrap calls the bootstrap start command', async () => {
+    const status: RuntimeStatus = {
+      state: 'downloading',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'Descargando runtime de IA',
+      blockedCapabilities: ['ocr'],
+      details: [],
+      guidance: [],
+      bootstrapEligible: true,
+      bootstrapRequired: true,
+      activeOperation: null,
+    }
+    vi.mocked(invoke).mockResolvedValueOnce(status)
+
+    const result = await startRuntimeBootstrap()
+
+    expect(invoke).toHaveBeenCalledWith('runtime_bootstrap_start')
+    expect(result).toEqual(status)
+  })
+
+  it.runIf(LOCAL_ML)('cancelRuntimeDownload calls the cancel command', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce(true)
+
+    await expect(cancelRuntimeDownload()).resolves.toBe(true)
+
+    expect(invoke).toHaveBeenCalledWith('runtime_cancel_download')
+  })
+
+  it('formatBootstrapSize renders gigabytes with one decimal in Spanish', () => {
+    expect(formatBootstrapSize(2_440_000_000)).toBe('2,4 GB')
+    expect(formatBootstrapSize(610_000_000)).toBe('0,6 GB')
+    expect(formatBootstrapSize(0)).toBe('0,0 GB')
+    expect(formatBootstrapSize(null)).toBeNull()
+    expect(formatBootstrapSize(undefined)).toBeNull()
+    expect(formatBootstrapSize(-1)).toBeNull()
+  })
+
+  it.runIf(!LOCAL_ML)('keeps bootstrap start and cancel inert in Lite', async () => {
+    const status = await startRuntimeBootstrap()
+    const cancelled = await cancelRuntimeDownload()
+
+    expect(status.state).toBe('healthy')
+    expect(cancelled).toBe(false)
+    expect(invoke).not.toHaveBeenCalledWith('runtime_bootstrap_start')
+    expect(invoke).not.toHaveBeenCalledWith('runtime_cancel_download')
   })
 
   it.runIf(LOCAL_ML)('onRuntimeStatus subscribes to runtime status events', async () => {
