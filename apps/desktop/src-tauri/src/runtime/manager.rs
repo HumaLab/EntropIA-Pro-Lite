@@ -669,9 +669,9 @@ pub(crate) struct StartupBootstrapGate {
     /// pull ~2.4 GB on their own. It alone already protects `cargo test`,
     /// but S8 forbids relying on it alone, hence the two layers below.
     pub release_runtime: bool,
-    /// True while a dev profile is active (`ENTROPIA_DEV_PROFILE`), read
-    /// through the established `dev_profile::active()` slot, which setup
-    /// activates before `validate_startup` runs.
+    /// True while a dev profile is active, read through the established
+    /// `dev_profile::active()` slot, which setup activates before
+    /// `validate_startup` runs.
     pub dev_profile_active: bool,
     /// True under `cfg(test)`, so even a `cargo test --release` run could
     /// never auto-download.
