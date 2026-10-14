@@ -231,6 +231,15 @@ describe('runtime pack packaging', () => {
       }
     }
 
+    // Tauri replaces arrays on merge: a platform overlay without its own list
+    // silently inherits the base tauri.conf.json resources, Pro payload included.
+    for (const name of liteConfigNames.filter((n) => n !== 'tauri.lite.conf.json')) {
+      const config = JSON.parse(readRepoFile('apps/desktop/src-tauri', name)) as {
+        bundle?: { resources?: string[] }
+      }
+      expect(config.bundle?.resources, `${name} must define bundle.resources`).toBeDefined()
+    }
+
     // Windows-only payload must not leak into the Unix Lite overlays: build.rs
     // stages vc-runtime only for windows-msvc, so the glob would match nothing
     // and fail the bundle.
