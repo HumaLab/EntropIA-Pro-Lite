@@ -850,6 +850,91 @@ describe('AppShell', () => {
       expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Pausar descarga' })).not.toBeInTheDocument()
     })
+
+    it.runIf(LOCAL_ML)('status_rejects_but_progress_arrives_shows_banner', async () => {
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') return Promise.reject(new Error('catalog timeout'))
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('runtime_get_status'))
+      // The VM case: no snapshot, no banner yet.
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      progressHandler?.({
+        payload: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 'Descargando runtime de IA',
+          progressPercent: 10,
+          downloadedBytes: 244_000_000,
+          totalBytes: 2_440_000_000,
+          retryable: false,
+        },
+      })
+
+      expect(await screen.findByRole('progressbar')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Pausar descarga' })).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('uv_rejects_but_status_resolves_shows_banner', async () => {
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') return Promise.resolve(pendingFixtureStatus())
+        if (c === 'deps_get_uv_status') return Promise.reject(new Error('uv timeout'))
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      // A uv failure must never discard the good runtime snapshot.
+      expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('status_retry_succeeds_after_failure', async () => {
+      let statusCalls = 0
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') {
+          statusCalls += 1
+          if (statusCalls === 1) return Promise.reject(new Error('catalog timeout'))
+          return Promise.resolve(pendingFixtureStatus())
+        }
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
+      // Bounded: exactly one retry, no unbounded polling.
+      expect(statusCalls).toBe(2)
+    })
+
+    it.runIf(LOCAL_ML)('progress_banner_clears_when_non_downloading_status_arrives', async () => {
+      invokeMock.mockImplementation((c: string) =>
+        c === 'runtime_get_status' ? Promise.reject(new Error('x')) : Promise.resolve([])
+      )
+      render(AppShellHost)
+      await waitFor(() =>
+        expect(listenMock).toHaveBeenCalledWith('runtime://progress', expect.any(Function))
+      )
+      progressHandler?.({
+        payload: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 's',
+          progressPercent: 10,
+          downloadedBytes: 1,
+          totalBytes: 10,
+          retryable: false,
+        },
+      })
+      expect(await screen.findByRole('progressbar')).toBeInTheDocument()
+      statusHandler?.({
+        payload: { ...pendingFixtureStatus(), state: 'healthy', blockedCapabilities: [] },
+      })
+      await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument())
+    })
   })
 
   // Regression guard (Stage 2 visual fix #1): `.content` used to be a plain

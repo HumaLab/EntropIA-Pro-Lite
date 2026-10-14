@@ -354,6 +354,20 @@
   const bootstrapOperation = $derived(
     runtimeProgress ?? runtimeStatus?.activeOperation ?? null
   )
+  // The banner also renders on live-transfer evidence alone: if the
+  // first-paint status snapshot never arrived (slow/blocking catalog
+  // fetch), `runtime://progress` events still describe the real download.
+  const hasLiveBootstrapProgress = $derived(
+    runtimeProgress?.kind === 'bootstrap' && runtimeProgress?.stage === 'downloading'
+  )
+  const showRuntimeBanner = $derived(
+    runtimeBlocksActiveCapabilities || hasLiveBootstrapProgress
+  )
+  // Neutral fallback while downloading without a snapshot — consistent
+  // with the backend's own downloading summary copy.
+  const bannerSummary = $derived(
+    runtimeStatus?.summary ?? (hasLiveBootstrapProgress ? 'Descargando runtime de IA' : '')
+  )
   const isBootstrapDownloading = $derived(
     bootstrapOperation?.stage === 'downloading' || runtimeStatus?.state === 'downloading'
   )
@@ -398,6 +412,72 @@
   let unlistenRuntimeProgress: (() => void) | undefined
   let stopNavegadorLifecycle: (() => void) | undefined
 
+  // The first-paint `runtime_get_status` rides a blocking catalog fetch (up
+  // to ~15 s) and used to share one single-shot `Promise.all` with the uv
+  // fetch: either side rejecting discarded BOTH snapshots forever. Each
+  // fetch now settles on its own, and the status fetch retries on a small
+  // bounded backoff (3 attempts total, no unbounded polling).
+  const RUNTIME_STATUS_ATTEMPTS = 3
+  const RUNTIME_STATUS_RETRY_DELAYS_MS = [100, 400]
+  let runtimeStatusFetchInFlight = false
+  let progressTriggeredRefetchDone = false
+  let destroyed = false
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
+  let retryWake: (() => void) | null = null
+
+  function cancelPendingStatusRetry() {
+    if (retryTimer) {
+      clearTimeout(retryTimer)
+      retryTimer = null
+    }
+    retryWake?.()
+    retryWake = null
+  }
+
+  async function fetchRuntimeStatusWithRetry(): Promise<void> {
+    if (runtimeStatusFetchInFlight) return
+    runtimeStatusFetchInFlight = true
+    try {
+      for (let attempt = 1; attempt <= RUNTIME_STATUS_ATTEMPTS; attempt += 1) {
+        try {
+          const status = await getRuntimeStatus()
+          if (destroyed) return
+          runtimeStatus = status
+          return
+        } catch (e) {
+          if (attempt >= RUNTIME_STATUS_ATTEMPTS) {
+            console.error('[AppShell] runtime status fetch failed', e)
+            return
+          }
+          await new Promise<void>((resolve) => {
+            retryWake = resolve
+            retryTimer = setTimeout(
+              () => {
+                retryTimer = null
+                retryWake = null
+                resolve()
+              },
+              RUNTIME_STATUS_RETRY_DELAYS_MS[attempt - 1] ?? 400
+            )
+          })
+          retryWake = null
+          if (destroyed) return
+        }
+      }
+    } finally {
+      runtimeStatusFetchInFlight = false
+    }
+  }
+
+  async function fetchUvStatus(): Promise<void> {
+    try {
+      const uv = await getUvStatus()
+      if (!destroyed) uvStatus = uv
+    } catch (e) {
+      console.error('[AppShell] uv status fetch failed', e)
+    }
+  }
+
   onMount(async () => {
     document.addEventListener('keydown', handleKeydown)
 
@@ -411,14 +491,8 @@
 
     unlistenDepsComplete = await onDepsComplete((event) => {
       depsResults = event.results ?? []
-      void Promise.all([getRuntimeStatus(), getUvStatus()])
-        .then(([status, uv]) => {
-          runtimeStatus = status
-          uvStatus = uv
-        })
-        .catch((e) => {
-          console.error('[AppShell] deps completion refresh failed', e)
-        })
+      void fetchRuntimeStatusWithRetry()
+      void fetchUvStatus()
     })
 
     void getCachedDepsStatuses()
@@ -444,19 +518,21 @@
       // tracks the bootstrap transfer, never a repair.
       if (operation.kind !== 'bootstrap') return
       runtimeProgress = operation
+      // A live transfer proves backend activity worth re-querying while the
+      // first-paint snapshot is still missing — once per mount, bounded.
+      if (!runtimeStatus && !progressTriggeredRefetchDone) {
+        progressTriggeredRefetchDone = true
+        void fetchRuntimeStatusWithRetry()
+      }
     })
 
-    void Promise.all([getRuntimeStatus(), getUvStatus()])
-      .then(([status, uv]) => {
-        runtimeStatus = status
-        uvStatus = uv
-      })
-      .catch((e) => {
-        console.error('[AppShell] runtime status fetch failed', e)
-      })
+    void fetchRuntimeStatusWithRetry()
+    void fetchUvStatus()
   })
 
   onDestroy(() => {
+    destroyed = true
+    cancelPendingStatusRetry()
     document.removeEventListener('keydown', handleKeydown)
     unlistenDepsComplete?.()
     unlistenRuntimeStatus?.()
@@ -661,10 +737,10 @@
       {/if}
 
       {#if LOCAL_ML}
-        {#if runtimeBlocksActiveCapabilities}
+        {#if showRuntimeBanner}
           <div class="deps-banner" role="alert">
             <div class="deps-banner__copy">
-              <strong>{runtimeStatus?.summary}</strong>
+              <strong>{bannerSummary}</strong>
               {#if runtimeStatus?.state === 'fixture'}
                 <span>
                   La app no se cayó: estás viendo un runtime-pack de desarrollo que todavía requiere
