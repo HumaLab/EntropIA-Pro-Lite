@@ -1486,6 +1486,8 @@ pub fn run() {
             runtime::runtime_get_status,
             runtime::runtime_get_bootstrap_plan,
             runtime::runtime_repair,
+            runtime::runtime_bootstrap_start,
+            runtime::runtime_cancel_download,
             app_logs::logs_get,
             app_logs::logs_clear,
             app_logs::logs_open_dir,

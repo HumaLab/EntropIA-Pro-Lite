@@ -165,6 +165,8 @@
     "allow-runtime-get-status",
     "allow-runtime-get-bootstrap-plan",
     "allow-runtime-repair",
+    "allow-runtime-bootstrap-start",
+    "allow-runtime-cancel-download",
     "allow-logs-get",
     "allow-logs-clear",
     "allow-logs-open-dir",

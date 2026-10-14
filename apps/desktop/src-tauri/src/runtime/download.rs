@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_DOWNLOAD_CHUNK_SIZE: usize = 64 * 1024;
@@ -66,6 +67,105 @@ pub(crate) fn build_bootstrap_client() -> Result<Client, String> {
         .timeout(config.read_stall_timeout)
         .build()
         .map_err(|error| format!("Failed to create bootstrap HTTP client: {error}"))
+}
+
+/// T2 (S2, S5) cancellation token: a shared flag the download read loop
+/// checks at least once per chunk, including the T1 resume path (resumed
+/// transfers flow through the same loop). The core takes an explicit
+/// `Option<&AtomicBool>` so unit tests stay hermetic with per-test tokens;
+/// production passes the command-layer flag below (`runtime_cancel_download`
+/// sets it, the `runtime_bootstrap_start` worker clears it on launch).
+///
+/// On cancel the core persists the resume state and keeps the partial (T1
+/// semantics — a later start resumes, never restarts), leaves the runtime
+/// in a clean non-downloading state, and returns the quiet sentinel below
+/// instead of the network/verification error shape.
+pub(crate) const BOOTSTRAP_DOWNLOAD_CANCELLED_MESSAGE: &str =
+    "Bootstrap download cancelled by user";
+
+/// True when `error` is the user-cancel sentinel rather than a transfer or
+/// verification failure: cancel stays quiet with the partial kept, while
+/// every other error keeps the existing failure path unchanged. Test-only
+/// for now: production distinguishes cancel through the flag, not the
+/// message (T3 owns the status copy and may promote this).
+#[cfg(test)]
+pub(crate) fn is_bootstrap_cancelled_error(error: &str) -> bool {
+    error == BOOTSTRAP_DOWNLOAD_CANCELLED_MESSAGE
+}
+
+/// Command-layer cancel flag observed by the in-flight download loop.
+static BOOTSTRAP_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// True while a bootstrap worker launched by `spawn_bootstrap_download` is
+/// in flight, so `request_bootstrap_cancel` can report whether a download
+/// was actually running (as opposed to merely arming the flag).
+static BOOTSTRAP_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Sets the cancel token; returns whether a bootstrap download was actually
+/// running. The in-flight read loop observes the flag on its next per-chunk
+/// check and exits promptly with the quiet sentinel.
+pub(crate) fn request_bootstrap_cancel() -> bool {
+    BOOTSTRAP_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    BOOTSTRAP_DOWNLOAD_RUNNING.load(Ordering::SeqCst)
+}
+
+/// Disarms the cancel token. Called by the start worker on launch so a
+/// previous cancel never leaks into the next transfer (and only there: an
+/// idempotent busy-start must never disarm another download's cancel).
+pub(crate) fn clear_bootstrap_cancel() {
+    BOOTSTRAP_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+}
+
+pub(crate) fn is_bootstrap_cancel_requested() -> bool {
+    BOOTSTRAP_CANCEL_REQUESTED.load(Ordering::SeqCst)
+}
+
+fn bootstrap_cancel_requested(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(Ordering::SeqCst))
+}
+
+/// Outcome of attempting to launch a bootstrap download worker: either the
+/// worker was spawned (holding the single-flight `ops_lock` guard for the
+/// whole transfer) or a download is already running (no second fetch opened).
+pub(crate) enum BootstrapSpawn<T> {
+    Started(std::thread::JoinHandle<T>),
+    AlreadyRunning,
+}
+
+/// Launches `run` on a background thread under the single-flight `ops_lock`
+/// — the blocking core executes off the main thread, so the app stays
+/// usable while downloading (S5). A busy gate returns `AlreadyRunning`
+/// WITHOUT invoking `run`, which is what makes `runtime_bootstrap_start`
+/// idempotent. `std::thread::spawn` (rather than `spawn_blocking`) keeps
+/// this unit-testable without a Tokio context; the async Tauri command is a
+/// thin wrapper that returns promptly while the worker runs on.
+pub(crate) fn spawn_bootstrap_download<T>(
+    operation: &str,
+    run: impl FnOnce() -> T + Send + 'static,
+) -> BootstrapSpawn<T>
+where
+    T: Send + 'static,
+{
+    let guard = match crate::runtime::ops_lock::try_acquire(operation) {
+        Ok(guard) => guard,
+        Err(_) => return BootstrapSpawn::AlreadyRunning,
+    };
+    BootstrapSpawn::Started(std::thread::spawn(move || {
+        // Held for the whole transfer: `Drop` releases the lock on return
+        // AND on worker panic (unwinding), so a crashing worker can never
+        // wedge the single-flight gate; the running flag resets the same way.
+        let _guard = guard;
+        BOOTSTRAP_DOWNLOAD_RUNNING.store(true, Ordering::SeqCst);
+        let _reset_running = BootstrapRunningReset;
+        run()
+    }))
+}
+
+struct BootstrapRunningReset;
+
+impl Drop for BootstrapRunningReset {
+    fn drop(&mut self) {
+        BOOTSTRAP_DOWNLOAD_RUNNING.store(false, Ordering::SeqCst);
+    }
 }
 
 /// One archive-part fetch: the byte stream plus whether the server honored a
@@ -326,16 +426,67 @@ where
     )
 }
 
-/// Resumable multi-part download core. `fetch_archive` receives each part URL
-/// plus the already-staged byte offset of that part (`None` for a fresh part
-/// — no `Range` header is sent then) and reports whether the server honored
-/// the range (HTTP 206) or restarted the part (HTTP 200).
+/// Command-layer entry of the resumable core below: identical behavior with
+/// the command-layer cancel flag armed, so `runtime_cancel_download` stops
+/// the manager-driven transfer without touching `manager.rs`.
 pub fn download_and_activate_remote_runtime_with_ranged_fetch<F, R>(
     source_manifest_url: &str,
     release: &BootstrapReleaseManifest,
     app_data_dir: &Path,
     public_key_base64: &str,
+    fetch_archive: F,
+    on_progress: &mut (impl FnMut(RuntimeOperation) + ?Sized),
+) -> Result<BootstrapDownloadOutcome, String>
+where
+    F: FnMut(&str, Option<u64>) -> Result<FetchResponse<R>, String>,
+    R: Read,
+{
+    download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+        source_manifest_url,
+        release,
+        app_data_dir,
+        public_key_base64,
+        fetch_archive,
+        Some(&BOOTSTRAP_CANCEL_REQUESTED),
+        on_progress,
+    )
+}
+
+/// Cancel exit shared by the part-fetch and chunk-read loops: durably
+/// persists the resume state (a later start resumes, never restarts),
+/// disarms the cleanup guard so the partial survives, and returns the quiet
+/// cancel sentinel — never the network/verification error shape, so cancel
+/// stays distinguishable from failure (no error latch).
+fn finish_cancelled_download(
+    resume_state_file: &Path,
+    resume_state: &mut download_state::PersistedResumeState,
+    downloaded_bytes: u64,
+    partial_guard: &mut PartialDownloadGuard,
+) -> String {
+    resume_state.total_downloaded = downloaded_bytes;
+    let _ = download_state::save(resume_state_file, resume_state);
+    partial_guard.keep_partial();
+    BOOTSTRAP_DOWNLOAD_CANCELLED_MESSAGE.to_string()
+}
+
+/// Resumable multi-part download core. `fetch_archive` receives each part URL
+/// plus the already-staged byte offset of that part (`None` for a fresh part
+/// — no `Range` header is sent then) and reports whether the server honored
+/// the range (HTTP 206) or restarted the part (HTTP 200).
+///
+/// `cancel` is the T2 shared cancel flag, checked at least once per chunk
+/// (see the read loop below): on cancel the partial is persisted and kept
+/// (T1 resume semantics) and the quiet sentinel is returned. Pass `None`
+/// for an uncancellable run. Production callers pass the command-layer
+/// flag; use `download_and_activate_remote_runtime_with_ranged_fetch` for
+/// the command-layer default.
+pub fn download_and_activate_remote_runtime_with_ranged_fetch_and_cancel<F, R>(
+    source_manifest_url: &str,
+    release: &BootstrapReleaseManifest,
+    app_data_dir: &Path,
+    public_key_base64: &str,
     mut fetch_archive: F,
+    cancel: Option<&AtomicBool>,
     on_progress: &mut (impl FnMut(RuntimeOperation) + ?Sized),
 ) -> Result<BootstrapDownloadOutcome, String>
 where
@@ -485,6 +636,14 @@ where
         .unwrap_or(resume_state.parts.len());
 
     for (part_index, part_url) in part_urls.iter().enumerate().skip(start_part) {
+        if bootstrap_cancel_requested(cancel) {
+            return Err(finish_cancelled_download(
+                &resume_state_file,
+                &mut resume_state,
+                downloaded_bytes,
+                &mut partial_guard,
+            ));
+        }
         let part_offset = resume_state.parts[part_index].bytes_done;
         let range_from = if part_offset > 0 {
             Some(part_offset)
@@ -595,6 +754,14 @@ where
         };
 
         loop {
+            if bootstrap_cancel_requested(cancel) {
+                return Err(finish_cancelled_download(
+                    &resume_state_file,
+                    &mut resume_state,
+                    downloaded_bytes,
+                    &mut partial_guard,
+                ));
+            }
             let read = match archive_reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => read,
@@ -2286,5 +2453,438 @@ mod tests {
             archive_bytes
         );
         assert!(outcome.managed_root.join("manifest.json").is_file());
+    }
+
+    // ------------------------------------------------------------------
+    // T2 (S2, S5): cancel token + non-blocking single-flight entry. All
+    // fetchers below are in-memory fakes: these tests never touch the
+    // network (S8).
+    // ------------------------------------------------------------------
+
+    /// Serializes the T2 tests that touch the process-wide single-flight
+    /// `ops_lock` (or the command-layer cancel flag). The 74 pre-existing
+    /// runtime tests never touch either, so serializing only among
+    /// ourselves keeps every test hermetic under parallel execution.
+    static T2_OPS_LOCK_SERIALIZER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_t2_serializer() -> std::sync::MutexGuard<'static, ()> {
+        T2_OPS_LOCK_SERIALIZER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A reader that arms the shared cancel token after `cancel_after` reads
+    /// and counts every non-empty `read`, so the test can bound how many
+    /// chunks the download loop consumed after the cancel.
+    struct CancelAfterNReads<R> {
+        inner: R,
+        cancel_after: usize,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        token: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl<R: std::io::Read> std::io::Read for CancelAfterNReads<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            if n > 0 {
+                let reads = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if reads >= self.cancel_after {
+                    self.token.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn cancel_stops_within_one_chunk_and_releases_the_lock() {
+        use super::FetchResponse;
+        use crate::runtime::download_state::resume_state_path;
+
+        let _serial = lock_t2_serializer();
+        let app_data_dir = tempfile::tempdir().expect("app data dir");
+        // ~3 MB activatable fixture: dozens of 64 KiB chunks, so stopping
+        // after a handful of chunks proves the loop exits promptly instead
+        // of draining the whole archive.
+        let archive_bytes = large_runtime_archive_bytes();
+        let total_chunks = archive_bytes.len().div_ceil(64 * 1024);
+        assert!(total_chunks > 20, "fixture must span many chunks");
+        let (release, public_key) = build_signed_release(&archive_bytes);
+
+        let cancel_after = 5usize;
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let data_dir = app_data_dir.path().to_path_buf();
+
+        let first = super::spawn_bootstrap_download("t2-cancel-stops", {
+            let reads = reads.clone();
+            let token = token.clone();
+            let bytes = archive_bytes.clone();
+            let release = release.clone();
+            let public_key = public_key.clone();
+            move || {
+                let mut progress = Vec::new();
+                let result =
+                    super::download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+                        "https://example.com/runtime/bootstrap.json",
+                        &release,
+                        &data_dir,
+                        &public_key,
+                        |_url, _range| {
+                            Ok(FetchResponse {
+                                reader: CancelAfterNReads {
+                                    inner: Cursor::new(bytes.clone()),
+                                    cancel_after,
+                                    reads: reads.clone(),
+                                    token: token.clone(),
+                                },
+                                resumed: false,
+                                content_range_start: None,
+                                range_not_satisfiable: false,
+                            })
+                        },
+                        Some(token.as_ref()),
+                        &mut |operation| progress.push(operation),
+                    );
+                (result, progress)
+            }
+        });
+        let handle = match first {
+            super::BootstrapSpawn::Started(handle) => handle,
+            super::BootstrapSpawn::AlreadyRunning => {
+                panic!("ops lock must be free for the first start")
+            }
+        };
+        let (result, progress) = handle.join().expect("worker thread joins");
+
+        // Cancel surfaces as the quiet sentinel, not a transfer error.
+        let error = result.expect_err("cancelled download must fail");
+        assert_eq!(error, super::BOOTSTRAP_DOWNLOAD_CANCELLED_MESSAGE);
+        assert!(super::is_bootstrap_cancelled_error(&error));
+
+        // The loop exits within one chunk of the cancel, not at the end of
+        // the archive: the token arms on read #5, so at most one more chunk
+        // can slip through before the per-chunk check fires.
+        let chunks_read = reads.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            chunks_read <= cancel_after + 1,
+            "cancel must stop promptly, read {chunks_read} chunks"
+        );
+        assert!(
+            chunks_read < total_chunks,
+            "must not drain the whole archive ({total_chunks} chunks)"
+        );
+
+        // Progress reporting keeps firing while cancellable: the
+        // `runtime://progress` listener path observes Downloading stages.
+        assert!(
+            progress
+                .iter()
+                .any(|operation| operation.stage == RuntimeOperationStage::Downloading),
+            "cancellable download must still emit Downloading progress"
+        );
+
+        // Resumable partial state is kept on disk with T1 semantics.
+        let paths = bootstrap_download_plan_paths(
+            app_data_dir.path(),
+            &release.pack_version,
+            "runtime-pack.zip",
+        );
+        let tmp = paths.archive_path.with_extension("download.tmp");
+        assert!(tmp.is_file(), "partial tmp must be kept for resume");
+        assert_eq!(
+            fs::metadata(&tmp).expect("tmp metadata").len(),
+            chunks_read as u64 * 64 * 1024,
+            "staged bytes must match the chunks consumed before the cancel"
+        );
+        assert!(
+            resume_state_path(app_data_dir.path(), &release.pack_version).is_file(),
+            "resume state must be kept for resume"
+        );
+        assert!(!paths.archive_path.exists());
+
+        // The ops lock is free afterwards: a probe acquires it, and a
+        // second start proceeds — resuming from the kept offset, not
+        // restarting from zero.
+        drop(
+            crate::runtime::ops_lock::try_acquire("t2-cancel-probe")
+                .expect("ops lock must be released after cancel"),
+        );
+        let expected_offset = chunks_read as u64 * 64 * 1024;
+        let observed_ranges = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let second = super::spawn_bootstrap_download("t2-cancel-resume", {
+            let bytes = archive_bytes.clone();
+            let release = release.clone();
+            let public_key = public_key.clone();
+            let data_dir = app_data_dir.path().to_path_buf();
+            let observed_ranges = observed_ranges.clone();
+            move || {
+                let fresh_token = std::sync::atomic::AtomicBool::new(false);
+                super::download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+                    "https://example.com/runtime/bootstrap.json",
+                    &release,
+                    &data_dir,
+                    &public_key,
+                    |_url, range| {
+                        observed_ranges
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(range);
+                        let from = range.expect("resume must carry a Range offset") as usize;
+                        Ok(FetchResponse {
+                            reader: Cursor::new(bytes[from..].to_vec()),
+                            resumed: true,
+                            content_range_start: Some(from as u64),
+                            range_not_satisfiable: false,
+                        })
+                    },
+                    Some(&fresh_token),
+                    &mut |_| {},
+                )
+            }
+        });
+        let outcome = match second {
+            super::BootstrapSpawn::Started(handle) => handle.join().expect("worker thread joins"),
+            super::BootstrapSpawn::AlreadyRunning => {
+                panic!("released lock must let the second start proceed")
+            }
+        }
+        .expect("resumed download after cancel must succeed");
+        assert_eq!(
+            *observed_ranges
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![Some(expected_offset)]
+        );
+        assert_eq!(
+            fs::read(&outcome.archive_path).expect("final archive"),
+            archive_bytes
+        );
+        assert!(outcome.managed_root.join("manifest.json").is_file());
+    }
+
+    #[test]
+    fn cancel_is_quiet_not_an_error() {
+        use super::FetchResponse;
+        use crate::runtime::download_state::resume_state_path;
+
+        let _serial = lock_t2_serializer();
+        let app_data_dir = tempfile::tempdir().expect("app data dir");
+        let archive_bytes = large_runtime_archive_bytes();
+        let (release, public_key) = build_signed_release(&archive_bytes);
+
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let error = {
+            let bytes = archive_bytes.clone();
+            super::download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+                "https://example.com/runtime/bootstrap.json",
+                &release,
+                app_data_dir.path(),
+                &public_key,
+                |_url, _range| {
+                    Ok(FetchResponse {
+                        reader: CancelAfterNReads {
+                            inner: Cursor::new(bytes.clone()),
+                            cancel_after: 3,
+                            reads: reads.clone(),
+                            token: token.clone(),
+                        },
+                        resumed: false,
+                        content_range_start: None,
+                        range_not_satisfiable: false,
+                    })
+                },
+                Some(token.as_ref()),
+                &mut |_| {},
+            )
+            .expect_err("cancelled download must fail")
+        };
+
+        // Quiet cancel: exactly the sentinel — never the network-failure
+        // shape ("Failed while ...") nor the verification-failure shape
+        // (checksum/signature mismatch, which deletes the partial). T3 owns
+        // the status copy; the core-level contract is this distinguishable
+        // sentinel plus kept resumable state, i.e. no error latch.
+        assert_eq!(error, super::BOOTSTRAP_DOWNLOAD_CANCELLED_MESSAGE);
+        assert!(super::is_bootstrap_cancelled_error(&error));
+        assert!(
+            !error.contains("Failed while"),
+            "cancel must not look like a network failure: {error}"
+        );
+        assert!(
+            !error.to_ascii_lowercase().contains("mismatch")
+                && !error.to_ascii_lowercase().contains("checksum")
+                && !error.to_ascii_lowercase().contains("signature"),
+            "cancel must not look like a verification failure: {error}"
+        );
+
+        let paths = bootstrap_download_plan_paths(
+            app_data_dir.path(),
+            &release.pack_version,
+            "runtime-pack.zip",
+        );
+        assert!(
+            paths.archive_path.with_extension("download.tmp").is_file(),
+            "cancel must keep the partial for resume"
+        );
+        assert!(
+            resume_state_path(app_data_dir.path(), &release.pack_version).is_file(),
+            "cancel must keep the resume state"
+        );
+
+        // ...and the retry resumes from the kept offset instead of failing.
+        let staged = 3u64 * 64 * 1024;
+        let mut observed_ranges = Vec::new();
+        let fresh_token = std::sync::atomic::AtomicBool::new(false);
+        super::download_and_activate_remote_runtime_with_ranged_fetch_and_cancel(
+            "https://example.com/runtime/bootstrap.json",
+            &release,
+            app_data_dir.path(),
+            &public_key,
+            |_url, range| {
+                observed_ranges.push(range);
+                let from = range.expect("resume must carry a Range offset") as usize;
+                Ok(FetchResponse {
+                    reader: Cursor::new(archive_bytes[from..].to_vec()),
+                    resumed: true,
+                    content_range_start: Some(from as u64),
+                    range_not_satisfiable: false,
+                })
+            },
+            Some(&fresh_token),
+            &mut |_| {},
+        )
+        .expect("retry after a quiet cancel must resume and succeed");
+        assert_eq!(observed_ranges, vec![Some(staged)]);
+    }
+
+    #[test]
+    fn start_is_idempotent_while_running() {
+        // Simulate an in-flight download holding the single-flight lock: the
+        // second start must report busy WITHOUT opening a second fetch.
+        let _serial = lock_t2_serializer();
+        let _in_flight = crate::runtime::ops_lock::try_acquire("t2-idempotent-first")
+            .expect("ops lock must be free at test start");
+
+        let fetches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let second = super::spawn_bootstrap_download("t2-idempotent-second", {
+            let fetches = fetches.clone();
+            move || {
+                fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        assert!(
+            matches!(second, super::BootstrapSpawn::AlreadyRunning),
+            "second start while one is in flight must be idempotent"
+        );
+        assert_eq!(
+            fetches.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a busy start must not open a second fetch"
+        );
+
+        // Once the lock is released, a later start proceeds exactly once.
+        drop(_in_flight);
+        let third = super::spawn_bootstrap_download("t2-idempotent-third", {
+            let fetches = fetches.clone();
+            move || {
+                fetches.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        match third {
+            super::BootstrapSpawn::Started(handle) => handle.join().expect("worker joins"),
+            super::BootstrapSpawn::AlreadyRunning => {
+                panic!("released lock must let the next start proceed")
+            }
+        }
+        assert_eq!(fetches.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn start_does_not_block_until_the_fetch_completes() {
+        let _serial = lock_t2_serializer();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let entered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // The spawner runs on its own thread: if the implementation ever
+        // executed the blocking core inline, no prompt return would arrive
+        // and the bounded wait below fails instead of hanging the suite.
+        let (returned_tx, returned_rx) = std::sync::mpsc::channel::<()>();
+        let spawner = std::thread::spawn({
+            let entered = entered.clone();
+            let finished = finished.clone();
+            move || {
+                let outcome = super::spawn_bootstrap_download("t2-nonblocking", move || {
+                    entered.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = release_rx.recv();
+                    finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                });
+                returned_tx.send(()).expect("signal prompt return");
+                outcome
+            }
+        });
+
+        returned_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("start must return before the blocking fetch completes");
+        // The worker may not be scheduled the instant spawn returns: wait
+        // for it with a bound instead of asserting instantly (that races
+        // the scheduler and flakes).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !entered.load(std::sync::atomic::Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                panic!("the worker must have started the blocking work");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the blocking work must still be pending after start returned"
+        );
+
+        drop(release_tx);
+        let outcome = spawner.join().expect("spawner joins");
+        match outcome {
+            super::BootstrapSpawn::Started(handle) => handle.join().expect("worker joins"),
+            super::BootstrapSpawn::AlreadyRunning => panic!("lock was free"),
+        }
+        assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn start_command_is_async() {
+        // Compile-time contract: both Tauri commands must stay `async` so
+        // the bootstrap never runs on the main thread. De-asyncing either
+        // command breaks this bound and fails the build.
+        fn assert_async_command<F, Fut>(_: F)
+        where
+            F: FnOnce(tauri::AppHandle) -> Fut,
+            Fut: std::future::Future,
+        {
+        }
+        fn assert_async_command_without_args<F, Fut>(_: F)
+        where
+            F: FnOnce() -> Fut,
+            Fut: std::future::Future,
+        {
+        }
+        assert_async_command(crate::runtime::runtime_bootstrap_start);
+        assert_async_command_without_args(crate::runtime::runtime_cancel_download);
+    }
+
+    #[test]
+    fn command_layer_cancel_flag_round_trips() {
+        // The flag the `runtime_cancel_download` command sets and the
+        // download loop observes: set is observable, clear disarms. Kept
+        // instantaneous on purpose — no download runs here, so parallel
+        // download tests can never observe the set window.
+        let _serial = lock_t2_serializer();
+        assert!(!super::is_bootstrap_cancel_requested());
+        super::request_bootstrap_cancel();
+        assert!(super::is_bootstrap_cancel_requested());
+        super::clear_bootstrap_cancel();
+        assert!(!super::is_bootstrap_cancel_requested());
     }
 }
