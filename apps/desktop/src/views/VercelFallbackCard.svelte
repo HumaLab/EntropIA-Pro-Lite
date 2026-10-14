@@ -5,11 +5,14 @@
    * Optional; without a key nothing changes. The key lives in the system
    * credential store like the others and is never shown back.
    */
-  import { Button, Card, Input } from '@entropia/ui'
+  import { ActionIcon, Button, Card, Input } from '@entropia/ui'
+  import { openExternalUrlFromClick } from '$lib/external-links'
   import { locale, t } from '$lib/i18n'
   import { SETTINGS_KEYS, settingsDelete, settingsGet, settingsSet } from '$lib/settings'
 
   const currentLocale = locale
+  // Vercel's own "go to my team's page" link: lands on AI Gateway → API Keys.
+  const KEYS_URL = 'https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fapi-keys'
   let key = $state('')
   let hasKey = $state(false)
   let busy = $state(false)
@@ -50,7 +53,21 @@
 
 <Card>
   <section class="vercel-card">
-    <h2>{$currentLocale && t('settings.vercel.title')}</h2>
+    <div class="vercel-card__head">
+      <h2>{$currentLocale && t('settings.vercel.title')}</h2>
+      <a
+        class="vercel-card__link"
+        href={KEYS_URL}
+        onclick={(event) =>
+          openExternalUrlFromClick(event, KEYS_URL).catch((failure: unknown) =>
+            console.error('[Settings] No se pudo abrir el enlace de Vercel', failure)
+          )}
+        aria-label={t('settings.getApiKeyLink', { provider: 'Vercel' })}
+      >
+        <span>{t('settings.getApiKeyShort')}</span>
+        <ActionIcon name="external-link" size={14} />
+      </a>
+    </div>
     <p class="vercel-card__text">{$currentLocale && t('settings.vercel.description')}</p>
     <div class="vercel-card__row">
       <Input
@@ -78,6 +95,27 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .vercel-card__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .vercel-card__link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--color-accent);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    text-decoration: none;
+  }
+
+  .vercel-card__link:hover {
+    text-decoration: underline;
   }
 
   .vercel-card h2 {
