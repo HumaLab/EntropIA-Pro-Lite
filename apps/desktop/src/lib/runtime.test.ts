@@ -180,6 +180,13 @@ describe('runtime client', () => {
 
       expect(
         runtimeCanBootstrapAutomatically({
+          state: 'fixture',
+          bootstrapEligible: true,
+        } as RuntimeStatus)
+      ).toBe(true)
+
+      expect(
+        runtimeCanBootstrapAutomatically({
           state: 'blocked_source_unavailable',
           bootstrapEligible: false,
         } as RuntimeStatus)

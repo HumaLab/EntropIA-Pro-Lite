@@ -492,19 +492,26 @@ describe('AppShell', () => {
           state: 'fixture',
           packVersion: '2026.05.0',
           repairNeeded: false,
-          repairAvailable: false,
-          summary:
-            'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+          repairAvailable: true,
+          summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
           blockedCapabilities: ['ocr', 'transcription', 'nlp'],
           details: [
-            'La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).',
+            'La app 0.0.10 arrancó correctamente, pero el runtime de IA para linux-x86_64 todavía está pendiente de descarga (app_version declarada: 0.0.10).',
           ],
           guidance: [
-            'Esto no indica una caída: la UI puede abrir, pero OCR/NLP/transcripción quedan bloqueados hasta inyectar los payloads de release.',
+            'Esto no indica una caída: el runtime de IA se descarga automáticamente cuando hay una fuente confiable; mientras tanto, OCR, NLP y transcripción quedan en pausa.',
           ],
-          bootstrapEligible: false,
+          bootstrapEligible: true,
           bootstrapRequired: true,
-          activeOperation: null,
+          activeOperation: {
+            kind: 'bootstrap',
+            stage: 'planning_download',
+            summary: 'EntropIA puede bootstrapear un runtime confiable',
+            progressPercent: null,
+            downloadedBytes: null,
+            totalBytes: 1024,
+            retryable: true,
+          },
         })
       }
 
@@ -514,9 +521,7 @@ describe('AppShell', () => {
     render(AppShellHost)
 
     expect(
-      await screen.findByText(
-        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release'
-      )
+      await screen.findByText('Runtime de IA pendiente de descarga para linux-x86_64')
     ).toBeInTheDocument()
     expect(screen.getByText(/app no se cay/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime →' })).not.toBeInTheDocument()
@@ -541,8 +546,7 @@ describe('AppShell', () => {
             packVersion: '2026.05.0',
             repairNeeded: false,
             repairAvailable: false,
-            summary:
-              'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+            summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
             blockedCapabilities: ['ocr', 'transcription', 'nlp'],
             details: ['payloads offline pendientes'],
             guidance: ['Inyectar payloads externos antes de distribuir offline'],

@@ -36,7 +36,9 @@ impl RuntimeManager {
         app_data_dir: &Path,
     ) -> Result<RuntimeStatus, String> {
         let manifest = self.load_manifest(bundle_root)?;
-        if let Some(status) = compatibility_status(&manifest) {
+        if let Some(status) =
+            compatibility_status(&manifest, not_configured_bootstrap_catalog(), app_data_dir)
+        {
             return Ok(status);
         }
 
@@ -51,7 +53,9 @@ impl RuntimeManager {
         app_data_dir: &Path,
     ) -> Result<RuntimeStatus, String> {
         let manifest = self.load_manifest(bundle_root)?;
-        if let Some(status) = compatibility_status(&manifest) {
+        if let Some(status) =
+            compatibility_status(&manifest, not_configured_bootstrap_catalog(), app_data_dir)
+        {
             return Ok(status);
         }
 
@@ -59,10 +63,24 @@ impl RuntimeManager {
         Ok(healthy_status(&manifest.pack_version))
     }
 
+    #[cfg(test)]
     pub fn status_for_tests(
         &self,
         bundle_root: &Path,
         app_data_dir: &Path,
+    ) -> Result<RuntimeStatus, String> {
+        self.status_for_tests_with_catalog(
+            bundle_root,
+            app_data_dir,
+            not_configured_bootstrap_catalog(),
+        )
+    }
+
+    pub fn status_for_tests_with_catalog(
+        &self,
+        bundle_root: &Path,
+        app_data_dir: &Path,
+        remote_catalog: BootstrapRemoteCatalog,
     ) -> Result<RuntimeStatus, String> {
         let manifest = match self.load_manifest(bundle_root) {
             Ok(manifest) => manifest,
@@ -84,7 +102,8 @@ impl RuntimeManager {
                 })
             }
         };
-        if let Some(status) = compatibility_status(&manifest) {
+        if let Some(status) = compatibility_status(&manifest, remote_catalog.clone(), app_data_dir)
+        {
             if status.state == RuntimeState::Fixture {
                 if let Some(existing_status) =
                     self.discover_hydrated_runtime_status_for_tests(app_data_dir)
@@ -94,14 +113,15 @@ impl RuntimeManager {
             }
             return Ok(status);
         }
-        inspect_runtime(bundle_root, app_data_dir, &manifest)
+        inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog)
     }
 
     pub fn status(&self, app_handle: &AppHandle) -> Result<RuntimeStatus, String> {
         let bundle_root = resolve_bundle_root(app_handle)?;
         let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
-        self.status_for_tests(&bundle_root, &app_data_dir)
+        let remote_catalog = configured_bootstrap_catalog(app_handle)?;
+        self.status_for_tests_with_catalog(&bundle_root, &app_data_dir, remote_catalog)
     }
 
     pub fn bootstrap_plan(&self, app_handle: &AppHandle) -> Result<BootstrapPlan, String> {
@@ -206,8 +226,11 @@ impl RuntimeManager {
         let app_data_dir = crate::path_utils::cache_dir(app_handle)
             .map_err(|error| format!("Failed to get app data dir: {error}"))?;
 
-        if matches!(compatibility_status(&manifest), Some(status) if status.state == RuntimeState::Fixture)
-        {
+        let remote_catalog = not_configured_bootstrap_catalog();
+        if matches!(
+            compatibility_status(&manifest, remote_catalog, &app_data_dir),
+            Some(status) if status.state == RuntimeState::Fixture
+        ) {
             if let Some(root) = self.discover_hydrated_runtime_root_for_tests(&app_data_dir) {
                 return Ok(Some(root));
             }
@@ -269,7 +292,13 @@ impl RuntimeManager {
         app_data_dir: &Path,
         manifest: &RuntimeManifest,
     ) -> Option<std::path::PathBuf> {
-        let status = inspect_runtime(bundle_root, app_data_dir, manifest).ok()?;
+        let status = inspect_runtime(
+            bundle_root,
+            app_data_dir,
+            manifest,
+            not_configured_bootstrap_catalog(),
+        )
+        .ok()?;
         if status.state != RuntimeState::Healthy {
             return None;
         }
@@ -284,7 +313,13 @@ impl RuntimeManager {
         managed_root: &Path,
         manifest: &RuntimeManifest,
     ) -> Option<RuntimeStatus> {
-        let status = inspect_runtime(managed_root, app_data_dir, manifest).ok()?;
+        let status = inspect_runtime(
+            managed_root,
+            app_data_dir,
+            manifest,
+            not_configured_bootstrap_catalog(),
+        )
+        .ok()?;
         if status.pack_version.as_deref() != Some(manifest.pack_version.as_str()) {
             return None;
         }
@@ -351,7 +386,8 @@ impl RuntimeManager {
         remote_catalog: BootstrapRemoteCatalog,
     ) -> Result<BootstrapPlan, String> {
         let manifest = self.load_manifest(bundle_root)?;
-        let bundle_status = inspect_runtime(bundle_root, app_data_dir, &manifest)?;
+        let bundle_status =
+            inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
 
         Ok(
             BootstrapController::new().plan(
@@ -436,7 +472,8 @@ impl RuntimeManager {
         invalidate_stale_managed_runtime(app_data_dir, &manifest)?;
         invalidate_stale_managed_runtime_dirs(app_data_dir, &manifest)?;
 
-        let current_status = inspect_runtime(bundle_root, app_data_dir, &manifest)?;
+        let current_status =
+            inspect_runtime(bundle_root, app_data_dir, &manifest, remote_catalog.clone())?;
         if current_status.state == RuntimeState::Healthy {
             return Ok(current_status);
         }
@@ -744,12 +781,20 @@ fn configured_bootstrap_public_key(
     crate::settings::get_runtime_bootstrap_public_key(&conn, public_key_id)
 }
 
+fn not_configured_bootstrap_catalog() -> BootstrapRemoteCatalog {
+    BootstrapRemoteCatalog::SourceUnavailable {
+        source: None,
+        reason: "Trusted remote bootstrap source is not configured in this environment".to_string(),
+    }
+}
+
 fn inspect_runtime(
     bundle_root: &Path,
     app_data_dir: &Path,
     manifest: &RuntimeManifest,
+    remote_catalog: BootstrapRemoteCatalog,
 ) -> Result<RuntimeStatus, String> {
-    if let Some(status) = compatibility_status(manifest) {
+    if let Some(status) = compatibility_status(manifest, remote_catalog, app_data_dir) {
         return Ok(status);
     }
 
@@ -941,7 +986,12 @@ where
         true,
     );
 
-    let verified_status = inspect_runtime(bundle_root, app_data_dir, manifest)?;
+    let verified_status = inspect_runtime(
+        bundle_root,
+        app_data_dir,
+        manifest,
+        not_configured_bootstrap_catalog(),
+    )?;
     if verified_status.state != RuntimeState::Healthy {
         return Err(format!(
             "Hydrated runtime verification failed with state {:?}",
@@ -1164,7 +1214,12 @@ fn promote_local_staged_runtime(
         ));
     }
 
-    let promoted_status = inspect_runtime(&managed_root, app_data_dir, manifest)?;
+    let promoted_status = inspect_runtime(
+        &managed_root,
+        app_data_dir,
+        manifest,
+        not_configured_bootstrap_catalog(),
+    )?;
     if promoted_status.state != RuntimeState::Healthy {
         if had_existing && backup_root.exists() {
             let _ = fs::remove_dir_all(&managed_root);
@@ -1204,6 +1259,7 @@ fn existing_managed_runtime_matches_manifest(
             .and_then(Path::parent)
             .unwrap_or(managed_root),
         &manifest,
+        not_configured_bootstrap_catalog(),
     )
     .map(|status| status.state == RuntimeState::Healthy)
     .unwrap_or(false)
@@ -1440,7 +1496,25 @@ fn incompatible_missing_manifest_status(error: String) -> RuntimeStatus {
     }
 }
 
-fn compatibility_status(manifest: &RuntimeManifest) -> Option<RuntimeStatus> {
+fn compatibility_status(
+    manifest: &RuntimeManifest,
+    remote_catalog: BootstrapRemoteCatalog,
+    app_data_dir: &Path,
+) -> Option<RuntimeStatus> {
+    compatibility_status_with_disk_free(
+        manifest,
+        remote_catalog,
+        app_data_dir,
+        crate::runtime::download::available_disk_space(app_data_dir),
+    )
+}
+
+fn compatibility_status_with_disk_free(
+    manifest: &RuntimeManifest,
+    remote_catalog: BootstrapRemoteCatalog,
+    app_data_dir: &Path,
+    disk_free_bytes: Option<u64>,
+) -> Option<RuntimeStatus> {
     if manifest.app_version != running_app_version() {
         return Some(app_version_incompatible_status(
             &manifest.app_version,
@@ -1477,35 +1551,44 @@ fn compatibility_status(manifest: &RuntimeManifest) -> Option<RuntimeStatus> {
             active_operation: None,
         },
         manifest,
-        Path::new("."),
-        BootstrapRemoteCatalog::SourceUnavailable {
-            source: None,
-            reason: "Trusted remote bootstrap source wiring is not implemented yet".to_string(),
-        },
+        app_data_dir,
+        remote_catalog,
     );
+
+    let mut details: Vec<String> = std::iter::once(format!(
+        "La app {} arrancó correctamente, pero el runtime de IA para {} todavía está pendiente de descarga (app_version declarada: {}).",
+        running_app_version(),
+        manifest.platform,
+        manifest.app_version
+    ))
+    .chain(
+        manifest
+            .external_artifacts_required
+            .iter()
+            .map(|artifact| format!("Payload externo pendiente antes de hidratar: {artifact}")),
+    )
+    .collect();
+
+    if let Some(download) = bootstrap_plan.download.as_ref() {
+        let required = crate::runtime::status::bootstrap_required_free_bytes(download.archive_size);
+        if let Some(disk_message) =
+            crate::runtime::status::disk_preflight_message(disk_free_bytes, required)
+        {
+            details.push(disk_message);
+        }
+    }
 
     Some(RuntimeStatus {
         state: RuntimeState::Fixture,
         pack_version: Some(manifest.pack_version.clone()),
         repair_needed: false,
-        repair_available: false,
+        repair_available: bootstrap_plan.eligible,
         summary: format!(
-            "Runtime de release pendiente para {} (modo desarrollo activo)",
+            "Runtime de IA pendiente de descarga para {}",
             manifest.platform
         ),
         blocked_capabilities: blocked_capabilities(),
-        details: std::iter::once(format!(
-            "La app {} arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: {}).",
-            running_app_version(),
-            manifest.app_version
-        ))
-        .chain(
-            manifest
-                .external_artifacts_required
-                .iter()
-                .map(|artifact| format!("Payload externo pendiente antes de hidratar: {artifact}")),
-        )
-        .collect(),
+        details,
         guidance: fixture_guidance(manifest),
         bootstrap_eligible: bootstrap_plan.eligible,
         bootstrap_required: bootstrap_plan.required,
@@ -1563,7 +1646,7 @@ fn app_version_incompatible_status(app_version: &str, pack_version: &str) -> Run
 
 fn fixture_guidance(manifest: &RuntimeManifest) -> Vec<String> {
     let mut guidance = vec![
-        "Esto no indica una caída: en dev podés seguir con dependencias locales/fallback mientras el runtime-pack de release queda pendiente.".to_string(),
+        "Esto no indica una caída: el runtime de IA se descarga automáticamente cuando hay una fuente confiable; mientras tanto, OCR, NLP y transcripción quedan en pausa.".to_string(),
     ];
 
     if manifest.release_injection_required {
@@ -1615,20 +1698,9 @@ mod tests {
 
         let source = crate::settings::get_runtime_bootstrap_remote_source(&conn)
             .expect("lookup should succeed");
+        assert_eq!(source, None);
 
-        let catalog = match source {
-            Some(source) => BootstrapRemoteCatalog::SourceUnavailable {
-                source: Some(source),
-                reason: "Trusted remote bootstrap source is configured, but remote manifest fetch is not implemented yet"
-                    .to_string(),
-            },
-            None => BootstrapRemoteCatalog::SourceUnavailable {
-                source: None,
-                reason: "Trusted remote bootstrap source is not configured in this environment"
-                    .to_string(),
-            },
-        };
-
+        let catalog = not_configured_bootstrap_catalog();
         assert_eq!(
             catalog,
             BootstrapRemoteCatalog::SourceUnavailable {
@@ -1637,6 +1709,48 @@ mod tests {
                     .to_string(),
             }
         );
+
+        let controller = BootstrapController::new();
+        let manifest = RuntimeManifest {
+            pack_version: "2026.05.0".to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: crate::runtime::paths::current_runtime_platform(),
+            payload_profile: "fixture".to_string(),
+            release_injection_required: true,
+            external_artifacts_required: vec!["relocatable-python".to_string()],
+            python_relpath: "python/bin/python3".to_string(),
+            uv_relpath: "uv/bin/uv".to_string(),
+            python_files: vec![],
+            uv_files: vec![],
+            script_files: vec![],
+            wheelhouse: vec![],
+            caches: vec![],
+            native_assets: vec![],
+        };
+        let plan = controller.plan(
+            &RuntimeStatus {
+                state: RuntimeState::Fixture,
+                pack_version: Some(manifest.pack_version.clone()),
+                repair_needed: false,
+                repair_available: false,
+                summary: "Runtime fixture".to_string(),
+                blocked_capabilities: blocked_capabilities(),
+                details: vec![],
+                guidance: vec![],
+                bootstrap_eligible: false,
+                bootstrap_required: true,
+                active_operation: None,
+            },
+            &manifest,
+            Path::new("."),
+            not_configured_bootstrap_catalog(),
+        );
+        assert!(!plan.eligible);
+        assert!(plan.required);
+        assert!(plan
+            .reason
+            .unwrap_or_default()
+            .contains("not configured in this environment"));
     }
 
     #[test]
@@ -1662,26 +1776,48 @@ mod tests {
         let source = crate::settings::get_runtime_bootstrap_remote_source(&conn)
             .expect("lookup should succeed")
             .expect("source should be configured");
-
-        let catalog = BootstrapRemoteCatalog::SourceUnavailable {
-            source: Some(source),
-            reason:
-                "Trusted remote bootstrap source is configured, but remote manifest fetch is not implemented yet"
-                    .to_string(),
-        };
-
         assert_eq!(
-            catalog,
-            BootstrapRemoteCatalog::SourceUnavailable {
-                source: Some(BootstrapRemoteSource {
-                    manifest_url: "https://example.com/runtime/bootstrap.json".to_string(),
-                    public_key_id: "entropia-root".to_string(),
-                }),
-                reason:
-                    "Trusted remote bootstrap source is configured, but remote manifest fetch is not implemented yet"
-                        .to_string(),
+            source,
+            BootstrapRemoteSource {
+                manifest_url: "https://example.com/runtime/bootstrap.json".to_string(),
+                public_key_id: "entropia-root".to_string(),
             }
         );
+
+        let offline = crate::runtime::bootstrap::load_remote_catalog(source.clone(), |_| {
+            Err("offline: trusted bootstrap source unreachable".to_string())
+        });
+        assert_eq!(
+            offline,
+            BootstrapRemoteCatalog::SourceUnavailable {
+                source: Some(source.clone()),
+                reason: "offline: trusted bootstrap source unreachable".to_string(),
+            }
+        );
+
+        let available = crate::runtime::bootstrap::load_remote_catalog(source.clone(), |_| {
+            Ok(r#"{
+                    "channel": "stable",
+                    "generated_at": "2026-05-06T00:00:00Z",
+                    "releases": [{
+                        "app_version": "0.0.10",
+                        "platform": "linux-x86_64",
+                        "pack_version": "2026.05.1",
+                        "archive_url": "https://example.com/runtime-pack.zip",
+                        "archive_sha256": "abc",
+                        "archive_size": 42,
+                        "signature": "sig"
+                    }]
+                }"#
+            .to_string())
+        });
+        match available {
+            BootstrapRemoteCatalog::Available { source: got, index } => {
+                assert_eq!(got, source);
+                assert_eq!(index.releases.len(), 1);
+            }
+            other => panic!("expected available catalog, got {other:?}"),
+        }
     }
 
     fn write_file(root: &Path, relpath: &str, bytes: &[u8]) -> String {
@@ -2564,6 +2700,347 @@ mod tests {
     }
 
     #[test]
+    fn fixture_status_stays_ineligible_without_a_configured_source() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let manager = RuntimeManager::new();
+        let status = manager
+            .status_for_tests_with_catalog(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::SourceUnavailable {
+                    source: None,
+                    reason: "Trusted remote bootstrap source is not configured in this environment"
+                        .to_string(),
+                },
+            )
+            .expect("fixture packs should produce status");
+
+        assert_eq!(status.state, RuntimeState::Fixture);
+        assert!(!status.bootstrap_eligible);
+        assert!(!status.repair_available);
+        assert!(status.bootstrap_required);
+    }
+
+    #[test]
+    fn insufficient_disk_blocks_before_the_first_byte() {
+        let required = crate::runtime::status::bootstrap_required_free_bytes(2_440_000_000);
+        assert_eq!(required, 2_440_000_000u64.saturating_mul(3));
+        let message = crate::runtime::status::disk_preflight_message(Some(1_000_000_000), required)
+            .expect("low disk must yield an explanatory message");
+        assert!(
+            message.contains("Espacio en disco"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            message.contains("GB"),
+            "message must report free vs required: {message}"
+        );
+        assert!(
+            message.contains("Liberá espacio"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            crate::runtime::status::disk_preflight_message(Some(required + 1), required).is_none()
+        );
+        assert!(crate::runtime::status::disk_preflight_message(None, required).is_none());
+
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        let catalog = BootstrapRemoteCatalog::Available {
+            source: BootstrapRemoteSource {
+                manifest_url: "https://example.com/bootstrap.json".to_string(),
+                public_key_id: "entropia-root".to_string(),
+            },
+            index: crate::runtime::manifest::BootstrapManifestIndex {
+                channel: "stable".to_string(),
+                generated_at: "2026-05-06T00:00:00Z".to_string(),
+                releases: vec![crate::runtime::manifest::BootstrapReleaseManifest {
+                    app_version: env!("CARGO_PKG_VERSION").to_string(),
+                    platform: crate::runtime::paths::current_runtime_platform(),
+                    pack_version: "2026.05.1".to_string(),
+                    archive_url: "https://example.com/runtime-pack.archive".to_string(),
+                    additional_part_urls: Vec::new(),
+                    archive_sha256: "remote-sha".to_string(),
+                    archive_size: 2_440_000_000,
+                    signature: "signed".to_string(),
+                }],
+            },
+        };
+        let blocked = compatibility_status_with_disk_free(
+            &manifest,
+            catalog.clone(),
+            app_data_dir.path(),
+            Some(1_000_000_000),
+        )
+        .expect("fixture must produce status");
+        assert!(blocked
+            .details
+            .iter()
+            .any(|detail| detail.contains("Espacio en disco")));
+        let spacious = compatibility_status_with_disk_free(
+            &manifest,
+            catalog,
+            app_data_dir.path(),
+            Some(required + 1),
+        )
+        .expect("fixture must produce status");
+        assert!(!spacious
+            .details
+            .iter()
+            .any(|detail| detail.contains("Espacio en disco")));
+    }
+
+    #[test]
+    fn fixture_status_is_bootstrap_eligible_when_a_source_is_configured() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let manager = RuntimeManager::new();
+        let status = manager
+            .status_for_tests_with_catalog(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::Available {
+                    source: BootstrapRemoteSource {
+                        manifest_url: "https://example.com/bootstrap.json".to_string(),
+                        public_key_id: "entropia-root".to_string(),
+                    },
+                    index: crate::runtime::manifest::BootstrapManifestIndex {
+                        channel: "stable".to_string(),
+                        generated_at: "2026-05-06T00:00:00Z".to_string(),
+                        releases: vec![crate::runtime::manifest::BootstrapReleaseManifest {
+                            app_version: env!("CARGO_PKG_VERSION").to_string(),
+                            platform: crate::runtime::paths::current_runtime_platform(),
+                            pack_version: "2026.05.1".to_string(),
+                            archive_url: "https://example.com/runtime-pack.archive".to_string(),
+                            additional_part_urls: Vec::new(),
+                            archive_sha256: "remote-sha".to_string(),
+                            archive_size: 1024,
+                            signature: "signed".to_string(),
+                        }],
+                    },
+                },
+            )
+            .expect("fixture packs should produce status");
+
+        assert_eq!(status.state, RuntimeState::Fixture);
+        assert!(
+            status.bootstrap_eligible,
+            "fixture with a configured source must be bootstrap-eligible"
+        );
+        assert!(
+            status.repair_available,
+            "fixture with a configured source must be repairable"
+        );
+        assert!(status.bootstrap_required);
+        assert!(status.summary.contains("pendiente de descarga"));
+        assert!(!status.summary.contains("modo desarrollo activo"));
+        let operation = status
+            .active_operation
+            .as_ref()
+            .expect("eligible fixture must expose an operation");
+        assert_eq!(operation.stage, RuntimeOperationStage::PlanningDownload);
+        assert!(operation.retryable);
+    }
+
+    #[test]
+    fn no_modo_desarrollo_activo_in_release_copy() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let manager = RuntimeManager::new();
+        let status = manager
+            .status_for_tests(bundle_dir.path(), app_data_dir.path())
+            .expect("fixture packs should produce status");
+
+        let haystack = format!(
+            "{} {} {}",
+            status.summary,
+            status.details.join(" "),
+            status.guidance.join(" ")
+        );
+        assert!(
+            !haystack.contains("modo desarrollo activo"),
+            "release copy must never say 'modo desarrollo activo': {haystack}"
+        );
+        assert!(status.summary.contains("pendiente de descarga"));
+    }
+
+    #[test]
+    fn hydrated_runtime_root_does_not_fetch_remote_catalog() {
+        let source = include_str!("manager.rs");
+        let fn_start = source
+            .find("pub fn hydrated_runtime_root(")
+            .expect("hydrated_runtime_root must exist");
+        let rest = &source[fn_start..];
+        let fn_end = rest
+            .find("\n    pub fn ")
+            .or_else(|| rest.find("\n    fn "))
+            .map(|i| fn_start + i)
+            .unwrap_or(source.len());
+        let body = &source[fn_start..fn_end];
+        assert!(
+            !body.contains("configured_bootstrap_catalog(app_handle)")
+                && !body.contains("fetch_remote_catalog"),
+            "RED: hydrated_runtime_root must not fetch the remote catalog on the hot path"
+        );
+        assert!(
+            body.contains("not_configured_bootstrap_catalog"),
+            "hydrated path should use the offline not-configured catalog"
+        );
+    }
+
+    #[test]
+    fn fixture_with_catalog_for_other_platform_stays_ineligible() {
+        let bundle_dir = tempdir().expect("bundle dir");
+        let app_data_dir = tempdir().expect("app data dir");
+        let python_relpath = if cfg!(windows) {
+            "python/python.exe"
+        } else {
+            "python/bin/python3"
+        };
+        let uv_relpath = if cfg!(windows) {
+            "uv/uv.exe"
+        } else {
+            "uv/bin/uv"
+        };
+        let python_sha = write_file(bundle_dir.path(), python_relpath, b"python");
+        let uv_sha = write_file(bundle_dir.path(), uv_relpath, b"uv");
+        let mut manifest = sample_manifest(
+            &crate::runtime::paths::current_runtime_platform(),
+            &python_sha,
+            &uv_sha,
+        );
+        manifest.payload_profile = "fixture".to_string();
+        manifest.release_injection_required = true;
+        manifest.external_artifacts_required = vec!["relocatable-python".to_string()];
+        write_manifest(bundle_dir.path(), &manifest);
+
+        let other_platform =
+            if crate::runtime::paths::current_runtime_platform() == "windows-x86_64" {
+                "linux-x86_64"
+            } else {
+                "windows-x86_64"
+            };
+        let manager = RuntimeManager::new();
+        let status = manager
+            .status_for_tests_with_catalog(
+                bundle_dir.path(),
+                app_data_dir.path(),
+                BootstrapRemoteCatalog::Available {
+                    source: BootstrapRemoteSource {
+                        manifest_url: "https://example.com/bootstrap.json".to_string(),
+                        public_key_id: "entropia-root".to_string(),
+                    },
+                    index: crate::runtime::manifest::BootstrapManifestIndex {
+                        channel: "stable".to_string(),
+                        generated_at: "2026-05-06T00:00:00Z".to_string(),
+                        releases: vec![crate::runtime::manifest::BootstrapReleaseManifest {
+                            app_version: env!("CARGO_PKG_VERSION").to_string(),
+                            platform: other_platform.to_string(),
+                            pack_version: "2026.05.1".to_string(),
+                            archive_url: "https://example.com/runtime-pack.archive".to_string(),
+                            additional_part_urls: Vec::new(),
+                            archive_sha256: "remote-sha".to_string(),
+                            archive_size: 1024,
+                            signature: "signed".to_string(),
+                        }],
+                    },
+                },
+            )
+            .expect("fixture packs should produce status");
+
+        assert_eq!(status.state, RuntimeState::Fixture);
+        assert!(!status.bootstrap_eligible);
+        assert!(!status.repair_available);
+    }
+
+    #[test]
     fn reports_fixture_pack_as_incompatible_until_release_artifacts_are_injected() {
         let bundle_dir = tempdir().expect("bundle dir");
         let app_data_dir = tempdir().expect("app data dir");
@@ -2595,15 +3072,25 @@ mod tests {
             .expect("fixture packs should produce status");
 
         assert_eq!(status.state, RuntimeState::Fixture);
-        assert!(status.summary.contains("desarrollo") || status.summary.contains("fixture"));
+        assert!(status.summary.contains("pendiente de descarga"));
+        assert!(!status.summary.contains("modo desarrollo activo"));
+        assert!(!status.summary.contains("desarrollo"));
         assert!(status
             .details
             .iter()
             .any(|detail| detail.contains("relocatable-python")));
+        assert!(!status
+            .details
+            .iter()
+            .any(|detail| detail.contains("modo fixture/dev")));
+        assert!(status.bootstrap_required);
+        assert!(!status.bootstrap_eligible);
+        assert!(!status.repair_available);
         assert!(status
             .guidance
             .iter()
             .any(|item| item.contains("no indica una caída")));
+        assert!(!status.guidance.iter().any(|item| item.contains("en dev")));
     }
 
     #[test]
@@ -2684,6 +3171,10 @@ mod tests {
             .expect("fixture packs should return incompatible status on repair");
 
         assert_eq!(status.state, RuntimeState::Fixture);
+        assert!(!status.bootstrap_eligible);
+        assert!(!status.repair_available);
+        assert!(status.bootstrap_required);
+        assert!(!status.summary.contains("modo desarrollo activo"));
         assert!(manager
             .discover_hydrated_runtime_root_for_tests(app_data_dir.path())
             .is_none());
