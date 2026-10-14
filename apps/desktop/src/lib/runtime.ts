@@ -30,6 +30,8 @@ export type RuntimeOperationStage =
   | 'activating'
   | 'blocked'
 export type RuntimeBootstrapSource = 'managed_ready' | 'bundled_release' | 'trusted_remote'
+export type BootstrapUnavailableReason =
+  'not_configured' | 'source_unavailable' | 'offline' | 'no_matching_release'
 
 export interface RuntimeOperation {
   kind: RuntimeOperationKind
@@ -62,6 +64,7 @@ export interface RuntimeBootstrapPlan {
   packVersion: string | null
   summary: string
   reason: string | null
+  unavailableReason?: BootstrapUnavailableReason | null
   remoteSource: RuntimeBootstrapRemoteSource | null
   download: RuntimeBootstrapDownloadPlan | null
 }
@@ -77,6 +80,7 @@ export interface RuntimeStatus {
   guidance: string[]
   bootstrapEligible: boolean
   bootstrapRequired: boolean
+  blockedReason?: BootstrapUnavailableReason | null
   activeOperation: RuntimeOperation | null
 }
 
