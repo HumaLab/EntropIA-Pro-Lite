@@ -845,11 +845,9 @@ async fn download_uv_once(
             .find(|&i| {
                 archive
                     .by_index(i)
-                    .map(|f| {
-                        let name = f.name().to_ascii_lowercase();
-                        name == "uv.exe" || name.ends_with("/uv.exe")
-                    })
-                    .unwrap_or(false)
+                    .ok()
+                    .and_then(|f| f.name().ok().map(|name| name.to_ascii_lowercase()))
+                    .is_some_and(|name| name == "uv.exe" || name.ends_with("/uv.exe"))
             })
             .ok_or_else(|| "Error extrayendo uv: uv.exe no encontrado en el ZIP".to_string())?;
 
