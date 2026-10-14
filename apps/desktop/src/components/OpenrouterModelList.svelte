@@ -105,15 +105,23 @@
 </div>
 
 <style>
+  /* Same shape as the Input next to it (label above, control the width of
+     the column, `control-height-md` tall), so swapping the text field for
+     the menu moves nothing. */
   .model-picker {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-2);
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .model-picker__label {
+    font-family: var(--font-ui);
     font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
+    user-select: none;
   }
 
   .model-picker__nokey {
@@ -135,20 +143,28 @@
   /* Same trigger as the schema menu above it: the app's own menu, never a
      native <select>, whose popup the operating system paints. */
   .menu-select {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: var(--space-1);
-    align-self: flex-start;
-    max-width: 100%;
-    min-height: var(--control-height-sm);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-control);
+    justify-content: space-between;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: var(--control-height-md);
+    max-height: var(--control-height-md);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-input);
     background: var(--surface-input);
     color: var(--color-text-primary);
     font-family: var(--font-ui);
-    font-size: var(--font-size-xs);
+    font-size: var(--font-size-sm);
+    text-align: left;
     cursor: pointer;
+  }
+
+  .menu-select span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .menu-select:hover,
