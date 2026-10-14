@@ -8,10 +8,10 @@
 // Usage:
 //   node apps/desktop/scripts/check-runtime-bootstrap.mjs \
 //     --platform <windows-x86_64|linux-x86_64> [--app-version <x.y.z>] \
-//     (--manifest-url <url> | --manifest-file <path>)
+//     (--manifest-url <url> | --manifest-file <path>) [--timeout-ms <ms>]
 //
 // Exit codes: 0 = matching release found; 1 = manifest has no matching release;
-// 2 = bad usage, fetch error, or unreadable/invalid manifest.
+// 2 = bad usage, fetch error or timeout, or unreadable/invalid manifest.
 
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -24,14 +24,19 @@ const packageJsonPath = resolve(here, '../package.json')
 const USAGE =
   'usage: node apps/desktop/scripts/check-runtime-bootstrap.mjs ' +
   '--platform <windows-x86_64|linux-x86_64> [--app-version <x.y.z>] ' +
-  '(--manifest-url <url> | --manifest-file <path>)'
+  '(--manifest-url <url> | --manifest-file <path>) [--timeout-ms <ms>]'
 
 const OPTION_KEYS = {
   '--platform': 'platform',
   '--app-version': 'appVersion',
   '--manifest-url': 'manifestUrl',
   '--manifest-file': 'manifestFile',
+  '--timeout-ms': 'timeoutMs',
 }
+
+// Bounds the whole manifest fetch, body included. A hung release host must
+// fail the gate quickly instead of stalling the job until its own timeout.
+const DEFAULT_TIMEOUT_MS = 30_000
 
 /**
  * Pure decision: the release the app would pick, or `undefined`. Mirrors the
@@ -66,20 +71,39 @@ function parseArgs(args) {
     throw new Error(`pass exactly one of --manifest-url or --manifest-file\n${USAGE}`)
   }
   if (!options.appVersion) options.appVersion = defaultAppVersion()
+  if (options.timeoutMs === undefined) {
+    options.timeoutMs = DEFAULT_TIMEOUT_MS
+  } else {
+    const timeoutMs = Number(options.timeoutMs)
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error(`--timeout-ms must be a positive integer, got ${options.timeoutMs}`)
+    }
+    options.timeoutMs = timeoutMs
+  }
   return options
 }
 
 /** Reads the manifest from disk or over HTTP (redirects followed) and parses it. */
-async function loadIndex({ manifestUrl, manifestFile }) {
+async function loadIndex({ manifestUrl, manifestFile, timeoutMs }) {
   let raw
   if (manifestFile) {
     raw = await readFile(manifestFile, 'utf8')
   } else {
-    const response = await fetch(manifestUrl, { redirect: 'follow' })
-    if (!response.ok) {
-      throw new Error(`manifest URL responded with HTTP ${response.status} ${response.statusText}`)
+    try {
+      const signal = AbortSignal.timeout(timeoutMs)
+      const response = await fetch(manifestUrl, { redirect: 'follow', signal })
+      if (!response.ok) {
+        throw new Error(
+          `manifest URL responded with HTTP ${response.status} ${response.statusText}`
+        )
+      }
+      raw = await response.text()
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(`manifest URL timed out after ${timeoutMs} ms`)
+      }
+      throw error
     }
-    raw = await response.text()
   }
 
   let index
