@@ -168,6 +168,21 @@ describe('windows pro validation build', () => {
     expect(workflow).not.toContain('GITHUB_TOKEN')
   })
 
+  it('runs the build step outside pwsh so the Windows PowerShell hook keeps its own modules', () => {
+    // The WebView2 repair hook runs under Windows PowerShell 5.1. A pwsh parent
+    // leaks PowerShell 7 module paths into PSModulePath, so 5.1 fails to load
+    // Microsoft.PowerShell.Security (Get-AuthenticodeSignature).
+    const workflow = readWorkflowOrEmpty()
+    const lines = workflow.split('\n')
+    const start = lines.findIndex((l) => l.trim() === '- name: Build Pro installers (NSIS + MSI)')
+    expect(start).toBeGreaterThan(-1)
+    const rest = lines.slice(start + 1)
+    const end = rest.findIndex((l) => l.trim().startsWith('- name:'))
+    const step = (end === -1 ? rest : rest.slice(0, end)).filter((l) => !l.trimStart().startsWith('#'))
+    expect(step.map((l) => l.trim())).toContain('shell: bash')
+    expect(step.some((l) => l.trim() === 'shell: pwsh')).toBe(false)
+  })
+
   it('reuses the signed runtime bootstrap source literals', () => {
     const workflow = readWorkflowOrEmpty()
     expect(workflow).toContain('ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL')

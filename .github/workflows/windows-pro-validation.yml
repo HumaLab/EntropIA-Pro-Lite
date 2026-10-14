@@ -64,7 +64,11 @@ jobs:
       # release parameter can ever attach this run to a release.
       # The Windows resource overlay (hooks.nsh, WebView2 repair hook, VC
       # runtime staging, Pro resources) applies via tauri.windows.conf.json.
+      # bash, not the default pwsh: the WebView2 repair hook runs under Windows
+      # PowerShell 5.1, and a pwsh parent leaks PowerShell 7 module paths into
+      # PSModulePath, which breaks loading Get-AuthenticodeSignature.
       - name: Build Pro installers (NSIS + MSI)
+        shell: bash
         working-directory: apps/desktop
         env:
           VITE_LOCAL_ML: '1'
