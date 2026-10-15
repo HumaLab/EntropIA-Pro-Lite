@@ -182,6 +182,7 @@ vi.mock('$lib/file-import', () => ({
   deleteImageThumbnail: vi.fn().mockResolvedValue(undefined),
   generatePdfThumbnail: vi.fn().mockResolvedValue('asset://localhost/thumbnails/asset-1.png'),
   deletePdfThumbnail: vi.fn().mockResolvedValue(undefined),
+  isOutsideDataDir: () => false,
   resolveStoredAssetPath: (path: string) => path,
 }))
 
@@ -868,7 +869,9 @@ describe('CollectionView import flow', () => {
     })
     expect(storeRef.current.assets.create).toHaveBeenCalledTimes(1)
     expect(navigationRef.navigate).not.toHaveBeenCalled()
-    expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
+    await waitFor(() => {
+      expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
+    })
   })
 
   // Behaves like the archive with foreign_keys=ON: an item that still owns

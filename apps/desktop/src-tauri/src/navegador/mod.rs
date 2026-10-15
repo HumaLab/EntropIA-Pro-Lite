@@ -98,7 +98,6 @@ pub fn sweep_captures(
             }
         }));
         let line = outcome.unwrap_or_else(|_| "web-captures sweep stopped by an error".to_string());
-        eprintln!("[navegador] {line}");
         crate::app_logs::info(&app, "navegador", line);
     });
 }

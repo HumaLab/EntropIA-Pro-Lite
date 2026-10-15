@@ -510,9 +510,11 @@ impl EmbeddingEngine {
             return Err("OpenRouter embedding model no configurado".to_string());
         }
 
-        eprintln!(
-            "[nlp/embeddings] OpenRouter embedding engine configured: model={}, dimensions={}",
-            config.model_name, OPENROUTER_EMBEDDING_DIMENSIONS,
+        log::info!(
+            target: "nlp/embeddings",
+            "OpenRouter embedding engine configured: model={}, dimensions={}",
+            config.model_name,
+            OPENROUTER_EMBEDDING_DIMENSIONS,
         );
 
         Ok(Self {
@@ -529,9 +531,11 @@ impl EmbeddingEngine {
     #[cfg(feature = "local-ml")]
     fn init_local(config: EmbeddingConfig) -> Result<Self, String> {
         let local = LocalBgeM3EmbeddingEngine::init(&config)?;
-        eprintln!(
-            "[nlp/embeddings] Local BGE-M3 embedding engine configured: model={}, dimensions={}",
-            local.model_name, OPENROUTER_EMBEDDING_DIMENSIONS,
+        log::info!(
+            target: "nlp/embeddings",
+            "Local BGE-M3 embedding engine configured: model={}, dimensions={}",
+            local.model_name,
+            OPENROUTER_EMBEDDING_DIMENSIONS,
         );
 
         Ok(Self {
@@ -563,8 +567,9 @@ impl EmbeddingEngine {
 
         let chunks = chunk_embedding_text(text)?;
         if chunks.len() > 1 {
-            eprintln!(
-                "[nlp/embeddings] text exceeded {EMBEDDING_CHUNK_MAX_CHARS} chars, splitting into {} chunks",
+            log::info!(
+                target: "nlp/embeddings",
+                "text exceeded {EMBEDDING_CHUNK_MAX_CHARS} chars, splitting into {} chunks",
                 chunks.len()
             );
         }
@@ -821,7 +826,7 @@ struct RequestFailure {
 impl OpenRouterEmbeddingClient {
     fn http_client() -> Result<reqwest::blocking::Client, String> {
         reqwest::blocking::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|e| format!("Failed to build OpenRouter embedding client: {e}"))

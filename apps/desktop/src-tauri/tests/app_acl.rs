@@ -378,6 +378,15 @@ fn invoke(
     cmd: &str,
     url: &str,
 ) -> Result<String, String> {
+    invoke_with(webview, cmd, url, InvokeBody::default())
+}
+
+fn invoke_with(
+    webview: &WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    url: &str,
+    body: InvokeBody,
+) -> Result<String, String> {
     get_ipc_response(
         webview,
         InvokeRequest {
@@ -385,7 +394,7 @@ fn invoke(
             callback: CallbackFn(0),
             error: CallbackFn(1),
             url: url.parse().unwrap(),
-            body: InvokeBody::default(),
+            body,
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         },
@@ -685,6 +694,139 @@ fn no_capability_selects_a_popup_window() {
                 .is_none_or(|w| w.is_empty()),
             "{}: a `windows` entry also covers the webviews inside that window",
             path.display()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fs plugin scope (S-01)
+//
+// The renderer reaches the file system only inside the archive directories it
+// works in. A path outside them fails with the plugin's own scope error
+// ("forbidden path"), which is neither the ACL's rejection nor a missing file.
+// ---------------------------------------------------------------------------
+
+/// Calls an fs plugin command that takes `{ path, options }`.
+fn fs_call(
+    webview: &WebviewWindow<tauri::test::MockRuntime>,
+    cmd: &str,
+    path: &std::path::Path,
+) -> Result<String, String> {
+    invoke_with(
+        webview,
+        &format!("plugin:fs|{cmd}"),
+        local_url(),
+        InvokeBody::Json(serde_json::json!({ "path": path, "options": null })),
+    )
+}
+
+fn is_scope_rejection(message: &str) -> bool {
+    message.starts_with("forbidden path:")
+}
+
+fn assert_scope_rejected(result: Result<String, String>, what: &str) {
+    match result {
+        Err(message) if is_scope_rejection(&message) => {}
+        other => panic!("{what}: expected an fs scope rejection, got {other:?}"),
+    }
+}
+
+fn assert_within_scope(result: Result<String, String>, what: &str) {
+    match &result {
+        Err(message) if is_scope_rejection(message) || is_acl_rejection(message) => {
+            panic!("{what}: expected the path to be in scope, got {result:?}")
+        }
+        _ => {}
+    }
+}
+
+/// A test archive and cache directory, granted the way setup grants the real ones.
+fn granted_archive(app: &App<tauri::test::MockRuntime>) -> (tempfile::TempDir, tempfile::TempDir) {
+    let app_dir = tempfile::tempdir().expect("archive dir");
+    let cache_dir = tempfile::tempdir().expect("cache dir");
+    entropia_desktop_lib::fs_scope::grant_frontend_fs_scope(
+        app.handle(),
+        app_dir.path(),
+        cache_dir.path(),
+    )
+    .expect("grant the frontend fs scope");
+    (app_dir, cache_dir)
+}
+
+#[test]
+fn the_renderer_cannot_read_or_remove_files_in_the_home_directory() {
+    let app = build_app();
+    let main = main_webview(&app);
+    let home = app.path().home_dir().expect("home dir");
+    // Never created: the scope check runs before any file access.
+    let outside = home.join("entropia-acl-test-not-a-real-file.txt");
+    for cmd in ["read_file", "stat", "remove"] {
+        assert_scope_rejected(fs_call(&main, cmd, &outside), &format!("{cmd} in $HOME"));
+    }
+}
+
+#[test]
+fn the_renderer_cannot_touch_an_archive_database_file() {
+    let app = build_app();
+    let main = main_webview(&app);
+    let (app_dir, _cache_dir) = granted_archive(&app);
+    // The real shared root (through a dev-profile path that does not exist,
+    // so the test never reads a real archive) and the granted test archive.
+    let shared_profile = app
+        .path()
+        .data_dir()
+        .expect("data dir")
+        .join("com.entropia.shared/dev-profiles/acl-test-missing");
+    for root in [shared_profile.as_path(), app_dir.path()] {
+        for name in [
+            "entropia.sqlite",
+            "entropia.sqlite-wal",
+            "entropia.sqlite-shm",
+        ] {
+            let db_file = root.join(name);
+            for cmd in ["read_file", "stat", "remove"] {
+                assert_scope_rejected(
+                    fs_call(&main, cmd, &db_file),
+                    &format!("{cmd} {}", db_file.display()),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_renderer_reaches_the_archive_directories_it_works_in() {
+    let app = build_app();
+    let main = main_webview(&app);
+    let (app_dir, cache_dir) = granted_archive(&app);
+    let asset = app_dir.path().join("assets/col/item/page.png");
+    std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+    std::fs::write(&asset, b"png").unwrap();
+    let preview = cache_dir.path().join("audio-previews/a.wav");
+    std::fs::create_dir_all(preview.parent().unwrap()).unwrap();
+    std::fs::write(&preview, b"wav").unwrap();
+
+    for path in [&asset, &preview] {
+        for cmd in ["read_file", "stat"] {
+            let response = fs_call(&main, cmd, path);
+            assert!(response.is_ok(), "{cmd} {}: {response:?}", path.display());
+        }
+    }
+    for dir in ["writing-images", "writing-crops", "temp", "sample-staging"] {
+        assert_within_scope(
+            fs_call(&main, "stat", &app_dir.path().join(dir).join("missing.bin")),
+            dir,
+        );
+    }
+    // The archive root and its other directories stay out of reach.
+    for path in [
+        app_dir.path().join("settings.json"),
+        app_dir.path().join("thumbnails/x.png"),
+        cache_dir.path().join("logs/app.log"),
+    ] {
+        assert_scope_rejected(
+            fs_call(&main, "read_file", &path),
+            &path.display().to_string(),
         );
     }
 }

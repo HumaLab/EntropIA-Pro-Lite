@@ -27,13 +27,13 @@ internet-archive = { path = "../../../crates/internet-archive" }
 tauri = { version = "2.12.1", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled", "backup"] }
+rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
 fs2 = "0.4"
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-fs = "2.6.0"
-thiserror = "1"
+thiserror = "2"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
-pdf-extract = "0.7"
+pdf-extract = "0.12"
 lopdf = "0.45"
 pdfium-render = "0.8"
 image = "0.25"
@@ -42,10 +42,13 @@ png = "0.18"
 tokio = { version = "1", features = ["full"] }
 regex = "1"
 once_cell = "1"
+# Backend logging facade (src/logging.rs, plan §5.4). Already in the lockfile
+# through tauri/wry; declared directly so the facade can use it. No new crate.
+log = "0.4.29"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
-cap-std = "=4.0.2"
-cap-fs-ext = "=4.0.2"
+cap-std = "=4.0.3"
+cap-fs-ext = "=4.0.3"
 ndarray = { version = "=0.16.1", optional = true }
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray", "load-dynamic"], optional = true }
 tokenizers = { version = "0.15", default-features = false, features = ["onig"], optional = true }
@@ -63,13 +66,16 @@ llama-cpp-2 = { version = "0.1", optional = true }
 hayagriva = { version = "0.10.1", features = ["archive", "csl-json"] }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "blocking", "rustls-tls", "rustls-tls-native-roots"] }
-zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
 urlencoding = "2"
+# Already in the tree through reqwest/tauri; direct for validate_external_url.
+url = "2.5"
 httpdate = "1"
-sha2 = "0.10"
-md-5 = "0.10"
-base64 = "0.22"
-ed25519-dalek = { version = "2", optional = true }
+sha2 = "0.11"
+md-5 = "0.11"
+base64 = "0.23"
+hex = "0.4"
+ed25519-dalek = { version = "3", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary
 # source audio to a PCM16 WAV the webview <audio> element can play.
 symphonia = { version = "0.5", features = ["all"] }
@@ -79,6 +85,8 @@ hound = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
+# The setup dialogs iterate GLib's main context themselves (lib.rs show_setup_dialog).
+glib = "0.18"
 # Cloud-sync stores session tokens in the OS secret service (DESIGN §6.x).
 keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }
 
@@ -129,9 +137,40 @@ debug-assertions = false
 overflow-checks = false
 
 # `tauri dev` runs an unoptimized build, where scanning ~100k vectors takes
-# many seconds. Only this tiny, non-generic crate is optimized; the rest of the
-# dev build keeps its fast incremental compiles.
+# many seconds or a scanned page PNG-encodes in minutes. Only these hot-path
+# crates are optimized; the rest of the dev build keeps its fast incremental
+# compiles.
 [profile.dev.package.vecscan]
+opt-level = 3
+
+# The selective OCR page render PNG-encodes a ~2550px page through `image`/`png`
+# and their deflate/checksum helpers, and downscales oversized pages with
+# `image`'s Triangle filter. Unoptimized in dev that costs minutes per scanned
+# page; same reasoning as `vecscan` above. Every name below is in Cargo.lock
+# (the PNG encode/resize hot path); the release profiles need no entry — they
+# already optimize every crate.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.adler2]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
 opt-level = 3
 
 [profile.release.package.vecscan]

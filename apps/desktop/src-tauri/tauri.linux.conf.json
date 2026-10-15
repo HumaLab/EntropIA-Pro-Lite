@@ -8,7 +8,6 @@
       "resources/models/ocr/*",
       "resources/lib/LICENSE",
       "resources/fonts/LICENSE",
-      "resources/lib/linux-x86_64/**/*",
       "resources/runtime-pack/linux-x86_64/**/*",
       "scripts/paddle_vl.py",
       "scripts/spacy_ner.py",

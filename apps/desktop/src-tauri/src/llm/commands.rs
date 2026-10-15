@@ -8,6 +8,7 @@ use super::{
 };
 #[cfg(feature = "local-ml")]
 use super::{prepare_local_model_download, LlmDownloadErrorPayload};
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 #[cfg(feature = "local-ml")]
 use tauri::Emitter;
@@ -264,11 +265,19 @@ pub async fn llm_get_results(
     target_type: Option<String>,
     db: State<'_, AppDbState>,
 ) -> Result<Vec<LlmResultEntry>, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock error: {e}"))?;
-    super::get_all_results_for_target(&conn, target_type.as_deref().unwrap_or("item"), &target_id)
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        super::get_all_results_for_target(
+            &conn,
+            target_type.as_deref().unwrap_or("item"),
+            &target_id,
+        )
+    })
+    .await
 }
 
 /// Test the OpenRouter connection with the given API key.
@@ -278,17 +287,16 @@ pub async fn test_openrouter_connection(
     api_key: String,
     db: State<'_, AppDbState>,
 ) -> Result<Vec<ModelInfo>, String> {
-    let api_key = {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error: {error}"))?;
-        crate::settings::resolve_api_key_input(
-            &conn,
+    let db = db.inner().clone();
+    let api_key = run_blocking_db_task(move || {
+        crate::settings::resolve_api_key_input_unlocked(
+            &db.ui_conn,
             crate::settings::OPENROUTER_API_KEY,
             &api_key,
-        )?
-    };
+            &crate::settings::KeyringSecretStore,
+        )
+    })
+    .await?;
     let client = OpenRouterClient::new(api_key, String::new());
     client.test_connection().await
 }
@@ -301,16 +309,20 @@ pub async fn llm_get_result(
     target_type: Option<String>,
     db: State<'_, AppDbState>,
 ) -> Result<Option<LlmResultEntry>, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock error: {e}"))?;
-    super::get_latest_result(
-        &conn,
-        target_type.as_deref().unwrap_or("item"),
-        &target_id,
-        Some(&job_type),
-    )
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock error: {e}"))?;
+        super::get_latest_result(
+            &conn,
+            target_type.as_deref().unwrap_or("item"),
+            &target_id,
+            Some(&job_type),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -318,11 +330,15 @@ pub async fn llm_can_restore_original_ocr_asset(
     asset_id: String,
     db: State<'_, AppDbState>,
 ) -> Result<bool, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|error| format!("DB lock error: {error}"))?;
-    super::ocr_correction::can_restore_original(&conn, &asset_id)
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|error| format!("DB lock error: {error}"))?;
+        super::ocr_correction::can_restore_original(&conn, &asset_id)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -330,9 +346,13 @@ pub async fn llm_restore_original_ocr_asset(
     asset_id: String,
     db: State<'_, AppDbState>,
 ) -> Result<String, String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|error| format!("DB lock error: {error}"))?;
-    super::ocr_correction::restore_original(&conn, &asset_id)
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|error| format!("DB lock error: {error}"))?;
+        super::ocr_correction::restore_original(&conn, &asset_id)
+    })
+    .await
 }

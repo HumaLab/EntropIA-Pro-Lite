@@ -1,11 +1,13 @@
 mod app_logs;
 mod archive_close;
 mod asset_integrity;
+pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
 pub mod bibliography;
 mod db;
 mod dev_profile;
+pub mod fs_scope;
 // `deps` is whole-file swapped by variant: the full managed-Python implementation
 // under local-ml, and Lite's self-contained API-only stub otherwise. The module name
 // + its command/struct surface are identical in both arms (DependencyId diverges
@@ -21,6 +23,7 @@ mod image_edit;
 mod instance_guard;
 mod internet_archive;
 mod llm;
+mod logging;
 mod navegador;
 mod nlp;
 mod ocr;
@@ -57,10 +60,10 @@ use geo::GeoQueue;
 use llm::LlmQueue;
 use nlp::NlpQueue;
 use rusqlite::Connection;
-use rusqlite::OptionalExtension;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use sync::capture::without_sync_capture;
 use tauri::Manager;
 use transcription::TranscriptionQueue;
 
@@ -99,6 +102,20 @@ const STARTUP_ERROR_LOG: &str = "entropia-pro-startup-error.log";
 #[cfg(not(feature = "local-ml"))]
 const STARTUP_ERROR_LOG: &str = "entropia-lite-startup-error.log";
 
+/// One User-Agent for every outgoing HTTP client.
+///
+/// The version comes from Cargo, so it cannot drift from the shipped app the
+/// way per-client literals did; `package.json` is the source of truth and
+/// `pnpm version:check` keeps Cargo in sync. Nominatim's usage policy requires
+/// an identifying User-Agent. The sync client is the one deliberate exception:
+/// it sends `EntropIA-Desktop-Sync/1.0`, a sync protocol identifier the server
+/// may rely on (see `src/sync/http.rs`).
+pub(crate) const USER_AGENT: &str = concat!(
+    "EntropIA-Desktop/",
+    env!("CARGO_PKG_VERSION"),
+    " (historical-research-app)"
+);
+
 /// Title and body of the dialog shown when setup cannot start the app.
 fn startup_error_dialog(context: &str, detail: &str, log_path: &Path) -> (String, String) {
     (
@@ -110,20 +127,60 @@ fn startup_error_dialog(context: &str, detail: &str, log_path: &Path) -> (String
     )
 }
 
+/// Shows a modal dialog from `setup` and returns once it is dismissed.
+///
+/// `setup` runs on the main thread, where `blocking_show` deadlocks on Linux:
+/// rfd queues the GTK dialog on the GLib main context this thread owns, then
+/// blocks this same thread waiting for the answer, so the dialog never maps
+/// and the app hangs behind the splash. There the dialog is shown without
+/// blocking and the context is iterated until it is dismissed, the way
+/// `gtk_dialog_run` does.
+fn show_setup_dialog(
+    handle: &tauri::AppHandle,
+    title: &str,
+    body: String,
+    kind: tauri_plugin_dialog::MessageDialogKind,
+) {
+    use tauri_plugin_dialog::DialogExt;
+    let dialog = handle.dialog().message(body).title(title).kind(kind);
+    #[cfg(target_os = "linux")]
+    {
+        let (dismissed, wait) = std::sync::mpsc::channel();
+        let context = glib::MainContext::default();
+        let waker = context.clone();
+        // The callback runs on the plugin's worker thread; waking the context
+        // keeps `iteration(true)` from sleeping past the dismissal.
+        dialog.show(move |_| {
+            let _ = dismissed.send(());
+            waker.wakeup();
+        });
+        while wait.try_recv().is_err() {
+            context.iteration(true);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dialog.blocking_show();
+    }
+}
+
+/// Title for the main window in development.
+///
+/// Debug builds set it at runtime, which is why the static `tauri.dev.conf.json`
+/// title stays variant-neutral. This is the value actually shown, so Pro dev
+/// never displays "EntropIA Lite".
+#[cfg(debug_assertions)]
+fn development_window_title() -> String {
+    format!("{PRODUCT_NAME} (dev)")
+}
+
 #[cfg(debug_assertions)]
 fn apply_development_window_title(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.dev.conf.json"))?;
-    let title = config
-        .pointer("/app/windows/0/title")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            std::io::Error::other("tauri.dev.conf.json is missing the main window title")
-        })?;
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| std::io::Error::other("main window is unavailable"))?;
 
-    window.set_title(title)?;
+    window.set_title(&development_window_title())?;
     Ok(())
 }
 
@@ -187,7 +244,7 @@ fn processing_commit_observer(
                                     item_id: item_id.clone(),
                                 })
                         {
-                            eprintln!("[processing] OCR follow-up FTS failed: {error}");
+                            log::warn!(target: "processing", "OCR follow-up FTS failed: {error}");
                         }
                         match processing::repository::ensure_system_batch(&conn, "repair") {
                             Ok(batch) => {
@@ -218,23 +275,31 @@ fn processing_commit_observer(
                                                 &contract.hash,
                                             )
                                         {
-                                            eprintln!(
-                                                "[processing] follow-up admit failed: {error}"
+                                            log::warn!(
+                                                target: "processing",
+                                                "follow-up admit failed: {error}"
                                             );
                                         }
                                     }
-                                    Err(error) => eprintln!(
-                                        "[processing] follow-up contract unresolved: {error}",
+                                    Err(error) => log::warn!(
+                                        target: "processing",
+                                        "follow-up contract unresolved: {error}",
                                     ),
                                 }
                             }
                             Err(error) => {
-                                eprintln!("[processing] repair batch unavailable: {error}")
+                                log::warn!(
+                                    target: "processing",
+                                    "repair batch unavailable: {error}"
+                                )
                             }
                         }
                     }
                 }
-                Err(error) => eprintln!("[processing] follow-up connection failed: {error}"),
+                Err(error) => log::warn!(
+                    target: "processing",
+                    "follow-up connection failed: {error}"
+                ),
             }
         }
         processing::scheduler::EngineOutput::BibliographyExtract(_) => {
@@ -276,7 +341,7 @@ fn processing_commit_observer(
                     &app_handle.state::<geo::GeoQueue>(),
                     &ner.item_id,
                 ) {
-                    eprintln!("[processing] NER follow-up geocoding failed: {error}");
+                    log::warn!(target: "processing", "NER follow-up geocoding failed: {error}");
                 }
             }
         }
@@ -377,7 +442,8 @@ fn processing_terminal_observer(
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    validate_external_url(&url)?;
+    // Open the validated, re-serialized form, never the caller's spelling.
+    let url = validate_external_url(&url)?;
 
     #[cfg(target_os = "windows")]
     let mut command = {
@@ -407,7 +473,10 @@ fn open_external_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_external_url(url: &str) -> Result<(), String> {
+/// Check a URL the frontend asks the OS to open and return the string to hand
+/// to the opener: the exact Store listing as is, otherwise the URL as parsed
+/// and re-serialized by `url::Url` (http/https, a host, no credentials).
+fn validate_external_url(url: &str) -> Result<String, String> {
     if url.trim() != url {
         return Err("External URL must not contain leading or trailing whitespace".to_string());
     }
@@ -415,7 +484,7 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     // The Lite Store listing, by exact equality: no other product, parameter or
     // spelling of the scheme gets through.
     if store_updates::STORE_UPDATES_SUPPORTED && url == store_updates::STORE_PRODUCT_URI {
-        return Ok(());
+        return Ok(url.to_string());
     }
 
     if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -429,7 +498,19 @@ fn validate_external_url(url: &str) -> Result<(), String> {
         return Err("External URL contains unsafe characters".to_string());
     }
 
-    Ok(())
+    let parsed =
+        url::Url::parse(url).map_err(|error| format!("External URL is not valid: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only HTTP(S) URLs are allowed".to_string());
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("External URL must name a host".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("External URL must not carry credentials".to_string());
+    }
+
+    Ok(parsed.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +566,7 @@ fn attach_close_orchestration(app_handle: &tauri::AppHandle) {
     use std::sync::atomic::Ordering;
 
     let Some(window) = app_handle.get_webview_window("main") else {
-        eprintln!("[app/close] main window not found: close orchestration not attached");
+        log::warn!(target: "app/close", "main window not found: close orchestration not attached");
         return;
     };
     let handler_handle = app_handle.clone();
@@ -604,6 +685,11 @@ async fn run_close_sequence(app_handle: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The logging facade goes first: setup diagnostics below already route
+    // through it, and records emitted before an AppHandle is attached still
+    // reach stderr.
+    logging::init();
+
     // Suppress Windows error dialogs and CRT debug assertions that block the
     // process when native libraries crash.
     // This must run before any other initialization.
@@ -651,7 +737,7 @@ pub fn run() {
             splash::open(&app.handle().clone());
             splash::start_watchdog(&app.handle().clone());
 
-            use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+            use tauri_plugin_dialog::MessageDialogKind;
             // On a clean/varied Windows PC the data dir or DB can be unreachable
             // (redirected/roaming AppData, read-only or full disk, AV locking the
             // freshly-created folder). SetErrorMode above suppresses the OS crash
@@ -664,14 +750,9 @@ pub fn run() {
                 splash::finish_now(&dialog_handle);
                 let log_path = std::env::temp_dir().join(STARTUP_ERROR_LOG);
                 let _ = std::fs::write(&log_path, format!("{context}\n{detail}\n"));
-                eprintln!("{PRODUCT_NAME} startup error: {context}: {detail}");
+                log::error!(target: "setup", "{PRODUCT_NAME} startup error: {context}: {detail}");
                 let (title, body) = startup_error_dialog(context, &detail, &log_path);
-                dialog_handle
-                    .dialog()
-                    .message(body)
-                    .title(title)
-                    .kind(MessageDialogKind::Error)
-                    .blocking_show();
+                show_setup_dialog(&dialog_handle, &title, body, MessageDialogKind::Error);
                 detail.into()
             };
 
@@ -686,8 +767,9 @@ pub fn run() {
                 })?;
             // Which archive this run opened, on stderr as early as possible so
             // `tauri dev` shows it before anything else happens.
-            eprintln!(
-                "[setup] {}",
+            log::info!(
+                target: "setup",
+                "{}",
                 dev_profile::startup_line(
                     dev_profile::active(),
                     dev_profile::sync_server(),
@@ -705,23 +787,22 @@ pub fn run() {
                 }
                 Err(instance_guard::GuardError::AlreadyRunning) => {
                     splash::finish_now(app.handle());
-                    app.handle()
-                        .dialog()
-                        .message(
-                            "Ya hay una EntropIA abierta (Lite, Pro o de desarrollo).\n\n\
-                             Cerrala antes de abrir esta: dos abiertas a la vez sobre la misma \
-                             base de datos pueden dañarla.",
-                        )
-                        .title("EntropIA ya está abierta")
-                        .kind(MessageDialogKind::Warning)
-                        .blocking_show();
+                    show_setup_dialog(
+                        app.handle(),
+                        "EntropIA ya está abierta",
+                        "Ya hay una EntropIA abierta (Lite, Pro o de desarrollo).\n\n\
+                         Cerrala antes de abrir esta: dos abiertas a la vez sobre la misma \
+                         base de datos pueden dañarla."
+                            .to_string(),
+                        MessageDialogKind::Warning,
+                    );
                     return Err("another EntropIA instance holds the archive".into());
                 }
                 // The guard failing is not evidence of another instance, and
                 // refusing to start over it would lock someone out of their
                 // documents. Logged and carried on, as before the guard existed.
                 Err(instance_guard::GuardError::Unavailable(error)) => {
-                    eprintln!("[setup] instance guard unavailable: {error}");
+                    log::warn!(target: "setup", "instance guard unavailable: {error}");
                 }
             }
 
@@ -743,35 +824,26 @@ pub fn run() {
             // still opens — refusing to start over a cache move would deny
             // someone their documents to tidy a directory.
             if let Err(error) = migrate_cache_out_of_data_dir(&app_dir, &cache_dir) {
-                eprintln!("[setup] cache move skipped: {error}");
+                log::warn!(target: "setup", "cache move skipped: {error}");
             }
 
-            // Grant the asset protocol the two directories it must serve, from
-            // the same functions that resolved them.
-            //
-            // The configs declare the equivalent `$DATA`/`$LOCALDATA` scopes,
-            // but those are three copies of a path spelled by hand: rename the
-            // shared directory in `path_utils` and they silently point at
-            // nothing, which surfaces as an image that will not load. Deriving
-            // the grant here keeps one definition of where the files are.
-            {
-                use tauri::Manager;
-                let scope = app.asset_protocol_scope();
-                scope.allow_directory(&app_dir, true).map_err(|e| {
-                    fail(
-                        "No se pudo habilitar el acceso a la carpeta de datos.",
-                        e.to_string(),
-                    )
-                })?;
-                scope.allow_directory(&cache_dir, true).map_err(|e| {
-                    fail(
-                        "No se pudo habilitar el acceso a la carpeta de caché.",
-                        e.to_string(),
-                    )
-                })?;
-            }
+            // The asset protocol serves exactly the subdirectories the webview
+            // loads files from; the list and the database deny live in
+            // `asset_scope`, mirroring `app.security.assetProtocol.scope` in
+            // the three `tauri*.conf.json` files (keep both in step).
+            asset_scope::grant_asset_protocol_scope(app.handle(), &app_dir, &cache_dir).map_err(
+                |e| fail("No se pudo habilitar el acceso a los archivos de la app.", e),
+            )?;
+
+            // The renderer's file-system scope: only the archive directories
+            // it works in, never the database (S-01).
+            fs_scope::grant_frontend_fs_scope(app.handle(), &app_dir, &cache_dir).map_err(|e| {
+                fail("No se pudo habilitar el acceso a la carpeta de datos.", e)
+            })?;
 
             app.manage(app_logs::AppLogsState::new(cache_dir.join("logs")));
+            // Now `warn`/`error` records also land in the app's own log.
+            logging::attach_app(app.handle().clone());
             app.manage(store_updates::StoreUpdateState::new());
             navegador::sweep_quarantine(&cache_dir);
             app_logs::info(&app.handle().clone(), "setup", "Registro de diagnóstico inicializado");
@@ -832,7 +904,7 @@ pub fn run() {
             })?;
 
             // UI connection — used by Tauri IPC commands
-            let ui_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
+            let mut ui_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
                 fail(
                     &format!("No se pudo abrir la base de datos {}.", db_path.display()),
                     e,
@@ -846,131 +918,50 @@ pub fn run() {
             // already accepts an absolute path, so its absence degrades to the
             // behaviour that shipped before it existed.
             if let Err(error) = install_relative_asset_path_guard(&ui_conn, &app_dir) {
-                eprintln!("[setup] relative asset-path guard not installed: {error}");
+                log::warn!(target: "setup", "relative asset-path guard not installed: {error}");
             }
 
-            // Normalize legacy duplicates and enforce one-row-per-asset semantics
-            // for extractions/transcriptions so Rust workers can use real UPSERT.
-            // Fresh installs may not have these tables yet (created later by JS migrations),
-            // so this must be conditional.
-            let has_extractions_table = table_exists(&ui_conn, "extractions");
-            let has_transcriptions_table = table_exists(&ui_conn, "transcriptions");
-            let mut legacy_uniques_sql = String::new();
-
-            if has_extractions_table {
-                legacy_uniques_sql.push_str(
-                    "DELETE FROM extractions
-                     WHERE rowid NOT IN (
-                       SELECT MAX(rowid) FROM extractions GROUP BY asset_id
-                     );
-                     CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_asset_id_unique
-                     ON extractions(asset_id);",
+            // One startup pipeline brings the archive schema up to date: the
+            // idempotent repairs legacy archives need, then every pending store
+            // migration, then the repairs once more so a fresh install reaches
+            // on its first boot the schema older installs reached on their
+            // second. A failing repair or migration returns `Err`, and
+            // `fail(...)` shows the dialog instead of ending the process.
+            let migrations = db::repairs::migrate_archive(&mut ui_conn)
+                .map_err(|error| fail(error.context(), error.detail()))?;
+            if let (Some(first), Some(last)) = (
+                migrations.applied.first().copied(),
+                migrations.applied.last().copied(),
+            ) {
+                log::info!(
+                    target: "setup",
+                    "migrations: applied {} ({}..{})",
+                    migrations.applied.len(),
+                    first,
+                    last
                 );
-            }
-
-            if has_transcriptions_table {
-                legacy_uniques_sql.push_str(
-                    "DELETE FROM transcriptions
-                     WHERE rowid NOT IN (
-                       SELECT MAX(rowid) FROM transcriptions GROUP BY asset_id
-                     );
-                     CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_asset_id_unique
-                     ON transcriptions(asset_id);",
-                );
-            }
-
-            if !legacy_uniques_sql.is_empty() {
-                ui_conn
-                    .execute_batch(&legacy_uniques_sql)
-                    .expect("Failed to enforce unique asset_id indexes for extraction/transcription");
             } else {
-                eprintln!(
-                    "[setup] extractions/transcriptions tables not found — skipping legacy unique-index enforcement"
-                );
+                log::info!(target: "setup", "migrations: up to date");
             }
 
-            // Migrate extractions.method CHECK constraint: remove the legacy
-            // `CHECK(method IN ('native', 'ocr'))` which blocked modern OCR methods
-            // like 'paddle', 'paddle_vl', 'pdf_paddle', and 'pdf_paddle_vl'.
-            migrate_extractions_method_check(&ui_conn)
-                .expect("Failed to migrate extractions method CHECK constraint");
-            llm::ensure_llm_results_schema(&ui_conn)
-                .expect("Failed to migrate llm_results table");
-
-            ensure_layouts_schema(&ui_conn)
-                .map_err(|e| format!("Failed to migrate layouts table: {e}"))
-                .expect("Failed to migrate layouts table");
-            let modern_schema_bootstrapped =
-                migration_applied(&ui_conn, "0017_vec_assets").unwrap_or(false);
-
-            if !modern_schema_bootstrapped && table_exists(&ui_conn, "assets") {
-                // Legacy fallback for databases that haven't run JS migrations yet.
-                let has_sort_index: bool = ui_conn
-                    .prepare("SELECT sort_index FROM assets LIMIT 0")
-                    .map(|mut stmt| {
-                        let _ = stmt.query_map([], |_| Ok(()));
-                        true
-                    })
-                    .unwrap_or(false);
-
-                if !has_sort_index {
-                    ui_conn
-                        .execute_batch(
-                            "ALTER TABLE assets ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0;
-                             CREATE INDEX IF NOT EXISTS idx_assets_item_sort ON assets(item_id, sort_index);",
-                        )
-                        .map_err(|e| format!("Failed to add sort_index column to assets: {e}"))
-                        .expect("Failed to add sort_index column");
-                    eprintln!("[setup] Added sort_index column to assets table");
-                }
-
-                let has_notes_asset_id: bool = ui_conn
-                    .prepare("SELECT asset_id FROM notes LIMIT 0")
-                    .map(|mut stmt| {
-                        let _ = stmt.query_map([], |_| Ok(()));
-                        true
-                    })
-                    .unwrap_or(false);
-
-                if !has_notes_asset_id {
-                    ui_conn
-                        .execute_batch(
-                            "ALTER TABLE notes ADD COLUMN asset_id TEXT;
-                             ALTER TABLE entities ADD COLUMN asset_id TEXT;
-                             ALTER TABLE triples ADD COLUMN asset_id TEXT;
-                             CREATE INDEX IF NOT EXISTS idx_notes_asset_id ON notes(asset_id);
-                             CREATE INDEX IF NOT EXISTS idx_entities_asset_id ON entities(asset_id);
-                             CREATE INDEX IF NOT EXISTS idx_triples_asset_id ON triples(asset_id);",
-                        )
-                        .map_err(|e| format!("Failed to add asset_id columns: {e}"))
-                        .expect("Failed to add asset_id columns");
-                    eprintln!("[setup] Added asset_id columns to notes, entities, triples");
-                }
-            } else if !modern_schema_bootstrapped {
-                eprintln!(
-                    "[setup] assets table not found — skipping legacy fallback schema patching"
-                );
-            }
-
-            // Create app_settings table for user configuration (API keys, preferences).
-            // Keep this outside the legacy fallback so modern-schema databases get it too.
-            ui_conn
-                .execute_batch(
-                    "CREATE TABLE IF NOT EXISTS app_settings (
-                        key TEXT PRIMARY KEY,
-                        value TEXT NOT NULL
-                    );",
-                )
-                .map_err(|e| format!("Failed to create app_settings table: {e}"))
-                .expect("Failed to create app_settings table");
-            eprintln!("[setup] app_settings table ensured");
+            // Phase 4.4b: the renderer could run DDL before Phase 4.4a, so a
+            // planted trigger or view may still be installed under a
+            // legitimate name. Compare the whole trigger/view set against a
+            // canonical in-memory build and repair every divergence, still
+            // before `AppDbState` hands `ui_conn` to the renderer. Failing
+            // here is a dialog, never a silently unaudited archive.
+            let schema_audit = db::schema_audit::audit_and_repair(&mut ui_conn, &app_dir)
+                .map_err(|error| fail("No se pudo verificar la base de datos.", error))?;
+            log_schema_audit(&app.handle().clone(), &schema_audit);
 
             settings::migrate_legacy_default_openrouter_model(&ui_conn)
-                .expect("Failed to migrate legacy default OpenRouter model");
+                .map_err(|e| fail("No se pudo actualizar la configuración guardada.", e))?;
+            settings::log_renderer_written_backend_settings(&ui_conn);
             let secret_migration = settings::migrate_legacy_api_keys(&ui_conn);
             if secret_migration.migrated > 0 {
-                eprintln!(
-                    "[setup] Migrated {} API credential(s) to the system credential store",
+                log::info!(
+                    target: "setup",
+                    "Migrated {} API credential(s) to the system credential store",
                     secret_migration.migrated
                 );
             }
@@ -979,14 +970,12 @@ pub fn run() {
                     "Could not migrate API credential(s) for: {}. Legacy values were preserved.",
                     secret_migration.failed_keys.join(", ")
                 );
-                eprintln!("[setup] {message}");
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
             if secret_migration.storage_cleanup_failed {
                 let message =
                     "API credentials moved to the system credential store, but SQLite storage cleanup could not be completed"
                         .to_string();
-                eprintln!("[setup] {message}");
                 app_logs::error(&app.handle().clone(), "settings/migration", message);
             }
 
@@ -995,8 +984,12 @@ pub fn run() {
             app.manage(research);
 
             // OCR worker connection
-            let worker_conn = db::open::open_archive_connection(&db_path)
-                .expect("Failed to open SQLite database (worker)");
+            let worker_conn = db::open::open_archive_connection(&db_path).map_err(|e| {
+                fail(
+                    &format!("No se pudo abrir la base de datos {}.", db_path.display()),
+                    e,
+                )
+            })?;
 
             app.manage(AppDbState::new(ui_conn, worker_conn, db_path.clone()));
 
@@ -1067,13 +1060,13 @@ pub fn run() {
                     // immediately — the worker owns the single-flight lock
                     // until the transfer ends, and every S8 skip (debug /
                     // dev-profile / test, non-fixture, no source) starts
-                    // nothing.
+                    // nothing. Err path keeps main's log-facade convention
+                    // (no raw eprintln).
                     Ok(status) => app
                         .state::<runtime::manager::RuntimeManager>()
                         .inner()
                         .trigger_startup_bootstrap(&app.handle().clone(), &status),
                     Err(error) => {
-                        eprintln!("[runtime] startup validation failed: {error}");
                         app_logs::error(
                             &app.handle().clone(),
                             "runtime",
@@ -1092,7 +1085,6 @@ pub fn run() {
                 match deps::probe_all_once(deps_state.inner(), db_state.inner()).await {
                     Ok(results) => {
                         deps::emit_probe_complete(&app_handle_deps, &results);
-                        eprintln!("[deps] Startup check: {} deps checked", results.len());
                         app_logs::info(
                             &app_handle_deps,
                             "deps",
@@ -1100,7 +1092,6 @@ pub fn run() {
                         );
                     }
                     Err(err) => {
-                        eprintln!("[deps] Startup check failed: {err}");
                         app_logs::error(
                             &app_handle_deps,
                             "deps",
@@ -1261,9 +1252,12 @@ pub fn run() {
             // tables that already exist; the frontend re-invokes sync_ensure_capture
             // after initStore() to cover the rest. Non-fatal — never block startup.
             match sync::ensure_capture_on_path(&db_path) {
-                Ok(()) => eprintln!("[sync] capture triggers ensured at setup"),
+                Ok(()) => log::info!(target: "sync", "capture triggers ensured at setup"),
                 Err(error) => {
-                    eprintln!("[sync] capture bootstrap failed (will retry from UI): {error}")
+                    log::warn!(
+                        target: "sync",
+                        "capture bootstrap failed (will retry from UI): {error}"
+                    )
                 }
             }
 
@@ -1272,8 +1266,12 @@ pub fn run() {
             // rename. Best-effort — never blocks startup.
             match sync::blobs::cleanup_orphan_parts(&app_dir) {
                 Ok(0) => {}
-                Ok(removed) => eprintln!("[sync] cleaned {removed} orphan .part file(s)"),
-                Err(error) => eprintln!("[sync] orphan .part cleanup failed: {error}"),
+                Ok(removed) => {
+                    log::info!(target: "sync", "cleaned {removed} orphan .part file(s)")
+                }
+                Err(error) => {
+                    log::warn!(target: "sync", "orphan .part cleanup failed: {error}")
+                }
             }
 
             // Saved web captures: remove what a crash or a failed delete left in
@@ -1292,11 +1290,17 @@ pub fn run() {
             let sync_engine = sync::engine::start_engine(app.handle().clone(), db_path.clone());
             app.manage(sync_engine);
             if dev_profile::sync_disabled() {
-                eprintln!("[sync] disabled in the dev profile: no engine, no keyring access");
+                log::info!(
+                    target: "sync",
+                    "disabled in the dev profile: no engine, no keyring access"
+                );
             } else if let Some(server) = dev_profile::sync_server() {
-                eprintln!("[sync] dev profile syncs with {server} only (profile-scoped keyring entry)");
+                log::info!(
+                    target: "sync",
+                    "dev profile syncs with {server} only (profile-scoped keyring entry)"
+                );
             } else {
-                eprintln!("[sync] engine spawned (gated until capture + session)");
+                log::info!(target: "sync", "engine spawned (gated until capture + session)");
             }
 
             // Close orchestration (app-close.ts handshake): durably flush the
@@ -1328,7 +1332,11 @@ pub fn run() {
                             true
                         });
                     }) {
-                        eprintln!("[linux-setup] Failed to configure webview media permissions: {}", e);
+                        log::warn!(
+                            target: "linux-setup",
+                            "Failed to configure webview media permissions: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -1362,6 +1370,7 @@ pub fn run() {
             processing::commands::processing_latest_bibliography_sync_status,
             bibliography::commands::bibliography_search_works,
             bibliography::commands::bibliography_open_passage,
+            bibliography::commands::zotero_data_dir_grant,
             bibliography::commands::bibliography_passage_context,
             bibliography::commands::bibliography_library_status,
             bibliography::commands::bibliography_search_passages,
@@ -1625,7 +1634,10 @@ fn migrate_legacy_app_dir(app_dir: &Path) -> Result<(), String> {
     // which is new, so an existing install cannot carry a stale one.
     let migration_marker = legacy_migration_marker_path(app_dir);
     if migration_marker.exists() {
-        eprintln!("[setup] legacy app dir convergence already completed — skipping");
+        log::info!(
+            target: "setup",
+            "legacy app dir convergence already completed — skipping"
+        );
         return Ok(());
     }
 
@@ -1659,16 +1671,18 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
         // with it, so a failed rename falls through to the file-by-file move.
         match fs::rename(legacy_dir, app_dir) {
             Ok(()) => {
-                eprintln!(
-                    "[setup] migrated legacy app dir: {} -> {}",
+                log::info!(
+                    target: "setup",
+                    "migrated legacy app dir: {} -> {}",
                     legacy_dir.display(),
                     app_dir.display()
                 );
                 return Ok(());
             }
             Err(error) => {
-                eprintln!(
-                    "[setup] whole-directory rename unavailable ({error}) — moving entry by entry: {} -> {}",
+                log::warn!(
+                    target: "setup",
+                    "whole-directory rename unavailable ({error}) — moving entry by entry: {} -> {}",
                     legacy_dir.display(),
                     app_dir.display()
                 );
@@ -1688,8 +1702,9 @@ fn merge_legacy_dir(legacy_dir: &Path, app_dir: &Path) -> Result<(), String> {
     // files. The walk is cheap anyway: it renames, and skips what the target
     // already has.
     move_missing_recursive(legacy_dir, app_dir)?;
-    eprintln!(
-        "[setup] merged legacy app dir into current app dir: {} -> {}",
+    log::info!(
+        target: "setup",
+        "merged legacy app dir into current app dir: {} -> {}",
         legacy_dir.display(),
         app_dir.display()
     );
@@ -1721,8 +1736,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
 
     if !current_db.exists() {
         copy_sqlite_bundle(&legacy_db, &current_db)?;
-        eprintln!(
-            "[setup] copied legacy sqlite bundle into new app dir: {} -> {}",
+        log::info!(
+            target: "setup",
+            "copied legacy sqlite bundle into new app dir: {} -> {}",
             legacy_db.display(),
             current_db.display()
         );
@@ -1734,8 +1750,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     let current_score = sqlite_richness_score(&current_db).unwrap_or(0);
 
     if legacy_score <= current_score {
-        eprintln!(
-            "[setup] keeping current sqlite bundle (current_score={current_score}, legacy_score={legacy_score})"
+        log::info!(
+            target: "setup",
+            "keeping current sqlite bundle (current_score={current_score}, legacy_score={legacy_score})"
         );
         return Ok(());
     }
@@ -1743,8 +1760,9 @@ fn prefer_richer_legacy_database(legacy_dir: &Path, app_dir: &Path) -> Result<()
     backup_sqlite_bundle(&current_db)?;
     remove_sqlite_bundle(&current_db)?;
     copy_sqlite_bundle(&legacy_db, &current_db)?;
-    eprintln!(
-        "[setup] restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
+    log::warn!(
+        target: "setup",
+        "restored richer legacy sqlite bundle (legacy_score={legacy_score} > current_score={current_score})"
     );
     reset_sync_reconciliation_if_applicable(&current_db)?;
     Ok(())
@@ -1951,34 +1969,6 @@ fn move_missing_recursive(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Runs a startup rewrite of asset rows without queueing it for sync.
-///
-/// An asset's `path` is a device-local key: sync sends a `rel_path` derived from
-/// it, so rewriting it changes nothing another device should see. Left to the
-/// capture triggers, the rewrite pushed every asset as a fresh edit, which could
-/// revive one that another device had deleted together with its item. The
-/// triggers stand down while `applying` is `1`; the previous value comes back
-/// afterwards. Run it inside the caller's transaction so both land together.
-fn without_sync_capture<T>(
-    conn: &Connection,
-    work: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    if !table_exists(conn, "sync_meta") {
-        return work();
-    }
-    let previous = crate::sync::session::meta_get(conn, "applying")?;
-    crate::sync::session::meta_set(conn, "applying", "1")?;
-    let result = work()?;
-    match previous {
-        Some(value) => crate::sync::session::meta_set(conn, "applying", &value)?,
-        None => {
-            conn.execute("DELETE FROM sync_meta WHERE key = 'applying'", [])
-                .map_err(|error| format!("Failed to restore the sync capture flag: {error}"))?;
-        }
-    }
-    Ok(result)
-}
-
 fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), String> {
     let Some(parent_dir) = app_dir.parent() else {
         return Ok(());
@@ -2004,7 +1994,10 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
         .unwrap_or(false);
 
     if !has_assets_table {
-        eprintln!("[setup] assets table not found — skipping legacy asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets table not found — skipping legacy asset-path migration"
+        );
         return Ok(());
     }
 
@@ -2017,7 +2010,10 @@ fn migrate_legacy_asset_paths(db_path: &Path, app_dir: &Path) -> Result<(), Stri
         .unwrap_or(false);
 
     if !has_path_column {
-        eprintln!("[setup] assets.path column not found — skipping legacy asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets.path column not found — skipping legacy asset-path migration"
+        );
         return Ok(());
     }
 
@@ -2088,8 +2084,9 @@ fn migrate_cache_out_of_data_dir(data_dir: &Path, cache_dir: &Path) -> Result<us
     }
 
     if moved > 0 {
-        eprintln!(
-            "[setup] moved {moved} cache directories out of the data directory: {} -> {}",
+        log::info!(
+            target: "setup",
+            "moved {moved} cache directories out of the data directory: {} -> {}",
             data_dir.display(),
             cache_dir.display()
         );
@@ -2112,7 +2109,13 @@ fn migrate_cache_out_of_data_dir(data_dir: &Path, cache_dir: &Path) -> Result<us
 /// External files that were never copied in keep absolute paths, so the guard
 /// only refuses a path *under the data directory* — which is precisely the
 /// class the migration is responsible for.
-fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Result<(), String> {
+///
+/// `pub(crate)` because the startup schema audit rebuilds the guard triggers
+/// in its canonical in-memory database (Phase 4.4b).
+pub(crate) fn install_relative_asset_path_guard(
+    conn: &Connection,
+    data_dir: &Path,
+) -> Result<(), String> {
     if !table_exists(conn, "assets") {
         return Ok(());
     }
@@ -2148,6 +2151,52 @@ fn install_relative_asset_path_guard(conn: &Connection, data_dir: &Path) -> Resu
         .map_err(|error| format!("Failed to install the relative asset-path guard: {error}"))
 }
 
+/// Publishes the Phase 4.4b schema-audit outcome: one `ok` line when the
+/// trigger/view set matched the canonical one, one line per repaired object
+/// when it did not. The canonical-build cost is part of every line because
+/// the audit rebuilds that database on each startup.
+fn log_schema_audit(app_handle: &tauri::AppHandle, report: &db::schema_audit::SchemaAuditReport) {
+    let budget = db::schema_audit::CANONICAL_BUILD_BUDGET_MS;
+    let cost = if report.canonical_build_ms > budget {
+        format!(
+            "canonical build {} ms, over the {} ms debug budget",
+            report.canonical_build_ms, budget
+        )
+    } else {
+        format!("canonical build {} ms", report.canonical_build_ms)
+    };
+
+    if report.is_clean() {
+        app_logs::info(
+            app_handle,
+            "schema-audit",
+            format!("Schema audit: ok ({cost})"),
+        );
+        return;
+    }
+
+    for object in &report.dropped {
+        let message = format!(
+            "[setup] schema audit: dropped {} \"{}\" ({})",
+            object.object_type,
+            object.name,
+            object.reason.describe()
+        );
+        app_logs::warn(app_handle, "schema-audit", message);
+    }
+    for name in &report.recreated {
+        let message =
+            format!("[setup] schema audit: restored \"{name}\" from the canonical definition");
+        app_logs::warn(app_handle, "schema-audit", message);
+    }
+    log::warn!(
+        target: "setup",
+        "schema audit: {} dropped, {} restored ({cost})",
+        report.dropped.len(),
+        report.recreated.len()
+    );
+}
+
 /// Rewrite absolute `assets.path` values into keys relative to the data
 /// directory, normalizing separators to `/`.
 ///
@@ -2166,7 +2215,10 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
     })?;
 
     if !table_exists(&conn, "assets") {
-        eprintln!("[setup] assets table not found — skipping relative asset-path migration");
+        log::info!(
+            target: "setup",
+            "assets table not found — skipping relative asset-path migration"
+        );
         return Ok(0);
     }
 
@@ -2233,236 +2285,27 @@ fn migrate_asset_paths_to_relative(db_path: &Path, data_dir: &Path) -> Result<us
         .map_err(|error| format!("Failed to commit the relative asset-path migration: {error}"))?;
 
     if rewritten > 0 {
-        eprintln!("[setup] rewrote {rewritten} asset paths as relative keys");
+        log::info!(target: "setup", "rewrote {rewritten} asset paths as relative keys");
     }
     Ok(rewritten)
-}
-
-fn migration_applied(conn: &Connection, name: &str) -> Result<bool, String> {
-    let has_migrations_table: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_migrations' LIMIT 1",
-            [],
-            |_row| Ok(true),
-        )
-        .unwrap_or(false);
-
-    if !has_migrations_table {
-        return Ok(false);
-    }
-
-    let found: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM _migrations WHERE name = ?1 LIMIT 1",
-            rusqlite::params![name],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| format!("Failed to check migration '{name}': {e}"))?;
-
-    Ok(found.is_some())
-}
-
-/// Migrate the `extractions` table to remove the legacy CHECK constraint
-/// on the `method` column that only allowed 'native' and 'ocr'.
-/// PaddleOCR uses methods like 'paddle', 'paddle_vl', 'pdf_paddle', and 'pdf_paddle_vl'.
-/// SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
-fn migrate_extractions_method_check(conn: &Connection) -> Result<(), String> {
-    // Check if the CHECK constraint exists by attempting an insert with a new method value.
-    // If it succeeds, no migration needed.
-    let has_check: bool = conn
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='extractions'")
-        .and_then(|mut stmt| {
-            stmt.query_row([], |row| {
-                let sql: String = row.get(0)?;
-                Ok(sql.contains("CHECK(method IN"))
-            })
-        })
-        .unwrap_or(false);
-
-    if !has_check {
-        eprintln!(
-            "[setup] extractions.method: no legacy CHECK constraint found — skipping migration"
-        );
-        return Ok(());
-    }
-
-    eprintln!("[setup] Migrating extractions table to remove legacy method CHECK constraint...");
-
-    conn.execute_batch(
-        "BEGIN TRANSACTION;
-         CREATE TABLE extractions_new (
-           id TEXT PRIMARY KEY,
-           asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-           text_content TEXT NOT NULL,
-           method TEXT NOT NULL,
-           confidence REAL,
-           created_at INTEGER NOT NULL
-         );
-         INSERT INTO extractions_new SELECT * FROM extractions;
-         DROP TABLE extractions;
-         ALTER TABLE extractions_new RENAME TO extractions;
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_extractions_asset_id_unique ON extractions(asset_id);
-         COMMIT;",
-    )
-    .map_err(|e| format!("Failed to migrate extractions table: {e}"))?;
-
-    eprintln!("[setup] extractions.method CHECK constraint removed successfully");
-    Ok(())
-}
-
-fn ensure_layouts_schema(conn: &Connection) -> Result<(), String> {
-    // `layouts.asset_id` references `assets`, which only the store migrations create. Until
-    // they have run, store migration 0020 owns `layouts`; touching it here would leave a
-    // table whose writes fail with `no such table: main.assets` while foreign keys are on.
-    if !table_exists(conn, "assets") {
-        eprintln!("[setup] assets table not found — leaving layouts to the store migrations");
-        return Ok(());
-    }
-
-    let has_layouts_table: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='layouts' LIMIT 1",
-            [],
-            |_row| Ok(true),
-        )
-        .unwrap_or(false);
-
-    if !has_layouts_table {
-        conn.execute_batch(
-            "CREATE TABLE layouts (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_layouts_asset_id ON layouts(asset_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id);",
-        )
-        .map_err(|e| format!("Failed to create layouts table: {e}"))?;
-        eprintln!("[setup] layouts table created with blocks column");
-        return Ok(());
-    }
-
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(layouts)")
-        .map_err(|e| format!("Failed to inspect layouts schema: {e}"))?;
-
-    let columns = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("Failed to read layouts schema: {e}"))?;
-
-    let mut has_blocks = false;
-    for column in columns {
-        if column.map_err(|e| format!("Failed to read layouts column: {e}"))? == "blocks" {
-            has_blocks = true;
-            break;
-        }
-    }
-    drop(stmt);
-
-    if !has_blocks {
-        eprintln!("[setup] Migrating legacy layouts table to add blocks column...");
-        conn.execute_batch(
-            "BEGIN TRANSACTION;
-             CREATE TABLE layouts_new (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-             );
-             INSERT INTO layouts_new (
-                id, asset_id, regions, blocks, model, image_width, image_height, created_at
-             )
-             SELECT
-                id,
-                asset_id,
-                regions,
-                '[]' AS blocks,
-                model,
-                image_width,
-                image_height,
-                created_at
-             FROM layouts;
-             DROP TABLE layouts;
-             ALTER TABLE layouts_new RENAME TO layouts;
-             COMMIT;",
-        )
-        .map_err(|e| format!("Failed to migrate layouts table: {e}"))?;
-    }
-
-    conn.execute_batch(
-        "DELETE FROM layouts
-         WHERE rowid NOT IN (
-           SELECT MAX(rowid) FROM layouts GROUP BY asset_id
-         );
-         CREATE INDEX IF NOT EXISTS idx_layouts_asset_id ON layouts(asset_id);
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_layouts_asset_id_unique ON layouts(asset_id);",
-    )
-    .map_err(|e| format!("Failed to finalize layouts schema: {e}"))?;
-
-    eprintln!("[setup] layouts schema ensured");
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn fk_connection() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        conn
+    #[cfg(debug_assertions)]
+    #[test]
+    fn development_window_title_names_the_variant_and_the_dev_marker() {
+        let title = development_window_title();
+        assert!(title.starts_with(PRODUCT_NAME));
+        assert!(title.ends_with(" (dev)"));
     }
 
     #[test]
-    fn ensure_layouts_schema_waits_for_the_store_to_create_assets() {
-        let conn = fk_connection();
-
-        ensure_layouts_schema(&conn).unwrap();
-
-        assert!(!table_exists(&conn, "layouts"));
-    }
-
-    #[test]
-    fn ensure_layouts_schema_survives_a_half_bootstrapped_archive() {
-        // A previous launch created `layouts` but the store never created `assets`.
-        let conn = fk_connection();
-        conn.execute_batch(
-            "CREATE TABLE layouts (
-                id TEXT PRIMARY KEY,
-                asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-                regions TEXT NOT NULL,
-                blocks TEXT NOT NULL,
-                model TEXT NOT NULL,
-                image_width INTEGER NOT NULL,
-                image_height INTEGER NOT NULL,
-                created_at INTEGER NOT NULL
-            );",
-        )
-        .unwrap();
-
-        ensure_layouts_schema(&conn).unwrap();
-    }
-
-    #[test]
-    fn ensure_layouts_schema_creates_layouts_once_assets_exists() {
-        let conn = fk_connection();
-        conn.execute_batch("CREATE TABLE assets (id TEXT PRIMARY KEY);")
-            .unwrap();
-
-        ensure_layouts_schema(&conn).unwrap();
-        ensure_layouts_schema(&conn).unwrap();
-
-        assert!(table_exists(&conn, "layouts"));
+    fn user_agent_uses_the_cargo_version() {
+        assert!(USER_AGENT.starts_with("EntropIA-Desktop/"));
+        assert!(USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 
     #[test]
@@ -2516,6 +2359,48 @@ mod tests {
     }
 
     #[test]
+    fn validate_external_url_requires_a_host() {
+        for url in ["https://", "http://", "https://:443/path"] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_external_url_rejects_credentials() {
+        for url in [
+            "https://github.com@evil.example/",
+            "https://user:pass@example.com/",
+        ] {
+            assert!(
+                validate_external_url(url).is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_external_url_returns_the_reserialized_url() {
+        // What gets opened is the parsed form, not the caller's spelling: the
+        // host is lowercased and IDNA-encoded, and a backslash cannot smuggle a
+        // second authority past the parser.
+        assert_eq!(
+            validate_external_url("https://Example.COM/a?b=1#c").unwrap(),
+            "https://example.com/a?b=1#c"
+        );
+        assert_eq!(
+            validate_external_url("https://münchen.de/").unwrap(),
+            "https://xn--mnchen-3ya.de/"
+        );
+        assert_eq!(
+            validate_external_url("https://example.com\\@evil.example/").unwrap(),
+            "https://example.com/@evil.example/"
+        );
+    }
+
+    #[test]
     fn validate_external_url_accepts_the_exact_store_listing_only_where_supported() {
         let accepted = validate_external_url("ms-windows-store://pdp/?ProductId=9N328K9L95JD");
         assert_eq!(accepted.is_ok(), store_updates::STORE_UPDATES_SUPPORTED);
@@ -2537,71 +2422,6 @@ mod tests {
                 "{url} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn migrate_extractions_method_check_removes_legacy_check_and_preserves_upsert_target() {
-        let conn = Connection::open_in_memory().expect("open in-memory db");
-        conn.execute_batch(
-            "CREATE TABLE assets (id TEXT PRIMARY KEY);
-             INSERT INTO assets(id) VALUES ('asset-1');
-             CREATE TABLE extractions (
-               id TEXT PRIMARY KEY,
-               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
-               text_content TEXT NOT NULL,
-               method TEXT NOT NULL CHECK(method IN ('native', 'ocr')),
-               confidence REAL,
-               created_at INTEGER NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_extractions_asset_id ON extractions(asset_id);",
-        )
-        .expect("create legacy schema");
-
-        migrate_extractions_method_check(&conn).expect("migrate extractions schema");
-
-        let create_sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='extractions'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("read migrated table sql");
-        assert!(!create_sql.contains("CHECK(method IN"));
-
-        conn.execute(
-            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-             VALUES ('ext-1', 'asset-1', 'first', 'paddle_vl', NULL, 1)
-             ON CONFLICT(asset_id) DO UPDATE SET
-               text_content = excluded.text_content,
-               method = excluded.method,
-               confidence = excluded.confidence,
-               created_at = excluded.created_at",
-            [],
-        )
-        .expect("insert modern OCR method");
-
-        conn.execute(
-            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
-             VALUES ('ext-2', 'asset-1', 'updated', 'pdf_paddle_vl', NULL, 2)
-             ON CONFLICT(asset_id) DO UPDATE SET
-               text_content = excluded.text_content,
-               method = excluded.method,
-               confidence = excluded.confidence,
-               created_at = excluded.created_at",
-            [],
-        )
-        .expect("upsert by asset_id");
-
-        let (text, method, count): (String, String, i64) = conn
-            .query_row(
-                "SELECT text_content, method, (SELECT COUNT(*) FROM extractions) FROM extractions WHERE asset_id = 'asset-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("read upserted extraction");
-        assert_eq!(text, "updated");
-        assert_eq!(method, "pdf_paddle_vl");
-        assert_eq!(count, 1);
     }
 
     // ------------------------------------------------------------------
@@ -3166,18 +2986,31 @@ mod tests {
     // Security scope.
     // ------------------------------------------------------------------
 
-    /// The only path any shipped configuration may expose.
+    /// The only paths any shipped configuration may expose.
     ///
     /// Turns "do not widen the scope" into something the build enforces instead
-    /// of something an audit has to notice. `$DATA` is the parent of every
-    /// variant directory, so this entry is exactly as narrow as the
-    /// `$APPDATA/**/*` it replaced — it just names a directory no identifier
-    /// owns.
+    /// of something an audit has to notice: the asset protocol reaches exactly
+    /// the subdirectories the webview loads files from (`asset_scope` grants
+    /// the same ones at runtime from the resolved directories) and refuses the
+    /// database and the saved capture HTML anywhere under the shared roots.
     #[test]
-    fn every_config_exposes_only_the_shared_directory() {
-        let expected = vec![
-            format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
-            format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+    fn every_config_exposes_only_the_served_subdirectories() {
+        let expected_allow: Vec<String> = asset_scope::ASSET_DATA_DIRS
+            .iter()
+            .map(|dir| format!("$DATA/{}/{dir}/**", path_utils::SHARED_DIR_NAME))
+            .chain(
+                asset_scope::ASSET_CACHE_DIRS
+                    .iter()
+                    .map(|dir| format!("$LOCALDATA/{}/{dir}/**", path_utils::SHARED_DIR_NAME)),
+            )
+            .collect();
+        let expected_deny = vec![
+            format!("$DATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+            format!("$LOCALDATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+            format!(
+                "$DATA/{}/**/web-captures/**/*.html",
+                path_utils::SHARED_DIR_NAME
+            ),
         ];
 
         for config in [
@@ -3190,47 +3023,64 @@ mod tests {
                 serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {config}: {e}"));
             let scope = parsed
                 .pointer("/app/security/assetProtocol/scope")
-                .unwrap_or_else(|| panic!("{config} has no assetProtocol scope"))
-                .as_array()
-                .unwrap_or_else(|| panic!("{config} scope is not an array"));
+                .unwrap_or_else(|| panic!("{config} has no assetProtocol scope"));
 
-            let entries: Vec<String> = scope
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(str::to_string)
-                .collect();
+            let allow = string_array(scope.get("allow"), config, "allow");
+            let deny = string_array(scope.get("deny"), config, "deny");
             assert_eq!(
-                entries, expected,
-                "{config} must expose the shared data and cache directories, and nothing else"
+                allow, expected_allow,
+                "{config} must serve the archive subdirectories and nothing else"
+            );
+            assert_eq!(
+                deny, expected_deny,
+                "{config} must deny the database and the saved capture HTML"
             );
         }
     }
 
+    /// The string values of one field of a config scope entry.
+    fn string_array(value: Option<&serde_json::Value>, config: &str, field: &str) -> Vec<String> {
+        value
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or_else(|| panic!("{config} scope.{field} is not an array"))
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
-    fn the_fs_capability_exposes_only_the_shared_directory() {
+    fn the_fs_capability_grants_no_directory_and_denies_the_database() {
         let raw = fs::read_to_string("capabilities/default.json").expect("read capabilities");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse capabilities");
         let permissions = parsed["permissions"]
             .as_array()
             .expect("permissions is an array");
 
+        // The directories are granted at runtime (`fs_scope`), derived from
+        // `path_utils` like the asset protocol scope; the static scope only
+        // denies the database under the shared roots.
         let scope = permissions
             .iter()
             .find(|entry| entry["identifier"] == "fs:scope")
             .expect("an fs:scope permission");
-        let allowed: Vec<String> = scope["allow"]
+        assert!(
+            scope.get("allow").is_none(),
+            "fs:scope must not allow paths"
+        );
+        let denied: Vec<String> = scope["deny"]
             .as_array()
-            .expect("allow is an array")
+            .expect("deny is an array")
             .iter()
             .filter_map(|entry| entry["path"].as_str())
             .map(str::to_string)
             .collect();
 
         assert_eq!(
-            allowed,
+            denied,
             vec![
-                format!("$DATA/{}/**/*", path_utils::SHARED_DIR_NAME),
-                format!("$LOCALDATA/{}/**/*", path_utils::SHARED_DIR_NAME),
+                format!("$DATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
+                format!("$LOCALDATA/{}/**/*.sqlite*", path_utils::SHARED_DIR_NAME),
             ]
         );
 

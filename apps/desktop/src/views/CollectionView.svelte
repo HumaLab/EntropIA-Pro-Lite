@@ -14,6 +14,7 @@
     deleteAssetFile,
     deleteImageThumbnail,
     deletePdfThumbnail,
+    isOutsideDataDir,
     resolveStoredAssetPath,
   } from '$lib/file-import'
   import {
@@ -943,7 +944,7 @@
           if (asset.type === 'pdf') await deletePdfThumbnail(asset.id)
         }
 
-        if (asset.type === 'pdf' && !asset.parentAssetId) {
+        if (asset.type === 'pdf' && !asset.parentAssetId && !isOutsideDataDir(asset.path)) {
           await remove(resolveStoredAssetPath(asset.path).replace(/\.pdf$/i, '.pages'), {
             recursive: true,
           })

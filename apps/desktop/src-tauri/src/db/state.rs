@@ -2,6 +2,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct AppDbState {
     pub ui_conn: Arc<Mutex<Connection>>,
     #[allow(dead_code)]

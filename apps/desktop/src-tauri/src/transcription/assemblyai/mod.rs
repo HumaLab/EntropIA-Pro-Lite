@@ -105,7 +105,7 @@ pub struct AssemblyAiClient {
 impl AssemblyAiClient {
     pub fn new(api_key: String) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
             .expect("Failed to build reqwest client");
@@ -182,14 +182,20 @@ impl AssemblyAiClient {
         // loop, but operators want to see it near the asset id when that flow
         // has one. Dictation has no asset row yet, so omit asset_id instead of
         // logging a misleading placeholder.
-        eprintln!(
+        let success_line = format_create_transcript_success_log_line(
+            asset_id,
+            &compat.schema_used.schema_name,
+            compat.schema_used.schema_kind,
+            &self.config.default_models,
+        );
+        // The helper returns the full legacy line (`[transcription] …`); the
+        // facade adds the `[target]` wrapper, so drop the prefix it duplicates.
+        log::info!(
+            target: "transcription",
             "{}",
-            format_create_transcript_success_log_line(
-                asset_id,
-                &compat.schema_used.schema_name,
-                compat.schema_used.schema_kind,
-                &self.config.default_models,
-            )
+            success_line
+                .strip_prefix("[transcription] ")
+                .unwrap_or(&success_line)
         );
 
         let mut poll_attempt = 0_u16;
@@ -341,12 +347,13 @@ pub async fn create_transcript_with_compat<T: CreateTransporter>(
 
                 if outcome.status == 400 {
                     if let Some(meta) = compatibility_error_meta(&outcome.body) {
-                        eprintln!(
-                        "[assemblyai] Schema '{}' rejected with compatibility error (status=400, body_bytes={}, class={})",
-                        schema.name,
-                        meta.body_len,
-                        meta.class
-                    );
+                        log::warn!(
+                            target: "assemblyai",
+                            "Schema '{}' rejected with compatibility error (status=400, body_bytes={}, class={})",
+                            schema.name,
+                            meta.body_len,
+                            meta.class
+                        );
                         last_compat_error = Some(meta);
                         // Move to the next schema.
                         continue;
@@ -368,8 +375,9 @@ pub async fn create_transcript_with_compat<T: CreateTransporter>(
             }
             CreateTranscriptSend::TransportError(error) => {
                 // Network/timeout/TLS error. No retry — log and bail.
-                eprintln!(
-                    "[assemblyai] Transport error posting transcript with schema '{}': {error}",
+                log::error!(
+                    target: "assemblyai",
+                    "Transport error posting transcript with schema '{}': {error}",
                     schema.name
                 );
                 return Err(format!(
@@ -462,8 +470,9 @@ fn log_schema_used(schema_name: &str, models: &[String], body: &str) {
     // We log the response body length rather than the body itself so
     // transcripts (which can contain user audio content once
     // AssemblyAI includes them) aren't dumped to disk.
-    eprintln!(
-        "[assemblyai] Schema '{}' accepted (models={:?}, response_bytes={})",
+    log::info!(
+        target: "assemblyai",
+        "Schema '{}' accepted (models={:?}, response_bytes={})",
         schema_name,
         models,
         body.len()

@@ -1357,7 +1357,7 @@ impl Executor for BibliographySyncExecutor {
                 unit_key: format!("page:{start}"),
                 input_fingerprint: task.input_fingerprint.clone(),
                 contract_hash: task.contract_hash.clone(),
-                payload_checksum: format!("{:x}", Sha256::digest(payload.as_bytes())),
+                payload_checksum: hex::encode(Sha256::digest(payload.as_bytes())),
                 payload,
             };
             match persist_page(ctx, task, &run, &checkpoint, start, next_start, &page) {
@@ -2369,7 +2369,7 @@ impl BibliographyProfileExecutor {
                     digest.update(staged[index].input_hash.as_bytes());
                     digest.update([0_u8]);
                 }
-                format!("{:x}", digest.finalize())
+                hex::encode(digest.finalize())
             };
             let key = format!(
                 "chunk-wave:{}:{}",
@@ -2590,8 +2590,9 @@ pub fn publish_bibliography_profile_output(
         &output.generation_id,
         processing_repository::now_ms(),
     ) {
-        eprintln!(
-            "[bibliography] generation {} activation deferred: {}: {}",
+        log::warn!(
+            target: "bibliography",
+            "generation {} activation deferred: {}: {}",
             output.generation_id, error.code, error.message
         );
     }
@@ -2608,9 +2609,12 @@ pub fn publish_bibliography_profile_output(
 use crate::processing::repository::{parse_extract_contract, ExtractMode};
 
 /// Setting key for the user-configured Zotero profile directory. Stored
-/// copies resolve under `<dir>/storage/<key>/<filename>`; no UI binds it
-/// yet, so an unset key simply makes stored copies unavailable.
-pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "zotero_data_dir";
+/// copies resolve under `<dir>/storage/<key>/<filename>`; an unset key simply
+/// makes stored copies unavailable. Only the backend writes it, from the
+/// native folder picker (`zotero_data_dir::grant_zotero_data_dir`): the
+/// renderer cannot set it, and the legacy `zotero_data_dir` row it once could
+/// is never read (S-01).
+pub const ZOTERO_DATA_DIR_SETTING_KEY: &str = "backend_grant.zotero_data_dir";
 
 /// Refusal size for attachment reads: a file above this is not a text
 /// extraction job but a storage problem the user must solve first.
@@ -2658,7 +2662,7 @@ pub struct BibliographyExtractComputeOutput {
 }
 
 fn extraction_text_hash(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
+    hex::encode(Sha256::digest(text.as_bytes()))
 }
 
 /// The verdict over the text a reader gets: GLM-OCR answers tables as HTML,
@@ -3549,8 +3553,9 @@ impl BibliographyExtractExecutor {
                             }
                             match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
                                 ExecOutput::Fatal { .. } => {
-                                    eprintln!(
-                                        "[bibliography] whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
+                                    log::warn!(
+                                        target: "bibliography",
+                                        "whole-document OCR of pages {first}-{last} failed, using per-page OCR: {error}"
                                     );
                                 }
                                 other => return Err(other),
@@ -3633,8 +3638,9 @@ impl BibliographyExtractExecutor {
                         // stay whole-task: backoff and user fixes must not
                         // masquerade as partial success.
                         Ok(PageOcrOutcome::Failed { message }) => {
-                            eprintln!(
-                                "[bibliography] OCR of page {} failed: {message}",
+                            log::warn!(
+                                target: "bibliography",
+                                "OCR of page {} failed: {message}",
                                 page.page_number
                             );
                             ocr_failed_pages.push(page.page_number);
@@ -3650,8 +3656,9 @@ impl BibliographyExtractExecutor {
                             // exactly as before.
                             match crate::bibliography::selective_ocr::map_page_ocr_error(&error) {
                                 ExecOutput::Fatal { message, .. } => {
-                                    eprintln!(
-                                        "[bibliography] OCR of page {} failed: {message}",
+                                    log::warn!(
+                                        target: "bibliography",
+                                        "OCR of page {} failed: {message}",
                                         page.page_number
                                     );
                                     ocr_failed_pages.push(page.page_number);
@@ -3900,7 +3907,7 @@ fn record_page_progress(
             Err(ExecOutput::Stopped)
         }
         Err(error) => {
-            eprintln!("[bibliography] could not record extraction progress: {error}");
+            log::warn!(target: "bibliography", "could not record extraction progress: {error}");
             Ok(())
         }
     }
@@ -3917,8 +3924,9 @@ fn record_page_progress(
 pub fn settled_page_row(page: ExtractPageText, text: String) -> ExtractPageText {
     let text = crate::ocr::markup::ocr_markup_to_text(&text);
     if text.trim().is_empty() {
-        eprintln!(
-            "[bibliography] page {}: no text recognized",
+        log::info!(
+            target: "bibliography",
+            "page {}: no text recognized",
             page.page_number
         );
         if crate::ocr::pdf::is_garbled_text(&crate::ocr::markup::ocr_markup_to_text(
@@ -4295,8 +4303,9 @@ pub fn read_native_page_texts_with_cancel(
                         }
                     }
                     Err(error) => {
-                        eprintln!(
-                            "[bibliography] PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
+                        log::warn!(
+                            target: "bibliography",
+                            "PDFium no cargó para la lectura por página ({error}); se lee con lopdf"
                         );
                         break;
                     }

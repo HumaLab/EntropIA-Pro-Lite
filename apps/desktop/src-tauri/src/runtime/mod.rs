@@ -5,6 +5,7 @@ pub mod bootstrap_types;
 pub mod download;
 #[cfg(feature = "local-ml")]
 pub(crate) mod download_state;
+pub(crate) mod hash;
 #[cfg(feature = "local-ml")]
 pub mod manager;
 #[cfg(feature = "local-ml")]
@@ -29,6 +30,7 @@ pub use paths::{
 #[allow(unused_imports)]
 pub use bootstrap_types::{
     BootstrapDownloadPlan, BootstrapPlan, BootstrapPlanSource, BootstrapRemoteSource,
+    BootstrapUnavailableReason,
 };
 
 // The three runtime commands keep an IDENTICAL signature + registered name in both
@@ -180,6 +182,7 @@ fn lite_runtime_status() -> status::RuntimeStatus {
         guidance: vec!["Configurá las claves remotas en Ajustes para usar IA.".to_string()],
         bootstrap_eligible: false,
         bootstrap_required: false,
+        blocked_reason: None,
         active_operation: None,
     }
 }
@@ -193,6 +196,7 @@ fn lite_bootstrap_plan() -> bootstrap_types::BootstrapPlan {
         pack_version: Some("lite-remote".to_string()),
         summary: "EntropIA no necesita bootstrap de runtime de IA en este perfil".to_string(),
         reason: None,
+        unavailable_reason: None,
         remote_source: None,
         download: None,
     }

@@ -95,7 +95,7 @@ pub(crate) fn retry_after_ms(raw: Option<&str>, now: std::time::SystemTime) -> O
 impl GlmOcrClient {
     pub fn new(api_key: String) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .connect_timeout(std::time::Duration::from_secs(GLM_CONNECT_TIMEOUT_SECS))
             .timeout(std::time::Duration::from_secs(GLM_TOTAL_TIMEOUT_SECS))
             .build()

@@ -1,5 +1,6 @@
 /// Tauri IPC commands for OCR operations.
 use super::update_extraction_text;
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 use crate::path_utils::normalize_windows_path_string;
 use serde::{Deserialize, Serialize};
@@ -56,7 +57,7 @@ where
     let mut write_error = None;
     let traversal = render_pages(&mut |page_idx, page_count, png_data| {
         if page_idx == 0 {
-            eprintln!("[render_pdf_pages] Rendering {page_count} pages from PDF");
+            log::info!(target: "render_pdf_pages", "Rendering {page_count} pages from PDF");
         }
 
         let page_number = (page_idx + 1) as u32;
@@ -78,7 +79,7 @@ where
             page_number,
             png_path: normalize_windows_path_string(&file_path),
         });
-        eprintln!("[render_pdf_pages] Rendered page {page_number}/{page_count}");
+        log::info!(target: "render_pdf_pages", "Rendered page {page_number}/{page_count}");
         Ok(())
     });
 
@@ -121,11 +122,9 @@ pub async fn extract_text(
     };
 
     if ocr_mode == super::OcrMode::High {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|e| format!("DB lock poisoned: {e}"))?;
-        super::ensure_selected_cloud_key(&conn)?;
+        let db = db.inner().clone();
+        run_blocking_db_task(move || super::ensure_selected_cloud_key_unlocked(&db.ui_conn))
+            .await?;
     }
 
     crate::app_logs::info(
@@ -347,13 +346,16 @@ pub async fn test_glm_ocr_connection(
     api_key: String,
     db: State<'_, AppDbState>,
 ) -> Result<(), String> {
-    let api_key = {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error: {error}"))?;
-        crate::settings::resolve_api_key_input(&conn, crate::settings::GLM_OCR_API_KEY, &api_key)?
-    };
+    let db = db.inner().clone();
+    let api_key = run_blocking_db_task(move || {
+        crate::settings::resolve_api_key_input_unlocked(
+            &db.ui_conn,
+            crate::settings::GLM_OCR_API_KEY,
+            &api_key,
+            &crate::settings::KeyringSecretStore,
+        )
+    })
+    .await?;
     super::glm_ocr::GlmOcrClient::new(api_key)
         .test_connection()
         .await
@@ -369,13 +371,15 @@ pub async fn update_extraction_text_cmd(
     text_content: String,
     db: State<'_, AppDbState>,
 ) -> Result<(), String> {
-    let conn = db
-        .ui_conn
-        .lock()
-        .map_err(|e| format!("DB lock poisoned: {e}"))?;
-    update_extraction_text(&conn, &asset_id, &text_content)?;
-
-    Ok(())
+    let db = db.inner().clone();
+    run_blocking_db_task(move || {
+        let conn = db
+            .ui_conn
+            .lock()
+            .map_err(|e| format!("DB lock poisoned: {e}"))?;
+        update_extraction_text(&conn, &asset_id, &text_content)
+    })
+    .await
 }
 
 /// Generate a thumbnail PNG for the first page of a PDF.
@@ -448,7 +452,7 @@ pub fn image_thumbnail_file_name(asset_id: &str, asset_path: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let path_hash = Sha256::digest(asset_path.as_bytes());
-    format!("image-{asset_id}-{path_hash:x}.png")
+    format!("image-{asset_id}-{}.png", hex::encode(path_hash))
 }
 
 /// Decode one image, shrink it, and write the PNG thumbnail.

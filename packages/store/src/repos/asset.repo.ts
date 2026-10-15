@@ -338,7 +338,8 @@ export class AssetRepo {
    * @throws Error if the transaction fails before committing
    */
   async deleteWithCascade(id: string): Promise<Asset> {
-    if (!this.rawClient) {
+    const rawClient = this.rawClient
+    if (!rawClient?.executeTransaction) {
       throw new Error('deleteWithCascade requires a rawClient for transactional execution')
     }
 
@@ -348,43 +349,59 @@ export class AssetRepo {
       throw new Error(`Asset not found: ${id}`)
     }
 
-    const escapedId = id.replace(/'/g, "''")
-
-    // Step 2: Execute all deletes in a single transaction.
-    // Keep BEGIN/COMMIT inside the batch because executeBatch delegates to the
-    // backend SQL runner and must not rely on implicit transaction behavior.
+    // Step 2: Execute all deletes in a single atomic transaction. The
+    // database command owns BEGIN/COMMIT and rolls back a failing statement
+    // itself, so no value is interpolated into the SQL and the repo sends no
+    // ROLLBACK round trip.
     try {
-      await this.rawClient.executeBatch(`
-        BEGIN;
-        DELETE FROM extractions WHERE asset_id = '${escapedId}';
-        DELETE FROM layouts WHERE asset_id = '${escapedId}';
-        DELETE FROM transcriptions WHERE asset_id = '${escapedId}';
-        DELETE FROM llm_results WHERE target_id = '${escapedId}' AND (target_type = 'asset' OR target_type = 'unknown');
-        DELETE FROM annotations WHERE asset_id = '${escapedId}';
-        DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM transcriptions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}') AND (target_type = 'asset' OR target_type = 'unknown');
-        DELETE FROM annotations WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM triples WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM vec_assets WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = '${escapedId}');
-        DELETE FROM entities WHERE asset_id = '${escapedId}';
-        DELETE FROM triples WHERE asset_id = '${escapedId}';
-        DELETE FROM vec_assets WHERE asset_id = '${escapedId}';
-        DELETE FROM assets WHERE parent_asset_id = '${escapedId}';
-        DELETE FROM assets WHERE id = '${escapedId}';
-        COMMIT;
-      `)
+      await rawClient.executeTransaction([
+        { sql: 'DELETE FROM extractions WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM layouts WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM transcriptions WHERE asset_id = ?', params: [id] },
+        {
+          sql: "DELETE FROM llm_results WHERE target_id = ? AND (target_type = 'asset' OR target_type = 'unknown')",
+          params: [id],
+        },
+        { sql: 'DELETE FROM annotations WHERE asset_id = ?', params: [id] },
+        {
+          sql: 'DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM transcriptions WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM llm_results WHERE target_id IN (SELECT id FROM assets WHERE parent_asset_id = ?) AND (target_type = 'asset' OR target_type = 'unknown')",
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM annotations WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM entities WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM triples WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        {
+          sql: 'DELETE FROM vec_assets WHERE asset_id IN (SELECT id FROM assets WHERE parent_asset_id = ?)',
+          params: [id],
+        },
+        { sql: 'DELETE FROM entities WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM triples WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM vec_assets WHERE asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM assets WHERE parent_asset_id = ?', params: [id] },
+        { sql: 'DELETE FROM assets WHERE id = ?', params: [id] },
+      ])
     } catch (e) {
-      // Transaction failed — ensure the explicit BEGIN does not leave the
-      // connection in an open transaction if the backend stops before COMMIT.
-      try {
-        await this.rawClient.executeBatch('ROLLBACK')
-      } catch {
-        /* rollback is best-effort; preserve the original failure */
-      }
-
       throw new Error(
         `Failed to delete asset cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`
       )

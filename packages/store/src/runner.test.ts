@@ -2,17 +2,114 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { COLLECTION_ACTIVITY_DDL, buildSchemaFixture, runMigrations } from './runner'
+import {
+  COLLECTION_ACTIVITY_DDL,
+  MIGRATIONS,
+  applyMigrations,
+  buildSchemaFixture,
+  runMigrations,
+} from './runner'
 import { createMockDbClient } from './__mocks__/db.mock'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import type { DbClient } from './types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-describe('runMigrations — migrations 0004, 0005 and 0006', () => {
+describe('runMigrations (verify-only)', () => {
+  const ALL_MIGRATION_NAMES = Object.keys(MIGRATIONS).sort()
+
+  interface RecordedCall {
+    method: 'select' | 'execute' | 'executeBatch' | 'selectRows'
+    sql: string
+  }
+
+  function recordingClient(
+    applied: string[],
+    options: { missingTable?: boolean } = {}
+  ): { client: DbClient; calls: RecordedCall[] } {
+    const calls: RecordedCall[] = []
+    return {
+      calls,
+      client: {
+        async execute(sql: string) {
+          calls.push({ method: 'execute', sql })
+          return { rowsAffected: 1 }
+        },
+        async executeBatch(sql: string) {
+          calls.push({ method: 'executeBatch', sql })
+        },
+        async select<T>(sql: string) {
+          calls.push({ method: 'select', sql })
+          if (options.missingTable) throw new Error('no such table: _migrations')
+          return applied.map((name) => ({ name })) as T[]
+        },
+        async selectRows(sql: string) {
+          calls.push({ method: 'selectRows', sql })
+          return []
+        },
+      },
+    }
+  }
+
+  const expectReadOnly = (calls: RecordedCall[]) => {
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every((call) => call.method === 'select')).toBe(true)
+    expect(calls.some((call) => call.sql.includes('FROM _migrations'))).toBe(true)
+  }
+
+  it('resolves when every registered migration is recorded, without writing', async () => {
+    const { client, calls } = recordingClient(ALL_MIGRATION_NAMES)
+
+    await expect(runMigrations(client)).resolves.toBeUndefined()
+
+    expectReadOnly(calls)
+  })
+
+  it('throws naming every missing migration and writes nothing', async () => {
+    const applied = ALL_MIGRATION_NAMES.filter(
+      (name) => name !== '0057_web_captures' && name !== '0058_processing_ner_tasks'
+    )
+    const { client, calls } = recordingClient(applied)
+
+    await expect(runMigrations(client)).rejects.toThrow(
+      'Archive is missing migrations applied by the backend: 0057_web_captures, 0058_processing_ner_tasks'
+    )
+
+    expect(calls.every((call) => call.method === 'select')).toBe(true)
+    expect(calls.some((call) => call.method === 'execute' || call.method === 'executeBatch')).toBe(
+      false
+    )
+  })
+
+  it('names the whole registry when the _migrations table does not exist', async () => {
+    const { client, calls } = recordingClient([], { missingTable: true })
+
+    let rejection = ''
+    try {
+      await runMigrations(client)
+    } catch (error) {
+      rejection = String(error)
+    }
+
+    expect(rejection).toContain('Archive is missing migrations applied by the backend:')
+    const named = rejection.slice(rejection.indexOf('backend: ') + 'backend: '.length).split(', ')
+    expect(named).toEqual(ALL_MIGRATION_NAMES)
+    expect(calls.every((call) => call.method === 'select')).toBe(true)
+  })
+
+  it('ignores names this build does not know about (a newer app wrote them)', async () => {
+    const { client, calls } = recordingClient([...ALL_MIGRATION_NAMES, '0099_future_migration'])
+
+    await expect(runMigrations(client)).resolves.toBeUndefined()
+
+    expectReadOnly(calls)
+  })
+})
+
+describe('applyMigrations — migrations 0004, 0005 and 0006', () => {
   it('executes 0004_fts5 migration SQL (FTS5 virtual table creation)', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasFts5 = client._executedSql.some(
       (sql) => sql.includes('fts_items') && sql.includes('fts5')
@@ -22,7 +119,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('executes 0005_nlp_tables migration SQL (entities table creation)', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasEntities = client._executedSql.some(
       (sql) => sql.includes('entities') && sql.includes('CREATE TABLE IF NOT EXISTS')
@@ -33,15 +130,15 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
   it('is idempotent — running twice does not throw', async () => {
     const client = createMockDbClient()
     // First run
-    await runMigrations(client)
+    await applyMigrations(client)
     // Simulate "already applied" by pre-populating the applied set
     // Second run with all migrations already recorded — mock already returns them
-    await expect(runMigrations(client)).resolves.toBeUndefined()
+    await expect(applyMigrations(client)).resolves.toBeUndefined()
   })
 
   it('FTS5 migration uses unicode61 tokenizer config', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasUnicode61 = client._executedSql.some((sql) => sql.includes('unicode61'))
     expect(hasUnicode61).toBe(true)
@@ -49,7 +146,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('FTS migrations backfill with explicit items.rowid', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasCanonicalRowidInsert = client._executedSql.some((sql) =>
       sql.includes('INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)')
@@ -59,7 +156,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('FTS corrective migration performs delete-all rebuild', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasDeleteAll = client._executedSql.some(
       (sql) =>
@@ -71,7 +168,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('entities migration creates idx_entities_item_id index', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasIndex = client._executedSql.some((sql) => sql.includes('idx_entities_item_id'))
     expect(hasIndex).toBe(true)
@@ -79,7 +176,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('migrations 0001 through 0005 are all executed on a fresh database', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     // All 5 migration names should cause INSERT INTO _migrations
     const wasInserted = client._executedSql.some(
@@ -90,7 +187,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('executes 0006_triples migration SQL (triples table + index)', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasTriplesTable = client._executedSql.some(
       (sql) => sql.includes('CREATE TABLE IF NOT EXISTS triples') && sql.includes('item_id')
@@ -105,7 +202,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('adds independent manual coordinates to geocoded entities', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lat REAL'))).toBe(true)
     expect(client._executedSql.some((sql) => sql.includes('ADD COLUMN manual_lon REAL'))).toBe(true)
@@ -113,7 +210,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('marks existing vec_assets rows as legacy while adding embedding contract metadata', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(
@@ -135,7 +232,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('installs triggers that propagate asset activity to the parent collection', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain('CREATE TRIGGER collection_activity_assets_insert')
@@ -151,14 +248,12 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
     expect(migrationSql).toContain('UPDATE collections')
 
     const mirror = readFileSync(resolve(here, 'migrations/0027_collection_activity.sql'), 'utf8')
-    expect(mirror).toBe(
-      `-- Generated from COLLECTION_ACTIVITY_DDL in ../runner.ts.\n${COLLECTION_ACTIVITY_DDL}\n`
-    )
+    expect(mirror).toBe(`${COLLECTION_ACTIVITY_DDL}\n`)
   })
 
   it('executes llm_results hardening migration with target_type and timestamp normalization', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasLlmResultsV2 = client._executedSql.some(
       (sql) =>
@@ -179,7 +274,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('executes layouts migration with blocks column and unique asset index', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasLayoutsTable = client._executedSql.some(
       (sql) =>
@@ -197,7 +292,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('executes 0022_rag_conversations migration SQL (conversations, messages and index)', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const hasConversationsTable = client._executedSql.some(
       (sql) =>
@@ -223,7 +318,7 @@ describe('runMigrations — migrations 0004, 0005 and 0006', () => {
 
   it('executes 0023_sync_ids and rewrites one-per-asset ids (sync re-added)', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     // Its .sql mirror matches the inline registry entry (the registry is the
     // runtime source of truth; the file is the human-readable mirror per the
@@ -266,7 +361,7 @@ describe('fts contentless delete', () => {
       },
     }
     try {
-      await runMigrations(client)
+      await applyMigrations(client)
 
       const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE name='fts_items'").get() as {
         sql: string
@@ -329,7 +424,7 @@ describe('durable queue migration', () => {
       },
     }
     try {
-      await runMigrations(client)
+      await applyMigrations(client)
       const names = db
         .prepare(
           `SELECT name FROM sqlite_master WHERE name IN (
@@ -372,7 +467,7 @@ describe('durable queue migration', () => {
       db.exec(`CREATE TABLE _migrations(id INTEGER PRIMARY KEY, name TEXT UNIQUE, applied_at INTEGER);
         CREATE TRIGGER interrupt_queue_migration BEFORE INSERT ON _migrations
         WHEN NEW.name='0032_batch_processing' BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;`)
-      await expect(runMigrations(client)).rejects.toThrow('simulated storage failure')
+      await expect(applyMigrations(client)).rejects.toThrow('simulated storage failure')
       expect(
         db.prepare("SELECT name FROM sqlite_master WHERE name='processing_batches'").get()
       ).toBeUndefined()
@@ -380,11 +475,11 @@ describe('durable queue migration', () => {
         db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()
       ).toBeUndefined()
       db.exec('DROP TRIGGER interrupt_queue_migration')
-      await runMigrations(client)
+      await applyMigrations(client)
       expect(
         db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
       ).toBe('0032_batch_processing')
-      await runMigrations(client)
+      await applyMigrations(client)
       db.prepare(
         "INSERT INTO processing_batches(id,request_id,origin,state,desired_state,operations,created_at,updated_at) VALUES('b','r','user','preparing','pause','[]',0,0)"
       ).run()
@@ -419,7 +514,7 @@ describe('durable queue migration', () => {
       // Start from a real fully-migrated database, then burn it into the
       // exact shape the earlier non-atomic build left behind: complete 0032
       // tables, no registry rows, no invalidation counter column.
-      await runMigrations(client)
+      await applyMigrations(client)
       db.exec(
         `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
       )
@@ -430,7 +525,7 @@ describe('durable queue migration', () => {
           )
           .get() as { name: string } | undefined) !== undefined
       if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
-      await expect(runMigrations(client)).resolves.toBeUndefined()
+      await expect(applyMigrations(client)).resolves.toBeUndefined()
       expect(
         db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
       ).toBe('0032_batch_processing')
@@ -475,7 +570,7 @@ describe('durable queue migration', () => {
       // bodies. Every statement before the first trigger had already
       // autocommitted, so the tables survive without processing_meta, without
       // the triggers, and without a registry row.
-      await runMigrations(client)
+      await applyMigrations(client)
       db.exec(
         `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
       )
@@ -497,7 +592,7 @@ describe('durable queue migration', () => {
           .get() as { name: string } | undefined) !== undefined
       if (hadColumn) db.exec('ALTER TABLE processing_tasks DROP COLUMN source_invalidation_count')
 
-      await expect(runMigrations(client)).resolves.toBeUndefined()
+      await expect(applyMigrations(client)).resolves.toBeUndefined()
 
       expect(
         db.prepare("SELECT name FROM _migrations WHERE name='0032_batch_processing'").get()?.name
@@ -546,7 +641,7 @@ describe('durable queue migration', () => {
       },
     }
     try {
-      await runMigrations(client)
+      await applyMigrations(client)
       db.exec(
         `DELETE FROM _migrations WHERE name IN ('0032_batch_processing','0033_processing_source_invalidation')`
       )
@@ -556,7 +651,7 @@ describe('durable queue migration', () => {
       ).run()
 
       // Dropping now would destroy queue state the user could still resume.
-      await expect(runMigrations(client)).rejects.toThrow('incomplete 0032 state')
+      await expect(applyMigrations(client)).rejects.toThrow('incomplete 0032 state')
       expect(db.prepare("SELECT id FROM processing_batches WHERE id='b'").get()?.id).toBe('b')
     } finally {
       db.close()
@@ -583,7 +678,7 @@ describe('durable queue migration', () => {
       },
     }
     try {
-      await runMigrations(client)
+      await applyMigrations(client)
       expect(
         db
           .prepare("SELECT name FROM _migrations WHERE name='0033_processing_source_invalidation'")
@@ -647,11 +742,11 @@ describe('writing workspace migration (0035)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       seedCorpus(db)
 
       // Re-running is idempotent and must not touch user rows.
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(db.prepare("SELECT title FROM items WHERE id='i1'").get()?.title).toBe('Item')
       expect(db.prepare("SELECT content FROM notes WHERE id='n1'").get()?.content).toBe('nota')
@@ -683,13 +778,13 @@ describe('writing workspace migration (0035)', () => {
         CREATE TRIGGER interrupt_writing BEFORE INSERT ON _migrations
         WHEN NEW.name='0035_writing_workspace' BEGIN SELECT RAISE(ABORT,'simulated storage failure'); END;`)
 
-      await expect(runMigrations(shim(db))).rejects.toThrow('simulated storage failure')
+      await expect(applyMigrations(shim(db))).rejects.toThrow('simulated storage failure')
       expect(
         db.prepare("SELECT name FROM sqlite_master WHERE name='writing_documents'").get()
       ).toBeUndefined()
 
       db.exec('DROP TRIGGER interrupt_writing')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       expect(
         db.prepare("SELECT name FROM _migrations WHERE name='0035_writing_workspace'").get()?.name
       ).toBe('0035_writing_workspace')
@@ -702,7 +797,7 @@ describe('writing workspace migration (0035)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       insertDocument(db)
 
       expect(
@@ -726,7 +821,7 @@ describe('writing workspace migration (0035)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       seedCorpus(db)
       insertDocument(db)
 
@@ -768,7 +863,7 @@ describe('writing workspace migration (0035)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       seedCorpus(db)
       insertDocument(db)
       db.exec(
@@ -793,7 +888,7 @@ describe('writing workspace migration (0035)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       insertDocument(db)
 
       db.exec(
@@ -852,7 +947,7 @@ describe('writing recovery journal migration (0036)', () => {
 
   const withDocument = async (db: DatabaseSync) => {
     db.exec('PRAGMA foreign_keys=ON')
-    await runMigrations(shim(db))
+    await applyMigrations(shim(db))
     db.exec(
       `INSERT INTO writing_documents
          (id, title, document_type, status, schema_version, current_content_json, revision, created_at, updated_at)
@@ -870,7 +965,7 @@ describe('writing recovery journal migration (0036)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       await withDocument(db)
-      await runMigrations(shim(db)) // idempotent
+      await applyMigrations(shim(db)) // idempotent
 
       expect(
         db
@@ -951,7 +1046,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       for (const table of ['zotero_connections', 'zotero_libraries', 'bibliographic_items']) {
         expect(
@@ -967,7 +1062,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
         .get() as { sql: string } | undefined
       expect(itemIndex?.sql).toContain('(library_id, item_key)')
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       expect(
         db
           .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0040_bibliography_catalog'")
@@ -990,7 +1085,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       for (const table of [
         'zotero_collections',
@@ -1014,7 +1109,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
           .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0041_bibliography_relations'")
           .get()?.n
       ).toBe(1)
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       expect(
         db
           .prepare("SELECT COUNT(*) AS n FROM _migrations WHERE name='0041_bibliography_relations'")
@@ -1029,7 +1124,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       for (const table of ['zotero_collections', 'zotero_tags', 'zotero_attachments']) {
         const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
@@ -1065,7 +1160,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       for (const table of ['zotero_reconciliation_runs', 'zotero_reconciliation_seen']) {
         expect(
@@ -1081,7 +1176,7 @@ describe('bibliography catalog migrations (0040, 0041)', () => {
           .get()?.n
       ).toBe(1)
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       expect(
         db
           .prepare(
@@ -1127,7 +1222,7 @@ describe('processing task-subject identity migration (0043)', () => {
 
   it('registers 0043 and emits the subject-identity DDL through the runner', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain('subject_kind')
@@ -1153,8 +1248,8 @@ describe('processing task-subject identity migration (0043)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0043}'`).get()?.n
@@ -1186,7 +1281,7 @@ describe('processing task-subject identity migration (0043)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       // Burn the database back into its pre-0043 shape: complete 0032/0033
       // tables, no 0043 registry row, no subject columns, no subject index.
@@ -1212,7 +1307,7 @@ describe('processing task-subject identity migration (0043)', () => {
       db.exec(`INSERT INTO processing_checkpoints(task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
         VALUES ('t-pending', 'page:1', 'fp-a1', 'ch-a1', '{}', 16)`)
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       const tasks = db
         .prepare(
@@ -1333,7 +1428,7 @@ describe('processing task-subject cutover migration (0044)', () => {
 
   it('registers 0044 and emits the cutover DDL through the runner', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain('DROP INDEX IF EXISTS idx_processing_tasks_active_unique')
@@ -1359,8 +1454,8 @@ describe('processing task-subject cutover migration (0044)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
@@ -1377,7 +1472,7 @@ describe('processing task-subject cutover migration (0044)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       // Burn the database back into its pre-0044 shape: the full 0043-era
       // index pair, no 0044 registry row. The old partial unique is
@@ -1388,7 +1483,7 @@ describe('processing task-subject cutover migration (0044)', () => {
         WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled')`)
       expect(liveIndexNames(db)).toContain('idx_processing_tasks_active_unique')
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
@@ -1396,7 +1491,7 @@ describe('processing task-subject cutover migration (0044)', () => {
       expect(liveIndexNames(db)).toContain('idx_processing_tasks_subject_active_unique')
       expect(liveIndexNames(db)).not.toContain('idx_processing_tasks_active_unique')
       // Replay stays an error-free no-op.
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0044}'`).get()?.n
       ).toBe(1)
@@ -1450,7 +1545,7 @@ describe('bibliography task admission migration (0045)', () => {
 
   it('registers 0045 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\\n')
     expect(migrationSql).toContain(MIGRATION_0045)
@@ -1466,8 +1561,8 @@ describe('bibliography task admission migration (0045)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0045}'`).get()?.n
@@ -1556,7 +1651,7 @@ describe('bibliography task admission migration (0045)', () => {
       const beforeAttempts = tableRows(db, 'processing_attempts')
       const beforeCheckpoints = tableRows(db, 'processing_checkpoints')
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
@@ -1683,7 +1778,7 @@ describe('batch priority migration (0046)', () => {
 
   it('registers 0046 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0046)
@@ -1699,8 +1794,8 @@ describe('batch priority migration (0046)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0046}'`).get()?.n
@@ -1763,7 +1858,7 @@ describe('batch priority migration (0046)', () => {
         )
         .all() as Array<Record<string, unknown>>
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       const after = db
         .prepare(
@@ -1804,7 +1899,7 @@ describe('bibliographic semantic profiles migration (0047)', () => {
 
   it('registers 0047 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0047)
@@ -1820,8 +1915,8 @@ describe('bibliographic semantic profiles migration (0047)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0047}'`).get()?.n
@@ -1899,7 +1994,7 @@ describe('bibliography profile tasks migration (0048)', () => {
 
   it('registers 0048 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0048)
@@ -1955,7 +2050,7 @@ describe('bibliography profile tasks migration (0048)', () => {
       const beforeAttempts = tableRows(db, 'processing_attempts')
       const beforeCheckpoints = tableRows(db, 'processing_checkpoints')
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
@@ -2046,7 +2141,7 @@ describe('bibliographic index generations migration (0049)', () => {
 
   it('registers 0049 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0049)
@@ -2063,8 +2158,8 @@ describe('bibliographic index generations migration (0049)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0049}'`).get()?.n
@@ -2136,14 +2231,9 @@ describe('bibliographic embedding generations migration (0050)', () => {
     }
   }
 
-  const tableRows = (db: DatabaseSync, table: string): unknown[][] =>
-    (db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all() as Array<Record<string, unknown>>).map(
-      Object.values
-    )
-
   it('registers 0050 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0050)
@@ -2178,7 +2268,7 @@ describe('bibliographic embedding generations migration (0050)', () => {
          VALUES ('item-1', 'c-old', 'm-old', 4, zeroblob(4), 'h1', 1, 1, 1)`
       ).run()
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0050}'`).get()?.n
@@ -2267,7 +2357,7 @@ describe('bibliographic extraction tasks migration (0052)', () => {
 
   it('registers 0052 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0052)
@@ -2303,7 +2393,7 @@ describe('bibliographic extraction tasks migration (0052)', () => {
       const beforeTasks = tableRows(db, 'processing_tasks')
       const beforeLinks = tableRows(db, 'processing_batch_tasks')
 
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(tableRows(db, 'processing_tasks')).toEqual(beforeTasks)
       expect(tableRows(db, 'processing_batch_tasks')).toEqual(beforeLinks)
@@ -2379,7 +2469,7 @@ describe('bibliographic page texts migration (0053)', () => {
 
   it('registers 0053 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0053)
@@ -2395,8 +2485,8 @@ describe('bibliographic page texts migration (0053)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0053}'`).get()?.n
@@ -2469,7 +2559,7 @@ describe('bibliographic chunks migration (0054)', () => {
 
   it('registers 0054 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0054)
@@ -2485,8 +2575,8 @@ describe('bibliographic chunks migration (0054)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0054}'`).get()?.n
@@ -2563,7 +2653,7 @@ describe('bibliographic chunks migration (0054)', () => {
 
   it('registers 0054 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0054)
@@ -2579,8 +2669,8 @@ describe('bibliographic chunks migration (0054)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0054}'`).get()?.n
@@ -2657,7 +2747,7 @@ describe('bibliographic chunk embeddings migration (0055)', () => {
 
   it('registers 0055 and keeps its checked-in SQL mirror byte-identical', async () => {
     const client = createMockDbClient()
-    await runMigrations(client)
+    await applyMigrations(client)
 
     const migrationSql = client._executedSql.join('\n')
     expect(migrationSql).toContain(MIGRATION_0055)
@@ -2673,8 +2763,8 @@ describe('bibliographic chunk embeddings migration (0055)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       expect(
         db.prepare(`SELECT COUNT(*) AS n FROM _migrations WHERE name='${MIGRATION_0055}'`).get()?.n
@@ -2762,7 +2852,7 @@ describe('web captures migration (0057)', () => {
 
   const migrated = async (db: DatabaseSync) => {
     db.exec('PRAGMA foreign_keys=ON')
-    await runMigrations(shim(db))
+    await applyMigrations(shim(db))
   }
 
   const addSource = (db: DatabaseSync, id = 's1', url = 'https://example.com/a') =>
@@ -2798,7 +2888,7 @@ describe('web captures migration (0057)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       await migrated(db)
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
 
       const expected: [string, string][] = [
         ['table', 'web_sources'],
@@ -2958,7 +3048,7 @@ describe('batch NER tasks migration (0058)', () => {
     const db = new DatabaseSync(':memory:')
     try {
       db.exec('PRAGMA foreign_keys=ON')
-      await runMigrations(shim(db))
+      await applyMigrations(shim(db))
       for (const kind of ['ner', 'triples', 'schema_extract']) {
         db.prepare(
           `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)

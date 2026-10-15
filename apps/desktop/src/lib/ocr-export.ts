@@ -1,7 +1,7 @@
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
-import htmlDocxBundleUrl from 'html-docx-js/dist/html-docx.js?url'
 
+import { generateDocxBytes } from './ocr-docx'
 import { generateNativeOcrPdfBytes } from './ocr-pdf'
 
 import {
@@ -34,10 +34,6 @@ export interface OcrExportGenerators {
 export interface OcrExportRuntime {
   resolveRegion?: OcrRegionResolver
   generators?: Partial<OcrExportGenerators>
-}
-
-interface HtmlDocxBrowserApi {
-  asBlob(html: string, options?: Record<string, unknown>): Blob
 }
 
 const OCR_EXPORT_FALLBACK_MARKDOWN = '*[Imagen OCR no disponible]*'
@@ -120,8 +116,6 @@ const EXPORT_OPTIONS = {
   docx: { name: 'Microsoft Word', extension: 'docx' },
 } as const
 
-let htmlDocxBundlePromise: Promise<HtmlDocxBrowserApi> | null = null
-
 /**
  * A body of HTML wrapped as a standalone printable document.
  *
@@ -134,79 +128,9 @@ export function buildPrintableHtml(bodyHtml: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>${OCR_EXPORT_STYLES}</style></head><body><div class="${OCR_EXPORT_CLASS}">${bodyHtml}</div></body></html>`
 }
 
-async function loadHtmlDocxBrowserApi(): Promise<HtmlDocxBrowserApi> {
-  if (typeof window !== 'undefined' && window.htmlDocx?.asBlob) {
-    return window.htmlDocx
-  }
-
-  if (!htmlDocxBundlePromise) {
-    htmlDocxBundlePromise = new Promise<HtmlDocxBrowserApi>((resolve, reject) => {
-      if (typeof document === 'undefined') {
-        htmlDocxBundlePromise = null
-        reject(new Error('html-docx-js browser bundle requires a document'))
-        return
-      }
-
-      const parent = document.head ?? document.body
-      if (!parent) {
-        htmlDocxBundlePromise = null
-        reject(new Error('html-docx-js browser bundle could not be attached to the document'))
-        return
-      }
-
-      const script = document.createElement('script')
-      script.async = true
-      script.src = htmlDocxBundleUrl
-
-      const cleanup = () => {
-        script.onload = null
-        script.onerror = null
-        script.remove()
-      }
-
-      script.onload = () => {
-        const api = window.htmlDocx
-        cleanup()
-
-        if (!api?.asBlob) {
-          htmlDocxBundlePromise = null
-          reject(new Error('html-docx-js browser bundle did not expose window.htmlDocx'))
-          return
-        }
-
-        resolve(api)
-      }
-
-      script.onerror = () => {
-        cleanup()
-        htmlDocxBundlePromise = null
-        reject(new Error('Failed to load html-docx-js browser bundle'))
-      }
-
-      parent.appendChild(script)
-    }).catch((error) => {
-      htmlDocxBundlePromise = null
-      throw error
-    })
-  }
-
-  return htmlDocxBundlePromise
-}
-
-/**
- * Word bytes from a printable document. Public for the same reason as
- * `buildPrintableHtml`: the browser bundle is loaded once, through the one
- * loader above, and a second copy of that script dance would be a second
- * `window.htmlDocx` race.
- */
-export async function generateDocxBytes(html: string): Promise<Uint8Array> {
-  const { asBlob } = await loadHtmlDocxBrowserApi()
-  const blob = asBlob(html, {
-    orientation: 'portrait',
-    margins: { top: 720, right: 720, bottom: 720, left: 720 },
-  })
-  return new Uint8Array(await blob.arrayBuffer())
-}
+// The public DOCX entry point: `ocr-docx.ts` builds the file, and this module
+// is where every caller already imports it from.
+export { generateDocxBytes }
 
 export async function prepareOcrExport(
   input: OcrExportInput,

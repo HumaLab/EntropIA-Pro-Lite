@@ -17,12 +17,7 @@ const OFF = import.meta.env.VITE_LOCAL_ML !== '1'
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type LlmJobType =
-  | 'correct_ocr'
-  | 'extract_entities'
-  | 'extract_triples'
-  | 'summarize'
-  | 'classify'
-  | 'ask'
+  'correct_ocr' | 'extract_entities' | 'extract_triples' | 'summarize' | 'classify' | 'ask'
 
 export type LlmStatus = 'idle' | 'pending' | 'running' | 'done' | 'error'
 export type LlmTargetType = 'asset' | 'item' | 'collection'

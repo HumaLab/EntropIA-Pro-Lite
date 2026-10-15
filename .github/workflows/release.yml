@@ -23,15 +23,6 @@ env:
   PNPM_VERSION: 9.15.4
   MACOSX_DEPLOYMENT_TARGET: '10.15'
   CMAKE_OSX_DEPLOYMENT_TARGET: '10.15'
-  # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
-  # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
-  # the real runtime at first launch from this ed25519-signed source, published by
-  # the Publish Runtime Bootstrap workflow. These three vars are read at COMPILE time
-  # via option_env!() (settings.rs) and pinned by build.rs rerun-if-env-changed.
-  ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro/releases/download/runtime-bootstrap/manifest.json
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
-  ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
-
 jobs:
   build:
     name: Build ${{ matrix.name }}
@@ -43,13 +34,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Tag pushes build Windows + Linux so the draft release includes the .deb.
-        # Default manual dispatch stays Windows-only; `all` adds macOS + Linux.
-        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":""},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.linux.conf.json --features local-ml --bundles deb","rust_target":""}]') }}
+        # Tag pushes build Windows only. Pro Linux stays out of the matrix until
+        # a linux-x86_64 runtime pack is published and the fail-closed gate below
+        # finds a matching manifest entry; Lite Linux still ships via lite-unix.
+        # Default manual dispatch stays Windows-only; `all` adds macOS (no
+        # runtime-pack, so the gate is skipped for it).
+        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin","runtime_platform":""}]') }}
     runs-on: ${{ matrix.platform }}
+    # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
+    # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
+    # the real runtime at first launch from this ed25519-signed source, published by
+    # the Publish Runtime Bootstrap workflow. These three vars are read at COMPILE time
+    # via option_env!() (settings.rs) and pinned by build.rs rerun-if-env-changed.
+    # Pro-only: Lite has no `local-ml` feature, so build.rs skips the guard and its
+    # installers must not bake a download source at all.
+    # The URL is the one publish-runtime-bootstrap.yml prints for this repository
+    # (C-02). Releases up to 1.0.20 baked the old repository name, HumaLab/EntropIA-Pro,
+    # which GitHub redirects here; never create a repository with that name, or
+    # those installs lose their runtime source.
+    env:
+      ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: https://github.com/HumaLab/EntropIA-Pro-Lite/releases/download/runtime-bootstrap/manifest.json
+      ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: entropia-runtime-2026
+      ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: fSt35Xo0XtpdZUH/Q2gsPm1drMZczLMQNcU6fqAEbi0=
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -63,17 +72,43 @@ jobs:
             patchelf
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
+      # C-04: package.json is the single version source. Every derived declaration
+      # must agree (and the `v*` tag must match the version) before the expensive
+      # build starts.
+      - name: Check version consistency
+        shell: bash
+        # The ref goes through env, never `${{ }}` inside run: (script injection).
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            node apps/desktop/scripts/version.mjs check --tag "$REF_NAME"
+          else
+            node apps/desktop/scripts/version.mjs check
+          fi
+
+      # Fail-closed gate: the app resolves its bootstrap release with an EXACT
+      # (app_version, platform) match in the signed manifest (runtime/bootstrap.rs
+      # and runtime/manifest.rs select_release). If the manifest lacks this
+      # release's pair, the Pro installer could never download its runtime on a
+      # clean machine, so the workflow stops here instead of building it.
+      - name: Require a published runtime for this Pro build
+        if: matrix.runtime_platform != ''
+        shell: bash
+        run: node apps/desktop/scripts/check-runtime-bootstrap.mjs --platform ${{ matrix.runtime_platform }} --manifest-url "$ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: 1.90.0
 
@@ -89,10 +124,20 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
+      # Pinned Pdfium, fetched into resources/pdfium and bundled by the
+      # explicit tauri.pro.linux.conf.json overlay (E-02). It is not listed in
+      # tauri.linux.conf.json: Tauri merges that file into every Linux build,
+      # cargo test included, and fails on a missing resource. Kept for when the
+      # Pro Linux leg returns to the matrix after a linux-x86_64 runtime pack is
+      # published; Lite Linux is exercised by the lite-unix job meanwhile.
+      - name: Fetch Pdfium (linux-x64)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
+
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.
       - name: Build Tauri application
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Pin the Pro frontend to local-ml=on (today this is unset and defaults to '1'
@@ -119,20 +164,38 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
+      # C-04: package.json is the single version source. Fail before the build when
+      # any derived declaration (or the pushed tag) disagrees, and expose the
+      # 4-segment Store version that the MSIX repack and upload consume below.
+      - name: Resolve version
+        id: version
+        shell: bash
+        # The ref goes through env, never `${{ }}` inside run: (script injection).
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            node apps/desktop/scripts/version.mjs check --tag "$REF_NAME"
+          else
+            node apps/desktop/scripts/version.mjs check
+          fi
+          echo "store_version=$(node apps/desktop/scripts/version.mjs print --store)" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
         with:
           toolchain: 1.90.0
 
@@ -143,18 +206,14 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
-      # Build the lean MSI (local-ml compiled out by the default lean feature set). The
-      # bootstrap env vars are KEPT: build.rs guard_lean_bootstrap_source() is gated on
-      # PROFILE=release + target_os, NOT on the cargo feature, so it still requires a
-      # baked download source for the fixture runtime-pack present in the source tree.
+      # Build the lean MSI (local-ml compiled out by the default lean feature set).
+      # Lite builds without `local-ml`, so build.rs skips guard_lean_bootstrap_source()
+      # entirely and no runtime download source is baked into the installer.
       - name: Build lean Tauri installers (NSIS + MSI)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_LOCAL_ML: '0'
-          ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL }}
-          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID }}
-          ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64 }}
         with:
           # No release params: tauri-action only builds (does not create/touch a release).
           # The NSIS .exe + WiX .msi are the distributable Lite installers (attached to the
@@ -207,7 +266,7 @@ jobs:
           Get-ChildItem $dst | ForEach-Object { Write-Host "staged: $($_.Name) ($($_.Length) bytes)" }
 
       - name: Upload Lite installers artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EntropIALite-installers
           path: ${{ runner.temp }}/lite-installers/*
@@ -222,13 +281,13 @@ jobs:
             -ExePath "${{ steps.artifacts.outputs.exe_path }}" `
             -PdfiumPath "apps/desktop/src-tauri/resources/lib/pdfium.dll" `
             -OutDir "${{ runner.temp }}/msix-out" `
-            -StoreVersion "1.0.20.0"
+            -StoreVersion "${{ steps.version.outputs.store_version }}"
 
       - name: Upload EntropIA Lite MSIX
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: EntropIALite-msix
-          path: ${{ runner.temp }}/msix-out/EntropIALite-Store-HLab-1.0.20.0.msix
+          path: ${{ runner.temp }}/msix-out/EntropIALite-Store-HLab-${{ steps.version.outputs.store_version }}.msix
           if-no-files-found: error
 
   # Attaches the EntropIA Lite installers (NSIS .exe + WiX .msi, built by build-lite) to
@@ -247,7 +306,7 @@ jobs:
       contents: write
     steps:
       - name: Download Lite installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: EntropIALite-installers
           path: lite-installers
@@ -256,7 +315,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" lite-installers/* --clobber --repo "${{ github.repository }}"
+          gh release upload "$GITHUB_REF_NAME" lite-installers/* --clobber --repo "$GITHUB_REPOSITORY"
 
   # EntropIA Lite for macOS (universal .dmg) and Ubuntu (.deb), built and
   # smoke-tested by the same workflow used for previews. Tag pushes and `all`
@@ -280,13 +339,13 @@ jobs:
       contents: write
     steps:
       - name: Download Lite .deb
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lite-linux-deb
           path: lite-unix
 
       - name: Download Lite .dmg
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lite-macos-dmg
           path: lite-unix
@@ -296,4 +355,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la lite-unix
-          gh release upload "${{ github.ref_name }}" lite-unix/* --clobber --repo "${{ github.repository }}"
+          gh release upload "$GITHUB_REF_NAME" lite-unix/* --clobber --repo "$GITHUB_REPOSITORY"

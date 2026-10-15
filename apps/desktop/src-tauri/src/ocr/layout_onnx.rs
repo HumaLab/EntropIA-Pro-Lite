@@ -319,8 +319,9 @@ impl OnnxLayoutEngine {
             }
         };
 
-        eprintln!(
-            "[ocr/layout_onnx] ✅ Layout engine initialized (input: {}x{})",
+        log::info!(
+            target: "ocr/layout_onnx",
+            "✅ Layout engine initialized (input: {}x{})",
             model_input_size.0, model_input_size.1
         );
 
@@ -345,8 +346,9 @@ impl OnnxLayoutEngine {
     /// accordingly.
     pub fn detect(&self, image_bytes: &[u8]) -> Result<Vec<LayoutRegion>, String> {
         let (target_h, target_w) = self.model_input_size;
-        eprintln!(
-            "[ocr/layout_onnx] detect(): input_size=({target_h},{target_w}), image_bytes_len={}",
+        log::info!(
+            target: "ocr/layout_onnx",
+            "detect(): input_size=({target_h},{target_w}), image_bytes_len={}",
             image_bytes.len()
         );
 
@@ -371,7 +373,7 @@ impl OnnxLayoutEngine {
 
             // Get input names so we can bind tensors by name
             let input_names: Vec<String> = session.inputs.iter().map(|i| i.name.clone()).collect();
-            eprintln!("[ocr/layout_onnx] Model expects inputs: {input_names:?}");
+            log::info!(target: "ocr/layout_onnx", "Model expects inputs: {input_names:?}");
 
             let image_ref = TensorRef::from_array_view(&input_tensor)
                 .map_err(|e| format!("Failed to create image input tensor: {e}"))?;
@@ -403,13 +405,14 @@ impl OnnxLayoutEngine {
                         .try_extract_array::<i32>()
                         .map_err(|e| format!("Failed to extract detection count: {e}"))?;
                     num_dets = count_arr.first().copied().unwrap_or(0) as usize;
-                    eprintln!("[ocr/layout_onnx] Output 1 ({name}): num_dets={num_dets}");
+                    log::info!(target: "ocr/layout_onnx", "Output 1 ({name}): num_dets={num_dets}");
                 } else {
                     let arr = outputs[i].try_extract_array::<f32>().map_err(|e| {
                         format!("Failed to extract layout output tensor {i} ({name}): {e}")
                     })?;
-                    eprintln!(
-                        "[ocr/layout_onnx] Output {i} ({name}): shape={:?}",
+                    log::info!(
+                        target: "ocr/layout_onnx",
+                        "Output {i} ({name}): shape={:?}",
                         arr.shape()
                     );
                     dets_array = Some(arr.to_owned());
@@ -424,8 +427,9 @@ impl OnnxLayoutEngine {
             detections_data.ok_or_else(|| "No detection output tensor from model".to_string())?;
         let mut detections = Vec::new();
 
-        eprintln!(
-            "[ocr/layout_onnx] Output shape: {:?}, num_dets from count output: {}",
+        log::info!(
+            target: "ocr/layout_onnx",
+            "Output shape: {:?}, num_dets from count output: {}",
             dets.shape(),
             num_dets
         );
@@ -464,8 +468,9 @@ impl OnnxLayoutEngine {
                 .collect()
         } else {
             // Fallback: try to reshape and parse
-            eprintln!(
-                "[ocr/layout_onnx] Unexpected detection shape: {:?}, attempting fallback",
+            log::warn!(
+                target: "ocr/layout_onnx",
+                "Unexpected detection shape: {:?}, attempting fallback",
                 dets.shape()
             );
             let total = dets.len();
@@ -520,8 +525,9 @@ impl OnnxLayoutEngine {
             }
         }
 
-        eprintln!(
-            "[ocr/layout_onnx] Parsed {} detections (raw: {}, filtered by confidence >= {})",
+        log::info!(
+            target: "ocr/layout_onnx",
+            "Parsed {} detections (raw: {}, filtered by confidence >= {})",
             detections.len(),
             effective_dets,
             CONFIDENCE_THRESHOLD
@@ -538,15 +544,17 @@ impl OnnxLayoutEngine {
         // they are already in original space (correct). If they are within [0, target_w/h]
         // (i.e. ≤480), the model is NOT applying scale_factor and we'd need to scale.
         if let Some(first) = detections.first() {
-            eprintln!(
-                "[ocr/layout_onnx] First raw detection: ({:.1},{:.1})-({:.1},{:.1}) | orig_image: {}x{} | model_input: {}x{}",
+            log::info!(
+                target: "ocr/layout_onnx",
+                "First raw detection: ({:.1},{:.1})-({:.1},{:.1}) | orig_image: {}x{} | model_input: {}x{}",
                 first.x1, first.y1, first.x2, first.y2, orig_w, orig_h, target_w, target_h
             );
             // Heuristic: if max coord exceeds model input size, coords are likely already in original space
             let max_coord = first.x2.max(first.y2);
             let likely_original_space = max_coord > target_w as f32 || max_coord > target_h as f32;
-            eprintln!(
-                "[ocr/layout_onnx] max_coord={:.1} → coords likely in {} space",
+            log::info!(
+                target: "ocr/layout_onnx",
+                "max_coord={:.1} → coords likely in {} space",
                 max_coord,
                 if likely_original_space {
                     "ORIGINAL"
@@ -573,8 +581,9 @@ impl OnnxLayoutEngine {
             1.0
         };
 
-        eprintln!(
-            "[ocr/layout_onnx] Coordinate handling: needs_scaling={needs_scaling}, scale_x={scale_x:.3}, scale_y={scale_y:.3}"
+        log::info!(
+            target: "ocr/layout_onnx",
+            "Coordinate handling: needs_scaling={needs_scaling}, scale_x={scale_x:.3}, scale_y={scale_y:.3}"
         );
 
         let regions: Vec<LayoutRegion> = detections
@@ -627,19 +636,20 @@ pub fn create_layout_engine(app_handle: &tauri::AppHandle) -> Option<OnnxLayoutE
         runtime_root.as_deref(),
         Path::new(env!("CARGO_MANIFEST_DIR")),
     ) {
-        eprintln!(
-            "[ocr/layout_onnx] Found layout model at: {}",
+        log::info!(
+            target: "ocr/layout_onnx",
+            "Found layout model at: {}",
             path.display()
         );
         match OnnxLayoutEngine::new(&path) {
             Ok(engine) => return Some(engine),
             Err(e) => {
-                eprintln!("[ocr/layout_onnx] ❌ Failed to load model from resolved path: {e}");
+                log::warn!(target: "ocr/layout_onnx", "❌ Failed to load model from resolved path: {e}");
             }
         }
     }
 
-    eprintln!("[ocr/layout_onnx] ⚠️ Layout model not found — native layout detection unavailable");
+    log::warn!(target: "ocr/layout_onnx", "⚠️ Layout model not found — native layout detection unavailable");
     None
 }
 
@@ -793,6 +803,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -825,6 +836,7 @@ mod tests {
                     guidance: vec!["Reintentá".to_string()],
                     bootstrap_eligible: false,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },

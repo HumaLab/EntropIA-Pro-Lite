@@ -837,7 +837,7 @@ where
         ));
     }
 
-    let archive_sha256 = format!("{:x}", hasher.finalize());
+    let archive_sha256 = hex::encode(hasher.finalize());
     if archive_sha256 != release.archive_sha256 {
         return Err(format!(
             "Downloaded runtime archive checksum mismatch: expected {}, got {}",
@@ -1072,11 +1072,15 @@ fn extract_archive_to_staging(archive_path: &Path, staging_path: &Path) -> Resul
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("Failed to read archive entry #{index}: {error}"))?;
+        let entry_name = entry
+            .name()
+            .map_err(|error| format!("Archive entry #{index} has an invalid name: {error}"))?
+            .into_owned();
         let Some(safe_name) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
-            return Err(format!("Archive entry {} has an unsafe path", entry.name()));
+            return Err(format!("Archive entry {entry_name} has an unsafe path"));
         };
         let output_path = staging_path.join(safe_name);
-        if entry.name().ends_with('/') {
+        if entry_name.ends_with('/') {
             fs::create_dir_all(&output_path).map_err(|error| {
                 format!(
                     "Failed to create extracted directory {}: {error}",
@@ -1100,9 +1104,8 @@ fn extract_archive_to_staging(archive_path: &Path, staging_path: &Path) -> Resul
                 output_path.display()
             )
         })?;
-        std::io::copy(&mut entry, &mut output_file).map_err(|error| {
-            format!("Failed to extract archive entry {}: {error}", entry.name())
-        })?;
+        std::io::copy(&mut entry, &mut output_file)
+            .map_err(|error| format!("Failed to extract archive entry {entry_name}: {error}"))?;
     }
 
     Ok(())
@@ -1125,13 +1128,12 @@ fn verify_extracted_runtime(
         if !target.exists() {
             return Err(format!("Extracted runtime entry missing: {}", entry.path));
         }
-        let bytes = fs::read(&target).map_err(|error| {
+        let sha256 = super::hash::sha256_file_streaming(&target).map_err(|error| {
             format!(
                 "Failed to read extracted entry {}: {error}",
                 target.display()
             )
         })?;
-        let sha256 = format!("{:x}", Sha256::digest(&bytes));
         if sha256 != entry.sha256 {
             return Err(format!(
                 "Extracted runtime checksum mismatch for {}",
@@ -1343,7 +1345,7 @@ pub(crate) mod test_support {
         let signing_key = SigningKey::from_bytes(&[11u8; 32]);
         let unsigned = sample_release(
             String::new(),
-            format!("{:x}", Sha256::digest(archive_bytes)),
+            hex::encode(Sha256::digest(archive_bytes)),
             archive_bytes.len() as u64,
         );
         let signature = signing_key.sign(unsigned.signature_payload().as_bytes());
@@ -1382,13 +1384,13 @@ pub(crate) mod test_support {
                 uv_relpath: "uv/bin/uv".to_string(),
                 python_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "python/bin/python3".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"python")),
+                    sha256: hex::encode(Sha256::digest(b"python")),
                     size: 6,
                     executable: !cfg!(windows),
                 }],
                 uv_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "uv/bin/uv".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"uv")),
+                    sha256: hex::encode(Sha256::digest(b"uv")),
                     size: 2,
                     executable: true,
                 }],
@@ -1503,7 +1505,7 @@ mod tests {
             pack_version: "2026.05.1".to_string(),
             archive_url: "https://example.com/runtime-pack.zip.part1".to_string(),
             additional_part_urls: vec!["https://example.com/runtime-pack.zip.part2".to_string()],
-            archive_sha256: format!("{:x}", Sha256::digest(&archive_bytes)),
+            archive_sha256: hex::encode(Sha256::digest(&archive_bytes)),
             archive_size: archive_bytes.len() as u64,
             signature: String::new(),
         };
@@ -1648,7 +1650,7 @@ mod tests {
                 uv_relpath: "uv/bin/uv".to_string(),
                 python_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "python/bin/python3".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"python")),
+                    sha256: hex::encode(Sha256::digest(b"python")),
                     size: 6,
                     executable: !cfg!(windows),
                 }],

@@ -10,10 +10,10 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
+use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 use crate::settings::{
-    get_raw_setting, get_setting, persist_setting, resolve_api_key_input, ZOTERO_API_KEY,
-    ZOTERO_USER_ID_KEY,
+    get_raw_setting, get_setting, persist_setting, ZOTERO_API_KEY, ZOTERO_USER_ID_KEY,
 };
 
 pub const API_BASE: &str = "https://api.zotero.org";
@@ -253,20 +253,28 @@ pub async fn zotero_verify_key(
     db: State<'_, AppDbState>,
 ) -> Result<KeyCheck, String> {
     let checking_stored = api_key.trim().is_empty();
-    let key = {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error: {error}"))?;
-        resolve_api_key_input(&conn, ZOTERO_API_KEY, &api_key)?
-    };
+    let db_state = db.inner().clone();
+    let key = run_blocking_db_task(move || {
+        crate::settings::resolve_api_key_input_unlocked(
+            &db_state.ui_conn,
+            ZOTERO_API_KEY,
+            &api_key,
+            &crate::settings::KeyringSecretStore,
+        )
+    })
+    .await?;
     let check = check_key_at(API_BASE, &key).await?;
     if let (true, KeyCheck::Valid(info)) = (checking_stored, &check) {
-        let conn = db
-            .ui_conn
-            .lock()
-            .map_err(|error| format!("DB lock error: {error}"))?;
-        remember_user_id(&conn, info.user_id)?;
+        let user_id = info.user_id;
+        let db_state = db.inner().clone();
+        run_blocking_db_task(move || {
+            let conn = db_state
+                .ui_conn
+                .lock()
+                .map_err(|error| format!("DB lock error: {error}"))?;
+            remember_user_id(&conn, user_id)
+        })
+        .await?;
     }
     Ok(check)
 }

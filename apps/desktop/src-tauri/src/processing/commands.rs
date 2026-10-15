@@ -16,7 +16,7 @@ use crate::db::state::AppDbState;
 
 fn payload_hash(parts: &[&str]) -> String {
     let digest = Sha256::digest(parts.join("\u{0}").as_bytes());
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 fn open_ready(db_path: &std::path::Path) -> Result<Connection, String> {

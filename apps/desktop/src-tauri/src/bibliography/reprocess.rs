@@ -244,17 +244,14 @@ fn plan_hash(
     reused_ocr_pages: &[ReusedOcrPage],
     detector_version: u32,
 ) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(plan_hash_payload(
-            attachment_id,
-            source_sha256,
-            page_count,
-            ocr_pages,
-            reused_ocr_pages,
-            detector_version,
-        ))
-    )
+    hex::encode(Sha256::digest(plan_hash_payload(
+        attachment_id,
+        source_sha256,
+        page_count,
+        ocr_pages,
+        reused_ocr_pages,
+        detector_version,
+    )))
 }
 
 /// A planning failure. `Cancelled` is the preview's own stop flag, not
@@ -317,7 +314,7 @@ pub fn plan_reprocess_for_attachment_cancellable(
     cancel: Option<&AtomicBool>,
     on_units: Option<&mut dyn FnMut(i64, i64)>,
 ) -> Result<ReprocessPlanning, PlanError> {
-    let source_sha256 = format!("{:x}", Sha256::digest(bytes));
+    let source_sha256 = hex::encode(Sha256::digest(bytes));
     let basis = read_native_extraction_basis_with_cancel(bytes, None, cancel, on_units).map_err(
         |output| match output {
             crate::processing::scheduler::ExecOutput::Stopped => PlanError::Cancelled,
@@ -1567,7 +1564,7 @@ mod tests {
         );
         assert_eq!(
             plan_hash("att-1", "source-sha", 1, &[], &[], 1),
-            format!("{:x}", Sha256::digest(text.as_bytes())),
+            hex::encode(Sha256::digest(text.as_bytes())),
             "plan_hash is the payload's SHA-256"
         );
     }

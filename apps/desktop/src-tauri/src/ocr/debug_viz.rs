@@ -258,7 +258,7 @@ pub fn save_layout_debug(
     let root = match workspace_root() {
         Some(r) => r,
         None => {
-            eprintln!("[debug_viz] CARGO_MANIFEST_DIR unavailable — skipping debug viz");
+            log::debug!(target: "debug_viz", "CARGO_MANIFEST_DIR unavailable — skipping debug viz");
             return Ok(());
         }
     };
@@ -268,14 +268,19 @@ pub fn save_layout_debug(
     let crops_dir = root.join("recortes").join(format!("{asset_id}_{ts}"));
 
     if let Err(e) = std::fs::create_dir_all(&layouts_dir) {
-        eprintln!(
-            "[debug_viz] Failed to create {}: {e}",
+        log::debug!(
+            target: "debug_viz",
+            "Failed to create {}: {e}",
             layouts_dir.display()
         );
         return Ok(());
     }
     if let Err(e) = std::fs::create_dir_all(&crops_dir) {
-        eprintln!("[debug_viz] Failed to create {}: {e}", crops_dir.display());
+        log::debug!(
+            target: "debug_viz",
+            "Failed to create {}: {e}",
+            crops_dir.display()
+        );
         return Ok(());
     }
 
@@ -304,8 +309,9 @@ pub fn save_layout_debug(
             col_idx, color[0], color[1], color[2], color[3]
         ));
     }
-    eprintln!(
-        "[debug_viz] Layout for {asset_id}: {} regions, {} columns ({})",
+    log::debug!(
+        target: "debug_viz",
+        "Layout for {asset_id}: {} regions, {} columns ({})",
         regions.len(),
         num_columns,
         column_legend
@@ -333,12 +339,17 @@ pub fn save_layout_debug(
     let short_id: String = asset_id.chars().take(8).collect();
     let overlay_path = layouts_dir.join(format!("{short_id}_{ts}.png"));
     if let Err(e) = overlay.save(&overlay_path) {
-        eprintln!(
-            "[debug_viz] Failed to write overlay {}: {e}",
+        log::debug!(
+            target: "debug_viz",
+            "Failed to write overlay {}: {e}",
             overlay_path.display()
         );
     } else {
-        eprintln!("[debug_viz] ✅ Overlay saved: {}", overlay_path.display());
+        log::debug!(
+            target: "debug_viz",
+            "✅ Overlay saved: {}",
+            overlay_path.display()
+        );
     }
 
     // ── Crops (organized by column and reading order) ────────────────────
@@ -357,16 +368,18 @@ pub fn save_layout_debug(
         let crop_path = crops_dir.join(&filename);
 
         if let Err(e) = std::fs::write(&crop_path, crop_bytes) {
-            eprintln!(
-                "[debug_viz] Failed to write crop {}: {e}",
+            log::debug!(
+                target: "debug_viz",
+                "Failed to write crop {}: {e}",
                 crop_path.display()
             );
         }
     }
 
     if !crops.is_empty() {
-        eprintln!(
-            "[debug_viz] ✅ Saved {} crops to: {}",
+        log::debug!(
+            target: "debug_viz",
+            "✅ Saved {} crops to: {}",
             crops.len(),
             crops_dir.display()
         );
@@ -412,7 +425,7 @@ pub fn save_ocr_lines_debug(
     let root = match workspace_root() {
         Some(r) => r,
         None => {
-            eprintln!("[debug_viz] CARGO_MANIFEST_DIR unavailable — skipping OCR lines debug");
+            log::debug!(target: "debug_viz", "CARGO_MANIFEST_DIR unavailable — skipping OCR lines debug");
             return Ok(());
         }
     };
@@ -421,7 +434,7 @@ pub fn save_ocr_lines_debug(
     let img = match image::load_from_memory(original_bytes) {
         Ok(img) => img,
         Err(e) => {
-            eprintln!("[debug_viz] Failed to decode image for OCR lines overlay: {e}");
+            log::debug!(target: "debug_viz", "Failed to decode image for OCR lines overlay: {e}");
             return Ok(());
         }
     };
@@ -430,8 +443,9 @@ pub fn save_ocr_lines_debug(
     let layouts_dir = root.join("tests_layouts");
 
     if let Err(e) = std::fs::create_dir_all(&layouts_dir) {
-        eprintln!(
-            "[debug_viz] Failed to create {}: {e}",
+        log::debug!(
+            target: "debug_viz",
+            "Failed to create {}: {e}",
             layouts_dir.display()
         );
         return Ok(());
@@ -442,8 +456,9 @@ pub fn save_ocr_lines_debug(
 
     let lines_with_bbox: Vec<_> = regions.iter().filter(|r| r.bbox.is_some()).collect();
 
-    eprintln!(
-        "[debug_viz] ─── OCR line detection for {asset_id}: {} lines with bboxes (method={method}) ───",
+    log::debug!(
+        target: "debug_viz",
+        "─── OCR line detection for {asset_id}: {} lines with bboxes (method={method}) ───",
         lines_with_bbox.len()
     );
 
@@ -479,8 +494,9 @@ pub fn save_ocr_lines_debug(
 
     // Summary log only — no per-line text dump (reduces noise in normal flow)
     if !lines_with_bbox.is_empty() {
-        eprintln!(
-            "[debug_viz]   Drew {} bounding boxes on overlay image",
+        log::debug!(
+            target: "debug_viz",
+            "  Drew {} bounding boxes on overlay image",
             lines_with_bbox.len()
         );
     }
@@ -489,13 +505,15 @@ pub fn save_ocr_lines_debug(
     let short_id: String = asset_id.chars().take(8).collect();
     let overlay_path = layouts_dir.join(format!("{short_id}_{ts}.png"));
     if let Err(e) = overlay.save(&overlay_path) {
-        eprintln!(
-            "[debug_viz] Failed to write overlay {}: {e}",
+        log::debug!(
+            target: "debug_viz",
+            "Failed to write overlay {}: {e}",
             overlay_path.display()
         );
     } else {
-        eprintln!(
-            "[debug_viz] ✅ OCR lines overlay saved: {}",
+        log::debug!(
+            target: "debug_viz",
+            "✅ OCR lines overlay saved: {}",
             overlay_path.display()
         );
     }
@@ -522,8 +540,9 @@ pub fn save_glm_ocr_response_debug(
     let root = match workspace_root() {
         Some(r) => r,
         None => {
-            eprintln!(
-                "[debug_viz] CARGO_MANIFEST_DIR unavailable — skipping GLM-OCR response dump"
+            log::debug!(
+                target: "debug_viz",
+                "CARGO_MANIFEST_DIR unavailable — skipping GLM-OCR response dump"
             );
             return Ok(());
         }
@@ -533,8 +552,9 @@ pub fn save_glm_ocr_response_debug(
     let layouts_dir = root.join("tests_layouts");
 
     if let Err(e) = std::fs::create_dir_all(&layouts_dir) {
-        eprintln!(
-            "[debug_viz] Failed to create {}: {e}",
+        log::debug!(
+            target: "debug_viz",
+            "Failed to create {}: {e}",
             layouts_dir.display()
         );
         return Ok(());
@@ -559,21 +579,23 @@ pub fn save_glm_ocr_response_debug(
     let json = match serde_json::to_string_pretty(&payload) {
         Ok(value) => value,
         Err(e) => {
-            eprintln!("[debug_viz] Failed to serialize GLM-OCR response for {asset_id}: {e}");
+            log::debug!(target: "debug_viz", "Failed to serialize GLM-OCR response for {asset_id}: {e}");
             return Ok(());
         }
     };
 
     match std::fs::write(&dump_path, json) {
         Ok(_) => {
-            eprintln!(
-                "[debug_viz] ✅ GLM-OCR response dump saved: {}",
+            log::debug!(
+                target: "debug_viz",
+                "✅ GLM-OCR response dump saved: {}",
                 dump_path.display()
             );
         }
         Err(e) => {
-            eprintln!(
-                "[debug_viz] Failed to write GLM-OCR response dump {}: {e}",
+            log::debug!(
+                target: "debug_viz",
+                "Failed to write GLM-OCR response dump {}: {e}",
                 dump_path.display()
             );
         }

@@ -52,18 +52,21 @@ export function getProcessingInitState(): {
 }
 
 export async function initDb(): Promise<void> {
+  // The Rust backend applies every migration during setup (Phase 4.2c/4.3),
+  // before the webview loads. initStore's runMigrations is a verify-only gate:
+  // it reads `_migrations` and rejects when the backend did not migrate, which
+  // surfaces through this init error path (no migration window anymore).
   _store = await initStore(createTauriDbClient())
-  // Sync capture bootstrap (DESIGN §6.1): now that every migration has run and
-  // all synced tables exist, ensure the sync schema + capture triggers. The
-  // backend already ran this at setup for tables that existed then; this covers
-  // tables created by the JS migrations. Best-effort — never block app init.
+  // Sync capture bootstrap (DESIGN §6.1): every synced table exists because
+  // the backend applied all migrations; ensure the sync schema + capture
+  // triggers. Best-effort — never block app init.
   try {
     await ensureSyncCapture()
   } catch (error) {
     console.error('[sync] ensureSyncCapture failed:', error)
   }
   // Batch queue gate (plan-lote.md Unidad 1): verify the durable schema after
-  // the JS migrations. Records the outcome for the settings tab; queue
+  // the backend migrations. Records the outcome for the settings tab; queue
   // admission/scheduling (Unidades 2-4) enforce readiness on top of this.
   try {
     await ensureProcessingInitialized()

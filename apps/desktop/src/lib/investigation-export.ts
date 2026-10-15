@@ -34,7 +34,7 @@ const EXTENSION: Record<ExportFormat, { name: string; extension: string }> = {
 
 const MAX_FILENAME_STEM_LENGTH = 80
 
-/** Generators are injectable so a test never loads the html-docx browser bundle. */
+/** Generators are injectable so a test never packs a DOCX. */
 export interface InvestigationExportGenerators {
   docx: (html: string) => Promise<Uint8Array>
 }
@@ -121,9 +121,7 @@ export async function investigationReportBytes(
 
 /** How a download ended. `null` is a closed file dialog, which says nothing. */
 export type InvestigationDownload =
-  | { kind: 'saved'; path: string }
-  | { kind: 'cancelled' }
-  | { kind: 'failed'; message: string }
+  { kind: 'saved'; path: string } | { kind: 'cancelled' } | { kind: 'failed'; message: string }
 
 /**
  * Asks where to put it and writes it.

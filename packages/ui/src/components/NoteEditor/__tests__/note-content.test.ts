@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   convertLegacyNoteTextToHtml,
@@ -29,6 +29,28 @@ describe('note-content helpers', () => {
         '<h2>Titulo</h2><p><a href="javascript:alert(1)">click</a> <strong>ok</strong></p><script>alert(1)</script>'
       )
     ).toBe('<h2>Titulo</h2><p>click <strong>ok</strong></p>')
+  })
+
+  describe('without a DOM (Q-04)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('escapes html it cannot filter instead of returning it raw', () => {
+      vi.stubGlobal('document', undefined)
+      const out = sanitizeNoteHtml(
+        '<p>ok</p><img src=x onerror="alert(1)"><script>alert(1)</script>'
+      )
+      expect(out).not.toMatch(/<(img|script)\b/i)
+      expect(out).toBe(
+        '<p>&lt;p&gt;ok&lt;/p&gt;&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;</p>'
+      )
+    })
+
+    it('still converts legacy plain text into paragraphs', () => {
+      vi.stubGlobal('document', undefined)
+      expect(sanitizeNoteHtml('Linea 1\nLinea 2')).toBe('<p>Linea 1<br>Linea 2</p>')
+    })
   })
 
   it('normalizes safe links and preserves href metadata for rendering', () => {

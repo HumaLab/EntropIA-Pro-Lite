@@ -3,7 +3,8 @@
   "compilerOptions": {
     "types": ["svelte", "vitest", "node"],
     "paths": { "$lib/*": ["./src/lib/*"] },
-    "outDir": "dist"
+    "outDir": "dist",
+    "rootDir": "../.."
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

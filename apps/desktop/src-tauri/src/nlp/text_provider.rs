@@ -43,7 +43,10 @@ pub fn get_item_text(conn: &Connection, item_id: &str) -> Result<String, String>
         Err(e) if e.contains("no such table") => {
             // Old DB without transcriptions table — log once, not per-item
             let _ = TRANSCRIPTIONS_TABLE_MISSING_LOGGED.get_or_init(|| {
-                eprintln!("[nlp/text_provider] transcriptions table not found — degrading to extraction-only text for all items");
+                log::warn!(
+                    target: "nlp/text_provider",
+                    "transcriptions table not found — degrading to extraction-only text for all items"
+                );
             });
             Vec::new() // No transcription text available
         }
@@ -86,7 +89,10 @@ pub fn get_asset_text(conn: &Connection, asset_id: &str) -> Result<String, Strin
         Ok(None) => String::new(),
         Err(e) if e.to_string().contains("no such table") => {
             let _ = TRANSCRIPTIONS_TABLE_MISSING_LOGGED.get_or_init(|| {
-                eprintln!("[nlp/text_provider] transcriptions table not found — degrading to extraction-only text");
+                log::warn!(
+                    target: "nlp/text_provider",
+                    "transcriptions table not found — degrading to extraction-only text"
+                );
             });
             String::new()
         }

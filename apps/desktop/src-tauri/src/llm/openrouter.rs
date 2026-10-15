@@ -316,7 +316,7 @@ impl OpenRouterClient {
 
     pub fn new(api_key: String, model: String) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+            .user_agent(crate::USER_AGENT)
             .timeout(Self::REQUEST_TIMEOUT)
             .connect_timeout(Self::CONNECT_TIMEOUT)
             .build()
@@ -359,8 +359,9 @@ impl OpenRouterClient {
                     if attempt >= Self::MAX_ATTEMPTS || !failure.is_retryable() {
                         return Err(failure.message());
                     }
-                    eprintln!(
-                        "[openrouter] attempt {attempt} failed ({}); retrying once",
+                    log::warn!(
+                        target: "openrouter",
+                        "attempt {attempt} failed ({}); retrying once",
                         failure.message()
                     );
                     attempt += 1;

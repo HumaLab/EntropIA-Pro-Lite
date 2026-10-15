@@ -3,6 +3,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
   import { ActionIcon, Button, IconButton } from '@entropia/ui'
   import { dependencyStatusIcon, dependencyStatusColor } from '$lib/deps-status'
+  import { registerListeners } from '$lib/register-listeners'
   import {
     checkAllDeps,
     installAllDeps,
@@ -126,10 +127,11 @@
   // ---------------------------------------------------------------------------
 
   let unlisteners: Array<() => void> = []
-  // The listeners register after the initial refresh, one `await` at a time.
-  // A tab destroyed before that refresh settles registers nothing; one
-  // destroyed during registration releases what lands afterwards; and every
-  // handler ignores what Tauri still delivers in between (drop-dup fix).
+  // The listeners register after the initial refresh, one at a time through
+  // the shared helper. A tab destroyed before that refresh settles registers
+  // nothing; one destroyed during registration releases what lands
+  // afterwards; and every handler ignores what Tauri still delivers in
+  // between (drop-dup fix).
   let destroyed = false
 
   onMount(async () => {
@@ -142,78 +144,97 @@
     }
     if (destroyed) return
 
-    const registered: Array<() => void> = [
-      await onDepsProgress((event) => {
-        if (destroyed) return
-        deps = deps.map((d) => (d.id === event.id ? { ...d, status: event.status } : d))
-      }),
-      await onDepsComplete((event) => {
-        if (destroyed) return
-        deps = event.results
-        installing = false
-        void refreshRuntimeState()
-      }),
-      await onDepsError((event) => {
-        if (destroyed) return
-        errorBanner = event.error
-        installing = false
-      }),
-      await onRuntimeStatus((status) => {
-        if (destroyed) return
-        runtimeStatus = status
-        runtimeOperation = status.activeOperation
-        runtimeOperationInFlight = status.activeOperation != null
-      }),
-      await onRuntimeProgress((operation) => {
-        if (destroyed) return
-        if (
-          !runtimeOperationInFlight &&
-          runtimeStatus?.state === 'healthy' &&
-          operation.stage !== 'checking'
-        ) {
-          return
-        }
-        runtimeOperationInFlight = true
-        runtimeOperation = operation
-      }),
-      await listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
-        if (destroyed) return
-        llmDownloading = true
-        llmDownloadPct = event.payload.pct
-      }),
-      await listen('llm:download_complete', async () => {
-        if (destroyed) return
-        llmDownloading = false
-        llmDownloadPct = 100
-        await refreshAiModelState().catch(() => undefined)
-      }),
-      await listen('llm:download_error', () => {
-        if (destroyed) return
-        llmDownloading = false
-        llmDownloadPct = 0
-      }),
-      await listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
-        if (destroyed) return
-        embeddingDownloading = true
-        embeddingDownloadPct = event.payload.pct
-        embeddingDownloadFile = event.payload.file
-      }),
-      await listen('embedding:download_complete', async () => {
-        if (destroyed) return
-        embeddingDownloading = false
-        embeddingDownloadPct = 100
-        embeddingDownloadFile = ''
-        await refreshAiModelState().catch(() => undefined)
-      }),
-      await listen('embedding:download_error', () => {
-        if (destroyed) return
-        embeddingDownloading = false
-        embeddingDownloadPct = 0
-        embeddingDownloadFile = ''
-      }),
-    ]
-    if (destroyed) registered.forEach((fn) => fn())
-    else unlisteners.push(...registered)
+    try {
+      const registered = await registerListeners(
+        [
+          () =>
+            onDepsProgress((event) => {
+              if (destroyed) return
+              deps = deps.map((d) => (d.id === event.id ? { ...d, status: event.status } : d))
+            }),
+          () =>
+            onDepsComplete((event) => {
+              if (destroyed) return
+              deps = event.results
+              installing = false
+              void refreshRuntimeState()
+            }),
+          () =>
+            onDepsError((event) => {
+              if (destroyed) return
+              errorBanner = event.error
+              installing = false
+            }),
+          () =>
+            onRuntimeStatus((status) => {
+              if (destroyed) return
+              runtimeStatus = status
+              runtimeOperation = status.activeOperation
+              runtimeOperationInFlight = status.activeOperation != null
+            }),
+          () =>
+            onRuntimeProgress((operation) => {
+              if (destroyed) return
+              if (
+                !runtimeOperationInFlight &&
+                runtimeStatus?.state === 'healthy' &&
+                operation.stage !== 'checking'
+              ) {
+                return
+              }
+              runtimeOperationInFlight = true
+              runtimeOperation = operation
+            }),
+          () =>
+            listen<LlmDownloadProgressPayload>('llm:download_progress', (event) => {
+              if (destroyed) return
+              llmDownloading = true
+              llmDownloadPct = event.payload.pct
+            }),
+          () =>
+            listen('llm:download_complete', async () => {
+              if (destroyed) return
+              llmDownloading = false
+              llmDownloadPct = 100
+              await refreshAiModelState().catch(() => undefined)
+            }),
+          () =>
+            listen('llm:download_error', () => {
+              if (destroyed) return
+              llmDownloading = false
+              llmDownloadPct = 0
+            }),
+          () =>
+            listen<EmbeddingDownloadProgressPayload>('embedding:download_progress', (event) => {
+              if (destroyed) return
+              embeddingDownloading = true
+              embeddingDownloadPct = event.payload.pct
+              embeddingDownloadFile = event.payload.file
+            }),
+          () =>
+            listen('embedding:download_complete', async () => {
+              if (destroyed) return
+              embeddingDownloading = false
+              embeddingDownloadPct = 100
+              embeddingDownloadFile = ''
+              await refreshAiModelState().catch(() => undefined)
+            }),
+          () =>
+            listen('embedding:download_error', () => {
+              if (destroyed) return
+              embeddingDownloading = false
+              embeddingDownloadPct = 0
+              embeddingDownloadFile = ''
+            }),
+        ],
+        () => destroyed
+      )
+      unlisteners.push(...registered)
+    } catch (e) {
+      // Best-effort wiring: the helper already released what had landed, so
+      // the tab stays usable and only surfaces the failure.
+      if (!destroyed) errorBanner = `Error al registrar listeners: ${String(e)}`
+    }
   })
 
   onDestroy(() => {
@@ -645,6 +666,13 @@
                 EntropIA Pro necesita descargar y verificar el runtime administrado la primera vez.
                 Conectate a internet y volvé a verificar. Mientras tanto, las capacidades locales
                 (OCR, transcripción y NLP) quedan en pausa.
+              </span>
+            {:else if runtimeStatus?.blockedReason === 'no_matching_release'}
+              <strong>Esta versión de EntropIA Pro todavía no tiene su runtime publicado.</strong>
+              <span>
+                El manifiesto firmado existe, pero no incluye un runtime para esta versión y
+                plataforma. No es un problema de tu equipo: actualizá EntropIA Pro a la última
+                versión o volvé a verificar más tarde.
               </span>
             {:else}
               <strong>Todavía no hay una fuente de descarga confiable para el runtime.</strong>

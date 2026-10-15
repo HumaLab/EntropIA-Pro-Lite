@@ -20,11 +20,8 @@ const collectionActivityMigrationPath = resolve(
 const sql = buildSchemaFixture()
 await mkdir(dirname(fixturePath), { recursive: true })
 await writeFile(fixturePath, sql, 'utf8')
-await writeFile(
-  collectionActivityMigrationPath,
-  `-- Generated from COLLECTION_ACTIVITY_DDL in ../runner.ts.\n${COLLECTION_ACTIVITY_DDL}\n`,
-  'utf8'
-)
+// Byte-identical to the registry entry (migration-files.test.ts), so no header.
+await writeFile(collectionActivityMigrationPath, `${COLLECTION_ACTIVITY_DDL}\n`, 'utf8')
 
 console.log(`Wrote ${sql.length} bytes to ${fixturePath}`)
 console.log(`Wrote collection activity migration to ${collectionActivityMigrationPath}`)

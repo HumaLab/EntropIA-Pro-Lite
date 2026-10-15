@@ -684,7 +684,7 @@ fn copy_verified(
         hasher.update(&block[..read]);
         to.write_all(&block[..read]).map_err(io_error)?;
     }
-    if total != expected_size || format!("{:x}", hasher.finalize()) != expected_sha256 {
+    if total != expected_size || hex::encode(hasher.finalize()) != expected_sha256 {
         return Err(SaveError::with_detail(
             code::HASH_MISMATCH,
             "the file is not the one that was verified",

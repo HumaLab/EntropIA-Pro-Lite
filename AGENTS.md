@@ -13,13 +13,16 @@
 - Focus a package: `pnpm --filter @entropia-pro/desktop test`, `pnpm --filter @entropia/ui typecheck`, `pnpm --filter @entropia/store test`.
 - Focus one Vitest file by passing args through the package script, e.g. `pnpm --filter @entropia-pro/desktop test -- src/lib/ocr.test.ts`.
 - Frontend Lite typecheck needs the variant env: `VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop typecheck`.
-- Rust quality helper exists at root: `pnpm rust:quality:report`.
+- Bump the app version only with `pnpm version:bump x.y.z`: `apps/desktop/package.json` is the single source of truth and the script rewrites every derived declaration; `pnpm version:check` verifies all of them.
+- Adding or replacing a committed binary requires updating `apps/desktop/src-tauri/binary-provenance.json`; run `pnpm binaries:check`. Upstream binaries must stay byte-identical to their pinned release (`pnpm binaries:verify-upstream`).
+- Rust quality helper exists at root: `pnpm rust:quality:report` (on Linux/macOS it needs PowerShell 7, `pwsh`).
 
 ## Dev profile (never run `tauri dev` on the real archive with a new migration)
 
 - `tauri dev` opens the same archive as the installed app (`%APPDATA%\com.entropia.shared`) and finds its sync session in the OS keyring. A new migration applied there is irreversible, and one sync raises the account's `schema_tag` for every device.
 - Debug builds only: set `ENTROPIA_DEV_PROFILE=<name>` (`A-Z a-z 0-9 - _`, max 32) before `pnpm exec tauri dev`. Data goes to `<data>/com.entropia.shared/dev-profiles/<name>`, cache likewise under `%LOCALAPPDATA%`; sync is off (no engine, no keyring, sync commands answer `sync_disabled_in_dev_profile`). Release builds never read the variable. See `src-tauri/src/dev_profile.rs`.
 - Check the startup line first: `[setup] profile=dev:<name> data_dir=... sync=disabled`. If it says `profile=shared`, close the app.
+- `tauri.conf.json` watches no sibling checkout: to hot-reload over a local `EntropIA-Agent` checkout, rerun dev with `pnpm exec tauri dev --config '{"build":{"additionalWatchFolders":["../../../../EntropIA-Agent/src"]}}'` (paths are relative to `apps/desktop/src-tauri`).
 
 ## Pro vs Lite variant rules
 
@@ -29,12 +32,13 @@
 - Use `pnpm exec tauri ...`, not `pnpm tauri ... -- ...`; pnpm can eat the first `--` and break Cargo arg forwarding.
 - PowerShell keeps `$env:VITE_LOCAL_ML` for the whole session; reset it when switching variants.
 - Pro dev/build uses `--features local-ml` and may compile MNN from source on first Windows build (~30 min). Do not trigger full Tauri builds casually.
+- Pro Linux `.deb`: run `bash scripts/fetch-pdfium.sh linux-x64` first, then build with `--config src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb`. Pdfium is listed only in that explicit overlay (and the Lite Linux one): `tauri.linux.conf.json` is merged into every Linux build, `cargo test` included, so it must not reference the downloaded file.
 - Lite Windows build command shape: `pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi`; do not add `--features local-ml`. The second overlay replaces the shared Windows resource list so Pro-only payload (uv, models, runtime pack, scripts) stays out.
 
 ## Tauri/Rust gotchas
 
 - `apps/desktop/src-tauri/src/lib.rs` swaps the whole `deps` module by feature: `deps/mod.rs` for `local-ml`, `deps/mod_lite.rs` otherwise. Keep the command/struct surface aligned across variants.
-- Release builds can fail closed in `build.rs` if a fixture runtime-pack is bundled without `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL` and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64`.
+- Pro (`local-ml`) release builds for Windows/Linux fail closed in `build.rs` if a fixture runtime-pack is bundled and any of `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `_PUBLIC_KEY_ID`, `_PUBLIC_KEY_BASE64` is missing; Lite builds need none.
 - Windows release builds stage VC runtime DLLs from `ENTROPIA_VC_RUNTIME_DIR` or `%WINDIR%\System32`; missing required DLLs panic in `build.rs`.
 
 ## Frontend/test quirks
@@ -44,12 +48,22 @@
 - Vite dev server is fixed to port `1420` for Tauri and ignores `src-tauri/**` watches.
 - Desktop Vite pins dependency prebundling and `noDiscovery` to avoid stale optimized chunks in Tauri WebView; be careful when adding new bare runtime imports from linked workspace packages.
 
+## Dependencies
+
+- `@tiptap/*` and `leaflet` versions live in the `catalog:` of `pnpm-workspace.yaml`; both `packages/ui` and `apps/desktop` reference them as `catalog:`. Change a version there, once.
+- `apps/desktop` redeclares the editor packages `packages/ui` uses on purpose: Vite prebundles them from the app's own resolution root, and a package it optimizes without the app depending on it resolves through the linked workspace, loading a second `prosemirror-state` that ProseMirror rejects. Add a new Tiptap/ProseMirror runtime dependency to both packages and to `optimizeDeps.include` in `apps/desktop/vite.config.ts`.
+- Two Markdown renderers coexist on purpose: `apps/desktop/src/lib/markdown.ts` renders untrusted LLM output (RAG chat, research, investigation reports) and escapes all HTML first, so its output is safe for `{@html}`; `markdown-it` renders OCR text only (`lib/ocr-rich-text.ts`), which needs raw HTML and full tables and is sanitized afterwards by `sanitizeOcrHtml`. Do not route LLM output through `markdown-it`.
+
 ## Style constraints already encoded in config
 
-- ESLint warnings allow `_`-prefixed unused args/vars, rest-sibling stripping, and `any`; do not “fix” those patterns blindly.
+- Zero warnings: `lint` runs `eslint src --max-warnings 0` and the desktop/ui `typecheck` runs svelte-check with `--fail-on-warnings`, so any warning fails the check. The config allows `_`-prefixed unused args/vars and rest-sibling stripping; do not “fix” those patterns blindly. `no-explicit-any` is a warning, so type the value (or justify an `eslint-disable-next-line` on that line). A deliberate init-time prop capture takes `// svelte-ignore state_referenced_locally` plus a one-line reason.
 - Svelte runes dependency expressions intentionally disable `@typescript-eslint/no-unused-expressions` in `.svelte` files.
 - Empty catches are allowed only for best-effort localStorage-style access in `.svelte` files.
 - Icons go through `ActionIcon`, never around it. `no-restricted-imports` fails the build on a direct `@tabler/icons-svelte-runes` import anywhere under `apps/**` or `packages/**`; to add an icon, add its name to `ACTION_ICON_NAMES` and map it in `ActionIcon.svelte`. Genuinely non-icon SVG — charts, viewer overlays, third-party brand marks — is allowlisted in `eslint.config.js` rather than exempted by hand.
+
+## Auditing history
+
+- A shallow clone (`--depth N`) grafts its oldest visible commit, which then shows the whole tree as one huge change under an unrelated message. Do not read that as a real commit; fetch full history (`git fetch --unshallow`) before blaming or dating anything.
 
 ## Task board (hlab.com.ar)
 

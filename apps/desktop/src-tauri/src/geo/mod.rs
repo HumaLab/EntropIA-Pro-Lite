@@ -127,20 +127,20 @@ impl GeoQueue {
             let conn = match crate::db::open::open_archive_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("[geo] Failed to open worker DB connection: {e}");
+                    log::error!(target: "geo", "Failed to open worker DB connection: {e}");
                     return;
                 }
             };
 
             let client = match reqwest::Client::builder()
-                .user_agent("EntropIA-Desktop/0.1 (historical-research-app)")
+                .user_agent(crate::USER_AGENT)
                 .timeout(Duration::from_secs(30))
                 .connect_timeout(Duration::from_secs(15))
                 .build()
             {
                 Ok(client) => client,
                 Err(e) => {
-                    eprintln!("[geo] Failed to build HTTP client: {e}");
+                    log::error!(target: "geo", "Failed to build HTTP client: {e}");
                     return;
                 }
             };
@@ -268,7 +268,7 @@ impl GeoQueue {
                 }
             }
 
-            eprintln!("[geo] Worker loop ended — channel closed.");
+            log::info!(target: "geo", "Worker loop ended — channel closed.");
         });
     }
 }

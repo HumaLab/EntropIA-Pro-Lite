@@ -3,7 +3,6 @@
   "version": "1.0.20",
   "identifier": "com.entropia.pro.desktop",
   "build": {
-    "additionalWatchFolders": ["../../../../EntropIA-Agent/src"],
     "beforeDevCommand": "pnpm --filter @entropia-pro/desktop dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
@@ -54,7 +53,20 @@
       },
       "assetProtocol": {
         "enable": true,
-        "scope": ["$DATA/com.entropia.shared/**/*", "$LOCALDATA/com.entropia.shared/**/*"]
+        "scope": {
+          "allow": [
+            "$DATA/com.entropia.shared/assets/**",
+            "$DATA/com.entropia.shared/writing-images/**",
+            "$DATA/com.entropia.shared/writing-crops/**",
+            "$DATA/com.entropia.shared/web-captures/**",
+            "$LOCALDATA/com.entropia.shared/thumbnails/**"
+          ],
+          "deny": [
+            "$DATA/com.entropia.shared/**/*.sqlite*",
+            "$LOCALDATA/com.entropia.shared/**/*.sqlite*",
+            "$DATA/com.entropia.shared/**/web-captures/**/*.html"
+          ]
+        }
       }
     }
   },

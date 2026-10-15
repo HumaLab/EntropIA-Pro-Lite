@@ -1,0 +1,24 @@
+<!-- Repo-owned copy of tauri-build 2.7.1's default Windows app manifest
+     (src/windows-app-manifest.xml in the tauri-build crate sources).
+
+     build.rs embeds this file into EVERY Windows MSVC target of this package
+     via the linker's /MANIFESTINPUT (see build.rs), while tauri-build's own
+     manifest is disabled with WindowsAttributes::new_without_app_manifest().
+     The <assembly> element below is byte-identical to tauri-build's default so
+     the shipped app binary carries exactly the same manifest as before; only
+     the embedding mechanism changed (.res RT_MANIFEST -> linker /MANIFEST).
+     Keep it in sync with the tauri-build version pinned in Cargo.lock. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

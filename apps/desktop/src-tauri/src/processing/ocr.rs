@@ -416,8 +416,9 @@ impl OcrExecutor {
                     )
                 }
                 Err(error) => {
-                    eprintln!(
-                        "[processing] GLM-OCR failed for {}, falling back to local: {error}",
+                    log::warn!(
+                        target: "processing",
+                        "GLM-OCR failed for {}, falling back to local: {error}",
                         task.asset_id
                     );
                     if ocrh_mode == ocr::OCRH_MODE_GLM_OCR {
@@ -446,8 +447,9 @@ impl OcrExecutor {
                 match ocr::paddle_vl::create_paddle_vl_engine_result(&self.app, &self.db_path) {
                     Ok(engine) => *vl = Some(engine),
                     Err(error) => {
-                        eprintln!(
-                            "[processing] PaddleOCR-VL unavailable, falling back to light: {error}"
+                        log::warn!(
+                            target: "processing",
+                            "PaddleOCR-VL unavailable, falling back to light: {error}"
                         );
                     }
                 }

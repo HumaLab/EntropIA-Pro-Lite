@@ -352,15 +352,17 @@ pub fn resolve_and_remember_dirs(
     let cache = resolve_real_dir(nominal_cache.clone())?;
 
     if data != nominal_data {
-        eprintln!(
-            "[setup] data directory is redirected: {} -> {}",
+        log::info!(
+            target: "setup",
+            "data directory is redirected: {} -> {}",
             nominal_data.display(),
             data.display()
         );
     }
     if cache != nominal_cache {
-        eprintln!(
-            "[setup] cache directory is redirected: {} -> {}",
+        log::info!(
+            target: "setup",
+            "cache directory is redirected: {} -> {}",
             nominal_cache.display(),
             cache.display()
         );

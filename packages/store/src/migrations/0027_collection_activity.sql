@@ -1,4 +1,3 @@
--- Generated from COLLECTION_ACTIVITY_DDL in ../runner.ts.
 -- Keep collections.updated_at as the canonical last-activity timestamp. Database
 -- triggers cover repository writes, Rust worker writes, and synchronized changes.
 CREATE TRIGGER collection_activity_items_insert

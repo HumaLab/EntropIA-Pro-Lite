@@ -3,7 +3,7 @@
   "mcp": {
     "shadcn": {
       "type": "local",
-      "command": ["pnpm", "dlx", "shadcn@latest", "mcp", "--cwd", "apps/desktop"],
+      "command": ["pnpm", "dlx", "shadcn@4.21.4", "mcp", "--cwd", "apps/desktop"],
       "enabled": false,
       "timeout": 30000
     },
@@ -15,7 +15,7 @@
     },
     "figma-framelink": {
       "type": "local",
-      "command": ["cmd", "/c", "npx", "-y", "figma-developer-mcp", "--stdio"],
+      "command": ["cmd", "/c", "npx", "-y", "figma-developer-mcp@0.13.2", "--stdio"],
       "enabled": true,
       "environment": {
         "FIGMA_API_KEY": "{env:FIGMA_API_KEY}"
@@ -35,7 +35,7 @@
     },
     "tauri": {
       "type": "local",
-      "command": ["npx", "-y", "@hypothesi/tauri-mcp-server"],
+      "command": ["npx", "-y", "@hypothesi/tauri-mcp-server@0.13.1"],
       "enabled": true,
       "timeout": 60000
     },
@@ -45,15 +45,9 @@
       "enabled": true,
       "timeout": 60000
     },
-    "serena": {
-      "type": "local",
-      "command": ["C:\\Users\\agusn\\.local\\bin\\serena.exe", "start-mcp-server", "--context", "ide"],
-      "enabled": true,
-      "timeout": 20000
-    },
     "playwright": {
       "type": "local",
-      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "command": ["npx", "-y", "@playwright/mcp@0.0.83"],
       "enabled": false,
       "timeout": 15000
     },
@@ -63,18 +57,12 @@
       "enabled": false,
       "timeout": 15000
     },
-    "semgrep": {
-      "type": "local",
-      "command": ["C:\\Users\\agusn\\.local\\bin\\semgrep.exe", "mcp", "--transport", "stdio"],
-      "enabled": false,
-      "timeout": 30000
-    },
     "sqlite_dev": {
       "type": "local",
       "command": [
         "npx",
         "-y",
-        "@berthojoris/mcp-sqlite-server",
+        "@berthojoris/mcp-sqlite-server@1.4.1",
         "sqlite://./dev.sqlite",
         "list,read"
       ],
@@ -112,10 +100,8 @@
     },
     "tauri_*": "ask",
     "docsrs_*": "allow",
-    "serena_*": "ask",
     "playwright_*": "ask",
     "gh_grep_*": "allow",
-    "semgrep_*": "ask",
     "sqlite_dev_*": "ask"
   }
 }
