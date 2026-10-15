@@ -84,6 +84,7 @@ pub struct RuntimeStatus {
 /// is out of T3 scope so the 3x formula is intentionally duplicated here for
 /// explanatory status only; the in-download check stays authoritative and is
 /// never moved.
+#[cfg(feature = "local-ml")]
 pub(crate) fn bootstrap_required_free_bytes(archive_size: u64) -> u64 {
     archive_size.saturating_mul(3)
 }
@@ -93,6 +94,7 @@ pub(crate) fn bootstrap_required_free_bytes(archive_size: u64) -> u64 {
 /// BEFORE the first byte. Returns `None` when free space is unknown (skip
 /// rather than block) or sufficient. Copy mirrors the in-download error in
 /// `download.rs` (`Espacio en disco insuficiente para ... Liberá espacio ...`).
+#[cfg(feature = "local-ml")]
 pub(crate) fn disk_preflight_message(
     free_bytes: Option<u64>,
     required_bytes: u64,

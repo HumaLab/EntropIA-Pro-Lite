@@ -5,6 +5,7 @@ pub mod bootstrap_types;
 pub mod download;
 #[cfg(feature = "local-ml")]
 pub(crate) mod download_state;
+#[cfg(feature = "local-ml")]
 pub(crate) mod hash;
 #[cfg(feature = "local-ml")]
 pub mod manager;
