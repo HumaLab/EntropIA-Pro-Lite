@@ -492,19 +492,26 @@ describe('AppShell', () => {
           state: 'fixture',
           packVersion: '2026.05.0',
           repairNeeded: false,
-          repairAvailable: false,
-          summary:
-            'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+          repairAvailable: true,
+          summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
           blockedCapabilities: ['ocr', 'transcription', 'nlp'],
           details: [
-            'La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).',
+            'La app 0.0.10 arrancó correctamente, pero el runtime de IA para linux-x86_64 todavía está pendiente de descarga (app_version declarada: 0.0.10).',
           ],
           guidance: [
-            'Esto no indica una caída: la UI puede abrir, pero OCR/NLP/transcripción quedan bloqueados hasta inyectar los payloads de release.',
+            'Esto no indica una caída: el runtime de IA se descarga automáticamente cuando hay una fuente confiable; mientras tanto, OCR, NLP y transcripción quedan en pausa.',
           ],
-          bootstrapEligible: false,
+          bootstrapEligible: true,
           bootstrapRequired: true,
-          activeOperation: null,
+          activeOperation: {
+            kind: 'bootstrap',
+            stage: 'planning_download',
+            summary: 'EntropIA puede bootstrapear un runtime confiable',
+            progressPercent: null,
+            downloadedBytes: null,
+            totalBytes: 1024,
+            retryable: true,
+          },
         })
       }
 
@@ -514,9 +521,7 @@ describe('AppShell', () => {
     render(AppShellHost)
 
     expect(
-      await screen.findByText(
-        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release'
-      )
+      await screen.findByText('Runtime de IA pendiente de descarga para linux-x86_64')
     ).toBeInTheDocument()
     expect(screen.getByText(/app no se cay/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime →' })).not.toBeInTheDocument()
@@ -541,8 +546,7 @@ describe('AppShell', () => {
             packVersion: '2026.05.0',
             repairNeeded: false,
             repairAvailable: false,
-            summary:
-              'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+            summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
             blockedCapabilities: ['ocr', 'transcription', 'nlp'],
             details: ['payloads offline pendientes'],
             guidance: ['Inyectar payloads externos antes de distribuir offline'],
@@ -605,6 +609,333 @@ describe('AppShell', () => {
       expect(screen.getByText(/ocr, transcription, nlp/i)).toBeInTheDocument()
     }
   )
+
+  // T5 (S2/S4/S5): the banner wires the T2/T3/T4 backend — progress fed by
+  // `runtime://progress` events, Pausar via the cancel command, Reintentar
+  // via the start command. Non-modal by construction: no dialog may appear.
+  describe('runtime bootstrap banner', () => {
+    let statusHandler: EventListenerCallback | undefined
+    let progressHandler: EventListenerCallback | undefined
+    const unlistens: Record<string, ReturnType<typeof vi.fn>> = {}
+
+    function downloadingStatus(): {
+      state: string
+      packVersion: string
+      repairNeeded: boolean
+      repairAvailable: boolean
+      summary: string
+      blockedCapabilities: string[]
+      details: string[]
+      guidance: string[]
+      bootstrapEligible: boolean
+      bootstrapRequired: boolean
+      activeOperation: {
+        kind: string
+        stage: string
+        summary: string
+        progressPercent: number | null
+        downloadedBytes: number | null
+        totalBytes: number | null
+        retryable: boolean
+      }
+    } {
+      return {
+        state: 'downloading',
+        packVersion: '2026.05.0',
+        repairNeeded: false,
+        repairAvailable: false,
+        summary: 'Descargando runtime de IA',
+        blockedCapabilities: ['ocr', 'transcription', 'nlp'],
+        details: [],
+        guidance: ['La descarga continúa en segundo plano.'],
+        bootstrapEligible: true,
+        bootstrapRequired: true,
+        activeOperation: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 'Descargando runtime de IA',
+          progressPercent: 25,
+          downloadedBytes: 610_000_000,
+          totalBytes: 2_440_000_000,
+          retryable: false,
+        },
+      }
+    }
+
+    function pendingFixtureStatus() {
+      return {
+        ...downloadingStatus(),
+        state: 'fixture',
+        summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
+        activeOperation: {
+          kind: 'bootstrap',
+          stage: 'planning_download',
+          summary: 'EntropIA puede bootstrapear un runtime confiable',
+          progressPercent: null,
+          downloadedBytes: null,
+          totalBytes: 2_440_000_000,
+          retryable: true,
+        },
+      }
+    }
+
+    function offlineStatus() {
+      return {
+        ...downloadingStatus(),
+        state: 'blocked_offline',
+        summary: 'No se pudo continuar el bootstrap porque la fuente confiable está offline',
+        guidance: ['Reintentá cuando vuelva la conexión.'],
+        activeOperation: {
+          kind: 'bootstrap',
+          stage: 'blocked',
+          summary: 'Bootstrap bloqueado por falta de conectividad',
+          progressPercent: null,
+          downloadedBytes: null,
+          totalBytes: 2_440_000_000,
+          retryable: true,
+        },
+      }
+    }
+
+    beforeEach(() => {
+      statusHandler = undefined
+      progressHandler = undefined
+      for (const key of Object.keys(unlistens)) delete unlistens[key]
+      listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
+        if (eventName === 'runtime://status') statusHandler = callback
+        if (eventName === 'runtime://progress') progressHandler = callback
+        const unlisten = vi.fn()
+        unlistens[eventName] = unlisten
+        return Promise.resolve(unlisten)
+      })
+    })
+
+    it.runIf(LOCAL_ML)('shows_total_size_and_percent_while_downloading', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (command === 'runtime_get_status') return Promise.resolve(downloadingStatus())
+        return Promise.resolve(undefined)
+      })
+
+      const { container } = render(AppShellHost)
+
+      expect(await screen.findByText('0,6 GB de 2,4 GB (25 %)')).toBeInTheDocument()
+
+      progressHandler?.({
+        payload: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 'Descargando runtime de IA',
+          progressPercent: 50,
+          downloadedBytes: 1_220_000_000,
+          totalBytes: 2_440_000_000,
+          retryable: false,
+        },
+      })
+
+      expect(await screen.findByText('1,2 GB de 2,4 GB (50 %)')).toBeInTheDocument()
+      expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
+      // Non-modal: the app stays usable, nothing traps focus behind a dialog.
+      expect(screen.getByTestId('app-shell-child')).toBeInTheDocument()
+      expect(container.querySelector('[role="dialog"]')).toBeNull()
+    })
+
+    it.runIf(LOCAL_ML)('pause_cancel_returns_to_pending_state', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (command === 'runtime_get_status') return Promise.resolve(downloadingStatus())
+        if (command === 'runtime_cancel_download') return Promise.resolve(true)
+        return Promise.resolve(undefined)
+      })
+
+      const { container } = render(AppShellHost)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Pausar descarga' }))
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith('runtime_cancel_download')
+      )
+
+      // The backend answers a user cancel with the quiet pending status.
+      statusHandler?.({ payload: pendingFixtureStatus() })
+
+      expect(
+        await screen.findByText('Runtime de IA pendiente de descarga para linux-x86_64')
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Pausar descarga' })).not.toBeInTheDocument()
+      expect(container.querySelector('[class*="error"]')).toBeNull()
+    })
+
+    it.runIf(LOCAL_ML)('failure_or_offline_shows_reintentar_descarga', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (command === 'runtime_get_status') return Promise.resolve(offlineStatus())
+        if (command === 'runtime_bootstrap_start')
+          return Promise.resolve(downloadingStatus())
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Reintentar descarga' }))
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith('runtime_bootstrap_start')
+      )
+
+      // The start command answers the current status: the banner flips to progress.
+      expect(await screen.findByText('0,6 GB de 2,4 GB (25 %)')).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('auto_started_download_shows_progress_on_first_paint', async () => {
+      const status = downloadingStatus()
+      status.activeOperation = {
+        ...status.activeOperation,
+        progressPercent: null,
+        downloadedBytes: 610_000_000,
+        totalBytes: 2_440_000_000,
+      }
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (command === 'runtime_get_status') return Promise.resolve(status)
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+
+      // T4 auto-starts at launch: progress comes from the status snapshot,
+      // no click and no progress event needed.
+      expect(await screen.findByText('0,6 GB de 2,4 GB (25 %)')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Pausar descarga' })).toBeInTheDocument()
+      expect(invokeMock).not.toHaveBeenCalledWith('runtime_bootstrap_start')
+      expect(invokeMock).not.toHaveBeenCalledWith('runtime_cancel_download')
+    })
+
+    it.runIf(LOCAL_ML)('unsubscribes the bootstrap progress listener on unmount', async () => {
+      const { unmount } = render(AppShellHost)
+
+      await waitFor(() =>
+        expect(listenMock).toHaveBeenCalledWith('runtime://progress', expect.any(Function))
+      )
+
+      unmount()
+
+      expect(unlistens['runtime://progress']).toHaveBeenCalled()
+      expect(unlistens['runtime://status']).toHaveBeenCalled()
+    })
+
+    it.runIf(LOCAL_ML)('no_retry_when_not_bootstrap_eligible', async () => {
+      invokeMock.mockImplementation((c: string) =>
+        c === 'deps_get_cached_statuses'
+          ? Promise.resolve([])
+          : c === 'runtime_get_status'
+            ? Promise.resolve({ ...offlineStatus(), bootstrapEligible: false })
+            : Promise.resolve(undefined)
+      )
+      render(AppShellHost)
+      await screen.findByText(/fuente confiable está offline/)
+      expect(
+        screen.queryByRole('button', { name: 'Reintentar descarga' })
+      ).not.toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('pending_fixture_offers_retry_not_pause', async () => {
+      invokeMock.mockImplementation((c: string) =>
+        c === 'deps_get_cached_statuses'
+          ? Promise.resolve([])
+          : c === 'runtime_get_status'
+            ? Promise.resolve(pendingFixtureStatus())
+            : Promise.resolve(undefined)
+      )
+      render(AppShellHost)
+      expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Pausar descarga' })).not.toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('status_rejects_but_progress_arrives_shows_banner', async () => {
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') return Promise.reject(new Error('catalog timeout'))
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('runtime_get_status'))
+      // The VM case: no snapshot, no banner yet.
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+      progressHandler?.({
+        payload: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 'Descargando runtime de IA',
+          progressPercent: 10,
+          downloadedBytes: 244_000_000,
+          totalBytes: 2_440_000_000,
+          retryable: false,
+        },
+      })
+
+      expect(await screen.findByRole('progressbar')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Pausar descarga' })).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('uv_rejects_but_status_resolves_shows_banner', async () => {
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') return Promise.resolve(pendingFixtureStatus())
+        if (c === 'deps_get_uv_status') return Promise.reject(new Error('uv timeout'))
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      // A uv failure must never discard the good runtime snapshot.
+      expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('status_retry_succeeds_after_failure', async () => {
+      let statusCalls = 0
+      invokeMock.mockImplementation((c: string) => {
+        if (c === 'deps_get_cached_statuses') return Promise.resolve([])
+        if (c === 'runtime_get_status') {
+          statusCalls += 1
+          if (statusCalls === 1) return Promise.reject(new Error('catalog timeout'))
+          return Promise.resolve(pendingFixtureStatus())
+        }
+        return Promise.resolve(undefined)
+      })
+      render(AppShellHost)
+
+      expect(await screen.findByRole('button', { name: 'Reintentar descarga' })).toBeInTheDocument()
+      // Bounded: exactly one retry, no unbounded polling.
+      expect(statusCalls).toBe(2)
+    })
+
+    it.runIf(LOCAL_ML)('progress_banner_clears_when_non_downloading_status_arrives', async () => {
+      invokeMock.mockImplementation((c: string) =>
+        c === 'runtime_get_status' ? Promise.reject(new Error('x')) : Promise.resolve([])
+      )
+      render(AppShellHost)
+      await waitFor(() =>
+        expect(listenMock).toHaveBeenCalledWith('runtime://progress', expect.any(Function))
+      )
+      progressHandler?.({
+        payload: {
+          kind: 'bootstrap',
+          stage: 'downloading',
+          summary: 's',
+          progressPercent: 10,
+          downloadedBytes: 1,
+          totalBytes: 10,
+          retryable: false,
+        },
+      })
+      expect(await screen.findByRole('progressbar')).toBeInTheDocument()
+      statusHandler?.({
+        payload: { ...pendingFixtureStatus(), state: 'healthy', blockedCapabilities: [] },
+      })
+      await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument())
+    })
+  })
 
   // Regression guard (Stage 2 visual fix #1): `.content` used to be a plain
   // block (only `flex: 1` as a *row*-flex item of `.workspace`), so its

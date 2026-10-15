@@ -78,17 +78,22 @@ describe('windows pro validation workflow file', () => {
 })
 
 describe('windows pro validation trigger', () => {
-  it('triggers on push to feat/internet-archive, never on tags', () => {
+  it('triggers on push to feat/internet-archive and feat/runtime-auto-bootstrap, never on tags', () => {
     const trigger = onBlock(readWorkflowOrEmpty())
     expect(trigger).toContain('push')
     expect(trigger).toContain('branches')
     expect(trigger).toContain('- feat/internet-archive')
+    expect(trigger).toContain('- feat/runtime-auto-bootstrap')
     expect(trigger).not.toContain('tags:')
     const items = trigger
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.startsWith('- '))
-    expect(items).toEqual(['- feat/internet-archive', `- ${workflowRelPath}`])
+    expect(items).toEqual([
+      '- feat/internet-archive',
+      '- feat/runtime-auto-bootstrap',
+      `- ${workflowRelPath}`,
+    ])
   })
 
   it('scopes the trigger to its own workflow path only', () => {

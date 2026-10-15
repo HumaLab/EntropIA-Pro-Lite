@@ -1051,16 +1051,28 @@ pub fn run() {
             {
                 app.manage(runtime::manager::RuntimeManager::new());
 
-                if let Err(error) = app
+                match app
                     .state::<runtime::manager::RuntimeManager>()
                     .inner()
                     .validate_startup(&app.handle().clone())
                 {
-                    app_logs::error(
-                        &app.handle().clone(),
-                        "runtime",
-                        format!("Validación inicial falló: {error}"),
-                    );
+                    // T4 (S1, S8): one-shot background bootstrap. Returns
+                    // immediately — the worker owns the single-flight lock
+                    // until the transfer ends, and every S8 skip (debug /
+                    // dev-profile / test, non-fixture, no source) starts
+                    // nothing. Err path keeps main's log-facade convention
+                    // (no raw eprintln).
+                    Ok(status) => app
+                        .state::<runtime::manager::RuntimeManager>()
+                        .inner()
+                        .trigger_startup_bootstrap(&app.handle().clone(), &status),
+                    Err(error) => {
+                        app_logs::error(
+                            &app.handle().clone(),
+                            "runtime",
+                            format!("Validación inicial falló: {error}"),
+                        );
+                    }
                 }
             }
 
@@ -1494,6 +1506,8 @@ pub fn run() {
             runtime::runtime_get_status,
             runtime::runtime_get_bootstrap_plan,
             runtime::runtime_repair,
+            runtime::runtime_bootstrap_start,
+            runtime::runtime_cancel_download,
             app_logs::logs_get,
             app_logs::logs_clear,
             app_logs::logs_open_dir,

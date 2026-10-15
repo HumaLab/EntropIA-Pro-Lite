@@ -174,6 +174,8 @@ const APP_COMMANDS: &[&str] = &[
     "runtime_get_status",
     "runtime_get_bootstrap_plan",
     "runtime_repair",
+    "runtime_bootstrap_start",
+    "runtime_cancel_download",
     "logs_get",
     "logs_clear",
     "logs_open_dir",
