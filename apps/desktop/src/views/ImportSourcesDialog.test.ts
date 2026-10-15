@@ -288,6 +288,35 @@ describe('ImportSourcesDialog', () => {
   })
 })
 
+describe('ImportSourcesDialog Internet Archive entry point (26b)', () => {
+  it('offers "Desde Internet Archive" when onOpenInternetArchive is given', async () => {
+    const onOpenInternetArchive = vi.fn()
+    render(ImportSourcesDialog, { props: { onClose, onOpenInternetArchive } })
+
+    await screen.findByText('Voces')
+    expect(screen.getByRole('button', { name: 'Desde Internet Archive' })).toBeInTheDocument()
+  })
+
+  it('closes itself and asks the parent to open Internet Archive, without picking files', async () => {
+    const onOpenInternetArchive = vi.fn()
+    render(ImportSourcesDialog, { props: { onClose, onOpenInternetArchive } })
+
+    await screen.findByText('Voces')
+    await fireEvent.click(screen.getByRole('button', { name: 'Desde Internet Archive' }))
+
+    expect(onOpenInternetArchive).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(fileImportRef.pickFiles).not.toHaveBeenCalled()
+  })
+
+  it('hides the Internet Archive action when no callback is given', async () => {
+    render(ImportSourcesDialog, { props: { onClose } })
+
+    await screen.findByText('Voces')
+    expect(screen.queryByRole('button', { name: 'Desde Internet Archive' })).toBeNull()
+  })
+})
+
 describe('ImportSourcesDialog progress and result handling (T4b)', () => {
   it('shows import progress and disables Cancel/Escape while importing', async () => {
     fileImportRef.pickFiles.mockResolvedValue(['/src/a.png'])

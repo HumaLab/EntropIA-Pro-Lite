@@ -21,12 +21,15 @@
     type ImportSummary,
   } from '$lib/collection-import'
   import { notifyDocumentExplorerCollectionChanged } from '$lib/document-explorer'
-  import { ConfirmDialog } from '@entropia/ui'
+  import { ConfirmDialog, Button } from '@entropia/ui'
   import type { Collection } from '@entropia/store'
 
   const navigation = getNavigation()
 
-  let { onClose }: { onClose: () => void } = $props()
+  let {
+    onClose,
+    onOpenInternetArchive,
+  }: { onClose: () => void; onOpenInternetArchive?: () => void } = $props()
 
   const NEW_COLLECTION = '__new__'
 
@@ -177,6 +180,16 @@
     onClose()
   }
 
+  /**
+   * Hands over to the Internet Archive dialog: the parent owns that dialog,
+   * so this one closes itself first and then asks the parent to open it.
+   * The action is only rendered when the parent passed the callback (26b).
+   */
+  function handleOpenInternetArchive() {
+    onClose()
+    onOpenInternetArchive?.()
+  }
+
   function handleGoToCollection() {
     if (!targetCollectionId || !targetCollectionName) return
     onClose()
@@ -310,6 +323,13 @@
         </div>
       {/if}
     </fieldset>
+    {#if onOpenInternetArchive}
+      <div class="import-dialog__ia">
+        <Button variant="secondary" onclick={handleOpenInternetArchive}>
+          {t('home.importDialog.fromInternetArchive')}
+        </Button>
+      </div>
+    {/if}
   {/if}
 </ConfirmDialog>
 
@@ -470,5 +490,11 @@
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  .import-dialog__ia {
+    display: flex;
+    justify-content: flex-start;
+    margin-top: var(--space-2);
   }
 </style>

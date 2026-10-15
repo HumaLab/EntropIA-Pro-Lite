@@ -406,6 +406,70 @@ describe('importClassifiedPathsIntoCollection', () => {
     expect(storeRef.current.assets.create).toHaveBeenCalledTimes(3)
     expect(result.createdItems).toEqual([{ id: 'item-1', title: 'doc' }])
   })
+
+  it('records each split page size from the file under the data directory', async () => {
+    // split_pdf_pages returns stored keys relative to the data directory; the
+    // fs plugin scope only accepts absolute paths, so the key must be resolved
+    // before stat or the page size is lost. Absolute paths pass through.
+    const { stat } = await import('@tauri-apps/plugin-fs')
+    const sizes: Record<string, number> = {
+      '/mock/app-data/assets/col-1/item-1/doc_page_1.pdf': 1373,
+      '/legacy/doc_page_2.pdf': 2048,
+    }
+    vi.mocked(stat).mockImplementation(async (path) => {
+      const size = sizes[String(path)]
+      if (size === undefined) throw new Error(`forbidden path: ${String(path)}`)
+      return { size } as Awaited<ReturnType<typeof stat>>
+    })
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [{ sourcePath: '/src/doc.pdf', name: 'doc.pdf', type: 'pdf' }],
+      rejected: [],
+    })
+    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
+    fileImportRef.importSingleFile.mockResolvedValue({
+      originalName: 'doc.pdf',
+      originalPath: '/src/doc.pdf',
+      destPath: '/mock/app-data/assets/col-1/item-1/doc.pdf',
+      type: 'pdf',
+      size: 7478,
+      originalMetadata: {
+        originalName: 'doc.pdf',
+        originalPath: '/src/doc.pdf',
+        importedAt: 'now',
+      },
+    })
+    storeRef.current.assets.create
+      .mockResolvedValueOnce({ id: 'parent-asset' })
+      .mockResolvedValueOnce({ id: 'page-1' })
+      .mockResolvedValueOnce({ id: 'page-2' })
+    fileImportRef.splitPdfPages.mockResolvedValue([
+      { page_number: 1, pdf_path: 'assets/col-1/item-1/doc_page_1.pdf' },
+      { page_number: 2, pdf_path: '/legacy/doc_page_2.pdf' },
+    ])
+
+    try {
+      await importClassifiedPathsIntoCollection(['/src/doc.pdf'], 'col-1', {
+        baseErrorMessage: 'Failed to import files',
+      })
+    } finally {
+      vi.mocked(stat).mockReset()
+      vi.mocked(stat).mockResolvedValue({ size: 0 } as Awaited<ReturnType<typeof stat>>)
+    }
+
+    const calls = storeRef.current.assets.create.mock.calls.map((c: unknown[]) => c[0])
+    expect(calls[0]).toMatchObject({ size: 7478 })
+    expect(calls[1]).toMatchObject({
+      path: 'assets/col-1/item-1/doc_page_1.pdf',
+      pageNumber: 1,
+      parentAssetId: 'parent-asset',
+      size: 1373,
+    })
+    expect(calls[2]).toMatchObject({
+      path: '/legacy/doc_page_2.pdf',
+      pageNumber: 2,
+      size: 2048,
+    })
+  })
 })
 
 describe('buildImportSummary', () => {

@@ -18,6 +18,7 @@
   import { checkMicrosoftStoreUpdate, type StoreUpdateStatus } from '$lib/store-updates'
   import { waitForFirstPaint } from '$lib/first-paint'
   import { matchWindowBackground } from '$lib/window-background'
+  import { runStartupReconcile } from '$lib/internet-archive-reconcile'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
 
@@ -71,6 +72,9 @@
         ready = true
         // Needs the settings store, so it waits for initDb().
         void initZoom()
+        // After the store is ready, without blocking the UI: releases any
+        // Internet Archive recovery leftover once per session (26b).
+        void runStartupReconcile()
       })
       .catch((e) => {
         console.error('[App] init ERROR:', e)

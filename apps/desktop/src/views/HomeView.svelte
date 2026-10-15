@@ -30,6 +30,8 @@
   import { requestCreateCollection } from '$lib/document-explorer'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
   import ImportSourcesDialog from './ImportSourcesDialog.svelte'
+  import InternetArchiveDialog from './InternetArchiveDialog.svelte'
+  import { getStore } from '$lib/db'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const navigation = getNavigation()
@@ -39,6 +41,7 @@
 
   let snapshot = $state<HomeSnapshot | null>(null)
   let showImportDialog = $state(false)
+  let showIaDialog = $state(false)
   let loading = $state(true)
   let error = $state<string | null>(null)
   // A header-action failure (e.g. "Nuevo documento") never blanks the page
@@ -105,6 +108,31 @@
 
   function closeImportDialog() {
     showImportDialog = false
+  }
+
+  /** The "Desde Internet Archive" action inside ImportSourcesDialog (26b). */
+  function openInternetArchive() {
+    showIaDialog = true
+  }
+
+  function closeIaDialog() {
+    showIaDialog = false
+  }
+
+  /**
+   * Same landing as a local import from ImportSourcesDialog: the dialog only
+   * hands back the collection id, so the name is read from the store.
+   */
+  async function handleIaImported(collectionId: string) {
+    showIaDialog = false
+    let collectionName = t('collection.documentsFallback')
+    try {
+      const found = await getStore().collections.findById(collectionId)
+      if (found) collectionName = found.name
+    } catch {
+      // The store read is best effort: the fallback name still navigates.
+    }
+    navigation.navigate({ name: 'collection', id: collectionId, collectionName })
   }
 
   function openNewResearch() {
@@ -695,7 +723,11 @@
   {/if}
 
   {#if showImportDialog}
-    <ImportSourcesDialog onClose={closeImportDialog} />
+    <ImportSourcesDialog onClose={closeImportDialog} onOpenInternetArchive={openInternetArchive} />
+  {/if}
+
+  {#if showIaDialog}
+    <InternetArchiveDialog onClose={closeIaDialog} onImported={handleIaImported} />
   {/if}
 </div>
 

@@ -692,6 +692,13 @@ pub async fn render_pdf_pages(
     Ok(pages)
 }
 
+// Cap for one split: a single import must not fill the disk.
+const SPLIT_MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Free space kept untouched so the split never leaves the volume full.
+const SPLIT_FREE_SPACE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
+// A split that runs longer than this is pathological; abort instead of hanging import.
+const SPLIT_MAX_DURATION: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// Split a multi-page PDF into one single-page PDF file per page.
 ///
 /// Each page is preserved as an independent PDF — no rasterization, no
@@ -724,15 +731,21 @@ pub async fn split_pdf_pages(
         let bytes =
             std::fs::read(&pdf_path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
-        let split = super::pdf::split_pdf_to_single_page_bytes(&bytes)?;
+        // Built per call: the budget follows the live free space, capped so one
+        // import cannot claim the whole disk. Unknown free space falls back to
+        // the cap; free space at or below the reserve yields a zero budget so
+        // the split fails cleanly instead of filling the volume.
+        let free = fs2::available_space(&out_dir).unwrap_or(u64::MAX);
+        let limits = super::pdf::SplitLimits {
+            max_output_bytes: free
+                .saturating_sub(SPLIT_FREE_SPACE_RESERVE_BYTES)
+                .min(SPLIT_MAX_OUTPUT_BYTES),
+            max_duration: SPLIT_MAX_DURATION,
+        };
+        let split = super::pdf::split_pdf_to_files(&bytes, &out_dir, &filename_prefix, &limits)?;
 
         let mut rendered = Vec::with_capacity(split.len());
-        for (page_number, pdf_bytes) in split {
-            let filename = format!("{filename_prefix}_page_{page_number}.pdf");
-            let file_path = out_dir.join(filename);
-            std::fs::write(&file_path, &pdf_bytes).map_err(|e| {
-                format!("Failed to write single-page PDF for page {page_number}: {e}")
-            })?;
+        for (page_number, file_path) in split {
             rendered.push(SplitPage {
                 page_number,
                 pdf_path: normalize_windows_path_string(&file_path),

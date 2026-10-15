@@ -1487,6 +1487,7 @@ dependencies = [
  "httpdate",
  "image",
  "imageproc",
+ "internet-archive",
  "keyring",
  "llama-cpp-2",
  "log",
@@ -2777,6 +2778,22 @@ checksum = "4250ce6452e92010fdf7268ccc5d14faa80bb12fc741938534c58f16804e03c7"
 dependencies = [
  "block-padding 0.4.2",
  "hybrid-array",
+]
+
+[[package]]
+name = "internet-archive"
+version = "0.1.0"
+dependencies = [
+ "lopdf 0.45.0",
+ "md-5 0.10.6",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

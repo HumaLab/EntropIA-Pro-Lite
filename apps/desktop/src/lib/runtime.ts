@@ -112,6 +112,22 @@ export function repairRuntime(): Promise<RuntimeStatus> {
   return invoke<RuntimeStatus>('runtime_repair')
 }
 
+export function startRuntimeBootstrap(): Promise<RuntimeStatus> {
+  if (OFF) return Promise.resolve({ ...HEALTHY_RUNTIME_STATUS })
+  return invoke<RuntimeStatus>('runtime_bootstrap_start')
+}
+
+export function cancelRuntimeDownload(): Promise<boolean> {
+  if (OFF) return Promise.resolve(false)
+  return invoke<boolean>('runtime_cancel_download')
+}
+
+/** Archive bytes as decimal gigabytes with one decimal (`2,4 GB`); null when unknown. */
+export function formatBootstrapSize(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return null
+  return `${(bytes / 1_000_000_000).toFixed(1).replace('.', ',')} GB`
+}
+
 export function onRuntimeStatus(callback: (status: RuntimeStatus) => void): Promise<UnlistenFn> {
   if (OFF) return Promise.resolve((() => {}) as UnlistenFn)
   return listen<RuntimeStatus>('runtime://status', (event) => callback(event.payload))
