@@ -24,6 +24,7 @@ Follow-ups left after shipping v1.0.20. Order chosen by the user: 2, 3, then 1.
   CI Windows contract covers them. The 6 `db::` failures seen locally were a CRLF working copy of
   `0036_writing_journal.sql` (`core.autocrlf=true` in this clone), not this change.
 - 3.0: `prepare_runtime_payload.py --fixture --platform linux-x86_64` plus `build_runtime_pack.py --payload-root` and the smoke pass on Linux, and the fixture-only Linux pack passes too. The real defect: the committed Linux fixture `python/bin/python3` and `uv/bin/uv` were `100644`, so the assembled pack shipped non-executable interpreters while the smoke still said ok. Fix: the smoke now reports `<key> is not executable: <path>` for the Linux interpreters on POSIX hosts, and both files are now `100755`. RED: the new smoke test (exit 0 on 0644 interpreters) failed, and once the check landed the bundled-fixture test failed with both contract errors. GREEN: `test_runtime_pack_scripts.py` 13/13, now also run by CI's `runtime-pack-smoke` step, which never ran it before; CI smoke Linux and Windows ok; `runtime-packaging.test.ts` plus `ci-supply-chain.test.ts` 26/26; `binaries:check` OK.
+- 3.1/3.2: I generalized the materializer instead of adding a sibling. `materialize_windows_runtime_payload.py --platform linux-x86_64` uses a per-platform layout: `python/bin/python3`, `uv/bin/uv` (marked executable) and `libpdfium.so` plus `libonnxruntime.so`. Windows stays the default, so the existing job is unchanged. `build-runtime-pack.yml` takes a `platform` input (default `windows-x86_64`) and gains a `build-linux` job on ubuntu-22.04. That job uses uv's managed, relocatable CPython 3.11; the same four specs; warmed caches; the pinned `fetch-pdfium.sh linux-x64`; `libonnxruntime.so` from the venv's own onnxruntime wheel; and uv 0.6.14 checked against Astral's `.sha256` (`0aaf451c…`). It then runs `--require-release-payload`, smoke `--release --install-probe`, and uploads `runtime-archive-linux-x86_64`. `publish-runtime-bootstrap.yml` takes the same `platform` input and picks the matching artifact; the manifest upsert is keyed by (app, platform), so Windows entries are kept. The zip need not carry execute bits, because the app restores them from the manifest (`ensure_executable_bit`). RED: the new materializer tests (unknown `platform` kwarg and `platform_layout`) and the workflow contract test failed. GREEN: script tests 15/15, and `runtime-packaging.test.ts` plus `ci-supply-chain.test.ts` 27/27. Not yet run for real: the Linux build job, a manual dispatch of about 60–90 min.
 
 ## Plan for 3 (Pro on Linux)
 
@@ -35,12 +36,12 @@ several platforms; `release.yml` keeps the Linux deps step, the Pdfium fetch and
 - [x] 3.0 Validate: `prepare_runtime_payload.py --fixture --platform linux-x86_64` plus
       `runtime-pack-smoke.py` on ubuntu-22.04; fix the executable bit of `python/bin/python3` and
       `uv/bin/uv` in the linux fixture.
-- [ ] 3.1 Linux pack builder: `build-runtime-pack.yml` gains a linux-x86_64 job on ubuntu-22.04
+- [x] 3.1 Linux pack builder: `build-runtime-pack.yml` gains a linux-x86_64 job on ubuntu-22.04
       (relocatable python-build-standalone 3.11, uv linux tarball, `fetch-pdfium.sh linux-x64`,
       `libonnxruntime.so` matching `ort =2.0.0-rc.10`, the same four `uv pip install` specs, warmed
       caches, `build_runtime_pack.py --platform linux-x86_64 --require-release-payload`, smoke with
       `--install-probe`). Generalize `materialize_windows_runtime_payload.py` or add a linux sibling.
-- [ ] 3.2 Publish: `publish-runtime-bootstrap.yml` takes a `platform` input (today
+- [x] 3.2 Publish: `publish-runtime-bootstrap.yml` takes a `platform` input (today
       `windows-x86_64` is hardcoded at lines 49-54); the manifest then holds both entries.
 - [ ] 3.3 Release: re-add the ubuntu-22.04 Pro matrix entry with `runtime_platform: linux-x86_64`
       and the `tauri.pro.linux.conf.json` build args; smoke the `.deb` on a clean runner.

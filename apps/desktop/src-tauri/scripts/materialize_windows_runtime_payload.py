@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import zipfile
@@ -33,6 +34,31 @@ CORE_HF_CACHE_ENTRIES = (
     "models--Systran--faster-whisper-base",
 )
 WINDOWS_NATIVE_LIBS = ("pdfium.dll", "onnxruntime.dll")
+LINUX_PLATFORM = "linux-x86_64"
+# Per-platform payload layout. The relpaths must match prepare_runtime_payload.py
+# and the runtime's own lookup (runtime/paths.rs); Linux interpreters must keep
+# the execute bit, which runtime-pack-smoke.py checks.
+PLATFORM_LAYOUTS = {
+    WINDOWS_PLATFORM: {
+        "base_python": "python.exe",
+        "python_relpath": "python/python.exe",
+        "uv_relpath": "uv/uv.exe",
+        "native_libs": WINDOWS_NATIVE_LIBS,
+    },
+    LINUX_PLATFORM: {
+        "base_python": "bin/python3",
+        "python_relpath": "python/bin/python3",
+        "uv_relpath": "uv/bin/uv",
+        "native_libs": ("libpdfium.so", "libonnxruntime.so"),
+    },
+}
+
+
+def platform_layout(platform: str) -> dict:
+    try:
+        return PLATFORM_LAYOUTS[platform]
+    except KeyError:
+        raise ValueError(f"unsupported platform: {platform} (expected one of {', '.join(PLATFORM_LAYOUTS)})") from None
 
 
 def default_app_data_dir() -> Path:
@@ -68,7 +94,7 @@ def run_json(command: list[str], description: str) -> dict:
         raise ValueError(f"{description} returned invalid JSON: {exc}\n{completed.stdout}") from exc
 
 
-def inspect_managed_python(python_path: Path) -> dict:
+def inspect_managed_python(python_path: Path, platform: str = WINDOWS_PLATFORM) -> dict:
     if not python_path.is_file():
         raise ValueError(f"managed python not found: {python_path}")
 
@@ -93,11 +119,12 @@ print(json.dumps({
     version = info.get("version") or []
     if version[:2] != [3, 11]:
         raise ValueError(
-            f"{python_path} reports Python {version}; EntropIA Windows runtime payload currently requires Python 3.11"
+            f"{python_path} reports Python {version}; EntropIA {platform} runtime payload currently requires Python 3.11"
         )
     base_prefix = Path(info["base_prefix"])
-    if not (base_prefix / "python.exe").is_file():
-        raise ValueError(f"base Python runtime does not contain python.exe: {base_prefix}")
+    base_python = platform_layout(platform)["base_python"]
+    if not (base_prefix / base_python).is_file():
+        raise ValueError(f"base Python runtime does not contain {base_python}: {base_prefix}")
     return info
 
 
@@ -113,20 +140,29 @@ def copy_tree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, ignore=ignore_runtime_junk)
 
 
-def copy_python_runtime(info: dict, payload_root: Path) -> None:
+def make_executable(path: Path) -> None:
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def copy_python_runtime(info: dict, payload_root: Path, platform: str = WINDOWS_PLATFORM) -> None:
     source = Path(info["base_prefix"])
     destination = payload_root / "python"
     copy_tree(source, destination)
-    if not (destination / "python.exe").is_file():
-        raise ValueError(f"copied Python runtime is missing python.exe: {destination}")
+    python_path = payload_root / platform_layout(platform)["python_relpath"]
+    if not python_path.is_file():
+        raise ValueError(f"copied Python runtime is missing {python_path.name}: {destination}")
+    if platform != WINDOWS_PLATFORM:
+        make_executable(python_path)
 
 
-def copy_uv(uv_path: Path, payload_root: Path) -> None:
+def copy_uv(uv_path: Path, payload_root: Path, platform: str = WINDOWS_PLATFORM) -> None:
     if not uv_path.is_file():
         raise ValueError(f"uv binary not found: {uv_path}")
-    destination = payload_root / "uv"
-    destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(uv_path, destination / "uv.exe")
+    destination = payload_root / platform_layout(platform)["uv_relpath"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(uv_path, destination)
+    if platform != WINDOWS_PLATFORM:
+        make_executable(destination)
 
 
 def ensure_repo_scripts(payload_root: Path) -> None:
@@ -297,14 +333,14 @@ def copy_caches(
     copy_cache_dir(paddlex_source, caches_root / "paddlex", None)
 
 
-def copy_native_libs(payload_root: Path, native_source_dirs: list[Path]) -> None:
+def copy_native_libs(payload_root: Path, native_source_dirs: list[Path], platform: str = WINDOWS_PLATFORM) -> None:
     destination = payload_root / "resources" / "lib"
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True, exist_ok=True)
 
     missing = []
-    for lib_name in WINDOWS_NATIVE_LIBS:
+    for lib_name in platform_layout(platform)["native_libs"]:
         found = None
         for source_dir in native_source_dirs:
             candidate = source_dir / lib_name
@@ -318,21 +354,24 @@ def copy_native_libs(payload_root: Path, native_source_dirs: list[Path]) -> None
 
     if missing:
         raise ValueError(
-            "missing Windows native runtime libraries: "
+            f"missing {platform} native runtime libraries: "
             + ", ".join(missing)
             + ". Provide --native-source-dir paths containing them."
         )
 
 
-def write_manifest_overrides(payload_root: Path, pack_version: str, app_version: str) -> None:
+def write_manifest_overrides(
+    payload_root: Path, pack_version: str, app_version: str, platform: str = WINDOWS_PLATFORM
+) -> None:
+    layout = platform_layout(platform)
     overrides = {
         "pack_version": pack_version,
         "app_version": app_version,
         "payload_profile": "release",
         "release_injection_required": False,
         "external_artifacts_required": [],
-        "python_relpath": "python/python.exe",
-        "uv_relpath": "uv/uv.exe",
+        "python_relpath": layout["python_relpath"],
+        "uv_relpath": layout["uv_relpath"],
     }
     (payload_root / "manifest.overrides.json").write_text(
         json.dumps(overrides, indent=2, ensure_ascii=False) + "\n",
@@ -351,15 +390,17 @@ def materialize_payload(
     hf_cache_mode: str,
     hf_cache_source: Path | None = None,
     paddlex_cache_source: Path | None = None,
+    platform: str = WINDOWS_PLATFORM,
 ) -> Path:
-    payload_root = output_dir / WINDOWS_PLATFORM
+    platform_layout(platform)
+    payload_root = output_dir / platform
     if payload_root.exists():
         shutil.rmtree(payload_root)
     payload_root.mkdir(parents=True)
 
-    info = inspect_managed_python(managed_python)
-    copy_python_runtime(info, payload_root)
-    copy_uv(uv_path, payload_root)
+    info = inspect_managed_python(managed_python, platform)
+    copy_python_runtime(info, payload_root, platform)
+    copy_uv(uv_path, payload_root, platform)
     ensure_repo_scripts(payload_root)
     repack_site_packages_as_wheels(select_site_packages(info), payload_root / "wheelhouse")
     copy_caches(
@@ -369,19 +410,20 @@ def materialize_payload(
         hf_cache_source=hf_cache_source,
         paddlex_cache_source=paddlex_cache_source,
     )
-    copy_native_libs(payload_root, native_source_dirs)
-    write_manifest_overrides(payload_root, pack_version, app_version)
+    copy_native_libs(payload_root, native_source_dirs, platform)
+    write_manifest_overrides(payload_root, pack_version, app_version, platform)
     return payload_root
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Materialize a Windows x86_64 EntropIA release runtime payload from the "
+            "Materialize an EntropIA release runtime payload (Windows or Linux x86_64) from the "
             "currently working managed venv. The output is intended for "
             "build_runtime_pack.py --payload-root, not for committing to git."
         )
     )
+    parser.add_argument("--platform", choices=tuple(PLATFORM_LAYOUTS), default=WINDOWS_PLATFORM)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--managed-python", default=str(default_managed_python()))
     parser.add_argument("--uv-path", default=str(default_uv_path()))
@@ -397,7 +439,7 @@ def main() -> int:
             str(TAURI_ROOT / "resources" / "lib"),
             str(TAURI_ROOT / "resources" / "models" / "ner"),
         ],
-        help="Directory to search for pdfium.dll/onnxruntime.dll. Can be repeated.",
+        help="Directory to search for the platform's pdfium/onnxruntime libraries. Can be repeated.",
     )
     parser.add_argument(
         "--hf-cache-mode",
@@ -419,6 +461,7 @@ def main() -> int:
             hf_cache_mode=args.hf_cache_mode,
             hf_cache_source=Path(args.hf_cache_source) if args.hf_cache_source else None,
             paddlex_cache_source=Path(args.paddlex_cache_source) if args.paddlex_cache_source else None,
+            platform=args.platform,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
