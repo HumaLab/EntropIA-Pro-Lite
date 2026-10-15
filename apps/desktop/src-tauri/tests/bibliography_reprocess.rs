@@ -1967,7 +1967,7 @@ fn a_reused_ocr_row_publishes_the_stored_text_converted_to_markdown() {
     );
     assert_eq!(
         text_hash,
-        format!("{:x}", Sha256::digest(text.as_bytes())),
+        hex::encode(Sha256::digest(text.as_bytes())),
         "a fresh hash of the CONVERTED text"
     );
 }

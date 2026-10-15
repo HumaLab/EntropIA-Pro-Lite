@@ -30,6 +30,8 @@ export type RuntimeOperationStage =
   | 'activating'
   | 'blocked'
 export type RuntimeBootstrapSource = 'managed_ready' | 'bundled_release' | 'trusted_remote'
+export type BootstrapUnavailableReason =
+  'not_configured' | 'source_unavailable' | 'offline' | 'no_matching_release'
 
 export interface RuntimeOperation {
   kind: RuntimeOperationKind
@@ -62,6 +64,7 @@ export interface RuntimeBootstrapPlan {
   packVersion: string | null
   summary: string
   reason: string | null
+  unavailableReason?: BootstrapUnavailableReason | null
   remoteSource: RuntimeBootstrapRemoteSource | null
   download: RuntimeBootstrapDownloadPlan | null
 }
@@ -77,6 +80,7 @@ export interface RuntimeStatus {
   guidance: string[]
   bootstrapEligible: boolean
   bootstrapRequired: boolean
+  blockedReason?: BootstrapUnavailableReason | null
   activeOperation: RuntimeOperation | null
 }
 
@@ -106,6 +110,22 @@ export function getRuntimeBootstrapPlan(): Promise<RuntimeBootstrapPlan> {
 export function repairRuntime(): Promise<RuntimeStatus> {
   if (OFF) return Promise.resolve({ ...HEALTHY_RUNTIME_STATUS })
   return invoke<RuntimeStatus>('runtime_repair')
+}
+
+export function startRuntimeBootstrap(): Promise<RuntimeStatus> {
+  if (OFF) return Promise.resolve({ ...HEALTHY_RUNTIME_STATUS })
+  return invoke<RuntimeStatus>('runtime_bootstrap_start')
+}
+
+export function cancelRuntimeDownload(): Promise<boolean> {
+  if (OFF) return Promise.resolve(false)
+  return invoke<boolean>('runtime_cancel_download')
+}
+
+/** Archive bytes as decimal gigabytes with one decimal (`2,4 GB`); null when unknown. */
+export function formatBootstrapSize(bytes: number | null | undefined): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return null
+  return `${(bytes / 1_000_000_000).toFixed(1).replace('.', ',')} GB`
 }
 
 export function onRuntimeStatus(callback: (status: RuntimeStatus) => void): Promise<UnlistenFn> {

@@ -42,7 +42,7 @@ pub struct AppendJournal {
 fn checksum_of(base_revision: i64, schema_version: i64, delta_json: &str) -> String {
     let digest =
         Sha256::digest(format!("{base_revision}\u{0}{schema_version}\u{0}{delta_json}").as_bytes());
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 /// Appends one delta and returns its sequence number.

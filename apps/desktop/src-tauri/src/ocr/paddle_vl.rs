@@ -1017,6 +1017,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -1049,6 +1050,7 @@ mod tests {
                     guidance: vec!["Reintentá".to_string()],
                     bootstrap_eligible: true,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },

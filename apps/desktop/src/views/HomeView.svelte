@@ -30,6 +30,8 @@
   import { requestCreateCollection } from '$lib/document-explorer'
   import ActiveProcessBand from './ActiveProcessBand.svelte'
   import ImportSourcesDialog from './ImportSourcesDialog.svelte'
+  import InternetArchiveDialog from './InternetArchiveDialog.svelte'
+  import { getStore } from '$lib/db'
   import { ActionIcon, Button, formatRelativeDate, type ActionIconName } from '@entropia/ui'
 
   const navigation = getNavigation()
@@ -39,6 +41,7 @@
 
   let snapshot = $state<HomeSnapshot | null>(null)
   let showImportDialog = $state(false)
+  let showIaDialog = $state(false)
   let loading = $state(true)
   let error = $state<string | null>(null)
   // A header-action failure (e.g. "Nuevo documento") never blanks the page
@@ -105,6 +108,31 @@
 
   function closeImportDialog() {
     showImportDialog = false
+  }
+
+  /** The "Desde Internet Archive" action inside ImportSourcesDialog (26b). */
+  function openInternetArchive() {
+    showIaDialog = true
+  }
+
+  function closeIaDialog() {
+    showIaDialog = false
+  }
+
+  /**
+   * Same landing as a local import from ImportSourcesDialog: the dialog only
+   * hands back the collection id, so the name is read from the store.
+   */
+  async function handleIaImported(collectionId: string) {
+    showIaDialog = false
+    let collectionName = t('collection.documentsFallback')
+    try {
+      const found = await getStore().collections.findById(collectionId)
+      if (found) collectionName = found.name
+    } catch {
+      // The store read is best effort: the fallback name still navigates.
+    }
+    navigation.navigate({ name: 'collection', id: collectionId, collectionName })
   }
 
   function openNewResearch() {
@@ -684,7 +712,7 @@
                 <ActionIcon name="file-text" size={14} />
                 <span class="home-view__recent-name-text">{entry.title}</span>
               </span>
-              <span role="cell">{entry.collectionName}</span>
+              <span role="cell" class="home-view__recent-cell">{entry.collectionName}</span>
               <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span
               >
             </div>
@@ -695,7 +723,11 @@
   {/if}
 
   {#if showImportDialog}
-    <ImportSourcesDialog onClose={closeImportDialog} />
+    <ImportSourcesDialog onClose={closeImportDialog} onOpenInternetArchive={openInternetArchive} />
+  {/if}
+
+  {#if showIaDialog}
+    <InternetArchiveDialog onClose={closeIaDialog} onImported={handleIaImported} />
   {/if}
 </div>
 
@@ -1093,13 +1125,18 @@
      of reflowing. Keyed to this pane's own width via the `pane` container
      (WorkPane.svelte), not the viewport, since a split pane is rarely the
      window's width (columns-adapt-to-pane-width fix). */
-  @container pane (max-width: 680px) {
+  /* The breakpoints follow the cards' own floor, not a round number: padding,
+     24px icon, gaps, arrow and the longest one-word title («Investigación» at
+     17px) need about 210px per card, so four of them plus the page padding
+     need a ~920px pane. At 680px the row stayed four-wide in a 900px window
+     and the title ran under the arrow. */
+  @container pane (max-width: 940px) {
     .home-view__quick-access-grid {
       grid-template-columns: repeat(2, 1fr);
     }
   }
 
-  @container pane (max-width: 380px) {
+  @container pane (max-width: 500px) {
     .home-view__quick-access-grid {
       grid-template-columns: 1fr;
     }
@@ -1244,6 +1281,15 @@
     white-space: nowrap;
     text-overflow: ellipsis;
     color: var(--color-text-primary);
+  }
+
+  /* A collection name longer than its 200px column ellipsizes like the
+     document name beside it, instead of growing the row to five lines. */
+  .home-view__recent-cell {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .home-view__recent-cell--end {

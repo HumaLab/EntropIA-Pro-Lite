@@ -275,7 +275,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       `extract_text`/`transcribe_*` now reads "DB lock error:" (no renderer matches it); the
       Windows-only `store_updates::native::check` call site was checked by reading (no
       Windows target here).
-  - [ ] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
+  - [x] 3.1 (S-02) — SQLite authorizer on the UI connection. Branch `fix/s02-sql-authorizer`.
     Facts: rusqlite 0.31 without `hooks`; renderer SQL runs only on `ui_conn` through
     `db_execute`, `db_execute_batch`, `db_execute_transaction`, `db_select`, `db_select_rows`;
     `app_settings` is reached only through `settings_*` commands; 54 `trg_sync_*` triggers write

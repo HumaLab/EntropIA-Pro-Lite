@@ -15,6 +15,15 @@ pub enum BootstrapPlanSource {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapUnavailableReason {
+    NotConfigured,
+    SourceUnavailable,
+    Offline,
+    NoMatchingRelease,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapRemoteSource {
     pub manifest_url: String,
@@ -45,6 +54,8 @@ pub struct BootstrapPlan {
     pub pack_version: Option<String>,
     pub summary: String,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub unavailable_reason: Option<BootstrapUnavailableReason>,
     pub remote_source: Option<BootstrapRemoteSource>,
     pub download: Option<BootstrapDownloadPlan>,
 }

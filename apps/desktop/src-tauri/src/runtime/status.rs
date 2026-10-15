@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::bootstrap_types::BootstrapUnavailableReason;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeState {
@@ -73,6 +75,39 @@ pub struct RuntimeStatus {
     pub bootstrap_required: bool,
     #[serde(default)]
     pub active_operation: Option<RuntimeOperation>,
+    #[serde(default)]
+    pub blocked_reason: Option<BootstrapUnavailableReason>,
+}
+
+/// Bytes that must be free before starting a remote bootstrap, mirrored from
+/// `download.rs::required_free_bytes` (T3 status-level pre-flight). `download.rs`
+/// is out of T3 scope so the 3x formula is intentionally duplicated here for
+/// explanatory status only; the in-download check stays authoritative and is
+/// never moved.
+#[cfg(feature = "local-ml")]
+pub(crate) fn bootstrap_required_free_bytes(archive_size: u64) -> u64 {
+    archive_size.saturating_mul(3)
+}
+
+/// Status-level disk pre-flight: returns an explanatory Spanish message when
+/// `free_bytes` is known and below `required_bytes`, so the UI can explain
+/// BEFORE the first byte. Returns `None` when free space is unknown (skip
+/// rather than block) or sufficient. Copy mirrors the in-download error in
+/// `download.rs` (`Espacio en disco insuficiente para ... Liberá espacio ...`).
+#[cfg(feature = "local-ml")]
+pub(crate) fn disk_preflight_message(
+    free_bytes: Option<u64>,
+    required_bytes: u64,
+) -> Option<String> {
+    let free = free_bytes?;
+    if free >= required_bytes {
+        return None;
+    }
+    Some(format!(
+        "Espacio en disco insuficiente para descargar el runtime de IA: se requieren ~{:.1} GB libres y hay {:.1} GB disponibles. Liberá espacio antes de iniciar la descarga.",
+        required_bytes as f64 / 1_000_000_000.0,
+        free as f64 / 1_000_000_000.0
+    ))
 }
 
 #[cfg(test)]
@@ -94,6 +129,7 @@ mod tests {
             ],
             bootstrap_eligible: true,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: Some(RuntimeOperation {
                 kind: RuntimeOperationKind::Bootstrap,
                 stage: RuntimeOperationStage::PlanningDownload,
@@ -137,6 +173,7 @@ mod tests {
             guidance: vec!["Reintentá cuando EntropIA publique una fuente firmada".to_string()],
             bootstrap_eligible: false,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: Some(RuntimeOperation {
                 kind: RuntimeOperationKind::Bootstrap,
                 stage: RuntimeOperationStage::Blocked,

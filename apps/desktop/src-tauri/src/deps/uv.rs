@@ -170,7 +170,7 @@ fn verify_pinned_uv_sha256(path: &Path, expected: &str) -> Result<(), String> {
             path.display()
         )
     })?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
+    let actual = hex::encode(Sha256::digest(&bytes));
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
@@ -845,11 +845,9 @@ async fn download_uv_once(
             .find(|&i| {
                 archive
                     .by_index(i)
-                    .map(|f| {
-                        let name = f.name().to_ascii_lowercase();
-                        name == "uv.exe" || name.ends_with("/uv.exe")
-                    })
-                    .unwrap_or(false)
+                    .ok()
+                    .and_then(|f| f.name().ok().map(|name| name.to_ascii_lowercase()))
+                    .is_some_and(|name| name == "uv.exe" || name.ends_with("/uv.exe"))
             })
             .ok_or_else(|| "Error extrayendo uv: uv.exe no encontrado en el ZIP".to_string())?;
 
@@ -981,7 +979,7 @@ mod tests {
         let exe = dir.path().join(UV_EXECUTABLE_NAME);
         let bytes = b"pinned-uv-bytes";
         fs::write(&exe, bytes).expect("write fake uv");
-        let expected = format!("{:x}", Sha256::digest(bytes));
+        let expected = hex::encode(Sha256::digest(bytes));
 
         assert!(
             verify_pinned_uv_sha256(&exe, &expected).is_ok(),
@@ -1108,6 +1106,7 @@ mod tests {
             guidance: vec![],
             bootstrap_eligible: false,
             bootstrap_required: false,
+            blocked_reason: None,
             active_operation: None,
         };
 

@@ -274,8 +274,14 @@
 {/if}
 
 <style>
+  /* Label, search, Buscar and Buscar desde la selección need about 520px on
+     one line, and this form lives in the Writing research panel (240-560px)
+     as well as in full-width views: without wrapping it ran up to 200px past
+     the card, cutting both buttons off. The field keeps a usable basis and
+     takes its own line when that basis no longer fits beside the label. */
   .bib-search__form {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
     align-items: end;
     margin-bottom: var(--space-3);
@@ -287,7 +293,8 @@
   }
 
   .bib-search__field {
-    flex: 1;
+    flex: 1 1 12rem;
+    min-width: 0;
   }
 
   .bib-search__error {

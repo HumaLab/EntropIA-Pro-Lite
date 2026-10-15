@@ -146,6 +146,17 @@ describe('Lite macOS bundle (tauri.lite.macos.conf.json)', () => {
     expect(liteMac.bundle?.macOS?.frameworks).toContain('resources/pdfium/libpdfium.dylib')
   })
 
+  // Without its own list the overlay inherits the base tauri.conf.json
+  // resources: the local-ml models and Python scripts (E-01).
+  it('replaces the base resource list with what Lite reads at runtime', () => {
+    expect(liteMac.bundle?.resources).toEqual([
+      'resources/provider-compatibility.json',
+      'resources/lib/LICENSE',
+      'resources/fonts/LICENSE',
+      'resources/pdfium/LICENSE',
+    ])
+  })
+
   it('does not change the product identity', () => {
     expect(liteMac.productName).toBeUndefined()
     expect(liteMac.identifier).toBeUndefined()

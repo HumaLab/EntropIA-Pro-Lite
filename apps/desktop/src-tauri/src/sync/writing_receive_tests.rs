@@ -217,7 +217,7 @@ fn tiny_png() -> Vec<u8> {
 }
 
 fn hash_of(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn image_entry(bytes: &[u8]) -> AttachmentFileV1 {

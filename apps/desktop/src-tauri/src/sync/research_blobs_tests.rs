@@ -30,7 +30,7 @@ fn limits() -> HealthLimits {
 }
 
 fn hash_of(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn report_bytes() -> Vec<u8> {

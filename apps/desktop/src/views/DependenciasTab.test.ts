@@ -343,25 +343,34 @@ describe('DependenciasTab', () => {
       state: 'fixture',
       packVersion: '2026.05.0',
       repairNeeded: false,
-      repairAvailable: false,
-      summary:
-        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+      repairAvailable: true,
+      summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
       blockedCapabilities: ['ocr', 'transcription', 'nlp'],
       details: [
-        'La app 0.0.10 arrancó correctamente, pero este runtime-pack todavía está en modo fixture/dev (app_version declarada: 0.0.10).',
+        'La app 0.0.10 arrancó correctamente, pero el runtime de IA para linux-x86_64 todavía está pendiente de descarga (app_version declarada: 0.0.10).',
       ],
       guidance: [
-        'Próximo paso manual inevitable: inyectar los artefactos externos requeridos al runtime-pack de release para esta plataforma.',
+        'Esto no indica una caída: el runtime de IA se descarga automáticamente cuando hay una fuente confiable; mientras tanto, OCR, NLP y transcripción quedan en pausa.',
       ],
-      bootstrapEligible: false,
+      bootstrapEligible: true,
       bootstrapRequired: true,
-      activeOperation: null,
+      activeOperation: {
+        kind: 'bootstrap',
+        stage: 'planning_download',
+        summary: 'EntropIA puede bootstrapear un runtime confiable',
+        progressPercent: null,
+        downloadedBytes: null,
+        totalBytes: 1024,
+        retryable: true,
+      },
     })
 
     render(DependenciasTab)
 
-    expect(await screen.findByText(/Runtime de desarrollo detectado/i)).toBeInTheDocument()
-    expect(screen.getByText(/Próximo paso manual inevitable/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Runtime de IA pendiente de descarga/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/se descarga automáticamente cuando hay una fuente confiable/i)
+    ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime' })).not.toBeInTheDocument()
   })
 
@@ -434,8 +443,7 @@ describe('DependenciasTab', () => {
       packVersion: '2026.05.0',
       repairNeeded: false,
       repairAvailable: false,
-      summary:
-        'Runtime de desarrollo detectado para linux-x86_64: faltan payloads externos de release',
+      summary: 'Runtime de IA pendiente de descarga para linux-x86_64',
       blockedCapabilities: ['ocr', 'transcription', 'nlp'],
       details: ['La app funciona localmente, pero el runtime-pack offline sigue pendiente.'],
       guidance: ['Inyectar payloads externos antes de distribuir offline.'],
@@ -463,7 +471,7 @@ describe('DependenciasTab', () => {
     expect(
       await screen.findByText('Todas las dependencias están instaladas y listas para usar.')
     ).toBeInTheDocument()
-    expect(screen.queryByText(/Runtime de desarrollo detectado/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Runtime de IA pendiente de descarga/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/payloads externos/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/runtime-pack release pendiente/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/^Capacidades afectadas:/i)).not.toBeInTheDocument()
@@ -491,7 +499,7 @@ describe('DependenciasTab', () => {
       repairAvailable: false,
       summary: 'No hay una fuente confiable disponible para bootstrap',
       blockedCapabilities: ['ocr', 'transcription', 'nlp'],
-      details: ['Trusted remote bootstrap source wiring is not implemented yet'],
+      details: ['Trusted remote bootstrap source is not configured in this environment'],
       guidance: ['Reintentá cuando exista una fuente confiable'],
       bootstrapEligible: false,
       bootstrapRequired: true,
@@ -517,13 +525,94 @@ describe('DependenciasTab', () => {
     expect(
       await screen.findByText('No hay una fuente confiable disponible para bootstrap')
     ).toBeInTheDocument()
-    expect(screen.getByText(/Trusted remote bootstrap source wiring/i)).toBeInTheDocument()
+    expect(screen.getByText(/not configured in this environment/i)).toBeInTheDocument()
     expect(screen.getByText(/Reintentá cuando exista una fuente confiable/i)).toBeInTheDocument()
     expect(
       screen.getByText(/En Windows dev el fallback online no está habilitado/i)
     ).toBeInTheDocument()
     expect(screen.getByText(/antes de habilitar OCR/i)).toBeInTheDocument()
     expect(screen.getByText(/^Capacidades afectadas:/i)).toBeInTheDocument()
+  })
+
+  it('shows a dedicated no_matching_release message when the manifest has no entry for this version', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['No bootstrap release matches app_version=1.0.19 platform=windows-x86_64'],
+      guidance: ['Reintentá cuando cambien las condiciones o se publique una fuente válida.'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      blockedReason: 'no_matching_release',
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(
+      await screen.findByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/aún no está publicado/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the generic source-unavailable text when no blocked reason is present', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['Trusted remote bootstrap source wiring is not implemented yet'],
+      guidance: ['Reintentá cuando exista una fuente confiable'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(await screen.findByText(/aún no está publicado/)).toBeInTheDocument()
+    expect(
+      screen.queryByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).not.toBeInTheDocument()
   })
 
   it('labels healthy embedded runtime without a managed venv honestly', async () => {

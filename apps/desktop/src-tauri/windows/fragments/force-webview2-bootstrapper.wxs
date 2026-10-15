@@ -42,9 +42,22 @@
       so we force it for installs/updates while keeping the Tauri-embedded
       bootstrapper binary as the source.
     -->
+    <!--
+      The repair wrapper below embeds the original signed Microsoft
+      bootstrapper (verified by the Windows-only pre-bundle hook) and runs it
+      with the same arguments. Only the documented already-installed result
+      (0x80040828 / -2147219416) is normalized to success; exit 0 stays 0 and
+      every other child code still fails the install. The Tauri-embedded
+      bootstrapper Binary stays in the MSI as well (~2MB deliberate
+      duplication) so this fragment remains a minimal override.
+    -->
+    <Binary
+      Id="EntropiaWebView2Repair"
+      SourceFile="$(sys.SOURCEFILEDIR)..\..\target\webview2-installer\repair.exe" />
+
     <CustomAction
       Id="ForceInvokeWebView2Bootstrapper"
-      BinaryKey="MicrosoftEdgeWebview2Setup.exe"
+      BinaryKey="EntropiaWebView2Repair"
       Execute="deferred"
       ExeCommand="/silent /install"
       Return="check" />

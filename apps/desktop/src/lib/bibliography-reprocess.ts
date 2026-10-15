@@ -11,9 +11,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 /** Why one attachment is a candidate (machine reason codes, stable). */
 export type ReprocessCandidateReason =
-  | 'garbled_stored_pages'
-  | 'empty_without_ocr'
-  | 'failed_ocr_attempt'
+  'garbled_stored_pages' | 'empty_without_ocr' | 'failed_ocr_attempt'
 
 /** One attachment the reprocess action should consider (no file is read). */
 export interface ReprocessCandidate {
@@ -39,11 +37,7 @@ export function bibliographyReprocessCandidatesCancel(): Promise<void> {
 
 /** Why a previewed attachment cannot be read; stable machine strings. */
 export type ReprocessUnreadableReason =
-  | 'attachment_missing'
-  | 'file_missing'
-  | 'file_too_large'
-  | 'not_a_pdf'
-  | 'read_failed'
+  'attachment_missing' | 'file_missing' | 'file_too_large' | 'not_a_pdf' | 'read_failed'
 
 /** One previewed attachment. `unreadable` ones carry no `planHash`. */
 export interface ReprocessPreviewAttachment {

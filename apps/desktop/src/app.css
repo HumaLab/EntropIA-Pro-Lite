@@ -106,6 +106,15 @@ select {
   font: inherit;
 }
 
+/* Browsers give <fieldset> `min-inline-size: min-content`, so one nowrap
+   label inside it (a long collection name, already ellipsized) widened the
+   whole fieldset past its dialog instead of letting the ellipsis work: the
+   import destination list ran 400px out of a 440px dialog. Every other block
+   here may shrink to its container; this puts fieldsets back in line. */
+fieldset {
+  min-inline-size: 0;
+}
+
 h1,
 h2,
 h3 {

@@ -30,9 +30,12 @@ updates:
     # ort is pinned to an exact release candidate and its `ndarray` feature fixes
     # the ndarray version; each rc changes the tensor API used by the local ML
     # code. Upgrade both together, by hand, as one migration.
+    # llama-cpp-2 is on 0.1.x and changes its model API between patch releases
+    # (llm/engine.rs); it also rebuilds llama.cpp. Same rule: upgrade by hand.
     ignore:
       - dependency-name: ort
       - dependency-name: ndarray
+      - dependency-name: llama-cpp-2
     groups:
       cargo-minor-and-patch:
         update-types:
