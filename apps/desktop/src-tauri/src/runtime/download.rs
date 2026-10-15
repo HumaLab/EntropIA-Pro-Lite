@@ -1768,7 +1768,7 @@ mod tests {
             pack_version: "2026.05.1".to_string(),
             archive_url: part_urls.0.to_string(),
             additional_part_urls: vec![part_urls.1.to_string()],
-            archive_sha256: format!("{:x}", Sha256::digest(archive_bytes)),
+            archive_sha256: hex::encode(Sha256::digest(archive_bytes)),
             archive_size: archive_bytes.len() as u64,
             signature: String::new(),
         };
@@ -2136,13 +2136,13 @@ mod tests {
                 uv_relpath: "uv/bin/uv".to_string(),
                 python_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "python/bin/python3".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"python")),
+                    sha256: hex::encode(Sha256::digest(b"python")),
                     size: 6,
                     executable: !cfg!(windows),
                 }],
                 uv_files: vec![crate::runtime::manifest::ManifestEntry {
                     path: "uv/bin/uv".to_string(),
-                    sha256: format!("{:x}", Sha256::digest(b"uv")),
+                    sha256: hex::encode(Sha256::digest(b"uv")),
                     size: 2,
                     executable: true,
                 }],

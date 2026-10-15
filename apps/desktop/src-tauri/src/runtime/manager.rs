@@ -1916,6 +1916,7 @@ mod tests {
                 guidance: vec![],
                 bootstrap_eligible: false,
                 bootstrap_required: true,
+                blocked_reason: None,
                 active_operation: None,
             },
             &manifest,
@@ -3847,6 +3848,7 @@ mod tests {
             guidance: vec![],
             bootstrap_eligible: eligible,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: None,
         }
     }
