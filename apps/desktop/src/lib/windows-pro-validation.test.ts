@@ -183,7 +183,9 @@ describe('windows pro validation build', () => {
     expect(start).toBeGreaterThan(-1)
     const rest = lines.slice(start + 1)
     const end = rest.findIndex((l) => l.trim().startsWith('- name:'))
-    const step = (end === -1 ? rest : rest.slice(0, end)).filter((l) => !l.trimStart().startsWith('#'))
+    const step = (end === -1 ? rest : rest.slice(0, end)).filter(
+      (l) => !l.trimStart().startsWith('#')
+    )
     expect(step.map((l) => l.trim())).toContain('shell: bash')
     expect(step.some((l) => l.trim() === 'shell: pwsh')).toBe(false)
   })

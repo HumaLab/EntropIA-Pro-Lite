@@ -2513,7 +2513,8 @@ const es = {
   'internetArchive.item.files': 'Archivos PDF',
   'internetArchive.item.noPdfs': 'Sin PDF: esta ficha no ofrece ningún PDF descargable.',
   'internetArchive.item.truncated': 'Se muestran los primeros PDF; la lista está truncada.',
-  'internetArchive.item.isCollection': 'Esta ficha es una colección. Explórala en la pestaña Colección.',
+  'internetArchive.item.isCollection':
+    'Esta ficha es una colección. Explórala en la pestaña Colección.',
   'internetArchive.item.browseCollection': 'Explorar en la pestaña Colección',
   'internetArchive.item.size': 'Tamaño: {size}',
   'internetArchive.item.source': 'Origen: {source}',
@@ -2521,12 +2522,16 @@ const es = {
   'internetArchive.item.source.derivative': 'derivado',
   'internetArchive.item.source.unknown': 'no determinado',
   'internetArchive.item.select': 'Seleccionar {name}',
-  'internetArchive.availability.item_restricted': 'Restringido: Internet Archive no permite descargarlo.',
-  'internetArchive.availability.encrypted': 'Cifrado: el archivo está cifrado y no se puede importar.',
+  'internetArchive.availability.item_restricted':
+    'Restringido: Internet Archive no permite descargarlo.',
+  'internetArchive.availability.encrypted':
+    'Cifrado: el archivo está cifrado y no se puede importar.',
   'internetArchive.availability.private': 'Privado: el archivo no es público.',
-  'internetArchive.availability.unsafe_name': 'Nombre no válido: el nombre del archivo no es seguro.',
+  'internetArchive.availability.unsafe_name':
+    'Nombre no válido: el nombre del archivo no es seguro.',
   'internetArchive.selection.title': 'Selección',
-  'internetArchive.selection.empty': 'Todavía no elegiste ningún archivo. Marca los PDF que quieras importar.',
+  'internetArchive.selection.empty':
+    'Todavía no elegiste ningún archivo. Marca los PDF que quieras importar.',
   'internetArchive.selection.count': 'Seleccionados: {count}',
   'internetArchive.selection.remove': 'Quitar {name}',
   'internetArchive.destination.title': 'Destino',
@@ -2550,8 +2555,10 @@ const es = {
   'internetArchive.summary.rejected': 'Rechazados',
   'internetArchive.summary.rejectedNotFound': 'No se encontró en la ficha.',
   'internetArchive.summary.syncVolume': 'Volumen sincronizado estimado: {size}',
-  'internetArchive.summary.syncWarning': 'Atención: supera 1 GB de volumen sincronizado estimado (cada PDF ocupa cerca del doble entre el original y sus páginas).',
-  'internetArchive.summary.nothingToImport': 'Con lo omitido no queda ningún archivo para importar.',
+  'internetArchive.summary.syncWarning':
+    'Atención: supera 1 GB de volumen sincronizado estimado (cada PDF ocupa cerca del doble entre el original y sus páginas).',
+  'internetArchive.summary.nothingToImport':
+    'Con lo omitido no queda ningún archivo para importar.',
   'internetArchive.running.heading': 'Importando…',
   'internetArchive.running.progress': '{done} de {total} archivos',
   'internetArchive.running.progressLabel': 'Progreso de la importación',
@@ -2598,7 +2605,8 @@ const es = {
   'internetArchive.error.invalid_query': 'La búsqueda no es válida. Revisa los filtros.',
   'internetArchive.error.not_found': 'No se encontró en Internet Archive.',
   'internetArchive.error.blocked': 'Internet Archive bloqueó la solicitud.',
-  'internetArchive.error.too_many_redirects': 'Demasiadas redirecciones al contactar Internet Archive.',
+  'internetArchive.error.too_many_redirects':
+    'Demasiadas redirecciones al contactar Internet Archive.',
   'internetArchive.error.too_large': 'La respuesta de Internet Archive fue demasiado grande.',
   'internetArchive.error.network': 'Error de red al contactar Internet Archive.',
   'internetArchive.error.decode': 'No se pudo leer la respuesta de Internet Archive.',
@@ -2611,7 +2619,8 @@ const es = {
   'internetArchive.error.nothing_to_import': 'No hay ningún archivo disponible para importar.',
   'internetArchive.error.db': 'Error del archivo de datos.',
   'internetArchive.error.job_running': 'Ya hay una importación en curso.',
-  'internetArchive.error.invalid_state': 'La importación no está en un estado válido para esta acción.',
+  'internetArchive.error.invalid_state':
+    'La importación no está en un estado válido para esta acción.',
   'internetArchive.error.staging_missing': 'Falta el archivo temporal de la descarga.',
   'internetArchive.error.item_not_found': 'El documento importado no se encontró.',
   'internetArchive.error.wrong_collection': 'El documento está en otra colección.',
@@ -5243,7 +5252,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.item.files': 'PDF files',
   'internetArchive.item.noPdfs': 'No PDF: this record offers no downloadable PDF.',
   'internetArchive.item.truncated': 'Showing the first PDFs; the list is truncated.',
-  'internetArchive.item.isCollection': 'This record is a collection. Browse it in the Collection tab.',
+  'internetArchive.item.isCollection':
+    'This record is a collection. Browse it in the Collection tab.',
   'internetArchive.item.browseCollection': 'Browse in the Collection tab',
   'internetArchive.item.size': 'Size: {size}',
   'internetArchive.item.source': 'Source: {source}',
@@ -5251,12 +5261,15 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.item.source.derivative': 'derivative',
   'internetArchive.item.source.unknown': 'undetermined',
   'internetArchive.item.select': 'Select {name}',
-  'internetArchive.availability.item_restricted': 'Restricted: Internet Archive does not allow downloading it.',
-  'internetArchive.availability.encrypted': 'Encrypted: the file is encrypted and cannot be imported.',
+  'internetArchive.availability.item_restricted':
+    'Restricted: Internet Archive does not allow downloading it.',
+  'internetArchive.availability.encrypted':
+    'Encrypted: the file is encrypted and cannot be imported.',
   'internetArchive.availability.private': 'Private: the file is not public.',
   'internetArchive.availability.unsafe_name': 'Invalid name: the file name is not safe.',
   'internetArchive.selection.title': 'Selection',
-  'internetArchive.selection.empty': 'You have not chosen any file yet. Tick the PDFs you want to import.',
+  'internetArchive.selection.empty':
+    'You have not chosen any file yet. Tick the PDFs you want to import.',
   'internetArchive.selection.count': 'Selected: {count}',
   'internetArchive.selection.remove': 'Remove {name}',
   'internetArchive.destination.title': 'Destination',
@@ -5280,8 +5293,10 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.summary.rejected': 'Rejected',
   'internetArchive.summary.rejectedNotFound': 'Not found in the record.',
   'internetArchive.summary.syncVolume': 'Estimated synced volume: {size}',
-  'internetArchive.summary.syncWarning': 'Warning: over 1 GB of estimated synced volume (each PDF takes about twice its size between the original and its pages).',
-  'internetArchive.summary.nothingToImport': 'With everything skipped there is no file left to import.',
+  'internetArchive.summary.syncWarning':
+    'Warning: over 1 GB of estimated synced volume (each PDF takes about twice its size between the original and its pages).',
+  'internetArchive.summary.nothingToImport':
+    'With everything skipped there is no file left to import.',
   'internetArchive.running.heading': 'Importing…',
   'internetArchive.running.progress': '{done} of {total} files',
   'internetArchive.running.progressLabel': 'Import progress',
@@ -5328,7 +5343,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'internetArchive.error.invalid_query': 'The search is not valid. Check the filters.',
   'internetArchive.error.not_found': 'Not found on Internet Archive.',
   'internetArchive.error.blocked': 'Internet Archive blocked the request.',
-  'internetArchive.error.too_many_redirects': 'Too many redirects while contacting Internet Archive.',
+  'internetArchive.error.too_many_redirects':
+    'Too many redirects while contacting Internet Archive.',
   'internetArchive.error.too_large': 'The Internet Archive response was too large.',
   'internetArchive.error.network': 'Network error while contacting Internet Archive.',
   'internetArchive.error.decode': 'Could not read the Internet Archive response.',

@@ -62,9 +62,7 @@ describe('read commands', () => {
 })
 
 describe('prepare and run commands', () => {
-  const selections: IaSelection[] = [
-    { identifier: 'some-id', fileNames: ['some-id_text.pdf'] },
-  ]
+  const selections: IaSelection[] = [{ identifier: 'some-id', fileNames: ['some-id_text.pdf'] }]
 
   it('prepare names the collection and the selections', async () => {
     vi.mocked(invoke).mockResolvedValue({ jobId: 'job-1', summary: null, rejected: [] })
@@ -162,11 +160,7 @@ describe('parseIaError', () => {
       ['staging_missing: staging file gone', 'staging_missing', 'staging file gone'],
       ['item_not_found: imported item not found', 'item_not_found', 'imported item not found'],
       ['wrong_collection: another collection', 'wrong_collection', 'another collection'],
-      [
-        'provenance_mismatch: different provenance',
-        'provenance_mismatch',
-        'different provenance',
-      ],
+      ['provenance_mismatch: different provenance', 'provenance_mismatch', 'different provenance'],
       ['incomplete_import: item is not complete', 'incomplete_import', 'item is not complete'],
       ['partial_remains: partial still there', 'partial_remains', 'partial still there'],
       ['network: down', 'network', 'down'],
@@ -236,8 +230,7 @@ describe('onIaJobUpdated', () => {
     })
     expect(listen).toHaveBeenCalledWith('ia://job-updated', expect.any(Function))
     const handler = vi.mocked(listen).mock.calls[0]?.[1] as unknown as
-      | ((event: { payload: { jobId: string } }) => void)
-      | undefined
+      ((event: { payload: { jobId: string } }) => void) | undefined
     expect(handler).toBeTypeOf('function')
     handler?.({ payload: { jobId: 'job-9' } })
     expect(seen).toEqual(['job-9'])

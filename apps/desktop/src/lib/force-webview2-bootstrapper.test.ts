@@ -26,15 +26,12 @@ const SRC_TAURI = resolve(import.meta.dirname, '../../src-tauri')
 const DESKTOP_ROOT = resolve(SRC_TAURI, '..')
 const FRAGMENT = readFileSync(
   resolve(SRC_TAURI, 'windows/fragments/force-webview2-bootstrapper.wxs'),
-  'utf-8',
+  'utf-8'
 )
 const WINDOWS_CONF = JSON.parse(
-  readFileSync(resolve(SRC_TAURI, 'tauri.windows.conf.json'), 'utf-8'),
+  readFileSync(resolve(SRC_TAURI, 'tauri.windows.conf.json'), 'utf-8')
 ) as { build?: { beforeBundleCommand?: string } }
-const HOOK = readFileSync(
-  resolve(SRC_TAURI, 'scripts/prepare-webview2-repair.ps1'),
-  'utf-8',
-)
+const HOOK = readFileSync(resolve(SRC_TAURI, 'scripts/prepare-webview2-repair.ps1'), 'utf-8')
 const WRAPPER = readFileSync(resolve(SRC_TAURI, 'windows/webview2-repair.rs'), 'utf-8')
 
 const ACTION_ID = 'ForceInvokeWebView2Bootstrapper'
@@ -54,7 +51,7 @@ function fragmentDocument(): Document {
 
 function singleElement(doc: Document, tag: string, idAttr: string, id: string): Element {
   const matches = Array.from(doc.getElementsByTagName(tag)).filter(
-    (el) => el.getAttribute(idAttr) === id,
+    (el) => el.getAttribute(idAttr) === id
   )
   expect(matches, `<${tag} ${idAttr}="${id}"> must appear exactly once`).toHaveLength(1)
   return matches[0]!
@@ -81,7 +78,7 @@ describe('forced WebView2 repair action', () => {
     const doc = fragmentDocument()
     const sequence = doc.getElementsByTagName('InstallExecuteSequence')[0]!
     const custom = Array.from(sequence.getElementsByTagName('Custom')).filter(
-      (el) => el.getAttribute('Action') === ACTION_ID,
+      (el) => el.getAttribute('Action') === ACTION_ID
     )
     expect(custom, 'forced action must stay sequenced').toHaveLength(1)
     expect(custom[0]!.getAttribute('Before')).toBe('InstallFinalize')
@@ -110,10 +107,9 @@ describe('pre-bundle hook wiring', () => {
     // selector anchors exec CWD at the selected package root (apps/desktop,
     // probed independently from repo root, apps/desktop and src-tauri), so
     // the hook must run through the workspace scope, not a bare powershell.
-    expect(
-      command,
-      'beforeBundleCommand must start with the workspace selector',
-    ).toMatch(/^pnpm --filter @entropia-pro\/desktop exec /)
+    expect(command, 'beforeBundleCommand must start with the workspace selector').toMatch(
+      /^pnpm --filter @entropia-pro\/desktop exec /
+    )
     expect(command).toContain('powershell')
     const match = command.match(/-File\s+(['"]?)([^\s'"]+)\1/)
     expect(match, 'beforeBundleCommand must pass a -File script path').not.toBeNull()
@@ -129,10 +125,9 @@ describe('pre-bundle hook wiring', () => {
     // Package-relative: pnpm --filter anchors exec at the selected package
     // root (apps/desktop), so the argument must start with src-tauri/ to
     // reach the real script.
-    expect(
-      fileArg,
-      '-File argument must be package-relative under src-tauri/',
-    ).toMatch(/^src-tauri\//)
+    expect(fileArg, '-File argument must be package-relative under src-tauri/').toMatch(
+      /^src-tauri\//
+    )
     const resolved = resolve(DESKTOP_ROOT, fileArg)
     expect(existsSync(resolved), resolved + ' must exist').toBe(true)
     // The script itself must stay cwd-independent via $PSScriptRoot so the

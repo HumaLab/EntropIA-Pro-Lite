@@ -294,9 +294,7 @@ describe('ImportSourcesDialog Internet Archive entry point (26b)', () => {
     render(ImportSourcesDialog, { props: { onClose, onOpenInternetArchive } })
 
     await screen.findByText('Voces')
-    expect(
-      screen.getByRole('button', { name: 'Desde Internet Archive' })
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Desde Internet Archive' })).toBeInTheDocument()
   })
 
   it('closes itself and asks the parent to open Internet Archive, without picking files', async () => {

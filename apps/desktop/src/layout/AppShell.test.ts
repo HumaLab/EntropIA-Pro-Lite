@@ -751,9 +751,7 @@ describe('AppShell', () => {
       const { container } = render(AppShellHost)
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Pausar descarga' }))
-      await waitFor(() =>
-        expect(invokeMock).toHaveBeenCalledWith('runtime_cancel_download')
-      )
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('runtime_cancel_download'))
 
       // The backend answers a user cancel with the quiet pending status.
       statusHandler?.({ payload: pendingFixtureStatus() })
@@ -770,17 +768,14 @@ describe('AppShell', () => {
       invokeMock.mockImplementation((command: string) => {
         if (command === 'deps_get_cached_statuses') return Promise.resolve([])
         if (command === 'runtime_get_status') return Promise.resolve(offlineStatus())
-        if (command === 'runtime_bootstrap_start')
-          return Promise.resolve(downloadingStatus())
+        if (command === 'runtime_bootstrap_start') return Promise.resolve(downloadingStatus())
         return Promise.resolve(undefined)
       })
 
       render(AppShellHost)
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Reintentar descarga' }))
-      await waitFor(() =>
-        expect(invokeMock).toHaveBeenCalledWith('runtime_bootstrap_start')
-      )
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('runtime_bootstrap_start'))
 
       // The start command answers the current status: the banner flips to progress.
       expect(await screen.findByText('0,6 GB de 2,4 GB (25 %)')).toBeInTheDocument()
@@ -833,9 +828,7 @@ describe('AppShell', () => {
       )
       render(AppShellHost)
       await screen.findByText(/fuente confiable está offline/)
-      expect(
-        screen.queryByRole('button', { name: 'Reintentar descarga' })
-      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Reintentar descarga' })).not.toBeInTheDocument()
     })
 
     it.runIf(LOCAL_ML)('pending_fixture_offers_retry_not_pause', async () => {

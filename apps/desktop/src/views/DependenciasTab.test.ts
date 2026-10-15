@@ -368,7 +368,9 @@ describe('DependenciasTab', () => {
     render(DependenciasTab)
 
     expect(await screen.findByText(/Runtime de IA pendiente de descarga/i)).toBeInTheDocument()
-    expect(screen.getByText(/se descarga automáticamente cuando hay una fuente confiable/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/se descarga automáticamente cuando hay una fuente confiable/i)
+    ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reparar runtime' })).not.toBeInTheDocument()
   })
 

@@ -351,18 +351,14 @@
   )
   // The transfer the banner reports on: live progress events win, the
   // status snapshot covers the auto-started download on first paint.
-  const bootstrapOperation = $derived(
-    runtimeProgress ?? runtimeStatus?.activeOperation ?? null
-  )
+  const bootstrapOperation = $derived(runtimeProgress ?? runtimeStatus?.activeOperation ?? null)
   // The banner also renders on live-transfer evidence alone: if the
   // first-paint status snapshot never arrived (slow/blocking catalog
   // fetch), `runtime://progress` events still describe the real download.
   const hasLiveBootstrapProgress = $derived(
     runtimeProgress?.kind === 'bootstrap' && runtimeProgress?.stage === 'downloading'
   )
-  const showRuntimeBanner = $derived(
-    runtimeBlocksActiveCapabilities || hasLiveBootstrapProgress
-  )
+  const showRuntimeBanner = $derived(runtimeBlocksActiveCapabilities || hasLiveBootstrapProgress)
   // Neutral fallback while downloading without a snapshot — consistent
   // with the backend's own downloading summary copy.
   const bannerSummary = $derived(
@@ -765,10 +761,7 @@
                       aria-valuenow={bootstrapPercent}
                       aria-label="Progreso de descarga del runtime"
                     >
-                      <div
-                        class="deps-banner__bar-fill"
-                        style:width={`${bootstrapPercent}%`}
-                      ></div>
+                      <div class="deps-banner__bar-fill" style:width={`${bootstrapPercent}%`}></div>
                     </div>
                   {/if}
                 </div>

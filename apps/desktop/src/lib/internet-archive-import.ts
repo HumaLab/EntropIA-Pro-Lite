@@ -155,22 +155,18 @@ async function confirm(run: IaImportRun, file: IaVerifiedFile, itemId: string) {
 async function importPayload(run: IaImportRun, file: IaVerifiedFile) {
   let created: Array<{ id: string; title: string }>
   try {
-    const result = await importClassifiedPathsIntoCollection(
-      [file.stagingPath],
-      run.collectionId,
-      {
-        baseErrorMessage: run.baseErrorMessage,
-        overrides: {
-          title: file.itemTitle,
-          fileName: file.displayFileName,
-          extraMetadata: file.extraMetadata as Record<string, unknown> | undefined,
-          // Rust already classified the file; the import's own
-          // "same file again" check must not skip it.
-          allowDuplicate: true,
-        },
-        onProgress: (progress) => report(run, file, progress.stage),
-      }
-    )
+    const result = await importClassifiedPathsIntoCollection([file.stagingPath], run.collectionId, {
+      baseErrorMessage: run.baseErrorMessage,
+      overrides: {
+        title: file.itemTitle,
+        fileName: file.displayFileName,
+        extraMetadata: file.extraMetadata as Record<string, unknown> | undefined,
+        // Rust already classified the file; the import's own
+        // "same file again" check must not skip it.
+        allowDuplicate: true,
+      },
+      onProgress: (progress) => report(run, file, progress.stage),
+    })
     created = result.createdItems
   } catch (reason) {
     await reportFailed(run, file.index)
@@ -252,11 +248,7 @@ export async function importVerifiedFiles(
   jobId: string,
   options: IaImportOptions = {}
 ): Promise<IaImportOutcome> {
-  const {
-    baseErrorMessage = DEFAULT_BASE_ERROR_MESSAGE,
-    onProgress,
-    shouldCancel,
-  } = options
+  const { baseErrorMessage = DEFAULT_BASE_ERROR_MESSAGE, onProgress, shouldCancel } = options
   const status = await iaGetImportStatus(jobId)
   const collectionId = status.targetCollectionId
   if (!collectionId) {
@@ -267,7 +259,13 @@ export async function importVerifiedFiles(
     collectionId,
     baseErrorMessage,
     onProgress,
-    outcome: { imported: [], confirmedExisting: [], failed: [], notProcessed: [], cancelled: false },
+    outcome: {
+      imported: [],
+      confirmedExisting: [],
+      failed: [],
+      notProcessed: [],
+      cancelled: false,
+    },
   }
   const files = [...(await iaListVerifiedFiles(jobId))].sort((a, b) => a.index - b.index)
   for (const [at, file] of files.entries()) {

@@ -26,7 +26,10 @@
 
   const navigation = getNavigation()
 
-  let { onClose, onOpenInternetArchive }: { onClose: () => void; onOpenInternetArchive?: () => void } = $props()
+  let {
+    onClose,
+    onOpenInternetArchive,
+  }: { onClose: () => void; onOpenInternetArchive?: () => void } = $props()
 
   const NEW_COLLECTION = '__new__'
 

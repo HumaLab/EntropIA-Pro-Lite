@@ -272,9 +272,7 @@ describe('importVerifiedFiles', () => {
       action: 'import',
       file: file(index),
     }))
-    iaRef.iaConfirmFileImported.mockRejectedValueOnce(
-      new Error('incomplete_import: pages missing')
-    )
+    iaRef.iaConfirmFileImported.mockRejectedValueOnce(new Error('incomplete_import: pages missing'))
     importRef.discardFailedImport.mockRejectedValueOnce(new Error('io: cannot discard'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -457,9 +455,7 @@ describe('resolveReconcileLeftovers', () => {
   })
 
   it('discards the remnant before releasing a discard entry', async () => {
-    iaRef.iaListReconcile.mockResolvedValue([
-      entry({ action: 'discard', itemId: 'item-old' }),
-    ])
+    iaRef.iaListReconcile.mockResolvedValue([entry({ action: 'discard', itemId: 'item-old' })])
 
     const outcome = await resolveReconcileLeftovers()
 
@@ -485,7 +481,10 @@ describe('resolveReconcileLeftovers', () => {
   })
 
   it('records a failing finish and releases the rest', async () => {
-    iaRef.iaListReconcile.mockResolvedValue([entry({ action: 'none', index: 0 }), entry({ action: 'none', index: 1 })])
+    iaRef.iaListReconcile.mockResolvedValue([
+      entry({ action: 'none', index: 0 }),
+      entry({ action: 'none', index: 1 }),
+    ])
     iaRef.iaFinishReconcile
       .mockRejectedValueOnce(new Error('partial_remains: still there'))
       .mockResolvedValueOnce(undefined)

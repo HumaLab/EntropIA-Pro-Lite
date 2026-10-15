@@ -89,18 +89,11 @@
     'no_space',
     'split_too_large',
   ])
-  const KNOWN_AVAILABILITY = new Set([
-    'item_restricted',
-    'encrypted',
-    'private',
-    'unsafe_name',
-  ])
+  const KNOWN_AVAILABILITY = new Set(['item_restricted', 'encrypted', 'private', 'unsafe_name'])
 
   const currentLocale = locale
   const NUMBER_LOCALE = { es: 'es-AR', en: 'en-US' } as const
-  const numberFormatter = $derived.by(
-    () => new Intl.NumberFormat(NUMBER_LOCALE[$currentLocale])
-  )
+  const numberFormatter = $derived.by(() => new Intl.NumberFormat(NUMBER_LOCALE[$currentLocale]))
 
   let phase = $state<Phase>('discover')
   let discoverTab = $state<DiscoverTab>('search')
@@ -241,9 +234,7 @@
   }
 
   function isSelected(identifier: string, fileName: string): boolean {
-    return selection.some(
-      (entry) => entry.identifier === identifier && entry.fileName === fileName
-    )
+    return selection.some((entry) => entry.identifier === identifier && entry.fileName === fileName)
   }
 
   function toggleFile(identifier: string, fileName: string, title: string): void {
@@ -644,7 +635,13 @@
     importInFlight = false
     importProgress = null
     jobStatus = null
-    outcome = { imported: [], confirmedExisting: [], failed: [], notProcessed: [], cancelled: false }
+    outcome = {
+      imported: [],
+      confirmedExisting: [],
+      failed: [],
+      notProcessed: [],
+      cancelled: false,
+    }
     void refresh()
   }
 
@@ -841,8 +838,7 @@
   })
 
   const doneCancelled = $derived(
-    phase === 'done' &&
-      (outcome.cancelled || jobStatus?.state === 'cancelled' || cancelRequested)
+    phase === 'done' && (outcome.cancelled || jobStatus?.state === 'cancelled' || cancelRequested)
   )
 
   const runningProgress = $derived.by(() => {
@@ -860,11 +856,11 @@
     title={t('internetArchive.title')}
     titleId="internet-archive-dialog-title"
     cancelLabel={$currentLocale && cancelLabel}
-    cancelDisabled={cancelDisabled}
+    {cancelDisabled}
     dismissOnOverlay={false}
     confirmLabel={confirmLabel !== undefined ? $currentLocale && confirmLabel : undefined}
-    confirmDisabled={confirmDisabled}
-    confirming={confirming}
+    {confirmDisabled}
+    {confirming}
     error={problem}
     oncancel={handleDialogCancel}
     onconfirm={handleDialogConfirm}
@@ -958,13 +954,17 @@
             </label>
             <label class="ia-field">
               <span class="ia-field__label">{t('internetArchive.search.yearTo')}</span>
-              <input type="number" class="ia-field__input" min="0" max="9999" bind:value={searchTo} />
+              <input
+                type="number"
+                class="ia-field__input"
+                min="0"
+                max="9999"
+                bind:value={searchTo}
+              />
             </label>
           </div>
           <button type="submit" class="ia-submit" disabled={searching}>
-            {searching
-              ? t('internetArchive.search.searching')
-              : t('internetArchive.search.submit')}
+            {searching ? t('internetArchive.search.searching') : t('internetArchive.search.submit')}
           </button>
         </form>
         {#if searching && !searchResult}
@@ -1302,11 +1302,7 @@
                   ? t('internetArchive.summary.inOther')
                   : t('internetArchive.summary.newVersion')}
               </span>
-              <div
-                class="ia-choice"
-                role="group"
-                aria-label={t('internetArchive.summary.choice')}
-              >
+              <div class="ia-choice" role="group" aria-label={t('internetArchive.summary.choice')}>
                 <label class="ia-choice__option">
                   <input
                     type="radio"

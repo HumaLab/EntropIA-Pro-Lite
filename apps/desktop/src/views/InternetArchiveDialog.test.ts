@@ -203,7 +203,10 @@ async function searchForResults(props: Record<string, unknown> = {}) {
   await screen.findByText('Some Title')
 }
 
-async function openItem(props: Record<string, unknown> = {}, details: Record<string, unknown> = {}) {
+async function openItem(
+  props: Record<string, unknown> = {},
+  details: Record<string, unknown> = {}
+) {
   await searchForResults(props)
   iaRef.iaGetItem.mockResolvedValue(itemDetails(details))
   await fireEvent.click(screen.getAllByRole('button', { name: 'Ver archivos' })[0]!)
@@ -401,9 +404,7 @@ describe('InternetArchiveDialog item and selection', () => {
     await screen.findByText(/es una colección/)
 
     iaRef.iaListCollection.mockResolvedValue({ numFound: 0, items: [] })
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'Explorar en la pestaña Colección' })
-    )
+    await fireEvent.click(screen.getByRole('button', { name: 'Explorar en la pestaña Colección' }))
     await screen.findByText('Esta colección no tiene resultados en esta página.')
 
     expect(screen.getByLabelText('Identificador de la colección')).toHaveValue('some-id')
@@ -615,9 +616,7 @@ describe('InternetArchiveDialog running and done', () => {
     await startJob()
 
     const cancelButtons = screen.getAllByRole('button', { name: 'Cancelar' })
-    const active = cancelButtons.find(
-      (button) => (button as HTMLButtonElement).disabled === false
-    )!
+    const active = cancelButtons.find((button) => (button as HTMLButtonElement).disabled === false)!
     await fireEvent.click(active)
 
     expect(iaRef.iaCancelImport).toHaveBeenCalledWith('job-1')
@@ -893,9 +892,7 @@ describe('InternetArchiveDialog resume (26b)', () => {
     'restarts the downloads of a %s job left without a runner',
     async (state) => {
       iaRef.iaListJobs.mockResolvedValue([resumableJob({ state })])
-      iaRef.iaGetImportStatus.mockResolvedValue(
-        jobStatus({ id: 'job-9', state, running: false })
-      )
+      iaRef.iaGetImportStatus.mockResolvedValue(jobStatus({ id: 'job-9', state, running: false }))
       open()
 
       await fireEvent.click(await screen.findByRole('button', { name: 'Retomar importación' }))

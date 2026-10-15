@@ -13,11 +13,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 /** File availability, as `availability_tag` reports it. */
 export type IaAvailability =
-  | 'available'
-  | 'encrypted'
-  | 'private'
-  | 'item_restricted'
-  | 'unsafe_name'
+  'available' | 'encrypted' | 'private' | 'item_restricted' | 'unsafe_name'
 
 /** Per-file state, as `FileState` serializes it (`snake_case`). */
 export type IaFileState =
@@ -34,14 +30,7 @@ export type IaFileState =
 
 /** Job-level state, as `JobState` serializes it (`snake_case`). */
 export type IaJobState =
-  | 'draft'
-  | 'ready'
-  | 'running'
-  | 'cancelling'
-  | 'completed'
-  | 'partial'
-  | 'failed'
-  | 'cancelled'
+  'draft' | 'ready' | 'running' | 'cancelling' | 'completed' | 'partial' | 'failed' | 'cancelled'
 
 /** What the frontend must do with a verified file (`BeginAction`). */
 export type IaBeginAction = 'import' | 'confirm_existing' | 'discard_partial'
@@ -288,11 +277,7 @@ export function iaBeginFileImport(jobId: string, index: number): Promise<IaBegin
 }
 
 /** Confirm the item the frontend imported for one `Importing` file. */
-export function iaConfirmFileImported(
-  jobId: string,
-  index: number,
-  itemId: string
-): Promise<void> {
+export function iaConfirmFileImported(jobId: string, index: number, itemId: string): Promise<void> {
   return invoke<void>('ia_confirm_file_imported', { jobId, index, itemId })
 }
 
