@@ -348,3 +348,15 @@
   is checked once rather than repeated per glyph.
 -->
 <Icon {size} aria-hidden="true" data-action-icon={name} />
+
+<style>
+  /* A glyph has one size: the one it was asked for. Tabler's <svg> is a flex
+     item wherever it sits beside text, and a flex item shrinks by default, so
+     a long label next to it (a recent-activity row, a list entry) squeezed the
+     14px icon into a 4px sliver. Global because the <svg> is the icon
+     library's element, not this component's; the attribute scopes it to icons
+     that came through this gate. */
+  :global(svg[data-action-icon]) {
+    flex-shrink: 0;
+  }
+</style>

@@ -125,17 +125,19 @@
 </Panel>
 
 <style>
+  /* The close button takes its own track instead of floating over the
+     preview: absolutely positioned at the top-right corner it sat on the
+     preview's bordered editor box and on the hint beside it. */
   .history-panel {
-    position: relative;
     display: grid;
-    grid-template-columns: minmax(12rem, 1fr) 2fr;
+    grid-template-columns: minmax(min(100%, 12rem), 1fr) minmax(0, 2fr) auto;
     gap: var(--space-4);
   }
 
   .history-panel > :global(button:first-child) {
-    position: absolute;
-    top: 0;
-    right: 0;
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
   }
 
   h3 {

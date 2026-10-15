@@ -684,7 +684,7 @@
                 <ActionIcon name="file-text" size={14} />
                 <span class="home-view__recent-name-text">{entry.title}</span>
               </span>
-              <span role="cell">{entry.collectionName}</span>
+              <span role="cell" class="home-view__recent-cell">{entry.collectionName}</span>
               <span role="cell" class="home-view__recent-cell--end">{activityDateLabel(entry)}</span
               >
             </div>
@@ -1093,13 +1093,18 @@
      of reflowing. Keyed to this pane's own width via the `pane` container
      (WorkPane.svelte), not the viewport, since a split pane is rarely the
      window's width (columns-adapt-to-pane-width fix). */
-  @container pane (max-width: 680px) {
+  /* The breakpoints follow the cards' own floor, not a round number: padding,
+     24px icon, gaps, arrow and the longest one-word title («Investigación» at
+     17px) need about 210px per card, so four of them plus the page padding
+     need a ~920px pane. At 680px the row stayed four-wide in a 900px window
+     and the title ran under the arrow. */
+  @container pane (max-width: 940px) {
     .home-view__quick-access-grid {
       grid-template-columns: repeat(2, 1fr);
     }
   }
 
-  @container pane (max-width: 380px) {
+  @container pane (max-width: 500px) {
     .home-view__quick-access-grid {
       grid-template-columns: 1fr;
     }
@@ -1244,6 +1249,15 @@
     white-space: nowrap;
     text-overflow: ellipsis;
     color: var(--color-text-primary);
+  }
+
+  /* A collection name longer than its 200px column ellipsizes like the
+     document name beside it, instead of growing the row to five lines. */
+  .home-view__recent-cell {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   .home-view__recent-cell--end {

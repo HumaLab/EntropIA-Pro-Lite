@@ -1731,9 +1731,12 @@
     flex-wrap: wrap;
   }
 
-  /* Reads as the heading it replaces until you put the caret in it. */
+  /* Reads as the heading it replaces until you put the caret in it.
+     The 14rem basis is what lets `.writing__bar` wrap: with `flex: 1` (a zero
+     basis) the bar never had a reason to, and in a 640px split pane the six
+     header icons, the revision and the badge squeezed the title to «I…». */
   .writing__doc-title {
-    flex: 1;
+    flex: 1 1 14rem;
     min-width: 0;
     min-height: 32px;
     margin: 0;

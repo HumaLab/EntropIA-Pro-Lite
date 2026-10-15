@@ -66,13 +66,16 @@ describe('Continuar / Estado del corpus proportion', () => {
  * got the chance to reflow (visual polish round, split view).
  */
 describe('Acceso rápido and Actividad reciente reflow off the pane, not the window', () => {
+  // Four cards need ~210px each (their one-word titles cannot wrap), so the
+  // row goes two-wide below a ~920px pane: at 680px a 900px window kept four
+  // and ran «Investigación» under its arrow.
   it('drops the quick-access row from 4 to 2 to 1 column as the pane narrows', () => {
-    const twoCol = blockFor('@container pane (max-width: 680px)')
+    const twoCol = blockFor('@container pane (max-width: 940px)')
     expect(twoCol).toMatch(
       /\.home-view__quick-access-grid\s*\{\s*grid-template-columns:\s*repeat\(2,\s*1fr\);/
     )
 
-    const oneCol = blockFor('@container pane (max-width: 380px)')
+    const oneCol = blockFor('@container pane (max-width: 500px)')
     expect(oneCol).toMatch(/\.home-view__quick-access-grid\s*\{\s*grid-template-columns:\s*1fr;/)
   })
 

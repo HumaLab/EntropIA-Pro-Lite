@@ -69,6 +69,13 @@
     white-space: nowrap;
     user-select: none;
     box-shadow: none;
+    /* Never wider than the box it sits in. A nowrap label longer than its
+       container (a long Spanish label in a research panel squeezed to its
+       floor) used to push the whole button, border and all, past the edge;
+       the cap keeps the button inside and lets the label below clip. It only
+       bites when the label alone outgrows the container: in a row, wrapping
+       and shrinking still decide first. */
+    max-width: 100%;
   }
 
   .btn:disabled {
@@ -185,6 +192,10 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+    /* Clipped on the inline axis only: `overflow: hidden` would also cut the
+       descenders a tight line-height lets hang below the label's box. */
+    min-width: 0;
+    overflow-x: clip;
   }
 
   .btn__label--hidden {

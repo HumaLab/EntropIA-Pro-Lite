@@ -720,8 +720,14 @@
     flex-wrap: wrap;
   }
 
+  /* The help text and the action share a row only while both fit at their own
+     bases (14rem + 12rem): without `flex-wrap` the research panel (240px at
+     its squeeze floor) crushed the text into a one-word column and pushed the
+     nowrap button past the card's edge. Wrapping puts the action under the
+     text instead, whatever width the panel is dragged to. */
   .zotero__bibliography-sync {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
@@ -733,6 +739,7 @@
 
   .zotero__bibliography-sync-help {
     flex: 1 1 14rem;
+    min-width: 0;
     margin: 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-2xs);
@@ -746,6 +753,7 @@
     gap: var(--space-2);
     flex: 1 1 12rem;
     flex-wrap: wrap;
+    min-width: 0;
   }
 
   .zotero__library {
@@ -779,7 +787,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    max-width: 260px;
+    max-width: min(260px, 100%);
     min-height: var(--control-height-sm);
     padding: 0 var(--space-2);
     border: 1px solid var(--border-subtle);
