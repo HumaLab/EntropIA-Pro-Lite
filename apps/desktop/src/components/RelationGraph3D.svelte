@@ -5,10 +5,16 @@
    * from the triples the batch already extracted; nothing new is computed.
    */
   import { onDestroy } from 'svelte'
+  import { ActionIcon, IconButton } from '@entropia/ui'
   import { getStore } from '$lib/db'
-  import { locale, t } from '$lib/i18n'
+  import { locale, t, type I18nKey } from '$lib/i18n'
+  import { getNavigation } from '$lib/pane-context'
   import {
     buildRelationGraph,
+    describeNode,
+    key as nameKey,
+    type NodeDetails,
+    type RelationTriple,
     type GraphLink,
     type GraphNode,
     type RelationGraph,
@@ -28,16 +34,56 @@
   let instance: ForceGraph3DInstance | null = null
   let observer: ResizeObserver | null = null
   let loadedFor = ''
+  const navigation = getNavigation()
+
+  // What a click needs, kept from the last load: the raw triples, document
+  // titles, and the entity type each name was tagged with (first one wins).
+  let triples: RelationTriple[] = []
+  let titles = $state.raw(new Map<string, string>())
+  let types = new Map<string, string>()
+  let selected = $state<(NodeDetails & { label: string; type?: string }) | null>(null)
 
   async function loadTriples(): Promise<RelationGraph> {
     const store = getStore()
     const items = await store.items.findByCollection(collectionId)
     // ponytail: one query per item, like the JSON export; a collection-wide
     // query in the store if large collections make this slow.
-    const perItem = await Promise.all(
-      items.map((item) => store.triples?.findByItemId?.(item.id) ?? Promise.resolve([]))
-    )
-    return buildRelationGraph(perItem.flat())
+    const [perItem, entities] = await Promise.all([
+      Promise.all(
+        items.map((item) => store.triples?.findByItemId?.(item.id) ?? Promise.resolve([]))
+      ),
+      Promise.all(
+        items.map((item) => store.entities?.findByItemId?.(item.id) ?? Promise.resolve([]))
+      ),
+    ])
+    triples = perItem.flat()
+    titles = new Map(items.map((item) => [item.id, item.title]))
+    types = new Map()
+    for (const entity of entities.flat()) {
+      const k = nameKey(entity.value)
+      if (!types.has(k)) types.set(k, entity.entityType)
+    }
+    selected = null
+    return buildRelationGraph(triples)
+  }
+
+  function select(node: GraphNode) {
+    selected = { ...describeNode(node.id, triples), label: node.label, type: types.get(node.id) }
+  }
+
+  function typeLabel(type: string): string {
+    return t(`item.entityType.${type}` as I18nKey)
+  }
+
+  function openDocument(itemId: string) {
+    const current = navigation.current
+    navigation.navigate({
+      name: 'item',
+      collectionId,
+      collectionName: current.name === 'collection' ? current.collectionName : '',
+      itemId,
+      itemTitle: titles.get(itemId) ?? '',
+    })
   }
 
   /** Text labels as elements: the library would render a string as HTML, and
@@ -84,6 +130,8 @@
         .nodeLabel((n) => label((n as GraphNode).label))
         .nodeVal((n) => 1 + (n as GraphNode).degree)
         .nodeColor(() => accent)
+        .onNodeClick((n) => select(n as GraphNode))
+        .onBackgroundClick(() => (selected = null))
         .linkLabel((l) => label((l as GraphLink).predicates.join(' · ')))
         .linkColor(() => token('--color-text-secondary', '#888'))
         .linkDirectionalArrowLength(3)
@@ -133,11 +181,56 @@
       {/if}
     </p>
   {/if}
-  <div
-    class="relation-graph__canvas"
-    class:is-empty={status !== 'ready' || !graph?.nodes.length}
-    bind:this={container}
-  ></div>
+  <div class="relation-graph__stage">
+    <div
+      class="relation-graph__canvas"
+      class:is-empty={status !== 'ready' || !graph?.nodes.length}
+      bind:this={container}
+    ></div>
+    {#if selected}
+      <section class="relation-graph__details" aria-label={selected.label}>
+        <header class="relation-graph__details-head">
+          <div>
+            <h3>{selected.label}</h3>
+            {#if selected.type}
+              <span class="relation-graph__type">{typeLabel(selected.type)}</span>
+            {/if}
+          </div>
+          <IconButton
+            size="sm"
+            variant="ghost"
+            label={t('collectionAnalysis.graphClose')}
+            onclick={() => (selected = null)}
+          >
+            <ActionIcon name="close" size={14} />
+          </IconButton>
+        </header>
+        <h4>{t('collectionAnalysis.graphRelations')}</h4>
+        <ul>
+          {#each selected.relations as relation, index (index)}
+            <li>{relation.subject} <em>{relation.predicate}</em> {relation.object}</li>
+          {/each}
+        </ul>
+        {#if selected.itemIds.length > 0}
+          <h4>{t('collectionAnalysis.graphDocuments')}</h4>
+          <ul>
+            {#each selected.itemIds as itemId (itemId)}
+              <li>
+                <button
+                  type="button"
+                  class="relation-graph__doc"
+                  onclick={() => openDocument(itemId)}
+                >
+                  {titles.get(itemId) ?? itemId}
+                  <ActionIcon name="external-link" size={12} />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -152,6 +245,80 @@
   .relation-graph__note {
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
+  }
+
+  .relation-graph__stage {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .relation-graph__details {
+    position: absolute;
+    top: var(--space-2);
+    left: var(--space-2);
+    width: min(320px, calc(100% - 2 * var(--space-2)));
+    max-height: calc(100% - 2 * var(--space-2));
+    overflow-y: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-surface);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-md);
+    font-size: var(--font-size-sm);
+  }
+
+  .relation-graph__details-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .relation-graph__details h3 {
+    font-size: var(--font-size-md);
+  }
+
+  .relation-graph__details h4 {
+    margin-top: var(--space-3);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .relation-graph__details ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .relation-graph__details em {
+    color: var(--color-text-secondary);
+  }
+
+  .relation-graph__type {
+    color: var(--color-text-secondary);
+  }
+
+  .relation-graph__doc {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-accent);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .relation-graph__doc:hover {
+    text-decoration: underline;
   }
 
   .relation-graph__canvas {

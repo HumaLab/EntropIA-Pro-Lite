@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRelationGraph } from './relation-graph'
+import { buildRelationGraph, describeNode } from './relation-graph'
 
 describe('buildRelationGraph', () => {
   it('merges names that differ only in case or spacing and joins predicates per pair', () => {
@@ -37,5 +37,22 @@ describe('buildRelationGraph', () => {
     expect(graph.nodes.map((n) => n.id)).toEqual(['a', 'b'])
     expect(graph.links).toEqual([{ source: 'a', target: 'b', predicates: ['p'] }])
     expect(graph.hiddenNodes).toBe(3)
+  })
+
+  it('describes a node with its relations, both directions, and their documents', () => {
+    const triples = [
+      { subject: 'Marini', predicate: 'visita', object: 'Mar del Plata', itemId: 'd1' },
+      { subject: ' marini', predicate: 'visita', object: 'mar del plata', itemId: 'd2' },
+      { subject: 'Verón', predicate: 'reclamó a', object: 'Marini', itemId: 'd2' },
+      { subject: 'Otro', predicate: 'p', object: 'Nadie', itemId: 'd3' },
+    ]
+
+    expect(describeNode('marini', triples)).toEqual({
+      relations: [
+        { subject: 'Marini', predicate: 'visita', object: 'Mar del Plata' },
+        { subject: 'Verón', predicate: 'reclamó a', object: 'Marini' },
+      ],
+      itemIds: ['d1', 'd2'],
+    })
   })
 })

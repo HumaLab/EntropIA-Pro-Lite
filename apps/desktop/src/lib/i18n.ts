@@ -1802,8 +1802,11 @@ const es = {
   'collectionAnalysis.graphEmpty':
     'Todavía no hay relaciones. Se extraen en Configuración → Lotes, con el paso de relaciones.',
   'collectionAnalysis.graphSummary':
-    '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla.',
+    '{nodes} nombres y {links} relaciones. Arrastrá para girar, rueda para acercar; pasá el mouse por un punto o una línea para leerla; tocá un punto para ver de dónde sale.',
   'collectionAnalysis.graphHidden': 'Se ocultan {count} nombres con pocas relaciones.',
+  'collectionAnalysis.graphRelations': 'Relaciones',
+  'collectionAnalysis.graphDocuments': 'Aparece en',
+  'collectionAnalysis.graphClose': 'Cerrar el detalle',
   'collectionAnalysis.loading': 'Analizando el texto de la colección...',
   'collectionAnalysis.empty':
     'No hay texto extraído en esta colección. Ejecutá OCR o transcripción en los documentos.',
@@ -4418,8 +4421,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collectionAnalysis.graphEmpty':
     'No relations yet. They are extracted in Settings → Batch, with the relations step.',
   'collectionAnalysis.graphSummary':
-    '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it.',
+    '{nodes} names and {links} relations. Drag to rotate, scroll to zoom; hover a point or a line to read it; click a point to see where it comes from.',
   'collectionAnalysis.graphHidden': '{count} names with few relations are hidden.',
+  'collectionAnalysis.graphRelations': 'Relations',
+  'collectionAnalysis.graphDocuments': 'Appears in',
+  'collectionAnalysis.graphClose': 'Close the details',
   'collectionAnalysis.loading': 'Analyzing collection text...',
   'collectionAnalysis.empty':
     'There is no extracted text in this collection. Run OCR or transcription on the documents.',
