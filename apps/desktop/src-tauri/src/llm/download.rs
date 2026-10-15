@@ -340,17 +340,19 @@ mod tests {
                 opened_models_path.clone()
             }
             Err(error) => {
-                #[cfg(windows)]
-                assert_eq!(
-                    error.raw_os_error(),
-                    Some(32),
-                    "unexpected Windows error while attempting directory swap: {error}"
-                );
                 #[cfg(not(windows))]
                 panic!("unexpected failure while attempting directory swap: {error}");
-                assert!(models_path.is_dir());
-                assert!(!opened_models_path.exists());
-                models_path.clone()
+                #[cfg(windows)]
+                {
+                    assert_eq!(
+                        error.raw_os_error(),
+                        Some(32),
+                        "unexpected Windows error while attempting directory swap: {error}"
+                    );
+                    assert!(models_path.is_dir());
+                    assert!(!opened_models_path.exists());
+                    models_path.clone()
+                }
             }
         };
         let outside_temporary = outside.join("gemma-model.download.tmp");

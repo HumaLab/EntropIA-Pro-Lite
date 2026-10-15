@@ -440,6 +440,18 @@ describe('runtime pack packaging', () => {
     expect(publishWorkflow).toContain('PLATFORM=${{ inputs.platform }}')
   })
 
+  it('lints the Pro (local-ml) build on Linux in CI', () => {
+    const ciWorkflow = readRepoFile('.github/workflows/ci.yml')
+    const job = topLevelJobText(ciWorkflow, 'rust-pro-linux')
+
+    // Same image as the Linux release build, gated like the other Rust legs.
+    expect(job).toContain('runs-on: ubuntu-22.04')
+    expect(job).toContain("needs.detect-rust-changes.outputs.has_rs_changes == 'true'")
+    expect(job).toContain(
+      'cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml --all-targets -- -D warnings'
+    )
+  })
+
   it('bakes the manifest URL that the bootstrap publish workflow prints (C-02)', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
     const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
