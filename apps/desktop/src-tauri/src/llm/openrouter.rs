@@ -548,7 +548,8 @@ impl OpenRouterClient {
                 role: "user".to_string(),
                 content: ChatMessageContent::Text("ping".to_string()),
             }],
-            max_tokens: 5,
+            // The gateway rejects fewer than 16 output tokens.
+            max_tokens: 16,
             temperature: 0.0,
             top_p: None,
             top_k: None,
