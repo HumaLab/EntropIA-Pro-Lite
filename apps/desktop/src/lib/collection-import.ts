@@ -105,6 +105,9 @@ export function buildImportSummary(result: ImportClassifiedPathsResult): ImportS
   }
 }
 
+// Same absolute-path rule as file-import.ts: drive letter, UNC or POSIX root.
+const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
+
 async function readAssetSize(path: string): Promise<number | null> {
   try {
     const metadata = await stat(path)
@@ -146,7 +149,11 @@ async function splitPdfIntoPageAssets(
       path: page.pdf_path,
       type: 'pdf',
       sortIndex: page.page_number - 1,
-      size: await readAssetSize(page.pdf_path),
+      // split_pdf_pages returns stored keys relative to the data directory;
+      // the fs plugin scope only accepts absolute paths.
+      size: await readAssetSize(
+        ABSOLUTE_PATH.test(page.pdf_path) ? page.pdf_path : await join(dataDir, page.pdf_path)
+      ),
       parentAssetId,
       pageNumber: page.page_number,
     })
@@ -161,12 +168,15 @@ async function splitPdfIntoPageAssets(
  * Remove everything a failed import created: its assets, its item and the
  * folder its files were copied into.
  *
+ * Exported (unchanged) so the Internet Archive import flow reuses it to drop
+ * partial remnants and failed items.
+ *
  * When splitting fails the parent asset already exists, so deleting the item
  * alone trips the assets foreign key. The assets go first. The item cascade
  * is not an option: it also deletes the collection when this was its first
  * document.
  */
-async function discardFailedImport(collectionId: string, itemId: string) {
+export async function discardFailedImport(collectionId: string, itemId: string) {
   const store = getStore()
   try {
     const assets = await store.assets.findByItem(itemId)

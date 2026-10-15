@@ -21,6 +21,7 @@ pub mod deps;
 mod geo;
 mod image_edit;
 mod instance_guard;
+mod internet_archive;
 mod llm;
 mod logging;
 mod navegador;
@@ -1000,6 +1001,51 @@ pub fn run() {
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
+            // Internet Archive connector (read-only commands): strict client
+            // plus the job store rooted under the data dir, so dev profiles
+            // get their own staging area. The store creates its directory
+            // lazily on first write, never here.
+            app.manage(internet_archive::IaState::new(&app_dir));
+            // Startup recovery for interrupted downloads: normalize every job
+            // folder and never block or fail startup over it. Reconcile
+            // entries are durable and derived on demand from `job.json` (a
+            // `Cancelled` file that still has a `staging_name`), so nothing
+            // is kept in memory for the frontend: it may call
+            // `ia_list_reconcile` any time after this. The whole `recover_all`
+            // runs while holding `jobs`, so a start arriving during recovery
+            // waits for it (lock order: `jobs` only, never `active`).
+            {
+                let handle = app.handle().clone();
+                let store = handle.state::<internet_archive::IaState>().store.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|elapsed| elapsed.as_secs())
+                        .unwrap_or(0);
+                    // Keep the state guard alive for the guard borrowing it.
+                    let state = handle.try_state::<internet_archive::IaState>();
+                    let _jobs_guard = state.as_ref().and_then(|state| state.jobs.lock().ok());
+                    let report = store.recover_all(now);
+                    let reconcile = report.needs_reconcile.len();
+                    eprintln!(
+                        "[ia] recovery: {} jobs, {} reconcile, {} skipped, {} quarantined, {} unsupported",
+                        report.jobs.len(),
+                        reconcile,
+                        report.skipped.len(),
+                        report.quarantined.len(),
+                        report.unsupported.len()
+                    );
+                    app_logs::info(
+                        &handle,
+                        "ia/recovery",
+                        format!(
+                            "Recuperación: {} trabajos, {reconcile} por conciliar",
+                            report.jobs.len(),
+                        ),
+                    );
+                });
+            }
+
             // Managed-runtime lifecycle is local-ml only; the lite build has no runtime to validate.
             #[cfg(feature = "local-ml")]
             {
@@ -1512,6 +1558,22 @@ pub fn run() {
             sync::commands::sync_delete_notification,
             sync::commands::sync_mark_notification_read,
             sync::commands::sync_delete_account,
+            internet_archive::commands::ia_resolve_identifier,
+            internet_archive::commands::ia_search,
+            internet_archive::commands::ia_list_collection,
+            internet_archive::commands::ia_get_item,
+            internet_archive::commands::ia_prepare_import,
+            internet_archive::commands::ia_start_import,
+            internet_archive::commands::ia_cancel_import,
+            internet_archive::commands::ia_discard_draft,
+            internet_archive::commands::ia_get_import_status,
+            internet_archive::commands::ia_list_jobs,
+            internet_archive::commands::ia_list_verified_files,
+            internet_archive::import::ia_begin_file_import,
+            internet_archive::import::ia_confirm_file_imported,
+            internet_archive::import::ia_fail_file_import,
+            internet_archive::import::ia_list_reconcile,
+            internet_archive::import::ia_finish_reconcile,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -238,6 +238,22 @@ const APP_COMMANDS: &[&str] = &[
     "sync_delete_notification",
     "sync_mark_notification_read",
     "sync_delete_account",
+    "ia_resolve_identifier",
+    "ia_search",
+    "ia_list_collection",
+    "ia_get_item",
+    "ia_prepare_import",
+    "ia_start_import",
+    "ia_cancel_import",
+    "ia_discard_draft",
+    "ia_get_import_status",
+    "ia_list_jobs",
+    "ia_list_verified_files",
+    "ia_begin_file_import",
+    "ia_confirm_file_imported",
+    "ia_fail_file_import",
+    "ia_list_reconcile",
+    "ia_finish_reconcile",
 ];
 
 fn main() {
