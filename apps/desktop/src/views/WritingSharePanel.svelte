@@ -209,10 +209,12 @@
 </Panel>
 
 <style>
+  /* Two columns while each still gets 16rem, one below that: a fixed `1fr 1fr`
+     left the e-mail and key rows half of a narrow Writing pane each. */
   .share-panel {
     position: relative;
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
     gap: var(--space-4);
   }
 
@@ -222,8 +224,12 @@
     right: 0;
   }
 
+  /* The close button is pinned to the panel's top-right corner, over whichever
+     heading sits there (the right column's, or the first one once the columns
+     stack): each heading keeps the button's 28px plus a gap clear of it. */
   h3 {
     margin: 0 0 var(--space-2);
+    padding-inline-end: calc(28px + var(--space-2));
     font-size: var(--font-size-md, 1rem);
   }
 
@@ -235,8 +241,14 @@
 
   .share-panel__row {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: var(--space-2);
+  }
+
+  .share-panel__row > :global(:first-child) {
+    flex: 1 1 12rem;
+    min-width: 0;
   }
 
   .share-panel__hint {
