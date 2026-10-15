@@ -818,7 +818,7 @@ pub(crate) fn now_secs() -> u64 {
 pub(crate) fn emit_job_updated(app: &tauri::AppHandle, job_id: &str) {
     use tauri::Emitter as _;
     if let Err(error) = app.emit("ia://job-updated", serde_json::json!({ "jobId": job_id })) {
-        eprintln!("[ia] job-updated emit failed for {job_id}: {error}");
+        log::warn!(target: "ia", "job-updated emit failed for {job_id}: {error}");
     }
 }
 
@@ -1068,7 +1068,7 @@ pub fn ia_start_import(
             None => Err("io: local storage error".to_string()),
         };
         if let Err(error) = run_result {
-            eprintln!("[ia] import runner for {job_id_clone} ended with error: {error}");
+            log::warn!(target: "ia", "import runner for {job_id_clone} ended with error: {error}");
         }
         // End of run: `active` first, then `jobs` inside the helper. A
         // cancel that arrived after `run_job` returned but before this
@@ -1082,11 +1082,11 @@ pub fn ia_start_import(
                     match apply_end_of_run_cancel(&store, &state.jobs, &job_id_clone, true, now) {
                         Ok((applied, _)) => {
                             if applied {
-                                eprintln!("[ia] applied end-of-run cancel for {job_id_clone}");
+                                log::info!(target: "ia", "applied end-of-run cancel for {job_id_clone}");
                             }
                         }
                         Err(error) => {
-                            eprintln!("[ia] end-of-run cancel for {job_id_clone} failed: {error}");
+                            log::warn!(target: "ia", "end-of-run cancel for {job_id_clone} failed: {error}");
                         }
                     }
                 }

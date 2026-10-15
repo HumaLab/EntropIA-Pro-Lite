@@ -245,10 +245,10 @@ impl RuntimeManager {
                 match outcome {
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => {
-                        eprintln!("[runtime] startup auto-bootstrap ended: {error}");
+                        log::warn!(target: "runtime", "startup auto-bootstrap ended: {error}");
                     }
                     Err(_) => {
-                        eprintln!("[runtime] startup auto-bootstrap worker panicked");
+                        log::error!(target: "runtime", "startup auto-bootstrap worker panicked");
                     }
                 }
             },

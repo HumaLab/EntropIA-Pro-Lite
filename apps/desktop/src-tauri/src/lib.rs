@@ -1027,8 +1027,9 @@ pub fn run() {
                     let _jobs_guard = state.as_ref().and_then(|state| state.jobs.lock().ok());
                     let report = store.recover_all(now);
                     let reconcile = report.needs_reconcile.len();
-                    eprintln!(
-                        "[ia] recovery: {} jobs, {} reconcile, {} skipped, {} quarantined, {} unsupported",
+                    log::info!(
+                        target: "ia",
+                        "recovery: {} jobs, {} reconcile, {} skipped, {} quarantined, {} unsupported",
                         report.jobs.len(),
                         reconcile,
                         report.skipped.len(),
