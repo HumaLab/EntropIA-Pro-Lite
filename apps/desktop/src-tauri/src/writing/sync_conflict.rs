@@ -511,7 +511,7 @@ pub(crate) fn conflict_copy_document_id(
     update_hash_field(&mut digest, b"writing-conflict-copy-v1");
     update_hash_field(&mut digest, source_document_id.as_bytes());
     update_hash_field(&mut digest, semantic_fingerprint_sha256.as_bytes());
-    format!("writing-conflict-{:x}", digest.finalize())
+    format!("writing-conflict-{}", hex::encode(digest.finalize()))
 }
 
 fn conflict_copy_title(source_title: &str, semantic_fingerprint_sha256: &str) -> String {

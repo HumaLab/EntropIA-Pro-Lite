@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "description": "Committed binaries and their provenance (audit finding D-07). Checked offline by `node apps/desktop/scripts/verify-binaries.mjs check`; upstream archives are re-derived by `verify-upstream`.",
+  "binaries": [
+    {
+      "path": "apps/desktop/src-tauri/msix/EntropIALite-base.msix",
+      "sha256": "32a1920701e59e3f5aa66bb10fca6e12ecd4c836ead23a0f3b9796840e462f71",
+      "size": 8237198,
+      "kind": "vendored",
+      "name": "EntropIA Lite base MSIX capture",
+      "version": null,
+      "provenance": "Captured once with the MSIX Packaging Tool in a Hyper-V Windows 11 VM; see apps/desktop/src-tauri/msix/README.md."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/lib/pdfium.dll",
+      "sha256": "6b963c2be9cacbaa0c0c7f4bf6d20d2fd16729ebdaa9989978b0f7b119c1c1cb",
+      "size": 5787136,
+      "kind": "upstream",
+      "name": "PDFium (Windows x64)",
+      "version": "chromium/7543",
+      "provenance": "Extracted from the pdfium-win-x64.tgz archive of bblanchon/pdfium-binaries release chromium/7543; the committed bytes are byte-identical to bin/pdfium.dll.",
+      "source": {
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7543/pdfium-win-x64.tgz",
+        "archive_sha256": "0b08b606792a6cc593426efdefc6622611bce446d9e0270743846956ea1554ca",
+        "member": "bin/pdfium.dll"
+      }
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/models/ocr/PP-LCNet_x1_0_doc_ori.mnn",
+      "sha256": "6953045fb5f8ea52fea5ec64e104002321be372b328fd5466fb859690f4a9c8e",
+      "size": 6703896,
+      "kind": "vendored",
+      "name": "PP-LCNet_x1_0_doc_ori MNN model",
+      "version": null,
+      "provenance": "Vendored: the names indicate PaddleOCR PP-OCRv5 / PP-LCNet models converted to MNN, but the source model version and the conversion tool/version were not recorded."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/models/ocr/PP-OCRv5_mobile_det.mnn",
+      "sha256": "326f846bb5c903282e116ea089e8796b67921586726cca9457730436a79684c3",
+      "size": 4760244,
+      "kind": "vendored",
+      "name": "PP-OCRv5_mobile_det MNN model",
+      "version": null,
+      "provenance": "Vendored: the names indicate PaddleOCR PP-OCRv5 / PP-LCNet models converted to MNN, but the source model version and the conversion tool/version were not recorded."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/models/ocr/latin_PP-OCRv5_mobile_rec_infer.mnn",
+      "sha256": "f3da21186ade13e0d3553867205a8983d9fda46e10b6a15e5f6308325e6e7a55",
+      "size": 4065440,
+      "kind": "vendored",
+      "name": "latin_PP-OCRv5_mobile_rec_infer MNN model",
+      "version": null,
+      "provenance": "Vendored: the names indicate PaddleOCR PP-OCRv5 / PP-LCNet models converted to MNN, but the source model version and the conversion tool/version were not recorded."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/runtime-pack/linux-x86_64/resources/lib/libonnxruntime.so",
+      "sha256": "7244f14e73e62c06d5f2828b1cb5775c55df8d20782c1e0d0be8e891f099f5fa",
+      "size": 56,
+      "kind": "fixture",
+      "name": "runtime-pack Linux libonnxruntime.so fixture",
+      "version": null,
+      "provenance": "Runtime-pack fixture: a text placeholder pinned by the runtime-pack manifest, replaced by the bootstrap download, and never loaded as a native library."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/runtime-pack/linux-x86_64/resources/lib/libpdfium.so",
+      "sha256": "93dcbebfd81416ccd4e7afaef9ca8e808a8f336abe4b5a1b9980b09dd02ee988",
+      "size": 51,
+      "kind": "fixture",
+      "name": "runtime-pack Linux libpdfium.so fixture",
+      "version": null,
+      "provenance": "Runtime-pack fixture: a text placeholder pinned by the runtime-pack manifest, replaced by the bootstrap download, and never loaded as a native library."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/runtime-pack/windows-x86_64/python/python.exe",
+      "sha256": "44666181d30254fcbdfe039b4dea8a2a1a75f4e74e672a70e3471ef13547d05a",
+      "size": 37,
+      "kind": "fixture",
+      "name": "runtime-pack Windows python.exe fixture",
+      "version": null,
+      "provenance": "Runtime-pack fixture: a text placeholder pinned by the runtime-pack manifest, replaced by the bootstrap download, and never executed."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/runtime-pack/windows-x86_64/resources/lib/pdfium.dll",
+      "sha256": "166168a127c7de1e71bc90f8e78696fc8d94d96ffd3e86110ad0782cfbe26b64",
+      "size": 60,
+      "kind": "fixture",
+      "name": "runtime-pack Windows pdfium.dll fixture",
+      "version": null,
+      "provenance": "Runtime-pack fixture: a text placeholder pinned by the runtime-pack manifest, replaced by the bootstrap download, and never loaded as a native library."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/runtime-pack/windows-x86_64/uv/uv.exe",
+      "sha256": "cce6e0626e5f61b3e07fca8fe4ba25a86be51b43a222d8ceac440146ba99aac5",
+      "size": 24,
+      "kind": "fixture",
+      "name": "runtime-pack Windows uv.exe fixture",
+      "version": null,
+      "provenance": "Runtime-pack fixture: a text placeholder pinned by the runtime-pack manifest, replaced by the bootstrap download, and never executed."
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/tools/uv/windows-aarch64/uv.exe",
+      "sha256": "8a924418e5d7a0562624c3a7b6833e9f0ff1447017a9c4129b3dd37ef3552e99",
+      "size": 40086016,
+      "kind": "upstream",
+      "name": "uv (Windows ARM64)",
+      "version": "0.6.14",
+      "provenance": "Extracted from uv-aarch64-pc-windows-msvc.zip of Astral's uv 0.6.14 release; the archive matches the published .sha256 and the extracted binary is committed byte-identical.",
+      "source": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-aarch64-pc-windows-msvc.zip",
+        "archive_sha256": "7b0b3367c4060c9b47b961201ceb4252e97496c890ad1bd13c664bf5b0744d57",
+        "member": "uv.exe"
+      }
+    },
+    {
+      "path": "apps/desktop/src-tauri/resources/tools/uv/windows-x86_64/uv.exe",
+      "sha256": "fad4db6a8f4898abc18a8b6e403ff181be0add5bf1fc90ea91c94e8dec24703f",
+      "size": 49496576,
+      "kind": "upstream",
+      "name": "uv (Windows x64)",
+      "version": "0.6.14",
+      "provenance": "Extracted from uv-x86_64-pc-windows-msvc.zip of Astral's uv 0.6.14 release; the archive matches the published .sha256 and the extracted binary is committed byte-identical.",
+      "source": {
+        "url": "https://github.com/astral-sh/uv/releases/download/0.6.14/uv-x86_64-pc-windows-msvc.zip",
+        "archive_sha256": "93b29fc234758e381df461d7638ff73d0f08bdf3a0dc37923b1ee0b9e442ca3f",
+        "member": "uv.exe"
+      }
+    }
+  ]
+}

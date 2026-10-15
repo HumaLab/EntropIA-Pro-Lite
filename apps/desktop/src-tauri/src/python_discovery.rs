@@ -169,12 +169,13 @@ pub fn discover_python_candidates() -> &'static Vec<PathBuf> {
         }
 
         if is_verbose_python_logging_enabled() {
-            eprintln!(
-                "[python] Discovered {} Python candidate(s)",
+            log::info!(
+                target: "python",
+                "Discovered {} Python candidate(s)",
                 candidates.len()
             );
             for (i, c) in candidates.iter().enumerate() {
-                eprintln!("[python]   [{}] {}", i + 1, c.display());
+                log::info!(target: "python", "  [{}] {}", i + 1, c.display());
             }
         }
 
@@ -353,8 +354,9 @@ pub fn which_python_for_module(
     settings_db_path: Option<&Path>,
 ) -> Option<PathBuf> {
     if let Some(path) = load_managed_venv_python(probe_code, settings_db_path) {
-        eprintln!(
-            "[{tag}] Python resolver hit ({cache_key}, source=managed_venv): {}",
+        log::info!(
+            target: tag,
+            "Python resolver hit ({cache_key}, source=managed_venv): {}",
             path.display()
         );
         if let Ok(mut cache) = get_probe_cache().lock() {
@@ -368,22 +370,25 @@ pub fn which_python_for_module(
     if let Ok(cache) = get_probe_cache().lock() {
         if let Some(cached) = cache.get(cache_key) {
             if let Some(path) = cached {
-                eprintln!(
-                    "[{tag}] Python resolver hit ({cache_key}, source=memory_cache): {}",
+                log::info!(
+                    target: tag,
+                    "Python resolver hit ({cache_key}, source=memory_cache): {}",
                     path.display()
                 );
                 return Some(path.clone());
             }
-            eprintln!(
-                "[{tag}] Python resolver hit ({cache_key}, source=memory_cache): not available"
+            log::info!(
+                target: tag,
+                "Python resolver hit ({cache_key}, source=memory_cache): not available"
             );
             return None;
         }
     }
 
     if let Some(path) = load_persisted_python(cache_key, probe_code, settings_db_path) {
-        eprintln!(
-            "[{tag}] Python resolver hit ({cache_key}, source=persisted_cache): {}",
+        log::info!(
+            target: tag,
+            "Python resolver hit ({cache_key}, source=persisted_cache): {}",
             path.display()
         );
         if let Ok(mut cache) = get_probe_cache().lock() {
@@ -394,15 +399,17 @@ pub fn which_python_for_module(
 
     let known_good = collect_known_good_pythons();
     if !known_good.is_empty() {
-        eprintln!(
-            "[{tag}] Fast-path: trying {} previously-validated Python(s) before full scan for {module_name}",
+        log::info!(
+            target: tag,
+            "Fast-path: trying {} previously-validated Python(s) before full scan for {module_name}",
             known_good.len()
         );
         for python in &known_good {
             let probe_start = std::time::Instant::now();
             if probe_python_module(python, probe_code) {
-                eprintln!(
-                    "[{tag}] ✅ Found Python with {module_name} via fast-path (source=known_good, {}ms): {}",
+                log::info!(
+                    target: tag,
+                    "✅ Found Python with {module_name} via fast-path (source=known_good, {}ms): {}",
                     probe_start.elapsed().as_millis(),
                     python.display()
                 );
@@ -413,7 +420,7 @@ pub fn which_python_for_module(
                 return Some(python.clone());
             }
         }
-        eprintln!("[{tag}] Fast-path: no previously-validated Python had {module_name}, falling back to full scan");
+        log::info!(target: tag, "Fast-path: no previously-validated Python had {module_name}, falling back to full scan");
     }
 
     let known_good_keys: std::collections::HashSet<String> = known_good
@@ -428,14 +435,15 @@ pub fn which_python_for_module(
         .collect();
 
     let candidate_count = candidates.len();
-    eprintln!("[{tag}] Probing {candidate_count} candidate(s) for {module_name}");
+    log::info!(target: tag, "Probing {candidate_count} candidate(s) for {module_name}");
     for (failed_probes, candidate) in candidates.into_iter().enumerate() {
         let probe_start = std::time::Instant::now();
         let import_ok = probe_python_module(&candidate, probe_code);
 
         if import_ok {
-            eprintln!(
-                "[{tag}] ✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
+            log::info!(
+                target: tag,
+                "✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
                 failed_probes,
                 probe_start.elapsed().as_millis(),
                 candidate.display()
@@ -449,16 +457,18 @@ pub fn which_python_for_module(
         }
 
         if is_verbose_python_logging_enabled() {
-            eprintln!(
-                "[{tag}]   ❌ {} ({}ms): {module_name} not importable",
+            log::info!(
+                target: tag,
+                "  ❌ {} ({}ms): {module_name} not importable",
                 candidate.display(),
                 probe_start.elapsed().as_millis()
             );
         }
     }
 
-    eprintln!(
-        "[{tag}] WARNING: No Python with {module_name} found among {candidate_count} candidate(s)"
+    log::warn!(
+        target: tag,
+        "WARNING: No Python with {module_name} found among {candidate_count} candidate(s)"
     );
     // Cache the miss
     if let Ok(mut cache) = get_probe_cache().lock() {
@@ -474,7 +484,7 @@ pub fn which_python_for_module(
 pub fn invalidate_probe_cache() {
     if let Ok(mut cache) = get_probe_cache().lock() {
         cache.clear();
-        eprintln!("[python_discovery] Probe cache invalidated");
+        log::info!(target: "python_discovery", "Probe cache invalidated");
     }
 }
 
@@ -538,8 +548,9 @@ pub fn which_python_for_module_scored(
     scorer: &dyn Fn(&std::path::Path) -> i32,
 ) -> Option<PathBuf> {
     if let Some(path) = load_managed_venv_python(probe_code, settings_db_path) {
-        eprintln!(
-            "[{tag}] Python resolver hit ({cache_key}, source=managed_venv): {}",
+        log::info!(
+            target: tag,
+            "Python resolver hit ({cache_key}, source=managed_venv): {}",
             path.display()
         );
         if let Ok(mut cache) = get_probe_cache().lock() {
@@ -553,22 +564,25 @@ pub fn which_python_for_module_scored(
     if let Ok(cache) = get_probe_cache().lock() {
         if let Some(cached) = cache.get(cache_key) {
             if let Some(path) = cached {
-                eprintln!(
-                    "[{tag}] Python resolver hit ({cache_key}, source=memory_cache): {}",
+                log::info!(
+                    target: tag,
+                    "Python resolver hit ({cache_key}, source=memory_cache): {}",
                     path.display()
                 );
                 return Some(path.clone());
             }
-            eprintln!(
-                "[{tag}] Python resolver hit ({cache_key}, source=memory_cache): not available"
+            log::info!(
+                target: tag,
+                "Python resolver hit ({cache_key}, source=memory_cache): not available"
             );
             return None;
         }
     }
 
     if let Some(path) = load_persisted_python(cache_key, probe_code, settings_db_path) {
-        eprintln!(
-            "[{tag}] Python resolver hit ({cache_key}, source=persisted_cache): {}",
+        log::info!(
+            target: tag,
+            "Python resolver hit ({cache_key}, source=persisted_cache): {}",
             path.display()
         );
         if let Ok(mut cache) = get_probe_cache().lock() {
@@ -582,15 +596,17 @@ pub fn which_python_for_module_scored(
     // Conda Python has all packages, this avoids ~10s of redundant probing.
     let known_good = collect_known_good_pythons();
     if !known_good.is_empty() {
-        eprintln!(
-            "[{tag}] Fast-path: trying {} previously-validated Python(s) before full scan for {module_name}",
+        log::info!(
+            target: tag,
+            "Fast-path: trying {} previously-validated Python(s) before full scan for {module_name}",
             known_good.len()
         );
         for python in &known_good {
             let probe_start = std::time::Instant::now();
             if probe_python_module(python, probe_code) {
-                eprintln!(
-                    "[{tag}] ✅ Found Python with {module_name} via fast-path (source=known_good, {}ms): {}",
+                log::info!(
+                    target: tag,
+                    "✅ Found Python with {module_name} via fast-path (source=known_good, {}ms): {}",
                     probe_start.elapsed().as_millis(),
                     python.display()
                 );
@@ -602,7 +618,7 @@ pub fn which_python_for_module_scored(
                 return Some(python.clone());
             }
         }
-        eprintln!("[{tag}] Fast-path: no previously-validated Python had {module_name}, falling back to full scan");
+        log::info!(target: tag, "Fast-path: no previously-validated Python had {module_name}, falling back to full scan");
     }
 
     let known_good_keys: std::collections::HashSet<String> = known_good
@@ -619,8 +635,9 @@ pub fn which_python_for_module_scored(
     // Sort candidates by score (descending) — dedicated envs first
     candidates.sort_by_key(|c| -scorer(c));
 
-    eprintln!(
-        "[{tag}] Probing {} candidate(s) for {module_name} (scored, dedicated envs first)",
+    log::info!(
+        target: tag,
+        "Probing {} candidate(s) for {module_name} (scored, dedicated envs first)",
         candidates.len()
     );
     for (failed_probes, candidate) in candidates.iter().enumerate() {
@@ -628,8 +645,9 @@ pub fn which_python_for_module_scored(
         let import_ok = probe_python_module(candidate, probe_code);
 
         if import_ok {
-            eprintln!(
-                "[{tag}] ✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
+            log::info!(
+                target: tag,
+                "✅ Found Python with {module_name} after {} failed probe(s) (source=full_scan, {}ms): {}",
                 failed_probes,
                 probe_start.elapsed().as_millis(),
                 candidate.display()
@@ -643,16 +661,18 @@ pub fn which_python_for_module_scored(
         }
 
         if is_verbose_python_logging_enabled() {
-            eprintln!(
-                "[{tag}]   ❌ {} ({}ms): {module_name} not importable",
+            log::info!(
+                target: tag,
+                "  ❌ {} ({}ms): {module_name} not importable",
                 candidate.display(),
                 probe_start.elapsed().as_millis()
             );
         }
     }
 
-    eprintln!(
-        "[{tag}] WARNING: No Python with {module_name} found among {} candidate(s)",
+    log::warn!(
+        target: tag,
+        "WARNING: No Python with {module_name} found among {} candidate(s)",
         candidates.len()
     );
     // Cache the miss
@@ -745,8 +765,8 @@ mod tests {
         std::fs::write(&python_path, b"python").expect("write python");
         std::fs::write(&uv_path, b"uv").expect("write uv");
         std::fs::write(&venv_python, b"venv-python").expect("write venv python");
-        let python_sha = format!("{:x}", sha2::Sha256::digest(b"python"));
-        let uv_sha = format!("{:x}", sha2::Sha256::digest(b"uv"));
+        let python_sha = hex::encode(sha2::Sha256::digest(b"python"));
+        let uv_sha = hex::encode(sha2::Sha256::digest(b"uv"));
         std::fs::write(
             managed_root.join("manifest.json"),
             serde_json::to_vec_pretty(&crate::runtime::manifest::RuntimeManifest {

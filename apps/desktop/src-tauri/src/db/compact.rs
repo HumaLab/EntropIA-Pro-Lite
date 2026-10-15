@@ -323,7 +323,7 @@ pub fn compact_archive(
     // Hand the WAL's pages back and shrink the file; the VACUUM is already
     // durable, so a failure here only leaves a bigger WAL for the next open.
     if let Err(error) = checkpoint_truncate(&conn) {
-        eprintln!("[compact] post-VACUUM checkpoint failed: {error}");
+        log::warn!(target: "compact", "post-VACUUM checkpoint failed: {error}");
     }
 
     let mode: i64 = conn
@@ -356,7 +356,7 @@ fn record_compaction(conn: &Connection, before_bytes: u64, after_bytes: u64) {
         )
         .and_then(|()| crate::settings::set_setting(conn, SETTING_KEY, &value));
     if let Err(error) = written {
-        eprintln!("[compact] could not record the compaction: {error}");
+        log::warn!(target: "compact", "could not record the compaction: {error}");
     }
 }
 

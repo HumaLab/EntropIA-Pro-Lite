@@ -1735,7 +1735,7 @@ mod tests {
     #[test]
     fn live_transport_creates_in_the_test_group() {
         if std::env::var("ZSB_LIVE_ZOTERO").is_err() {
-            eprintln!("skipping live Zotero write: ZSB_LIVE_ZOTERO is not set");
+            println!("skipping live Zotero write: ZSB_LIVE_ZOTERO is not set");
             return;
         }
         let mut conn = tray_db();

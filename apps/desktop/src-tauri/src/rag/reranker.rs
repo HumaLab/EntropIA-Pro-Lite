@@ -260,7 +260,10 @@ pub(crate) async fn rerank_candidates(
 
 #[cfg(not(feature = "local-ml"))]
 fn warn_fallback(reason: &str) {
-    eprintln!("[rag] Lite reranking unavailable ({reason}); preserving RRF order");
+    log::warn!(
+        target: "rag",
+        "Lite reranking unavailable ({reason}); preserving RRF order"
+    );
 }
 
 #[cfg(feature = "local-ml")]
@@ -330,8 +333,9 @@ pub(crate) fn rerank_candidates_local(
     match result {
         Ok(ranked) => ranked,
         Err(reason) => {
-            eprintln!(
-                "[rag] Local reranking unavailable ({}); preserving RRF order",
+            log::warn!(
+                target: "rag",
+                "Local reranking unavailable ({}); preserving RRF order",
                 reason.reason()
             );
             candidates
@@ -746,7 +750,7 @@ fn file_sha256(path: &Path) -> Result<String, String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(feature = "local-ml")]
@@ -866,7 +870,7 @@ fn download_artifact(
                 artifact.filename
             ));
         }
-        let actual_sha256 = format!("{:x}", hasher.finalize());
+        let actual_sha256 = hex::encode(hasher.finalize());
         if actual_sha256 != artifact.expected_sha256 {
             return Err(format!(
                 "Downloaded reranker artifact checksum mismatch: {}",

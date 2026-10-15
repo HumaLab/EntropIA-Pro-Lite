@@ -670,7 +670,7 @@ fn batch_task_reads_keep_an_unknown_bibliography_total_explicit() {
         )
         .expect("current first-page checkpoint");
     let stale_payload = r#"{"next_start":2,"total":99,"items":[]}"#;
-    let stale_checksum = format!("{:x}", Sha256::digest(stale_payload.as_bytes()));
+    let stale_checksum = hex::encode(Sha256::digest(stale_payload.as_bytes()));
     conn.execute(
         "INSERT INTO processing_checkpoints
             (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -6287,15 +6287,15 @@ fn bomb_page_stream(text: Option<&str>) -> Stream {
     stream
 }
 
-/// JD6-A-003's scenario. Page 1 hides its text where only PDFium finds it: an
-/// inline image first (pdf-extract silently drops everything after it) and
-/// then a Form XObject (lopdf's per-page extractor never recurses into `Do`),
-/// while PDFium reads the form's text. Page 2 is a decompression bomb: the
-/// unreadable sibling whose OCR candidacy must not move.
+/// JD6-A-003's scenario. Page 1 hides its text where only PDFium finds it: a
+/// Form XObject shown with the `'` operator (lopdf's per-page extractor never
+/// recurses into `Do`, and pdf-extract 0.12 recurses into the form but only
+/// handles `Tj`/`TJ`, so both stay blank), while PDFium reads the form's
+/// text. Page 2 is a decompression bomb: the unreadable sibling whose OCR
+/// candidacy must not move.
 fn pdf_with_recovered_page_and_bomb_page() -> Vec<u8> {
-    let page_one = "q BI /W 1 /H 1 /CS /G /BPC 8 ID \u{80} EI Q /Fm1 Do";
     make_pdf_with_contents(
-        vec![text_page_stream(page_one), bomb_page_stream(None)],
+        vec![text_page_stream("/Fm1 Do"), bomb_page_stream(None)],
         |index, font_id| {
             (index == 0).then(|| {
                 Stream::new(
@@ -6305,7 +6305,7 @@ fn pdf_with_recovered_page_and_bomb_page() -> Vec<u8> {
                         "BBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
                         "Resources" => dictionary! { "Font" => dictionary! { "F1" => font_id } },
                     },
-                    b"BT /F1 12 Tf 50 700 Td (Hola mundo recuperado del formulario) Tj ET".to_vec(),
+                    b"BT /F1 12 Tf 50 700 Td (Hola mundo recuperado del formulario) ' ET".to_vec(),
                 )
             })
         },
@@ -6404,15 +6404,16 @@ fn a_pdfium_recovered_page_beside_an_unreadable_one_keeps_the_baseline_ocr_candi
         return;
     }
     let pdf = pdf_with_recovered_page_and_bomb_page();
-    // The construction IS the verdict: pdf-extract reads nothing (the inline
-    // image eats the page) and lopdf reads nothing from page 1 (its extractor
-    // never recurses into a Form XObject), so the pre-part-A basis is blank
-    // and the unreadable page is an OCR candidate exactly as before part A.
+    // The construction IS the verdict: pdf-extract reads nothing (it recurses
+    // into the Form XObject but only handles `Tj`/`TJ`, missing the `'`
+    // operator) and lopdf reads nothing from page 1 (its extractor never
+    // recurses into a Form XObject), so the pre-part-A basis is blank and the
+    // unreadable page is an OCR candidate exactly as before part A.
     let whole = entropia_desktop_lib::bibliography::processing::pdf_extract_text(&pdf)
         .expect("pdf-extract runs");
     assert!(
         whole.trim().is_empty(),
-        "pdf-extract must read nothing here (the inline-image quirk): {whole:?}"
+        "pdf-extract must read nothing here (the apostrophe-in-form construction): {whole:?}"
     );
     let lopdf_only = read_native_page_texts(&pdf, 2, PageTextDecoder::Lopdf).expect("lopdf reads");
     assert!(
@@ -6904,7 +6905,7 @@ fn ocr_checkpoints_resume_without_resending_content() {
     // have left it: correct fingerprint, contract, and checksum.
     let cached = "Texto ya reconocido en un intento anterior con longitud suficiente";
     let payload = serde_json::to_string(&cached.to_string()).expect("payload json");
-    let checksum = format!("{:x}", sha2::Sha256::digest(payload.as_bytes()));
+    let checksum = hex::encode(sha2::Sha256::digest(payload.as_bytes()));
     conn.execute(
         "INSERT INTO processing_checkpoints
            (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -8743,7 +8744,7 @@ fn attachment_page_keeps_pdfs_and_stored_web_snapshots_with_a_parent_and_decodes
         "externo.pdf",
         None,
     );
-    linked["data"]["path"] = serde_json::json!("C:/Libros/externo.pdf");
+    linked["data"]["path"] = serde_json::json!(LINKED_ABSOLUTE_PATH);
     let body = serde_json::json!([
         attachment_row(
             "PDFATT01",
@@ -8830,9 +8831,33 @@ fn attachment_page_keeps_pdfs_and_stored_web_snapshots_with_a_parent_and_decodes
     let linked = &page.attachments[2];
     assert_eq!(
         linked.input.native_path.as_deref(),
-        Some("C:/Libros/externo.pdf"),
+        Some(LINKED_ABSOLUTE_PATH),
         "an absolute data.path backs a linked file without an enclosure"
     );
+}
+
+/// Zotero stores a linked file's `data.path` in the platform's own form, and
+/// only an absolute path on this machine is a readable location.
+#[cfg(windows)]
+const LINKED_ABSOLUTE_PATH: &str = "C:/Libros/externo.pdf";
+#[cfg(not(windows))]
+const LINKED_ABSOLUTE_PATH: &str = "/home/ana/Libros/externo.pdf";
+
+#[cfg(not(windows))]
+#[test]
+fn a_drive_letter_data_path_is_not_a_local_file_off_windows() {
+    use entropia_desktop_lib::bibliography::processing::attachment_page_from_json;
+    let mut linked = attachment_row(
+        "LINKED02",
+        Some("WORK0002"),
+        "application/pdf",
+        "linked_file",
+        "externo.pdf",
+        None,
+    );
+    linked["data"]["path"] = serde_json::json!("C:/Libros/externo.pdf");
+    let page = attachment_page_from_json(&serde_json::json!([linked]), None).expect("parses");
+    assert_eq!(page.attachments[0].input.native_path, None);
 }
 
 #[test]
@@ -11762,7 +11787,7 @@ fn seed_stored_texts(
             item_id: item_id.to_string(),
             page_count: 1,
             method: "native".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(extraction_text.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(extraction_text.as_bytes())),
             text_chars: extraction_text.chars().count() as i64,
             quality: quality.to_string(),
             text_content: extraction_text.to_string(),
@@ -11778,7 +11803,7 @@ fn seed_stored_texts(
             attachment_id: attachment_id.to_string(),
             page_number: 1,
             method: "native".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(page_text.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(page_text.as_bytes())),
             text_chars: page_text.chars().count() as i64,
             quality: quality.to_string(),
             text_content: page_text.to_string(),
@@ -12319,7 +12344,7 @@ fn plant_running_extraction(conn: &rusqlite::Connection, fixture: RunningExtract
     .expect("open attempt");
     for (index, (unit_key, created_at)) in landings.iter().enumerate() {
         let payload = format!("\"pagina landing {index}\"");
-        let checksum = format!("{:x}", Sha256::digest(payload.as_bytes()));
+        let checksum = hex::encode(Sha256::digest(payload.as_bytes()));
         conn.execute(
             "INSERT INTO processing_checkpoints
                (task_id, unit_key, input_fingerprint, contract_hash, payload, payload_checksum, created_at)
@@ -12415,13 +12440,20 @@ fn p3_sync_eta_uses_the_running_extraction_page_rate_and_excludes_its_attempt() 
     );
 
     let status = bibliography_sync_status(&conn, &requested.task_id).expect("status");
+    let elapsed_ms = repository::now_ms() - now;
     let eta = status
         .eta_ms
         .expect("the running extraction measures its own page rate");
     // 7 remaining pages × 20 000 ms/page plus 1 queued attachment × 1000 ms.
+    // The rate reads the real clock, so the attempt is 60 000 + δ ms old by
+    // then (δ = the time spent seeding above): the ETA is
+    // 7 × ⌊(60 000 + δ) / 3⌋ + 1000, i.e. 141 000 plus 7/3 ms per ms of δ.
+    // Bound it with the δ measured here instead of a fixed window, which a
+    // slow runner overshoots.
+    let max_eta = 141_000 + 7 * (elapsed_ms / 3 + 1);
     assert!(
-        (141_000..=143_000).contains(&eta),
-        "page-rate ETA plus the queued average, got {eta}"
+        (141_000..=max_eta).contains(&eta),
+        "page-rate ETA plus the queued average, got {eta} (max {max_eta} after {elapsed_ms} ms)"
     );
 }
 
@@ -12734,7 +12766,7 @@ fn chunking_never_carries_html_tags_into_passages() {
             attachment_id,
             page_number: 1,
             method: "ocr".to_string(),
-            text_hash: format!("{:x}", Sha256::digest(OCR_TABLE_HTML.as_bytes())),
+            text_hash: hex::encode(Sha256::digest(OCR_TABLE_HTML.as_bytes())),
             text_chars: OCR_TABLE_HTML.chars().count() as i64,
             quality: "empty".to_string(),
             text_content: OCR_TABLE_HTML.to_string(),

@@ -612,7 +612,7 @@ mod tests {
         fs::create_dir_all(root(env.data.path())).unwrap();
         let link = root(env.data.path()).join("src-1");
         if !link_dir(&link, outside.path()) {
-            eprintln!("skipped: this machine cannot create a directory link");
+            println!("skipped: this machine cannot create a directory link");
             return;
         }
 
@@ -631,7 +631,7 @@ mod tests {
         fs::create_dir_all(victim.parent().unwrap()).unwrap();
         fs::write(&victim, b"x").unwrap();
         if !link_dir(&root(env.data.path()), outside.path()) {
-            eprintln!("skipped: this machine cannot create a directory link");
+            println!("skipped: this machine cannot create a directory link");
             return;
         }
 

@@ -11,6 +11,8 @@
 
 <script lang="ts">
   let { paneId }: { paneId: string } = $props()
+  // Deliberate: records the mount-time paneId (see mountLog above).
+  // svelte-ignore state_referenced_locally
   mountLog.push(paneId)
 </script>
 

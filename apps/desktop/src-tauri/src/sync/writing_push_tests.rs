@@ -192,7 +192,7 @@ fn png_bytes(payload: &[u8]) -> Vec<u8> {
 
 fn attachment(payload: &[u8]) -> (Vec<u8>, AttachmentFileV1) {
     let bytes = png_bytes(payload);
-    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let sha256 = hex::encode(Sha256::digest(&bytes));
     let entry = AttachmentFileV1 {
         rel_path: format!("writing-images/{sha256}.png"),
         sha256,

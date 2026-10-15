@@ -1139,8 +1139,9 @@ fn try_apply_page(
                     .map(|rows| rows.filter_map(Result::ok).collect())
                     .unwrap_or_default();
                 if !edges.is_empty() {
-                    eprintln!(
-                        "[sync] page FK violations (child->parent): {}",
+                    log::warn!(
+                        target: "sync",
+                        "page FK violations (child->parent): {}",
                         edges.into_iter().collect::<Vec<_>>().join(", ")
                     );
                 }

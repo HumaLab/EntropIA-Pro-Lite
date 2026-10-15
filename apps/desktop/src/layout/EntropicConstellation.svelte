@@ -50,7 +50,7 @@
   let width = 0
   let height = 0
   let deviceScale = 1
-  let reducedMotion = false
+  let reducedMotion = $state(false)
   let resizeTimer: ReturnType<typeof setTimeout> | null = null
 
   // Animated mode (Inicio only, decor.js-style 3D box of drifting, linked

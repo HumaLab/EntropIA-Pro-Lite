@@ -207,7 +207,7 @@ fn snapshot_carries_summary_report_sources_and_file_manifest() {
     assert_eq!(file.size, 10);
     assert_eq!(
         file.sha256,
-        format!("{:x}", Sha256::digest(b"# Informe\n".as_slice()))
+        hex::encode(Sha256::digest(b"# Informe\n".as_slice()))
     );
     verify_report_file(&root, "job-1", file).expect("manifest verifies against the file");
 
@@ -394,7 +394,7 @@ fn report_file_manifest_is_optional_and_read_bounded() {
         manifest,
         ResearchFileManifestV1 {
             rel_path: "report.md".into(),
-            sha256: format!("{:x}", Sha256::digest(b"# Informe\n".as_slice())),
+            sha256: hex::encode(Sha256::digest(b"# Informe\n".as_slice())),
             size: 10,
         }
     );

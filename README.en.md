@@ -15,7 +15,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 | LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER          | OpenRouter (Gemma 4 by default)                                                                   |
 | Embeddings          | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`)         | OpenRouter (`baai/bge-m3`)                                                                        |
 | Native ML runtime   | yes (downloaded on first use)                            | no                                                                                                |
-| Installer           | Windows: NSIS + MSI (GitHub) · Linux: DEB (GitHub)       | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
+| Installer           | Windows: NSIS + MSI (GitHub)                             | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
 | Tauri identifier    | `com.entropia.pro.desktop`                               | `com.entropia.lite`                                                                               |
 | Store MSIX identity | —                                                        | `CONICET.EntropIALite`                                                                            |
 | Built with          | `--features local-ml` + `VITE_LOCAL_ML=1`                | lean default features + `VITE_LOCAL_ML=0`                                                         |
@@ -25,7 +25,7 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 ## Quick start
 
 - **User manual**: [User manual](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — full usage guide, in Spanish.
-- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64: `.deb`. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`. Pro for Linux is not published yet: its local-ML runtime needs a `linux-x86_64` pack that does not exist, so Linux users should use **EntropIA Lite** for now. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) or `.exe`/`.msi`; macOS (Apple Silicon and Intel): universal `.dmg`; Linux x64 (Ubuntu 22.04 or later): `.deb`. All from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: the `.dmg` is not notarized by Apple. On first launch macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
   - **Linux**: API keys are stored in the system keyring (gnome-keyring or KWallet). Desktop Ubuntu ships one; on minimal installs, install `gnome-keyring` and create a default keyring.
@@ -74,12 +74,13 @@ pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri
 
 > - `tauri.lite.windows.conf.json` keeps what only Pro uses (uv, models, runtime pack, Python scripts) out of the Windows installers. Without it the build still works, but weighs about 100 MB more.
 > - Use **`pnpm exec tauri`** (not `pnpm tauri … -- …`): pnpm eats the first `--` and breaks arg passing to Cargo.
+> - No sibling checkout is watched by default: to hot-reload over a local `EntropIA-Agent` checkout, run `pnpm exec tauri dev --config '{"build":{"additionalWatchFolders":["../../../../EntropIA-Agent/src"]}}'` (paths are relative to `apps/desktop/src-tauri`).
 > - To run it from the **repo root** without `cd`, use `pnpm --filter @entropia-pro/desktop exec tauri ...`.
 > - Lite is Cargo's lean default. Do not pass `--features local-ml` when using `tauri.lite.conf.json`.
 > - In PowerShell `$env:VITE_LOCAL_ML` **persists for the session** → set it on every variant switch (or open a new terminal). In bash it goes inline: `VITE_LOCAL_ML=0 pnpm exec tauri …`.
 > - Lite uses `identifier com.entropia.lite` → **separate app data** from Pro (you can run both without clobbering each other).
 > - Lite's `tauri build` produces the **`.exe` (NSIS) + `.msi`**; the final Store **MSIX** comes from the repack (see _Release &amp; installers_).
-> - With the committed fixture `runtime-pack`, a Windows/Linux release `tauri build` requires `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). The workflow sets them for both Pro and Lite; `tauri dev` does not need them. The current `build.rs` guard runs for both variants even though Lite does not use local AI.
+> - With the committed fixture `runtime-pack`, a Windows/Linux **Pro** (`--features local-ml`) release `tauri build` requires all three variables `ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL`, `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID`, and `ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64` to be set to the values in [`.github/workflows/release.yml`](./.github/workflows/release.yml). **Lite needs none**: without `local-ml` the runtime is compiled out and the `build.rs` guard does not run. `tauri dev` does not need them either.
 
 ### Validate
 
@@ -126,17 +127,19 @@ The unification is a **strangler** over the Pro code: all local inference lives 
 - The **frontend** reads `VITE_LOCAL_ML`: in Lite it hides DependenciasTab, the deps banners, and the local-model UI, and the brand becomes "EntropIA Lite".
 - The **Tauri command list is identical** in both variants; only the bodies branch (the Lite arm returns healthy/no-op, like EntropIA Lite did).
 
-On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite as blocking gates.
+On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend and audits dependencies (`pnpm audit --prod --audit-level high` and `cargo audit`, blocking). Lint and svelte-check fail on any warning. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite, and the Linux Rust Lite job runs `rustfmt`, `clippy`, and `cargo test`, as blocking gates.
 
 ## Release &amp; installers
 
-**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if any release build embeds the fixture without a baked bootstrap source; the **Release** workflow sets it for both Pro and Lite.
+**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if a Pro (`local-ml`) release build embeds the fixture without a baked bootstrap source; Lite downloads no runtime and skips that check. The **Release** workflow sets the variables for Pro only.
 
 Pro release flow:
 
 1. **Build Runtime Pack** → builds a fresh runtime-pack (`runtime-archive` artifact).
 2. **Publish Runtime Bootstrap** with that `runtime_pack_run_id` → splits the archive under GitHub's 2 GiB per-asset limit, uploads the parts to the `runtime-bootstrap` tag, and publishes a signed `manifest.json`.
-3. Push a `v*` tag → the **Release** workflow builds NSIS + MSI on Windows and DEB on Linux, with the manifest URL + public key **baked** into the binary.
+3. Push a `v*` tag → the **Release** workflow builds NSIS + MSI on Windows only (Pro Linux stays out until the `linux-x86_64` runtime exists), with the manifest URL + public key **baked** into the binary. Before building, the workflow **refuses to build Pro** when the signed manifest has no entry for the exact app version and platform (`apps/desktop/scripts/check-runtime-bootstrap.mjs`).
+
+The version lives in one place: `apps/desktop/package.json`. Bump it with `pnpm version:bump x.y.z`, which rewrites every derived declaration (Cargo.toml/Cargo.lock, Tauri configs, runtime manifests, and the MSIX packaging), and verify with `pnpm version:check`.
 
 **Lite — GitHub installers + MSIX for the Store.** The `build-lite` job in the **Release** workflow builds the lean variant with `--bundles nsis,msi`; the `attach-lite-installers` job attaches the `.exe` (NSIS) + `.msi` to the GitHub release (downloadable like Pro's). In parallel, the `.msi` feeds the **repack** of a captured base MSIX (`apps/desktop/src-tauri/msix/`), rewriting the identity to `CONICET.EntropIALite` + the version; the unsigned `.msix` (the Store signs it) remains an Actions artifact for Partner Center only, not a release asset.
 

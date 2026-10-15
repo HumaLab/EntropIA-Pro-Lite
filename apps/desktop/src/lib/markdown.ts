@@ -36,21 +36,45 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;')
 }
 
+/* A finished inline span is parked behind a private-use placeholder so the
+   emphasis passes that run after it cannot reach inside: `**` in a code span or
+   `*` in a link destination is literal text, not markup. */
+const PLACEHOLDER = /\uE000(\d+)\uE001/g
+const PLACEHOLDER_CHARS = /[\uE000\uE001]/g
+
 function isSafeUrl(url: string): boolean {
-  return /^(https?:\/\/|mailto:)/i.test(url.trim())
+  return /^(https?:\/\/|mailto:)/i.test(url.trim()) && !url.includes('\uE000')
 }
 
-/** Apply inline Markdown formatting to an already-HTML-escaped string. */
-function renderInline(escaped: string): string {
+function renderEmphasis(escaped: string): string {
   return escaped
-    .replace(INLINE_CODE, (_m, code: string) => `<code>${code}</code>`)
     .replace(STRONG, (_m, a: string, b: string) => `<strong>${a ?? b}</strong>`)
     .replace(EMPHASIS, (_m, text: string) => `<em>${text}</em>`)
-    .replace(LINK, (_m, text: string, url: string) =>
-      isSafeUrl(url)
-        ? `<a href="${url.trim()}" rel="noopener noreferrer" target="_blank">${text}</a>`
-        : text
-    )
+}
+
+/**
+ * Apply inline Markdown formatting to an already-HTML-escaped string. Code
+ * spans are taken first, then links (a label may still carry emphasis; the
+ * destination never does), then emphasis runs on what is left.
+ */
+function renderInline(escaped: string): string {
+  const spans: string[] = []
+  const park = (html: string) => `\uE000${spans.push(html) - 1}\uE001`
+  const restore = (text: string): string =>
+    text.replace(PLACEHOLDER, (_m, index: string) => restore(spans[Number(index)] ?? ''))
+
+  const parked = escaped
+    .replace(PLACEHOLDER_CHARS, '')
+    .replace(INLINE_CODE, (_m, code: string) => park(`<code>${code}</code>`))
+    .replace(LINK, (_m, text: string, url: string) => {
+      const label = renderEmphasis(text)
+      return park(
+        isSafeUrl(url)
+          ? `<a href="${url.trim()}" rel="noopener noreferrer" target="_blank">${label}</a>`
+          : label
+      )
+    })
+  return restore(renderEmphasis(parked))
 }
 
 function lineAt(lines: string[], index: number): string {

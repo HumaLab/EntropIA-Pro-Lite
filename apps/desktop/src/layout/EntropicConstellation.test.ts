@@ -23,6 +23,7 @@ function readSource() {
 describe('EntropicConstellation visual contract', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('renders as a non-interactive canvas layer', () => {
@@ -82,6 +83,22 @@ describe('EntropicConstellation visual contract', () => {
     expect(source).toContain(
       "readThemeColor('--constellation-link', '--color-accent', '--color-text-muted')"
     )
+  })
+
+  it('drops the motion class for users who prefer reduced motion', async () => {
+    // Regression: `reducedMotion` was a plain `let`, so the onMount matchMedia
+    // result never re-rendered the class binding and reduced-motion users kept
+    // `constellation--motion` on the canvas.
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true }))
+    )
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+
+    const { container } = render(EntropicConstellation)
+    const canvas = container.querySelector('canvas')
+
+    await vi.waitFor(() => expect(canvas).not.toHaveClass('constellation--motion'))
   })
 
   it('redraws continuously only on Inicio, never for the static field', () => {

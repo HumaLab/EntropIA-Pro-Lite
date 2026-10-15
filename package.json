@@ -8,6 +8,8 @@
     "pnpm": ">=9 <10"
   },
   "scripts": {
+    "binaries:check": "node apps/desktop/scripts/verify-binaries.mjs check",
+    "binaries:verify-upstream": "node apps/desktop/scripts/verify-binaries.mjs verify-upstream",
     "dev": "turbo dev",
     "build": "turbo build",
     "desktop:dev:isolated": "pnpm --filter @entropia-pro/desktop tauri:dev:isolated",
@@ -19,24 +21,32 @@
     "test": "turbo test",
     "test:run": "turbo test -- --run",
     "test:ui": "vitest --ui",
-    "rust:quality:report": "powershell -NoProfile -File ./apps/desktop/src-tauri/scripts/rust-quality-contract.ps1"
+    "version:check": "node apps/desktop/scripts/version.mjs check",
+    "version:bump": "node apps/desktop/scripts/version.mjs bump",
+    "rust:quality:report": "node apps/desktop/scripts/run-powershell.mjs ./apps/desktop/src-tauri/scripts/rust-quality-contract.ps1"
   },
   "devDependencies": {
     "@eslint/js": "^9",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
-    "@vitest/coverage-v8": "^3",
-    "@vitest/ui": "^3",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/ui": "^4.1.11",
     "eslint": "^9",
-    "eslint-plugin-svelte": "^3.19.0",
-    "globals": "^17.6.0",
-    "happy-dom": "^17",
+    "eslint-plugin-svelte": "^3.23.1",
+    "globals": "^17.13.0",
+    "happy-dom": "^20.8.9",
     "prettier": "^3",
     "prettier-plugin-svelte": "^3",
-    "svelte-eslint-parser": "^1.8.0",
+    "svelte-eslint-parser": "^1.9.0",
     "turbo": "^2",
-    "typescript": "^5",
+    "typescript": "^6",
     "typescript-eslint": "^8",
-    "vitest": "^3"
+    "vitest": "^4.1.11"
+  },
+  "pnpm": {
+    "overrides": {
+      "prosemirror-view": "^1.42.3",
+      "markdown-it": "^14.3.1"
+    }
   }
 }

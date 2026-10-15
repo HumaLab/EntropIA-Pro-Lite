@@ -50,7 +50,7 @@ fn detect_nvidia_gpu() -> bool {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let has_gpu = !stdout.trim().is_empty() && stdout.contains("GPU");
             if has_gpu {
-                eprintln!("[deps/install] detect_nvidia_gpu: found GPU via nvidia-smi -L");
+                log::info!(target: "deps/install", "detect_nvidia_gpu: found GPU via nvidia-smi -L");
             }
             if has_gpu {
                 return true;
@@ -68,7 +68,7 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false)
     {
-        eprintln!("[deps/install] detect_nvidia_gpu: found GPU via /proc/driver/nvidia/gpus");
+        log::info!(target: "deps/install", "detect_nvidia_gpu: found GPU via /proc/driver/nvidia/gpus");
         return true;
     }
 
@@ -85,7 +85,7 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
 
         let class = std::fs::read_to_string(path.join("class")).unwrap_or_default();
         if class.trim().starts_with("0x03") {
-            eprintln!("[deps/install] detect_nvidia_gpu: found GPU via PCI inventory");
+            log::info!(target: "deps/install", "detect_nvidia_gpu: found GPU via PCI inventory");
             return true;
         }
     }
@@ -115,8 +115,9 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if output.status.success() && stdout.contains("GPU") {
-                eprintln!(
-                    "[deps/install] detect_nvidia_gpu: found GPU via {}",
+                log::info!(
+                    target: "deps/install",
+                    "detect_nvidia_gpu: found GPU via {}",
                     smi.display()
                 );
                 return true;
@@ -285,15 +286,17 @@ fn resolve_paddlepaddle_install_target(wheelhouse_dir: Option<&Path>) -> (String
 
     if let Some(dir) = wheelhouse_dir {
         if let Some(gpu_wheel) = find_wheel_in_dir(dir, "paddlepaddle_gpu") {
-            eprintln!(
-                "[deps/install] Using bundled GPU wheel: {}",
+            log::info!(
+                target: "deps/install",
+                "Using bundled GPU wheel: {}",
                 gpu_wheel.display()
             );
             return (gpu_wheel.to_string_lossy().into_owned(), None);
         }
         if let Some(cpu_wheel) = find_wheel_in_dir(dir, "paddlepaddle") {
-            eprintln!(
-                "[deps/install] Using bundled CPU wheel: {}",
+            log::info!(
+                target: "deps/install",
+                "Using bundled CPU wheel: {}",
                 cpu_wheel.display()
             );
             return (cpu_wheel.to_string_lossy().into_owned(), None);
@@ -307,11 +310,12 @@ fn resolve_paddlepaddle_install_target(wheelhouse_dir: Option<&Path>) -> (String
         let spec = format!("paddlepaddle-gpu{VERSION_SPEC}");
         let cuda_ver = detect_cuda_version();
         let index = paddlepaddle_cuda_index(cuda_ver.as_deref()).to_string();
-        eprintln!("[deps/install] NVIDIA GPU detected — selecting {spec} from {index}");
+        log::info!(target: "deps/install", "NVIDIA GPU detected — selecting {spec} from {index}");
         (spec, Some(index))
     } else {
-        eprintln!(
-            "[deps/install] No NVIDIA GPU detected — selecting paddlepaddle{VERSION_SPEC} (CPU) from PyPI"
+        log::info!(
+            target: "deps/install",
+            "No NVIDIA GPU detected — selecting paddlepaddle{VERSION_SPEC} (CPU) from PyPI"
         );
         (format!("paddlepaddle{VERSION_SPEC}"), None)
     }
@@ -674,7 +678,7 @@ pub async fn create_venv(
         &mut cmd,
         "Python venv",
         |line| {
-            eprintln!("[deps/install] [Python venv] {line}");
+            log::info!(target: "deps/install", "[Python venv] {line}");
         },
         UV_VENV_TIMEOUT,
     )
@@ -713,7 +717,7 @@ pub async fn create_dev_fallback_venv(runtime: &DevFallbackContext) -> Result<Pa
         &mut cmd,
         "Python dev fallback venv",
         |line| {
-            eprintln!("[deps/install] [Python dev fallback venv] {line}");
+            log::info!(target: "deps/install", "[Python dev fallback venv] {line}");
         },
         UV_VENV_TIMEOUT,
     )
@@ -1061,7 +1065,7 @@ async fn ensure_managed_prerequisites_installed(
             wheelhouse_dir,
             false,
             move |line| {
-                eprintln!("[deps/install] [{display_name}] {line}");
+                log::info!(target: "deps/install", "[{display_name}] {line}");
             },
         )
         .await?;
@@ -1094,13 +1098,13 @@ async fn update_dependency_status(
 
 fn emit_progress_best_effort(app: &tauri::AppHandle, id: DependencyId, status: DependencyStatus) {
     if let Err(error) = app.emit("deps://progress", DepsProgressPayload { id, status }) {
-        eprintln!("[deps/install] Failed to emit dependency progress event: {error}");
+        log::warn!(target: "deps/install", "Failed to emit dependency progress event: {error}");
     }
 }
 
 fn emit_complete_best_effort(app: &tauri::AppHandle, payload: DepsCompletePayload) {
     if let Err(error) = app.emit("deps://complete", payload) {
-        eprintln!("[deps/install] Failed to emit dependency completion event: {error}");
+        log::warn!(target: "deps/install", "Failed to emit dependency completion event: {error}");
     }
 }
 
@@ -1440,7 +1444,7 @@ pub async fn install_all(
             runtime.wheelhouse_dir().as_deref(),
             false,
             move |line| {
-                eprintln!("[deps/install] [{display_name}] {line}");
+                log::info!(target: "deps/install", "[{display_name}] {line}");
             },
         )
         .await;
@@ -1460,7 +1464,7 @@ pub async fn install_all(
                 }
             }
             Err(msg) => {
-                eprintln!("[deps/install] failed {}: {msg}", dep.display_name);
+                log::error!(target: "deps/install", "failed {}: {msg}", dep.display_name);
                 DependencyStatus::Failed { message: msg }
             }
         };
@@ -1612,7 +1616,7 @@ pub async fn install_one(
             runtime.wheelhouse_dir().as_deref(),
             false,
             move |line| {
-                eprintln!("[deps/install] [{display_name}] {line}");
+                log::info!(target: "deps/install", "[{display_name}] {line}");
             },
         )
         .await?;
@@ -1648,7 +1652,7 @@ pub async fn install_one(
         runtime.wheelhouse_dir().as_deref(),
         reinstall_target,
         move |line| {
-            eprintln!("[deps/install] [{display_name}] {line}");
+            log::info!(target: "deps/install", "[{display_name}] {line}");
         },
     )
     .await;
@@ -1795,7 +1799,7 @@ mod tests {
             std::fs::create_dir_all(parent).expect("create parent");
         }
         std::fs::write(&path, bytes).expect("write file");
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     #[tokio::test]

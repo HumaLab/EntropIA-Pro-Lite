@@ -76,8 +76,9 @@ impl PaddleVlEngine {
             .map(|v| !v.is_empty())
             .unwrap_or(false)
         {
-            eprintln!(
-                "[paddle_vl] Engine configured: python={}, script={}",
+            log::info!(
+                target: "paddle_vl",
+                "Engine configured: python={}, script={}",
                 config.python_path.display(),
                 config.script_path.display(),
             );
@@ -113,8 +114,9 @@ impl PaddleVlEngine {
     ///   - FLAGS_use_mkldnn=1: enable Paddle's oneDNN acceleration
     ///   - HF_HUB_DISABLE_PROGRESS_BARS=1: silence noisy HF download progress
     pub fn detect(&self, image_path: &str) -> Result<PaddleVlOutput, String> {
-        eprintln!(
-            "[paddle_vl] Spawning PaddleOCR-VL for: {} (device={})",
+        log::info!(
+            target: "paddle_vl",
+            "Spawning PaddleOCR-VL for: {} (device={})",
             image_path, self.config.device
         );
 
@@ -180,8 +182,9 @@ impl PaddleVlEngine {
                 .env("MODELSCOPE_HOME", &modelscope_cache_dir);
         }
 
-        eprintln!(
-            "[paddle_vl] device={}, CPU threads: {cpu_threads}, MKLDNN+AVX enabled, offline_mode={}",
+        log::info!(
+            target: "paddle_vl",
+            "device={}, CPU threads: {cpu_threads}, MKLDNN+AVX enabled, offline_mode={}",
             self.config.device, offline_value
         );
 
@@ -201,8 +204,9 @@ impl PaddleVlEngine {
             .take()
             .map(|stderr| std::thread::spawn(move || drain_child_pipe(stderr)));
 
-        eprintln!(
-            "[paddle_vl] Waiting for PaddleVL (timeout: {}s, progress logs every {}s)...",
+        log::info!(
+            target: "paddle_vl",
+            "Waiting for PaddleVL (timeout: {}s, progress logs every {}s)...",
             Self::PADDLE_VL_TIMEOUT_SECS,
             Self::PROGRESS_LOG_INTERVAL_SECS
         );
@@ -284,8 +288,9 @@ impl PaddleVlEngine {
                     })?;
 
                     let actual = result.actual_device.as_deref().unwrap_or("unknown");
-                    eprintln!(
-                        "[paddle_vl] Complete: {} blocks, {} regions, device={} (took {:.1}s)",
+                    log::info!(
+                        target: "paddle_vl",
+                        "Complete: {} blocks, {} regions, device={} (took {:.1}s)",
                         result.blocks.len(),
                         result.regions.len(),
                         actual,
@@ -297,8 +302,9 @@ impl PaddleVlEngine {
                 Ok(None) => {
                     // Process still running — check timeout
                     if start.elapsed() > timeout {
-                        eprintln!(
-                            "[paddle_vl] ⏰ TIMEOUT after {}s, killing PaddleVL process",
+                        log::warn!(
+                            target: "paddle_vl",
+                            "⏰ TIMEOUT after {}s, killing PaddleVL process",
                             start.elapsed().as_secs()
                         );
                         let _ = child.kill();
@@ -316,8 +322,9 @@ impl PaddleVlEngine {
 
                     // Periodic progress log so the user knows the subprocess is alive
                     if last_progress_log.elapsed().as_secs() >= Self::PROGRESS_LOG_INTERVAL_SECS {
-                        eprintln!(
-                            "[paddle_vl] ⏳ Still running... {}s elapsed (timeout at {}s)",
+                        log::info!(
+                            target: "paddle_vl",
+                            "⏳ Still running... {}s elapsed (timeout at {}s)",
                             start.elapsed().as_secs(),
                             Self::PADDLE_VL_TIMEOUT_SECS
                         );
@@ -507,7 +514,7 @@ fn detect_nvidia_gpu() -> bool {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let has_gpu = !stdout.trim().is_empty() && stdout.contains("GPU");
             if has_gpu {
-                eprintln!("[paddle_vl] detect_nvidia_gpu: found GPU via nvidia-smi -L");
+                log::info!(target: "paddle_vl", "detect_nvidia_gpu: found GPU via nvidia-smi -L");
             }
             has_gpu
         }
@@ -524,7 +531,7 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
         .map(|mut entries| entries.next().is_some())
         .unwrap_or(false)
     {
-        eprintln!("[paddle_vl] detect_nvidia_gpu: found GPU via /proc/driver/nvidia/gpus");
+        log::info!(target: "paddle_vl", "detect_nvidia_gpu: found GPU via /proc/driver/nvidia/gpus");
         return true;
     }
 
@@ -541,7 +548,7 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
 
         let class = std::fs::read_to_string(path.join("class")).unwrap_or_default();
         if class.trim().starts_with("0x03") {
-            eprintln!("[paddle_vl] detect_nvidia_gpu: found GPU via PCI inventory");
+            log::info!(target: "paddle_vl", "detect_nvidia_gpu: found GPU via PCI inventory");
             return true;
         }
     }
@@ -570,8 +577,9 @@ fn detect_nvidia_gpu_from_system_inventory() -> bool {
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if output.status.success() && stdout.contains("GPU") {
-                eprintln!(
-                    "[paddle_vl] detect_nvidia_gpu: found GPU via {}",
+                log::info!(
+                    target: "paddle_vl",
+                    "detect_nvidia_gpu: found GPU via {}",
                     smi.display()
                 );
                 return true;
@@ -723,10 +731,10 @@ pub fn create_paddle_vl_engine_result(
     // Auto-detect GPU and prefer it, but let the Python subprocess validate
     // software-level support and fall back to CPU if GPU init fails.
     let device = if detect_nvidia_gpu() {
-        eprintln!("[paddle_vl] NVIDIA GPU detected — preferring GPU for PaddleOCR-VL");
+        log::info!(target: "paddle_vl", "NVIDIA GPU detected — preferring GPU for PaddleOCR-VL");
         "gpu".to_string()
     } else {
-        eprintln!("[paddle_vl] No NVIDIA GPU detected — using CPU for PaddleOCR-VL");
+        log::info!(target: "paddle_vl", "No NVIDIA GPU detected — using CPU for PaddleOCR-VL");
         "cpu".to_string()
     };
 
@@ -1009,6 +1017,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -1041,6 +1050,7 @@ mod tests {
                     guidance: vec!["Reintentá".to_string()],
                     bootstrap_eligible: true,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },

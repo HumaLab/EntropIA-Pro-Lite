@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -51,6 +52,21 @@ function readPackManifest(platform: string): RuntimePackFixtureManifest {
   ) as RuntimePackFixtureManifest
 }
 
+/** Shared libraries under `dir` smaller than 1 MiB: stubs `dlopen` rejects. */
+function findTinySharedLibraries(dir: string): string[] {
+  if (!existsSync(dir)) return []
+  const tiny: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = resolve(dir, entry.name)
+    if (entry.isDirectory()) {
+      tiny.push(...findTinySharedLibraries(full))
+    } else if (entry.isFile() && entry.name.endsWith('.so') && statSync(full).size < 1024 * 1024) {
+      tiny.push(full)
+    }
+  }
+  return tiny
+}
+
 function allEntries(manifest: RuntimePackFixtureManifest): ManifestEntry[] {
   return [
     ...manifest.python_files,
@@ -60,6 +76,15 @@ function allEntries(manifest: RuntimePackFixtureManifest): ManifestEntry[] {
     ...manifest.caches,
     ...manifest.native_assets,
   ]
+}
+
+/** Top-level job body: its `  <name>:` key up to the next job key at the same indentation. */
+function topLevelJobText(workflow: string, job: string): string {
+  const start = workflow.indexOf(`\n  ${job}:`)
+  expect(start).toBeGreaterThanOrEqual(0)
+  const body = workflow.slice(start + 1)
+  const next = body.search(/\n {2}[a-z][a-z0-9_-]*:/)
+  return next === -1 ? body : body.slice(0, next)
 }
 
 describe('runtime pack packaging', () => {
@@ -100,8 +125,14 @@ describe('runtime pack packaging', () => {
     expect(windowsResources).not.toContain('resources/lib/linux-x86_64/**/*')
     expect(windowsResources).not.toContain('resources/runtime-pack/linux-x86_64/**/*')
 
-    expect(linuxResources).toContain('resources/lib/linux-x86_64/**/*')
+    expect(linuxResources).not.toContain('resources/lib/linux-x86_64/**/*')
     expect(linuxResources).toContain('resources/runtime-pack/linux-x86_64/**/*')
+    // Tauri merges tauri.linux.conf.json into every Linux build, `cargo build`
+    // and `cargo test` included, and fails when a listed resource is missing.
+    // The fetched Pdfium therefore lives in the explicit Pro Linux release
+    // overlay, so a fresh Linux checkout still compiles without the network.
+    expect(linuxResources).not.toContain('resources/pdfium/libpdfium.so')
+    expect(linuxResources).not.toContain('resources/pdfium/LICENSE')
     expect(linuxResources).not.toContain('resources/lib/pdfium.dll')
     expect(linuxResources).not.toContain('resources/tools/uv/windows-x86_64/*')
     expect(linuxResources).not.toContain('resources/tools/uv/windows-aarch64/*')
@@ -110,6 +141,207 @@ describe('runtime pack packaging', () => {
 
     expect(liteConfig.bundle?.resources).toBeUndefined()
     expect(liteConfig.bundle?.targets).toBeUndefined()
+  })
+
+  it('ships the fetched Linux Pdfium and never a stub shared library', () => {
+    const linuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    const proLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.pro.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    const liteLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.lite.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+
+    // Bundle resource arrays replace each other when configs merge, so the Pro
+    // overlay must restate every Pro Linux resource and add only Pdfium.
+    expect(proLinuxResources).toEqual([
+      ...linuxResources,
+      'resources/pdfium/libpdfium.so',
+      'resources/pdfium/LICENSE',
+    ])
+
+    for (const resources of [proLinuxResources, liteLinuxResources]) {
+      expect(resources).toContain('resources/pdfium/libpdfium.so')
+      expect(resources).toContain('resources/pdfium/LICENSE')
+      expect(resources).not.toContain('resources/lib/linux-x86_64/**/*')
+    }
+
+    // The text fixtures moved to the test tree; no Linux bundle glob points at
+    // their old resource paths anymore.
+    for (const fixture of ['libpdfium.so', 'libonnxruntime.so']) {
+      expect(existsSync(resolve(tauriRoot, 'resources/lib/linux-x86_64', fixture))).toBe(false)
+      expect(
+        existsSync(resolve(tauriRoot, 'tests/fixtures/resource-audit', `${fixture}.fixture`))
+      ).toBe(true)
+    }
+
+    // Any `*.so` a Linux resource glob can reach under the native-lib dirs must
+    // be a real-enough library. The runtime-pack `.so` stubs are a deliberate
+    // fixture (replaced by the bootstrap download, never loaded directly), so
+    // they are out of scope here.
+    const tiny = [
+      resolve(tauriRoot, 'resources/lib'),
+      resolve(tauriRoot, 'resources/pdfium'),
+    ].flatMap((dir) => findTinySharedLibraries(dir))
+    expect(tiny).toEqual([])
+  })
+
+  it('keeps every Lite bundle free of the Pro payload', () => {
+    const liteConfigNames = readdirSync(tauriRoot).filter((name) =>
+      /^tauri\.lite(\.[a-z]+)?\.conf\.json$/.test(name)
+    )
+    expect(liteConfigNames).toEqual(
+      expect.arrayContaining([
+        'tauri.lite.conf.json',
+        'tauri.lite.linux.conf.json',
+        'tauri.lite.macos.conf.json',
+        'tauri.lite.windows.conf.json',
+      ])
+    )
+
+    // Lite has no local ML: no models, runtime pack, uv or Python sidecars.
+    const proOnly = [
+      /^resources\/models\//,
+      /^resources\/runtime-pack\//,
+      /^resources\/tools\/uv\//,
+      /^scripts\/.*\.py$/,
+    ]
+    for (const name of liteConfigNames) {
+      const resources =
+        (
+          JSON.parse(readRepoFile('apps/desktop/src-tauri', name)) as {
+            bundle?: { resources?: string[] }
+          }
+        ).bundle?.resources ?? []
+      for (const resource of resources) {
+        for (const pattern of proOnly) {
+          expect(resource, `${name}: ${resource}`).not.toMatch(pattern)
+        }
+      }
+    }
+
+    // Tauri replaces arrays on merge: a platform overlay without its own list
+    // silently inherits the base tauri.conf.json resources, Pro payload included.
+    for (const name of liteConfigNames.filter((n) => n !== 'tauri.lite.conf.json')) {
+      const config = JSON.parse(readRepoFile('apps/desktop/src-tauri', name)) as {
+        bundle?: { resources?: string[] }
+      }
+      expect(config.bundle?.resources, `${name} must define bundle.resources`).toBeDefined()
+    }
+
+    // Windows-only payload must not leak into the Unix Lite overlays: build.rs
+    // stages vc-runtime only for windows-msvc, so the glob would match nothing
+    // and fail the bundle.
+    for (const name of ['tauri.lite.linux.conf.json', 'tauri.lite.macos.conf.json']) {
+      const raw = readRepoFile('apps/desktop/src-tauri', name)
+      expect(raw, name).not.toMatch(/\.dll\b/)
+      expect(raw, name).not.toContain('vc-runtime')
+    }
+
+    // Every Lite Linux resource is a literal path that a clean checkout has, or
+    // that `fetch-pdfium.sh linux-x64` writes. No globs: one that matches
+    // nothing fails the bundle.
+    const tracked = new Set(
+      execFileSync('git', ['ls-files', '--', 'apps/desktop/src-tauri'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      })
+        .split('\n')
+        .filter(Boolean)
+    )
+    const fetchedByPdfiumScript = ['resources/pdfium/libpdfium.so', 'resources/pdfium/LICENSE']
+    const liteLinuxResources =
+      (
+        JSON.parse(readRepoFile('apps/desktop/src-tauri/tauri.lite.linux.conf.json')) as {
+          bundle?: { resources?: string[] }
+        }
+      ).bundle?.resources ?? []
+    expect(liteLinuxResources).toEqual(expect.arrayContaining(fetchedByPdfiumScript))
+    for (const resource of liteLinuxResources) {
+      expect(resource, resource).not.toMatch(/[*?[{]/)
+      const available =
+        tracked.has(`apps/desktop/src-tauri/${resource}`) ||
+        fetchedByPdfiumScript.includes(resource)
+      expect(available, `${resource} is neither tracked nor fetched`).toBe(true)
+    }
+  })
+
+  it('checks the built Lite .deb for Pdfium and against the Pro payload', () => {
+    const litePreview = readRepoFile('.github/workflows/lite-preview.yml')
+    expect(litePreview).toContain("grep -qE '/resources/pdfium/libpdfium\\.so$'")
+    expect(litePreview).toContain("grep -E '/(models|runtime-pack|tools/uv)/|\\.py$|\\.dll$'")
+  })
+
+  it('fetches the real Linux Pdfium for the Pro release build', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const fetchIndex = releaseWorkflow.indexOf(
+      'bash apps/desktop/scripts/fetch-pdfium.sh linux-x64'
+    )
+    const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
+    expect(fetchIndex).toBeGreaterThan(-1)
+    expect(buildIndex).toBeGreaterThan(-1)
+    expect(fetchIndex).toBeLessThan(buildIndex)
+
+    const fetchStep = releaseWorkflow.slice(
+      releaseWorkflow.lastIndexOf('- name:', fetchIndex),
+      buildIndex
+    )
+    expect(fetchStep).toContain("if: matrix.platform == 'ubuntu-22.04'")
+
+    // Pro Linux is out of the matrix until a linux-x86_64 runtime pack is
+    // published, but the explicit overlay that lists Pdfium stays in the tree
+    // for when the leg returns.
+    expect(existsSync(resolve(tauriRoot, 'tauri.pro.linux.conf.json'))).toBe(true)
+    expect(releaseWorkflow).not.toContain('--config apps/desktop/src-tauri/tauri.linux.conf.json')
+  })
+
+  it('gates the Pro release build on a published runtime for its exact version and platform', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+
+    // The app resolves its bootstrap release with an exact (app_version,
+    // platform) match, so the gate must run before the expensive build.
+    const gateIndex = releaseWorkflow.indexOf(
+      '- name: Require a published runtime for this Pro build'
+    )
+    const buildIndex = releaseWorkflow.indexOf('- name: Build Tauri application')
+    expect(gateIndex).toBeGreaterThan(-1)
+    expect(buildIndex).toBeGreaterThan(-1)
+    expect(gateIndex).toBeLessThan(buildIndex)
+
+    const gateStep = releaseWorkflow.slice(gateIndex, buildIndex)
+    expect(gateStep).toContain('check-runtime-bootstrap.mjs')
+    expect(gateStep).toContain("if: matrix.runtime_platform != ''")
+    expect(gateStep).toContain('--manifest-url "$ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"')
+    expect(gateStep).toContain('shell: bash')
+
+    // Pro Linux stays out of the matrix until a linux-x86_64 runtime pack is
+    // published. Every remaining entry declares its runtime_platform (macOS
+    // ships no runtime-pack, hence the empty string).
+    expect(releaseWorkflow).not.toContain('"platform":"ubuntu-22.04"')
+    const includeLine = /^\s*include: \$\{\{ fromJSON\((.*)\) \}\}$/m.exec(releaseWorkflow)
+    const includeJson = includeLine?.[1] ?? ''
+    expect(includeJson).not.toBe('')
+    const matrices = [...includeJson.matchAll(/'\[(.*?)\]'/g)].map(
+      (match) => JSON.parse(`[${match[1]}]`) as { platform: string; runtime_platform?: string }[]
+    )
+    expect(matrices.length).toBe(3)
+    const entries = matrices.flat()
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      expect(entry).toHaveProperty('runtime_platform')
+      expect(entry.platform).not.toBe('ubuntu-22.04')
+    }
   })
 
   it('ships fixture runtime-pack manifests for windows and linux with concrete payload files', () => {
@@ -179,6 +411,54 @@ describe('runtime pack packaging', () => {
     expect(ciWorkflow).toContain('runtime-pack-smoke')
     expect(ciWorkflow).toContain('--root apps/desktop/src-tauri/target/runtime-pack')
     expect(ciWorkflow).toContain('src/lib/runtime-packaging.test.ts')
+  })
+
+  it('bakes the manifest URL that the bootstrap publish workflow prints (C-02)', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
+
+    // publish-runtime-bootstrap.yml uploads to `github.repository` under its
+    // `release_tag` input and prints exactly this URL for the release build to bake.
+    expect(publishWorkflow).toContain(
+      'https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}/manifest.json'
+    )
+    const defaultTag = /release_tag:[\s\S]*?default: '([^']+)'/.exec(publishWorkflow)?.[1]
+    expect(defaultTag).toBe('runtime-bootstrap')
+
+    // The canonical repository name. HumaLab/EntropIA-Pro is its old name: GitHub
+    // still redirects it, so binaries built with that URL keep working, but new
+    // builds must not depend on the redirect.
+    const baked = /ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: (\S+)/.exec(releaseWorkflow)?.[1]
+    expect(baked).toBe(
+      `https://github.com/HumaLab/EntropIA-Pro-Lite/releases/download/${defaultTag}/manifest.json`
+    )
+  })
+
+  it('scopes the bootstrap download source to the Pro release job', () => {
+    const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
+    const litePreviewWorkflow = readRepoFile('.github/workflows/lite-preview.yml')
+    const bootstrapVars = [
+      'ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL',
+      'ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID',
+      'ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64',
+    ] as const
+
+    // Lite compiles the runtime out (`local-ml` off), so build.rs skips the
+    // bootstrap guard and no download source may be baked into those builds.
+    expect(litePreviewWorkflow).not.toContain('ENTROPIA_RUNTIME_BOOTSTRAP')
+    expect(topLevelJobText(releaseWorkflow, 'build-lite')).not.toContain(
+      'ENTROPIA_RUNTIME_BOOTSTRAP'
+    )
+
+    // Pro still bakes all three variables, and only in its own job: the job-level
+    // env is where the per-step `${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_* }}` refs resolve.
+    const proJob = topLevelJobText(releaseWorkflow, 'build')
+    for (const variable of bootstrapVars) {
+      expect(proJob).toContain(variable)
+    }
+    expect(releaseWorkflow.slice(0, releaseWorkflow.indexOf('\njobs:'))).not.toContain(
+      'ENTROPIA_RUNTIME_BOOTSTRAP'
+    )
   })
 
   it('documents fixture scope and the lean download-at-launch model', () => {

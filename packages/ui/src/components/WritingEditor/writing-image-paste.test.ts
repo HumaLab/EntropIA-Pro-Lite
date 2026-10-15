@@ -1,4 +1,5 @@
 import { Editor } from '@tiptap/core'
+import { Slice } from '@tiptap/pm/model'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWritingExtensions } from './extensions'
 import { emptyDocument } from './document-contract'
@@ -63,12 +64,10 @@ describe('pasting an image into the manuscript', () => {
     instance.commands.focus()
 
     // someProp infers `fn` as ProseMirror's full three-arg handlePaste
-    // signature (view, event, slice). Every call site here only needs the
-    // first two — the `any` sidesteps the arity mismatch that would
-    // otherwise be a compile error, and matches this repo's convention of
-    // not fighting inferred callback types with contortions (AGENTS.md).
-    const handled = instance.view.someProp('handlePaste', (fn: any) =>
-      fn(instance.view, pasteEvent([pngFile()]))
+    // signature (view, event, slice); the image handler ignores the slice, so
+    // Slice.empty stands in for it.
+    const handled = instance.view.someProp('handlePaste', (fn) =>
+      fn(instance.view, pasteEvent([pngFile()]), Slice.empty)
     )
     await vi.waitFor(() => expect(importImage).toHaveBeenCalled())
     // importAndInsert dispatches asynchronously, after handlePaste's own
@@ -92,8 +91,8 @@ describe('pasting an image into the manuscript', () => {
     const instance = mount(importImage)
     instance.commands.focus()
 
-    const handled = instance.view.someProp('handlePaste', (fn: any) =>
-      fn(instance.view, pasteEvent([]))
+    const handled = instance.view.someProp('handlePaste', (fn) =>
+      fn(instance.view, pasteEvent([]), Slice.empty)
     )
 
     expect(handled).toBeFalsy()
@@ -105,8 +104,8 @@ describe('pasting an image into the manuscript', () => {
     const instance = mount(importImage)
     instance.commands.focus()
 
-    instance.view.someProp('handlePaste', (fn: any) =>
-      fn(instance.view, pasteEvent([], '<img src="https://example.org/remote.png">'))
+    instance.view.someProp('handlePaste', (fn) =>
+      fn(instance.view, pasteEvent([], '<img src="https://example.org/remote.png">'), Slice.empty)
     )
 
     const names: string[] = []

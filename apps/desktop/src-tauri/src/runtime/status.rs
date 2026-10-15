@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::runtime::bootstrap_types::BootstrapUnavailableReason;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeState {
@@ -73,6 +75,8 @@ pub struct RuntimeStatus {
     pub bootstrap_required: bool,
     #[serde(default)]
     pub active_operation: Option<RuntimeOperation>,
+    #[serde(default)]
+    pub blocked_reason: Option<BootstrapUnavailableReason>,
 }
 
 #[cfg(test)]
@@ -94,6 +98,7 @@ mod tests {
             ],
             bootstrap_eligible: true,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: Some(RuntimeOperation {
                 kind: RuntimeOperationKind::Bootstrap,
                 stage: RuntimeOperationStage::PlanningDownload,
@@ -137,6 +142,7 @@ mod tests {
             guidance: vec!["Reintentá cuando EntropIA publique una fuente firmada".to_string()],
             bootstrap_eligible: false,
             bootstrap_required: true,
+            blocked_reason: None,
             active_operation: Some(RuntimeOperation {
                 kind: RuntimeOperationKind::Bootstrap,
                 stage: RuntimeOperationStage::Blocked,

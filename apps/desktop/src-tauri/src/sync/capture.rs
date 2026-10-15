@@ -170,7 +170,11 @@ fn base_table_exists(conn: &Connection, table: &str) -> bool {
 }
 
 /// Drops all `trg_sync_*` triggers currently installed (DESIGN §6.1.2 upgrade).
-fn drop_all_sync_triggers(conn: &Connection) -> Result<(), String> {
+///
+/// Shared with the startup schema audit (Phase 4.4b): a sync trigger whose
+/// body differs from the canonical one is dropped here and recreated by
+/// [`ensure_capture`], because `create_trigger_sql` uses `IF NOT EXISTS`.
+pub(crate) fn drop_all_sync_triggers(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_sync_%'")
         .map_err(|e| format!("Failed to list sync triggers: {e}"))?;
@@ -293,12 +297,51 @@ pub fn ensure_capture(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Runs `work` with sync capture suppressed, restoring the previous `applying`
+/// value afterwards — including when `work` fails, so a failed repair can never
+/// leave capture silently off for the rest of the connection.
+///
+/// Not every archive has the sync schema yet: a fresh install runs the schema
+/// repairs before `ensure_capture` ever creates `sync_meta`, and an archive
+/// that never synced has no capture triggers either. Without the table there is
+/// nothing to stand down, so the work runs untouched.
+///
+/// The `trg_sync_*` triggers check `applying` themselves; callers run the work
+/// inside their own transaction so the flag and the writes land together.
+pub(crate) fn without_sync_capture<T>(
+    conn: &Connection,
+    work: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if !base_table_exists(conn, "sync_meta") {
+        return work();
+    }
+    let previous = meta_get(conn, "applying")?;
+    meta_set(conn, "applying", "1")?;
+
+    let result = work();
+    let restored = match previous {
+        Some(value) => meta_set(conn, "applying", &value),
+        None => conn
+            .execute("DELETE FROM sync_meta WHERE key = 'applying'", [])
+            .map(|_| ())
+            .map_err(|error| format!("Failed to restore the sync capture flag: {error}")),
+    };
+
+    match (result, restored) {
+        // The work error is the one the caller cares about; a restore failure
+        // still surfaces when the work itself succeeded.
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync::test_support::{
-        new_synced_test_db, oplog_count, oplog_count_for, set_session, set_session_with_capture,
-        trg_sync_count,
+        new_app_schema_db, new_synced_test_db, oplog_count, oplog_count_for, set_session,
+        set_session_with_capture, trg_sync_count,
     };
 
     #[test]
@@ -659,6 +702,66 @@ mod tests {
         assert_eq!(oplog_count_for(&conn, "assets"), 1);
         assert_eq!(oplog_count_for(&conn, "extractions"), 1, "cascade captured");
         assert_eq!(oplog_count_for(&conn, "annotations"), 1, "cascade captured");
+    }
+
+    #[test]
+    fn without_sync_capture_runs_without_the_sync_schema() {
+        // A fresh or very old archive has no `sync_meta`: there is no capture to
+        // suppress, and the helper must not touch (or need) the table.
+        let conn = new_app_schema_db();
+        let value = without_sync_capture(&conn, || Ok(7)).expect("no sync schema is safe");
+        assert_eq!(value, 7);
+    }
+
+    #[test]
+    fn without_sync_capture_suppresses_and_restores_the_flag() {
+        let conn = new_synced_test_db();
+        ensure_capture(&conn).expect("ensure capture");
+        conn.execute_batch(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1);\
+             INSERT INTO items(id,title,collection_id,created_at,updated_at) VALUES('i1','I','c1',1,1);\
+             INSERT INTO assets(id,item_id,path,type,created_at) VALUES('a1','i1','p','pdf',1);",
+        )
+        .expect("seed asset");
+        set_session_with_capture(&conn);
+
+        without_sync_capture(&conn, || {
+            conn.execute("UPDATE assets SET path = 'q' WHERE id = 'a1'", [])
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .expect("suppressed write");
+        assert_eq!(oplog_count_for(&conn, "assets"), 0, "capture stood down");
+
+        conn.execute("UPDATE assets SET path = 'r' WHERE id = 'a1'", [])
+            .expect("write with capture on");
+        assert_eq!(oplog_count_for(&conn, "assets"), 1, "flag restored");
+    }
+
+    #[test]
+    fn without_sync_capture_restores_the_flag_when_the_work_fails() {
+        let conn = new_synced_test_db();
+        ensure_capture(&conn).expect("ensure capture");
+        set_session_with_capture(&conn);
+
+        let result = without_sync_capture(&conn, || Err::<(), String>("boom".to_string()));
+        assert!(result.is_err());
+
+        conn.execute(
+            "INSERT INTO collections(id,name,created_at,updated_at) VALUES('c1','C',1,1)",
+            [],
+        )
+        .expect("insert");
+        assert_eq!(
+            oplog_count_for(&conn, "collections"),
+            1,
+            "capture resumed after a failed repair"
+        );
+        assert_eq!(
+            meta_get(&conn, "applying").expect("read applying"),
+            None,
+            "no `applying` row is left behind"
+        );
     }
 
     #[test]

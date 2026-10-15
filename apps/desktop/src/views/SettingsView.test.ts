@@ -384,6 +384,36 @@ describe('SettingsView', () => {
     }
   )
 
+  // A failed registration used to abandon the listeners that had already
+  // landed: the sequential array literal never completed, so nothing called
+  // their unlisten (same leak class as the destroy race above).
+  it.runIf(LOCAL_ML)(
+    'releases the download listeners already registered when a later registration fails',
+    async () => {
+      applyDefaultSettingsBackend()
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      const unlistens: Array<ReturnType<typeof vi.fn>> = []
+      vi.mocked(listen).mockImplementation((async (name: string) => {
+        if (name === 'embedding:download_progress') throw new Error('listen failed')
+        const unlisten = vi.fn()
+        unlistens.push(unlisten)
+        return unlisten
+      }) as unknown as typeof listen)
+      try {
+        render(SettingsView)
+
+        await waitFor(() => {
+          expect(unlistens).toHaveLength(3)
+          for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+        })
+        expect(consoleError).toHaveBeenCalled()
+      } finally {
+        consoleError.mockRestore()
+        vi.mocked(listen).mockImplementation(() => Promise.resolve(vi.fn()))
+      }
+    }
+  )
+
   it.runIf(LOCAL_ML)(
     'ignores a download event Tauri still delivers after the view is gone',
     async () => {

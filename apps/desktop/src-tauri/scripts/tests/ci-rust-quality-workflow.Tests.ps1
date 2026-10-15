@@ -58,127 +58,33 @@ Describe "rust-quality-report workflow" {
     Assert-Match -Value $content -Pattern "ci-rust-quality-workflow.Tests.ps1" -Message "workflow must run workflow contract suite"
   }
 
-  It "runs pnpm pre-install forensics before installing dependencies" {
+  It "no longer carries pnpm forensics diagnostics" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    $forensicsIndex = $content.IndexOf("Run pnpm pre-install forensics (rust-quality-report)")
-    $installIndex = $content.IndexOf("name: Install dependencies")
-
-    Assert-True -Condition ($forensicsIndex -ge 0) -Message "workflow must include rust-quality-report pre-install forensic step"
-    Assert-True -Condition ($installIndex -ge 0) -Message "workflow must include Install dependencies step"
-    Assert-True -Condition ($forensicsIndex -lt $installIndex) -Message "forensic step must run before Install dependencies"
-  }
-
-  It "runs post-checkout forensics before pnpm setup in rust-quality-report" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    $jobIndex = $content.IndexOf("rust-quality-report:")
-    $checkoutIndex = $content.IndexOf("- uses: actions/checkout@v6", $jobIndex)
-    $postCheckoutForensicsIndex = $content.IndexOf("Run pnpm post-checkout forensics (rust-quality-report)", $jobIndex)
-    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
-
-    Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
-    Assert-True -Condition ($checkoutIndex -gt $jobIndex) -Message "rust-quality-report must include checkout step"
-    Assert-True -Condition ($postCheckoutForensicsIndex -gt $checkoutIndex) -Message "post-checkout forensic step must run after checkout"
-    Assert-True -Condition ($pnpmSetupIndex -gt $postCheckoutForensicsIndex) -Message "post-checkout forensic step must run before pnpm/action-setup"
-    Assert-True -Condition ($nodeSetupIndex -gt $postCheckoutForensicsIndex) -Message "post-checkout forensic step must run before actions/setup-node"
+    Assert-True -Condition ($content -notmatch "forensics") -Message "workflow must not contain pnpm forensics diagnostics"
+    Assert-True -Condition ($content -notmatch "pnpm-preinstall-classify") -Message "workflow must not contain pnpm pre-install classification diagnostics"
   }
 
   It "pins rust-quality-report setup-node to Node 22 for pnpm/action-setup compatibility" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@v6[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
+    Assert-Match -Value $content -Pattern "rust-quality-report:[\s\S]*?- uses: actions/setup-node@[0-9a-f]{40} # v\d+\.[\s\S]*?node-version:\s*22" -Message "rust-quality-report must pin actions/setup-node to Node 22 to keep pnpm/action-setup on a compatible runtime"
   }
 
-  It "uploads rust post-checkout forensics to a distinct evidence path" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    Assert-Match -Value $content -Pattern "Upload pnpm post-checkout forensics \(rust-quality-report\)" -Message "workflow must include rust post-checkout forensic upload"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-checkout forensics \(rust-quality-report\)[\s\S]*?if:\s*always\(\)" -Message "rust post-checkout upload must run with if: always()"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-checkout forensics \(rust-quality-report\)[\s\S]*?\.ci-evidence/pnpm-preinstall/rust-quality-report-post-checkout/" -Message "rust post-checkout upload must publish distinct post-checkout evidence path"
-  }
-
-  It "runs rust post-pnpm-setup forensics between pnpm and setup-node" {
+  It "restores canonical lockfile after setup-node and before install in rust-quality-report" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
     $jobIndex = $content.IndexOf("rust-quality-report:")
-    $pnpmSetupIndex = $content.IndexOf("- uses: pnpm/action-setup@v6", $jobIndex)
-    $postPnpmForensicsIndex = $content.IndexOf("Run pnpm post-pnpm-setup forensics (rust-quality-report)", $jobIndex)
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
-
-    Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
-    Assert-True -Condition ($pnpmSetupIndex -gt $jobIndex) -Message "rust-quality-report must include pnpm/action-setup"
-    Assert-True -Condition ($postPnpmForensicsIndex -gt $pnpmSetupIndex) -Message "post-pnpm-setup forensic step must run after pnpm/action-setup"
-    Assert-True -Condition ($nodeSetupIndex -gt $postPnpmForensicsIndex) -Message "post-pnpm-setup forensic step must run before actions/setup-node"
-  }
-
-  It "uploads rust post-pnpm-setup forensics to a distinct evidence path" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    Assert-Match -Value $content -Pattern "Upload pnpm post-pnpm-setup forensics \(rust-quality-report\)" -Message "workflow must include rust post-pnpm-setup forensic upload"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-pnpm-setup forensics \(rust-quality-report\)[\s\S]*?if:\s*always\(\)" -Message "rust post-pnpm-setup upload must run with if: always()"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-pnpm-setup forensics \(rust-quality-report\)[\s\S]*?\.ci-evidence/pnpm-preinstall/rust-quality-report-post-pnpm-setup/" -Message "rust post-pnpm-setup upload must publish distinct evidence path"
-  }
-
-  It "runs rust post-setup-node forensics between setup-node and pre-install" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    $jobIndex = $content.IndexOf("rust-quality-report:")
-    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@v6", $jobIndex)
-    $postNodeForensicsIndex = $content.IndexOf("Run pnpm post-setup-node forensics (rust-quality-report)", $jobIndex)
-    $preInstallForensicsIndex = $content.IndexOf("Run pnpm pre-install forensics (rust-quality-report)", $jobIndex)
+    $nodeSetupIndex = $content.IndexOf("- uses: actions/setup-node@", $jobIndex)
+    $restoreIndex = $content.IndexOf("Restore canonical lockfile (rust-quality-report)", $jobIndex)
+    $installIndex = $content.IndexOf("name: Install dependencies", $jobIndex)
 
     Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
     Assert-True -Condition ($nodeSetupIndex -gt $jobIndex) -Message "rust-quality-report must include actions/setup-node"
-    Assert-True -Condition ($postNodeForensicsIndex -gt $nodeSetupIndex) -Message "post-setup-node forensic step must run after actions/setup-node"
-    Assert-True -Condition ($preInstallForensicsIndex -gt $postNodeForensicsIndex) -Message "post-setup-node forensic step must run before pre-install forensics"
-  }
-
-  It "uploads rust post-setup-node forensics to a distinct evidence path" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    Assert-Match -Value $content -Pattern "Upload pnpm post-setup-node forensics \(rust-quality-report\)" -Message "workflow must include rust post-setup-node forensic upload"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-setup-node forensics \(rust-quality-report\)[\s\S]*?if:\s*always\(\)" -Message "rust post-setup-node upload must run with if: always()"
-    Assert-Match -Value $content -Pattern "Upload pnpm post-setup-node forensics \(rust-quality-report\)[\s\S]*?\.ci-evidence/pnpm-preinstall/rust-quality-report-post-setup-node/" -Message "rust post-setup-node upload must publish distinct evidence path"
-  }
-
-  It "restores canonical lockfile between post-setup-node forensics and pre-install forensics in rust-quality-report" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    $jobIndex = $content.IndexOf("rust-quality-report:")
-    $postNodeForensicsIndex = $content.IndexOf("Run pnpm post-setup-node forensics (rust-quality-report)", $jobIndex)
-    $restoreIndex = $content.IndexOf("Restore canonical lockfile (rust-quality-report)", $jobIndex)
-    $preInstallForensicsIndex = $content.IndexOf("Run pnpm pre-install forensics (rust-quality-report)", $jobIndex)
-    $installIndex = $content.IndexOf("name: Install dependencies", $jobIndex)
-
-    Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
-    Assert-True -Condition ($postNodeForensicsIndex -gt $jobIndex) -Message "rust-quality-report must include post-setup-node forensics"
-    Assert-True -Condition ($restoreIndex -gt $postNodeForensicsIndex) -Message "rust-quality-report lockfile restore must run after post-setup-node forensics"
-    Assert-True -Condition ($preInstallForensicsIndex -gt $restoreIndex) -Message "rust-quality-report lockfile restore must run before pre-install forensics"
-    Assert-True -Condition ($installIndex -gt $preInstallForensicsIndex) -Message "rust-quality-report install must run after pre-install forensics"
+    Assert-True -Condition ($restoreIndex -gt $nodeSetupIndex) -Message "rust-quality-report lockfile restore must run after actions/setup-node"
+    Assert-True -Condition ($installIndex -gt $restoreIndex) -Message "rust-quality-report lockfile restore must run before Install dependencies"
 
     Assert-Match -Value $content -Pattern "Restore canonical lockfile \(rust-quality-report\)[\s\S]*?run:\s*git checkout -- pnpm-lock\.yaml" -Message "rust-quality-report lockfile restore must use deterministic git checkout from committed state"
-  }
-
-  It "uploads rust-quality-report pre-install forensics artifact with always policy" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    Assert-Match -Value $content -Pattern "Upload pnpm pre-install forensics \(rust-quality-report\)" -Message "workflow must include rust-quality-report forensics upload"
-    Assert-Match -Value $content -Pattern "Upload pnpm pre-install forensics \(rust-quality-report\)[\s\S]*?if:\s*always\(\)" -Message "rust-quality-report forensics upload must run with if: always()"
-    Assert-Match -Value $content -Pattern "Upload pnpm pre-install forensics \(rust-quality-report\)[\s\S]*?\.ci-evidence/pnpm-preinstall/rust-quality-report/" -Message "rust-quality-report forensics upload must include rust-quality-report evidence folder"
-  }
-
-  It "uploads rust-quality-report pre-install forensics after install" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    $jobIndex = $content.IndexOf("rust-quality-report:")
-    $installIndex = $content.IndexOf("name: Install dependencies", $jobIndex)
-    $uploadIndex = $content.IndexOf("Upload pnpm pre-install forensics (rust-quality-report)", $jobIndex)
-
-    Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
-    Assert-True -Condition ($installIndex -gt $jobIndex) -Message "rust-quality-report job must include Install dependencies"
-    Assert-True -Condition ($uploadIndex -gt $installIndex) -Message "rust-quality-report pre-install forensics upload must run after install"
   }
 
   It "uploads baseline coverage artifacts lcov and summary" {
@@ -192,7 +98,7 @@ Describe "rust-quality-report workflow" {
   It "pins pnpm/action-setup id and uses explicit pnpm bin path in rust-quality-report install" {
     $content = Get-Content -Path $script:workflowPath -Raw
 
-    Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?- uses: pnpm/action-setup@v6[\s\S]*?id:\s*pnpm_setup' -Message "rust-quality-report pnpm/action-setup must define id: pnpm_setup"
+    Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?- uses: pnpm/action-setup@[0-9a-f]{40} # v6\.[\s\S]*?id:\s*pnpm_setup' -Message "rust-quality-report pnpm/action-setup must define id: pnpm_setup"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?steps\.pnpm_setup\.outputs\.bin_dest' -Message "rust-quality-report install must use steps.pnpm_setup.outputs.bin_dest"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?Write-Host\s+"pnpm_bin=' -Message "rust-quality-report install must print pnpm binary path"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?&\s*\$pnpmExe\s+-v' -Message "rust-quality-report install must print pnpm version from pinned binary"
@@ -213,24 +119,6 @@ Describe "rust-quality-report workflow" {
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?git checkout -- pnpm-lock\.yaml[\s\S]*?lockfile_diag\.first_line_is_yaml_doc=' -Message "rust-quality-report install must emit same-step YAML doc first-line diagnostic"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?git checkout -- pnpm-lock\.yaml[\s\S]*?lockfile_diag\.head_blob=' -Message "rust-quality-report install must emit same-step HEAD lockfile blob diagnostic"
     Assert-Match -Value $content -Pattern 'rust-quality-report:[\s\S]*?name:\s*Install dependencies[\s\S]*?git checkout -- pnpm-lock\.yaml[\s\S]*?lockfile_diag\.matches_head_blob=[\s\S]*?npm\s+exec\s+--package=pnpm@9\.15\.4\s+--\s+pnpm\s+install\s+--frozen-lockfile' -Message "rust-quality-report install must compare working lockfile to HEAD blob before npm exec pnpm install"
-  }
-
-  It "runs generic lockfile YAML parse diagnostic before rust install with decisive logs" {
-    $content = Get-Content -Path $script:workflowPath -Raw
-
-    $jobIndex = $content.IndexOf("rust-quality-report:")
-    $yamlParseIndex = $content.IndexOf("Run generic lockfile YAML parse (rust-quality-report)", $jobIndex)
-    $installIndex = $content.IndexOf("name: Install dependencies", $jobIndex)
-
-    Assert-True -Condition ($jobIndex -ge 0) -Message "workflow must include rust-quality-report job"
-    Assert-True -Condition ($yamlParseIndex -gt $jobIndex) -Message "rust-quality-report must include generic lockfile YAML parse step"
-    Assert-True -Condition ($installIndex -gt $yamlParseIndex) -Message "rust-quality-report lockfile YAML parse must run before install"
-
-    Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?\$parserCommand\s*=\s*''npm exec --yes --package=js-yaml@4\.1\.0 -- js-yaml pnpm-lock\.yaml''' -Message "rust-quality-report YAML parse step must define portable js-yaml CLI parser via single-quoted npm exec js-yaml@4.1.0 command"
-    Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parser=\$parserCommand' -Message "rust-quality-report YAML parse step must emit parser identity using lockfile_yaml_parser"
-    Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parse=ok' -Message "rust-quality-report YAML parse step must emit lockfile_yaml_parse=ok on success"
-    Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parse=error' -Message "rust-quality-report YAML parse step must emit lockfile_yaml_parse=error on parse failure"
-    Assert-Match -Value $content -Pattern 'Run generic lockfile YAML parse \(rust-quality-report\)[\s\S]*?lockfile_yaml_parse_error=\$\(' -Message "rust-quality-report YAML parse step must emit lockfile_yaml_parse_error with the exception message"
   }
 
   It "blocks the build when rustfmt or clippy report findings" {

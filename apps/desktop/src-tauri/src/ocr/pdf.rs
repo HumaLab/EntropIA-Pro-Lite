@@ -51,7 +51,8 @@ use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId};
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -263,13 +264,15 @@ pub fn init_pdfium_path(app_handle: &tauri::AppHandle) {
     }
 
     match cached.as_ref() {
-        Some(path) => eprintln!(
-            "[pdf] ✅ Pdfium native library resolved: {}",
+        Some(path) => log::info!(
+            target: "pdf",
+            "✅ Pdfium native library resolved: {}",
             path.display()
         ),
         None => {
-            eprintln!(
-                "[pdf] ℹ️ Pdfium no se resolvió desde runtime/resources dev; se intentará la librería del sistema ({})",
+            log::warn!(
+                target: "pdf",
+                "ℹ️ Pdfium no se resolvió desde runtime/resources dev; se intentará la librería del sistema ({})",
                 dll_name_display()
             )
         }
@@ -332,7 +335,7 @@ fn resolve_pdfium_dll_path_from_roots(
         let managed = managed_resource_path(root, "lib").join(&dll_name);
         #[cfg(not(feature = "local-ml"))]
         let managed = root.join("resources").join("lib").join(&dll_name);
-        if managed.exists() {
+        if let Some(managed) = first_usable_candidate(std::iter::once(managed)) {
             return Some(managed);
         }
     }
@@ -342,17 +345,18 @@ fn resolve_pdfium_dll_path_from_roots(
     // candidates. The runtime-free resolver probes the broader host-filtered
     // list instead (`resolve_bundled_pdfium_path`).
     if let Some(resource_dir) = bundled_resource_dir {
-        for bundled in bundled_pdfium_candidate_paths(resource_dir, &dll_name) {
-            if bundled.exists() {
-                return Some(strip_windows_prefix(bundled));
-            }
+        if let Some(bundled) =
+            first_usable_candidate(bundled_pdfium_candidate_paths(resource_dir, &dll_name))
+        {
+            return Some(strip_windows_prefix(bundled));
         }
     }
 
-    for dev_path in dev_pdfium_candidate_paths(manifest_dir, dll_name.to_string_lossy().as_ref()) {
-        if dev_path.exists() {
-            return Some(strip_windows_prefix(dev_path));
-        }
+    if let Some(dev_path) = first_usable_candidate(dev_pdfium_candidate_paths(
+        manifest_dir,
+        dll_name.to_string_lossy().as_ref(),
+    )) {
+        return Some(strip_windows_prefix(dev_path));
     }
 
     None
@@ -369,13 +373,8 @@ fn resolve_bundled_pdfium_path(
     resource_dir: Option<&std::path::Path>,
     manifest_dir: &std::path::Path,
 ) -> Option<PathBuf> {
-    for candidate in host_pdfium_candidate_paths(resource_dir, manifest_dir) {
-        if candidate.exists() {
-            return Some(strip_windows_prefix(candidate));
-        }
-    }
-
-    None
+    first_usable_candidate(host_pdfium_candidate_paths(resource_dir, manifest_dir))
+        .map(strip_windows_prefix)
 }
 
 /// The candidates [`resolve_bundled_pdfium_path`] may probe: the current
@@ -386,14 +385,15 @@ fn resolve_bundled_pdfium_path(
 /// installer that uses them:
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
-/// - Lite Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
-///   (`bundle.resources` in tauri.lite.linux.conf.json);
+/// - Lite and Pro Linux: `resources/pdfium/libpdfium.so` under
+///   `/usr/lib/<productName>` (`bundle.resources` in
+///   tauri.lite.linux.conf.json and tauri.pro.linux.conf.json);
 /// - Pro/Lite Windows installers, the Store MSIX repack and `tauri dev`
 ///   (whose resource dir is `target/debug`): `resources/lib/<dll>`
 ///   (`bundle.resources` in tauri.windows.conf.json / tauri.lite.windows.conf.json);
-/// - Pro Linux: `resources/lib/linux-x86_64/libpdfium.so`
-///   (`bundle.resources` in tauri.linux.conf.json) — the host's own
-///   `<os>-<arch>` subdir.
+/// - an optional `<os>-<arch>` subdir under `resources/lib/`: the host's own
+///   one only. No installer ships it anymore; per-arch packs and dev
+///   checkouts may.
 ///
 /// The dev candidates follow exactly where the pre-part-A code had them and
 /// in its order (the flat host path first): `CARGO_MANIFEST_DIR/resources/lib`
@@ -420,7 +420,8 @@ fn host_pdfium_candidate_paths(resource_dir: Option<&Path>, manifest_dir: &Path)
         // `resources/lib/<dll>`.
         candidates.push(resource_dir.join("resources").join("lib").join(&dll_name));
         // Pro Linux (and any per-arch pack): `resources/lib/<os>-<arch>/<dll>`
-        // — the HOST subdir only.
+        // — the HOST subdir only. No installer ships it anymore; this stays a
+        // pack/dev fallback behind the resources/pdfium layout.
         if let Some(platform) = host_platform_resource_dir() {
             candidates.push(
                 resource_dir
@@ -462,7 +463,8 @@ fn host_platform_resource_dir() -> Option<&'static str> {
 /// - macOS: `Contents/Frameworks/libpdfium.dylib`, beside `Contents/Resources`
 ///   (`bundle.macOS.frameworks` in tauri.lite.macos.conf.json);
 /// - Linux: `resources/pdfium/libpdfium.so` under `/usr/lib/<productName>`
-///   (`bundle.resources` in tauri.lite.linux.conf.json);
+///   (`bundle.resources` in tauri.lite.linux.conf.json and
+///   tauri.pro.linux.conf.json);
 /// - Windows: `resources\lib\pdfium.dll` beside the exe (`bundle.resources` in
 ///   tauri.windows.conf.json for NSIS/MSI, and repack-store-msix.ps1 for the
 ///   Store MSIX). Pro finds its managed runtime copy first; Lite has only this.
@@ -559,6 +561,78 @@ fn ensure_cached_pdfium_path(
     resolved
 }
 
+/// The minimum size of a plausible Pdfium build. The real library is tens of
+/// megabytes; anything below this floor is a placeholder or a stub — the
+/// 49-byte text file named `libpdfium.so` the Linux installer used to ship is
+/// the reason this gate exists (E-02).
+const MIN_NATIVE_LIBRARY_BYTES: u64 = 1024 * 1024;
+
+/// The first four bytes of every native shared-object container
+/// pdfium-render can load, read as a big-endian `u32`. PE (`MZ`) is only two
+/// bytes and is matched separately.
+const NATIVE_LIBRARY_MAGICS_BE: &[u32] = &[
+    0x7f45_4c46, // ELF: \x7fELF
+    0xfeed_face, // Mach-O 32-bit, big-endian file order
+    0xfeed_facf, // Mach-O 64-bit, big-endian file order
+    0xcefa_edfe, // Mach-O 32-bit, little-endian file order
+    0xcffa_edfe, // Mach-O 64-bit, little-endian file order
+    0xcafe_babe, // fat/universal
+    0xbeba_feca, // fat/universal, byte-swapped
+];
+
+/// Whether `path` can be a real Pdfium shared library: an existing file, at
+/// least [`MIN_NATIVE_LIBRARY_BYTES`] long, opening with one of the native
+/// shared-object magics. A candidate that fails is logged and refused, so the
+/// resolver walks on instead of binding a stub that would fail at `dlopen`
+/// (E-02). Absent candidates are silent — most probed layouts are expected to
+/// be missing.
+fn usable_native_library(path: &Path) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return false,
+    };
+    if metadata.len() < MIN_NATIVE_LIBRARY_BYTES {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: {} bytes is below the {} byte minimum for a native shared library",
+            path.display(),
+            metadata.len(),
+            MIN_NATIVE_LIBRARY_BYTES
+        );
+        return false;
+    }
+
+    let mut header = [0u8; 4];
+    if let Err(error) = File::open(path).and_then(|mut file| file.read_exact(&mut header)) {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: unreadable header ({error})",
+            path.display()
+        );
+        return false;
+    }
+    if header[..2] == *b"MZ" || NATIVE_LIBRARY_MAGICS_BE.contains(&u32::from_be_bytes(header)) {
+        true
+    } else {
+        log::warn!(
+            target: "pdf",
+            "Skipping Pdfium candidate {}: header {header:02x?} is not a native shared-library magic",
+            path.display()
+        );
+        false
+    }
+}
+
+/// The single candidate gate of every Pdfium lookup: the first candidate
+/// [`usable_native_library`] accepts, in order. Invalid stubs are logged and
+/// skipped there, so they cannot shadow a later valid candidate or the system
+/// library.
+fn first_usable_candidate(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find(|candidate| usable_native_library(candidate))
+}
+
 /// Resolves the Pdfium library the bundle carries — and nothing else. Unlike
 /// [`init_pdfium_path`] it never reaches the ML runtime: no background sync
 /// and no bibliography extraction may trigger
@@ -589,12 +663,14 @@ pub(crate) fn ensure_pdfium_path_without_runtime_dir(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
         );
         match &resolved {
-            Some(path) => eprintln!(
-                "[pdf] ✅ Pdfium incluida resuelta sin runtime de ML: {}",
+            Some(path) => log::info!(
+                target: "pdf",
+                "✅ Pdfium incluida resuelta sin runtime de ML: {}",
                 path.display()
             ),
-            None => eprintln!(
-                "[pdf] ℹ️ Sin Pdfium incluida ({}) ni en el checkout de desarrollo; la lectura por página usa lopdf",
+            None => log::warn!(
+                target: "pdf",
+                "ℹ️ Sin Pdfium incluida ({}) ni en el checkout de desarrollo; la lectura por página usa lopdf",
                 dll_name_display()
             ),
         }
@@ -621,12 +697,14 @@ pub fn ensure_pdfium_path_with_hydrated_runtime(app_handle: &tauri::AppHandle) -
         #[cfg(feature = "local-ml")]
         let resolved = resolved.or_else(|| existing_managed_pdfium_path(app_handle));
         match &resolved {
-            Some(path) => eprintln!(
-                "[pdf] ✅ Pdfium resuelta para el render de páginas: {}",
+            Some(path) => log::info!(
+                target: "pdf",
+                "✅ Pdfium resuelta para el render de páginas: {}",
                 path.display()
             ),
-            None => eprintln!(
-                "[pdf] ℹ️ Sin Pdfium incluida ni copia hidratada del runtime ({})",
+            None => log::warn!(
+                target: "pdf",
+                "ℹ️ Sin Pdfium incluida ni copia hidratada del runtime ({})",
                 dll_name_display()
             ),
         }
@@ -661,7 +739,7 @@ where
     let managed = managed_resource_path(&root, "lib").join(&dll_name);
     #[cfg(not(feature = "local-ml"))]
     let managed = root.join("resources").join("lib").join(&dll_name);
-    managed.exists().then(|| strip_windows_prefix(managed))
+    first_usable_candidate(std::iter::once(managed)).map(strip_windows_prefix)
 }
 
 /// Initialize a Pdfium instance without panicking.
@@ -681,8 +759,9 @@ fn get_pdfium() -> Result<GuardedPdfium, String> {
     let bindings = match cached_path.as_ref() {
         // Initialized with a resolved DLL path — try that first, then system library
         Some(path) => Pdfium::bind_to_library(path).or_else(|path_err| {
-            eprintln!(
-                "[pdf] Failed to load pdfium from resolved path ({}): {path_err} — trying system library",
+            log::warn!(
+                target: "pdf",
+                "Failed to load pdfium from resolved path ({}): {path_err} — trying system library",
                 path.display()
             );
             Pdfium::bind_to_system_library()
@@ -881,9 +960,10 @@ fn cancelled_output_error() -> pdf_extract::OutputError {
     ))
 }
 
-/// pdf-extract 0.7.12 keeps `maybe_decrypt` private; this is that step
-/// verbatim: a permissions-only file opens with the empty user password, and
-/// a real user password fails with the crate's own hint on stderr.
+/// pdf-extract 0.12.1 keeps `maybe_decrypt` private; this is that step: a
+/// permissions-only file opens with the empty user password, and a real user
+/// password fails with the crate's own hint. The crate logs that hint through
+/// `log::error!`; this copy keeps it on stderr.
 fn maybe_decrypt_pdf_extract(
     doc: &mut pdf_extract::Document,
 ) -> Result<(), pdf_extract::OutputError> {
@@ -895,7 +975,8 @@ fn maybe_decrypt_pdf_extract(
             pdf_extract::encryption::DecryptionError::IncorrectPassword,
         ) = error
         {
-            eprintln!(
+            log::warn!(
+                target: "pdf",
                 "Encrypted documents must be decrypted with a password using \
                  {{extract_text|extract_text_from_mem|output_doc}}_encrypted"
             );
@@ -905,7 +986,7 @@ fn maybe_decrypt_pdf_extract(
     Ok(())
 }
 
-/// Mirrors pdf-extract 0.7.12's `extract_text_from_mem` exactly — same
+/// Mirrors pdf-extract 0.12.1's `extract_text_from_mem` exactly — same
 /// [`pdf_extract::Document::load_mem`], same decrypt step
 /// ([`maybe_decrypt_pdf_extract`]), same [`pdf_extract::output_doc`] over
 /// [`pdf_extract::PlainTextOutput`] — with [`PageProgressOutput`] around the
@@ -985,9 +1066,9 @@ pub fn extract_pdf_text_with_progress(
 /// Extract text from the native text layer of a PDF byte slice.
 /// Returns the raw extracted text or an error message.
 ///
-/// `pdf-extract` signals unsupported constructs (function type 4 tint
-/// transforms, DeviceN spaces, dangling references, fonts without a unicode
-/// map) with `panic!` instead of an error, and that panic is contained here,
+/// `pdf-extract` signals unsupported constructs (DeviceN spaces, missing
+/// colour spaces, dangling references, fonts without a unicode map) with
+/// `panic!` instead of an error, and that panic is contained here,
 /// at the narrowest boundary, so every caller — bibliography extraction,
 /// corpus import, OCR fallback — receives an ordinary `Err`. Containment
 /// needs unwinding: `[profile.release]` must not set `panic = "abort"`.
@@ -1327,17 +1408,48 @@ fn flush_run(stats: &mut GarbleStats, run_letters: &mut usize, run_digits: &mut 
 /// Version of the bibliography garble detector. Bumped whenever a rule or a
 /// threshold changes, so a stored measurement names the rules that produced
 /// it (B2, plan-texto-nativo-parte-b 2.2).
-pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 1;
+///
+/// v2 (detector-old-ocr-noise) widened rule 2 (digits and more separators
+/// between letters, replacement-character noise, identifier tokens excluded,
+/// 10 % over 10 judged tokens) and added rule 3, punctuation soup (15 % over
+/// 20 whitespace tokens). Measured on the stored native rows of the
+/// prueba-sync copy: 542 of the 911 Abulafia 1950 pages and 73 pages of other
+/// works (24 works) flag, versus v1's 42 and 56. Born-digital false positives
+/// are the risk to minimize: a flagged page leaves the regular extraction for
+/// GLM-OCR. A case-soup clause ("PrelUlliIl") was measured and dropped: it
+/// added 40 Abulafia pages but flagged camelCase code in 28 more works.
+///
+/// v3 (detector-shredded-text) adds rule 4, shredded text: pages whose
+/// words came back shredded into 1-2 char fragments ("J.mport.a- Calen-
+/// Impor- ciones") or spaced letters ("u n a t e s i s"), the Abulafia
+/// 1950 rich rows v2 kept native. Measured on the stored native rows of
+/// the prueba-sync copy: rule 4 flags 835 rows (Abulafia 1,204 PDFium
+/// pages read by hand as garbage, plus spaced-letter damage in 3 more
+/// works); accepted false positives are TOC dot-leader, math-symbol and
+/// number-table pages, which GLM-OCR also reads well.
+pub const BIBLIOGRAPHY_DETECTOR_VERSION: u32 = 3;
 
-/// Which of the two bibliography-garble rules flag a text.
+/// Which of the four bibliography-garble rules flag a text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GarbledBibliographyFlags {
     /// Rule 1, glued words: at least half the Latin letters sit in tokens
     /// whose longest Latin-letter run is longer than 24 characters.
     pub glued_words: bool,
-    /// Rule 2, old OCR noise: at least 8 % of the eligible 4+-letter tokens
-    /// carry an intrusive `.`, `~` or `·` between two letters.
+    /// Rule 2, old OCR noise: at least 10 % of the judged tokens (4+ Latin
+    /// letters, identifier-like tokens excluded) carry noise inside the
+    /// word — a U+FFFD, an intrusive digit or punctuation mark between two
+    /// letters, or a lowercase-uppercase-lowercase run.
     pub old_ocr_noise: bool,
+    /// Rule 3, punctuation soup: at least 15 % of the whitespace tokens are
+    /// punctuation without one alphanumeric character — lone quote or tilde
+    /// marks and mixed punctuation, the shape of an old typewritten scan
+    /// whose OCR layer answers with punctuation soup and few whole words.
+    pub punctuation_soup: bool,
+    /// Rule 4, shredded text: with 30 or more whitespace tokens, when under
+    /// 30 % of them are words (a run of 3+ Latin letters) and at least
+    /// 15 % are shreds (2 or fewer chars, not a short word, not all
+    /// digits) — the page's words came back shredded into fragments.
+    pub shredded_text: bool,
 }
 
 /// True when the bibliography detector flags the text as garbled (B2). Used
@@ -1349,20 +1461,37 @@ pub struct GarbledBibliographyFlags {
 /// [`is_quality_text`] are untouched.
 ///
 /// Two independent rules over the eligible tokens (whitespace split minus
-/// URL/DOI/email/domain tokens, punctuation stripped at the edges):
+/// URL/DOI/email/domain tokens, punctuation stripped at the edges), plus a
+/// third and a fourth over the raw whitespace tokens:
 ///
 /// 1. **Glued words.** Needs 80 Latin letters (ASCII, Latin-1 Supplement,
 ///    Latin Extended-A/B — so spaceless scripts are never judged). Flags
 ///    when >= 50 % of those letters lie in tokens whose longest Latin-letter
 ///    run is longer than 24.
-/// 2. **Old OCR noise.** Needs 40 eligible tokens of 4+ Latin letters. Flags
-///    when >= 8 % of them contain `.`, `~` or `·` between two letters.
-///    Hyphens and apostrophes never count, the Catalan geminate `l·l` is
-///    not noise, and dotted abbreviations (`U.S.`, `U.S.A.`, `e.g.`, `i.e.`)
-///    are not noise either.
+/// 2. **Old OCR noise.** Needs 10 judged tokens (4+ Latin letters, minus
+///    identifier-like tokens: URL/DOI/file-name shapes, slashes, colons,
+///    two digits). Flags when >= 10 % of them carry noise inside the word:
+///    a U+FFFD, a digit or an intrusive `. ~ · " ; , : ! | ^ ` \ { } < >`
+///    between two letters, or a lowercase-uppercase-lowercase run. Hyphens
+///    and apostrophes never count, the Catalan geminate `l·l` is not noise,
+///    and dotted abbreviations (`U.S.`, `U.S.A.`, `e.g.`, `i.e.`) are not
+///    noise either.
+/// 3. **Punctuation soup.** Needs 20 whitespace tokens (no edge stripping).
+///    Flags when >= 15 % of them hold no alphanumeric character and either
+///    carry a quote-or-tilde-like mark or mix punctuation.
+/// 4. **Shredded text.** Needs 30 whitespace tokens. Flags when under
+///    30 % of them are words (a run of 3+ Latin letters) and at least
+///    15 % are shreds (2 or fewer chars, not a short function word, not
+///    all ASCII digits) — the shape of a page whose words came back
+///    shredded into 1-2 char fragments.
+///
+/// Measured on the 18 984-page prueba-sync copy (abulafia_soup/
+/// abulafia_prose-class pages are the v2 target): rules 2+3 at these
+/// thresholds flag 582 of the 911 Abulafia 1950 pages and 121 pages of
+/// other works (52 works), versus v1's 42 and 56.
 pub fn is_garbled_bibliography_text(text: &str) -> bool {
     let flags = garbled_bibliography_flags(text);
-    flags.glued_words || flags.old_ocr_noise
+    flags.glued_words || flags.old_ocr_noise || flags.punctuation_soup || flags.shredded_text
 }
 
 /// The per-rule verdict behind [`is_garbled_bibliography_text`]: the
@@ -1372,6 +1501,8 @@ pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
     GarbledBibliographyFlags {
         glued_words: glued_words_flag(&tokens),
         old_ocr_noise: old_ocr_noise_flag(&tokens),
+        punctuation_soup: punctuation_soup_flag(text),
+        shredded_text: shredded_text_flag(text),
     }
 }
 
@@ -1380,10 +1511,19 @@ pub fn garbled_bibliography_flags(text: &str) -> GarbledBibliographyFlags {
 const BIBLIOGRAPHY_GLUED_MIN_LETTERS: usize = 80;
 /// A Latin-letter run longer than this is a glued word.
 const BIBLIOGRAPHY_GLUED_RUN: usize = 24;
-/// Rule 2 needs this many eligible tokens of 4+ Latin letters.
-const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 40;
+/// Rule 2 needs this many judged tokens (4+ Latin letters, identifiers
+/// excluded).
+const BIBLIOGRAPHY_NOISE_MIN_TOKENS: usize = 10;
 /// A token enters rule 2's judgement from this many Latin letters.
 const BIBLIOGRAPHY_NOISE_MIN_TOKEN_LETTERS: usize = 4;
+/// Rule 3 needs this many whitespace tokens before it judges a page.
+const BIBLIOGRAPHY_SOUP_MIN_TOKENS: usize = 20;
+/// Rule 4 needs this many whitespace tokens before it judges a page.
+const BIBLIOGRAPHY_SHRED_MIN_TOKENS: usize = 30;
+/// A token counts as a word for rule 4 from this Latin-letter run.
+const BIBLIOGRAPHY_SHRED_WORD_RUN: usize = 3;
+/// A shred token has at most this many characters.
+const BIBLIOGRAPHY_SHRED_MAX_CHARS: usize = 2;
 
 /// The letters rule 1 counts: ASCII, Latin-1 Supplement and Latin
 /// Extended-A/B. `×` (U+00D7) and `÷` (U+00F7) sit inside Latin-1 but are
@@ -1491,9 +1631,11 @@ fn glued_words_flag(tokens: &[&str]) -> bool {
     total >= BIBLIOGRAPHY_GLUED_MIN_LETTERS && glued * 2 >= total
 }
 
-/// Rule 2, old OCR noise: at least 8 % of the judged tokens carry an
-/// intrusive `.`, `~` or `·` between two letters. Exact integer arithmetic
-/// at the 8 % line (4 of 50 flags; 3 of 50 does not).
+/// Rule 2, old OCR noise: at least 10 % of the judged tokens carry noise
+/// inside the word. Identifier-like tokens are dropped before the judgement
+/// — their dots, slashes and digits are structure, not noise (a DOI stamp or
+/// an `arXiv:…` line would otherwise read as noise). Exact integer
+/// arithmetic at the 10 % line (5 of 50 flags; 4 of 50 does not).
 fn old_ocr_noise_flag(tokens: &[&str]) -> bool {
     let mut judged = 0usize;
     let mut noisy = 0usize;
@@ -1503,22 +1645,58 @@ fn old_ocr_noise_flag(tokens: &[&str]) -> bool {
         {
             continue;
         }
+        if is_noise_excluded_identifier(token) {
+            continue;
+        }
         judged += 1;
         if token_has_old_ocr_noise(token) {
             noisy += 1;
         }
     }
-    judged >= BIBLIOGRAPHY_NOISE_MIN_TOKENS && noisy * 100 >= judged * 8
+    judged >= BIBLIOGRAPHY_NOISE_MIN_TOKENS && noisy * 100 >= judged * 10
 }
 
-/// Whether the token carries one non-excluded noise occurrence. Hyphens
-/// and apostrophes are not in the separator set at all: real spelling
-/// ("state-of-the-art", "l'adquisició") never counts.
+/// Whether the token is identifier-like and stays out of rule 2's judgement:
+/// a URL, DOI, domain, file name or code. Case-insensitive markers plus the
+/// structural punctuation (`/`, `@`, `:`) and two-digit runs cover them.
+fn is_noise_excluded_identifier(token: &str) -> bool {
+    let lower = token.to_lowercase();
+    if ["http", "www", "doi", "arxiv", ".pdf", ".htm"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return true;
+    }
+    if token.contains('@') || token.contains('/') || token.contains(':') {
+        return true;
+    }
+    token.chars().filter(|c| c.is_ascii_digit()).count() >= 2
+}
+
+/// The characters rule 2 counts between two Latin letters: the dotted and
+/// tilde artifacts of old recognizers plus the punctuation a shifted glyph
+/// map glues into words. Hyphens and apostrophes are not in the set at all:
+/// real spelling ("state-of-the-art", "l'adquisició") never counts.
+const BIBLIOGRAPHY_NOISE_SEPARATORS: &[char] = &[
+    '.', '~', '\u{00B7}', '"', ';', ',', ':', '!', '|', '^', '`', '\\', '{', '}', '<', '>',
+];
+
+/// Whether the token carries one non-excluded noise occurrence: a U+FFFD, or
+/// a digit or [`BIBLIOGRAPHY_NOISE_SEPARATORS`] character between two Latin
+/// letters. Mixed case alone never counts: camelCase identifiers in
+/// born-digital papers look like it. The separator checks
+/// keep today's exclusions: hyphens and apostrophes never count, the Catalan
+/// geminate "l·l" ("paral·lel", case-insensitive) is not noise, and dotted
+/// abbreviations ("U.S.", "U.S.A.", "N.A.T.O.", "e.g.", "i.e.") are not
+/// noise either.
 fn token_has_old_ocr_noise(token: &str) -> bool {
+    if token.contains('\u{FFFD}') {
+        return true;
+    }
     let chars: Vec<char> = token.chars().collect();
     for index in 1..chars.len().saturating_sub(1) {
         let sep = chars[index];
-        if !matches!(sep, '.' | '~' | '\u{00B7}') {
+        if !(sep.is_ascii_digit() || BIBLIOGRAPHY_NOISE_SEPARATORS.contains(&sep)) {
             continue;
         }
         let before = chars[index - 1];
@@ -1549,6 +1727,110 @@ fn token_has_old_ocr_noise(token: &str) -> bool {
         return true;
     }
     false
+}
+
+/// The marks rule 3 reads as OCR punctuation soup: quote and tilde-like
+/// characters, the replacement character and the inverted/angled quotes.
+const BIBLIOGRAPHY_SOUP_MARKS: &[char] = &[
+    '~', '\'', '"', '`', '^', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{FFFD}',
+    '\u{00A1}', '\u{00BF}', '\u{00AB}', '\u{00BB}',
+];
+
+/// Rule 3, punctuation soup: at least 15 % of the raw whitespace tokens are
+/// soup. Exact integer arithmetic at the 15 % line (3 of 20 flags; 2 of 20
+/// does not).
+fn punctuation_soup_flag(text: &str) -> bool {
+    let mut tokens = 0usize;
+    let mut soup = 0usize;
+    for token in text.split_whitespace() {
+        tokens += 1;
+        if is_punctuation_soup_token(token) {
+            soup += 1;
+        }
+    }
+    tokens >= BIBLIOGRAPHY_SOUP_MIN_TOKENS && soup * 100 >= tokens * 15
+}
+
+/// A soup token: not one alphanumeric character, and either a quote-or-tilde
+/// mark or punctuation mixing (2+ distinct characters). A lone paren,
+/// comma, equals sign, dot leader, ellipsis of dots or hyphen run carries no
+/// mark and only one distinct character — spacing, never soup.
+fn is_punctuation_soup_token(token: &str) -> bool {
+    if token.chars().any(char::is_alphanumeric) {
+        return false;
+    }
+    if token.chars().any(|c| BIBLIOGRAPHY_SOUP_MARKS.contains(&c)) {
+        return true;
+    }
+    let mut chars = token.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    chars.any(|c| c != first)
+}
+
+/// The short function words rule 4 never counts as shreds: the 1-2 char
+/// words of the languages in the corpus (es/en/fr/de/pt), matched
+/// case-insensitively.
+const BIBLIOGRAPHY_SHRED_SHORT_WORDS: &[&str] = &[
+    // Spanish
+    "a", "e", "y", "o", "u", "de", "la", "el", "en", "al", "del", "los", "las", "un", "una", "su",
+    "se", "lo", "le", "les", "me", "te", "no", "si", "ni", "que", // English
+    "the", "and", "for", "are", "was", "its", "his", "her", "she", "not", "but", "with", "from",
+    // French
+    "les", "des", "une", "est", "aux", "par", "sur", "dans", // German
+    "der", "die", "das", "und", "von", "mit", // Portuguese
+    "que", "uma", "para", "com",
+];
+
+/// Rule 4, shredded text: at least 30 whitespace tokens, under 30 % words
+/// and at least 15 % shreds — the shape of a page whose words came back
+/// shredded into 1-2 char fragments ("J.mport.a- Calen- Impor- ciones")
+/// or spaced letters ("u n a t e s i s"). Exact integer arithmetic at
+/// both lines (the word line is strict: exactly 30 % does not flag).
+fn shredded_text_flag(text: &str) -> bool {
+    let mut tokens = 0usize;
+    let mut words = 0usize;
+    let mut shreds = 0usize;
+    for token in text.split_whitespace() {
+        tokens += 1;
+        if is_shredded_word_token(token) {
+            words += 1;
+        }
+        if is_shred_token(token) {
+            shreds += 1;
+        }
+    }
+    tokens >= BIBLIOGRAPHY_SHRED_MIN_TOKENS
+        && words * 100 < tokens * 30
+        && shreds * 100 >= tokens * 15
+}
+
+/// A word token for rule 4: it contains a run of 3 or more Latin letters.
+fn is_shredded_word_token(token: &str) -> bool {
+    let mut run = 0usize;
+    for c in token.chars() {
+        if is_latin_letter(c) {
+            run += 1;
+            if run >= BIBLIOGRAPHY_SHRED_WORD_RUN {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+/// A shred token for rule 4: 2 or fewer chars, not a short function word
+/// and not an all-digit number. The digit exclusion keeps number tables
+/// quiet; the short-word list keeps prose function words out.
+fn is_shred_token(token: &str) -> bool {
+    token.chars().count() <= BIBLIOGRAPHY_SHRED_MAX_CHARS
+        && !token.chars().all(|c| c.is_ascii_digit())
+        && !BIBLIOGRAPHY_SHRED_SHORT_WORDS
+            .iter()
+            .any(|word| token.eq_ignore_ascii_case(word))
 }
 
 /// Build a conservative per-page profile for a PDF, synchronously.
@@ -2411,10 +2693,76 @@ mod tests {
 
     /// 816 bytes minimised from real library PDFs: a page whose colour space
     /// is a `Separation` with a PostScript-calculator (`/FunctionType 4`) tint
-    /// transform. `pdf-extract` 0.7 answers it with `panic!("unhandled
-    /// function type 4")` instead of an error.
+    /// transform. `pdf-extract` 0.7 answered it with `panic!("unhandled
+    /// function type 4")`; 0.12 evaluates the function and reads the text.
     const TYPE4_TINT_PDF: &[u8] =
         include_bytes!("../../tests/fixtures/pdf-type4-tint-transform.pdf");
+
+    /// A one-page PDF with `page_entries` added to the page dictionary and, when
+    /// given, `content` as its content stream. The cross-reference table is
+    /// correct, so the parser takes its normal path.
+    fn one_page_pdf(page_entries: &str, content: Option<&str>) -> Vec<u8> {
+        let contents = if content.is_some() {
+            " /Contents 4 0 R"
+        } else {
+            ""
+        };
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10]{contents} {page_entries} >>"
+            ),
+        ];
+        if let Some(content) = content {
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ));
+        }
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (index, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    /// RUSTSEC-2026-0187: lopdf before 0.42 parsed nested objects recursively
+    /// with no depth limit, so a crafted PDF overflowed the stack. That aborts
+    /// the process — `catch_unwind` cannot contain it — and PDFs arrive from
+    /// the user, the Navegador and Zotero. The extraction must return.
+    #[test]
+    fn extract_pdf_text_survives_deeply_nested_objects() {
+        let depth = 100_000;
+        let nested = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        let pdf = one_page_pdf(&format!("/Nested {nested}"), None);
+
+        let result = extract_pdf_text(&pdf);
+
+        assert_eq!(result, Ok(String::new()), "the page holds no text");
+    }
+
+    /// A page that selects a colour space its resources never declare:
+    /// `pdf-extract` answers it with `panic!("missing colorspace ...")`.
+    fn parser_panic_pdf() -> Vec<u8> {
+        one_page_pdf("/Resources << >>", Some("/CS0 cs"))
+    }
 
     #[test]
     fn extract_pdf_text_turns_a_parser_panic_into_an_error() {
@@ -2422,9 +2770,17 @@ mod tests {
         // dangling references, fonts without a unicode map). A panic must
         // never cross this boundary: callers get an honest Err they can
         // route, not an unwinding thread.
-        let error = extract_pdf_text(TYPE4_TINT_PDF).expect_err("the parser panics on this file");
+        let error =
+            extract_pdf_text(&parser_panic_pdf()).expect_err("the parser panics on this file");
 
         assert_eq!(error, UNREADABLE_PDF_TEXT_MESSAGE);
+    }
+
+    #[test]
+    fn extract_pdf_text_reads_a_page_with_a_type4_tint_transform() {
+        let text = extract_pdf_text(TYPE4_TINT_PDF).expect("pdf-extract 0.12 reads this file");
+
+        assert!(text.contains("Texto nativo legible"), "{text:?}");
     }
 
     /// Text PDFs with an owner password and an EMPTY user password — the
@@ -2548,14 +2904,19 @@ mod tests {
     const RC4_40_INLINE_IMAGE_TEXT_PDF: &[u8] =
         include_bytes!("../../tests/fixtures/pdf-rc4-40-inline-image-text.pdf");
 
-    /// `pdf-extract` answers `Ok("")` for a page with an inline image before
-    /// its text: no error, no panic, no text. The fixture only guards the fix
-    /// while that stays true.
+    /// `pdf-extract` 0.7 answered `Ok("")` for a page with an inline image
+    /// before its text, which is why `extract_pdf_text_with_progress` asks the
+    /// page layer when the whole-document text is blank. 0.12 reads this page
+    /// itself, so this fixture no longer reaches that fallback; no fixture
+    /// does today.
     #[test]
-    fn the_inline_image_fixture_still_defeats_the_whole_document_parser() {
+    fn the_whole_document_parser_reads_a_page_with_an_inline_image() {
         let plain = open_with_empty_password(RC4_40_INLINE_IMAGE_TEXT_PDF).expect("opens");
         let text = pdf_extract::extract_text_from_mem(&plain).expect("no error");
-        assert!(text.trim().is_empty(), "pdf-extract read {text:?}");
+        assert!(
+            text.contains("Informe sociolaboral del Partido de General Pueyrredon"),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -2703,7 +3064,7 @@ mod tests {
 
     #[test]
     fn the_progress_pass_contains_the_parser_panic_like_the_plain_path() {
-        let outcome = extract_text_from_mem_reported(TYPE4_TINT_PDF, None, None);
+        let outcome = extract_text_from_mem_reported(&parser_panic_pdf(), None, None);
 
         assert!(
             matches!(outcome, ExtractPassOutcome::Panicked),
@@ -3107,7 +3468,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         if !dll.exists() {
-            eprintln!("[pdf] pdfium native library not available — skipping crop geometry test");
+            println!("pdfium native library not available — skipping crop geometry test");
             return;
         }
         use_dev_pdfium();
@@ -3171,7 +3532,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed_dll.parent().expect("lib parent")).expect("create lib dir");
-        std::fs::write(&managed_dll, b"pdfium").expect("write dll");
+        write_fake_native_library(&managed_dll);
 
         let resolved =
             resolve_pdfium_dll_path_from_roots(Some(runtime_dir.path()), None, manifest_dir.path());
@@ -3189,7 +3550,7 @@ mod tests {
             .join("linux-x86_64")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(arch_specific.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&arch_specific, b"pdfium").expect("write");
+        write_fake_native_library(&arch_specific);
 
         let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
@@ -3211,7 +3572,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(runtime_pack.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&runtime_pack, b"pdfium").expect("write");
+        write_fake_native_library(&runtime_pack);
 
         let resolved = resolve_pdfium_dll_path_from_roots(None, None, manifest_dir.path());
 
@@ -3240,9 +3601,18 @@ mod tests {
         let lib = resource_dir.join("resources").join("pdfium").join(name);
         #[cfg(target_os = "windows")]
         let lib = resource_dir.join("resources").join("lib").join(name);
-        std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&lib, b"pdfium").expect("write");
+        write_fake_native_library(&lib);
         lib
+    }
+
+    /// A ≥ 1 MiB file with an ELF header: a candidate the hardened resolver
+    /// accepts. Nothing loads it — the bytes only need to pass the
+    /// native-library gate, which ignores files that cannot be a real Pdfium.
+    fn write_fake_native_library(path: &Path) {
+        let mut bytes = vec![0u8; 1024 * 1024];
+        bytes[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, bytes).expect("write fake native library");
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -3285,7 +3655,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(dev.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&dev, b"pdfium").expect("write");
+        write_fake_native_library(&dev);
 
         let resolved =
             resolve_pdfium_dll_path_from_roots(None, Some(&resource_dir), manifest_dir.path());
@@ -3305,7 +3675,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&managed, b"pdfium").expect("write");
+        write_fake_native_library(&managed);
         let resource_dir = install.path().join("Contents").join("Resources");
         std::fs::create_dir_all(&resource_dir).expect("mkdir resources");
         bundled_pdfium_fixture(&resource_dir);
@@ -3344,7 +3714,7 @@ mod tests {
                 "the macOS corpus list is the Frameworks layout, unchanged"
             );
         }
-        // Lite Linux deb: `resources/pdfium/<dll>` under `/usr/lib/<productName>`.
+        // Lite/Pro Linux deb: `resources/pdfium/<dll>` under `/usr/lib/<productName>`.
         #[cfg(target_os = "linux")]
         {
             let flat_resource_dir = PathBuf::from("install-root");
@@ -3372,9 +3742,10 @@ mod tests {
 
     /// The runtime-free resolver's own candidate list covers the layouts the
     /// installers ship for THIS host (JD5-B-005) — untagged dirs every host
-    /// probes (`resources/pdfium/<dll>` Lite, `resources/lib/<dll>` Pro
-    /// Windows + `tauri dev`), the host's own `<os>-<arch>` subdir (Pro
-    /// Linux), and the macOS Frameworks dir beside `Contents/Resources`.
+    /// probes (`resources/pdfium/<dll>` Lite/Pro Linux, `resources/lib/<dll>`
+    /// Pro Windows + `tauri dev`), the host's own `<os>-<arch>` subdir (legacy
+    /// per-arch packs / dev checkouts), and the macOS Frameworks dir beside
+    /// `Contents/Resources`.
     #[test]
     fn the_bundled_resolver_covers_the_host_layouts() {
         let dll = Pdfium::pdfium_platform_library_name();
@@ -3395,8 +3766,8 @@ mod tests {
             candidates.contains(&resource_dir.join("resources").join("lib").join(&dll)),
             "Pro Windows / dev layout resources/lib missing from {candidates:?}"
         );
-        // Pro Linux deb: `resources/lib/<host os>-<arch>/<dll>` — the host's
-        // own subdir only.
+        // Per-arch pack / dev checkout: `resources/lib/<host os>-<arch>/<dll>`
+        // — the host's own subdir only. No installer ships it anymore.
         if let Some(platform) = host_platform_resource_dir() {
             assert!(
                 candidates.contains(
@@ -3406,7 +3777,7 @@ mod tests {
                         .join(platform)
                         .join(&dll)
                 ),
-                "Pro Linux layout resources/lib/{platform} missing from {candidates:?}"
+                "per-arch pack layout resources/lib/{platform} missing from {candidates:?}"
             );
         }
         // macOS bundles put the library in `Contents/Frameworks`, beside the
@@ -3430,7 +3801,7 @@ mod tests {
         let lite = tempdir().expect("lite install");
         let lite_lib = lite.path().join("resources").join("pdfium").join(&dll);
         std::fs::create_dir_all(lite_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&lite_lib, b"fake").expect("write");
+        write_fake_native_library(&lite_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(lite.path()), manifest_dir.path()),
             Some(strip_windows_prefix(lite_lib)),
@@ -3441,14 +3812,14 @@ mod tests {
         let windows = tempdir().expect("windows install");
         let windows_lib = windows.path().join("resources").join("lib").join(&dll);
         std::fs::create_dir_all(windows_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&windows_lib, b"fake").expect("write");
+        write_fake_native_library(&windows_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(windows.path()), manifest_dir.path()),
             Some(strip_windows_prefix(windows_lib)),
             "Pro Windows / dev layout"
         );
 
-        // Pro Linux: resources/lib/<host os>-<arch>/<dll>.
+        // Per-arch pack / dev checkout: resources/lib/<host os>-<arch>/<dll>.
         if let Some(platform) = host_platform_resource_dir() {
             let linux = tempdir().expect("per-arch install");
             let linux_lib = linux
@@ -3458,11 +3829,11 @@ mod tests {
                 .join(platform)
                 .join(&dll);
             std::fs::create_dir_all(linux_lib.parent().expect("parent")).expect("mkdir");
-            std::fs::write(&linux_lib, b"fake").expect("write");
+            write_fake_native_library(&linux_lib);
             assert_eq!(
                 resolve_bundled_pdfium_path(Some(linux.path()), manifest_dir.path()),
                 Some(strip_windows_prefix(linux_lib)),
-                "Pro Linux layout"
+                "per-arch pack layout"
             );
         }
 
@@ -3470,11 +3841,131 @@ mod tests {
         let dev = tempdir().expect("dev checkout");
         let dev_lib = dev.path().join("resources").join("lib").join(&dll);
         std::fs::create_dir_all(dev_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&dev_lib, b"fake").expect("write");
+        write_fake_native_library(&dev_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(None, dev.path()),
             Some(strip_windows_prefix(dev_lib)),
             "dev checkout layout"
+        );
+    }
+
+    /// E-02: a text file named like the library (the 49-byte Linux fixture)
+    /// must not be accepted just because it exists; the resolver logs it and
+    /// keeps walking to the next candidate.
+    #[test]
+    fn the_bundled_resolver_skips_a_text_file_named_like_the_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let text_stub = install.path().join("resources").join("pdfium").join(&dll);
+        std::fs::create_dir_all(text_stub.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &text_stub,
+            b"fixture bundled pdfium for linux resource audit\n",
+        )
+        .expect("write stub");
+        let real = install.path().join("resources").join("lib").join(&dll);
+        write_fake_native_library(&real);
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(real)),
+            "the text stub must be skipped, not returned as the library"
+        );
+    }
+
+    /// A native library (ELF magic, ≥ 1 MiB) is accepted in the first layout
+    /// that carries one — later valid candidates never win over it.
+    #[test]
+    fn the_bundled_resolver_accepts_a_large_native_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let lib = install.path().join("resources").join("pdfium").join(&dll);
+        write_fake_native_library(&lib);
+        write_fake_native_library(&install.path().join("resources").join("lib").join(&dll));
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(lib))
+        );
+    }
+
+    /// A truncated native library (ELF magic but below the 1 MiB floor) is
+    /// skipped like any other stub: the next candidate resolves.
+    #[test]
+    fn the_bundled_resolver_skips_a_truncated_native_library() {
+        let dll = Pdfium::pdfium_platform_library_name();
+        let manifest_dir = tempdir().expect("manifest dir");
+        let install = tempdir().expect("install dir");
+        let truncated = install.path().join("resources").join("pdfium").join(&dll);
+        std::fs::create_dir_all(truncated.parent().expect("parent")).expect("mkdir");
+        let mut bytes = vec![0u8; 4096];
+        bytes[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        std::fs::write(&truncated, bytes).expect("write truncated");
+
+        let next = if let Some(platform) = host_platform_resource_dir() {
+            install
+                .path()
+                .join("resources")
+                .join("lib")
+                .join(platform)
+                .join(&dll)
+        } else {
+            install.path().join("resources").join("lib").join(&dll)
+        };
+        write_fake_native_library(&next);
+
+        assert_eq!(
+            resolve_bundled_pdfium_path(Some(install.path()), manifest_dir.path()),
+            Some(strip_windows_prefix(next)),
+            "a truncated ELF must be skipped for the next candidate"
+        );
+    }
+
+    /// Every shared-object container pdfium-render can load passes the gate
+    /// (ELF, PE, the four Mach-O orders and both fat orders); a short file or
+    /// a text file never does.
+    #[test]
+    fn the_native_library_gate_recognizes_every_supported_container() {
+        let dir = tempdir().expect("gate dir");
+        let accepted: &[(&str, [u8; 4])] = &[
+            ("elf", [0x7f, b'E', b'L', b'F']),
+            ("pe", [b'M', b'Z', 0x90, 0x00]),
+            ("macho32-be", [0xfe, 0xed, 0xfa, 0xce]),
+            ("macho64-be", [0xfe, 0xed, 0xfa, 0xcf]),
+            ("macho32-le", [0xce, 0xfa, 0xed, 0xfe]),
+            ("macho64-le", [0xcf, 0xfa, 0xed, 0xfe]),
+            ("fat-be", [0xca, 0xfe, 0xba, 0xbe]),
+            ("fat-le", [0xbe, 0xba, 0xfe, 0xca]),
+        ];
+        for (name, magic) in accepted {
+            let path = dir.path().join(name);
+            let mut bytes = vec![0u8; MIN_NATIVE_LIBRARY_BYTES as usize];
+            bytes[..4].copy_from_slice(magic);
+            std::fs::write(&path, bytes).expect("write candidate");
+            assert!(usable_native_library(&path), "{name} must pass the gate");
+        }
+
+        let text = dir.path().join("text");
+        std::fs::write(&text, b"fixture bundled pdfium for linux resource audit\n")
+            .expect("write text");
+        assert!(
+            !usable_native_library(&text),
+            "a text file must not pass the gate"
+        );
+
+        let short = dir.path().join("short-elf");
+        std::fs::write(&short, [0x7f, b'E', b'L', b'F']).expect("write short");
+        assert!(
+            !usable_native_library(&short),
+            "an ELF below the size floor must not pass the gate"
+        );
+
+        let missing = dir.path().join("missing");
+        assert!(
+            !usable_native_library(&missing),
+            "a missing candidate must not pass the gate"
         );
     }
 
@@ -3511,8 +4002,7 @@ mod tests {
             .join(foreign_platform)
             .join(&dll);
         for lib in [&host_lib, &foreign_lib] {
-            std::fs::create_dir_all(lib.parent().expect("parent")).expect("mkdir");
-            std::fs::write(lib, b"fake").expect("write");
+            write_fake_native_library(lib);
         }
         assert_eq!(
             resolve_bundled_pdfium_path(Some(mixed.path()), manifest_dir.path()),
@@ -3528,7 +4018,7 @@ mod tests {
             .join(foreign_platform)
             .join(&dll);
         std::fs::create_dir_all(foreign_only_lib.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&foreign_only_lib, b"fake").expect("write");
+        write_fake_native_library(&foreign_only_lib);
         assert_eq!(
             resolve_bundled_pdfium_path(Some(foreign_only.path()), manifest_dir.path()),
             None,
@@ -3570,7 +4060,7 @@ mod tests {
             .join("lib")
             .join(Pdfium::pdfium_platform_library_name());
         std::fs::create_dir_all(managed.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&managed, b"fake").expect("write");
+        write_fake_native_library(&managed);
 
         let calls = RefCell::new(Vec::new());
         let resolved = existing_managed_pdfium_path_with(|| {
@@ -3759,7 +4249,7 @@ mod tests {
     #[test]
     fn pinned_pdfium_library_renders_a_pdf_page() {
         let Ok(lib) = std::env::var("ENTROPIA_PDFIUM_PROBE_LIB") else {
-            eprintln!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
+            println!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
             return;
         };
         let bindings = Pdfium::bind_to_library(&lib).expect("bind pinned pdfium");
@@ -3874,13 +4364,18 @@ mod tests {
 
     // ── Bibliography garble detector (B2, plan-texto-nativo 3.4) ──────────
     //
-    // Two rules, both pure text statistics. Rule 1 (glued words) catches
+    // Three rules became four in v3 (detector-shredded-text), all pure
+    // text statistics. Rule 1 (glued words) catches
     // the lopdf page layer that never saw a space; rule 2 (old OCR noise)
-    // catches the dotted artifacts of old recognizers in SPACED text. The
-    // p. 309 fixtures are verbatim from one user library (Abulafia 1950,
-    // stored row and PDFium read); the rest pin every false-positive shape
-    // the plan names. `is_garbled_text`/`is_quality_text` above are a
-    // different detector for raw glyph codes and must not change.
+    // catches the dotted artifacts of old recognizers in SPACED text; rule
+    // 3 (punctuation soup) catches the old typewritten-scan layers that
+    // answer with punctuation instead of words; rule 4 (shredded text)
+    // catches pages whose words came back shredded into 1-2 char fragments.
+    // The p. 309 fixtures are
+    // verbatim from one user library (Abulafia 1950, stored row and PDFium
+    // read); the rest pin every false-positive shape the plan names.
+    // `is_garbled_text`/`is_quality_text` above are a different detector for
+    // raw glyph codes and must not change.
 
     /// Verbatim prefix of the stored `bibliographic_page_texts` row for
     /// Abulafia 1950, p. 309 (353 chars): lopdf glued the words.
@@ -4008,10 +4503,19 @@ mod tests {
         // Rule 1 below 80 Latin letters: silence.
         let short_glued = "ArrozElcultivodelarrozaligualqueeldelgirasoL";
         assert!(!garbled_bibliography_flags(short_glued).glued_words);
-        // Rule 2 below 40 eligible tokens of 4+ letters: silence.
+        // Rule 2 below its judged-token gate: silence (v2 judges from 10
+        // tokens; v1 needed 40).
         let sparse_noise =
             "deb.\u{ed}.endo superfi~ie cultiv.ada r.ecu.rrir impor.tac.ion defi.cit cober.tura";
         assert!(!garbled_bibliography_flags(sparse_noise).old_ocr_noise);
+        let doubled_noise = format!("{sparse_noise} {sparse_noise}");
+        assert!(
+            garbled_bibliography_flags(&doubled_noise).old_ocr_noise,
+            "14 judged tokens clear the 10-token gate"
+        );
+        // Rule 3 below 20 whitespace tokens: silence, even at 15 % soup.
+        let sparse_soup = format!("{} {}", ["\u{FFFD}"; 3].join(" "), ["x"; 16].join(" "));
+        assert!(!is_garbled_bibliography_text(&sparse_soup));
     }
 
     #[test]
@@ -4021,26 +4525,308 @@ mod tests {
         let suffix = ["ab"; 25].join(" "); // 50 letters in short words
         assert!(garbled_bibliography_flags(&format!("{} {suffix}", "a".repeat(50))).glued_words);
         assert!(!garbled_bibliography_flags(&format!("{} {suffix} x", "a".repeat(49))).glued_words);
-        // Rule 2: exactly 8 % noisy tokens flags; one noisy token less does
-        // not (4/50 vs 3/50).
-        let clean = (0..46)
-            .map(|n| format!("palabra{n}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let noisy = ["pq.rstu"; 4].join(" ");
+        // Rule 2 v2 thresholds at 10 % over judged tokens (v1 was 8 %):
+        // 5 of 50 flags, one noisy token less does not. The clean tokens
+        // carry no digits because v2 drops identifier-like tokens from the
+        // judgement.
+        let clean = ["palabralimpia"; 45].join(" ");
+        let noisy = ["pq.rstu"; 5].join(" ");
         assert!(
             garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
-            "4 of 50 is exactly 8 %"
+            "5 of 50 is exactly 10 %"
         );
-        let clean = (0..47)
-            .map(|n| format!("palabra{n}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let noisy = ["pq.rstu"; 3].join(" ");
+        let clean = ["palabralimpia"; 46].join(" ");
+        let noisy = ["pq.rstu"; 4].join(" ");
         assert!(
             !garbled_bibliography_flags(&format!("{noisy} {clean}")).old_ocr_noise,
-            "3 of 50 is below 8 %"
+            "4 of 50 is below 10 %"
         );
+        // Rule 3 thresholds at 15 % over whitespace tokens: 3 of 20 flags,
+        // one soup token less does not.
+        let soup = format!("{} {}", ["\u{FFFD}"; 3].join(" "), ["x"; 17].join(" "));
+        assert!(
+            garbled_bibliography_flags(&soup).punctuation_soup,
+            "3 of 20 is exactly 15 %"
+        );
+        let soup = format!("{} {}", ["\u{FFFD}"; 2].join(" "), ["x"; 18].join(" "));
+        assert!(
+            !garbled_bibliography_flags(&soup).punctuation_soup,
+            "2 of 20 is below 15 %"
+        );
+    }
+
+    // ── Detector v2 sample corpus (odd/tasks/detector-old-ocr-noise) ─────
+    //
+    // Verbatim page samples from the prueba-sync archive: the old
+    // typewritten-scan OCR layer of Abulafia 1950 (punctuation soup and
+    // dotted noise with few whole words — v1's rule 2 never judged these
+    // pages) and a shifted-glyph page fragment, plus the false-positive
+    // shapes that must stay clean. Non-ASCII characters are written as Rust
+    // escapes, exactly as the sample file records them.
+
+    /// Abulafia 1950, p. 154 (verbatim sample): punctuation soup with few
+    /// whole words.
+    const ABULAFIA_PUNCTUATION_SOUP: &str = "154 . ' . , , . \" ......... , ..... .- ~,,,\" ... Q ~. \u{FFFD}Canad4.' \", .'. . .' .: ..... ..... \u{FFFD} _ ..... 1. . ~- ,... .... ~\"..' . ' . ~: \" ,.. . ,... 156 \" ~~. \" - \u{FFFD} ... ..,.- 4 r .'-;, . vador-e s Local.esy ,~\u{FFFD}t~rminq.l~5\u{FFFD} .deg~ano~: ~y,'~on un 'g'ran . .. 'volumen 'de manipuleo'.'";
+
+    /// Abulafia 1950 (verbatim sample): old OCR noise in text that still has
+    /// spaces and some whole words.
+    const ABULAFIA_OLD_OCR_PROSE: &str = "Univeraiu4Naeicnt-.l de Buenos Aires Fa8ul~ad ~. Cien~ia' Eeom'.icaa \"EL PROBLEMA DEL YUTE\" Tesis para optar altiecterad.o 0-1'1 Ciencias Eeen'llicas David Abulafia Buenos Aires, agoste 1950. Aae del Libertaaer General Sa.n.~art!n Introduccion P~...rte PrelUlliIl~r Con~ideraciones~ener~les i 2 - Yute en r<>..n!a y .rpiller~. El yute en. el m~rc~do intorn~c~onal pueden estimarse en alrededor de l4millones de yardas de .rpillera";
+
+    /// A shifted-glyph font's page fragment (verbatim sample): 15 whitespace
+    /// tokens of punctuation soup.
+    const SHIFTED_GLYPH_SOUP: &str =
+        "\u{2019}% 7+ 0154+ . A 8; \u{2019} % -+ 7+ J+ G: 4 5E+ %A$$\u{2019}+$51+515=$9+";
+
+    /// A page whose text decode failed (verbatim shape): replacement
+    /// characters alone and glued inside words.
+    const REPLACEMENT_CHARACTER_BODY: &str = "\u{FFFD} recei\u{FFFD}ed \u{FFFD} pro\u{FFFD}ramme \u{FFFD} docu\u{FFFD}ent \u{FFFD} la\u{FFFD}guage \u{FFFD} \u{FFFD}isible \u{FFFD} i\u{FFFD}age \u{FFFD} co\u{FFFD}plex \u{FFFD} te\u{FFFD}tual \u{FFFD} gra\u{FFFD}ar \u{FFFD} stru\u{FFFD}ture \u{FFFD} \u{FFFD}";
+
+    /// TOC page line (verbatim sample): dot leaders must never count.
+    const CLEAN_TOC_LINE: &str = "3.3.2 Contributors . . . . . . . . . . . . . . . . 32 / 3.3.3 Task Design . . . . . . . . . . . . . . 33";
+
+    /// Math prose (verbatim sample): lone parens, commas and operators.
+    const CLEAN_MATH_LINE: &str = "side of a i ) would incur a larger and more rapidly increasing loss. The objective is thus the sum of these surrogate losses at all points ( x i , c i ) . Let D = { z : f ( z ; w ) \u{2264} 0 } . According to";
+
+    /// Reference-list fragment (verbatim sample): identifiers with slashes,
+    /// colons, dots and digits.
+    const CLEAN_REFS_LINE: &str = "CoRR abs/1609.04836. arXiv:1609.04836. (2016) 46. Krizhevsky, A.: One weird trick. doi: 10.1093/geronb/gbx014";
+
+    /// Clean prose carrying every shape that must never count as noise
+    /// (verbatim sample): dotted abbreviations, e.g./i.e., an apostrophe, a
+    /// hyphenated compound, Mc/De names and the Catalan geminate.
+    const CLEAN_PROSE_FRAGMENT: &str =
+        "U.S.A., e.g., l'adquisici\u{00F3}, state-of-the-art, McDonald, DeLuca, paral\u{00B7}lel";
+
+    #[test]
+    fn the_abulafia_punctuation_soup_sample_is_flagged() {
+        // One sample already clears rule 3's 20-whitespace-token gate; the
+        // repeated page body flags the same way.
+        let flags = garbled_bibliography_flags(ABULAFIA_PUNCTUATION_SOUP);
+        assert!(flags.punctuation_soup, "{ABULAFIA_PUNCTUATION_SOUP}");
+        let body = format!("{ABULAFIA_PUNCTUATION_SOUP} {ABULAFIA_PUNCTUATION_SOUP}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_abulafia_old_ocr_prose_sample_is_flagged_by_the_noise_rule() {
+        // One sample already clears rule 2 v2's 10-judged-token gate; v1
+        // needed 40 and kept this page native.
+        let flags = garbled_bibliography_flags(ABULAFIA_OLD_OCR_PROSE);
+        assert!(flags.old_ocr_noise, "{ABULAFIA_OLD_OCR_PROSE}");
+        let body = format!("{ABULAFIA_OLD_OCR_PROSE} {ABULAFIA_OLD_OCR_PROSE}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_shifted_glyph_soup_sample_is_flagged() {
+        // The sample holds 15 whitespace tokens; repeated it clears rule 3's
+        // 20-token gate and flags.
+        let body = format!("{SHIFTED_GLYPH_SOUP} {SHIFTED_GLYPH_SOUP}");
+        assert!(garbled_bibliography_flags(&body).punctuation_soup, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn a_replacement_character_heavy_body_is_flagged() {
+        // Every word carries a U+FFFD (rule 2's replacement-character noise),
+        // and the lone U+FFFD tokens are quote-or-tilde-like soup (rule 3).
+        let flags = garbled_bibliography_flags(REPLACEMENT_CHARACTER_BODY);
+        assert!(flags.old_ocr_noise, "every word carries a U+FFFD");
+        assert!(flags.punctuation_soup, "the lone U+FFFD tokens are soup");
+        assert!(is_garbled_bibliography_text(REPLACEMENT_CHARACTER_BODY));
+    }
+
+    #[test]
+    fn toc_dot_leaders_are_rule_4s_documented_false_positive() {
+        // Rules 1-3 stay silent on the dot-leader page, but every lone dot
+        // is a shred token and rule 4 flags it: the documented accepted
+        // false positive of odd/tasks/detector-shredded-text ("TOC
+        // dot-leader and number-table pages as accepted false positives —
+        // GLM reads those fine; the owner accepts the overtreatment").
+        let page = [CLEAN_TOC_LINE; 8].join("\n");
+        let flags = garbled_bibliography_flags(&page);
+        assert!(!flags.glued_words, "{page}");
+        assert!(!flags.old_ocr_noise, "{page}");
+        assert!(!flags.punctuation_soup, "{page}");
+        assert!(flags.shredded_text, "{page}");
+        assert!(is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn math_prose_stays_clean() {
+        let page = [CLEAN_MATH_LINE; 3].join(" ");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn reference_fragments_stay_clean() {
+        let page = [CLEAN_REFS_LINE; 3].join(" ");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
+    }
+
+    #[test]
+    fn code_identifiers_in_born_digital_prose_stay_clean() {
+        // Cut from a born-digital paper the v2 measurement flagged through
+        // camelCase identifiers; such pages must stay native, not go to OCR.
+        let page = "The model resets the accumulated income (accIncome) to zero, and increase by one their number of lootings (nmrOfLootings). Due to looting, however, an Enterprise may flee from the RebelGroup territory.";
+        assert!(!is_garbled_bibliography_text(page), "{page}");
+    }
+
+    #[test]
+    fn the_clean_prose_fragment_stays_clean_inside_spanish_and_english_paragraphs() {
+        let spanish = format!("El estado de la cuesti\u{f3}n se mantiene estable desde entonces: {CLEAN_PROSE_FRAGMENT} aparecen en el mismo orden en que los cita el autor, y el lector no encuentra aqu\u{ed} m\u{e1}s que prosa acad\u{e9}mica corriente, con comas, puntos y par\u{e9}ntesis bien usados. La investigaci\u{f3}n sobre lectura biling\u{fc}e contin\u{fa}a, con muestras grandes y m\u{e9}todos claros, sin ruido de reconocimiento \u{f3}ptico ni palabras pegadas en ninguna l\u{ed}nea del cap\u{ed}tulo.");
+        let english = format!("The state of the art remains steady: {CLEAN_PROSE_FRAGMENT} all appear here in the order the author cites them, and the reader finds nothing but ordinary academic prose, with commas, periods and parentheses used properly. Research on bilingual reading continues with large samples and clear methods, and no page of the chapter shows optical character recognition noise or glued words.");
+        assert!(!is_garbled_bibliography_text(&spanish), "{spanish}");
+        assert!(!is_garbled_bibliography_text(&english), "{english}");
+    }
+
+    // ── Detector v3 sample corpus (odd/tasks/detector-shredded-text) ────
+    //
+    // Pages whose words came back shredded into 1-2 char fragments: the
+    // Abulafia 1950 rich rows v2 kept native (rule 2 never reached its
+    // judged-token gate and rule 3 excludes single repeated chars), plus
+    // the spaced-letter damage found in other works. Quoted fragments are
+    // verbatim from the measurement samples.
+
+    /// Abulafia 1950, p. 661 (verbatim sample): a shredded table page —
+    /// garbage words ("CU<!Idro", "hilados.Producc/onh7…") in a stream of
+    /// 1-2 char fragments. v2 kept it native (13 % soup, 0 noisy).
+    const ABULAFIA_SHRED_P661: &str = "CU<!Idro N~ 9 YUTE Sogas hilados.Producc/onh7EnSLlslen/. /NI)/AB/?/lAN/CA Desd9 ABRIl. de /932 - MA~:Zo de /94.2. 1-:> I-=:::::: I~ <~ \"\"V --p. '--. L- - \u{a1} :2-===- V ----";
+
+    /// Abulafia 1950, p. 601 (verbatim sample, the whole 29-token page):
+    /// same damage with more shred than word. v2 kept it native (10 %
+    /// soup, 0 noisy).
+    const ABULAFIA_SHRED_P601: &str = "Cuadro Nf:14 I'.U .. .} Vl I YUTE $upe,.r/cie culfiv~oJ.:y en FORMOSA A\u{f1}os 1909-1.944 6/6 6()61 : \\ -<l-----~ 1\"--'r---r--r-, , I I I 1< -, /' \\ I~";
+
+    /// The recognizable leftovers of shredded Abulafia pages (verbatim
+    /// excerpts) between verbatim table rows of 1-2 char fragments ("tables
+    /// of `r--- \u{a1} I , i -=\"`").
+    const ABULAFIA_SHRED_LEFTOVERS: &str = "lJIanufacturas de yute: Importaciones, reexportaciones e Importaciones netas r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\" J.mport.a- Calen- Impor- ciones r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\" Cuadro N~7 G2Il yute: Producc/o'n r--- \u{a1} I , i -=\" r--- \u{a1} I , i -=\"";
+
+    /// Spaced-letter damage (verbatim shape): a whole line comes back with
+    /// every letter in its own token ("una tesis de licenciatura").
+    const SPACED_LETTER_DAMAGE: &str = "u n a t e s i s d e l i c e n c i a t u r a";
+
+    #[test]
+    fn shredded_abulafia_fragments_are_flagged() {
+        // Each fragment alone sits under rule 4's 30-token gate; repeated
+        // the page reads as the shredded text it is.
+        let body = format!("{ABULAFIA_SHRED_P661} {ABULAFIA_SHRED_P661}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+        let body = format!("{ABULAFIA_SHRED_P601} {ABULAFIA_SHRED_P601}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+        let flags = garbled_bibliography_flags(ABULAFIA_SHRED_LEFTOVERS);
+        assert!(flags.shredded_text, "{ABULAFIA_SHRED_LEFTOVERS}");
+        assert!(
+            is_garbled_bibliography_text(ABULAFIA_SHRED_LEFTOVERS),
+            "{ABULAFIA_SHRED_LEFTOVERS}"
+        );
+    }
+
+    #[test]
+    fn spaced_letter_damage_is_flagged() {
+        // 22 shred tokens alone; repeated they clear the 30-token gate and
+        // the page goes to OCR instead of staying native.
+        let body = format!("{SPACED_LETTER_DAMAGE} {SPACED_LETTER_DAMAGE}");
+        assert!(garbled_bibliography_flags(&body).shredded_text, "{body}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn the_v2_flagged_glyph_shift_page_keeps_flagging() {
+        // The shifted-glyph font page v2 flags via rule 3 must still flag
+        // under v3.
+        let body = format!("{SHIFTED_GLYPH_SOUP} {SHIFTED_GLYPH_SOUP}");
+        assert!(is_garbled_bibliography_text(&body), "{body}");
+    }
+
+    #[test]
+    fn ordinary_spanish_and_english_prose_are_not_shredded() {
+        let spanish = "El presente trabajo analiza el efecto de la intervenci\u{f3}n educativa sobre el rendimiento acad\u{e9}mico de los estudiantes de secundaria. Se utiliz\u{f3} un dise\u{f1}o cuasiexperimental con una muestra de 240 participantes distribuidos en dos grupos: control y experimental. Los resultados muestran mejoras significativas en comprensi\u{f3}n lectora y en motivaci\u{f3}n escolar, con p < 0,01 en las dos medidas.";
+        let english = "This paper presents a controlled study of bilingual reading comprehension across two instructional conditions. Participants completed standardized vocabulary and fluency measures before and after a twelve week intervention. Mixed effects models revealed a reliable main effect of condition, with no interaction involving prior proficiency (beta = 0.42, SE = 0.08).";
+        assert!(
+            !garbled_bibliography_flags(spanish).shredded_text,
+            "{spanish}"
+        );
+        assert!(
+            !garbled_bibliography_flags(english).shredded_text,
+            "{english}"
+        );
+        assert!(!is_garbled_bibliography_text(spanish), "{spanish}");
+        assert!(!is_garbled_bibliography_text(english), "{english}");
+    }
+
+    #[test]
+    fn a_short_page_of_garbage_stays_unjudged() {
+        // ABULAFIA_SHRED_P601 is the whole 29-token page: one token under
+        // rule 4's 30-token gate, so it stays unjudged even though every
+        // ratio would flag it.
+        assert!(
+            !garbled_bibliography_flags(ABULAFIA_SHRED_P601).shredded_text,
+            "{ABULAFIA_SHRED_P601}"
+        );
+        assert!(
+            !is_garbled_bibliography_text(ABULAFIA_SHRED_P601),
+            "{ABULAFIA_SHRED_P601}"
+        );
+    }
+
+    #[test]
+    fn rule_4_flags_exactly_at_its_thresholds() {
+        // Gate: 29 whitespace tokens stay unjudged, 30 judge.
+        let short = ["x"; 29].join(" ");
+        assert!(!garbled_bibliography_flags(&short).shredded_text);
+        let long = ["x"; 30].join(" ");
+        assert!(garbled_bibliography_flags(&long).shredded_text);
+        // Word line, strict: 9 words of 30 is exactly 30 % and does not
+        // flag; one word less does. The shred line is satisfied in both.
+        let words = ["palabra"; 9].join(" ");
+        let mixed = format!("{words} {}", ["x"; 21].join(" "));
+        assert!(
+            !garbled_bibliography_flags(&mixed).shredded_text,
+            "9 of 30 words is exactly 30 %"
+        );
+        let words = ["palabra"; 8].join(" ");
+        let mixed = format!("{words} {}", ["x"; 22].join(" "));
+        assert!(
+            garbled_bibliography_flags(&mixed).shredded_text,
+            "8 of 30 words is under 30 %"
+        );
+        // Shred line: 5 shreds of 30 is past 15 % (500 >= 450), 4 is below
+        // (400 < 450). `---` is neutral: 3 chars, no letters.
+        let mixed = format!(
+            "{} {} {}",
+            ["palabra"; 8].join(" "),
+            ["x"; 5].join(" "),
+            ["---"; 17].join(" ")
+        );
+        assert!(
+            garbled_bibliography_flags(&mixed).shredded_text,
+            "5 shreds of 30 is past 15 %"
+        );
+        let mixed = format!(
+            "{} {} {}",
+            ["palabra"; 8].join(" "),
+            ["x"; 4].join(" "),
+            ["---"; 18].join(" ")
+        );
+        assert!(
+            !garbled_bibliography_flags(&mixed).shredded_text,
+            "4 shreds of 30 is below 15 %"
+        );
+    }
+
+    #[test]
+    fn digit_number_tables_stay_clean() {
+        // Plain digit rows are no shreds (the all-digit exclusion) and no
+        // words, so rule 4 stays quiet however long the table runs. (Rows
+        // with lone punctuation separators between the figures are the
+        // accepted false positive of the measurement, like the TOC dots.)
+        let page = ["12 45.6 789 33 21.0 456"; 12].join("\n");
+        assert!(!garbled_bibliography_flags(&page).shredded_text, "{page}");
+        assert!(!is_garbled_bibliography_text(&page), "{page}");
     }
 
     /// get_pdfium() must never panic — it should return Err when the native
@@ -4140,6 +4926,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -4172,6 +4959,7 @@ mod tests {
                     guidance: vec!["Reintentá".to_string()],
                     bootstrap_eligible: true,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },

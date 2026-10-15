@@ -152,7 +152,7 @@ pub fn emit_probe_complete(
     };
 
     if let Err(error) = app.emit("deps://complete", payload) {
-        eprintln!("[deps] Failed to emit dependency completion event: {error}");
+        log::warn!(target: "deps", "Failed to emit dependency completion event: {error}");
     }
 }
 

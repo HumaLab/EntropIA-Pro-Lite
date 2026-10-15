@@ -2386,8 +2386,9 @@ pub fn admit_stale_profile_demands(
     if let Err(error) =
         crate::bibliography::generation::activate_complete_staging_generations(conn, now_ms())
     {
-        eprintln!(
-            "[bibliography] generation repair skipped: {}: {}",
+        log::warn!(
+            target: "bibliography",
+            "generation repair skipped: {}: {}",
             error.code, error.message
         );
     }
@@ -3771,7 +3772,7 @@ fn read_bibliography_progress(
             format!("Failed to read bibliography checkpoint of {task_id}: {error}")
         })?;
         let first_page = unit_key == "page:0";
-        if format!("{:x}", Sha256::digest(payload.as_bytes())) == checksum {
+        if hex::encode(Sha256::digest(payload.as_bytes())) == checksum {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) {
                 if items_seen.is_none() {
                     items_seen = value.get("next_start").and_then(|value| value.as_i64());

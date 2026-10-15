@@ -145,7 +145,7 @@ impl WritingEnvelopeV1 {
 
     pub(crate) fn fingerprint_sha256(&self) -> WritingResult<String> {
         let canonical = self.to_canonical_json()?;
-        Ok(format!("{:x}", Sha256::digest(canonical.as_bytes())))
+        Ok(hex::encode(Sha256::digest(canonical.as_bytes())))
     }
 
     /// Identifies conflict content independently of database-scoped row ids.

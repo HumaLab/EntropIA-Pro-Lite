@@ -290,7 +290,7 @@ pub fn start_engine(app_handle: AppHandle, db_path: PathBuf) -> SyncEngine {
             {
                 Ok(rt) => rt,
                 Err(error) => {
-                    eprintln!("[sync] engine failed to build its runtime: {error}");
+                    log::error!(target: "sync", "engine failed to build its runtime: {error}");
                     return;
                 }
             };
@@ -303,7 +303,7 @@ pub fn start_engine(app_handle: AppHandle, db_path: PathBuf) -> SyncEngine {
             ));
         });
     if let Err(error) = spawned {
-        eprintln!("[sync] failed to spawn engine thread: {error}");
+        log::error!(target: "sync", "failed to spawn engine thread: {error}");
     }
 
     SyncEngine { sender, status }
@@ -388,7 +388,7 @@ async fn engine_loop(
     let conn = match crate::sync::open_sync_connection(&db_path) {
         Ok(conn) => conn,
         Err(error) => {
-            eprintln!("[sync] engine failed to open its connection: {error}");
+            log::error!(target: "sync", "engine failed to open its connection: {error}");
             return;
         }
     };
@@ -396,12 +396,12 @@ async fn engine_loop(
     let app_data_dir = match crate::path_utils::data_dir(&app_handle) {
         Ok(dir) => dir,
         Err(error) => {
-            eprintln!("[sync] engine failed to resolve app_data_dir: {error}");
+            log::error!(target: "sync", "engine failed to resolve app_data_dir: {error}");
             return;
         }
     };
 
-    eprintln!("[sync] engine task ready (gated until capture + session)");
+    log::info!(target: "sync", "engine task ready (gated until capture + session)");
 
     let mut backoff = BACKOFF_MIN;
     // Tracks elapsed minutes so the coarse 60 s ticker honors the configured
@@ -414,7 +414,7 @@ async fn engine_loop(
         // Coalesce: drain everything already queued so a burst is one run.
         let batch = drain_batch(first, &mut receiver);
         if batch.shutdown {
-            eprintln!("[sync] engine shutting down");
+            log::info!(target: "sync", "engine shutting down");
             break;
         }
 

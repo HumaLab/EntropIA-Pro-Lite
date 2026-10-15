@@ -310,7 +310,7 @@ pub fn script_for(kind: CaptureKind) -> String {
 
 /// SHA-256 as lowercase hex.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// `secs` since the Unix epoch as `YYYY-MM-DDTHH:MM:SSZ`.

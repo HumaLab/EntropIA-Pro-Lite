@@ -31,7 +31,10 @@ where
         Ok(raw) => match parse_intent_route(raw.as_ref()) {
             Some(route) => route,
             None => {
-                eprintln!("[rag] Intent classifier output rejected; continuing with retrieval");
+                log::warn!(
+                    target: "rag",
+                    "Intent classifier output rejected; continuing with retrieval"
+                );
                 IntentRoute::Retrieval
             }
         },
@@ -167,7 +170,10 @@ pub(crate) async fn classify_intent(
     };
 
     if generated.is_err() {
-        eprintln!("[rag] Intent classifier unavailable; continuing with retrieval");
+        log::warn!(
+            target: "rag",
+            "Intent classifier unavailable; continuing with retrieval"
+        );
     }
     route_classifier_result(generated)
 }

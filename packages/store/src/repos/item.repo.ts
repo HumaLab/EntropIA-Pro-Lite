@@ -1502,66 +1502,85 @@ export class ItemRepo {
    * 2. Assets (FK → items)
    * 3. Entities (FK → items)
    * 4. Triples (FK → items)
-   * 5. Asset embeddings (item_id in vec_assets)
+   * 5. Asset embeddings (item_id in vec_assets, only when that table exists)
    * 6. The item's own FTS row, by rowid (contentless_delete=1, 0034)
    * 7. Notes (FK → items)
    * 8. Item itself
+   *
+   * The database command owns the transaction and rolls back a failing
+   * statement itself, so the repo never sends BEGIN/COMMIT/ROLLBACK and every
+   * value travels bound instead of interpolated into the SQL.
    *
    * @throws Error if rawClient is not available
    * @throws Error if the transaction fails
    */
   async deleteWithCascade(id: string): Promise<void> {
-    if (!this.rawClient) {
+    const rawClient = this.rawClient
+    if (!rawClient?.executeTransaction) {
       throw new Error('deleteWithCascade requires a rawClient for transactional execution')
     }
 
-    const esc = id.replace(/'/g, "''")
-
     // Get the parent collection ID before deleting the item (needed for auto-cleanup)
-    const parentRows = await this.rawClient.select(
-      `SELECT collection_id FROM items WHERE id = '${esc}'`,
-      []
+    const parentRows = await rawClient.select<{ collection_id: string | null }>(
+      'SELECT collection_id FROM items WHERE id = ?',
+      [id]
     )
-    const collectionId = parentRows[0]?.collection_id as string | undefined
-    const escCollectionId = collectionId !== undefined ? collectionId.replace(/'/g, "''") : ''
+    const collectionId = parentRows[0]?.collection_id ?? ''
 
-    // Phase 1: Atomic transaction for core tables (always exist)
+    // The embedding table is optional: join its cleanup to the transaction only
+    // when it exists, so the delete never fails on a missing virtual table.
+    const vecAssetsExists =
+      (
+        await rawClient.select<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vec_assets'",
+          []
+        )
+      ).length > 0
+
+    const statements: Array<{ sql: string; params: unknown[] }> = [
+      {
+        sql: 'DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE item_id = ?)',
+        params: [id],
+      },
+      {
+        sql: 'DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE item_id = ?)',
+        params: [id],
+      },
+      {
+        sql: "DELETE FROM llm_results WHERE (target_type = 'asset' OR target_type = 'unknown') AND target_id IN (SELECT id FROM assets WHERE item_id = ?)",
+        params: [id],
+      },
+      {
+        sql: "DELETE FROM llm_results WHERE target_id = ? AND (target_type = 'item' OR target_type = 'unknown')",
+        params: [id],
+      },
+      { sql: 'DELETE FROM assets WHERE item_id = ?', params: [id] },
+      { sql: 'DELETE FROM entities WHERE item_id = ?', params: [id] },
+      { sql: 'DELETE FROM triples WHERE item_id = ?', params: [id] },
+      { sql: 'DELETE FROM notes WHERE item_id = ?', params: [id] },
+      {
+        sql: 'DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE id = ?)',
+        params: [id],
+      },
+      { sql: 'DELETE FROM items WHERE id = ?', params: [id] },
+      {
+        sql: 'DELETE FROM collections WHERE id = ? AND id NOT IN (SELECT DISTINCT collection_id FROM items)',
+        params: [collectionId],
+      },
+    ]
+    if (vecAssetsExists) {
+      statements.push({ sql: 'DELETE FROM vec_assets WHERE item_id = ?', params: [id] })
+    }
+
     try {
-      await this.rawClient.executeBatch(`
-        BEGIN;
-        DELETE FROM extractions WHERE asset_id IN (SELECT id FROM assets WHERE item_id = '${esc}');
-        DELETE FROM layouts WHERE asset_id IN (SELECT id FROM assets WHERE item_id = '${esc}');
-        DELETE FROM llm_results WHERE (target_type = 'asset' OR target_type = 'unknown') AND target_id IN (SELECT id FROM assets WHERE item_id = '${esc}');
-        DELETE FROM llm_results WHERE target_id = '${esc}' AND (target_type = 'item' OR target_type = 'unknown');
-        DELETE FROM assets WHERE item_id = '${esc}';
-        DELETE FROM entities WHERE item_id = '${esc}';
-        DELETE FROM triples WHERE item_id = '${esc}';
-        DELETE FROM notes WHERE item_id = '${esc}';
-        DELETE FROM fts_items WHERE rowid IN (SELECT rowid FROM items WHERE id = '${esc}');
-        DELETE FROM items WHERE id = '${esc}';
-        DELETE FROM collections WHERE id = '${escCollectionId}' AND id NOT IN (SELECT DISTINCT collection_id FROM items);
-        COMMIT;
-      `)
+      await rawClient.executeTransaction(statements)
     } catch (e) {
-      try {
-        await this.rawClient.executeBatch('ROLLBACK')
-      } catch {
-        /* rollback is best-effort; preserve the original failure */
-      }
-
       throw new Error(
         `Failed to delete item cascade for ${id}: ${e instanceof Error ? e.message : String(e)}`
       )
     }
 
     this.ftsRepo?.forgetVocabulary()
-
-    // Phase 2: Best-effort cleanup for optional tables
-    try {
-      await this.rawClient.execute(`DELETE FROM vec_assets WHERE item_id = '${esc}'`)
-    } catch {
-      /* table may not exist — non-fatal */
-    }
   }
 
   /**

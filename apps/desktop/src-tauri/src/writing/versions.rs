@@ -60,7 +60,7 @@ pub struct RestoreVersion {
 }
 
 fn hash_of(content: &str) -> String {
-    format!("{:x}", Sha256::digest(content.as_bytes()))
+    hex::encode(Sha256::digest(content.as_bytes()))
 }
 
 fn settings_json(conn: &Connection, document_id: &str) -> WritingResult<String> {

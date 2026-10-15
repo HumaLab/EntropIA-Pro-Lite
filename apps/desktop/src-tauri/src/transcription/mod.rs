@@ -109,7 +109,6 @@ impl TranscriptionQueue {
                 let conn = match crate::db::open::open_archive_connection(&db_path) {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("[transcription] Failed to open DB connection: {e}");
                         crate::app_logs::error(
                             &app_handle,
                             "transcription",
@@ -137,7 +136,6 @@ impl TranscriptionQueue {
                     if stt_mode != STT_MODE_ASSEMBLYAI && engine.is_none() && init_error.is_none() {
                         match create_whisper_engine(&app_handle, Some(&db_path)) {
                             Ok(resolved_engine) => {
-                                eprintln!("[transcription] Engine ready (lazy init)");
                                 crate::app_logs::info(
                                     &app_handle,
                                     "transcription",
@@ -146,7 +144,6 @@ impl TranscriptionQueue {
                                 engine = Some(resolved_engine);
                             }
                             Err(error) => {
-                                eprintln!("[transcription] Failed to initialize transcription engine: {error}");
                                 crate::app_logs::warn(
                                     &app_handle,
                                     "transcription",
@@ -217,7 +214,6 @@ impl TranscriptionQueue {
                             );
                         }
                         Err(err) => {
-                            eprintln!("[transcription] Error for {asset_id}: {err}");
                             crate::app_logs::error(
                                 &app_handle,
                                 "transcription",
@@ -479,7 +475,10 @@ pub(super) fn transcribe_with_selected_provider(
                     match transcribe_with_local_provider(app_handle, settings_db_path, audio_path) {
                         Ok(result) => return Ok(result),
                         Err(local_error) => {
-                            eprintln!("[transcription] Local STT failed in auto mode, trying AssemblyAI fallback: {local_error}");
+                            log::warn!(
+                                target: "transcription",
+                                "Local STT failed in auto mode, trying AssemblyAI fallback: {local_error}"
+                            );
 
                             if assemblyai_api_key.is_empty() {
                                 return Err(format!(
@@ -511,8 +510,9 @@ pub(super) fn transcribe_with_selected_provider(
                 );
             }
 
-            eprintln!(
-                "[transcription] Local STT unavailable in auto mode, using AssemblyAI fallback"
+            log::warn!(
+                target: "transcription",
+                "Local STT unavailable in auto mode, using AssemblyAI fallback"
             );
             transcribe_with_assemblyai_provider(
                 audio_path,
@@ -627,6 +627,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: false,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -659,6 +660,7 @@ mod tests {
                     guidance: vec!["Reintentá cuando exista una fuente firmada".to_string()],
                     bootstrap_eligible: false,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -705,6 +707,7 @@ mod tests {
                     guidance: vec![],
                     bootstrap_eligible: false,
                     bootstrap_required: true,
+                    blocked_reason: None,
                     active_operation: None,
                 })
             },
@@ -813,7 +816,7 @@ fn process_job(
 ) -> Result<TranscriptionResult, String> {
     emit_progress(app_handle, &job.asset_id, 10, "reading");
 
-    eprintln!("[transcription] Transcribing: {}", job.asset_path);
+    log::info!(target: "transcription", "Transcribing: {}", job.asset_path);
     emit_progress(app_handle, &job.asset_id, 30, "transcribing");
 
     let ManagedTranscriptionResult {
@@ -836,19 +839,29 @@ fn process_job(
         if let Err(e) = nlp_queue.submit(NlpJob::IndexFts {
             item_id: item_id.clone(),
         }) {
-            eprintln!("[nlp] Failed to auto-enqueue IndexFts after transcription save: {e}");
+            log::warn!(
+                target: "nlp",
+                "Failed to auto-enqueue IndexFts after transcription save: {e}"
+            );
         } else {
-            eprintln!("[nlp] Auto-enqueued IndexFts after transcription save: item_id={item_id}");
+            log::info!(
+                target: "nlp",
+                "Auto-enqueued IndexFts after transcription save: item_id={item_id}"
+            );
         }
         // Asset-level embedding keeps similarity in sync for the specific
         // transcribed asset. Admitted durably into the repair batch (never a
         // transient channel submit): the supervisor owns the only engine and
         // a restart loses nothing.
         if let Err(e) = admit_repair_embedding(conn, &job.asset_id) {
-            eprintln!("[nlp] Failed to admit repair embedding after transcription save: {e}");
+            log::warn!(
+                target: "nlp",
+                "Failed to admit repair embedding after transcription save: {e}"
+            );
         } else {
-            eprintln!(
-                "[nlp] Admitted repair embedding after transcription save: asset_id={}, item_id={}",
+            log::info!(
+                target: "nlp",
+                "Admitted repair embedding after transcription save: asset_id={}, item_id={}",
                 job.asset_id, item_id
             );
         }

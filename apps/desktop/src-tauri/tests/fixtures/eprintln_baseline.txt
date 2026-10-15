@@ -1,0 +1,4 @@
+# eprintln! occurrences per backend source file (plan §5.4 ratchet).
+# Format: `path count`, path relative to src/, one line per file with occurrences.
+# Regenerate deliberately with: cargo test --test eprintln_ratchet -- --ignored
+app_logs.rs 1

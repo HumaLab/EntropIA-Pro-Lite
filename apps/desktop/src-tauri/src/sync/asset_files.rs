@@ -194,8 +194,9 @@ fn decide(conn: &Connection, data_dir: &Path, stored: &str) -> Result<Verdict, S
         Ok(_) => match fs::remove_file(&candidate) {
             Ok(()) => removed += 1,
             Err(e) => {
-                eprintln!(
-                    "[sync] could not remove the file of a deleted asset ({}): {e}",
+                log::warn!(
+                    target: "sync",
+                    "could not remove the file of a deleted asset ({}): {e}",
                     candidate.display()
                 );
                 return Ok(Verdict::Retry(0));
@@ -293,8 +294,9 @@ fn remove_versions(
         match fs::remove_file(entry.path()) {
             Ok(()) => removed += 1,
             Err(e) => {
-                eprintln!(
-                    "[sync] could not remove an edit version of a deleted asset ({}): {e}",
+                log::warn!(
+                    target: "sync",
+                    "could not remove an edit version of a deleted asset ({}): {e}",
                     entry.path().display()
                 );
                 failed = true;
@@ -354,8 +356,9 @@ fn remove_thumbnails(conn: &Connection, cache_dir: &Path, asset_id: &str) -> Res
         let Some(name) = name.to_str() else { continue };
         if is_thumbnail_of(name, asset_id) {
             if let Err(e) = fs::remove_file(entry.path()) {
-                eprintln!(
-                    "[sync] could not remove the thumbnail of a deleted asset ({}): {e}",
+                log::warn!(
+                    target: "sync",
+                    "could not remove the thumbnail of a deleted asset ({}): {e}",
                     entry.path().display()
                 );
                 done = false;

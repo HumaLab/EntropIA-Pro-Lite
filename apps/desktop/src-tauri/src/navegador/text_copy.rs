@@ -168,7 +168,7 @@ pub fn copy_ticket(
 
     let bytes = text_bytes(&row, data_dir)?;
     if selection {
-        let actual = format!("{:x}", Sha256::digest(&bytes));
+        let actual = hex::encode(Sha256::digest(&bytes));
         if actual != row.sha256 {
             return Err(format!(
                 "{}: the saved quote is not the one that was verified",

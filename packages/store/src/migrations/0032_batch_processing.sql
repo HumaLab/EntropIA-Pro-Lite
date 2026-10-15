@@ -1,18 +1,3 @@
--- 0032_batch_processing: durable background batch queue for OCR + embeddings.
---
--- Source of truth at runtime is the inlined copy in packages/store/src/runner.ts
--- (MIGRATIONS['0032_batch_processing']); this file mirrors it for review and for
--- the Rust processing tests (include_str!). Keep both identical.
---
--- Runs through the trigger-safe single-batch path in runMigrations() (same as
--- 0025/0027/0029): the whole body goes inside one BEGIN IMMEDIATE ... COMMIT,
--- so the naive `splitStatements` must never see the trigger bodies.
---
--- Design (plan-lote.md §5): the queue lives in entropia.sqlite next to the
--- results it coordinates, so receipts and terminal states commit atomically
--- with canonical output. Historical asset/collection ids are snapshots (plain
--- TEXT, no CASCADE that would destroy attempts when content is deleted).
-
 CREATE TABLE processing_batches (
   id TEXT PRIMARY KEY,
   request_id TEXT NOT NULL UNIQUE,
@@ -30,14 +15,12 @@ CREATE TABLE processing_batches (
   finished_at INTEGER,
   last_error TEXT
 );
-
 CREATE TABLE processing_batch_collections (
   batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
   collection_id_snapshot TEXT NOT NULL,
   name_snapshot TEXT NOT NULL,
   PRIMARY KEY (batch_id, collection_id_snapshot)
 );
-
 CREATE TABLE processing_batch_members (
   batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
   ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
@@ -52,7 +35,6 @@ CREATE TABLE processing_batch_members (
 );
 CREATE INDEX idx_processing_members_batch_asset
   ON processing_batch_members(batch_id, asset_id_snapshot);
-
 CREATE TABLE processing_tasks (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK(kind IN ('ocr', 'embedding')),
@@ -81,13 +63,9 @@ CREATE TABLE processing_tasks (
 );
 CREATE INDEX idx_processing_tasks_claimable
   ON processing_tasks(state, next_retry_at, id);
--- One active writer per operation+asset: retries reuse the same row (new
--- retry_cycle), so terminal rows are excluded and a fresh admission after a
--- terminal state must transition that row, never insert a second one.
 CREATE UNIQUE INDEX idx_processing_tasks_active_unique
   ON processing_tasks(kind, asset_id_snapshot)
   WHERE state NOT IN ('succeeded', 'failed', 'skipped', 'cancelled');
-
 CREATE TABLE processing_batch_tasks (
   batch_id TEXT NOT NULL REFERENCES processing_batches(id) ON DELETE CASCADE,
   task_id TEXT NOT NULL REFERENCES processing_tasks(id),
@@ -101,7 +79,6 @@ CREATE INDEX idx_processing_batch_tasks_task
   ON processing_batch_tasks(task_id, request_state);
 CREATE INDEX idx_processing_batch_tasks_batch
   ON processing_batch_tasks(batch_id, task_id);
-
 CREATE TABLE processing_requests (
   request_id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -112,7 +89,6 @@ CREATE TABLE processing_requests (
   response_json TEXT,
   created_at INTEGER NOT NULL
 );
-
 CREATE TABLE processing_attempts (
   task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,
   attempt_number INTEGER NOT NULL CHECK(attempt_number >= 1),
@@ -128,7 +104,6 @@ CREATE TABLE processing_attempts (
 );
 CREATE INDEX idx_processing_attempts_task
   ON processing_attempts(task_id, attempt_number);
-
 CREATE TABLE processing_checkpoints (
   task_id TEXT NOT NULL REFERENCES processing_tasks(id) ON DELETE CASCADE,
   unit_key TEXT NOT NULL,
@@ -139,12 +114,6 @@ CREATE TABLE processing_checkpoints (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (task_id, unit_key)
 );
-
--- Monotonic source revisions per asset. Bumped in the SAME transaction that
--- mutates extraction/transcription rows, so an embedding result computed from
--- older text can never clear a newer invalidation (Unidad 2+ compares these).
--- Rows cascade when the asset itself is deleted; per-row triggers below skip
--- the bump when the asset no longer exists so FK cascades cannot resurrect it.
 CREATE TABLE processing_asset_revisions (
   asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
   source_revision INTEGER NOT NULL DEFAULT 0,
@@ -153,15 +122,14 @@ CREATE TABLE processing_asset_revisions (
   invalidation_reason TEXT,
   auto_suppressed_revision INTEGER
 );
--- Single-row liveness for the supervisor thread (`scheduler_heartbeat` =
--- "<session-id>|<epoch-millis>"). Recovery and claiming consult it so a
+-- Single-row liveness for the supervisor thread (scheduler_heartbeat =
+-- "session-id|epoch-millis"). Recovery and claiming consult it so a
 -- second process never steals units from a live scheduler, while a dead
 -- scheduler's fresh-looking leases still converge on restart.
 CREATE TABLE processing_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-
 CREATE TRIGGER trg_processing_extractions_ai
 AFTER INSERT ON extractions
 BEGIN

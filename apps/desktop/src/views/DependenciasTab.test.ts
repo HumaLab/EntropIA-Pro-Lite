@@ -230,6 +230,27 @@ describe('DependenciasTab', () => {
     for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
   })
 
+  // A failed registration used to abandon the listeners that had already
+  // landed: the sequential array literal never completed, so nothing called
+  // their unlisten (same leak class as the destroy race above).
+  it('releases the listeners already registered and shows a banner when a later registration fails', async () => {
+    const unlistens: Array<ReturnType<typeof vi.fn>> = []
+    depsMocks.listen.mockImplementation(async (name: string) => {
+      if (name === 'embedding:download_progress') throw new Error('listen failed')
+      const unlisten = vi.fn()
+      unlistens.push(unlisten)
+      return unlisten
+    })
+
+    render(DependenciasTab)
+
+    await waitFor(() => {
+      expect(unlistens).toHaveLength(3)
+      for (const unlisten of unlistens) expect(unlisten).toHaveBeenCalledOnce()
+    })
+    expect(await screen.findByText(/Error al registrar listeners/)).toBeInTheDocument()
+  })
+
   it('registers no listener when the tab is gone before the initial refresh settles', async () => {
     let resolveCheck: ((results: unknown[]) => void) | undefined
     depsMocks.checkAllDeps.mockImplementation(
@@ -503,6 +524,87 @@ describe('DependenciasTab', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/antes de habilitar OCR/i)).toBeInTheDocument()
     expect(screen.getByText(/^Capacidades afectadas:/i)).toBeInTheDocument()
+  })
+
+  it('shows a dedicated no_matching_release message when the manifest has no entry for this version', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['No bootstrap release matches app_version=1.0.19 platform=windows-x86_64'],
+      guidance: ['Reintentá cuando cambien las condiciones o se publique una fuente válida.'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      blockedReason: 'no_matching_release',
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(
+      await screen.findByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/aún no está publicado/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the generic source-unavailable text when no blocked reason is present', async () => {
+    depsMocks.checkAllDeps.mockResolvedValueOnce([
+      { id: 'Python', status: { type: 'installed', version: '3.11.9' }, version: '3.11.9' },
+    ])
+    depsMocks.getRuntimeStatus.mockResolvedValueOnce({
+      state: 'blocked_source_unavailable',
+      packVersion: '2026.05.0',
+      repairNeeded: false,
+      repairAvailable: false,
+      summary: 'No hay una fuente confiable disponible para bootstrap',
+      blockedCapabilities: ['ocr'],
+      details: ['Trusted remote bootstrap source wiring is not implemented yet'],
+      guidance: ['Reintentá cuando exista una fuente confiable'],
+      bootstrapEligible: false,
+      bootstrapRequired: true,
+      activeOperation: null,
+    })
+    depsMocks.getUvStatus.mockResolvedValueOnce({
+      uv_ready: false,
+      uv_path: null,
+      uv_version: null,
+      uv_source: null,
+      uv_compatible_for_dev: false,
+      venv_exists: true,
+      venv_path: '/runtime/venv',
+      uv_warning: null,
+      release_runtime_ready: false,
+      release_runtime_state: 'blocked_source_unavailable',
+      dev_fallback_available: false,
+      dev_fallback_reason: null,
+    })
+
+    render(DependenciasTab)
+
+    expect(await screen.findByText(/aún no está publicado/)).toBeInTheDocument()
+    expect(
+      screen.queryByText('Esta versión de EntropIA Pro todavía no tiene su runtime publicado.')
+    ).not.toBeInTheDocument()
   })
 
   it('labels healthy embedded runtime without a managed venv honestly', async () => {
@@ -803,7 +905,12 @@ describe('DependenciasTab', () => {
 
     render(DependenciasTab)
 
-    await waitFor(() => expect(progressHandler).toBeDefined())
+    // The listeners register one await at a time after the initial refresh;
+    // wait for the real registrations instead of the vi.fn() placeholders.
+    await waitFor(() => {
+      expect(depsMocks.onRuntimeStatus).toHaveBeenCalled()
+      expect(depsMocks.onRuntimeProgress).toHaveBeenCalled()
+    })
     expect(await screen.findByText(/Runtime dañado/i)).toBeInTheDocument()
     progressHandler?.({
       kind: 'bootstrap',

@@ -468,7 +468,7 @@ pub fn apply(data_dir: &Path, plan: &mut Plan, date: &str) {
                 }
             }
             Err(error) => {
-                eprintln!("[assets] could not quarantine {}: {error}", item.rel);
+                log::warn!(target: "assets", "could not quarantine {}: {error}", item.rel);
                 plan.report.errors += 1;
             }
         }
@@ -531,7 +531,7 @@ pub fn run_once(data_dir: &Path, conn: &Connection, now: SystemTime, min_age: Du
     }
     let report = sweep(data_dir, conn, now, min_age);
     for rel in &report.doubts {
-        eprintln!("[assets] kept for a doubt: {rel}");
+        log::info!(target: "assets", "kept for a doubt: {rel}");
     }
     let mut line = report.summary();
     if report.complete() {
@@ -554,7 +554,6 @@ pub fn spawn(app: tauri::AppHandle, data_dir: PathBuf, db_path: PathBuf) {
         }));
         let line =
             outcome.unwrap_or_else(|_| "assets orphan sweep stopped by an error".to_string());
-        eprintln!("[assets] {line}");
         crate::app_logs::info(&app, "assets", line);
     });
 }

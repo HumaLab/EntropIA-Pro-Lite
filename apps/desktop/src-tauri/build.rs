@@ -1,6 +1,11 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+#[path = "build_support/bootstrap_guard.rs"]
+mod bootstrap_guard;
+
+use bootstrap_guard::{bootstrap_guard_error, BootstrapGuardInput};
+
 /// Every command registered with `generate_handler!` in `src/lib.rs`. tauri-build
 /// turns each into an `allow-<name>` / `deny-<name>` permission (underscores become
 /// dashes), and the presence of this manifest is what makes Tauri check app
@@ -33,6 +38,7 @@ const APP_COMMANDS: &[&str] = &[
     "processing_latest_bibliography_sync_status",
     "bibliography_search_works",
     "bibliography_open_passage",
+    "zotero_data_dir_grant",
     "bibliography_passage_context",
     "bibliography_library_status",
     "bibliography_search_passages",
@@ -264,7 +270,8 @@ fn main() {
     println!("cargo:rerun-if-changed=resources/runtime-pack/windows-x86_64/manifest.json");
     println!("cargo:rerun-if-changed=resources/runtime-pack/linux-x86_64/manifest.json");
 
-    embed_common_controls_manifest_for_tests();
+    println!("cargo:rerun-if-changed=windows/app-manifest.xml");
+    embed_common_controls_manifest_for_all_targets();
     guard_lean_bootstrap_source();
     ensure_windows_vc_runtime_glob_exists();
     stage_windows_vc_runtime();
@@ -274,75 +281,92 @@ fn main() {
     // native ML libraries use the dynamic CRT (see tests/vc_runtime_guard.rs).
     if let Err(error) = tauri_build::try_build(
         tauri_build::Attributes::new()
-            .windows_attributes(tauri_build::WindowsAttributes::new().static_vc_runtime(false))
+            .windows_attributes(
+                tauri_build::WindowsAttributes::new_without_app_manifest().static_vc_runtime(false),
+            )
             .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
     ) {
         panic!("tauri-build failed: {error:#}");
     }
 }
 
-/// The Tauri runtime imports `TaskDialogIndirect`, which only exists in Common
-/// Controls v6. tauri-build embeds that manifest in the app binary, but a test
-/// executable that links the runtime (tests/app_acl.rs) has none and dies at
-/// load with STATUS_ENTRYPOINT_NOT_FOUND before running a single test. Scoped to
-/// test targets so it can never collide with the manifest tauri-build embeds
-/// in the binary.
-fn embed_common_controls_manifest_for_tests() {
+/// Every Windows MSVC executable of this package — the app binary, the
+/// integration-test binaries and the lib unit-test harness — needs the Common
+/// Controls v6 manifest. The Tauri runtime imports `TaskDialogIndirect`, which
+/// only exists in Common Controls v6; a binary without the manifest dies at
+/// load with STATUS_ENTRYPOINT_NOT_FOUND before running a single test.
+///
+/// tauri-build embeds its default app manifest only into bins (its `.res` is
+/// linked via `cargo:rustc-link-arg-bins`), so the lib test harness never got
+/// one; `cargo:rustc-link-arg-tests` only reaches integration-test targets
+/// (`tests/*.rs`), not the lib harness either. Hence the recurring 0xc0000139.
+///
+/// Following Tauri's own guidance for `tauri::test` users, tauri-build's
+/// manifest is disabled (`WindowsAttributes::new_without_app_manifest`, kept
+/// alongside `.static_vc_runtime(false)` below) and the repo-owned copy at
+/// `windows/app-manifest.xml` — same content as tauri-build's default — is
+/// embedded into EVERY target of this package with the plain (unsuffixed)
+/// `cargo:rustc-link-arg`. tauri-build's `.res` still carries the icon and
+/// version info, just no manifest, so the app binary keeps exactly one
+/// manifest and nothing collides (no duplicate RT_MANIFEST, no CVT1100/LNK).
+fn embed_common_controls_manifest_for_all_targets() {
     let is_windows_msvc = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     if !is_windows_msvc {
         return;
     }
-    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
-    println!(
-        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
-         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
-         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
-    );
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_default())
+        .join("windows")
+        .join("app-manifest.xml");
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
 
-/// Fail a release build that would ship a lean/fixture runtime-pack with no baked
-/// download source. Such an installer dead-ends on a clean machine
-/// (`RuntimeState::BlockedSourceUnavailable`, no recovery), so it must never be
-/// produced — not even by a plain local `cargo build --release` / `tauri build`.
-/// Debug builds and macOS (which ships no runtime-pack) are unaffected.
+/// Fail a Pro (`local-ml`) release build that would ship a lean/fixture
+/// runtime-pack with no baked download source. Such an installer dead-ends on a
+/// clean machine (`RuntimeState::BlockedSourceUnavailable`, no recovery), so it
+/// must never be produced — not even by a plain local `cargo build --release` /
+/// `tauri build`. Lite builds are skipped: without the feature the runtime is
+/// compiled out and every reader of these variables is `#[cfg(feature =
+/// "local-ml")]` (src/settings.rs). Debug builds and macOS (which ships no
+/// runtime-pack) are unaffected. The decision itself lives in
+/// `build_support/bootstrap_guard.rs`, shared with tests/bootstrap_guard.rs.
 fn guard_lean_bootstrap_source() {
-    if env::var("PROFILE").unwrap_or_default() != "release" {
-        return;
-    }
-    let platform = match env::var("CARGO_CFG_TARGET_OS").unwrap_or_default().as_str() {
-        "windows" => "windows-x86_64",
-        "linux" => "linux-x86_64",
+    // Check the cheap rules first, so the manifest is not even read when the
+    // guard cannot possibly fire (debug, Lite, macOS, ...).
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let local_ml = env::var("CARGO_FEATURE_LOCAL_ML").is_ok();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let platform = match (profile.as_str(), local_ml, target_os.as_str()) {
+        ("release", true, "windows") => "windows-x86_64",
+        ("release", true, "linux") => "linux-x86_64",
         _ => return,
     };
-    let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") else {
-        return;
+    let manifest = env::var("CARGO_MANIFEST_DIR").ok().and_then(|dir| {
+        std::fs::read_to_string(
+            PathBuf::from(dir)
+                .join("resources")
+                .join("runtime-pack")
+                .join(platform)
+                .join("manifest.json"),
+        )
+        .ok()
+    });
+    let manifest_url = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL").unwrap_or_default();
+    let public_key_id = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID").unwrap_or_default();
+    let public_key_base64 =
+        env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64").unwrap_or_default();
+    let input = BootstrapGuardInput {
+        profile: &profile,
+        target_os: &target_os,
+        local_ml,
+        manifest: manifest.as_deref(),
+        manifest_url: &manifest_url,
+        public_key_id: &public_key_id,
+        public_key_base64: &public_key_base64,
     };
-    let manifest_path = PathBuf::from(&manifest_dir)
-        .join("resources")
-        .join("runtime-pack")
-        .join(platform)
-        .join("manifest.json");
-    let Ok(manifest) = std::fs::read_to_string(&manifest_path) else {
-        return;
-    };
-    let compact: String = manifest.chars().filter(|c| !c.is_whitespace()).collect();
-    let bundles_real_release = compact.contains("\"payload_profile\":\"release\"")
-        && compact.contains("\"release_injection_required\":false");
-    if bundles_real_release {
-        return;
-    }
-
-    let url = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL").unwrap_or_default();
-    let key = env::var("ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64").unwrap_or_default();
-    if url.trim().is_empty() || key.trim().is_empty() {
-        panic!(
-            "Release build for {platform} bundles a non-release (fixture) runtime-pack, but \
-             ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL / _PUBLIC_KEY_BASE64 are not baked in. A lean \
-             installer with no signed download source dead-ends on a clean machine. Set the bootstrap \
-             env vars (see .github/workflows/release.yml) before a release build, or bundle a real \
-             release runtime-pack."
-        );
+    if let Some(message) = bootstrap_guard_error(&input) {
+        panic!("{message}");
     }
 }
 

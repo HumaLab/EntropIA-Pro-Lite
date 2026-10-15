@@ -164,7 +164,7 @@ impl ResearchEnvelopeV1 {
 
     pub(crate) fn fingerprint_sha256(&self) -> ResearchResult<String> {
         let canonical = self.to_canonical_json()?;
-        Ok(format!("{:x}", Sha256::digest(canonical.as_bytes())))
+        Ok(hex::encode(Sha256::digest(canonical.as_bytes())))
     }
 
     pub(crate) fn validate(&self) -> ResearchResult<()> {
@@ -734,7 +734,7 @@ fn read_report_file(path: &Path) -> ResearchResult<(u64, String)> {
     }
     Ok((
         bytes.len() as u64,
-        format!("{:x}", Sha256::digest(bytes.as_slice())),
+        hex::encode(Sha256::digest(bytes.as_slice())),
     ))
 }
 

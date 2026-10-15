@@ -295,7 +295,7 @@ async fn persist(mirror: Mirror, path: &Path) {
     let path = path.to_path_buf();
     let saved = tokio::task::spawn_blocking(move || mirror.save(&path)).await;
     if let Ok(Err(error)) | Err(error) = saved.map_err(std::io::Error::other) {
-        eprintln!("[zotero] the copy of the library could not be saved: {error}");
+        log::warn!(target: "zotero", "the copy of the library could not be saved: {error}");
     }
 }
 

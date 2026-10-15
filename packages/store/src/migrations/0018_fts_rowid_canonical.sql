@@ -1,5 +1,4 @@
--- Rebuild the FTS5 contentless index so its canonical identity is items.rowid.
--- This repairs legacy rows inserted without an explicit rowid.
+-- Rebuild FTS rows so fts_items.rowid always matches items.rowid.
 INSERT INTO fts_items(fts_items) VALUES('delete-all');
 
 INSERT INTO fts_items(rowid, item_id, title, metadata, extracted_text)
@@ -34,4 +33,4 @@ SELECT
       ORDER BY source_order ASC, sort_index ASC, created_at ASC
     )
   ), '')
-FROM items i;
+FROM items i
