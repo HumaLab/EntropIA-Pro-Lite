@@ -537,6 +537,37 @@ impl OpenRouterClient {
         }
     }
 
+    /// Tests the stored Vercel AI Gateway key with a tiny paid request: the
+    /// gateway's model list answers without a key, and a key on an account
+    /// without a card on file only fails once it is asked to generate.
+    pub async fn test_fallback_connection() -> Result<(), String> {
+        let key = fallback_key().ok_or("No hay clave de Vercel guardada")?;
+        let request = ChatCompletionRequest {
+            model: "openai/gpt-4o-mini".to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: ChatMessageContent::Text("ping".to_string()),
+            }],
+            max_tokens: 5,
+            temperature: 0.0,
+            top_p: None,
+            top_k: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            stop: Vec::new(),
+        };
+        Self::new(String::new(), String::new())
+            .try_send_request(VERCEL_AI_GATEWAY_URL, &key, &request)
+            .await
+            .map(|_| ())
+            .map_err(|failure| match failure {
+                RequestFailure::Status { status, body } => {
+                    format!("Vercel AI Gateway ({status}): {body}")
+                }
+                other => other.message().replace("OpenRouter", "Vercel AI Gateway"),
+            })
+    }
+
     /// Test the connection by listing available models.
     /// Returns Ok with a list of model IDs on success, Err on failure.
     pub async fn test_connection(&self) -> Result<Vec<ModelInfo>, String> {

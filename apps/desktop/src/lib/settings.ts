@@ -59,6 +59,10 @@ export function describeSettingsError(error: unknown, translate: (key: string) =
 // OpenRouter-specific
 // ---------------------------------------------------------------------------
 
+export function testVercelConnection(): Promise<void> {
+  return invoke<void>('test_vercel_connection')
+}
+
 export function testOpenrouterConnection(apiKey: string): Promise<ModelInfo[]> {
   return invoke<ModelInfo[]>('test_openrouter_connection', { apiKey })
 }

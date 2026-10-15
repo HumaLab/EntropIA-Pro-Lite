@@ -167,6 +167,7 @@ const APP_COMMANDS: &[&str] = &[
     "settings_get_all",
     "settings_delete",
     "test_openrouter_connection",
+    "test_vercel_connection",
     "deps_check_all",
     "deps_get_cached_statuses",
     "deps_install_all",

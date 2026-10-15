@@ -159,6 +159,7 @@
     "allow-settings-get-all",
     "allow-settings-delete",
     "allow-test-openrouter-connection",
+    "allow-test-vercel-connection",
     "allow-deps-check-all",
     "allow-deps-get-cached-statuses",
     "allow-deps-install-all",

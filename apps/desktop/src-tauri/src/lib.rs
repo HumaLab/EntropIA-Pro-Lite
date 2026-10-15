@@ -1517,6 +1517,7 @@ pub fn run() {
             settings::settings_get_all,
             settings::settings_delete,
             llm::commands::test_openrouter_connection,
+            llm::commands::test_vercel_connection,
             deps::deps_check_all,
             deps::deps_get_cached_statuses,
             deps::deps_install_all,

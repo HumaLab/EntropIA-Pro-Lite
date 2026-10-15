@@ -190,6 +190,9 @@ const es = {
   'settings.vercel.saved': 'Clave guardada',
   'settings.vercel.save': 'Guardar',
   'settings.vercel.remove': 'Borrar',
+  'settings.vercel.ok': 'Conexión lista: Vercel contestó.',
+  'settings.vercel.needsCard':
+    'La clave es válida, pero Vercel no atiende pedidos hasta que cargues una tarjeta de crédito en tu cuenta (eso libera también el crédito gratis).',
   'settings.appearance.themeLabel': 'Tema',
   'settings.appearance.contrastLabel': 'Contraste',
   'batch.title': 'Procesamiento por lote',
@@ -3498,6 +3501,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.vercel.saved': 'Key saved',
   'settings.vercel.save': 'Save',
   'settings.vercel.remove': 'Remove',
+  'settings.vercel.ok': 'Connection ready: Vercel answered.',
+  'settings.vercel.needsCard':
+    'The key is valid, but Vercel serves no requests until you add a credit card to your account (that also unlocks the free credits).',
   'settings.appearance.themeLabel': 'Theme',
   'settings.appearance.contrastLabel': 'Contrast',
   'batch.title': 'Batch processing',

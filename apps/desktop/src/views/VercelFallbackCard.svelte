@@ -8,7 +8,13 @@
   import { ActionIcon, Button, Card, Input } from '@entropia/ui'
   import { openExternalUrlFromClick } from '$lib/external-links'
   import { locale, t } from '$lib/i18n'
-  import { SETTINGS_KEYS, settingsDelete, settingsGet, settingsSet } from '$lib/settings'
+  import {
+    SETTINGS_KEYS,
+    settingsDelete,
+    settingsGet,
+    settingsSet,
+    testVercelConnection,
+  } from '$lib/settings'
 
   const currentLocale = locale
   // Vercel's own "go to my team's page" link: lands on AI Gateway → API Keys.
@@ -17,6 +23,7 @@
   let hasKey = $state(false)
   let busy = $state(false)
   let error = $state('')
+  let ok = $state('')
 
   $effect(() => {
     settingsGet(SETTINGS_KEYS.VERCEL_AI_GATEWAY_API_KEY)
@@ -28,6 +35,7 @@
     if (busy) return
     busy = true
     error = ''
+    ok = ''
     try {
       await action()
     } catch (failure) {
@@ -42,6 +50,19 @@
       await settingsSet(SETTINGS_KEYS.VERCEL_AI_GATEWAY_API_KEY, key.trim())
       key = ''
       hasKey = true
+    })
+
+  const test = () =>
+    run(async () => {
+      try {
+        await testVercelConnection()
+        ok = t('settings.vercel.ok')
+      } catch (failure) {
+        // Vercel's 403 for an account without a card is a JSON blob; say it plainly.
+        throw String(failure).includes('customer_verification_required')
+          ? t('settings.vercel.needsCard')
+          : failure
+      }
     })
 
   const remove = () =>
@@ -79,11 +100,18 @@
         {$currentLocale && t('settings.vercel.save')}
       </Button>
       {#if hasKey}
+        <Button variant="secondary" size="sm" disabled={busy} onclick={test}>
+          {$currentLocale &&
+            (busy ? t('settings.testingConnection') : t('settings.testConnection'))}
+        </Button>
         <Button variant="ghost" size="sm" disabled={busy} onclick={remove}>
           {$currentLocale && t('settings.vercel.remove')}
         </Button>
       {/if}
     </div>
+    {#if ok}
+      <p class="vercel-card__ok" role="status">{ok}</p>
+    {/if}
     {#if error}
       <p class="vercel-card__error" role="alert">{error}</p>
     {/if}
@@ -135,6 +163,11 @@
 
   .vercel-card__row :global(.input-field) {
     flex: 1;
+  }
+
+  .vercel-card__ok {
+    color: var(--color-success);
+    font-size: var(--font-size-sm);
   }
 
   .vercel-card__error {
