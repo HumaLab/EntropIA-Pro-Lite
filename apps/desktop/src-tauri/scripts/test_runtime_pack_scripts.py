@@ -385,6 +385,48 @@ class RuntimePackScriptTests(unittest.TestCase):
                 smoke_payload['release_errors'],
             )
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits are not tracked on Windows')
+    def test_smoke_rejects_linux_interpreters_without_execute_bit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_root = create_fixture_root(Path(temp_dir) / 'fixtures')
+            pack_root = fixture_root / 'linux-x86_64'
+            for rel in ('python/bin/python3', 'uv/bin/uv'):
+                (pack_root / rel).chmod(0o644)
+            result = self.run_script(
+                str(SMOKE_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--root',
+                str(fixture_root),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload['ok'])
+            self.assertIn('python_relpath is not executable: python/bin/python3', payload['contract_errors'])
+            self.assertIn('uv_relpath is not executable: uv/bin/uv', payload['contract_errors'])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits are not tracked on Windows')
+    def test_bundled_linux_fixture_pack_passes_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build = self.run_script(
+                str(BUILD_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--output-dir',
+                str(Path(temp_dir) / 'out'),
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            result = self.run_script(
+                str(SMOKE_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--root',
+                str(Path(temp_dir) / 'out'),
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload['contract_errors'], [])
+            self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_fixture_smoke_passes_but_release_smoke_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture_root = create_fixture_root(Path(temp_dir) / 'fixtures')

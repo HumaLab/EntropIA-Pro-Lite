@@ -23,6 +23,7 @@ Follow-ups left after shipping v1.0.20. Order chosen by the user: 2, 3, then 1.
   clippy clean, lean `cargo test --lib` 2580 / 0 / 14. Pro (`local-ml`) tests not run locally (MNN);
   CI Windows contract covers them. The 6 `db::` failures seen locally were a CRLF working copy of
   `0036_writing_journal.sql` (`core.autocrlf=true` in this clone), not this change.
+- 3.0: `prepare_runtime_payload.py --fixture --platform linux-x86_64` plus `build_runtime_pack.py --payload-root` and the smoke pass on Linux, and the fixture-only Linux pack passes too. The real defect: the committed Linux fixture `python/bin/python3` and `uv/bin/uv` were `100644`, so the assembled pack shipped non-executable interpreters while the smoke still said ok. Fix: the smoke now reports `<key> is not executable: <path>` for the Linux interpreters on POSIX hosts, and both files are now `100755`. RED: the new smoke test (exit 0 on 0644 interpreters) failed, and once the check landed the bundled-fixture test failed with both contract errors. GREEN: `test_runtime_pack_scripts.py` 13/13, now also run by CI's `runtime-pack-smoke` step, which never ran it before; CI smoke Linux and Windows ok; `runtime-packaging.test.ts` plus `ci-supply-chain.test.ts` 26/26; `binaries:check` OK.
 
 ## Plan for 3 (Pro on Linux)
 
@@ -31,7 +32,7 @@ The app side is about 90% portable already (`runtime/paths.rs`, `nlp/embeddings.
 several platforms; `release.yml` keeps the Linux deps step, the Pdfium fetch and
 `tauri.pro.linux.conf.json`.
 
-- [ ] 3.0 Validate: `prepare_runtime_payload.py --fixture --platform linux-x86_64` plus
+- [x] 3.0 Validate: `prepare_runtime_payload.py --fixture --platform linux-x86_64` plus
       `runtime-pack-smoke.py` on ubuntu-22.04; fix the executable bit of `python/bin/python3` and
       `uv/bin/uv` in the linux fixture.
 - [ ] 3.1 Linux pack builder: `build-runtime-pack.yml` gains a linux-x86_64 job on ubuntu-22.04

@@ -397,6 +397,7 @@ jobs:
 
       - name: runtime-pack-smoke
         run: |
+          python3 -m unittest apps/desktop/src-tauri/scripts/test_runtime_pack_scripts.py
           python3 apps/desktop/src-tauri/scripts/build_runtime_pack.py --platform linux-x86_64 --platform windows-x86_64
           python3 apps/desktop/src-tauri/scripts/runtime-pack-smoke.py --platform linux-x86_64 --root apps/desktop/src-tauri/target/runtime-pack
           python3 apps/desktop/src-tauri/scripts/runtime-pack-smoke.py --platform windows-x86_64 --root apps/desktop/src-tauri/target/runtime-pack
