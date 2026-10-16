@@ -1,6 +1,6 @@
 # Inventario de funciones de EntropIA Lite
 
-**Versión de EntropIA:** 1.0.20 · **Actualizado:** 16 de octubre de 2026
+**Versión de EntropIA:** 1.1.0 · **Actualizado:** 16 de octubre de 2026
 
 **Documento asociado:** [Manual de usuario](manual-usuario.md)
 

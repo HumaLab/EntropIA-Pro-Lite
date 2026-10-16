@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.0.20 · **Actualizado:** 16 de octubre de 2026
+**Versión de EntropIA:** 1.1.0 · **Actualizado:** 16 de octubre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
