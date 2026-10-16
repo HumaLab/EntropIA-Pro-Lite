@@ -111,8 +111,14 @@ pub async fn runtime_bootstrap_start(
         }));
         match outcome {
             Ok(result) => {
-                if let Err(error) = &result {
-                    log::warn!(target: "runtime", "background bootstrap ended: {error}");
+                match &result {
+                    Ok(status) if status.state == status::RuntimeState::Healthy => {
+                        crate::deps::trigger_deps_auto_install(worker_app.clone());
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        log::warn!(target: "runtime", "background bootstrap ended: {error}");
+                    }
                 }
                 if crate::runtime::download::is_bootstrap_cancel_requested() {
                     // User cancel wins over any latched failure: re-emit

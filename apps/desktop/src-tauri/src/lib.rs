@@ -1091,6 +1091,11 @@ pub fn run() {
                             "deps",
                             format!("Verificación inicial completada: {} dependencias", results.len()),
                         );
+                        // A runtime that is already healthy at startup with
+                        // dependencies still missing installs them on its own;
+                        // a runtime still downloading triggers it when done.
+                        #[cfg(feature = "local-ml")]
+                        deps::trigger_deps_auto_install(app_handle_deps.clone());
                     }
                     Err(err) => {
                         app_logs::error(
