@@ -2,7 +2,7 @@
 
 **English:** [THIRD_PARTY_NOTICES.en.md](./THIRD_PARTY_NOTICES.en.md)
 
-EntropIA Pro depende de Rust, Node, Python, librerías nativas, modelos de IA y artefactos de runtime payload. Este archivo registra la política de revisión para release; todavía no es un SBOM generado completo.
+EntropIA (Pro y Lite) depende de Rust, Node, librerías nativas y, en Pro, de Python, modelos de IA y artefactos de runtime payload. Este archivo registra la política de revisión para release; todavía no es un SBOM generado completo.
 
 ## Regla de release
 
@@ -21,9 +21,9 @@ Antes de firmar o publicar un instalador final, verificar:
 
 | Componente | Propósito | Fuente/ruta actual | Estado de revisión |
 | ---------- | --------- | ------------------ | ------------------ |
-| Pdfium | Renderizado PDF | `resources/lib/pdfium.dll`, librerías nativas del release runtime payload | Necesita traza de versión/licencia en notas de release o SBOM. |
+| Pdfium | Renderizado y lectura de texto de PDF (Pro y Lite) | `resources/lib/pdfium.dll` commiteado; en Linux y macOS, descargado en el build con `apps/desktop/scripts/fetch-pdfium.sh` | Fijado a `bblanchon/pdfium-binaries` `chromium/7543` (BSD-3-Clause/Apache-2.0); la copia de Windows está registrada byte a byte en `binary-provenance.json`. |
 | ONNX Runtime | Consumidores ONNX activos: layout PP-DocLayout-L, embeddings BGE-M3 local, reranker RAG | release payload `resources/lib/onnxruntime.dll` o `resources/lib/libonnxruntime.so` | Requerido en payloads de release; el NER ONNX legacy ya no existe. |
-| uv | Bootstrap del entorno Python administrado | `resources/tools/uv/*`, runtime payload `uv/` | Necesita traza de versión/licencia. |
+| uv | Bootstrap del entorno Python administrado (Pro) | `resources/tools/uv/*`, runtime payload `uv/` | `resources/tools/uv/*` fijado a uv 0.6.14 (MIT OR Apache-2.0) en `binary-provenance.json`; el del runtime payload sigue el manifest del runtime-pack. |
 | Runtime Python | Runtime subprocess para OCR/NLP/transcripción | release runtime payload `python/` | Debe ser redistribuible y estar versionado. |
 | Wheelhouse Python | Instalación offline para dependencias IA | release runtime payload `wheelhouse/` | Debe generarse desde paquetes revisados. |
 | Caches Hugging Face | Seeds de faster-whisper/model cache | release runtime payload `caches/hf/` | Cada licencia de modelo debe revisarse. |
@@ -41,11 +41,19 @@ Estas no viajan como archivos separados del runtime payload: se compilan o empaq
 | `symphonia` | Decodificación de audio para la previsualización | **MPL-2.0** |
 | `hound` | Lectura/escritura WAV para el camino de audio | Apache-2.0 |
 | `leaflet` | Mapa de ubicaciones | BSD-2-Clause |
-| `@tiptap/*` | Editor de texto enriquecido de las notas | MIT |
+| `@tiptap/*` | Editor de texto enriquecido de las notas y de Escritura | MIT |
+| `3d-force-graph` y `three` | Grafo 3D de relaciones de una colección | MIT |
+| `pdfjs-dist` | Visor de PDF en la interfaz | Apache-2.0 |
+| `markdown-it` | Render del texto OCR con tablas | MIT |
+| `@tabler/icons-svelte-runes` | Íconos de la interfaz | MIT |
 | `pdfmake` | Exportación a PDF | MIT |
 | `docx` | Exportación a DOCX | MIT |
 | `drizzle-orm` | Capa de acceso a la base local | Apache-2.0 |
 | `@fontsource*/*` (Source Sans 3, Source Serif 4, JetBrains Mono, Inter, Literata, IBM Plex Sans, IBM Plex Mono, Lora, Atkinson Hyperlegible Next, Noto Serif, Source Code Pro) | Presets tipográficos; solo subsets latin/latin-ext | OFL-1.1 — avisos empaquetados en `resources/fonts/LICENSE` |
+
+## Binarios commiteados
+
+`apps/desktop/src-tauri/binary-provenance.json` registra cada binario commiteado (hash, tamaño, origen y, para los de upstream, el archivo y release de donde salen). `pnpm binaries:check` lo verifica offline y `pnpm binaries:verify-upstream` vuelve a derivar los de upstream; el workflow **Verify binary provenance** corre ambos chequeos. Los modelos MNN de OCR de Pro figuran como *vendored*: no se registró la versión del modelo de origen ni la herramienta de conversión.
 
 ## Riesgos de licencia ya identificados
 

@@ -1,27 +1,36 @@
-# EntropIA Pro Database Debugging
+# EntropIA Pro and Lite Database Debugging
 
 **Español:** [DATABASE_DEBUGGING.md](./DATABASE_DEBUGGING.md)
 
-Operational guide for diagnosing problems in the EntropIA Pro SQLite database without wasting time.
+Operational guide for diagnosing problems in the EntropIA SQLite database (Pro and Lite share the same schema) without wasting time. The full inventory of tables, columns, indexes, and triggers is in [SQLite.en.md](./SQLite.en.md).
 
 ## Active database
 
-The path depends on the variant (Tauri resolves `app.path().app_data_dir()` from the effective `identifier` and opens `entropia.sqlite` inside that directory):
+Pro, Lite, and development share a single database, `entropia.sqlite`, inside the shared `com.entropia.shared` directory of the system data directory:
 
-| Variant | Configuration | Path |
-|---|---|---|
-| Pro | `tauri.conf.json`: `com.entropia.pro.desktop` | `%APPDATA%\com.entropia.pro.desktop\entropia.sqlite` |
-| Lite | `tauri.lite.conf.json`: `com.entropia.lite` | `%APPDATA%\com.entropia.lite\entropia.sqlite` |
-| Explicit dev | `tauri.dev.conf.json`: `com.entropia.pro.desktop.dev` | `%APPDATA%\com.entropia.pro.desktop.dev\entropia.sqlite` |
-| Recognized legacy | `com.entropia.app` constant in `lib.rs` | `%APPDATA%\com.entropia.app\entropia.sqlite` |
+| System | Path |
+|---|---|
+| Windows | `%APPDATA%\com.entropia.shared\entropia.sqlite` |
+| macOS | `~/Library/Application Support/com.entropia.shared/entropia.sqlite` |
+| Linux | `~/.local/share/com.entropia.shared/entropia.sqlite` |
+| Dev profile (`ENTROPIA_DEV_PROFILE=<name>`, debug builds only) | `<data>/com.entropia.shared/dev-profiles/<name>/entropia.sqlite` |
+| Recognized legacy | `<data>/<identifier>/entropia.sqlite`, for the eight identifiers in `LEGACY_APP_IDENTIFIERS` (`lib.rs`); the backend merges them into the shared database at startup |
+
+The shared directory is not any variant's `app_data_dir()`: the identifiers
+cannot change because they are what lets Lite and Pro be installed side by side,
+so the canonical one is a fixed directory next to each variant's own. In the
+Microsoft Store MSIX build, Windows may redirect it inside
+`%LOCALAPPDATA%\Packages\CONICET.EntropIALite_…\LocalCache\Roaming\`.
+
+A backup (`entropia-backup-<UTC>`, in the folder chosen under **Settings → Backups**) holds its own `entropia.sqlite`: use it to compare without touching the active database.
 
 ## Open the database
 
 ```powershell
-sqlite3 "$env:APPDATA\com.entropia.pro.desktop\entropia.sqlite"
-sqlite3 "$env:APPDATA\com.entropia.lite\entropia.sqlite"
-sqlite3 "$env:APPDATA\com.entropia.pro.desktop.dev\entropia.sqlite"
+sqlite3 "$env:APPDATA\com.entropia.shared\entropia.sqlite"
 ```
+
+Reading with the app open is fine (the database is in WAL), but **close EntropIA before writing**. The backend applies migrations at startup; do not run DDL by hand on the active database.
 
 ## Debugging philosophy
 
@@ -40,6 +49,9 @@ items -> notes / entities / triples / item_topics
 item_topics -> topics
 assets -> vec_assets
 items -> fts_items
+processing_batches -> processing_batch_tasks -> processing_tasks -> processing_attempts
+writing_documents -> writing_document_versions / writing_document_citations / writing_zotero_citations
+zotero_libraries -> bibliographic_items -> zotero_attachments -> bibliographic_page_texts / bibliographic_chunks
 ```
 
 ---
@@ -107,8 +119,10 @@ ORDER BY notes DESC;
 ### 5. Verify indexing/search
 
 ```sql
-SELECT item_id, title
+-- fts_items is contentless: join it to items by rowid.
+SELECT i.id AS item_id, i.title
 FROM fts_items
+JOIN items i ON i.rowid = fts_items.rowid
 LIMIT 20;
 
 SELECT asset_id, item_id, length(embedding) AS bytes
@@ -262,6 +276,16 @@ WHERE a.id = 'ASSET_ID_HERE'
 LIMIT 1;
 ```
 
+If you requested it and there is no result, look at its processing task: pressing OCRH or EMBED and running batches create tasks in `processing_tasks` (STT transcription does not go through it).
+
+```sql
+SELECT id, kind, state, stage, attempt_count, last_error_code, last_error_message,
+       datetime(updated_at / 1000, 'unixepoch', 'localtime') AS updated_local
+FROM processing_tasks
+WHERE subject_id = 'ASSET_ID_HERE' OR asset_id_snapshot = 'ASSET_ID_HERE'
+ORDER BY updated_at DESC;
+```
+
 ### E. “OCR High did not leave layout”
 
 Look at:
@@ -315,10 +339,14 @@ Look at:
 - `fts_items`
 
 ```sql
-SELECT item_id, title, extracted_text
+SELECT i.id AS item_id, i.title, bm25(fts_items) AS rank
 FROM fts_items
-WHERE fts_items MATCH 'term';
+JOIN items i ON i.rowid = fts_items.rowid
+WHERE fts_items MATCH 'term'
+ORDER BY rank;
 ```
+
+`fts_items` is contentless: its columns read as NULL. Do not read `title` or `extracted_text` from it.
 
 ### I. “Similarity/embeddings are not working”
 
@@ -336,7 +364,16 @@ WHERE asset_id = 'ASSET_ID_HERE';
 
 Active APIs/runtime for this flow: `embed_asset`, `backfill_asset_embeddings`, `similar_assets`, and their TS wrappers `embedAsset`, `backfillAssetEmbeddings`, `similarAssets`.
 
-If the asset has text but no embedding, the problem is NO LONGER theoretical: run the backfill, then audit again.
+If the asset has text but no embedding, first check whether a retry is pending and why:
+
+```sql
+SELECT asset_id, rag_incomplete, failure_count, last_error,
+       datetime(next_retry_at_ms / 1000, 'unixepoch', 'localtime') AS next_retry_local
+FROM rag_asset_embedding_state
+WHERE asset_id = 'ASSET_ID_HERE';
+```
+
+A provider 429 or a missing key leaves the task waiting, not failed; saving the key or restarting resumes it. If nothing is pending, run the backfill, then audit again.
 
 ### J. “The LLM result was mixed between asset/item/collection or disappeared”
 
@@ -358,13 +395,88 @@ ORDER BY created_at ASC;
 
 ---
 
+### K. “A batch does not move or ended with errors”
+
+Look at:
+
+- `processing_batches`
+- `processing_batch_tasks` / `processing_tasks`
+- `processing_attempts`
+
+```sql
+SELECT id, origin, state, desired_state, priority, last_error
+FROM processing_batches
+ORDER BY created_at DESC
+LIMIT 10;
+
+SELECT t.kind, t.state, COUNT(*) AS tasks
+FROM processing_batch_tasks bt
+JOIN processing_tasks t ON t.id = bt.task_id
+WHERE bt.batch_id = 'BATCH_ID_HERE'
+GROUP BY t.kind, t.state;
+
+SELECT t.id, t.kind, t.last_error_code, t.last_error_message
+FROM processing_batch_tasks bt
+JOIN processing_tasks t ON t.id = bt.task_id
+WHERE bt.batch_id = 'BATCH_ID_HERE' AND t.state = 'failed';
+```
+
+`blocked` waits for another task (for example, embeddings waiting for OCR); `retry_wait` waits for a retry; `interrupted` was left that way when the app closed. `dependency_failed` means the task it depended on failed. An OCR that finished without text counts as `succeeded`.
+
+### L. “The Biblioteca finds no passages or does not search by meaning”
+
+Look at:
+
+- `zotero_reconciliation_runs`
+- `bibliographic_extractions` / `bibliographic_page_texts`
+- `bibliographic_index_generations`
+- `bibliography_*` tasks in `processing_tasks`
+
+```sql
+SELECT library_id, state, phase, remote_total, latest_error_code, latest_error_message
+FROM zotero_reconciliation_runs;
+
+SELECT kind, state, last_error_code, COUNT(*) AS tasks
+FROM processing_tasks
+WHERE kind LIKE 'bibliography_%'
+GROUP BY kind, state, last_error_code;
+
+SELECT status, expected_inputs, completed_inputs, activated_at
+FROM bibliographic_index_generations
+ORDER BY created_at DESC;
+```
+
+Without an `active` generation there is no meaning search. Tasks blocked by configuration usually mean the OpenRouter key (embeddings) or the GLM-OCR key (scanned pages) is missing.
+
+### M. “A manuscript lost changes”
+
+Look at:
+
+- `writing_documents` (current content and `revision`)
+- `writing_document_versions` (history: `auto`, `checkpoint` before a receive, `restore`)
+- `writing_journal` (deltas not consolidated yet)
+
+```sql
+SELECT id, title, revision, datetime(updated_at / 1000, 'unixepoch', 'localtime') AS updated_local
+FROM writing_documents
+WHERE title LIKE '%TITLE%';
+
+SELECT version_number, reason, datetime(created_at / 1000, 'unixepoch', 'localtime') AS created_local
+FROM writing_document_versions
+WHERE document_id = 'DOCUMENT_ID_HERE'
+ORDER BY version_number DESC;
+```
+
+To recover, use **Historial de versiones** in the app; do not edit these tables by hand.
+
 ## Current embedding architecture
 
 The verified runtime/product truth today is this:
 
-- embeddings and similarity are **asset-only**
-- active table: `vec_assets`
+- corpus embeddings and similarity are **asset-only**
+- active tables: `vec_assets` (one vector per asset) and `rag_chunks` (per-fragment vectors for Chat and Research), with `rag_asset_embedding_state` for retries
 - active APIs: `embed_asset`, `backfill_asset_embeddings`, `similar_assets`
+- the Biblioteca has its own versioned index: `bibliographic_item_embeddings` and `bibliographic_chunk_embeddings`, tied to a `bibliographic_index_generations` generation
 
 If you see `vec_items`, `embed_item`, `similar_items`, or `embeddings_fallback` in old notes or snapshots of a previous local DB, treat them as **legacy/archive**, not as supported architecture.
 
@@ -499,7 +611,8 @@ When something fails, do not start with guesses. Start with evidence:
 1. `assets`
 2. `extractions` / `transcriptions` / `layouts`
 3. `entities` / `triples` / `topics`
-4. `fts_items` / `vec_assets`
+4. `fts_items` / `vec_assets` / `rag_chunks`
+5. `processing_tasks` / `processing_attempts`, when what is missing comes from a batch or a background task
 
 It is that simple. First you verify persistence. Then you discuss logic.
 

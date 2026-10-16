@@ -39,14 +39,14 @@ Los modelos `.mnn` y el MSIX base están vendoreados sin fuente pública reprodu
 - `payload_profile: fixture` significa que estos packs son estructuralmente reales y bundleables, pero NO son los payloads pesados finales de release.
 - `release_injection_required: true` en el fixture indica que el pack en repo NO es el runtime pesado final: la app lo obtiene en runtime, no del instalador.
 - El runtime administrado y su bootstrap pertenecen exclusivamente a **EntropIA Pro** (`local-ml`). **EntropIA Lite** usa proveedores remotos y no descarga ni consume este runtime local.
-- **Modelo de distribución: instalador liviano.** El instalador ship solo el fixture; el runtime de IA (~2.2GB) se hostea aparte (tag `runtime-bootstrap`, partido bajo 2 GiB/asset + firmado ed25519) y la app lo descarga y verifica (firma + sha256) al primer uso. No se inyecta el runtime en el instalador, porque NSIS/WiX no soportan bundles >2GB.
+- **Modelo de distribución: instalador liviano.** El instalador ship solo el fixture; el runtime de IA (~2.2GB) se hostea aparte (tag `runtime-bootstrap`, partido bajo 2 GiB/asset + firmado ed25519) y la app lo descarga y verifica (firma + sha256) al iniciar, en partes reanudables y con avance, pausa y reintento en el aviso del runtime; con el runtime listo instala sola las dependencias de IA desde el wheelhouse offline. No se inyecta el runtime en el instalador, porque NSIS/WiX no soportan bundles >2GB.
 - **En repo ahora**: layout de runtime-pack, contrato de manifest, bundle globs del fixture, wiring de assembly, smoke checks y límites explícitos de ownership offline.
 
 ### Flujo de release (lean)
 
-1. **Build Runtime Pack** → arma el runtime-pack fresco y sube el artifact `runtime-archive`.
+1. **Build Runtime Pack** (una vez por plataforma: `windows-x86_64`, `linux-x86_64`) → arma el runtime-pack fresco y sube el artifact `runtime-archive`.
 2. **Publish Runtime Bootstrap** con ese `runtime_pack_run_id` → parte el archivo bajo 2 GiB/asset, sube las partes al tag `runtime-bootstrap` y publica un `manifest.json` firmado.
-3. Pushear tag `v*` → **Release** construye los instaladores Pro livianos: NSIS + MSI en Windows y DEB en Linux, con la URL del manifiesto + la clave pública horneadas en el binario. `build.rs` falla cerrado si un build de release embebe el fixture sin fuente horneada, así que nunca se publica un instalador Pro que no pueda descargar el runtime.
+3. Pushear tag `v*` → **Release** construye los instaladores Pro livianos: NSIS + MSI en Windows y DEB en Linux, con la URL del manifiesto + la clave pública horneadas en el binario. Antes de compilar, el workflow exige que el manifiesto firmado tenga la entrada exacta de versión y plataforma (`apps/desktop/scripts/check-runtime-bootstrap.mjs`), y `build.rs` falla cerrado si un build de release embebe el fixture sin fuente horneada, así que nunca se publica un instalador Pro que no pueda descargar el runtime.
 
 Ver `scripts/prepare_runtime_payload.py`, `scripts/materialize_windows_runtime_payload.py`, `scripts/build_runtime_pack.py`, `scripts/runtime-pack-smoke.py` y cada `ASSEMBLY_NOTES.md` de plataforma para el contrato de handoff de release.
 
