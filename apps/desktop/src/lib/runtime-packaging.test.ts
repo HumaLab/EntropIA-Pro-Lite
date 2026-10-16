@@ -299,9 +299,7 @@ describe('runtime pack packaging', () => {
     )
     expect(fetchStep).toContain("if: matrix.platform == 'ubuntu-22.04'")
 
-    // Pro Linux is out of the matrix until a linux-x86_64 runtime pack is
-    // published, but the explicit overlay that lists Pdfium stays in the tree
-    // for when the leg returns.
+    // The Pro Linux leg bundles Pdfium through the explicit overlay only.
     expect(existsSync(resolve(tauriRoot, 'tauri.pro.linux.conf.json'))).toBe(true)
     expect(releaseWorkflow).not.toContain('--config apps/desktop/src-tauri/tauri.linux.conf.json')
   })
@@ -325,10 +323,8 @@ describe('runtime pack packaging', () => {
     expect(gateStep).toContain('--manifest-url "$ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"')
     expect(gateStep).toContain('shell: bash')
 
-    // Pro Linux stays out of the matrix until a linux-x86_64 runtime pack is
-    // published. Every remaining entry declares its runtime_platform (macOS
-    // ships no runtime-pack, hence the empty string).
-    expect(releaseWorkflow).not.toContain('"platform":"ubuntu-22.04"')
+    // Every entry declares its runtime_platform (macOS ships no runtime-pack,
+    // hence the empty string), so the gate covers Windows and Linux alike.
     const includeLine = /^\s*include: \$\{\{ fromJSON\((.*)\) \}\}$/m.exec(releaseWorkflow)
     const includeJson = includeLine?.[1] ?? ''
     expect(includeJson).not.toBe('')
@@ -340,8 +336,24 @@ describe('runtime pack packaging', () => {
     expect(entries.length).toBeGreaterThan(0)
     for (const entry of entries) {
       expect(entry).toHaveProperty('runtime_platform')
-      expect(entry.platform).not.toBe('ubuntu-22.04')
     }
+
+    // A linux-x86_64 runtime is published, so Pro Linux is back in the tag and
+    // `all` matrices (not the default Windows-only dispatch), gated on it and
+    // built with the overlay that bundles the real Pdfium.
+    const [tagMatrix = [], defaultMatrix = [], allMatrix = []] = matrices as {
+      platform: string
+      runtime_platform?: string
+      build_args?: string
+    }[][]
+    for (const matrix of [tagMatrix, allMatrix]) {
+      const linux = matrix.find((entry) => entry.platform === 'ubuntu-22.04')
+      expect(linux?.runtime_platform).toBe('linux-x86_64')
+      expect(linux?.build_args).toBe(
+        '--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb'
+      )
+    }
+    expect(defaultMatrix.some((entry) => entry.platform === 'ubuntu-22.04')).toBe(false)
   })
 
   it('ships fixture runtime-pack manifests for windows and linux with concrete payload files', () => {

@@ -34,12 +34,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Tag pushes build Windows only. Pro Linux stays out of the matrix until
-        # a linux-x86_64 runtime pack is published and the fail-closed gate below
-        # finds a matching manifest entry; Lite Linux still ships via lite-unix.
-        # Default manual dispatch stays Windows-only; `all` adds macOS (no
-        # runtime-pack, so the gate is skipped for it).
-        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin","runtime_platform":""}]') }}
+        # Tag pushes build Windows + Linux so the draft release includes the Pro
+        # .deb; each leg runs the fail-closed runtime gate below for its own
+        # platform, and fail-fast is off so a missing Linux runtime never blocks
+        # Windows. Default manual dispatch stays Windows-only; `all` adds macOS
+        # (no runtime-pack, so the gate is skipped for it) and Linux.
+        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin","runtime_platform":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
     # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
@@ -127,9 +127,7 @@ jobs:
       # Pinned Pdfium, fetched into resources/pdfium and bundled by the
       # explicit tauri.pro.linux.conf.json overlay (E-02). It is not listed in
       # tauri.linux.conf.json: Tauri merges that file into every Linux build,
-      # cargo test included, and fails on a missing resource. Kept for when the
-      # Pro Linux leg returns to the matrix after a linux-x86_64 runtime pack is
-      # published; Lite Linux is exercised by the lite-unix job meanwhile.
+      # cargo test included, and fails on a missing resource.
       - name: Fetch Pdfium (linux-x64)
         if: matrix.platform == 'ubuntu-22.04'
         run: bash apps/desktop/scripts/fetch-pdfium.sh linux-x64
