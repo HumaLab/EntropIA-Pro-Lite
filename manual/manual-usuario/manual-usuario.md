@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.0.16 · **Actualizado:** 25 de septiembre de 2026
+**Versión de EntropIA:** 1.0.20 · **Actualizado:** 16 de octubre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
@@ -10,9 +10,9 @@ Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
 ![Captura de EntropIA Lite: una colección de fuentes con sus documentos y el panel de análisis textual.](images/EntropIA-Coleccion.webp)
 
-Este manual acompaña el recorrido completo: **preparar el espacio de trabajo → reunir fuentes → obtener y revisar texto → buscar y analizar → investigar → escribir con citas → exportar**. No necesitás configurar todas las funciones para empezar.
+Este manual acompaña el recorrido completo: **preparar el espacio de trabajo → reunir fuentes → obtener y revisar texto → buscar y analizar → investigar → escribir con citas → exportar y respaldar**. No necesitás configurar todas las funciones para empezar.
 
-> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
+> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. Las capturas corresponden a la versión 1.0.16: algunos botones agregados después, como **Biblioteca** en la barra superior o la pestaña **Copias** de Configuración, se explican en el texto aunque no se vean en la imagen. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
 
 ### Elegí tu recorrido
 
@@ -21,9 +21,12 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 | Usar EntropIA por primera vez | [Inicio rápido](#capitulo-1-inicio-rapido). |
 | Configurar OCR, audio o asistencia de IA | [Proveedores y configuración](#capitulo-16-configuracion-y-herramientas-generales). |
 | Ordenar un archivo y extraer texto | [Colecciones](#capitulo-4-crear-y-organizar-un-corpus) y [OCR / transcripción](#capitulo-6-obtener-texto-de-documentos). |
+| Traer libros o documentos de Internet Archive | [Importar desde Internet Archive](#internet-archive). |
 | Encontrar evidencia y comparar fuentes | [Búsquedas](#capitulo-7-buscar-informacion), [análisis](#capitulo-8-analizar-documentos-y-colecciones) e [Investigación](#capitulo-10-investigacion). |
-| Redactar con notas y bibliografía | [Escritura](#capitulo-11-escritura) y [Zotero](#capitulo-12-zotero). |
+| Redactar con notas y bibliografía | [Escritura](#capitulo-11-escritura) y [Zotero y Biblioteca](#capitulo-12-zotero). |
+| Buscar dentro de mi biblioteca de Zotero | [Biblioteca](#biblioteca). |
 | Conservar o compartir resultados | [Exportar y descargar](#capitulo-17-exportar-y-descargar). |
+| Guardar una copia de seguridad de todo | [Copias de seguridad](#copias-de-seguridad). |
 | Resolver un problema | [¿Qué hago si…?](#capitulo-19-que-hago-si). |
 
 ## Índice
@@ -39,12 +42,12 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 - [9. Notas y tópicos](#capitulo-9-notas-y-topicos)
 - [10. Investigación](#capitulo-10-investigacion)
 - [11. Escritura](#capitulo-11-escritura)
-- [12. Zotero](#capitulo-12-zotero)
+- [12. Zotero y Biblioteca](#capitulo-12-zotero)
 - [13. Chat y agentes de EntropIA](#capitulo-13-chat-y-agentes-de-entropia)
 - [14. Procesamiento por lotes](#capitulo-14-procesamiento-por-lotes)
 - [15. Sincronización y nube](#capitulo-15-sincronizacion-y-nube)
 - [16. Configuración y herramientas generales](#capitulo-16-configuracion-y-herramientas-generales)
-- [17. Exportar y descargar](#capitulo-17-exportar-y-descargar)
+- [17. Exportar, descargar y respaldar](#capitulo-17-exportar-y-descargar)
 - [18. Ejemplos paso a paso](#capitulo-18-ejemplos-paso-a-paso)
 - [19. ¿Qué hago si…?](#capitulo-19-que-hago-si)
 - [20. Consejos y buenas prácticas](#capitulo-20-consejos-y-buenas-practicas)
@@ -71,21 +74,23 @@ Elegí un PDF escaneado o una imagen **PNG o JPG** que puedas usar como ejemplo.
 
 Al abrir EntropIA llegás a **Inicio → Espacio de trabajo**, no directamente a la lista de colecciones. Desde ahí podés:
 
-- **Importar:** abrir **Importar fuentes**, elegir una colección de destino o crear una y seleccionar archivos.
+- **Importar:** abrir **Importar fuentes**, elegir una colección de destino o crear una y seleccionar archivos. Desde el mismo diálogo, **Desde Internet Archive** trae PDF públicos de archive.org (ver [4.3](#internet-archive)).
 - **Recuperar:** comenzar una conversación nueva en el Chat para consultar el corpus. No restaura archivos ni copias de seguridad.
 - **Escribir:** crear un manuscrito o retomar el que sigue vacío y sin título.
 - **Continuar → Retomar:** volver a trabajos recientes.
 - **Estado del corpus:** consultar cuántas colecciones y documentos tenés y el avance de OCR, STT, texto y embeddings. Los porcentajes indican procesamiento, no exactitud ni cobertura completa de un tema.
-- **Acceso rápido:** entrar en **Colecciones**, **Chat**, **Investigación** o **Escritura**.
+- **Acceso rápido:** entrar en **Colecciones**, **Chat**, **Investigación** o **Escritura**. **Biblioteca** se abre desde la barra superior.
 - **Actividad reciente:** abrir documentos modificados recientemente. Si hay un lote activo, su indicador permite ir a **Ver lote**.
 
-En un espacio vacío, **Empezá con EntropIA** ofrece importar fuentes o crear una colección. Para orientarte en las demás pantallas, reconocé estas zonas:
+En un espacio vacío, **Empezá con EntropIA** ofrece **Importar**, **Crear colección** o **Probar con documentos de ejemplo**. Para orientarte en las demás pantallas, reconocé estas zonas:
 
-1. **Barra superior:** pestañas de trabajo, **Abrir nueva pestaña**, **Vista dividida**, búsqueda general y accesos a **Inicio**, **Colecciones**, **Chat de investigación**, **Agente de investigación**, **Escritura**, **Base de datos** y **Configuración**. Los botones con solo un ícono muestran su nombre al pasar el cursor. El tema, el idioma y el zoom de interfaz se ajustan en **Configuración → Apariencia**.
+1. **Barra superior:** pestañas de trabajo, **Abrir nueva pestaña**, búsqueda general y accesos a **Inicio**, **Colecciones**, **Biblioteca**, **Chat de investigación**, **Agente de investigación**, **Escritura**, **Vista dividida**, **Base de datos** y **Configuración**. Los botones con solo un ícono muestran su nombre al pasar el cursor. El tema, el idioma y el zoom de interfaz se ajustan en **Configuración → Apariencia**.
 2. **Explorador:** colecciones y, dentro de ellas, documentos y páginas o archivos. En una sola pantalla queda a la izquierda. En vista dividida se abre encima del panel activo.
 3. **Área de trabajo:** lo que muestra la pestaña activa. Puede ser Inicio, una colección, un documento u otra herramienta.
 4. **Paneles:** herramientas que cambian según la vista. En un documento aparecen **Notas**, **Texto**, **Análisis**, **Mapa**, **Búsquedas**, **Layout** (estructura de la página) y **Metadatos** (datos descriptivos del archivo).
 5. **Barra inferior:** versión y, cuando corresponde, estados de sincronización, lotes y notificaciones.
+
+Al cerrar EntropIA puede aparecer **Optimizando el archivo…**: la aplicación recupera espacio en disco de su base de datos. No apagues el equipo; la ventana se cierra sola al terminar. Si en ese momento hay otra tarea usando la base, la optimización se deja para el próximo cierre.
 
 ### 1.3. Crear o seleccionar una colección
 
@@ -101,7 +106,7 @@ Una colección es el espacio donde vas a reunir fuentes de un mismo proyecto, te
 
 Si ya existe una colección adecuada, abrila en lugar de crear otra.
 
-**¿Querés probar antes de cargar tus fuentes?** La primera vez que abrís EntropIA ya trae tres colecciones de ejemplo con material real de Mar del Plata: actas manuscritas del Concejo Deliberante de 1891, fichas de casas y chalets del catálogo de patrimonio de la UNMDP y páginas del diario *La Capital* de 1965 sobre el conflicto del filet. Cada documento viene con su texto y el análisis ya hecho —nombres, lugares ubicados en el mapa, relaciones, notas y resumen—, así podés recorrer todas las vistas o correr un lote sin gastar nada. Los ejemplos quedan solo en esa computadora: no se sincronizan con tu cuenta. Cuando no los necesites, borralos como cualquier colección.
+**¿Querés probar antes de cargar tus fuentes?** La primera vez que abrís EntropIA ya trae tres colecciones de ejemplo con material real de Mar del Plata: actas manuscritas del Concejo Deliberante de 1891, fichas de casas y chalets del catálogo de patrimonio de la UNMDP y páginas del diario *La Capital* de 1965 sobre el conflicto del filet. Cada documento viene con su texto y el análisis ya hecho —nombres, lugares ubicados en el mapa, relaciones, notas y resumen—, así podés recorrer todas las vistas o correr un lote sin gastar nada. Los ejemplos quedan solo en esa computadora: no se sincronizan con tu cuenta. Cuando no los necesites, borralos como cualquier colección; no vuelven a aparecer solos. Si el espacio está vacío y querés cargarlos de nuevo, usá **Probar con documentos de ejemplo** en Inicio.
 
 ### 1.4. Importar el primer documento
 
@@ -115,7 +120,7 @@ Si importás un único archivo correctamente desde una colección, puede abrirse
 
 La importación **no** ejecuta OCR ni transcribe audio automáticamente. La lista completa de formatos aparece en [Crear y organizar una colección de documentos](#capitulo-4-crear-y-organizar-un-corpus).
 
-**Alternativa desde Inicio:** pulsá **Importar**, elegí **Destino** o **+ Nueva colección**, completá el nombre si corresponde y pulsá **Elegir archivos**. Si cancelás el selector de archivos, no se crea la colección nueva. Al finalizar sin incidencias, se abre la colección; si hubo duplicados, archivos omitidos o errores, revisá el resumen y pulsá **Ir a la colección**. Durante la importación, esperá a que termine antes de cerrar.
+**Alternativa desde Inicio:** pulsá **Importar**, elegí **Destino** o **+ Nueva colección**, completá el nombre si corresponde y pulsá **Elegir archivos**. Para traer PDF de archive.org, usá **Desde Internet Archive** ([4.3](#internet-archive)). Si cancelás el selector de archivos, no se crea la colección nueva. Al finalizar sin incidencias, se abre la colección; si hubo duplicados, archivos omitidos o errores, revisá el resumen y pulsá **Ir a la colección**. Durante la importación, esperá a que termine antes de cerrar.
 
 ### 1.5. Abrir el documento
 
@@ -179,7 +184,7 @@ Podés tener hasta **4 pestañas**. Cada una recuerda su propio recorrido: **←
 
 1. Pulsá **Vista dividida** en la barra superior.
 2. Si todavía no hay 4 pestañas, EntropIA abre una de Inicio al lado de la actual. Si ya hay 4, empareja la activa con la vecina.
-3. Arrastrá la división para cambiar el tamaño. Cada lado conserva al menos el 40 % del espacio y un ancho mínimo de 480 píxeles. Un doble clic la devuelve al medio. Con el teclado, usá las flechas.
+3. Arrastrá la división para cambiar el tamaño. Cada lado conserva al menos el 40 % del espacio y un ancho mínimo de 640 píxeles. Un doble clic la devuelve al medio. Con el teclado, usá las flechas.
 4. Si la ventana queda demasiado angosta, se muestra solo la pestaña activa; los paneles no se apilan. Ampliá la ventana para ver ambos otra vez. Si todavía no activaste la división, el botón puede estar deshabilitado hasta que haya ancho suficiente.
 5. Pulsá otra vez **Vista dividida** para volver a una sola pantalla. Las dos pestañas siguen abiertas.
 
@@ -214,15 +219,18 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 | Buscar palabras y contar frecuencias sobre texto ya guardado | Sí. | Primero necesitás disponer del texto. |
 | Reconocer texto de imágenes o PDF con OCRH | No. | Internet y una clave de GLM-OCR / z.ai. |
 | Transcribir audios o dictar | No. | Internet y AssemblyAI; permiso de micrófono para dictado. |
-| Corregir, resumir, generar embeddings y usar Chat o agentes | No. | Internet y OpenRouter con modelos disponibles para tu cuenta. |
-| Consultar Zotero | No necesita IA. | Zotero abierto en este equipo y comunicación local habilitada. |
+| Corregir, resumir, generar embeddings y usar Chat o agentes | No. | Internet y OpenRouter con modelos disponibles para tu cuenta. Opcionalmente, Vercel AI Gateway como respaldo de algunas tareas de texto ([16.1](#capitulo-16-configuracion-y-herramientas-generales)). |
+| Importar PDF desde Internet Archive | No necesita IA. | Internet; no hace falta cuenta ni clave. |
+| Sincronizar y buscar en tu biblioteca de Zotero (**Biblioteca**) | No para ver las obras ni buscar por título. | Zotero abierto con comunicación local; OpenRouter para buscar por significado y GLM-OCR para leer PDF escaneados. |
+| Citar desde Zotero | No necesita IA. | Zotero abierto en este equipo y comunicación local habilitada. |
 | Sincronizar entre equipos | No necesita IA. | Internet y una cuenta de sincronización. Es opcional. |
+| Hacer copias de seguridad | No necesita IA. | Una carpeta con espacio, idealmente en otro disco. |
 
 Las cuentas de proveedores y la cuenta de sincronización son independientes. El uso de servicios remotos puede tener costos o límites del proveedor; una clave no equivale a uso ilimitado. **Lite no instala los motores locales de IA de Pro**.
 
 ### 2.2. Preparar una sesión de trabajo segura
 
-1. Conservá una copia externa de las fuentes originales.
+1. Conservá una copia externa de las fuentes originales y configurá las [copias de seguridad](#copias-de-seguridad) automáticas.
 2. Configurá solo el proveedor que necesitás y probá con un archivo no sensible.
 3. Importá una muestra pequeña y comprobá su texto antes de procesar muchas páginas.
 4. Antes de cerrar, esperá que terminen las tareas importantes y que Escritura indique **Guardado**.
@@ -250,6 +258,10 @@ Las cuentas de proveedores y la cuenta de sincronización son independientes. El
 | **Recuperación** | Selección de pasajes de tus documentos que el Chat puede usar para preparar una respuesta. |
 | **Pestaña** | Una pantalla de trabajo independiente. Podés tener hasta cuatro, y cada una conserva su recorrido. |
 | **Vista dividida** | Dos pestañas visibles al mismo tiempo, separadas por una división que podés mover. |
+| **Biblioteca** y **obra** | La Biblioteca reúne las referencias de Zotero que sincronizaste en EntropIA; cada referencia es una obra, con sus adjuntos y su texto. Es distinta de tus colecciones. |
+| **Pasaje** | Fragmento del texto de una obra de la Biblioteca que una búsqueda o el Chat pueden mostrar y citar. |
+| **Copia de seguridad** | Carpeta con la base de datos y todos los archivos de EntropIA, hecha a mano o en forma automática. |
+| **Versión** | Estado anterior de un manuscrito que Escritura guarda para que puedas leerlo o restaurarlo. |
 
 ---
 
@@ -267,7 +279,7 @@ Las tarjetas muestran recuentos resumidos. Al abrir una colección, el panel de 
 - No hay controles para ordenar manualmente las colecciones.
 - Importar otro archivo crea un documento nuevo; no hay una acción para anexarlo a un documento existente.
 
-> **Atención:** eliminar una colección borra sus documentos y datos asociados. Confirmá el nombre y exportá la información que necesites antes de aceptar. No hay una acción de deshacer.
+> **Atención:** eliminar una colección borra sus documentos y datos asociados. Confirmá el nombre antes de aceptar. No hay una acción de deshacer: solo una [copia de seguridad](#copias-de-seguridad) anterior permite recuperarla.
 
 ### 4.2. Importar archivos
 
@@ -287,7 +299,23 @@ Durante la importación, **Resumen de importación** informa qué archivo se pro
 
 **Comprobación:** el documento tiene que aparecer en la colección y abrirse en el visor. Un archivo omitido por duplicado no es un OCR fallido: son etapas diferentes. Si parte de la importación falla, revisá el resumen antes de repetir la selección completa.
 
-### 4.3. Organizar fuentes
+<a id="internet-archive"></a>
+### 4.3. Importar desde Internet Archive
+
+Podés traer PDF públicos de [archive.org](https://archive.org) sin descargarlos a mano. Abrí el diálogo desde **Inicio → Importar → Desde Internet Archive** o, dentro de una colección, con el botón **Importar desde Internet Archive** junto a **Importar documento**.
+
+1. En **Descubrimiento**, elegí cómo encontrar el material:
+   - **Buscar:** completá **Texto libre**, **Título**, **Autor** o los años **Desde el año** / **Hasta el año** y pulsá **Buscar en el archivo**. En cada resultado, **Ver archivos** muestra sus PDF.
+   - **Colección:** escribí el **Identificador de la colección** de Internet Archive (por ejemplo `opensource`) y pulsá **Explorar**.
+   - **Enlace:** pegá un identificador o una dirección `https://archive.org/details/…` y pulsá **Abrir**.
+2. Marcá los PDF que quieras. Cada uno muestra su tamaño y si es el **original** o un **derivado**. Los marcados como **restringido**, **cifrado** o **privado** no se pueden importar. **Selección** resume lo elegido; podés quitar un archivo antes de seguir. Pulsá **Continuar**.
+3. En **Destino**, elegí una colección o **+ Nueva colección** y pulsá **Preparar importación**.
+4. Revisá **Revisa la preparación**: cuántos archivos se importan, su tamaño y los **Duplicados**. Para un archivo que ya está en esta u otra colección, elegí en **Qué hacer** entre **Importar una copia independiente** u **Omitir**. Si la sincronización está activa, se muestra el **Volumen sincronizado estimado**: cada PDF ocupa cerca del doble entre el original y sus páginas.
+5. Pulsá **Iniciar importación**. Cada archivo se descarga, se verifica y se importa como cualquier PDF. Al terminar, **Importación terminada** detalla importados, omitidos y con error; **Abrir colección** te lleva a la colección.
+
+Solo se hace una importación de Internet Archive por vez. Si cerrás el diálogo o la aplicación mientras se descarga, al volver a abrirlo aparece **Importaciones en curso → Retomar importación**. Igual que con tus archivos, la importación no ejecuta OCR: después usá **OCRH** o un lote; si el PDF trae texto digital legible, OCRH lo aprovecha. Revisá los derechos de uso de cada obra antes de reutilizarla.
+
+### 4.4. Organizar fuentes
 
 ![Relación entre colección, documento, página/archivo y texto.](images/03-organizacion-corpus.svg)
 
@@ -300,17 +328,17 @@ Una organización sencilla puede ser:
 
 Usá nombres de archivo claros antes de importarlos: el título inicial del documento se basa en ese nombre. No hay una opción para mover documentos entre colecciones ni para ordenar sus páginas manualmente.
 
-### 4.4. Buscar dentro de una colección
+### 4.5. Buscar dentro de una colección
 
 En la colección, **Buscar documentos...** consulta nombres, datos y contenido indexado, no solo las tarjetas visibles. Puede mostrar coincidencias de escritura próximas identificadas como **Aproximado**. La lista carga más documentos al desplazarte. Para buscar en distintas colecciones, usá la barra superior o **Búsquedas**; ver [capítulo 7](#capitulo-7-buscar-informacion).
 
-### 4.5. Exportar una colección
+### 4.6. Exportar una colección
 
-El botón **Exportar JSON** guarda datos de la colección y sus documentos, textos y análisis, pero no incluye los PDF, imágenes o audios originales. No podés usar ese archivo para reconstruir la colección en EntropIA. Conservá por separado los archivos originales. Ver [Exportar y descargar](#capitulo-17-exportar-y-descargar).
+El botón **Exportar JSON** guarda datos de la colección y sus documentos, textos y análisis, pero no incluye los PDF, imágenes o audios originales. No podés usar ese archivo para reconstruir la colección en EntropIA. Para guardar todo, incluidos los archivos, usá las [copias de seguridad](#copias-de-seguridad).
 
-### 4.6. Leer los indicadores de una colección
+### 4.7. Leer los indicadores de una colección
 
-La cabecera resume documentos, tipos de archivo y resultados como **OCR**, **STT**, **Embed**, **NER** y **Triplets**. Usalos para orientarte antes de procesar; no sustituyen la revisión de cada página. La nube y el gráfico de palabras pertenecen a **Análisis textual**, explicado en el [capítulo 8](#capitulo-8-analizar-documentos-y-colecciones).
+La cabecera resume documentos, tipos de archivo y resultados como **OCR**, **STT**, **Embed**, **NER** y **Triplets**. Usalos para orientarte antes de procesar; no sustituyen la revisión de cada página. La nube, el gráfico de palabras y el grafo **Relaciones 3D** pertenecen a **Análisis textual**, explicado en el [capítulo 8](#capitulo-8-analizar-documentos-y-colecciones).
 
 ---
 
@@ -389,7 +417,7 @@ El texto permite buscar y analizar lo que aparece en una página o se dice en un
 4. Leé el resultado y contrastalo con la página original.
 5. Corregí manualmente los errores relevantes si hace falta.
 
-En Lite, el reconocimiento remoto usa GLM-OCR y necesita una clave configurada en **Configuración → APIs remotas**. No está disponible el motor local **OCRL** de Pro. En PDF, EntropIA intenta primero extraer el texto digital de cada página; si tiene calidad suficiente, puede guardarlo como texto nativo sin reconocimiento remoto. El inicio manual de OCRH sigue requiriendo la clave configurada.
+En Lite, el reconocimiento remoto usa GLM-OCR y necesita una clave configurada en **Configuración → APIs remotas**. No está disponible el motor local **OCRL** de Pro. En PDF, EntropIA intenta primero extraer el texto digital de cada página; si tiene calidad suficiente, puede guardarlo como texto nativo sin reconocimiento remoto. Si ese texto digital es ilegible —por ejemplo, letras sin sentido porque las fuentes del PDF no traen su tabla de caracteres—, la página se envía igual al OCR. Las tablas que devuelve GLM-OCR se muestran como tablas en **Texto extraído**. El inicio manual de OCRH sigue requiriendo la clave configurada.
 
 Aunque se pueden importar archivos WebP/TIFF/TIF, GLM-OCR no acepta esos formatos de imagen. Convertí una copia a PNG/JPG antes de reconocerla. Cambiar solo la extensión del archivo no convierte su contenido.
 
@@ -447,11 +475,12 @@ EntropIA tiene varias búsquedas. Elegí la que corresponda; no todas buscan lo 
 |---|---|---|
 | **Buscar colecciones...** | Nombres de colecciones. | Encontrar un espacio de trabajo. |
 | **Buscar documentos...** | Nombres, datos y contenido indexado de la colección abierta; puede incluir variantes aproximadas. | Localizar fuentes dentro de una colección. |
-| **Búsqueda superior** | Hasta 20 documentos por nombre, metadatos o texto indexado del conjunto de colecciones. | Encontrar uno o varios términos y abrir un documento. |
+| **Búsqueda superior** | Hasta 20 documentos por nombre, metadatos o texto indexado del conjunto de colecciones y, en un grupo aparte, hasta 5 obras de la Biblioteca. | Encontrar uno o varios términos y abrir un documento u obra. |
 | **Búsquedas → Buscar por texto similar (FTS)** | Hasta 10 documentos de distintas colecciones, mediante términos y posibles variantes de escritura. | Buscar contenido léxico, no formular una pregunta al modelo. |
 | **Assets similares** | Hasta 5 páginas o archivos relacionados con el seleccionado, con porcentaje de semejanza y vista previa. | Explorar fuentes por contenido parecido. |
-| **Chat de investigación** | Responde preguntas sobre texto reconocido en tus documentos y puede mostrar las fuentes. | Pedir una explicación que puedas comprobar en las fuentes. |
-| **Investigar** | Desarrolla una pregunta de investigación a partir de colecciones seleccionadas y prepara un informe con fuentes. | Explorar una pregunta amplia paso a paso. |
+| **Biblioteca → Buscar obras** y **Escritura → Obras** | Obras de Zotero sincronizadas por título, autor o significado; Obras también muestra pasajes con su página. | Encontrar bibliografía propia y citar una página concreta ([cap. 12](#biblioteca)). |
+| **Chat de investigación** | Responde preguntas sobre texto reconocido en tus documentos, en la Biblioteca o en ambos, y puede mostrar las fuentes. | Pedir una explicación que puedas comprobar en las fuentes. |
+| **Investigar** | Desarrolla una pregunta de investigación a partir de colecciones seleccionadas, la Biblioteca o ambas, y prepara un informe con fuentes. | Explorar una pregunta amplia paso a paso. |
 
 ### 7.1. Buscar una palabra o varios términos
 
@@ -504,17 +533,30 @@ La pestaña **Mapa** muestra lugares asociados al documento. Podés seleccionar 
 
 ### 8.3. Análisis textual de una colección
 
-Dentro de una colección, abrí el panel lateral con **Mostrar análisis textual**. Este panel cuenta palabras de textos reconocidos y transcripciones guardadas; no genera resúmenes ni interpreta los documentos.
+Dentro de una colección, abrí el panel lateral con **Mostrar análisis textual**. Este panel cuenta palabras de textos reconocidos y transcripciones guardadas y dibuja las relaciones ya extraídas; no genera resúmenes ni interpreta los documentos.
 
 ![Detalle del análisis textual de una colección: nube de palabras, gráfico de frecuencias y pestañas Visualización y Parámetros.](images/EntropIA-Analisis-detalle.webp)
 
 - **Visualización:** nube **Top N palabras** y gráfico **Top 20 palabras**. Cada gráfico puede descargarse como PNG.
 - **Parámetros:** elegir entre 20 y 100 términos para la nube (50 inicialmente) y agregar **Stopwords personalizadas** separadas por espacios, comas o punto y coma. Estas preferencias se conservan por colección en este equipo.
+- **Relaciones 3D:** grafo de las relaciones de la colección; se explica en [8.4](#relaciones-3d).
 - **Ocultar análisis textual:** cerrar el panel.
 
 Si todavía no hay texto reconocido o transcripciones, la colección no tiene palabras para contar. Primero revisá el texto de sus documentos. El recuento usa los textos guardados en este equipo y no necesita una clave de IA.
 
 **Lectura recomendada:** una palabra grande aparece muchas veces; no necesariamente es la idea más importante. Revisá **Parámetros** para excluir términos de relleno y contrastá los resultados con documentos concretos. Los errores de OCR también cuentan como palabras.
+
+<a id="relaciones-3d"></a>
+### 8.4. Relaciones 3D de una colección
+
+La pestaña **Relaciones 3D** del panel de análisis dibuja, en tres dimensiones, las tripletas de la colección: cada nombre (sujeto u objeto) es un punto y cada relación una línea rotulada con su predicado. Un mismo nombre escrito con otras mayúsculas o espacios cuenta como un solo punto.
+
+1. Primero extraé relaciones: **TRIPLET** en cada documento o **Tripletes** en [un lote](#capitulo-14-procesamiento-por-lotes). Sin tripletas, la pestaña indica **Todavía no hay relaciones**.
+2. Abrí la colección, pulsá **Mostrar análisis textual** y elegí **Relaciones 3D**. Arriba se resume cuántos nombres y relaciones hay.
+3. Arrastrá para girar el grafo y usá la rueda del mouse para acercarte. Pasá el cursor por un punto o una línea para leerlo.
+4. Hacé clic en un punto para abrir su detalle: **Relaciones** lista las tripletas de ese nombre y **Aparece en**, los documentos de donde salen; pulsá uno para abrirlo. **Cerrar el detalle** vuelve al grafo.
+
+En colecciones grandes se muestran los nombres más conectados y se avisa cuántos con pocas relaciones quedan ocultos. El grafo usa las tripletas guardadas en este equipo y no necesita una clave para dibujarse. Las relaciones son propuestas del modelo: corregilas en **Análisis → Tripletas semánticas** de cada documento y volvé a abrir la pestaña.
 
 ---
 
@@ -550,7 +592,7 @@ También podés seleccionar una frase del manuscrito y usar **Guardar la selecci
 <a id="capitulo-10-investigacion"></a>
 ## Capítulo 10. Investigación
 
-**Investigar** permite plantear una pregunta, elegir colecciones y obtener un informe acompañado de fuentes. Es diferente de una búsqueda por palabra y del chat breve del capítulo 13.
+**Investigar** permite plantear una pregunta, elegir dónde buscar —tus colecciones, tu Biblioteca de Zotero o ambas— y obtener un informe acompañado de fuentes. Es diferente de una búsqueda por palabra y del chat breve del capítulo 13.
 
 ![Recorrido general desde fuentes y notas hasta escritura.](images/05-investigar-y-escribir.svg)
 
@@ -560,11 +602,12 @@ También podés seleccionar una frase del manuscrito y usar **Guardar la selecci
 
 1. En la barra superior, abrí **Agente de investigación**; la página se titula **Investigar**.
 2. En **Nueva investigación**, escribí una pregunta concreta y, si querés, un título.
-3. Abrí **Alcance de colecciones**. EntropIA puede proponer las colecciones que ya tienen fragmentos; revisá la selección, agregá o quitá colecciones y usá **Seleccionar todas** si corresponde.
-4. Seleccioná al menos una colección y pulsá **Investigar**.
-5. El trabajo se abre automáticamente para seguir el proceso. Después podés retomarlo desde **Investigar → Anteriores**, seleccionando su tarjeta.
+3. En **Modelo**, dejá el modelo general de OpenRouter o elegí otro de la lista. El trabajo conserva ese modelo en todos sus pasos y el encabezado de la investigación lo muestra. La lista necesita la clave de OpenRouter guardada; sin ella, el campo indica cómo ir a **Configuración**.
+4. En **Buscar en**, elegí **Corpus** (tus colecciones), **Biblioteca** (las obras de Zotero sincronizadas, ver [12.4](#biblioteca)) o **Ambos**. Con Biblioteca, el menú **Bibliotecas de Zotero** permite elegir cuáles usar.
+5. Si buscás en el corpus, abrí **Alcance de colecciones**. EntropIA propone las colecciones que ya tienen fragmentos; revisá la selección, agregá o quitá colecciones y usá **Seleccionar todas** si corresponde.
+6. Pulsá **Investigar**. El trabajo se abre automáticamente para seguir el proceso. Después podés retomarlo desde **Investigar → Anteriores**, seleccionando su tarjeta.
 
-Prepará antes el texto y los fragmentos de tus documentos. El alcance debe incluir material procesado: **si todas las colecciones seleccionadas tienen cero fragmentos, la investigación no comienza**. Si solo parte del material está procesado, revisá las carencias de cobertura del informe.
+Prepará antes el texto y los fragmentos de tus documentos. El alcance debe incluir material procesado: **si todas las colecciones seleccionadas tienen cero fragmentos, la investigación no comienza**, y con **Biblioteca** hace falta al menos una biblioteca sincronizada y elegida. Si solo parte del material está procesado, revisá las carencias de cobertura del informe.
 
 ### 10.2. Acompañar el proceso
 
@@ -577,7 +620,7 @@ Durante el trabajo, la vista puede pedir intervención:
 
 **Alcance del plan:** las búsquedas del corpus se limitan a las colecciones elegidas. Las **Consultas bibliográficas** pueden consultar Zotero local y **OpenAlex por Internet**; obtienen metadatos bibliográficos, no el texto completo de las obras. Si no querés ejecutarlas, vaciá ese campo antes de **Guardar y buscar**.
 
-En Lite, **Investigar** necesita Internet y OpenRouter. La pregunta, respuestas de encuadre, contexto recibido del Chat y pasajes utilizados pueden enviarse al proveedor. Las consultas bibliográficas también salen hacia OpenAlex. Revisá el plan antes de aprobarlo si trabajás con material sensible.
+En Lite, **Investigar** necesita Internet y OpenRouter; el respaldo de Vercel no se aplica a esta herramienta. La pregunta, respuestas de encuadre, contexto recibido del Chat y pasajes utilizados pueden enviarse al proveedor. Las consultas bibliográficas también salen hacia OpenAlex. Revisá el plan antes de aprobarlo si trabajás con material sensible.
 
 ### 10.3. Leer y comprobar el informe
 
@@ -593,18 +636,20 @@ El informe puede incluir el planteo, cobertura por colección, hallazgos, limita
 
 > **Atención:** una reescritura utiliza la evidencia del informe, no incorpora fuentes nuevas y **suma costo incluso si el presupuesto ya estaba agotado**. Descargá una copia antes si querés conservar la redacción anterior.
 
-Al crear la investigación no hay un selector de proyecto, modalidad de búsqueda ni presupuesto inicial. El límite de colecciones se aplica al corpus, no debe confundirse con las consultas bibliográficas del plan.
+Al crear la investigación no hay un selector de proyecto ni presupuesto inicial: los límites se ajustan después, al pausar. El alcance de colecciones se aplica al corpus; no debe confundirse con la Biblioteca ni con las consultas bibliográficas del plan.
 
 ### 10.4. Guardar o eliminar una investigación
 
 En el encabezado del informe, pulsá **Descargar** y elegí Markdown, HTML o Word (`.docx`); no se ofrece PDF. Para volver a un trabajo, abrí su tarjeta en **Anteriores**. **Borrar la investigación → Borrar** elimina el informe y su información asociada sin deshacer; si sigue en curso, cancelalo primero. Conservá una descarga antes de borrarlo.
+
+Con la [sincronización](#capitulo-15-sincronizacion-y-nube) activa, las investigaciones terminadas o fallidas viajan a tus otros equipos con su informe; las que siguen en curso se quedan en el equipo donde corren. Borrar una investigación sincronizada la borra también en los otros equipos.
 
 ---
 
 <a id="capitulo-11-escritura"></a>
 ## Capítulo 11. Escritura
 
-**Escritura** sirve para redactar un manuscrito y consultar tus documentos, las notas, Zotero y la ayuda contextual desde un mismo espacio.
+**Escritura** sirve para redactar un manuscrito y consultar tus documentos, tu Biblioteca de Zotero, las notas y la ayuda contextual desde un mismo espacio.
 
 ### 11.1. Crear y abrir un manuscrito
 
@@ -631,11 +676,19 @@ El espacio reúne **Esquema**, el manuscrito y el panel de investigación. Usá 
 - **Esquema** muestra títulos de nivel 1 a 3. Seleccioná uno para saltar a esa sección; podés cambiar su título, moverla, agregar otra debajo o eliminarla con su contenido.
 - **Dictado:** ubicá el cursor antes de iniciarlo; el resultado se inserta allí o reemplaza la selección. En Lite requiere AssemblyAI, Internet y permiso de micrófono. Se puede deshacer como una edición normal.
 
-### 11.3. Guardado automático y revisiones
+### 11.3. Guardado automático, revisiones e historial de versiones
 
-El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra **Guardado**, **Guardando**, **Cambios pendientes** o **Error de guardado**. Al cambiar de documento, salir de Escritura o cerrar su pestaña, EntropIA intenta guardar lo pendiente. Igual esperá a ver **Guardado** antes de cerrar la aplicación. El número junto a **Revisión** solo cuenta cambios; no permite abrir versiones anteriores.
+El manuscrito se guarda automáticamente; no hay un botón para guardarlo manualmente. La barra muestra **Guardado**, **Guardando**, **Cambios pendientes** o **Error de guardado**. Al cambiar de documento, salir de Escritura o cerrar su pestaña, EntropIA intenta guardar lo pendiente. Igual esperá a ver **Guardado** antes de cerrar la aplicación. El número junto a **Revisión** cuenta los cambios guardados. Si el guardado falla, usá **Reintentar** cuando aparezca y conservá una copia del texto importante antes de cerrar.
 
-La interfaz actual no ofrece una lista de versiones anteriores ni una acción para restaurarlas. Si el guardado falla, usá **Reintentar** cuando aparezca y conservá una copia del texto importante antes de cerrar.
+<a id="historial-de-versiones"></a>
+Además, Escritura guarda versiones anteriores del manuscrito: una cada diez minutos de trabajo, otra antes de recibir cambios de otra cuenta y otra antes de restaurar. Se conservan las 50 más recientes de cada manuscrito.
+
+1. Con el manuscrito abierto, pulsá **Historial de versiones** en la barra (el ícono del reloj).
+2. La lista muestra cada versión con su fecha y su motivo: **Guardado automático**, **Antes de recibir cambios de otra cuenta** o **Antes de restaurar otra versión**.
+3. Elegí una para leerla. La vista previa es de solo lectura.
+4. Si querés volver a ese texto, pulsá **Restaurar esta versión**. No se pierde nada: lo que tenías antes queda guardado como otra versión.
+
+Una restauración es un cambio más: si el manuscrito está sincronizado o compartido, llega a tus otros equipos y a la otra cuenta. Un manuscrito eliminado no se recupera desde el historial.
 
 ### 11.4. Consultar tus documentos y citar una fuente
 
@@ -647,19 +700,21 @@ La cita mantiene el vínculo con el documento y el pasaje. Si la fuente cambia, 
 
 ### 11.5. Usar notas, agente y exportación
 
-Las cinco pestañas del panel son **Corpus**, **Zotero**, **Notas**, **Agente** y **Exportar**. **Notas** permite localizar notas asociadas a tus documentos e insertarlas como texto o vínculo. **Agente** trabaja sobre una selección y se explica en el [capítulo 13](#capitulo-13-chat-y-agentes-de-entropia). **Exportar** configura el formato de las citas y la bibliografía; el botón **Descargar** está en la barra del manuscrito.
+Las seis pestañas del panel son **Corpus**, **Zotero**, **Obras**, **Notas**, **Agente** y **Exportar**. **Zotero** y **Obras** se explican en el [capítulo 12](#capitulo-12-zotero). **Notas** permite localizar notas asociadas a tus documentos e insertarlas como texto o vínculo. **Agente** trabaja sobre una selección y se explica en el [capítulo 13](#capitulo-13-chat-y-agentes-de-entropia). **Exportar** configura el formato de las citas y la bibliografía; el botón **Descargar** está en la barra del manuscrito.
 
 En **Exportar → Estadísticas** se muestran palabras, caracteres con y sin espacios, párrafos y notas al pie; las palabras del cuerpo no incluyen el contenido de esas notas. Para obtener el archivo, pulsá **Descargar** en la barra del manuscrito, elegí el formato y la ubicación de guardado.
 
-El panel llamado **Investigación** dentro de Escritura contiene estas cinco pestañas; no es la pantalla independiente **Investigar**.
+El panel llamado **Investigación** dentro de Escritura contiene estas seis pestañas; no es la pantalla independiente **Investigar**.
 
 ### 11.6. Eliminar un manuscrito
 
-Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción **Eliminar** y confirmá. El documento sale de la lista; no hay una vista de papelera ni un control para restaurarlo. Descargá una copia antes de eliminarlo.
+Para eliminar un manuscrito, volvé a la lista de Escritura, usá su acción **Eliminar** y confirmá. El documento sale de la lista con su historial de versiones; no hay una vista de papelera ni un control para restaurarlo. Descargá una copia antes de eliminarlo.
 
 ### 11.7. Sincronización del manuscrito
 
-Con la [sincronización](#capitulo-15-sincronizacion-y-nube) activa, los manuscritos viajan entre los equipos de tu cuenta junto con sus imágenes. Si editaste el mismo manuscrito en dos equipos antes de sincronizar, EntropIA conserva las dos versiones: la otra queda como un manuscrito aparte para que elijas qué texto mantener. Sin sincronización, el manuscrito se queda en este equipo; descargá una copia si necesitás moverlo.
+Con la [sincronización](#capitulo-15-sincronizacion-y-nube) activa, los manuscritos viajan entre los equipos de tu cuenta junto con sus imágenes. Si editaste el mismo manuscrito en dos equipos antes de sincronizar, EntropIA conserva las dos versiones: la otra queda como un manuscrito aparte, marcada **Copia por conflicto**, para que elijas qué texto mantener. Sin sincronización, el manuscrito se queda en este equipo; descargá una copia si necesitás moverlo.
+
+No hace falta ir a Configuración para sincronizar un manuscrito: el botón **Sincronizar ahora** (dos flechas en círculo) aparece en la lista de Escritura y en la barra del manuscrito. Gira mientras trabaja y, si llegó una versión más nueva y no escribiste nada mientras tanto, la muestra en el lugar. Con **Sincronización automática** activa, un manuscrito abierto envía lo guardado a los pocos segundos y busca cambios de la otra cuenta cada 30 segundos. Si la sincronización está apagada, el botón no aparece. La lista también avisa **Sincronización pendiente** cuando quedan cambios o imágenes por enviar o recibir.
 
 <a id="compartir-manuscrito"></a>
 ### 11.8. Compartir un manuscrito con otra cuenta
@@ -670,7 +725,7 @@ Para escribir de a dos, cada persona usa su propia cuenta de sincronización y c
 2. En **Compartir con otra cuenta**, escribí el mail de la cuenta de EntropIA de la otra persona y pulsá **Compartir**.
 3. La otra persona lo recibe en su próxima sincronización. En la lista de Escritura, los manuscritos compartidos llevan la marca **Compartido**.
 
-Desde ese momento, lo que escribe cada uno le llega al otro al sincronizar. Conviene no editar el mismo párrafo a la vez: si los dos cambian el manuscrito entre una sincronización y la siguiente, se conserva la otra versión como manuscrito aparte, igual que entre tus equipos. Mandar el manuscrito a la papelera lo manda para los dos.
+Desde ese momento, lo que escribe cada uno le llega al otro al sincronizar. Conviene no editar el mismo párrafo a la vez: si los dos cambian el manuscrito entre una sincronización y la siguiente, se conserva la otra versión como manuscrito aparte, igual que entre tus equipos. Antes de aplicar los cambios recibidos, el [historial de versiones](#historial-de-versiones) guarda lo que tenías. Mandar el manuscrito a la papelera lo manda para los dos.
 
 - **Quitar:** quien compartió puede sacar a una persona; esa persona conserva su copia, pero deja de recibir cambios.
 - **Dejar de recibir cambios:** quien recibió el manuscrito puede salirse por su cuenta, con el mismo resultado.
@@ -691,9 +746,9 @@ El primer envío llega como **borrador oculto**: nadie lo ve hasta que se public
 ---
 
 <a id="capitulo-12-zotero"></a>
-## Capítulo 12. Zotero
+## Capítulo 12. Zotero y Biblioteca
 
-Zotero aporta referencias bibliográficas al manuscrito. EntropIA consulta la biblioteca local de Zotero; no es un acceso a una cuenta web.
+Zotero aporta referencias bibliográficas al manuscrito. EntropIA consulta la biblioteca local de Zotero a través de su comunicación local; no necesita tu cuenta web de Zotero. Además, podés **sincronizar** una biblioteca de Zotero en EntropIA: sus obras pasan a la sección **Biblioteca**, con el texto de sus PDF, y se pueden buscar por significado, consultar en el Chat e Investigar y citar por página.
 
 ### 12.1. Conectar Zotero
 
@@ -707,21 +762,68 @@ Si la conexión no funciona, EntropIA indica si Zotero no permitió la conexión
 
 Si abriste Zotero después, cambiá a otra pestaña del panel y volvé a **Zotero** para comprobar la conexión. Puede quedar visible la copia local de metadatos aunque Zotero no responda. **Actualizar** actualiza esa copia, no reescribe automáticamente las citas ya insertadas.
 
+**Elegir la biblioteca.** El menú **Biblioteca** de la pestaña muestra tu biblioteca **Personal** y las que EntropIA ya conoce porque las usaste o sincronizaste. Para usar un grupo por primera vez, pulsá **Agregar biblioteca**, elegí **Tipo** (**Usuario** o **Grupo**), escribí su **ID** —el número que figura en la dirección del grupo en zotero.org— y pulsá **Agregar**. EntropIA comprueba que Zotero la tenga; una biblioteca que no pudo comprobarse se marca **(sin verificar)**.
+
 ### 12.2. Buscar y citar
 
 ![Detalle de Zotero dentro de Escritura: estado de conexión, Actualizar, búsqueda bibliográfica y acción Citar en cada referencia.](images/EntropIA-Zotero-detalle.webp)
 
-1. Situá el cursor donde querés insertar la cita. En **Buscar en tu biblioteca de Zotero**, escribí autor, título o año para filtrar la copia local.
-2. Enter consulta también el buscador de Zotero, que puede encontrar obras por su texto indexado o notas. La lista muestra hasta 200 referencias; afiná consultas amplias. Esto no importa ni abre sus PDF.
-3. Pulsá **Citar** junto a la obra: **la cita se inserta en ese momento**.
-4. En **Ajustar la cita**, completá **Localizador** y **Tipo de localizador**: página, capítulo, sección, párrafo, volumen, línea, folio o nota. Marcá **Ya nombré al autor en mi frase** si corresponde y revisá la vista previa. Podés añadir **Antes de la cita** y **Después de la cita**.
-5. Revisá **Así queda** y pulsá **Listo**. **Cancelar** descarta los ajustes pendientes, pero no elimina la cita ya insertada. Para modificarla más tarde, pulsá la cita en el manuscrito.
+1. Situá el cursor donde querés insertar la cita. En **Buscar en tu biblioteca de Zotero**, escribí autor, título o año para filtrar la copia local. La búsqueda no distingue mayúsculas ni acentos y, con **Incluir coincidencias aproximadas**, tolera errores de tipeo.
+2. Enter consulta también el buscador de Zotero, que puede encontrar obras por su texto indexado o notas. Si la biblioteca está [sincronizada en EntropIA](#biblioteca), también aparecen obras parecidas por significado, marcadas **Por significado**, y coincidencias dentro del texto, marcadas **Por contenido**. La lista muestra hasta 200 referencias; afiná consultas amplias. Esto no importa ni abre sus PDF.
+3. **Ver ficha** muestra los datos de la obra: autores, publicación, fecha, DOI, ISBN, resumen, colecciones, etiquetas y adjuntos.
+4. Pulsá **Citar** (el ícono de comillas) junto a la obra: **la cita se inserta en ese momento**.
+5. En **Ajustar la cita**, completá **Localizador** y **Tipo de localizador**: página, capítulo, sección, párrafo, volumen, línea, folio o nota. Marcá **Ya nombré al autor en mi frase** si corresponde y revisá la vista previa. Podés añadir **Antes de la cita** y **Después de la cita**.
+6. Revisá **Así queda** y pulsá **Listo**. **Cancelar** descarta los ajustes pendientes, pero no elimina la cita ya insertada. Para modificarla más tarde, pulsá la cita en el manuscrito.
 
-El formato de cita inicial es APA; no podés elegir otro estilo desde EntropIA ni administrar bibliotecas o grupos de Zotero. La referencia guarda una copia de sus datos para que siga en el manuscrito aunque Zotero no responda más adelante.
+El formato de cita es APA; no podés elegir otro estilo desde EntropIA. Las obras, colecciones y etiquetas se editan en Zotero, no en EntropIA. La referencia guarda una copia de sus datos para que siga en el manuscrito aunque Zotero no responda más adelante.
 
 ### 12.3. Incluir bibliografía
 
 En **Escritura → Exportar**, dejá activada **Incluir bibliografía** si querés que el archivo incluya la lista de obras de Zotero citadas. La bibliografía se construye con las referencias Zotero; no convierte las citas insertadas desde tus documentos en referencias de Zotero.
+
+<a id="biblioteca"></a>
+### 12.4. Sincronizar una biblioteca y recorrer la Biblioteca
+
+**Sincronizar** copia en EntropIA el catálogo de una biblioteca de Zotero y prepara sus obras para buscarlas. No cambia nada en Zotero.
+
+1. Abrí Zotero con la comunicación local habilitada ([12.1](#capitulo-12-zotero)).
+2. En **Escritura → Zotero**, elegí la biblioteca en el menú **Biblioteca** y pulsá **Sincronizar biblioteca**.
+3. La pestaña muestra el avance: **Fichas** y **Pasajes** procesados, la obra en curso con su página y el tiempo restante estimado. Al terminar, indica **Biblioteca al día** o cuántas obras y adjuntos nuevos se incorporaron. **Actualizar** solo renueva la lista de referencias; no reinicia una sincronización en curso.
+
+La sincronización trabaja en segundo plano y continúa al reabrir EntropIA; las obras que abriste hace poco se procesan primero. Para cada obra lee los PDF adjuntos y las capturas web guardadas: usa el texto digital del PDF cuando es legible y envía a **GLM-OCR** las páginas escaneadas o con texto ilegible. Después prepara las obras y sus pasajes para buscarlos por significado con el **modelo de embeddings de OpenRouter**. Si falta una de esas claves, el avance indica **en espera** y qué configurar; el resto sigue. Si Zotero deja de responder, la sincronización queda **En pausa** y se reintenta sola cuando contesta.
+
+> **Costos y privacidad.** En Lite, leer PDF escaneados de una biblioteca grande puede ser una cantidad importante de páginas pagas a GLM-OCR, y el texto de las obras se envía a OpenRouter para calcular sus embeddings. Probá primero con una biblioteca o un grupo pequeño.
+
+**Recorrer la Biblioteca.** El botón **Biblioteca** de la barra superior (el ícono de los libros) muestra las obras sincronizadas como tarjetas, igual que las colecciones:
+
+- **Elegir biblioteca** filtra por biblioteca de Zotero o muestra **Todas las bibliotecas**.
+- **Elegir orden** ordena por **Título** o **Recientes**.
+- **Buscar obras** busca por título, autor o significado.
+- Al pulsar una obra se abre con tres pestañas: **Original** (el PDF adjunto dentro de la aplicación o el texto de una captura web; **Elegir adjunto** cambia entre adjuntos), **Texto** (el texto extraído, página por página, con las tablas como tablas) y **Metadatos** (la ficha de Zotero y sus **Adjuntos**; **Ver en Original** abre uno).
+
+La búsqueda de la barra superior también muestra, debajo de tus documentos, un grupo **Biblioteca** con hasta cinco obras. La Biblioteca es de solo lectura y queda en este equipo: no viaja con la sincronización de EntropIA. Las obras se agregan, corrigen o borran en Zotero y llegan en la siguiente sincronización.
+
+### 12.5. Buscar pasajes y citar desde Obras
+
+La pestaña **Obras** del panel de Escritura busca en las bibliotecas sincronizadas sin salir del manuscrito.
+
+1. En **Buscar obras**, escribí un tema, autor u obra en **Consulta** y pulsá **Buscar**. También podés seleccionar un fragmento del manuscrito y pulsar **Buscar desde la selección**.
+2. Arriba aparecen las obras; debajo, en **Pasajes**, los fragmentos más cercanos agrupados por obra, con su página (`p. 12`) o, en capturas web, su párrafo (`párr. 4`).
+3. **Abrir pasaje** muestra el fragmento marcado dentro de su texto y permite abrir el original en esa página.
+4. Con el cursor en el lugar correcto, **Citar pasaje** inserta la cita de Zotero con la página ya cargada como localizador. Ajustala como cualquier cita ([12.2](#capitulo-12-zotero)).
+
+La búsqueda envía tu consulta al proveedor de embeddings para buscar por significado; **Buscar desde la selección** envía exactamente el texto seleccionado, solo cuando lo pedís. Si no hay pasajes, el aviso explica por qué: ninguna biblioteca sincronizada, indexado sin terminar o proveedor de embeddings no disponible.
+
+<a id="reprocesar-texto"></a>
+### 12.6. Reprocesar texto dañado de la Biblioteca
+
+Algunos PDF traen un texto digital que parece completo pero es ilegible, o se procesaron con una versión anterior que no lo detectaba. **Reprocesar texto**, en la Biblioteca y en el encabezado de una obra con PDF, busca esos casos y los vuelve a leer.
+
+1. Pulsá **Reprocesar texto**. EntropIA revisa los adjuntos (**Buscando obras con texto dañado…**).
+2. Leé el resumen: adjuntos y páginas afectadas, **Páginas para GLM-OCR**, páginas que se corrigen sin OCR, OCR que se reutiliza y el **Costo estimado** en dólares. **No se encolan** lista los adjuntos que no se pueden leer o ya están en proceso.
+3. Pulsá **Reprocesar (≈ USD …)** para encolarlos o **Cancelar**.
+
+El costo es una estimación (supone unas 3000 unidades de texto por página); el precio real lo cobra el proveedor. El avance, la pausa y la cancelación están en **Configuración → Lotes**.
 
 ---
 
@@ -732,8 +834,8 @@ La interfaz tiene tres ayudas relacionadas, pero distintas:
 
 | Herramienta | Cómo llegar | Resultado y control |
 |---|---|---|
-| **Chat de investigación** | Botón superior del mismo nombre. | Conversación; puede responder con fuentes del corpus o sin recuperación documental. No tiene selector de colecciones ni navegación web. |
-| **Investigar** | **Agente de investigación**, o **Profundizar con el Agente** desde Chat. | Investigación por etapas e informe. Corpus acotado a colecciones, con consultas bibliográficas del plan a Zotero/OpenAlex. |
+| **Chat de investigación** | Botón superior del mismo nombre. | Conversación; puede responder con fuentes del corpus, de la Biblioteca o sin recuperación documental. No tiene selector de colecciones ni navegación web. |
+| **Investigar** | **Agente de investigación**, o **Profundizar con el Agente** desde Chat. | Investigación por etapas e informe. Corpus acotado a colecciones, Biblioteca o ambos, con consultas bibliográficas del plan a Zotero/OpenAlex. |
 | **Agente de Escritura** | Abrir manuscrito → panel **Agente**. | Propuesta sobre una selección. No modifica el manuscrito hasta **Reemplazar** o **Insertar debajo**. |
 
 Ninguna de estas herramientas sustituye la comprobación de la fuente.
@@ -743,12 +845,13 @@ Ninguna de estas herramientas sustituye la comprobación de la fuente.
 ![Captura del Chat de investigación: pregunta, respuesta con referencias numeradas, Fuentes, historial de Conversaciones y acceso Profundizar con el Agente.](images/EntropIA-Chat-RAG.webp)
 
 1. Abrí **Chat de investigación** desde la barra superior.
-2. Escribí una pregunta de hasta 4000 caracteres sobre documentos cuyo texto ya se reconoció y preparó para la búsqueda.
-3. Pulsá **Enviar**. Enter envía; Shift+Enter agrega una línea.
-4. Revisá **Fuentes** debajo de la respuesta, cuando aparezca, para comprobar títulos, colecciones y fragmentos citados.
-5. Pulsá una fuente para volver al documento de origen.
+2. En **Buscar en**, elegí **Corpus** (tus colecciones, la opción inicial), **Biblioteca** (las obras de Zotero sincronizadas, ver [12.4](#biblioteca)) o **Ambos**. Con Biblioteca, el menú **Bibliotecas de Zotero** permite elegir cuáles usar; debajo se indica cuántas obras y pasajes tiene cada una.
+3. Escribí una pregunta de hasta 4000 caracteres sobre documentos cuyo texto ya se reconoció y preparó para la búsqueda.
+4. Pulsá **Enviar**. Enter envía; Shift+Enter agrega una línea.
+5. Revisá **Fuentes** debajo de la respuesta, cuando aparezca, para comprobar títulos, colecciones y fragmentos citados. Cada fuente indica si viene del corpus o de la Biblioteca; las de la Biblioteca nombran la obra, la biblioteca y la página o párrafo.
+6. Pulsá una fuente del corpus para abrir el documento con el fragmento citado marcado; si es un audio, el reproductor se ubica en ese tramo de la transcripción. Una fuente de la Biblioteca abre **Abrir pasaje**, con el texto citado resaltado y **Abrir original** para ver el PDF en esa página.
 
-El Chat no permite elegir una colección ni navega la Web. En Lite utiliza OpenRouter: puede enviar la pregunta, el historial pertinente y los pasajes recuperados. Una respuesta conversacional directa puede no tener fuentes. Si una consulta documental no encuentra pasajes, aparece **No encontré contenido relevante en la base de conocimiento para esa pregunta**; revisá el texto procesado y reformulá.
+La elección de **Buscar en** dura la sesión. El Chat no permite elegir una colección ni navega la Web. Si la Biblioteca no tiene bibliotecas sincronizadas o su indexado no terminó, el Chat lo avisa y responde sin ella. En Lite utiliza OpenRouter —con el respaldo de Vercel si lo configuraste—: puede enviar la pregunta, el historial pertinente y los pasajes recuperados. Una respuesta conversacional directa puede no tener fuentes. Si una consulta documental no encuentra pasajes, aparece **No encontré contenido relevante en la base de conocimiento para esa pregunta**; revisá el texto procesado y reformulá.
 
 ### 13.2. Conversaciones e historial
 
@@ -769,7 +872,7 @@ Con un manuscrito abierto, entrá en **Escritura → Agente**, seleccioná un pa
 
 Las acciones de revisión trabajan sobre la selección. **Evidencia**, **Contraevidencia**, **Contraejemplos** y la acción llamada **Notas** añaden pasajes relacionados del corpus. **El botón Notas del agente no recupera tus notas personales en el flujo actual**; para consultarlas e insertarlas usá la pestaña **Notas** del panel de Escritura.
 
-En Lite se envía a OpenRouter la selección y, cuando corresponde, los pasajes recuperados. No se envía automáticamente todo el manuscrito, pero si lo seleccionás entero, ese es el texto enviado. **Esto es lo que se envió** muestra el contexto registrado después de la solicitud; no es una autorización previa.
+En Lite se envía a OpenRouter la selección y, cuando corresponde, los pasajes recuperados; el respaldo de Vercel no se aplica al agente. No se envía automáticamente todo el manuscrito, pero si lo seleccionás entero, ese es el texto enviado. **Esto es lo que se envió** muestra el contexto registrado después de la solicitud; no es una autorización previa.
 
 En **Sugerencias para revisar**, leé **Texto original**, **Texto propuesto**, **Por qué** y **Sobre qué se apoya**. Vos decidís qué hacer:
 
@@ -784,12 +887,12 @@ El agente no modifica el manuscrito automáticamente. Si el pasaje cambió, desa
 <a id="capitulo-14-procesamiento-por-lotes"></a>
 ## Capítulo 14. Procesamiento por lotes
 
-Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto, **Embeddings** para preparar materiales para compararlos por semejanza, **Entidades** para encontrar personas, lugares y organizaciones, y **Tripletes** para extraer relaciones del tipo quién hizo qué. No incluyen transcripción de audio STT ni generan un resumen conjunto.
+Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto, **Embeddings** para preparar materiales para compararlos por semejanza, **Entidades** para encontrar personas, lugares y organizaciones, **Tripletes** para extraer relaciones del tipo quién hizo qué y un [esquema propio](#esquema-propio) para armar una tabla con los datos que vos definas. No incluyen transcripción de audio STT ni generan un resumen conjunto.
 
 ![Seleccionar colecciones, revisar tareas y seguir el avance del lote.](images/06-lotes-progreso.svg)
 
 1. Abrí **Configuración → Lotes** y seleccioná una o varias colecciones. **Seleccionar todas** marca todas las disponibles.
-2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, o varias a la vez. Después, pulsá **Analizar selección**.
+2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, o varias a la vez. Después, pulsá **Analizar selección**. Si marcaste Embeddings, Entidades, Tripletes o un esquema y todavía no guardaste la clave de OpenRouter, el botón queda deshabilitado y, al pasar el cursor, indica que primero hay que cargarla en **Configuración → APIs remotas → OpenRouter**.
 3. Revisá qué documentos y tareas incluye la propuesta. Si el alcance no es correcto, descartala.
 4. Cuando termine el análisis, pulsá **Iniciar lote**.
 5. Seguí el estado en la pestaña o desde el indicador de lotes de la barra inferior.
@@ -800,11 +903,14 @@ No hace falta repetir tareas completas. Los embeddings, las entidades y los trip
 - **Cancelar:** pide confirmación; conserva el trabajo ya confirmado, no deshace el OCR ni los embeddings terminados.
 - **Reintentar fallidos:** repetir las tareas fallidas del lote; **Reintentar** actúa sobre una tarea.
 - **Ver detalle:** consultar intentos, mensaje o código de error y filtrar por estado.
+- **Prioridad:** en el detalle de un lote que no terminó, elegí **Fondo**, **Alta** o **Interactiva** para decidir qué se procesa antes cuando hay varios lotes.
 - **Cargar más:** consultar registros anteriores.
 
 Un OCR terminado sin texto puede contar como completo. Abrí esa página y revisá el resultado; crear otro lote no garantiza que vuelva a procesarla.
 
-En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+Lo que pedís a mano en un documento —por ejemplo, pulsar **OCRH**— pasa adelante de los lotes en segundo plano. En esta pestaña también aparecen los procesos de la [Biblioteca](#biblioteca): la sincronización de una biblioteca de Zotero y el [reprocesamiento de texto](#reprocesar-texto), con su avance, pausa y cancelación.
+
+En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. Si configuraste el respaldo de Vercel, las entidades, tripletes y esquemas usan Vercel cuando OpenRouter falla; los embeddings no. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
 
 
 <a id="esquema-propio"></a>
@@ -813,7 +919,7 @@ En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o u
 Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
 
 1. En **Configuración → Lotes**, debajo de las operaciones, buscá **Esquema propio** y pulsá **Nuevo esquema**.
-2. Poné un nombre al esquema y, si querés, un **Modelo** de OpenRouter solo para este esquema (vacío usa el general de **Model Params**). Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
+2. Poné un nombre al esquema y, si querés, elegí en **Modelo** uno de la lista de OpenRouter solo para este esquema; **El modelo general** usa el de **Model Params**. La lista se carga con la clave de OpenRouter guardada; sin ella, el campo lo indica y ofrece **Ir a Configuración**. Agregá un **Campo** por cada dato. En **Qué es** explicá con tus palabras qué tiene que buscar el modelo, por ejemplo «nombre de la embarcación».
 3. Marcá **Puede repetirse** en los campos que pueden tener varios valores en un mismo caso: un barco con muchas cargas distintas.
 4. Pulsá **Guardar esquema**. Queda elegido en **Esquema propio**.
 5. Seleccioná las colecciones y pulsá **Analizar selección**. La propuesta dice cuántos documentos pasan por el esquema. Después, **Iniciar lote**.
@@ -851,9 +957,9 @@ El indicador inferior puede mostrar que la sincronización está al día, que ha
 
 **Actualizar conflictos** vuelve a consultar los avisos; los detalles se pueden revisar en **Logs**. **Marcar vistos** reconoce el aviso: no permite elegir una versión ni resuelve manualmente la diferencia.
 
-**Re-verificar archivos** encola su reenvío para comprobarlos; no crea una copia de respaldo. **Borrar mis datos del servidor** requiere la contraseña y confirmar **Borrar todo**. Elimina los datos remotos, pero conserva los de este equipo. No lo uses como prueba para solucionar un error.
+**Re-verificar archivos** encola su reenvío para comprobarlos; no crea una copia de respaldo (para eso están las [copias de seguridad](#copias-de-seguridad)). **Borrar mis datos del servidor** requiere la contraseña y confirmar **Borrar todo**. Elimina los datos remotos, pero conserva los de este equipo. No lo uses como prueba para solucionar un error.
 
-> **Importante:** los manuscritos de **Escritura** también se sincronizan, con sus imágenes, y se pueden compartir con otra cuenta ([11.8](#compartir-manuscrito)). Las notas asociadas a documentos pueden sincronizarse cuando configurás la cuenta.
+> **Qué viaja y qué no.** Se sincronizan las colecciones, documentos y sus archivos, textos, notas, tópicos, anotaciones, entidades, relaciones, resúmenes, embeddings y conversaciones del Chat. Los manuscritos de **Escritura** también se sincronizan, con sus imágenes, y se pueden compartir con otra cuenta ([11.8](#compartir-manuscrito)); las investigaciones terminadas o fallidas viajan con su informe ([10.4](#capitulo-10-investigacion)). **No** se sincronizan la [Biblioteca](#biblioteca) (cada equipo la sincroniza desde su Zotero), los esquemas propios y sus tablas, los flujos guardados, las colecciones de ejemplo, las claves de los proveedores ni las preferencias de Apariencia.
 
 ![Decidir, iniciar sesión, configurar y revisar el estado de sincronización.](images/14-sincronizacion-opcional.svg)
 
@@ -877,8 +983,9 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. En Lit
 | **Model Params** | Ajustar el modelo y la forma en que prepara cada respuesta. | Dejá los valores predeterminados. |
 | **RAG Params** | Elegir qué pasajes de tus documentos consulta el Chat, cuántos usa y cuánto de la conversación previa considera. | Dejá los valores predeterminados hasta tener una necesidad concreta. |
 | **Sincronización** | Conectar la cuenta y compartir datos entre equipos. | No la actives si no necesitás usar más de un equipo. |
-| **Lotes** | Reconocer texto y preparar varios documentos para compararlos. | Ejecutá primero una prueba con una colección pequeña. |
+| **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
+| **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |
 | **Apariencia** | Cambiar tema, contraste, zoom de interfaz, tipografía e idioma. | Ajustá la legibilidad antes de comenzar una sesión larga. |
 
 La pestaña **Dependencias de IA** no aparece en Lite. Esta variante no permite elegir los motores locales incluidos en Pro.
@@ -896,13 +1003,21 @@ En **APIs remotas**:
 |---|---|
 | **GLM-OCR / z.ai** | OCRH de imágenes y PDF compatibles. |
 | **AssemblyAI** | Transcribe audio y permite dictar con el micrófono. El selector **Identificación de hablantes en audio de colección** controla la separación de intervenciones en STT; el dictado no usa esa identificación. |
-| **OpenRouter** | Corrección, resúmenes, Chat, Investigación, agente de Escritura, entidades, relaciones y embeddings. Tiene campos separados para **Modelo generativo** y **Modelo de embeddings**. |
+| **OpenRouter** | Corrección, resúmenes, Chat, Investigación, agente de Escritura, entidades, relaciones, esquemas propios, embeddings y búsqueda por significado en la Biblioteca. Tiene campos separados para **Modelo generativo** y **Modelo de embeddings**. |
+| **Respaldo: Vercel AI Gateway** | Opcional. Si OpenRouter no responde, está saturado o se quedó sin crédito, los pedidos de texto van a Vercel con el mismo modelo. |
+| **Zotero** | Opcional. Guarda una clave de la Web API de Zotero. Hoy solo la usa una función experimental que no viene activada en Lite; **no** hace falta para citar ni para la Biblioteca, que usan el Zotero de este equipo. |
 
 Una clave válida no garantiza que el servicio esté funcionando ni que tu cuenta permita más usos en ese momento. Antes de enviar material sensible, revisá cómo trata los datos el servicio. EntropIA envía el contenido necesario para reconocer, transcribir o generar una respuesta.
 
 **Obtener API key** abre el sitio del proveedor; la cuenta y su facturación se gestionan allí. Los campos permiten mostrar u ocultar la clave y señalan cuando hay una guardada en el almacén del sistema. No la incluyas en capturas ni mensajes de soporte.
 
 En OpenRouter, conservá un identificador válido para **Modelo generativo** y otro compatible para **Modelo de embeddings**. La interfaz recomienda `baai/bge-m3` para embeddings salvo que tu cuenta use otro identificador compatible. Un modelo que aparece en una captura es un ejemplo de esa instalación, no una recomendación ni una garantía de disponibilidad.
+
+**Respaldo de Vercel.** En la tarjeta **Respaldo: Vercel AI Gateway**, el enlace lleva a la página de claves de Vercel. Pegá la **Clave de Vercel AI Gateway**, pulsá **Guardar** y después **Probar conexión**: **Conexión lista: Vercel contestó** confirma que funciona. Vercel no atiende pedidos hasta que la cuenta tenga una tarjeta de crédito cargada; la prueba lo avisa. El respaldo cubre corrección, resúmenes, entidades, tripletes, esquemas propios y el Chat. No cubre **Investigar**, el **Agente de Escritura**, los embeddings ni el reordenamiento de pasajes, que siguen dependiendo de OpenRouter. **Borrar** quita la clave.
+
+**Clave de Zotero.** En la tarjeta **Zotero**, pegá la **API key de Zotero** creada en zotero.org y pulsá **Verificar clave**: se muestran la cuenta y los permisos sobre la biblioteca personal y los grupos. Los cambios hechos por la Web API llegan a tu Zotero local cuando Zotero sincroniza.
+
+**Quitar una clave.** Junto a cada clave guardada (OpenRouter, AssemblyAI, GLM-OCR y Zotero) hay un botón **Quitar clave de …**. Pide confirmación, borra la clave del almacén del sistema y deja sin configurar las funciones que la usan hasta que cargues otra.
 
 **Probar conexión no guarda la clave.** Después de **Guardar cambios**, el campo puede quedar vacío mientras el estado indica que hay una credencial almacenada; eso no significa que se haya borrado. Con el campo vacío, la prueba puede usar la clave guardada. Una conexión correcta tampoco garantiza cuota ni disponibilidad de todos los modelos. La prueba de GLM-OCR hace una solicitud real al proveedor sobre una imagen de prueba.
 
@@ -954,7 +1069,7 @@ El botón **Base de datos** abre **Consulta DB**, una página de solo lectura pa
 
 La descarga respeta el filtro y el orden y contiene **todas las filas coincidentes, no solo la página visible**. Para descargar toda la tabla, limpiá **Filtro simple** antes de exportar.
 
-No hace falta usar esta herramienta para importar, reconocer texto o escribir. Es una consulta avanzada, no un editor de base de datos ni un mecanismo de restauración.
+No hace falta usar esta herramienta para importar, reconocer texto o escribir. Es una consulta avanzada, no un editor de base de datos ni un mecanismo de restauración: para eso están las [copias de seguridad](#copias-de-seguridad).
 
 La barra inferior también muestra los lotes, la sincronización y, cuando corresponde, la campana de notificaciones. Un aviso de actualización puede ofrecer **Ver actualización**, que abre la ficha de Microsoft Store; no instala la actualización.
 El pie también incluye enlaces a GitHub y HLab.
@@ -966,9 +1081,9 @@ En **Configuración → Logs**, **Refrescar** actualiza la vista y **Copiar** co
 ---
 
 <a id="capitulo-17-exportar-y-descargar"></a>
-## Capítulo 17. Exportar y descargar
+## Capítulo 17. Exportar, descargar y respaldar
 
-Elegí el formato según lo que quieras conservar. Los botones de exportación no son equivalentes y no todos incluyen archivos originales.
+Elegí el formato según lo que quieras conservar. Los botones de exportación no son equivalentes y no todos incluyen archivos originales. Para guardar **todo** —base de datos y archivos— usá las [copias de seguridad](#copias-de-seguridad).
 
 | Desde | Acción/formato | Qué guardar o tener en cuenta |
 |---|---|---|
@@ -980,6 +1095,8 @@ Elegí el formato según lo que quieras conservar. Los botones de exportación n
 | Escritura → Exportar | Elegir cómo aparecen las citas y activar **Incluir bibliografía**. | Son preferencias de descarga, no un botón para descargar. La bibliografía incluye las obras de Zotero citadas. |
 | Análisis textual de colección | Descargar gráfico como PNG. | Guarda el gráfico de frecuencias, no los documentos originales. |
 | Consulta DB | Descargar JSON o CSV. | Incluye todas las filas que cumplen el filtro, en el orden elegido; no solo la página visible ni una copia de seguridad completa. |
+| Lotes → Esquema propio | **Descargar CSV** desde **Ver resultados**. | Una fila por caso extraído, con su documento; los valores repetidos van separados por punto y coma. |
+| Configuración → Copias | **Hacer una copia ahora** o copia automática. | Carpeta con la base de datos y todos los archivos de EntropIA. Es la única opción que permite recuperar todo. |
 
 ### 17.1. Preferencias de citas en Escritura
 
@@ -994,9 +1111,33 @@ También podés activar **Incluir bibliografía** para las obras de Zotero citad
 
 ### 17.2. Diferencia entre exportar y respaldar
 
-El archivo JSON de la colección, el CSV de una tabla y los documentos descargados no guardan todos los archivos y datos necesarios para recuperar EntropIA. Conservá los originales y los manuscritos exportados en una copia de seguridad de tu organización. La sincronización en la nube tampoco reemplaza esa copia.
+El archivo JSON de la colección, el CSV de una tabla y los documentos descargados no guardan todos los archivos y datos necesarios para recuperar EntropIA: sirven para leer o compartir resultados. Para poder recuperar el trabajo completo, usá las [copias de seguridad](#copias-de-seguridad). La sincronización en la nube tampoco reemplaza esa copia: si borrás algo, el borrado también se sincroniza.
 
 El JSON de colección puede incluir notas, tópicos, texto OCR y transcripciones, metadatos, anotaciones, layout, entidades, relaciones y resultados de IA. Las rutas o referencias a los archivos no son los PDF, imágenes ni audios. Revisá su contenido antes de compartirlo: puede contener información sensible del corpus.
+
+<a id="copias-de-seguridad"></a>
+### 17.3. Copias de seguridad
+
+Una copia guarda la base de datos y todos los archivos de EntropIA (PDF, imágenes, audios, imágenes de los manuscritos, investigaciones) en una carpeta nueva llamada `entropia-backup-<fecha y hora>`. Se configura en **Configuración → Copias**:
+
+1. En **Carpeta de las copias**, pulsá **Elegir carpeta**. Conviene que esté en otro disco, un pendrive o una carpeta que tu organización respalde. No puede estar dentro de la carpeta de datos de EntropIA.
+2. En **Copia automática**, elegí **Nunca**, **Todos los días** o **Una vez por semana**.
+3. En **Copias a guardar**, indicá cuántas conservar (entre 1 y 100; 5 de forma predeterminada). Las más viejas se borran solas.
+4. Para hacer una en el momento, pulsá **Hacer una copia ahora**. Al terminar se muestra **Copia guardada en** y la ruta; **Última copia** indica la fecha de la más reciente.
+
+Las copias automáticas se hacen mientras EntropIA está abierta: la aplicación comprueba cada hora si corresponde una. Si la carpeta no está disponible —por ejemplo, un disco desconectado—, la copia falla y se reintenta en la próxima comprobación. Una copia interrumpida no cuenta como copia: queda descartada.
+
+**Qué no incluye.** Las claves de los proveedores y la sesión de sincronización, que viven en el almacén de credenciales del sistema; tus archivos originales fuera de EntropIA; y, en Pro, los modelos de IA, que se descargan de nuevo.
+
+**Recuperar una copia.** No hay un botón de restauración: se copia de vuelta a mano.
+
+1. Cerrá EntropIA.
+2. Abrí la carpeta de datos: en Windows, `%APPDATA%\com.entropia.shared`; en macOS, `~/Library/Application Support/com.entropia.shared`; en Linux, `~/.local/share/com.entropia.shared`. Con la versión de Microsoft Store, si no la encontrás ahí, buscala en `%LOCALAPPDATA%\Packages\CONICET.EntropIALite_…\LocalCache\Roaming\com.entropia.shared`: Windows guarda allí los datos de las aplicaciones de la Store.
+3. Mové su contenido actual a otro lugar, por si lo necesitás.
+4. Copiá dentro todo el contenido de la carpeta `entropia-backup-…` elegida.
+5. Abrí EntropIA y comprobá tus colecciones. Volvé a cargar las claves si cambiaste de equipo.
+
+Si usás sincronización, al volver a abrir EntropIA la copia recuperada se sincroniza con tu cuenta. Pedí ayuda antes de recuperar una copia vieja en un equipo sincronizado.
 
 ---
 
@@ -1081,6 +1222,22 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 5. Revisá especialmente las afirmaciones generales: ni la cantidad de documentos importados ni la presencia de una cita garantizan que toda la evidencia esté cubierta.
 6. Exportá el informe revisado. Para desarrollar un manuscrito, trabajá en **Escritura** y verificá allí las citas; no confundas la descarga del informe con el guardado de un manuscrito.
 
+### 18.9. Quiero traer un libro digitalizado de Internet Archive
+
+1. Abrí la colección de destino y pulsá **Importar desde Internet Archive** (o **Inicio → Importar → Desde Internet Archive**).
+2. En **Buscar**, escribí el título o el autor y pulsá **Buscar en el archivo**. Si ya tenés la dirección, usá **Enlace**.
+3. Pulsá **Ver archivos**, marcá el PDF que te interesa —el **original** suele ser el escaneo completo— y pulsá **Continuar**.
+4. Confirmá el **Destino**, pulsá **Preparar importación**, revisá duplicados y tamaño, y pulsá **Iniciar importación**.
+5. Cuando termine, abrí el documento y procesá una página con **OCRH** antes de lanzar un lote para todo el libro.
+
+### 18.10. Quiero buscar un tema en mi biblioteca de Zotero y citar la página
+
+1. Abrí Zotero. En **Escritura → Zotero**, elegí la biblioteca y pulsá **Sincronizar biblioteca**. Esperá a que el avance termine o, al menos, avance bastante.
+2. Con un manuscrito abierto, pasá a la pestaña **Obras** y buscá el tema en **Consulta**.
+3. En **Pasajes**, usá **Abrir pasaje** para leer el fragmento en su contexto y comprobar la página.
+4. Ubicá el cursor y pulsá **Citar pasaje**: la cita de Zotero se inserta con esa página. Revisala en **Ajustar la cita**.
+5. Para preguntar sobre esas obras, abrí el **Chat de investigación** con **Buscar en → Biblioteca** o **Ambos**.
+
 ---
 
 <a id="capitulo-19-que-hago-si"></a>
@@ -1103,7 +1260,7 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | No puedo sincronizar | Revisá el estado inferior, la conexión y la sesión. En **Configuración → Sincronización** y **Logs** podés leer más detalles; no borres datos como prueba. |
 | Zotero no aparece en Escritura | Abrí Zotero y habilitá **Permitir que otras aplicaciones se comuniquen con Zotero** en **Editar → Configuración → Avanzado**. Después, volvé a **Escritura → Zotero** y usá **Actualizar** si está disponible. |
 | Escritura no guardó un cambio | Esperá el estado **Guardado**. Si aparece **Error de guardado**, pulsá **Reintentar** si está disponible y copiá el texto importante antes de cerrar. |
-| No puedo restaurar una versión de Escritura | EntropIA muestra un número de revisión, pero no permite abrir versiones anteriores ni restaurarlas. Exportá el texto mientras esté abierto. |
+| Quiero volver a una versión anterior de un manuscrito | Pulsá **Historial de versiones** en la barra del manuscrito, elegí la versión y **Restaurar esta versión**. Lo que tenías queda guardado como otra versión. Ver [11.3](#historial-de-versiones). |
 | No puedo abrir otra pestaña | El máximo es 4. Cerrá una con **Cerrar pestaña** y volvé a pulsar **Abrir nueva pestaña**. |
 | No veo el explorador en vista dividida | No queda fijo a la izquierda. En el panel activo, pulsá **Abrir explorador de documentos**. Esc lo cierra. |
 | Escritura aparece en otra pestaña | Solo puede estar abierta en una. Elegí esa pestaña o pulsá **Ir a esa pestaña**. |
@@ -1113,12 +1270,23 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | Pulsé Recuperar y se abrió el Chat | **Recuperar** inicia una consulta nueva sobre el corpus; no recupera una copia de seguridad ni archivos eliminados. |
 | La investigación no cubre todas mis fuentes | Revisá el alcance y la tabla de cobertura del informe. Un documento sin fragmentos no aporta evidencia textual; procesalo antes de repetir la investigación. |
 | La imagen del manual se ve pequeña | Pulsala para abrirla a tamaño completo en otra pestaña. El texto de cada capítulo explica también los pasos sin depender de la captura. |
-| Vista dividida está deshabilitada o desapareció un lado | Ampliá la ventana. Cada panel necesita al menos 480 píxeles; con poco ancho solo se muestra la pestaña activa. |
+| Vista dividida está deshabilitada o desapareció un lado | Ampliá la ventana. Cada panel necesita al menos 640 píxeles (unos 1290 en total); con poco ancho solo se muestra la pestaña activa. |
 | No encuentro Descargar en una transcripción | Ese menú solo existe para OCR de imágenes/PDF en **Texto extraído** sobre el visor. Copiá manualmente el campo de transcripción. |
 | OCRC cambió mi texto sin preguntarme | Aplica la corrección al terminar. Revisala y, si hace falta, usá **Texto extraído → Restaurar OCR original**, conservando antes los cambios manuales. |
 | Una búsqueda devuelve otra grafía | Puede incluir variantes aproximadas. Abrí el documento y verificá el término; no es una prueba de equivalencia semántica. |
 | Me registré en la nube pero no sincroniza | Después de **Registrar cuenta**, tenés que **Iniciar sesión**. |
 | Guardar cambios falla después de pegar una clave | Revisá el mensaje y la pestaña señalada; también se validan Prompts, Model Params y RAG Params. |
+| **Analizar selección** está deshabilitado en Lotes | Elegí al menos una colección y una operación. Si marcaste Embeddings, Entidades, Tripletes o un esquema, primero guardá la clave de OpenRouter. |
+| La lista de modelos está vacía o pide ir a Configuración | La lista se carga con la clave de OpenRouter guardada. Cargala en **Configuración → APIs remotas** y volvé a abrir la pantalla. |
+| OpenRouter se quedó sin crédito o no responde | Revisá tu cuenta de OpenRouter. Si configuraste el respaldo de **Vercel AI Gateway**, la corrección, los resúmenes, entidades, tripletes, esquemas y el Chat siguen por Vercel; Investigar, el Agente de Escritura y los embeddings no. |
+| Un PDF de Internet Archive dice restringido, cifrado o privado | Internet Archive no permite descargarlo. Buscá otra edición o un archivo derivado que sí esté disponible. |
+| Se cortó una importación de Internet Archive | Abrí de nuevo el diálogo de Internet Archive y usá **Importaciones en curso → Retomar importación**. |
+| La Biblioteca está vacía | Todavía no sincronizaste ninguna biblioteca. Abrí Zotero y, en **Escritura → Zotero**, pulsá **Sincronizar biblioteca**. |
+| La sincronización de la Biblioteca está en pausa o en espera | **En pausa:** Zotero no responde o su comunicación local está apagada; se reintenta sola. **En espera:** falta configurar OpenRouter o GLM-OCR; el mensaje indica cuál. |
+| El Chat dice que no buscó en la Biblioteca | No hay bibliotecas elegidas sincronizadas, el indexado no terminó o no se pudo calcular la consulta con el proveedor de embeddings. Leé el aviso y revisá **Configuración → APIs remotas → OpenRouter**. |
+| **Relaciones 3D** no muestra nada | La colección todavía no tiene tripletas. Extraelas con **TRIPLET** o con un lote de **Tripletes**. |
+| La copia de seguridad falla | Comprobá que la carpeta elegida exista y tenga espacio (por ejemplo, que el disco esté conectado). Si hay otra copia en curso, esperá a que termine. |
+| Al cerrar aparece **Optimizando el archivo…** | EntropIA recupera espacio en disco de su base. No apagues el equipo: la ventana se cierra sola al terminar. |
 
 Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje exacto, el formato del archivo y la versión que aparece en la barra inferior. No compartas claves de proveedor ni documentos sensibles en capturas.
 
@@ -1135,9 +1303,13 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 >
 > Probá OCR en una página antes de procesar un lote grande. Corregí errores claros y conservá la imagen o PDF para revisar el resultado.
 
+> **Consejo**
+>
+> Activá una [copia de seguridad](#copias-de-seguridad) automática en una carpeta de otro disco. Es la única forma de recuperar colecciones, archivos y manuscritos después de un borrado o una falla del equipo.
+
 > **Importante**
 >
-> En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.
+> En Lite, OCR, transcripción, Chat y muchas acciones de IA envían contenido al proveedor externo que realiza la tarea. Sincronizar una biblioteca de Zotero en la Biblioteca también envía el texto de sus obras a OpenRouter y las páginas escaneadas a GLM-OCR. La sincronización envía datos al servicio de nube solo cuando configurás una cuenta y la activás. Revisá las condiciones del proveedor antes de usar material confidencial.
 
 > **Importante**
 >
@@ -1145,11 +1317,11 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 
 > **Atención**
 >
-> Eliminar una colección o un documento puede borrar sus datos y archivos asociados. Si eliminás una página o archivo citado, el pasaje guardado puede dejar de abrir la fuente. El archivo JSON de la colección no incluye los documentos originales ni permite reconstruirla. Conservá esos originales y exportá los manuscritos que necesites.
+> Eliminar una colección o un documento puede borrar sus datos y archivos asociados. Si eliminás una página o archivo citado, el pasaje guardado puede dejar de abrir la fuente. El archivo JSON de la colección no incluye los documentos originales ni permite reconstruirla; solo una copia de seguridad hecha antes del borrado permite recuperarla.
 
 > **Atención**
 >
-> Los documentos creados en **Escritura** se sincronizan entre dispositivos solo si la sincronización está activa. Sin ella, guardá una copia en una carpeta segura antes de cambiar de equipo.
+> Los documentos creados en **Escritura** se sincronizan entre dispositivos solo si la sincronización está activa. Sin ella, guardá una copia en una carpeta segura antes de cambiar de equipo. El historial de versiones protege contra cambios no deseados, no contra la eliminación del manuscrito.
 
 ---
 
@@ -1160,24 +1332,34 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Búsqueda FTS:** búsqueda léxica de términos, con posibles variantes ortográficas próximas; no busca por significado.
 - **Búsqueda aproximada:** amplía coincidencias a grafías parecidas; no demuestra que las palabras sean equivalentes.
 - **Texto nativo de PDF:** texto digital que el archivo ya contiene, distinto del reconocimiento de una imagen escaneada.
-- **Lote:** conjunto de tareas OCR o de embeddings con estado, avance y recuperación.
+- **Lote:** conjunto de tareas de OCR, embeddings, entidades, tripletes o un esquema propio sobre varias colecciones, con estado, avance, prioridad y recuperación.
+- **Biblioteca:** sección con las obras de las bibliotecas de Zotero sincronizadas en EntropIA. Es de solo lectura y no viaja con la sincronización.
+- **Copia de seguridad:** carpeta `entropia-backup-…` con la base de datos y los archivos de EntropIA; permite recuperar todo copiándola de vuelta.
 - **Colección:** grupo de documentos reunidos para un tema o proyecto.
 - **Corpus:** conjunto de documentos y colecciones que reunís para trabajar.
 - **Embedding:** forma de representar el texto para sugerir páginas o documentos que tratan temas parecidos.
 - **Entidad:** nombre o dato identificado en un texto, como una persona, un lugar o una fecha.
+- **Esquema propio:** lista de campos que definís para que un lote arme una tabla con los datos de cada documento.
+- **Flujo guardado:** combinación de operaciones de lote guardada con un nombre.
+- **Historial de versiones:** estados anteriores de un manuscrito que Escritura conserva para leerlos o restaurarlos.
+- **Internet Archive:** biblioteca digital pública (archive.org) desde la que se pueden importar PDF.
 - **Ítem:** palabra que algunos mensajes de EntropIA usan para referirse a un documento.
 - **Layout:** herramienta que marca zonas de una página, como títulos, párrafos, tablas o figuras.
 - **Metadatos:** datos que describen un archivo o documento.
 - **Modelo de IA:** servicio que propone texto, resúmenes o análisis a partir de una instrucción y material relacionado.
 - **OCR:** reconocimiento de palabras visibles en imágenes o PDF escaneados.
+- **Obra:** cada referencia de Zotero sincronizada en la Biblioteca, con sus adjuntos y su texto.
 - **OpenRouter:** servicio por Internet que Lite usa para algunas tareas de texto y análisis.
-- **RAG / recuperación:** opción para que el Chat consulte pasajes de tus documentos antes de responder.
+- **Pasaje:** fragmento del texto de una obra que la búsqueda o el Chat muestran con su página o párrafo.
+- **RAG / recuperación:** opción para que el Chat consulte pasajes de tus documentos o de la Biblioteca antes de responder.
+- **Relaciones 3D:** grafo que dibuja las tripletas de una colección.
 - **Corpus procesado:** parte del archivo que ya tiene texto o representaciones preparadas. No equivale a todas las fuentes importadas ni garantiza cobertura temática.
 - **API Key / clave de acceso:** credencial personal de un proveedor remoto; no debe compartirse.
 - **Identificación de hablantes:** separación automática de intervenciones de audio; requiere revisar quién habla realmente.
 - **STT:** conversión de voz o audio a texto.
 - **Tópico:** etiqueta que ayuda a clasificar documentos.
 - **Tripleta:** forma de registrar una relación; por ejemplo, quién realizó una acción.
+- **Vercel AI Gateway:** servicio opcional que EntropIA usa como respaldo de algunas tareas de texto cuando OpenRouter falla.
 - **Vista dividida:** dos pestañas visibles al mismo tiempo.
 - **Pestaña:** pantalla de trabajo independiente. EntropIA permite hasta cuatro.
 
