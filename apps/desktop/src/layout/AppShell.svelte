@@ -9,8 +9,11 @@
     getCachedDepsStatuses,
     checkAllDeps,
     getUvStatus,
+    installAllDeps,
     onDepsComplete,
+    onDepsProgress,
     CRITICAL_DEPS,
+    DEP_DISPLAY_NAMES,
     setCriticalMissing,
     type DepCheckResult,
     type UvStatusResult,
@@ -321,6 +324,7 @@
   // paints first when T4 auto-started the download before mount).
   let runtimeProgress = $state<RuntimeOperation | null>(null)
   let bootstrapBusy = $state(false)
+  let depsInstallBusy = $state(false)
 
   const hasCriticalMissing = $derived(
     depsResults.some(
@@ -337,6 +341,12 @@
         depsResults.some((dep) => dep.id === id && dep.status.type === 'installed')
       )
   )
+  // The backend installs the AI dependencies on its own once the runtime is
+  // ready; `deps://progress` says which one is running right now.
+  const installingDep = $derived(depsResults.find((dep) => dep.status.type === 'installing'))
+  // Retrying only makes sense once the runtime (and its offline wheelhouse)
+  // is ready; before that the runtime banner owns the retry.
+  const showDepsInstallRetry = $derived(runtimeStatus?.state === 'healthy')
   const runtimeBlocksActiveCapabilities = $derived(
     runtimeStatus?.state === 'fixture' && uvStatus?.dev_fallback_available
       ? false
@@ -404,6 +414,7 @@
   })
 
   let unlistenDepsComplete: (() => void) | undefined
+  let unlistenDepsProgress: (() => void) | undefined
   let unlistenRuntimeStatus: (() => void) | undefined
   let unlistenRuntimeProgress: (() => void) | undefined
   let stopNavegadorLifecycle: (() => void) | undefined
@@ -491,6 +502,15 @@
       void fetchUvStatus()
     })
 
+    unlistenDepsProgress = await onDepsProgress((event) => {
+      const others = depsResults.filter((dep) => dep.id !== event.id)
+      const previous = depsResults.find((dep) => dep.id === event.id)
+      depsResults = [
+        ...others,
+        { id: event.id, status: event.status, version: previous?.version ?? null },
+      ]
+    })
+
     void getCachedDepsStatuses()
       .then((results) => {
         depsResults = results
@@ -531,6 +551,7 @@
     cancelPendingStatusRetry()
     document.removeEventListener('keydown', handleKeydown)
     unlistenDepsComplete?.()
+    unlistenDepsProgress?.()
     unlistenRuntimeStatus?.()
     unlistenRuntimeProgress?.()
     stopNavegadorLifecycle?.()
@@ -568,6 +589,18 @@
       console.error('[AppShell] runtime bootstrap retry failed', error)
     } finally {
       bootstrapBusy = false
+    }
+  }
+
+  async function handleDepsInstallRetry() {
+    depsInstallBusy = true
+    try {
+      // Progress and the final results arrive through the deps listeners.
+      await installAllDeps()
+    } catch (error) {
+      console.error('[AppShell] dependency install retry failed', error)
+    } finally {
+      depsInstallBusy = false
     }
   }
 
@@ -795,12 +828,30 @@
           </div>
         {/if}
 
-        {#if criticalDepsStatusKnown && hasCriticalMissing}
+        {#if installingDep}
+          <div class="deps-banner" role="status">
+            <span class="deps-banner__message">
+              <ActionIcon name="rotate-cw" size={20} />
+              Instalando dependencias de IA: {DEP_DISPLAY_NAMES[installingDep.id]}…
+            </span>
+          </div>
+        {:else if criticalDepsStatusKnown && hasCriticalMissing}
           <div class="deps-banner" role="alert">
             <span class="deps-banner__message">
               <ActionIcon name="triangle-alert" size={20} />
               Algunas funciones de IA no están disponibles.
             </span>
+            {#if showDepsInstallRetry}
+              <button
+                class="deps-banner__btn"
+                type="button"
+                onclick={handleDepsInstallRetry}
+                disabled={depsInstallBusy}
+              >
+                <ActionIcon name="rotate-cw" size={16} />
+                Reintentar instalación
+              </button>
+            {/if}
             <button class="deps-banner__btn" type="button" onclick={goToDepSettings}>
               <ActionIcon name="settings" size={16} />
               Configurar dependencias

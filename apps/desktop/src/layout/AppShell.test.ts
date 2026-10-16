@@ -613,6 +613,127 @@ describe('AppShell', () => {
   // T5 (S2/S4/S5): the banner wires the T2/T3/T4 backend — progress fed by
   // `runtime://progress` events, Pausar via the cancel command, Reintentar
   // via the start command. Non-modal by construction: no dialog may appear.
+  describe('automatic AI dependency install banner', () => {
+    let progressHandler: EventListenerCallback | undefined
+    let completeHandler: EventListenerCallback | undefined
+
+    function healthyStatus() {
+      return {
+        state: 'healthy',
+        packVersion: '2026.10.0',
+        repairNeeded: false,
+        repairAvailable: false,
+        summary: 'Runtime listo',
+        blockedCapabilities: [],
+        details: [],
+        guidance: [],
+        bootstrapEligible: false,
+        bootstrapRequired: false,
+        activeOperation: null,
+      }
+    }
+
+    beforeEach(() => {
+      progressHandler = undefined
+      completeHandler = undefined
+      listenMock.mockImplementation((eventName: string, callback: EventListenerCallback) => {
+        if (eventName === 'deps://progress') progressHandler = callback
+        if (eventName === 'deps://complete') completeHandler = callback
+        return Promise.resolve(vi.fn())
+      })
+    })
+
+    it.runIf(LOCAL_ML)('shows_which_dependency_is_installing_while_it_runs', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses')
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'installed', version: '3.11' } },
+            { id: 'PaddlePaddle', status: { type: 'missing' } },
+            { id: 'PaddleOcr', status: { type: 'missing' } },
+          ])
+        if (command === 'runtime_get_status') return Promise.resolve(healthyStatus())
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+      await waitFor(() => expect(progressHandler).toBeDefined())
+
+      progressHandler?.({
+        payload: { id: 'PaddlePaddle', status: { type: 'installing', percent: 0 }, message: '' },
+      })
+
+      expect(
+        await screen.findByText('Instalando dependencias de IA: PaddlePaddle (runtime OCR)…')
+      ).toBeInTheDocument()
+      // While it installs, the banner reports progress instead of the
+      // "not available" warning and its buttons.
+      expect(
+        screen.queryByText('Algunas funciones de IA no están disponibles.')
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Reintentar instalación' })
+      ).not.toBeInTheDocument()
+
+      completeHandler?.({
+        payload: {
+          results: [
+            { id: 'Python', status: { type: 'installed', version: '3.11' } },
+            { id: 'PaddlePaddle', status: { type: 'installed', version: '3.2.2' } },
+            { id: 'PaddleOcr', status: { type: 'installed', version: '3.7.0' } },
+          ],
+          all_critical_installed: true,
+        },
+      })
+
+      await waitFor(() =>
+        expect(screen.queryByText(/Instalando dependencias de IA/)).not.toBeInTheDocument()
+      )
+    })
+
+    it.runIf(LOCAL_ML)('a_failed_install_on_a_ready_runtime_offers_a_retry', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses')
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'installed', version: '3.11' } },
+            { id: 'PaddlePaddle', status: { type: 'failed', message: 'boom' } },
+            { id: 'PaddleOcr', status: { type: 'missing' } },
+          ])
+        if (command === 'runtime_get_status') return Promise.resolve(healthyStatus())
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+
+      await fireEvent.click(await screen.findByRole('button', { name: 'Reintentar instalación' }))
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('deps_install_all'))
+      // The manual path stays one click away.
+      expect(screen.getByRole('button', { name: 'Configurar dependencias' })).toBeInTheDocument()
+    })
+
+    it.runIf(LOCAL_ML)('no_install_retry_while_the_runtime_is_not_ready', async () => {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === 'deps_get_cached_statuses')
+          return Promise.resolve([
+            { id: 'Python', status: { type: 'missing' } },
+            { id: 'PaddlePaddle', status: { type: 'missing' } },
+            { id: 'PaddleOcr', status: { type: 'missing' } },
+          ])
+        if (command === 'runtime_get_status')
+          return Promise.resolve({ ...healthyStatus(), state: 'downloading' })
+        return Promise.resolve(undefined)
+      })
+
+      render(AppShellHost)
+
+      expect(
+        await screen.findByText('Algunas funciones de IA no están disponibles.')
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Reintentar instalación' })
+      ).not.toBeInTheDocument()
+    })
+  })
+
   describe('runtime bootstrap banner', () => {
     let statusHandler: EventListenerCallback | undefined
     let progressHandler: EventListenerCallback | undefined

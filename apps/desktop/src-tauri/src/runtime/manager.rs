@@ -243,7 +243,11 @@ impl RuntimeManager {
                     RuntimeManager::new().ensure_ready_or_bootstrap_unlocked(&worker_app)
                 }));
                 match outcome {
-                    Ok(Ok(_)) => {}
+                    Ok(Ok(status)) => {
+                        if status.state == RuntimeState::Healthy {
+                            crate::deps::trigger_deps_auto_install(worker_app.clone());
+                        }
+                    }
                     Ok(Err(error)) => {
                         log::warn!(target: "runtime", "startup auto-bootstrap ended: {error}");
                     }

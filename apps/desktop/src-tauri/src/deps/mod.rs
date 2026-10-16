@@ -438,6 +438,153 @@ pub async fn deps_get_cached_statuses(
     Ok(dep_results_from_map(data.statuses.clone()))
 }
 
+/// Why the automatic dependency install did not start. The three gate
+/// reasons are the runtime auto-bootstrap's own (`StartupBootstrapGate`), so
+/// debug builds, dev profiles and tests never install anything by themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DepsAutoInstallSkip {
+    Gate(crate::runtime::manager::StartupBootstrapSkip),
+    RuntimeNotReady,
+    AlreadyInstalled,
+    AlreadyAttempted,
+}
+
+/// Pure decision for the automatic install: `None` means "install now".
+/// It runs only on a healthy managed runtime (its offline wheelhouse is what
+/// the install reads), only while some dependency is still missing or failed,
+/// and at most once per process; a failure is then retried by the user from
+/// the banner or the Dependencias tab, never in a loop.
+pub(crate) fn deps_auto_install_skip_reason(
+    runtime_state: RuntimeState,
+    statuses: &HashMap<DependencyId, DependencyStatus>,
+    gate: crate::runtime::manager::StartupBootstrapGate,
+    already_attempted: bool,
+) -> Option<DepsAutoInstallSkip> {
+    use crate::runtime::manager::StartupBootstrapSkip;
+
+    if !gate.release_runtime {
+        return Some(DepsAutoInstallSkip::Gate(
+            StartupBootstrapSkip::NotReleaseBuild,
+        ));
+    }
+    if gate.dev_profile_active {
+        return Some(DepsAutoInstallSkip::Gate(
+            StartupBootstrapSkip::DevProfileActive,
+        ));
+    }
+    if gate.automated_test {
+        return Some(DepsAutoInstallSkip::Gate(
+            StartupBootstrapSkip::AutomatedTest,
+        ));
+    }
+    if runtime_state != RuntimeState::Healthy {
+        return Some(DepsAutoInstallSkip::RuntimeNotReady);
+    }
+    let all_installed = registry::all_deps_in_install_order().iter().all(|dep| {
+        matches!(
+            statuses.get(&dep.id),
+            Some(DependencyStatus::Installed { .. })
+        )
+    });
+    if all_installed {
+        return Some(DepsAutoInstallSkip::AlreadyInstalled);
+    }
+    if already_attempted {
+        return Some(DepsAutoInstallSkip::AlreadyAttempted);
+    }
+    None
+}
+
+static DEPS_AUTO_INSTALL_ATTEMPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Installs the AI dependencies on its own once the managed runtime is ready,
+/// so a fresh Pro install needs no trip to the Dependencias tab. Called after
+/// the startup probe and after a bootstrap download finishes; returns at once
+/// and does the work on the async runtime. Progress reaches the UI through
+/// the same `deps://progress` / `deps://complete` events as the manual
+/// "Instalar todo".
+pub fn trigger_deps_auto_install(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tauri::Manager;
+
+    tauri::async_runtime::spawn(async move {
+        let runtime_state = match app.state::<RuntimeManager>().status(&app) {
+            Ok(status) => status.state,
+            Err(error) => {
+                log::warn!(target: "deps", "auto-install skipped: runtime status unavailable: {error}");
+                return;
+            }
+        };
+        let db = app.state::<crate::db::state::AppDbState>();
+        let state = app.state::<DepsState>();
+        let statuses = match probe_all_once(state.inner(), db.inner()).await {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                log::warn!(target: "deps", "auto-install skipped: probe failed: {error}");
+                return;
+            }
+        };
+        let already_attempted = DEPS_AUTO_INSTALL_ATTEMPTED.load(Ordering::SeqCst);
+        if let Some(reason) = deps_auto_install_skip_reason(
+            runtime_state,
+            &statuses,
+            crate::runtime::manager::StartupBootstrapGate::live(),
+            already_attempted,
+        ) {
+            log::debug!(target: "deps", "auto-install skipped: {reason:?}");
+            return;
+        }
+        // Two triggers can race (startup probe and bootstrap completion):
+        // only the one that flips the flag installs.
+        if DEPS_AUTO_INSTALL_ATTEMPTED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        crate::app_logs::info(&app, "deps", "Instalación automática de dependencias de IA");
+        if let Err(error) =
+            run_install_all(&app, state.inner(), &db.db_path, "deps_auto_install").await
+        {
+            log::warn!(target: "deps", "auto-install failed: {error}");
+        }
+    });
+}
+
+/// Shared body of the manual and automatic "install everything" paths.
+async fn run_install_all(
+    app: &tauri::AppHandle,
+    state: &DepsState,
+    db_path: &std::path::Path,
+    operation: &str,
+) -> Result<(), String> {
+    let _guard = crate::runtime::ops_lock::acquire_with_timeout(operation).await?;
+    let app_data_dir = crate::path_utils::cache_dir(app)
+        .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
+    crate::app_logs::info(
+        app,
+        "deps",
+        "Inicio de instalación completa de dependencias",
+    );
+    invalidate_uv_status_cache().await;
+    let result = install::install_all(app, state, db_path, &app_data_dir).await;
+    invalidate_uv_status_cache().await;
+    match &result {
+        Ok(()) => crate::app_logs::info(
+            app,
+            "deps",
+            "Instalación completa de dependencias finalizada",
+        ),
+        Err(error) => crate::app_logs::error(
+            app,
+            "deps",
+            format!("Instalación completa de dependencias falló: {error}"),
+        ),
+    }
+    result
+}
+
 /// Install all registered dependencies into the managed venv.
 ///
 /// - Ensures the uv binary (bundled/dev/system fallback, downloads only if needed).
@@ -450,31 +597,7 @@ pub async fn deps_install_all(
     state: tauri::State<'_, DepsState>,
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<(), String> {
-    let _guard = crate::runtime::ops_lock::acquire_with_timeout("deps_install_all").await?;
-    let app_data_dir = crate::path_utils::cache_dir(&app)
-        .map_err(|e| format!("Error obteniendo directorio de datos de la app: {e}"))?;
-    let db_path = db.db_path.clone();
-    crate::app_logs::info(
-        &app,
-        "deps",
-        "Inicio de instalación completa de dependencias",
-    );
-    invalidate_uv_status_cache().await;
-    let result = install::install_all(&app, &state, &db_path, &app_data_dir).await;
-    invalidate_uv_status_cache().await;
-    match &result {
-        Ok(()) => crate::app_logs::info(
-            &app,
-            "deps",
-            "Instalación completa de dependencias finalizada",
-        ),
-        Err(error) => crate::app_logs::error(
-            &app,
-            "deps",
-            format!("Instalación completa de dependencias falló: {error}"),
-        ),
-    }
-    result
+    run_install_all(&app, &state, &db.db_path, "deps_install_all").await
 }
 
 /// Install a single dependency by id string.
@@ -929,5 +1052,151 @@ mod tests {
             })
         );
         assert_eq!(json["all_critical_installed"], serde_json::json!(false));
+    }
+}
+
+#[cfg(test)]
+mod auto_install_tests {
+    use super::*;
+    use crate::runtime::manager::{StartupBootstrapGate, StartupBootstrapSkip};
+
+    fn release_gate() -> StartupBootstrapGate {
+        StartupBootstrapGate {
+            release_runtime: true,
+            dev_profile_active: false,
+            automated_test: false,
+        }
+    }
+
+    fn statuses(missing: &[DependencyId]) -> HashMap<DependencyId, DependencyStatus> {
+        default_dependency_statuses()
+            .into_keys()
+            .map(|id| {
+                let status = if missing.contains(&id) {
+                    DependencyStatus::Missing
+                } else {
+                    DependencyStatus::Installed { version: None }
+                };
+                (id, status)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn installs_when_the_runtime_is_ready_and_a_dependency_is_missing() {
+        let decision = deps_auto_install_skip_reason(
+            RuntimeState::Healthy,
+            &statuses(&[DependencyId::PaddleOcr]),
+            release_gate(),
+            false,
+        );
+        assert_eq!(decision, None);
+    }
+
+    #[test]
+    fn a_failed_dependency_also_triggers_the_install() {
+        let mut map = statuses(&[]);
+        map.insert(
+            DependencyId::Spacy,
+            DependencyStatus::Failed {
+                message: "x".to_string(),
+            },
+        );
+        assert_eq!(
+            deps_auto_install_skip_reason(RuntimeState::Healthy, &map, release_gate(), false),
+            None
+        );
+    }
+
+    #[test]
+    fn skips_with_the_same_release_dev_profile_and_test_gates_as_the_bootstrap() {
+        let missing = statuses(&[DependencyId::Python]);
+        let cases = [
+            (
+                StartupBootstrapGate {
+                    release_runtime: false,
+                    ..release_gate()
+                },
+                DepsAutoInstallSkip::Gate(StartupBootstrapSkip::NotReleaseBuild),
+            ),
+            (
+                StartupBootstrapGate {
+                    dev_profile_active: true,
+                    ..release_gate()
+                },
+                DepsAutoInstallSkip::Gate(StartupBootstrapSkip::DevProfileActive),
+            ),
+            (
+                StartupBootstrapGate {
+                    automated_test: true,
+                    ..release_gate()
+                },
+                DepsAutoInstallSkip::Gate(StartupBootstrapSkip::AutomatedTest),
+            ),
+        ];
+        for (gate, expected) in cases {
+            assert_eq!(
+                deps_auto_install_skip_reason(RuntimeState::Healthy, &missing, gate, false),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn the_live_gate_never_installs_from_a_test_binary() {
+        assert!(matches!(
+            deps_auto_install_skip_reason(
+                RuntimeState::Healthy,
+                &statuses(&[DependencyId::Python]),
+                StartupBootstrapGate::live(),
+                false,
+            ),
+            Some(DepsAutoInstallSkip::Gate(_))
+        ));
+    }
+
+    #[test]
+    fn waits_until_the_runtime_is_healthy() {
+        for state in [
+            RuntimeState::Fixture,
+            RuntimeState::Downloading,
+            RuntimeState::Damaged,
+        ] {
+            assert_eq!(
+                deps_auto_install_skip_reason(
+                    state,
+                    &statuses(&[DependencyId::Python]),
+                    release_gate(),
+                    false,
+                ),
+                Some(DepsAutoInstallSkip::RuntimeNotReady)
+            );
+        }
+    }
+
+    #[test]
+    fn does_nothing_when_everything_is_installed() {
+        assert_eq!(
+            deps_auto_install_skip_reason(
+                RuntimeState::Healthy,
+                &statuses(&[]),
+                release_gate(),
+                false
+            ),
+            Some(DepsAutoInstallSkip::AlreadyInstalled)
+        );
+    }
+
+    #[test]
+    fn runs_at_most_once_per_process() {
+        assert_eq!(
+            deps_auto_install_skip_reason(
+                RuntimeState::Healthy,
+                &statuses(&[DependencyId::Python]),
+                release_gate(),
+                true,
+            ),
+            Some(DepsAutoInstallSkip::AlreadyAttempted)
+        );
     }
 }
