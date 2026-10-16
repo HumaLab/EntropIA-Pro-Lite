@@ -341,7 +341,7 @@ describe('runtime pack packaging', () => {
     // A linux-x86_64 runtime is published, so Pro Linux is back in the tag and
     // `all` matrices (not the default Windows-only dispatch), gated on it and
     // built with the overlay that bundles the real Pdfium.
-    const [tagMatrix, defaultMatrix, allMatrix] = matrices as {
+    const [tagMatrix = [], defaultMatrix = [], allMatrix = []] = matrices as {
       platform: string
       runtime_platform?: string
       build_args?: string
