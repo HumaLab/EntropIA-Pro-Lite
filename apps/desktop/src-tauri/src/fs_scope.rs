@@ -15,13 +15,16 @@ use tauri_plugin_fs::FsExt;
 /// removes: `assets` (`lib/file-import.ts`, `lib/collection-import.ts`, the
 /// collection and item deletions), `writing-images` (`lib/writing-images.ts`),
 /// `writing-crops` (`lib/writing-crops.ts`), `temp` (dictation recordings,
-/// `lib/transcription.ts`) and `sample-staging` (`lib/sample-collection.ts`).
-pub const FRONTEND_ARCHIVE_DIRS: [&str; 5] = [
+/// `lib/transcription.ts`), `sample-staging` (`lib/sample-collection.ts`) and
+/// `staging`, whose `internet-archive` jobs hand verified PDFs to the
+/// frontend importer (`lib/internet-archive-import.ts`).
+pub const FRONTEND_ARCHIVE_DIRS: [&str; 6] = [
     "assets",
     "writing-images",
     "writing-crops",
     "temp",
     "sample-staging",
+    "staging",
 ];
 
 /// Cache subdirectories the frontend reads: the WAV previews

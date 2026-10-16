@@ -812,7 +812,13 @@ fn the_renderer_reaches_the_archive_directories_it_works_in() {
             assert!(response.is_ok(), "{cmd} {}: {response:?}", path.display());
         }
     }
-    for dir in ["writing-images", "writing-crops", "temp", "sample-staging"] {
+    for dir in [
+        "writing-images",
+        "writing-crops",
+        "temp",
+        "sample-staging",
+        "staging/internet-archive",
+    ] {
         assert_within_scope(
             fs_call(&main, "stat", &app_dir.path().join(dir).join("missing.bin")),
             dir,

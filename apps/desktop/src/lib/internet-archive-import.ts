@@ -154,6 +154,7 @@ async function confirm(run: IaImportRun, file: IaVerifiedFile, itemId: string) {
 // exactly one item) drops what will not be confirmed and reports the file.
 async function importPayload(run: IaImportRun, file: IaVerifiedFile) {
   let created: Array<{ id: string; title: string }>
+  let importErrors: string[]
   try {
     const result = await importClassifiedPathsIntoCollection([file.stagingPath], run.collectionId, {
       baseErrorMessage: run.baseErrorMessage,
@@ -168,14 +169,19 @@ async function importPayload(run: IaImportRun, file: IaVerifiedFile) {
       onProgress: (progress) => report(run, file, progress.stage),
     })
     created = result.createdItems
+    importErrors = result.importErrors
   } catch (reason) {
     await reportFailed(run, file.index)
     fail(run, file.index, reason)
     return
   }
   if (created.length !== 1) {
-    // The importer reports its own messages; there is no Rust code for
-    // "nothing (or too much) came out", so this records `unknown`.
+    // The importer collects per-file errors instead of throwing; keep them
+    // visible, since the outcome only carries a code. There is no Rust code
+    // for "nothing (or too much) came out", so this records `unknown`.
+    if (importErrors.length > 0) {
+      console.warn('[internet-archive] the import failed:', importErrors.join('; '))
+    }
     for (const item of created) await dropUnconfirmed(run, item.id)
     await reportFailed(run, file.index)
     run.outcome.failed.push({ index: file.index, code: 'unknown' })
