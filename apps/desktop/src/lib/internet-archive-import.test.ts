@@ -254,6 +254,31 @@ describe('importVerifiedFiles', () => {
     expect(outcome.imported).toEqual([{ index: 1, itemId: 'item-1' }])
   })
 
+  it('logs the collected import errors when the importer resolves with no item', async () => {
+    iaRef.iaListVerifiedFiles.mockResolvedValue([file(0)])
+    importRef.importClassifiedPathsIntoCollection.mockResolvedValueOnce({
+      classifiedCount: 1,
+      rejected: [],
+      createdItems: [],
+      importErrors: ['Import (importing File 0.pdf): forbidden path', 'second cause'],
+      alreadyImported: [],
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const outcome = await importVerifiedFiles('job-1')
+
+      expect(iaRef.iaFailFileImport).toHaveBeenCalledWith('job-1', 0)
+      expect(outcome.failed).toEqual([{ index: 0, code: 'unknown' }])
+      expect(warn).toHaveBeenCalledWith(
+        '[internet-archive] the import failed:',
+        'Import (importing File 0.pdf): forbidden path; second cause'
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('records the parsed code when confirm rejects, without reporting a failure', async () => {
     iaRef.iaListVerifiedFiles.mockResolvedValue([file(0)])
     iaRef.iaConfirmFileImported.mockRejectedValue(new Error('incomplete_import: pages missing'))

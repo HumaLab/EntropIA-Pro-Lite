@@ -16,15 +16,16 @@ use tauri_plugin_fs::FsExt;
 /// collection and item deletions), `writing-images` (`lib/writing-images.ts`),
 /// `writing-crops` (`lib/writing-crops.ts`), `temp` (dictation recordings,
 /// `lib/transcription.ts`), `sample-staging` (`lib/sample-collection.ts`) and
-/// `staging`, whose `internet-archive` jobs hand verified PDFs to the
-/// frontend importer (`lib/internet-archive-import.ts`).
+/// `staging/internet-archive`, whose jobs hand verified PDFs to the frontend
+/// importer (`lib/internet-archive-import.ts`). Entries separate their
+/// segments with `/`; the rest of `staging` stays out of reach.
 pub const FRONTEND_ARCHIVE_DIRS: [&str; 6] = [
     "assets",
     "writing-images",
     "writing-crops",
     "temp",
     "sample-staging",
-    "staging",
+    "staging/internet-archive",
 ];
 
 /// Cache subdirectories the frontend reads: the WAV previews
@@ -41,7 +42,11 @@ pub fn grant_frontend_fs_scope<R: tauri::Runtime>(
     let scope = app.fs_scope();
     let granted = FRONTEND_ARCHIVE_DIRS
         .iter()
-        .map(|dir| app_dir.join(dir))
+        // One `join` per segment keeps a single separator kind on Windows.
+        .map(|dir| {
+            dir.split('/')
+                .fold(app_dir.to_path_buf(), |path, part| path.join(part))
+        })
         .chain(FRONTEND_CACHE_DIRS.iter().map(|dir| cache_dir.join(dir)));
     for dir in granted {
         scope
