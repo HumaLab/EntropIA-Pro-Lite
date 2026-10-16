@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import BatchProcessingTab from './BatchProcessingTab.svelte'
 import { batchStore } from '$lib/batch-processing'
+import { LOCAL_ML } from '$lib/capabilities'
 
 const mockInvoke = vi.mocked(invoke)
 
@@ -187,6 +188,32 @@ describe('BatchProcessingTab batch controls', () => {
 
     expect(await screen.findByRole('button', { name: 'Iniciar lote' })).toBeDisabled()
   })
+
+  it.runIf(!LOCAL_ML)(
+    'without an OpenRouter key the analyze button is off and says why',
+    async () => {
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+        if (command === 'settings_get') return null
+        return undefined
+      })
+      render(BatchProcessingTab)
+
+      await screen.findByText('Legajo 1')
+      await fireEvent.click(screen.getByText('Legajo 1'))
+
+      const analyze = screen.getByRole('button', { name: 'Analizar selección' })
+      await waitFor(() => expect(analyze).toBeDisabled())
+      expect(analyze.closest('[data-tooltip]')).toHaveAttribute(
+        'data-tooltip',
+        expect.stringContaining('Primero cargá tu API key de OpenRouter')
+      )
+
+      // OCR alone goes through GLM, not OpenRouter: unticking the rest frees the button.
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Embeddings' }))
+      await waitFor(() => expect(analyze).toBeEnabled())
+    }
+  )
 
   it('sends entities when asked and says how many documents will go through it', async () => {
     mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
@@ -1128,9 +1155,9 @@ describe('the collection picker reflows and truncates', () => {
   it('sends the analyze action to the end of its line without leaving the flow', () => {
     // `position: absolute` or a float would put it over the label it follows
     // the moment the strip wraps; an auto start margin cannot overlap anything.
-    expect(ruleFor('.batch-ops :global(.batch-ops__action) {')).toMatch(
-      /margin-inline-start:\s*auto/
-    )
+    // The margin sits on the wrapper that carries the tooltip, not on the
+    // button: inside the wrapper the button's own margin pushes against nothing.
+    expect(ruleFor('.batch-ops__action-slot {')).toMatch(/margin-inline-start:\s*auto/)
     expect(ruleFor('.batch-ops {')).toMatch(/flex-wrap:\s*wrap/)
   })
 

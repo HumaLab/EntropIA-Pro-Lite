@@ -4,6 +4,7 @@ mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
+mod backup;
 pub mod bibliography;
 mod db;
 mod dev_profile;
@@ -998,6 +999,22 @@ pub fn run() {
             // worth logging, not worth making startup wait on or fail over.
             asset_integrity::spawn_startup_scan(db_path.clone(), app_dir.clone());
 
+            // Scheduled backups (T-47): checks hourly whether one is due.
+            backup::spawn_scheduler(db_path.clone());
+            // The Vercel AI Gateway fallback key (T-45), off the startup path:
+            // reading it may touch the system credential store.
+            {
+                let db_path = db_path.clone();
+                std::thread::spawn(move || {
+                    if let Ok(conn) = db::open::open_archive_connection(&db_path) {
+                        llm::openrouter::set_fallback_key(settings::get_setting(
+                            &conn,
+                            settings::VERCEL_AI_GATEWAY_API_KEY,
+                        ));
+                    }
+                });
+            }
+
             // Dependency manager: tracks Python-package availability (OCR, embeddings, etc.)
             app.manage(deps::DepsState::new());
 
@@ -1372,6 +1389,8 @@ pub fn run() {
             bibliography::commands::bibliography_search_works,
             bibliography::commands::bibliography_open_passage,
             bibliography::commands::zotero_data_dir_grant,
+            backup::backup_dir_grant,
+            backup::backup_run_now,
             bibliography::commands::bibliography_passage_context,
             bibliography::commands::bibliography_library_status,
             bibliography::commands::bibliography_search_passages,
@@ -1498,6 +1517,7 @@ pub fn run() {
             settings::settings_get_all,
             settings::settings_delete,
             llm::commands::test_openrouter_connection,
+            llm::commands::test_vercel_connection,
             deps::deps_check_all,
             deps::deps_get_cached_statuses,
             deps::deps_install_all,

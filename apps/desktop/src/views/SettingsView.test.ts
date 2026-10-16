@@ -1190,7 +1190,17 @@ describe('SettingsView', () => {
   })
 
   it('shows a retryable error when initial settings fail to load', async () => {
-    settingsGetMock.mockRejectedValueOnce(new Error('credential store unavailable'))
+    // Fail the load's own key read, not whichever settingsGet runs first: the
+    // Vercel fallback card reads its key on its own.
+    const defaultGet = settingsGetMock.getMockImplementation()!
+    let failed = false
+    settingsGetMock.mockImplementation(async (key: string) => {
+      if (key === 'openrouter_api_key' && !failed) {
+        failed = true
+        throw new Error('credential store unavailable')
+      }
+      return defaultGet(key)
+    })
 
     render(SettingsView)
 

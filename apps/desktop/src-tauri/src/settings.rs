@@ -48,15 +48,18 @@ pub const GLM_OCR_API_KEY: &str = "glm_ocr_api_key";
 pub const ZOTERO_API_KEY: &str = "zotero_api_key";
 /// Key for publishing Escritura documents to hlab.com.ar (`writing::publish`).
 pub const HLAB_PUBLISH_KEY: &str = "hlab_publish_key";
+/// Vercel AI Gateway key, the fallback when OpenRouter fails (T-45).
+pub const VERCEL_AI_GATEWAY_API_KEY: &str = "vercel_ai_gateway_api_key";
 /// The Zotero account id the stored key was last verified for. Not a secret, but
 /// only meaningful next to that key, so a new or cleared key forgets it.
 pub const ZOTERO_USER_ID_KEY: &str = "zotero_user_id";
-const SECRET_SETTING_KEYS: [&str; 5] = [
+const SECRET_SETTING_KEYS: [&str; 6] = [
     OPENROUTER_API_KEY,
     ASSEMBLYAI_API_KEY,
     GLM_OCR_API_KEY,
     ZOTERO_API_KEY,
     HLAB_PUBLISH_KEY,
+    VERCEL_AI_GATEWAY_API_KEY,
 ];
 static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 
@@ -69,7 +72,7 @@ static APP_CREDENTIAL_LOCK: Mutex<()> = Mutex::new(());
 /// 3. `APP_CREDENTIAL_LOCK` — inside each single credential-store call.
 ///
 /// The key lock is requested before `ui_conn` and never while holding it.
-/// Entries are created on first use and never removed: only the five
+/// Entries are created on first use and never removed: only the six
 /// `SECRET_SETTING_KEYS` reach this map, so it cannot grow without bound.
 static SETTINGS_KEY_LOCKS: LazyLock<Mutex<HashMap<String, &'static Mutex<()>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -212,6 +215,7 @@ pub async fn settings_set(
 ) -> Result<(), String> {
     let should_invalidate = crate::deps::should_invalidate_cache_for_setting(&key);
     let invalidation_key = key.clone();
+    let fallback_key = (key == VERCEL_AI_GATEWAY_API_KEY).then(|| value.clone());
     let db = db.inner().clone();
     run_blocking_db_task(move || {
         set_setting_with_store(&db.ui_conn, &key, &value, &KeyringSecretStore)?;
@@ -219,6 +223,9 @@ pub async fn settings_set(
         Ok(())
     })
     .await?;
+    if fallback_key.is_some() {
+        crate::llm::openrouter::set_fallback_key(fallback_key);
+    }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&invalidation_key, Some(&deps)).await;
     }
@@ -502,8 +509,12 @@ pub async fn settings_delete(
     let should_invalidate = crate::deps::should_invalidate_cache_for_setting(&key);
     let invalidation_key = key.clone();
     let db = db.inner().clone();
+    let clears_fallback = key == VERCEL_AI_GATEWAY_API_KEY;
     run_blocking_db_task(move || delete_setting_with_store(&db.ui_conn, &key, &KeyringSecretStore))
         .await?;
+    if clears_fallback {
+        crate::llm::openrouter::set_fallback_key(None);
+    }
     if should_invalidate {
         invalidate_dependency_probe_cache_if_needed(&invalidation_key, Some(&deps)).await;
     }

@@ -22,15 +22,10 @@
   } from '$lib/bibliography-search'
   import { libraryChoiceKey, selectedLibrariesAfterToggle } from '$lib/rag-scope'
   import type { RagLibraryRef } from '$lib/rag'
-  import {
-    DEFAULT_OPENROUTER_MODEL,
-    SETTINGS_KEYS,
-    settingsGet,
-    testOpenrouterConnection,
-    type ModelInfo,
-  } from '$lib/settings'
+  import { DEFAULT_OPENROUTER_MODEL, SETTINGS_KEYS, settingsGet } from '$lib/settings'
 
   import { renderMarkdown } from '$lib/markdown'
+  import OpenrouterModelList from '../components/OpenrouterModelList.svelte'
   import {
     ActionIcon,
     Button,
@@ -90,7 +85,6 @@
   // El modelo se elige al crear y el motor lo congela en el job: es lo que
   // permite comparar gemma contra luna sin tocar Configuración.
   let researchModel = $state('')
-  let availableModels = $state<ModelInfo[]>([])
 
   /** El modelo efectivo de Investigación: el ajuste del chat RAG manda y el
    *  modelo general de OpenRouter lo cubre — el mismo orden con el que el
@@ -102,19 +96,6 @@
     ])
     if (!mounted || researchModel.trim()) return
     researchModel = ragModel?.trim() || openrouterModel?.trim() || ''
-  }
-
-  /** Las sugerencias del catálogo de OpenRouter, con la credencial guardada
-   *  (el mismo patrón que Configuración). Sin credencial o sin red no hay
-   *  lista: el campo sigue editable a mano. */
-  async function loadSuggestedModels() {
-    try {
-      const models = await testOpenrouterConnection('')
-      if (!mounted) return
-      availableModels = Array.isArray(models) ? models : []
-    } catch {
-      availableModels = []
-    }
   }
 
   function chooseModel(id: string) {
@@ -442,7 +423,6 @@
     applyHandoff(takeResearchHandoff())
     void refreshJobs()
     void loadResearchModel()
-    void loadSuggestedModels()
     pollingTimer = setInterval(() => {
       void refreshJobs({ silent: true })
     }, 1500)
@@ -555,34 +535,12 @@
                OpenRouter»). El valor viaja en el create y el motor lo congela
                en el job. -->
           <div class="research-form__field">
-            <Input
+            <OpenrouterModelList
+              selected={researchModel}
+              onchoose={chooseModel}
               label={$currentLocale && t('research.modelLabel')}
-              type="text"
-              bind:value={researchModel}
-              placeholder={DEFAULT_OPENROUTER_MODEL}
+              emptyLabel={DEFAULT_OPENROUTER_MODEL}
             />
-            {#if availableModels.length > 0}
-              <div class="settings__model-list">
-                <p class="settings__model-list-title">
-                  {$currentLocale && t('settings.suggestedModels')}
-                </p>
-                {#each availableModels
-                  .filter((m) => m.id.includes('gemma') || m.id.includes('llama') || m.id.includes('mistral') || m.id.includes('qwen') || m.id.includes('claude') || m.id.includes('gpt'))
-                  .slice(0, 15) as m (m.id)}
-                  <button
-                    class="settings__model-option"
-                    type="button"
-                    class:selected={researchModel === m.id}
-                    onclick={() => chooseModel(m.id)}
-                  >
-                    <span class="settings__model-id">{m.id}</span>
-                    <span class="settings__model-ctx"
-                      >{Math.round(m.context_length / 1024)}k ctx</span
-                    >
-                  </button>
-                {/each}
-              </div>
-            {/if}
           </div>
 
           <div class="research-form__evidence">
@@ -901,59 +859,6 @@
 
   .research-form__hint--empty {
     font-style: italic;
-  }
-
-  /* La lista de modelos sugeridos es la MISMA que Configuración
-     (`settings__model-*` en SettingsView): mismas clases y mismos tokens para
-     que las dos listas sean visualmente la misma. */
-  .settings__model-list {
-    max-height: 240px;
-    overflow-y: auto;
-    border: 1px solid color-mix(in srgb, var(--color-hairline) 78%, transparent);
-    border-radius: var(--radius-surface);
-    background: color-mix(in srgb, var(--color-surface-glass) 72%, transparent);
-  }
-
-  .settings__model-list-title {
-    padding: var(--space-2) var(--space-3);
-    font-size: var(--font-size-xs);
-    color: var(--color-text-secondary);
-    border-bottom: 1px solid color-mix(in srgb, var(--color-hairline) 72%, transparent);
-  }
-  .settings__model-option {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 100%;
-    padding: var(--space-2) var(--space-3);
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    font-size: var(--font-size-sm);
-    text-align: left;
-    transition: background-color var(--transition-smooth);
-  }
-  .settings__model-option:hover {
-    background: color-mix(in srgb, var(--color-surface-glass) 82%, transparent);
-  }
-
-  .settings__model-option.selected {
-    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-glass));
-    font-weight: var(--font-weight-medium);
-  }
-
-  .settings__model-option + .settings__model-option {
-    border-top: 1px solid var(--color-border-subtle);
-  }
-
-  .settings__model-id {
-    color: var(--color-text-primary);
-  }
-
-  .settings__model-ctx {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
   }
 
   /* El alcance de la evidencia y la elección de bibliotecas son los MISMOS

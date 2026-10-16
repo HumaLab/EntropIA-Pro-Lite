@@ -83,6 +83,11 @@
     opacity: 0.48;
     transform: none;
   }
+  /* A principal button that is off must still be seen (and hovered for its
+     tooltip); at 48 % it melted into the surface. */
+  .btn--primary:disabled {
+    opacity: 0.72;
+  }
 
   .btn:focus-visible {
     outline: none;

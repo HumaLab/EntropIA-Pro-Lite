@@ -280,6 +280,12 @@ pub async fn llm_get_results(
     .await
 }
 
+/// Test the stored Vercel AI Gateway fallback key (T-45).
+#[tauri::command]
+pub async fn test_vercel_connection() -> Result<(), String> {
+    OpenRouterClient::test_fallback_connection().await
+}
+
 /// Test the OpenRouter connection with the given API key.
 /// Returns a list of available models on success.
 #[tauri::command]

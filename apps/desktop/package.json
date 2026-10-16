@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "3d-force-graph": "1.80.0",
     "@entropia/store": "workspace:*",
     "@entropia/ui": "workspace:*",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
