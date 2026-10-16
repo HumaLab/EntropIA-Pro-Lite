@@ -339,10 +339,16 @@ mod tests {
         std::fs::create_dir_all(archive.path().join("dev-profiles/x")).unwrap();
         std::fs::write(archive.path().join("entropia.processing.lock"), b"").unwrap();
         // Three older copies and a cut one.
-        for old in ["2001-01-01_000000", "2002-01-01_000000", "2003-01-01_000000"] {
+        for old in [
+            "2001-01-01_000000",
+            "2002-01-01_000000",
+            "2003-01-01_000000",
+        ] {
             std::fs::create_dir(target.path().join(format!("{COPY_PREFIX}{old}"))).unwrap();
         }
-        let cut = target.path().join(format!("{COPY_PREFIX}2004-01-01_000000{PARTIAL_SUFFIX}"));
+        let cut = target
+            .path()
+            .join(format!("{COPY_PREFIX}2004-01-01_000000{PARTIAL_SUFFIX}"));
         std::fs::create_dir(&cut).unwrap();
         // Something else of the user's in the same folder.
         std::fs::create_dir(target.path().join("fotos")).unwrap();
@@ -350,15 +356,23 @@ mod tests {
         let copy = run_backup(&db_path).expect("backup");
 
         let restored = rusqlite::Connection::open(copy.join(DB_FILE)).unwrap();
-        let body: String = restored.query_row("SELECT body FROM notes", [], |r| r.get(0)).unwrap();
+        let body: String = restored
+            .query_row("SELECT body FROM notes", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(body, "hola");
-        assert_eq!(std::fs::read(copy.join("assets/a/doc.pdf")).unwrap(), b"%PDF");
+        assert_eq!(
+            std::fs::read(copy.join("assets/a/doc.pdf")).unwrap(),
+            b"%PDF"
+        );
         assert!(!copy.join("dev-profiles").exists());
         assert!(!copy.join("entropia.processing.lock").exists());
 
         let left = complete_copies(target.path());
         assert_eq!(left.len(), 2);
-        assert_eq!(left[0].file_name().unwrap(), "entropia-backup-2003-01-01_000000");
+        assert_eq!(
+            left[0].file_name().unwrap(),
+            "entropia-backup-2003-01-01_000000"
+        );
         assert_eq!(left[1], copy);
         assert!(!cut.exists());
         assert!(target.path().join("fotos").exists());
