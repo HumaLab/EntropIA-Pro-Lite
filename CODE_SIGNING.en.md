@@ -15,7 +15,7 @@ Installer signing is not integrated into the repository. Installers and packages
 | Linux DEB | Yes | Yes | `Release` can build it; no package signing is integrated. |
 | macOS | Yes, arm64, through a manual run with `release_platform=all` | Yes, universal DMG | No code signing or notarization is integrated. |
 | Remote runtime bootstrap | Yes, for lean installers | No | Ed25519-signed manifest/catalog and SHA-256-validated archive. |
-| GitHub Release | `Release` creates a draft with the applicable Pro assets. | NSIS/MSI are attached on tags; the MSIX remains an Actions artifact. | Draft publication is manual and outside the workflow. |
+| GitHub Release | `Release` creates a draft with the applicable Pro assets. | NSIS/MSI, the `.deb`, and the `.dmg` are attached on tags; the MSIX remains an Actions artifact. | Draft publication is manual and outside the workflow. |
 | Supply-chain controls | Both variants | Both variants | No provenance attestation, generated SBOM, published installer checksums, or enforced manual signing approval. |
 
 ## Trust boundaries
@@ -32,19 +32,19 @@ These controls protect the remote runtime, not the installer. The conditions `pa
 
 ### 3. GitHub Release draft and manual publication
 
-On a tag, `Release` creates the Pro release as a draft and attaches the applicable assets. Lite NSIS/MSI installers are also attached on tags; the MSIX remains a separate artifact for Microsoft Store. Publishing the draft is a manual action outside the workflow and is not an enforced CI signing approval.
+On a tag, `Release` creates the Pro release as a draft and attaches the applicable assets. Lite NSIS/MSI installers and, when they passed their startup checks, the Lite `.deb` and `.dmg` are also attached on tags; the MSIX remains a separate artifact for Microsoft Store. Publishing the draft is a manual action outside the workflow and is not an enforced CI signing approval.
 
 ## Current release path
 
 This is the operational order for a lean Pro release; it is not an automatic dependency among all workflows:
 
-1. Run `Build Runtime Pack` for the intended application version. It currently builds the `windows-x86_64` pack, produces the `runtime-archive` and `runtime-payloads` artifacts, and runs the runtime-pack smoke test.
+1. Run `Build Runtime Pack` for the intended application version, once per platform (`windows-x86_64` and `linux-x86_64`). It produces the `runtime-archive` and `runtime-payloads` artifacts and runs the runtime-pack smoke test.
 2. Run `Publish Runtime Bootstrap` with that run's `runtime_pack_run_id`. It consumes `runtime-archive`, publishes the archive or its parts, and updates the signed manifest/catalog.
-3. Mandatorily verify that a compatible live signed catalog entry exists for every lean Pro artifact, with an exact `app_version` and platform match.
+3. Verify that a compatible live signed catalog entry exists for every lean Pro artifact, with an exact `app_version` and platform match. `Release` checks it again before compiling (step *Require a published runtime for this Pro build*, `apps/desktop/scripts/check-runtime-bootstrap.mjs`) and refuses to build Pro when it is missing.
 4. Trigger `Release` by tag or manually. Its only manual inputs are `release_platform` and `lite_only`; it does not accept `runtime_payload_artifact` or `runtime_payload_run_id`.
 5. Review the draft and publish it manually when the applicable artifacts and controls are correct.
 
-`Release` intentionally includes fixture runtime packs in lean Pro installers and compiles in the bootstrap manifest URL and public key. Installer builds are not gated on the smoke workflow result, so verifying the live catalog is a mandatory pre-release control.
+`Release` intentionally includes fixture runtime packs in lean Pro installers and compiles in the bootstrap manifest URL and public key. The build fails closed when the signed manifest lacks the exact version and platform entry, but it is not gated on the smoke workflow result: reviewing that result remains a pre-release control.
 
 ## Pre-publication checklist
 

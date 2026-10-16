@@ -12,20 +12,20 @@ EntropIA organizes collections, processes images/PDFs/audio, and enriches result
 | ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | OCR                 | local PaddleOCR (Light) + PaddleOCR-VL or GLM-OCR (High) | remote GLM-OCR (Light and High use the same provider)                                             |
 | Transcription       | local faster-whisper + AssemblyAI                        | AssemblyAI                                                                                        |
-| LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER          | OpenRouter (Gemma 4 by default)                                                                   |
+| LLM / NER / RAG     | local Gemma 4 + OpenRouter; local spaCy for NER          | OpenRouter (Gemma 4 by default); optional Vercel AI Gateway fallback                              |
 | Embeddings          | local BGE-M3 (ONNX) + OpenRouter (`baai/bge-m3`)         | OpenRouter (`baai/bge-m3`)                                                                        |
-| Native ML runtime   | yes (downloaded on first use)                            | no                                                                                                |
+| Native ML runtime   | yes (downloads itself at startup)                        | no                                                                                                |
 | Installer           | Windows: NSIS + MSI · Linux: DEB (GitHub)                | Windows: NSIS + MSI (GitHub) · MSIX (Store) · macOS: universal DMG (GitHub) · Linux: DEB (GitHub) |
 | Tauri identifier    | `com.entropia.pro.desktop`                               | `com.entropia.lite`                                                                               |
 | Store MSIX identity | —                                                        | `CONICET.EntropIALite`                                                                            |
 | Built with          | `--features local-ml` + `VITE_LOCAL_ML=1`                | lean default features + `VITE_LOCAL_ML=0`                                                         |
 
-**Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR): no native models or runtime, small installer, Microsoft Store distribution.
+**Pro** runs AI on the machine by default (offline-first) and lets users select remote providers in settings; `auto` modes apply fallback where implemented. **Lite** is 100% remote (OpenRouter / AssemblyAI / GLM-OCR, with Vercel AI Gateway as an optional OpenRouter fallback): no native models or runtime, small installer, Microsoft Store distribution.
 
 ## Quick start
 
 - **User manual**: [User manual](https://humalab.github.io/EntropIA-Pro-Lite/manual-usuario/manual-usuario.html) — full usage guide, in Spanish.
-- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64 (Ubuntu 22.04 or later): `.deb`. On both, the local-ML runtime downloads itself on first launch. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
+- **EntropIA Pro** — Windows x64: `.exe` (NSIS) + `.msi`; Linux x64 (Ubuntu 22.04 or later): `.deb`. On both, the local-ML runtime downloads itself at startup —a banner shows the progress and lets you pause or retry— and the AI dependencies then install themselves. Available from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
 - **EntropIA Lite** — Windows x64: Microsoft Store (<https://apps.microsoft.com/detail/9N328K9L95JD>) or `.exe`/`.msi`; macOS (Apple Silicon and Intel): universal `.dmg`; Linux x64 (Ubuntu 22.04 or later): `.deb`. All from [repo Releases](https://github.com/HumaLab/EntropIA-Pro-Lite/releases).
   - **macOS**: the `.dmg` is not notarized by Apple. On first launch macOS blocks it: open **System Settings → Privacy & Security** and click **Open Anyway**.
   - **Linux**: API keys are stored in the system keyring (gnome-keyring or KWallet). Desktop Ubuntu ships one; on minimal installs, install `gnome-keyring` and create a default keyring.
@@ -98,24 +98,29 @@ cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml                   
 
 Both variants cover the same core research workflows; the engine changes (local vs remote, see the table above). Their runtime and UI feature sets are not literally identical: Pro adds local engines and dependency/model management.
 
-- Home: startup view with what to resume, corpus status (OCR, embeddings, pending work), and quick access to Collections, Chat, Research, and Writing.
+- Home: startup view with what to resume, corpus status (OCR, embeddings, pending work), and quick access to Collections, Chat, Research, and Writing. A new archive comes with three sample collections, analysis included, kept off sync.
 - Corpus organization into collections, items, and local assets (SQLite).
-- Image, PDF, and audio ingestion; exporting a collection to JSON (documents, text, notes, entities, layout).
+- Image, PDF, and audio ingestion; import of public PDFs from Internet Archive (search, collection or link, with verification, deduplication and resume); exporting a collection to JSON (documents, text, notes, entities, layout).
 - OCR Light + OCR High with layout persistence (blocks, regions, pages, bounding boxes).
 - Audio transcription.
 - LLM-assisted correction, summary, and semantic extraction.
 - Entities, triples, NER, FTS, and asset-level embeddings (RAG).
-- Batch processing: OCR and embeddings over entire collections from Settings, in the background, with per-item retries and resume after closes or outages.
+- Batch processing: OCR, embeddings, entities, triples and extraction with a user-defined schema (a table downloadable as CSV) over entire collections from Settings, in the background, with priority, saved flows, per-item retries and resume after closes or outages.
 - Notes, annotations, and manual result editing: entities and triples are created, edited and deleted by hand, not only read.
 - Per-process status on each document (indexing, embeddings, NER, triples), so what already ran is visible without running it again.
-- Research chat over the corpus, with each new conversation titled automatically.
-- Writing: a manuscript editor with an outline, a research panel, and citations anchored to the corpus or to a local Zotero library (CSL styling); an AI writing agent that never edits on its own; export to Markdown, HTML, or Word with footnotes and a bibliography.
+- A 3D graph of a collection's relations (triples), with each name's details and the documents it comes from.
+- Research chat over the corpus, the Biblioteca or both, with each new conversation titled automatically and sources that open the cited fragment.
+- Staged research (agent) with a selectable model, a scope of collections and/or the Biblioteca, a budget, and a report with verifiable sources.
+- Biblioteca: sync of Zotero libraries (catalog, text of PDFs and web snapshots, hybrid text and meaning search), a view per work, and reprocessing of damaged text with an estimated cost.
+- Writing: a manuscript editor with an outline, a research panel, and citations anchored to the corpus, to Biblioteca passages, or to a local Zotero library (CSL styling); an AI writing agent that never edits on its own; a version history with restore; its own sync, manuscripts shared across accounts and sending to the hlab.com.ar blog; export to Markdown, HTML, or Word with footnotes and a bibliography.
 - Browser-style tabs (up to 4) and a two-pane split view, each pane with its own navigation.
 - Collection grid with keyset pagination and thumbnails generated for what is looked at, not for everything loaded.
 - Sidebar collection tree, with each collection paged in batches.
-- Appearance: themes (dark, warm, light, and Lite), contrast levels, and typography presets.
-- Browser-style UI zoom (75%-125%), from the topbar or `Ctrl +/-/0`.
-- Cross-device sync (deterministic ids for duplicate-free convergence).
+- Appearance: themes (dark, warm, light, Lite, Papel, Bosque, and Vibrante), contrast levels, and typography presets.
+- Browser-style UI zoom (75%-125%), from Settings → Appearance or `Ctrl +/-/0`.
+- Cross-device sync (deterministic ids for duplicate-free convergence), including manuscripts and finished investigations.
+- Backups of the whole archive (database and files) into a chosen folder, by hand or daily/weekly, keeping the last N.
+- Archive maintenance: migrations applied in Rust at startup, a trigger/view audit, and compaction at close when worthwhile.
 - Microsoft Store update notice (Lite on Windows): detects a newer published version and opens the Store listing; it does not download or install anything on its own.
 
 ## How the variant flag works
@@ -127,15 +132,15 @@ The unification is a **strangler** over the Pro code: all local inference lives 
 - The **frontend** reads `VITE_LOCAL_ML`: in Lite it hides DependenciasTab, the deps banners, and the local-model UI, and the brand becomes "EntropIA Lite".
 - The **Tauri command list is identical** in both variants; only the bodies branch (the Lite arm returns healthy/no-op, like EntropIA Lite did).
 
-On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend and audits dependencies (`pnpm audit --prod --audit-level high` and `cargo audit`, blocking). Lint and svelte-check fail on any warning. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite, and the Linux Rust Lite job runs `rustfmt`, `clippy`, and `cargo test`, as blocking gates.
+On every push/PR, CI runs workspace lint, typecheck, and tests with the Pro frontend, plus desktop typecheck and tests with `VITE_LOCAL_ML=0`; it also builds the Pro frontend and audits dependencies (`pnpm audit --prod --audit-level high` and `cargo audit`, blocking). Lint and svelte-check fail on any warning. When relevant Rust/Tauri files change, the Windows feature contract compiles and links Pro and Lite, the Linux Rust Lite job runs `rustfmt`, `clippy`, and `cargo test`, and the Linux Rust Pro job runs `clippy --features local-ml`, as blocking gates. The **Verify binary provenance** workflow checks every committed binary against `apps/desktop/src-tauri/binary-provenance.json`.
 
 ## Release &amp; installers
 
-**Pro — lean installer + download-on-first-use.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime on first use from a signed remote source (ed25519), verifying signature + sha256 before trusting it. On Windows/Linux, `build.rs` fails closed if a Pro (`local-ml`) release build embeds the fixture without a baked bootstrap source; Lite downloads no runtime and skips that check. The **Release** workflow sets the variables for Pro only.
+**Pro — lean installer + download at startup.** The AI runtime (~2.2GB) does not fit inside a Windows installer (NSIS and WiX fail above ~2GB). The installer ships the small `runtime-pack` fixture and the app downloads the real runtime at startup (once, outside dev and tests) from a signed remote source (ed25519), in resumable parts, verifying signature + sha256 before trusting it; the runtime banner shows progress and offers pause and retry. Once the runtime is ready, the AI dependencies install themselves from its offline wheelhouse. On Windows/Linux, `build.rs` fails closed if a Pro (`local-ml`) release build embeds the fixture without a baked bootstrap source; Lite downloads no runtime and skips that check. The **Release** workflow sets the variables for Pro only.
 
 Pro release flow:
 
-1. **Build Runtime Pack** → builds a fresh runtime-pack (`runtime-archive` artifact).
+1. **Build Runtime Pack** (platform `windows-x86_64` or `linux-x86_64`) → builds a fresh runtime-pack (`runtime-archive` artifact).
 2. **Publish Runtime Bootstrap** with that `runtime_pack_run_id` → splits the archive under GitHub's 2 GiB per-asset limit, uploads the parts to the `runtime-bootstrap` tag, and publishes a signed `manifest.json`.
 3. Push a `v*` tag → the **Release** workflow builds NSIS + MSI on Windows and the Pro `.deb` on Linux, with the manifest URL + public key **baked** into the binary. Before building, the workflow **refuses to build Pro** when the signed manifest has no entry for the exact app version and platform (`apps/desktop/scripts/check-runtime-bootstrap.mjs`).
 

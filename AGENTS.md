@@ -45,6 +45,7 @@
 
 - Root Vitest is a multi-project config for `packages/store`, `packages/ui`, and `apps/desktop`; package configs define environments (`node` for store, `happy-dom` for UI/desktop).
 - Desktop tests mirror `VITE_LOCAL_ML`; default tests exercise Pro UI. Set `VITE_LOCAL_ML=0` to cover Lite-specific UI paths.
+- The Navegador section is experimental and off in every published build: it needs `VITE_NAVEGADOR=1` on the frontend and the Cargo feature `navegador` (`pnpm exec tauri dev --features navegador`); without the feature its commands answer "not available". It is not part of the Pro/Lite variant axis, and the user manual does not document it.
 - Vite dev server is fixed to port `1420` for Tauri and ignores `src-tauri/**` watches.
 - Desktop Vite pins dependency prebundling and `noDiscovery` to avoid stale optimized chunks in Tauri WebView; be careful when adding new bare runtime imports from linked workspace packages.
 
