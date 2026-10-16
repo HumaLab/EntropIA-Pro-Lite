@@ -35,6 +35,11 @@ CHAPTER_PATTERN = re.compile(
     r'## Capítulo (?P<number>\d+)\.\s*(?P<title>[^\r\n]+)$'
 )
 IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+# The editions must work offline: no stylesheet, font or script may load
+# from the network (links to external pages in the text are fine).
+REMOTE_RESOURCE_PATTERN = re.compile(
+    r"<(?:link|script)\b[^>]*\b(?:href|src)=[\"']?(?:https?:)?//", re.IGNORECASE
+)
 
 STYLES = r"""
 /* ================================================================
@@ -511,9 +516,6 @@ PAGE_TEMPLATE = """<!doctype html>
   <script>
 @@THEME_INIT_SCRIPT@@
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Fraunces:ital,wght@0,400;0,500;1,500&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
 @@STYLES@@
   </style>
@@ -776,6 +778,8 @@ def page_markup(
         page = page.replace(placeholder, value)
     if "@@" in page:
         raise ValueError("Quedó un marcador de plantilla sin reemplazar.")
+    if REMOTE_RESOURCE_PATTERN.search(page):
+        raise ValueError("La página carga una hoja de estilo o un script remoto.")
     return page
 
 
