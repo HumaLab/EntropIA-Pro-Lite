@@ -31,14 +31,14 @@ const UV_EXECUTABLE_NAME: &str = "uv";
 #[cfg(windows)]
 const UV_EXECUTABLE_NAME: &str = "uv.exe";
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const UV_DOWNLOAD_URL_WINDOWS_X86_64: &str = concat!(
     "https://github.com/astral-sh/uv/releases/download/",
     "0.6.14",
     "/uv-x86_64-pc-windows-msvc.zip"
 );
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const UV_DOWNLOAD_URL_WINDOWS_AARCH64: &str = concat!(
     "https://github.com/astral-sh/uv/releases/download/",
     "0.6.14",
@@ -48,14 +48,14 @@ const UV_DOWNLOAD_URL_WINDOWS_AARCH64: &str = concat!(
 /// Total request timeout for the uv download (read + body), generous enough for a
 /// ~15 MB zip on a slow corporate link but bounded so a dead proxy fails instead
 /// of hanging forever.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const UV_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// Connect-phase timeout: a misconfigured proxy/firewall surfaces fast here.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const UV_DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bounded retries for the whole download+extract before giving up, mirroring the
 /// backoff precedent in `deps/mod.rs::remove_dir_all_with_retry`.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const UV_DOWNLOAD_ATTEMPTS: u32 = 3;
 
 /// Expected SHA-256 of `uv.exe` extracted from the official
@@ -140,7 +140,7 @@ impl WindowsUvArch {
         }
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(windows)]
     fn download_url(self) -> &'static str {
         match self {
             Self::X86_64 => UV_DOWNLOAD_URL_WINDOWS_X86_64,
@@ -686,14 +686,17 @@ impl UvBinary {
     /// Build a tokio `Command` pre-configured with `CREATE_NO_WINDOW` on
     /// Windows. Callers add args before spawning.
     pub fn command(&self) -> Command {
-        let mut cmd = Command::new(&self.path);
-
         #[cfg(windows)]
         {
+            let mut cmd = Command::new(&self.path);
             cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd
         }
 
-        cmd
+        #[cfg(not(windows))]
+        {
+            Command::new(&self.path)
+        }
     }
 }
 
@@ -713,10 +716,10 @@ pub async fn download(
     {
         let _ = app_data_dir;
         let _ = on_progress;
-        return Err(
+        Err(
             "No hay descarga administrada de uv para esta plataforma. En Linux/macOS usá el runtime hidratado (uv/bin/uv) o instalá uv en el PATH."
                 .to_string(),
-        );
+        )
     }
 
     #[cfg(windows)]

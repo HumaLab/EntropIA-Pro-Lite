@@ -273,6 +273,81 @@ class RuntimePackScriptTests(unittest.TestCase):
                 self.assertIn('demo_pkg/__init__.py', archive.namelist())
                 self.assertIn('demo_pkg-1.2.3.dist-info/METADATA', archive.namelist())
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits are not tracked on Windows')
+    def test_materialize_linux_payload_passes_prepare_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            base = root / 'base'
+            write_fixture_file(base, 'bin/python3', '#!/bin/sh\necho Python 3.11.9\n', executable=True)
+            write_fixture_file(base, 'lib/python3.11/os.py', '# stdlib\n')
+            site_packages = root / 'venv' / 'lib' / 'python3.11' / 'site-packages'
+            for dist in ('paddlepaddle', 'paddleocr', 'faster_whisper', 'spacy', 'es_core_news_md'):
+                (site_packages / dist).mkdir(parents=True)
+                (site_packages / dist / '__init__.py').write_text('', encoding='utf-8')
+                dist_info = site_packages / f'{dist}-1.0.0.dist-info'
+                dist_info.mkdir()
+                (dist_info / 'METADATA').write_text(
+                    f'Metadata-Version: 2.1\nName: {dist}\nVersion: 1.0.0\n',
+                    encoding='utf-8',
+                )
+                (dist_info / 'RECORD').write_text(
+                    f'{dist}/__init__.py,,\n{dist}-1.0.0.dist-info/METADATA,,\n',
+                    encoding='utf-8',
+                )
+            uv_source = root / 'uv-bin' / 'uv'
+            uv_source.parent.mkdir()
+            uv_source.write_text('#!/bin/sh\necho uv 0.6.14\n', encoding='utf-8')
+            uv_source.chmod(0o644)
+            native = root / 'native'
+            native.mkdir()
+            for lib in ('libpdfium.so', 'libonnxruntime.so'):
+                (native / lib).write_bytes(b'\x7fELF')
+            hf = root / 'hf' / 'models--Systran--faster-whisper-base'
+            hf.mkdir(parents=True)
+            (hf / 'model.bin').write_bytes(b'w')
+            paddlex = root / 'paddlex'
+            paddlex.mkdir()
+            (paddlex / 'official_models.txt').write_text('m\n', encoding='utf-8')
+
+            info = {
+                'base_prefix': str(base),
+                'version': [3, 11, 9],
+                'purelib': str(site_packages),
+                'platlib': str(site_packages),
+                'sitepackages': [str(site_packages)],
+            }
+            module = materialize_windows_runtime_payload
+            original = module.inspect_managed_python
+            module.inspect_managed_python = lambda _python, _platform=None: info
+            try:
+                payload_root = module.materialize_payload(
+                    output_dir=root / 'out',
+                    managed_python=root / 'venv' / 'bin' / 'python',
+                    uv_path=uv_source,
+                    pack_version='2026.10.0',
+                    app_version='1.0.20',
+                    app_data_dir=root / 'appdata',
+                    native_source_dirs=[native],
+                    hf_cache_mode='core',
+                    hf_cache_source=root / 'hf',
+                    paddlex_cache_source=paddlex,
+                    platform='linux-x86_64',
+                )
+            finally:
+                module.inspect_managed_python = original
+
+            self.assertEqual(payload_root, root / 'out' / 'linux-x86_64')
+            self.assertTrue(os.access(payload_root / 'uv' / 'bin' / 'uv', os.X_OK))
+            self.assertTrue(os.access(payload_root / 'python' / 'bin' / 'python3', os.X_OK))
+            overrides = json.loads((payload_root / 'manifest.overrides.json').read_text(encoding='utf-8'))
+            self.assertEqual(overrides['python_relpath'], 'python/bin/python3')
+            self.assertEqual(overrides['uv_relpath'], 'uv/bin/uv')
+            prepare_runtime_payload.validate_required_payload('linux-x86_64', payload_root)
+
+    def test_materialize_rejects_unknown_platform(self) -> None:
+        with self.assertRaises(ValueError):
+            materialize_windows_runtime_payload.platform_layout('macos-arm64')
+
     def test_materialize_compresses_multiple_wheel_tags(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             dist_info = Path(temp_dir) / 'colorama-0.4.6.dist-info'
@@ -384,6 +459,48 @@ class RuntimePackScriptTests(unittest.TestCase):
                 'release smoke found unseeded cache marker: caches/hf/CACHE_NOT_SEEDED.txt',
                 smoke_payload['release_errors'],
             )
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits are not tracked on Windows')
+    def test_smoke_rejects_linux_interpreters_without_execute_bit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_root = create_fixture_root(Path(temp_dir) / 'fixtures')
+            pack_root = fixture_root / 'linux-x86_64'
+            for rel in ('python/bin/python3', 'uv/bin/uv'):
+                (pack_root / rel).chmod(0o644)
+            result = self.run_script(
+                str(SMOKE_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--root',
+                str(fixture_root),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            self.assertFalse(payload['ok'])
+            self.assertIn('python_relpath is not executable: python/bin/python3', payload['contract_errors'])
+            self.assertIn('uv_relpath is not executable: uv/bin/uv', payload['contract_errors'])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX execute bits are not tracked on Windows')
+    def test_bundled_linux_fixture_pack_passes_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            build = self.run_script(
+                str(BUILD_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--output-dir',
+                str(Path(temp_dir) / 'out'),
+            )
+            self.assertEqual(build.returncode, 0, build.stderr)
+            result = self.run_script(
+                str(SMOKE_SCRIPT),
+                '--platform',
+                'linux-x86_64',
+                '--root',
+                str(Path(temp_dir) / 'out'),
+            )
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload['contract_errors'], [])
+            self.assertEqual(result.returncode, 0, result.stdout)
 
     def test_fixture_smoke_passes_but_release_smoke_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

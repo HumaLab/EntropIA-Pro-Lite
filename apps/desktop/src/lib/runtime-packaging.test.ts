@@ -413,6 +413,45 @@ describe('runtime pack packaging', () => {
     expect(ciWorkflow).toContain('src/lib/runtime-packaging.test.ts')
   })
 
+  it('builds and publishes a linux-x86_64 runtime pack next to the Windows one', () => {
+    const buildWorkflow = readRepoFile('.github/workflows/build-runtime-pack.yml')
+    const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')
+
+    // Both workflows take the target platform as an input, Windows by default so
+    // existing dispatches keep their meaning.
+    for (const workflow of [buildWorkflow, publishWorkflow]) {
+      expect(workflow).toMatch(/platform:[\s\S]*?default: 'windows-x86_64'/)
+      expect(workflow).toContain('- linux-x86_64')
+    }
+
+    // The Linux job materializes a relocatable payload, assembles it as a
+    // release pack and proves it installs offline before uploading it.
+    const linuxJob = topLevelJobText(buildWorkflow, 'build-linux')
+    expect(linuxJob).toContain('runs-on: ubuntu-22.04')
+    expect(linuxJob).toContain('materialize_windows_runtime_payload.py')
+    expect(linuxJob).toContain('--platform linux-x86_64')
+    expect(linuxJob).toContain('fetch-pdfium.sh linux-x64')
+    expect(linuxJob).toContain('--require-release-payload')
+    expect(linuxJob).toContain('--release --install-probe')
+    expect(linuxJob).toContain('runtime-archive-linux-x86_64')
+
+    // Publish signs whichever platform it was given instead of hardcoding Windows.
+    expect(publishWorkflow).not.toContain('PLATFORM=windows-x86_64')
+    expect(publishWorkflow).toContain('PLATFORM=${{ inputs.platform }}')
+  })
+
+  it('lints the Pro (local-ml) build on Linux in CI', () => {
+    const ciWorkflow = readRepoFile('.github/workflows/ci.yml')
+    const job = topLevelJobText(ciWorkflow, 'rust-pro-linux')
+
+    // Same image as the Linux release build, gated like the other Rust legs.
+    expect(job).toContain('runs-on: ubuntu-22.04')
+    expect(job).toContain("needs.detect-rust-changes.outputs.has_rs_changes == 'true'")
+    expect(job).toContain(
+      'cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml --all-targets -- -D warnings'
+    )
+  })
+
   it('bakes the manifest URL that the bootstrap publish workflow prints (C-02)', () => {
     const releaseWorkflow = readRepoFile('.github/workflows/release.yml')
     const publishWorkflow = readRepoFile('.github/workflows/publish-runtime-bootstrap.yml')

@@ -150,6 +150,49 @@ jobs:
       - name: Test (Lite)
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
+  # Pro (`local-ml`) on Linux: the Windows contract job lints Pro only on
+  # Windows, so Linux-only dead code in cfg(windows)-heavy modules slipped
+  # through. Clippy only (tests run on Windows and Lite); MNN builds from source
+  # with the runner's cmake/clang, cached across runs.
+  rust-pro-linux:
+    name: Rust Pro (Linux)
+    needs: [detect-rust-changes]
+    if: needs.detect-rust-changes.outputs.has_rs_changes == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libdbus-1-dev \
+            pkg-config \
+            cmake \
+            clang \
+            libclang-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: 1.90.0
+
+      - name: Install clippy for the pinned toolchain
+        run: rustup component add clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: pro-linux
+
+      - name: Clippy (Pro, local-ml)
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml --all-targets -- -D warnings
+
   rust-quality-report:
     name: Rust Quality Report (report-first)
     runs-on: windows-latest
@@ -397,6 +440,7 @@ jobs:
 
       - name: runtime-pack-smoke
         run: |
+          python3 -m unittest apps/desktop/src-tauri/scripts/test_runtime_pack_scripts.py
           python3 apps/desktop/src-tauri/scripts/build_runtime_pack.py --platform linux-x86_64 --platform windows-x86_64
           python3 apps/desktop/src-tauri/scripts/runtime-pack-smoke.py --platform linux-x86_64 --root apps/desktop/src-tauri/target/runtime-pack
           python3 apps/desktop/src-tauri/scripts/runtime-pack-smoke.py --platform windows-x86_64 --root apps/desktop/src-tauri/target/runtime-pack

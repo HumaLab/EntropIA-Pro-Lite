@@ -268,6 +268,14 @@ def run_smoke(platform: str, root: Path, release: bool = False, install_probe: b
         contract_errors.append('python_relpath missing from python_files')
     if uv_relpath not in {entry['path'] for entry in manifest.get('uv_files', [])}:
         contract_errors.append('uv_relpath missing from uv_files')
+    # The runtime launches these directly on Linux, so a pack that lost the
+    # execute bit (e.g. a fixture committed as 100644) cannot start Python.
+    # Windows hosts do not track POSIX modes, so the check only runs on POSIX.
+    if platform == 'linux-x86_64' and os.name != 'nt':
+        for key, rel in (('python_relpath', python_relpath), ('uv_relpath', uv_relpath)):
+            target = pack_root / rel if rel else None
+            if target is not None and target.is_file() and not os.access(target, os.X_OK):
+                contract_errors.append(f'{key} is not executable: {rel}')
 
     release_errors = []
     missing_wheels = []
