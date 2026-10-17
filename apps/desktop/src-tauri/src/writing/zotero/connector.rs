@@ -263,6 +263,33 @@ pub async fn library_version(
     Ok(ask(client, &versions_url(library, 0, 1)).await?.version)
 }
 
+/// The URL for the groups the local user belongs to, each with its name.
+pub fn groups_url() -> String {
+    format!("{BASE_URL}/api/users/0/groups?format=json&limit={MAX_LIMIT}")
+}
+
+/// `(group id, name)` for every group a groups answer names. An entry without
+/// a numeric id or a name is skipped, never an error: names only label.
+pub fn group_names_from(body: &serde_json::Value) -> Vec<(String, String)> {
+    body.as_array()
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|group| {
+                    let id = group.get("id")?.as_u64()?;
+                    let name = group.pointer("/data/name")?.as_str()?.trim();
+                    (!name.is_empty()).then(|| (id.to_string(), name.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The names Zotero gives the local user's groups, in one request.
+pub async fn group_names(client: &reqwest::Client) -> Result<Vec<(String, String)>, ZoteroState> {
+    Ok(group_names_from(&ask(client, &groups_url()).await?.body))
+}
+
 /// The library's whole map of `key → version`.
 pub async fn read_versions(
     client: &reqwest::Client,
@@ -567,6 +594,32 @@ mod tests {
 
         assert!(url.contains("limit="), "{url}");
         assert!(url.contains("start="), "{url}");
+    }
+
+    /// The groups answer as Zotero sends it: the numeric `id` beside
+    /// `data.name`. An entry missing either, or with a blank name, labels
+    /// nothing; a body that is not a list names no group.
+    #[test]
+    fn group_names_are_read_from_the_groups_answer() {
+        let body = serde_json::json!([
+            { "id": 6238085, "data": { "id": 6238085, "name": "cienciassocialescomputacionales" } },
+            { "id": 4638346, "data": { "id": 4638346, "name": " pip2021 " } },
+            { "id": "7", "data": { "name": "string id" } },
+            { "id": 8, "data": { "name": "   " } },
+            { "id": 9, "data": {} },
+        ]);
+
+        assert_eq!(
+            group_names_from(&body),
+            vec![
+                (
+                    "6238085".to_string(),
+                    "cienciassocialescomputacionales".to_string()
+                ),
+                ("4638346".to_string(), "pip2021".to_string()),
+            ]
+        );
+        assert!(group_names_from(&serde_json::json!({ "error": "x" })).is_empty());
     }
 
     /// Child attachments ("Full Text PDF") and notes are not works anyone

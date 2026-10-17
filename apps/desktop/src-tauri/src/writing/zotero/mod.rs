@@ -382,6 +382,22 @@ pub fn merge_known_libraries(
     known
 }
 
+/// Names the known groups Zotero itself names (`/api/users/0/groups`).
+///
+/// Only fills a missing name: a catalog name the archive already trusts
+/// stays. User libraries are never touched — Zotero names no user library
+/// there. Pure, so precedence is testable without a server.
+pub fn name_known_groups(known: &mut [KnownLibrary], group_names: &[(String, String)]) {
+    for library in known.iter_mut() {
+        if library.library_type != LibraryType::Group || library.name.is_some() {
+            continue;
+        }
+        if let Some((_, name)) = group_names.iter().find(|(id, _)| *id == library.library_id) {
+            library.name = Some(name.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +594,46 @@ mod tests {
                     name: None,
                     source: KnownLibrarySource::Mirror,
                 },
+            ]
+        );
+    }
+
+    /// Zotero's group names fill unnamed groups only: the catalog name stays,
+    /// and a user library with the same id is a different library.
+    #[test]
+    fn known_groups_take_zotero_names_without_overriding_the_catalog() {
+        let mut known = merge_known_libraries(
+            vec![
+                super::Library::group("4638346"),
+                super::Library::group("6238085"),
+                super::Library::group("99"),
+                super::Library::user("4638346"),
+            ],
+            vec![(super::Library::group("6238085"), "Catálogo".to_string())],
+        );
+        name_known_groups(
+            &mut known,
+            &[
+                ("4638346".to_string(), "pip2021".to_string()),
+                (
+                    "6238085".to_string(),
+                    "cienciassocialescomputacionales".to_string(),
+                ),
+            ],
+        );
+
+        let names: Vec<(&str, Option<&str>)> = known
+            .iter()
+            .map(|library| (library.library_id.as_str(), library.name.as_deref()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("0", None),
+                ("4638346", Some("pip2021")),
+                ("6238085", Some("Catálogo")),
+                ("99", None),
+                ("4638346", None),
             ]
         );
     }

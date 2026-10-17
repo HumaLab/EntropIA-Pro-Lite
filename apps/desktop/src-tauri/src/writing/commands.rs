@@ -542,11 +542,13 @@ pub async fn writing_zotero_search(
         .map_err(zotero_error)
 }
 
-/// Every library the UI can offer without asking Zotero (E1c-2).
+/// Every library the UI can offer (E1c-2).
 ///
 /// Personal is always first; mirror files and catalog rows follow with the
 /// catalog winning over the mirror for the same library. Never fails on a
 /// missing cache directory or a missing catalog: those contribute no entries.
+/// Groups the catalog does not name take the name Zotero gives them; a Zotero
+/// that does not answer leaves them unnamed, never an error.
 #[tauri::command]
 pub async fn writing_zotero_known_libraries(
     app: tauri::AppHandle,
@@ -555,9 +557,20 @@ pub async fn writing_zotero_known_libraries(
     let cache = crate::path_utils::cache_dir(&app)
         .map_err(|e| WritingError::new("cache_unavailable", e))?;
     let db_path = db.db_path.clone();
-    tokio::task::spawn_blocking(move || Ok(known_libraries(&cache, &db_path)))
+    let mut known = tokio::task::spawn_blocking(move || known_libraries(&cache, &db_path))
         .await
-        .map_err(|e| joined("writing_zotero_known_libraries", e))?
+        .map_err(|e| joined("writing_zotero_known_libraries", e))?;
+    let unnamed_group = known
+        .iter()
+        .any(|library| library.library_type == LibraryType::Group && library.name.is_none());
+    if unnamed_group {
+        if let Ok(client) = zotero_client() {
+            if let Ok(names) = super::zotero::connector::group_names(&client).await {
+                super::zotero::name_known_groups(&mut known, &names);
+            }
+        }
+    }
+    Ok(known)
 }
 
 /// Whether Zotero answers for one library (E1c-2).

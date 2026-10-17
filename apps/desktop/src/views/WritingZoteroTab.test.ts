@@ -591,7 +591,7 @@ describe('E1c-2 library selector', () => {
     await fireEvent.click(trigger)
     const entries = await screen.findAllByRole('menuitemradio')
     expect(entries.map((entry) => entry.textContent?.trim())).toEqual([
-      'Personal',
+      'Mi biblioteca',
       'Seminario',
       'user/9',
     ])
@@ -630,7 +630,9 @@ describe('E1c-2 library selector', () => {
 
     await screen.findByText('Los orígenes')
     expect(zoteroStore.select).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: /^Biblioteca/ }).textContent).toContain('Personal')
+    expect(screen.getByRole('button', { name: /^Biblioteca/ }).textContent).toContain(
+      'Mi biblioteca'
+    )
   })
 })
 
