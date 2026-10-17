@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::params::RagParams;
-use super::{RagSource, RagSourceProvenance};
+use super::{RagDegradation, RagSource, RagSourceProvenance};
 use crate::nlp::vector::cosine_distance_to_blob;
 use crate::processing::eligibility::EffectiveEmbeddingContract;
 
@@ -209,15 +209,31 @@ impl<'c, 'a> ChunkCoverage<'c, 'a> {
 /// (`writing_corpus_retrieve`): las piernas de chunks proponen pasajes y las
 /// de asset solo proponen páginas sin chunks en el espacio efectivo. Así una
 /// página nunca entra dos veces y la que no tiene chunks no se pierde.
+#[cfg(test)]
 pub(crate) fn retrieval_legs(
     conn: &Connection,
     queries: &[RetrievalQuery<'_>],
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RetrievalLeg>, String> {
+    Ok(legs_reporting(conn, queries, params, unit)?.0)
+}
+
+/// Código de [`RagDegradation`]: sin espacio de embedding resoluble no hay
+/// pasajes indexados que cuenten, y todo el corpus se recupera por página.
+pub(crate) const DEGRADATION_WHOLE_PAGES_ONLY: &str = "whole_pages_only";
+
+fn legs_reporting(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<(Vec<RetrievalLeg>, Vec<RagDegradation>), String> {
+    let mut degradation = Vec::new();
     // Sin espacio efectivo resoluble (proveedor desconocido) no hay chunks que
     // cuenten como indexados: se recupera como en `Asset`, igual que la pierna
-    // vectorial cae cuando la consulta no se puede embeber.
+    // vectorial cae cuando la consulta no se puede embeber. No en silencio: va
+    // al log y a `degradation`, que la respuesta lleva a la interfaz.
     let effective = match unit {
         RetrievalUnit::Asset => None,
         RetrievalUnit::Chunk => {
@@ -228,6 +244,10 @@ pub(crate) fn retrieval_legs(
                         target: "rag",
                         "Recuperación por pasajes deshabilitada (se usan páginas enteras): {error}"
                     );
+                    degradation.push(RagDegradation {
+                        code: DEGRADATION_WHOLE_PAGES_ONLY.to_string(),
+                        detail: error,
+                    });
                     None
                 }
             }
@@ -283,7 +303,14 @@ pub(crate) fn retrieval_legs(
             )?),
         });
     }
-    Ok(legs)
+    Ok((legs, degradation))
+}
+
+/// Candidatos de una recuperación y lo que tuvo que resignar para obtenerlos.
+#[derive(Debug, Default)]
+pub(crate) struct HybridRetrieval {
+    pub(crate) candidates: Vec<RrfCandidate>,
+    pub(crate) degradation: Vec<RagDegradation>,
 }
 
 /// Recuperación híbrida hasta la lista RRF de candidatos. Los registros son
@@ -294,10 +321,19 @@ pub(crate) fn hybrid_retrieve_candidates(
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
-    let legs: Vec<Vec<RecordKey>> = retrieval_legs(conn, queries, params, unit)?
-        .into_iter()
-        .map(|leg| leg.records)
-        .collect();
+    Ok(retrieve_reporting(conn, queries, params, unit)?.candidates)
+}
+
+/// [`hybrid_retrieve_candidates`] más las degradaciones declaradas, para el
+/// Chat, que las devuelve en la respuesta.
+pub(crate) fn retrieve_reporting(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<HybridRetrieval, String> {
+    let (legs, degradation) = legs_reporting(conn, queries, params, unit)?;
+    let legs: Vec<Vec<RecordKey>> = legs.into_iter().map(|leg| leg.records).collect();
     let fused = rrf_fuse(&legs, params.fusion_candidate_limit, params.rrf_k as f64);
 
     // Solo materializamos los `rerank_depth` mejores. `load_source_record` lee
@@ -336,7 +372,10 @@ pub(crate) fn hybrid_retrieve_candidates(
         }
     }
 
-    Ok(candidates)
+    Ok(HybridRetrieval {
+        candidates,
+        degradation,
+    })
 }
 
 /// Cobertura de pasajes del corpus en ESTE dispositivo: páginas con texto y,
@@ -3519,6 +3558,30 @@ mod tests {
             chunk_coverage(&conn).expect("coverage").assets_with_chunks,
             0
         );
+    }
+
+    #[test]
+    fn hybrid_retrieval_declares_the_degradation_to_whole_pages() {
+        use super::hybrid_fixture::corpus;
+        let conn = corpus();
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let healthy =
+            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
+                .expect("retrieval");
+        assert!(healthy.degradation.is_empty());
+
+        set_setting(&conn, "embedding_provider", "mystery");
+        let degraded =
+            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
+                .expect("an unknown provider must not fail retrieval");
+        assert_eq!(degraded.degradation.len(), 1);
+        assert_eq!(degraded.degradation[0].code, "whole_pages_only");
+        assert!(degraded.degradation[0].detail.contains("mystery"));
+        assert_eq!(degraded.candidates.len(), 2);
     }
 
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {

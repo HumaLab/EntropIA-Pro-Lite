@@ -77,6 +77,17 @@ export interface RagAnswer {
   bibliographyNotice?: string | null
   /** Short, key-free cause behind `failed` / `embedding_unavailable`. */
   bibliographyNoticeDetail?: string | null
+  /**
+   * What corpus retrieval gave up for this answer (e.g. `whole_pages_only`:
+   * no resolvable embedding space, so whole pages were retrieved instead of
+   * passages). Absent when retrieval ran complete. Not displayed yet (F4).
+   */
+  retrievalDegradation?: RagDegradation[]
+}
+
+export interface RagDegradation {
+  code: string
+  detail: string
 }
 
 export interface RagConversationSummary {
