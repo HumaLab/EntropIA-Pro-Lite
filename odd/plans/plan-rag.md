@@ -337,3 +337,35 @@ Agente, con entrega separada.
 1. ¿Arrancar por F0 + F1, que solas resuelven el caso de referencia?
 2. ¿El modo Asset se elimina después de F1 o se conserva como opción avanzada?
 3. ¿F5 (núcleo común con el Agente) entra en este plan o queda como plan propio?
+
+## 8. Pendientes detectados en F0–F1
+
+### 8.1 Etiqueta del espacio de embedding en Pro sin `embedding_provider`
+
+Sin el setting configurado, el motor y el sello no nombran el mismo proveedor:
+
+- **Motor (consulta y chunks).** En Pro, `EmbeddingProvider::from_setting(None)` devuelve `Local`
+  (`nlp/embeddings.rs:191`; en Lite, `Api`: `:193`). Lo usan tanto la consulta del Chat
+  (`rag/commands.rs:1311-1316`, `config_from_settings` → `engine.embed_text`) como el procesamiento,
+  que embebe cada chunk con el mismo motor (`processing/embedding.rs:409`, vía
+  `nlp/mod.rs:462`).
+- **Sello.** `resolve_effective_embedding_contract` trata la ausencia del setting como `api`
+  (`processing/eligibility.rs:113`) y, con el modelo por defecto, sella el contrato canónico
+  (`:125`, `:135`), que el procesamiento escribe en `rag_chunks` (`processing/embedding.rs:362`,
+  `:454-455`).
+
+**Es solo la etiqueta, no el espacio.** Las dos ramas son BGE-M3 denso de 1.024 dimensiones con
+normalización L2: el motor local corre el ONNX de `BAAI/bge-m3` (`nlp/embeddings.rs:161`, `:1625`) y
+toma el vector CLS (`:2056`); el API pide `baai/bge-m3` (`:37`, `:40`) con 1.024 dimensiones (`:41`);
+ambos pasan por `l2_normalize` en la agregación (`:1338`). En un mismo dispositivo la consulta y los
+chunks salen además del mismo motor, y `rag_chunks` no se sincroniza, así que `chunk_vector_leg`
+compara vectores comparables. Que el ONNX local y el endpoint de OpenRouter den el mismo vector para
+el mismo texto se infiere de que ambos son el modelo BGE-M3 publicado; no está medido.
+
+**Pendiente.** (1) Que el sello nombre el proveedor que realmente embebió (`local` en Pro sin setting),
+o que el default de los dos resolutores sea el mismo. Cambiar el sello invalida la frescura de lo ya
+procesado (re-embebido), así que va con el contrato nuevo de F2. (2) Caso borde: en Pro sin
+`embedding_provider` pero con `openrouter_embedding_model` distinto del canónico, el sello nombra ese
+modelo (contrato hash) aunque embebe el BGE-M3 local. (3) El frontend ya asume `local` por defecto en
+Pro (`src/lib/settings.ts:233`); conviene verificar si persiste el valor en instalaciones nuevas, que
+haría este caso raro en la práctica.
