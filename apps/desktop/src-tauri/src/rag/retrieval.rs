@@ -15,8 +15,8 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::{RagSource, RagSourceProvenance};
-use crate::processing::eligibility::EffectiveEmbeddingContract;
 use crate::nlp::vector::cosine_distance_to_blob;
+use crate::processing::eligibility::EffectiveEmbeddingContract;
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
@@ -25,6 +25,13 @@ const MIN_TERM_CHARS: usize = 4;
 // (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
 // que el usuario no podía tocar.
 
+/// Unidad de recuperación (`rag_retrieval_unit`).
+///
+/// `Chunk` (el default) es híbrida POR ASSET: el asset con chunks en el
+/// espacio de embedding efectivo se recupera por pasaje; el que no los tiene
+/// (procesado antes de los chunks, o sin proveedor de embeddings) sigue
+/// entrando entero, por `vec_assets` y `fts_items`, como en `Asset`. `Asset`
+/// queda como modo explícito: la página entera, recortada por ventana.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetrievalUnit {
     Asset,
@@ -34,8 +41,8 @@ pub(crate) enum RetrievalUnit {
 impl RetrievalUnit {
     pub(crate) fn from_setting(value: Option<&str>) -> Result<Self, String> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("asset") => Ok(Self::Asset),
-            Some("chunk") => Ok(Self::Chunk),
+            Some("asset") => Ok(Self::Asset),
+            None | Some("chunk") => Ok(Self::Chunk),
             Some(other) => Err(format!(
                 "Unidad de recuperación RAG no soportada: {other}. Usá 'asset' o 'chunk'."
             )),
@@ -45,7 +52,7 @@ impl RetrievalUnit {
 
 impl Default for RetrievalUnit {
     fn default() -> Self {
-        Self::Asset
+        Self::Chunk
     }
 }
 
@@ -125,50 +132,133 @@ pub(crate) struct RetrievalLeg {
     pub(crate) records: Vec<RecordKey>,
 }
 
+/// Qué páginas puede proponer una pierna por asset.
+#[derive(Clone, Copy)]
+enum AssetFilter<'a> {
+    All,
+    /// Solo las que NO tienen chunks en el espacio efectivo: las que sí los
+    /// tienen ya entran por las piernas de chunks.
+    WithoutChunks(&'a EffectiveEmbeddingContract),
+}
+
+/// Pregunta, por asset, si ya tiene chunks en el espacio efectivo.
+struct ChunkCoverage<'c, 'a> {
+    stmt: Option<(rusqlite::Statement<'c>, &'a EffectiveEmbeddingContract)>,
+}
+
+impl<'c, 'a> ChunkCoverage<'c, 'a> {
+    fn new(conn: &'c Connection, filter: AssetFilter<'a>) -> Result<Self, String> {
+        let stmt = match filter {
+            AssetFilter::All => None,
+            AssetFilter::WithoutChunks(effective) => Some((
+                conn.prepare(
+                    "SELECT EXISTS(SELECT 1 FROM rag_chunks
+                                   WHERE asset_id = ?1
+                                     AND embedding_model = ?2
+                                     AND embedding_contract = ?3
+                                     AND dimensions = ?4)",
+                )
+                .map_err(|e| format!("Failed to prepare RAG chunk coverage check: {e}"))?,
+                effective,
+            )),
+        };
+        Ok(Self { stmt })
+    }
+
+    /// `true` si la pierna por asset puede proponer esta página.
+    fn admits(&mut self, asset_id: &str) -> Result<bool, String> {
+        let Some((stmt, effective)) = self.stmt.as_mut() else {
+            return Ok(true);
+        };
+        let covered: bool = stmt
+            .query_row(
+                rusqlite::params![
+                    asset_id,
+                    effective.model,
+                    effective.contract,
+                    effective.dimensions as i64
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to check RAG chunk coverage of {asset_id}: {e}"))?;
+        Ok(!covered)
+    }
+}
+
 /// Las piernas de una recuperación, en el orden en que se fusionan.
+///
+/// En `Chunk` la decisión es POR ASSET y vive acá, no en el comando, para
+/// que la compartan el Chat (`rag_ask`) y Escritura
+/// (`writing_corpus_retrieve`): las piernas de chunks proponen pasajes y las
+/// de asset solo proponen páginas sin chunks en el espacio efectivo. Así una
+/// página nunca entra dos veces y la que no tiene chunks no se pierde.
 pub(crate) fn retrieval_legs(
     conn: &Connection,
     queries: &[RetrievalQuery<'_>],
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RetrievalLeg>, String> {
+    // Sin espacio efectivo resoluble (proveedor desconocido) no hay chunks que
+    // cuenten como indexados: se recupera como en `Asset`, igual que la pierna
+    // vectorial cae cuando la consulta no se puede embeber.
+    let effective = match unit {
+        RetrievalUnit::Asset => None,
+        RetrievalUnit::Chunk => {
+            match crate::processing::eligibility::resolve_effective_embedding_contract(conn) {
+                Ok(effective) => Some(effective),
+                Err(error) => {
+                    log::warn!(
+                        target: "rag",
+                        "Recuperación por pasajes deshabilitada (se usan páginas enteras): {error}"
+                    );
+                    None
+                }
+            }
+        }
+    };
+    let filter = effective
+        .as_ref()
+        .map_or(AssetFilter::All, AssetFilter::WithoutChunks);
     let limit = params.candidates_per_leg;
     let assets = |ids: Vec<String>| ids.into_iter().map(RecordKey::Asset).collect();
     let chunks = |ids: Vec<String>| ids.into_iter().map(RecordKey::Chunk).collect();
 
-    let mut legs = Vec::with_capacity(queries.len().saturating_mul(2));
+    let mut legs = Vec::with_capacity(queries.len().saturating_mul(4));
     for query in queries {
-        match unit {
-            RetrievalUnit::Asset => {
-                if let Some(embedding) = query.embedding {
-                    legs.push(RetrievalLeg {
-                        kind: LegKind::AssetVector,
-                        records: assets(vector_leg(conn, embedding, limit, params.min_similarity)?),
-                    });
-                }
+        if let Some(effective) = effective.as_ref() {
+            if let Some(embedding) = query.embedding {
                 legs.push(RetrievalLeg {
-                    kind: LegKind::AssetLexical,
-                    records: assets(lexical_leg(conn, query.text, limit)?),
+                    kind: LegKind::ChunkVector,
+                    records: chunks(chunk_vector_leg_in(
+                        conn,
+                        embedding,
+                        limit,
+                        params.min_similarity,
+                        effective,
+                    )?),
                 });
             }
-            RetrievalUnit::Chunk => {
-                if let Some(embedding) = query.embedding {
-                    legs.push(RetrievalLeg {
-                        kind: LegKind::ChunkVector,
-                        records: chunks(chunk_vector_leg(
-                            conn,
-                            embedding,
-                            limit,
-                            params.min_similarity,
-                        )?),
-                    });
-                }
-                legs.push(RetrievalLeg {
-                    kind: LegKind::ChunkLexical,
-                    records: chunks(chunk_lexical_leg(conn, query.text, limit)?),
-                });
-            }
+            legs.push(RetrievalLeg {
+                kind: LegKind::ChunkLexical,
+                records: chunks(chunk_lexical_leg_in(conn, query.text, limit, effective)?),
+            });
         }
+        if let Some(embedding) = query.embedding {
+            legs.push(RetrievalLeg {
+                kind: LegKind::AssetVector,
+                records: assets(vector_leg_filtered(
+                    conn,
+                    embedding,
+                    limit,
+                    params.min_similarity,
+                    filter,
+                )?),
+            });
+        }
+        legs.push(RetrievalLeg {
+            kind: LegKind::AssetLexical,
+            records: assets(lexical_leg_filtered(conn, query.text, limit, filter)?),
+        });
     }
     Ok(legs)
 }
@@ -261,6 +351,22 @@ pub(crate) fn vector_leg(
     limit: usize,
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
+    vector_leg_filtered(
+        conn,
+        query_embedding,
+        limit,
+        min_similarity,
+        AssetFilter::All,
+    )
+}
+
+fn vector_leg_filtered(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+    min_similarity: f64,
+    filter: AssetFilter<'_>,
+) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare("SELECT v.asset_id, v.embedding FROM vec_assets v")
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
@@ -285,10 +391,12 @@ pub(crate) fn vector_leg(
                               AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)",
         )
         .map_err(|e| format!("Failed to prepare RAG vector text check: {e}"))?;
+    let mut coverage = ChunkCoverage::new(conn, filter)?;
     rank_assets_with_text(scored, limit, |asset_id| {
-        has_text
+        let with_text: bool = has_text
             .query_row([asset_id], |row| row.get(0))
-            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))
+            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))?;
+        Ok(with_text && coverage.admits(asset_id)?)
     })
 }
 
@@ -420,6 +528,7 @@ fn score_embeddings<P: rusqlite::Params>(
 /// procesamiento los estampa y con el que se embebe la consulta: filtrar por
 /// el contrato canónico dejaba sin pierna semántica a quien usa el proveedor
 /// local o un modelo API propio.
+#[cfg(test)]
 pub(crate) fn chunk_vector_leg(
     conn: &Connection,
     query_embedding: &[f32],
@@ -427,6 +536,16 @@ pub(crate) fn chunk_vector_leg(
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
     let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
+    chunk_vector_leg_in(conn, query_embedding, limit, min_similarity, &effective)
+}
+
+fn chunk_vector_leg_in(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+    min_similarity: f64,
+    effective: &EffectiveEmbeddingContract,
+) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, embedding
@@ -464,10 +583,20 @@ pub(crate) fn chunk_vector_leg(
 /// (extracción O transcripción no vacía) de cada ítem preservando el orden de
 /// relevancia. El rank léxico de un asset es su posición en esta lista
 /// aplanada.
+#[cfg(test)]
 pub(crate) fn lexical_leg(
     conn: &Connection,
     question: &str,
     limit: usize,
+) -> Result<Vec<String>, String> {
+    lexical_leg_filtered(conn, question, limit, AssetFilter::All)
+}
+
+fn lexical_leg_filtered(
+    conn: &Connection,
+    question: &str,
+    limit: usize,
+    filter: AssetFilter<'_>,
 ) -> Result<Vec<String>, String> {
     // El input es una pregunta en lenguaje natural, no una lista de keywords:
     // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
@@ -512,6 +641,7 @@ pub(crate) fn lexical_leg(
 
     // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
     // cada ítem al presupuesto total: ningún ítem necesita más que eso.
+    let mut coverage = ChunkCoverage::new(conn, filter)?;
     let mut per_item: Vec<Vec<String>> = Vec::new();
     for item in items.iter().take(limit) {
         let ids = stmt
@@ -521,6 +651,13 @@ pub(crate) fn lexical_leg(
             .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
             .collect::<Result<Vec<String>, _>>()
             .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
+        let mut admitted = Vec::with_capacity(ids.len());
+        for asset_id in ids {
+            if coverage.admits(&asset_id)? {
+                admitted.push(asset_id);
+            }
+        }
+        let ids = admitted;
 
         if !ids.is_empty() {
             per_item.push(ids);
@@ -552,6 +689,7 @@ pub(crate) fn lexical_leg(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn chunk_lexical_leg(
     conn: &Connection,
     question: &str,
@@ -561,9 +699,9 @@ pub(crate) fn chunk_lexical_leg(
     chunk_lexical_leg_in(conn, question, limit, &effective)
 }
 
-/// Pierna léxica por chunk, restringida a los chunks del espacio efectivo,
-/// igual que la pierna vectorial: un chunk de otro espacio no cuenta como
-/// pasaje indexado.
+/// Pierna léxica por chunk, restringida a los chunks del espacio efectivo:
+/// "tener chunks" significa lo mismo para las dos piernas de chunks y para
+/// el filtro de las piernas por asset.
 fn chunk_lexical_leg_in(
     conn: &Connection,
     question: &str,
@@ -1136,6 +1274,130 @@ pub(crate) fn resolve_timestamps(
     }
 
     None
+}
+
+/// Corpus mínimo con el esquema real de `rag_chunks` (migración 0029) para
+/// probar la decisión Chunk/Asset por asset desde el Chat y desde Escritura.
+#[cfg(test)]
+pub(crate) mod hybrid_fixture {
+    use rusqlite::{params, Connection};
+
+    use crate::nlp::embeddings::{
+        floats_to_blob, CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS,
+        CANONICAL_EMBEDDING_MODEL,
+    };
+
+    const RAG_CHUNKS_MIGRATION_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0029_rag_chunks.sql");
+
+    /// Página con chunks en el espacio efectivo (canónico, sin settings).
+    pub(crate) const CHUNKED_ASSET: &str = "asset-chunked";
+    /// Página procesada antes de los chunks: solo vector y texto del asset.
+    pub(crate) const PLAIN_ASSET: &str = "asset-plain";
+    pub(crate) const CHUNKED_TEXT: &str = "el cabildo abierto de mayo";
+    /// Donde empieza el único chunk de la página con chunks.
+    pub(crate) const CHUNK_START: usize = 3;
+
+    pub(crate) fn axis(index: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; CANONICAL_EMBEDDING_DIMENSIONS];
+        vector[index] = 1.0;
+        vector
+    }
+
+    fn insert_page(conn: &Connection, asset_id: &str, item_id: &str, text: &str, vector: &[f32]) {
+        conn.execute(
+            "INSERT OR IGNORE INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES (?1, 'col-1', ?1, '{}')",
+            params![item_id],
+        )
+        .expect("item");
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, 'p.png', 'image', 1)",
+            params![asset_id, item_id],
+        )
+        .expect("asset");
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
+             VALUES (?1, ?2, ?3, 'ocr', 0.9, 1)",
+            params![format!("ext-{asset_id}"), asset_id, text],
+        )
+        .expect("extraction");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                asset_id,
+                item_id,
+                floats_to_blob(vector),
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("asset vector");
+        crate::nlp::fts::fts_index_item(conn, item_id, item_id, "", text).expect("fts index");
+    }
+
+    /// Dos páginas que mencionan "cabildo": una con chunks, otra sin.
+    pub(crate) fn corpus() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory DB");
+        conn.execute_batch(
+            "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE items (id TEXT PRIMARY KEY, collection_id TEXT, title TEXT NOT NULL, metadata TEXT);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL,
+                                  type TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+                                       method TEXT, confidence REAL, created_at INTEGER NOT NULL);
+             CREATE TABLE transcriptions (id TEXT PRIMARY KEY, asset_id TEXT UNIQUE, text_content TEXT NOT NULL,
+                                          language TEXT, duration_ms INTEGER, model TEXT, segments TEXT,
+                                          confidence REAL, created_at INTEGER NOT NULL);
+             CREATE TABLE vec_assets (asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
+                                      embedding_model TEXT NOT NULL DEFAULT 'legacy',
+                                      embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+                                      dimensions INTEGER NOT NULL DEFAULT 0);",
+        )
+        .expect("corpus schema");
+        conn.execute_batch(crate::nlp::fts::FTS_ITEMS_DDL)
+            .expect("fts_items");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+
+        insert_page(&conn, CHUNKED_ASSET, "item-chunked", CHUNKED_TEXT, &axis(1));
+        let chunk_text: String = CHUNKED_TEXT.chars().skip(CHUNK_START).collect();
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES ('chunk-1', ?1, 'item-chunked', 'extraction', ?2, 0, ?3, ?4, ?5,
+                       'hash', 'rag-chunk-800-100-char-v1', ?6, ?7, ?8, ?9)",
+            params![
+                CHUNKED_ASSET,
+                format!("ext-{CHUNKED_ASSET}"),
+                chunk_text,
+                CHUNK_START as i64,
+                CHUNKED_TEXT.chars().count() as i64,
+                floats_to_blob(&axis(1)),
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("chunk");
+        insert_page(
+            &conn,
+            PLAIN_ASSET,
+            "item-plain",
+            "el cabildo y la revolución",
+            &axis(2),
+        );
+        conn
+    }
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────────
@@ -2389,11 +2651,12 @@ mod tests {
     }
 
     #[test]
-    fn retrieval_unit_selection_is_explicit_and_defaults_to_asset() {
+    fn retrieval_unit_selection_is_explicit_and_defaults_to_chunk() {
         assert_eq!(
             RetrievalUnit::from_setting(None).expect("missing setting must be valid"),
-            RetrievalUnit::Asset
+            RetrievalUnit::Chunk
         );
+        assert_eq!(RetrievalUnit::default(), RetrievalUnit::Chunk);
         assert_eq!(
             RetrievalUnit::from_setting(Some("asset")).expect("asset setting must be valid"),
             RetrievalUnit::Asset
@@ -2637,6 +2900,49 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_retrieval_falls_back_to_the_asset_for_pages_without_effective_chunks() {
+        use super::hybrid_fixture::{axis, corpus, CHUNKED_ASSET, PLAIN_ASSET};
+        let conn = corpus();
+        let embedding = axis(2);
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+        let kinds: Vec<(&str, bool)> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.record.asset_id.as_str(),
+                    candidate.record.chunk.is_some(),
+                )
+            })
+            .collect();
+        assert!(kinds.contains(&(CHUNKED_ASSET, true)), "{kinds:?}");
+        assert!(kinds.contains(&(PLAIN_ASSET, false)), "{kinds:?}");
+        assert!(
+            !kinds.contains(&(CHUNKED_ASSET, false)),
+            "a page with chunks is never also retrieved whole: {kinds:?}"
+        );
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 10_000)
+            .expect("mixed evidence should pack");
+        let packed: Vec<(&str, bool)> = sources
+            .iter()
+            .map(|source| (source.asset_id.as_str(), source.provenance.is_some()))
+            .collect();
+        assert!(packed.contains(&(CHUNKED_ASSET, true)), "{packed:?}");
+        assert!(packed.contains(&(PLAIN_ASSET, false)), "{packed:?}");
+    }
+
+    #[test]
     fn chunk_lexical_leg_ignores_chunks_of_another_embedding_space() {
         let conn = setup_rag_db();
         conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
@@ -2665,6 +2971,37 @@ mod tests {
         let ranked = chunk_lexical_leg(&conn, "cabildo", 10).expect("chunk leg");
 
         assert_eq!(ranked, ["chunk-current"]);
+    }
+
+    #[test]
+    fn hybrid_retrieval_degrades_to_whole_pages_when_the_embedding_space_is_unknown() {
+        use super::hybrid_fixture::{corpus, CHUNKED_ASSET, PLAIN_ASSET};
+        let conn = corpus();
+        set_setting(&conn, "embedding_provider", "mystery");
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("an unknown provider must not fail retrieval");
+
+        let mut pages: Vec<(&str, bool)> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.record.asset_id.as_str(),
+                    candidate.record.chunk.is_some(),
+                )
+            })
+            .collect();
+        pages.sort();
+        assert_eq!(pages, [(CHUNKED_ASSET, false), (PLAIN_ASSET, false)]);
     }
 
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {

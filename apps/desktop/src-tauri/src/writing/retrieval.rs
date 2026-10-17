@@ -154,6 +154,42 @@ mod tests {
         }
     }
 
+    /// The same steps as `writing_corpus_retrieve`, after the query is embedded.
+    fn corpus_passages(unit_setting: Option<&str>) -> Vec<RetrievedPassage> {
+        use crate::rag::retrieval::{hybrid_fixture, hybrid_retrieve_candidates, RetrievalQuery};
+        let conn = hybrid_fixture::corpus();
+        let params = crate::rag::params::rag_params_from_settings(&conn);
+        let unit =
+            crate::rag::retrieval::RetrievalUnit::from_setting(unit_setting).expect("valid unit");
+        let embedding = hybrid_fixture::axis(2);
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+        let candidates =
+            hybrid_retrieve_candidates(&conn, &[query], &params, unit).expect("retrieval");
+        passages(candidates, MAX_PASSAGES, params.snippet_max_chars)
+    }
+
+    #[test]
+    fn corpus_evidence_keeps_pages_without_chunks_under_the_default_unit() {
+        use crate::rag::retrieval::hybrid_fixture::{CHUNKED_ASSET, CHUNK_START, PLAIN_ASSET};
+        for setting in [None, Some("chunk")] {
+            let found: Vec<(String, usize)> = corpus_passages(setting)
+                .into_iter()
+                .map(|passage| (passage.asset_id, passage.start_char))
+                .collect();
+            assert!(
+                found.contains(&(CHUNKED_ASSET.to_string(), CHUNK_START)),
+                "{setting:?}: the chunked page arrives as its passage: {found:?}"
+            );
+            assert!(
+                found.contains(&(PLAIN_ASSET.to_string(), 0)),
+                "{setting:?}: the page without chunks still arrives whole: {found:?}"
+            );
+        }
+    }
+
     #[test]
     fn carries_the_identity_that_makes_a_passage_evidence() {
         let out = passages(

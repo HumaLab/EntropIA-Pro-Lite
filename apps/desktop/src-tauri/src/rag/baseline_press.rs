@@ -404,7 +404,13 @@ fn press_baseline_reports_every_case_with_its_attribution_and_stage_positions() 
             assert_eq!(report.unit, unit_name(unit));
             let expected: &[&str] = match unit {
                 RetrievalUnit::Asset => &["asset_vector", "asset_lexical", "fused"],
-                RetrievalUnit::Chunk => &["chunk_vector", "chunk_lexical", "fused"],
+                RetrievalUnit::Chunk => &[
+                    "chunk_vector",
+                    "chunk_lexical",
+                    "asset_vector",
+                    "asset_lexical",
+                    "fused",
+                ],
             };
             assert_eq!(
                 report
