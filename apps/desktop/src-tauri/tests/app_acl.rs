@@ -812,16 +812,25 @@ fn the_renderer_reaches_the_archive_directories_it_works_in() {
             assert!(response.is_ok(), "{cmd} {}: {response:?}", path.display());
         }
     }
-    for dir in ["writing-images", "writing-crops", "temp", "sample-staging"] {
+    for dir in [
+        "writing-images",
+        "writing-crops",
+        "temp",
+        "sample-staging",
+        "staging/internet-archive",
+    ] {
         assert_within_scope(
             fs_call(&main, "stat", &app_dir.path().join(dir).join("missing.bin")),
             dir,
         );
     }
-    // The archive root and its other directories stay out of reach.
+    // The archive root and its other directories stay out of reach, and so
+    // does the rest of `staging`: only its `internet-archive` jobs are granted.
     for path in [
         app_dir.path().join("settings.json"),
         app_dir.path().join("thumbnails/x.png"),
+        app_dir.path().join("staging/x.pdf"),
+        app_dir.path().join("staging/other/x.pdf"),
         cache_dir.path().join("logs/app.log"),
     ] {
         assert_scope_rejected(
