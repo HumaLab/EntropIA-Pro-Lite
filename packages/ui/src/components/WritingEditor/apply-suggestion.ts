@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core'
-import { findMatches } from './search'
+import { BLOCK_BREAK, findMatches } from './search'
 
 /**
  * Putting an agent's proposal into the manuscript (plan-editor.md §14.2).
@@ -21,9 +21,15 @@ import { findMatches } from './search'
  * asked about.
  */
 
-/** Where the passage currently stands, or `null` if it is gone or ambiguous. */
+/**
+ * Where the passage currently stands, or `null` if it is gone or ambiguous.
+ *
+ * A passage that spans paragraphs arrives with line breaks between them (see
+ * `selectedText`); each run of them stands for one block boundary, which is
+ * how the search reads the document.
+ */
 export function locateText(editor: Editor, passage: string): { from: number; to: number } | null {
-  const needle = passage.trim()
+  const needle = passage.trim().split(/[^\S\n]*\n+[^\S\n]*/).join(BLOCK_BREAK)
   if (!needle) return null
 
   // Case-sensitive: the proposal was made about these exact words, and a match

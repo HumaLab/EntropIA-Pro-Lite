@@ -34,7 +34,7 @@ export interface SearchOptions {
  * Separates blocks in the flattened text. A record separator: there is no key
  * for it, so no query can contain one and match across a block boundary.
  */
-const BLOCK_BREAK = ''
+export const BLOCK_BREAK = '\u001E'
 
 interface Chunk {
   /** Offset of this chunk's first character in the flattened text. */
