@@ -10,6 +10,7 @@ manual pages and their images) into ``_site/``.
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import re
 import shutil
@@ -28,6 +29,10 @@ MANUAL_OUTPUT = ROOT / "manual-usuario.html"
 INVENTORY_OUTPUT = ROOT / "inventario-funciones-manual.html"
 INDEX_SOURCE = ROOT.parent / "index.html"
 IMAGES_SOURCE = ROOT / "images"
+# The app's own mark (the 'e', black on transparent), used as a mask so it
+# takes the theme's accent colour, as the app's top bar does. Read from the app
+# rather than copied, so the manual follows any change to the logo.
+BRAND_MARK_SOURCE = ROOT.parents[1] / "apps" / "desktop" / "src" / "assets" / "entropia-mark.png"
 EXPECTED_CHAPTERS = 21
 
 CHAPTER_PATTERN = re.compile(
@@ -208,7 +213,15 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   text-decoration: none;
 }
 .brand:hover { color: var(--ink); }
-.brand-mark { display: block; width: 1.15rem; height: 1.15rem; color: var(--accent); flex-shrink: 0; }
+.brand .brand-mark {
+  display: block;
+  height: 1.25rem;
+  aspect-ratio: 161 / 210;
+  flex-shrink: 0;
+  background-color: var(--accent);
+  -webkit-mask: var(--brand-mark) center / contain no-repeat;
+  mask: var(--brand-mark) center / contain no-repeat;
+}
 .brand span { display: none; }
 .topbar-actions { display: flex; align-items: center; gap: .6rem; }
 .document-nav { display: flex; flex-wrap: wrap; gap: .1rem; font: 600 .85rem/1.2 var(--sans); }
@@ -544,14 +557,7 @@ PAGE_TEMPLATE = """<!doctype html>
     <div class="progress" data-progress aria-hidden="true"></div>
     <div class="topbar-inner">
       <a class="brand" href="manual-usuario.html">
-        <svg class="brand-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-          <circle cx="5" cy="5" r="1.6" fill="currentColor" stroke="none"/>
-          <circle cx="19" cy="6" r="1.6" fill="currentColor" stroke="none"/>
-          <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>
-          <circle cx="6" cy="19" r="1.6" fill="currentColor" stroke="none"/>
-          <circle cx="18" cy="18" r="1.6" fill="currentColor" stroke="none"/>
-          <path d="M5 5 12 12M19 6 12 12M12 12 6 19M12 12 18 18"/>
-        </svg>
+        <span class="brand-mark" style="--brand-mark: url(@@BRAND_MARK@@)" aria-hidden="true"></span>
         EntropIA Lite
       </a>
 @@DOCUMENT_NAV@@
@@ -768,6 +774,12 @@ def print_index(items: List[Tuple[str, str]]) -> str:
     return f'<nav class="print-index" aria-label="Índice para impresión"><ol>{links}</ol></nav>'
 
 
+def brand_mark_uri() -> str:
+    """The official mark as a data URI: the editions load nothing from elsewhere."""
+    encoded = base64.b64encode(BRAND_MARK_SOURCE.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 def page_markup(
     title: str,
     current: str,
@@ -785,6 +797,7 @@ def page_markup(
         "@@STYLES@@": STYLES,
         "@@THEME_INIT_SCRIPT@@": THEME_INIT_SCRIPT,
         "@@DOCUMENT_NAV@@": document_switcher(current),
+        "@@BRAND_MARK@@": brand_mark_uri(),
         "@@ASIDE_LABEL@@": html.escape(aside_label),
         "@@SUMMARY@@": html.escape(summary),
         "@@FILTER_LABEL@@": html.escape(filter_label),
