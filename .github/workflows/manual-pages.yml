@@ -10,6 +10,8 @@ on:
     branches: [main]
     paths:
       - 'manual/**'
+      # The manual's header mark is read from the app's logo.
+      - 'apps/desktop/src/assets/entropia-mark.png'
       - '.github/workflows/manual-pages.yml'
   workflow_dispatch:
 
