@@ -94,6 +94,10 @@ export function evidencePieces(passages: RetrievedPassage[]): ContextPiece[] {
  * each remaining word counts on its own, typos forgiven. A note that says the
  * same thing in other words is not found — that needs embeddings over notes.
  *
+ * A passage of four or more meaningful words asks for two in common: across a
+ * long selection almost every note shares some word, and a note related by
+ * coincidence is exactly what the model would then build a relation on.
+ *
  * Unlike corpus retrieval this throws: "no related notes" is an answer the
  * writer acts on, and a failed read must not pass for it.
  */
@@ -102,10 +106,17 @@ export async function retrieveNotes(
   collectionIds?: string[],
   limit = 5
 ): Promise<RelatedNote[]> {
-  const terms = tokenize(passage)
+  const terms = [...new Set(tokenize(passage))]
   if (terms.length === 0) return []
-  return getStore().notes.related(terms, { collectionIds, limit })
+  return getStore().notes.related(terms, {
+    collectionIds,
+    limit,
+    minMatchedTerms: terms.length >= LONG_PASSAGE_TERMS ? 2 : 1,
+  })
 }
+
+/** From this many meaningful words on, one shared word is not a relation. */
+const LONG_PASSAGE_TERMS = 4
 
 /** The notes as context, each carrying its id so the proposal records it. */
 export function notePieces(notes: RelatedNote[]): ContextPiece[] {

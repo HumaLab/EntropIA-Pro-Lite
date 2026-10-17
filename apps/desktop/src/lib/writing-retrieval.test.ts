@@ -142,7 +142,25 @@ describe('asking the notes', () => {
     expect(related).toHaveBeenCalledWith(['hijo', 'padre'], {
       collectionIds: ['col1'],
       limit: 5,
+      minMatchedTerms: 1,
     })
+  })
+
+  /** Across a long passage one shared word is coincidence, not a relation. */
+  it('asks a long passage for two shared words, counting each word once', async () => {
+    related.mockResolvedValue([])
+
+    await retrieveNotes('molineros molineros huelga')
+    expect(related).toHaveBeenLastCalledWith(
+      ['molineros', 'huelga'],
+      expect.objectContaining({ minMatchedTerms: 1 })
+    )
+
+    await retrieveNotes('los molineros declararon la huelga en el puerto')
+    expect(related).toHaveBeenLastCalledWith(
+      ['molineros', 'declararon', 'huelga', 'puerto'],
+      expect.objectContaining({ minMatchedTerms: 2 })
+    )
   })
 
   it('does not ask when the passage has no meaningful word', async () => {

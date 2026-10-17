@@ -34,6 +34,11 @@ export interface RelatedNotesOptions {
   /** Collections to stay inside. An empty array is no collection, not all. */
   collectionIds?: string[]
   limit?: number
+  /**
+   * Fewest terms a note must share to count as related; 1 when absent. One
+   * shared word out of a long passage is usually coincidence, not a relation.
+   */
+  minMatchedTerms?: number
 }
 
 /** A note related to a passage, and how many of the passage's words it holds. */
@@ -109,7 +114,9 @@ export class NoteRepo {
     for (const note of await this.#inScope(options)) {
       const text = `${note.content} ${note.itemTitle}`
       const matchedTerms = unique.filter((term) => matchText(term, text) !== null).length
-      if (matchedTerms > 0) found.push({ ...note, matchedTerms })
+      if (matchedTerms >= Math.max(1, options.minMatchedTerms ?? 1)) {
+        found.push({ ...note, matchedTerms })
+      }
     }
     // Stable, so notes holding as many words keep their recency order.
     found.sort((a, b) => b.matchedTerms - a.matchedTerms)

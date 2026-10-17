@@ -266,6 +266,26 @@ describe('notes related to a passage', () => {
     expect(await repo.related(['  '])).toEqual([])
   })
 
+  it('leaves out notes sharing fewer words than asked', async () => {
+    const repo = createRealDb([
+      { id: 'both', itemId: 'it-1', content: 'obreros del filet' },
+      { id: 'one', itemId: 'it-1', content: 'los obreros' },
+    ])
+
+    const found = await repo.related(['obreros', 'filet'], { minMatchedTerms: 2 })
+
+    expect(found.map((n) => n.id)).toEqual(['both'])
+  })
+
+  it('puts the most recently edited first among notes sharing as many words', async () => {
+    const repo = createRealDb([
+      { id: 'older', itemId: 'it-1', content: 'los obreros' },
+      { id: 'newer', itemId: 'it-1', content: 'otros obreros' },
+    ])
+
+    expect((await repo.related(['obreros'])).map((n) => n.id)).toEqual(['newer', 'older'])
+  })
+
   it('stays inside the collections it was given', async () => {
     const repo = createRealDb(SEEDS)
 
