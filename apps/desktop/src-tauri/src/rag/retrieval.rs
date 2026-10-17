@@ -27,6 +27,17 @@ const MIN_TERM_CHARS: usize = 4;
 /// solo pasaje al empaquetar (`pack_sources`).
 const MAX_PASSAGES_PER_ASSET: usize = 3;
 
+/// Ítems cuyas páginas lee la pierna léxica por asset para ordenarlas por sus
+/// propias coincidencias (ver `lexical_leg_filtered`). Leer páginas cuesta
+/// por página, y un diario puede tener cientos por ítem: sin tope, cada
+/// pregunta leía el texto de las páginas de hasta `rag_candidates_per_leg`
+/// (24) ítems. Ocho cubre los `top_k` ítems que pueden llegar al prompt solo
+/// por el rango de esta pierna (6 por defecto) con margen; si el usuario
+/// sube `top_k`, el tope sube con él (`top_k.max(8)`). Los ítems siguientes
+/// siguen entrando, con sus páginas en el orden histórico: el tope no quita
+/// recall, solo deja de leer texto.
+const LEXICAL_SCAN_MIN_ITEMS: usize = 8;
+
 // El tope de candidatos RRF vive ahora en `params::DEFAULT_FUSION_CANDIDATE_LIMIT`
 // (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
 // que el usuario no podía tocar.
@@ -263,7 +274,13 @@ pub(crate) fn retrieval_legs(
         }
         legs.push(RetrievalLeg {
             kind: LegKind::AssetLexical,
-            records: assets(lexical_leg_filtered(conn, query.text, limit, filter)?),
+            records: assets(lexical_leg_filtered(
+                conn,
+                query.text,
+                limit,
+                filter,
+                params.top_k.max(LEXICAL_SCAN_MIN_ITEMS),
+            )?),
         });
     }
     Ok(legs)
@@ -653,7 +670,13 @@ pub(crate) fn lexical_leg(
     question: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    lexical_leg_filtered(conn, question, limit, AssetFilter::All)
+    lexical_leg_filtered(
+        conn,
+        question,
+        limit,
+        AssetFilter::All,
+        LEXICAL_SCAN_MIN_ITEMS,
+    )
 }
 
 fn lexical_leg_filtered(
@@ -661,6 +684,7 @@ fn lexical_leg_filtered(
     question: &str,
     limit: usize,
     filter: AssetFilter<'_>,
+    scan_items: usize,
 ) -> Result<Vec<String>, String> {
     // El input es una pregunta en lenguaje natural, no una lista de keywords:
     // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
@@ -688,65 +712,88 @@ fn lexical_leg_filtered(
     }
 
     // Dentro del ítem, cada página se ordena por SUS coincidencias: cuántos
-    // términos de la pregunta contiene (sin stopwords, como el recorte). El
-    // BM25 de `fts_items` es por ítem, y ordenar sus páginas por fecha de
-    // creación ponía primero la tapa de un diario aunque el tema estuviera
-    // en la página tres (S2). Si ninguna página contiene un término (el ítem
-    // coincidió por título, metadatos o por una variante del OCR), se
-    // conservan todas en el orden histórico.
-    let terms = extract_query_terms(question);
-    let hits = if terms.is_empty() {
-        "0".to_string()
-    } else {
-        (0..terms.len())
-            .map(|index| format!("(instr(body, ?{}) > 0)", index + 3))
-            .collect::<Vec<_>>()
-            .join(" + ")
-    };
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT id, {hits} AS hits
-             FROM (
-                 SELECT a.id AS id, a.created_at AS created_at,
-                        lower(COALESCE((SELECT group_concat(e.text_content, ' ')
-                                        FROM extractions e WHERE e.asset_id = a.id), '')
-                              || ' ' ||
-                              COALESCE((SELECT group_concat(t.text_content, ' ')
-                                        FROM transcriptions t WHERE t.asset_id = a.id), ''))
-                            AS body
-                 FROM assets a
-                 WHERE a.item_id = ?1
-                   AND (EXISTS(SELECT 1 FROM extractions e
-                               WHERE e.asset_id = a.id
-                                 AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
-                        OR EXISTS(SELECT 1 FROM transcriptions t
-                                  WHERE t.asset_id = a.id
-                                    AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
-             )
-             ORDER BY hits DESC, created_at ASC, id ASC
-             LIMIT ?2"
-        ))
+    // términos de la pregunta contiene (sin stopwords, como el recorte),
+    // plegados en Rust igual que FTS (minúscula Unicode, sin diacríticos):
+    // `lower()` de SQLite solo baja el ASCII y "ÓRGANO" no encontraba
+    // "órgano". El BM25 de `fts_items` es por ítem, y ordenar sus páginas por
+    // fecha de creación ponía primero la tapa de un diario aunque el tema
+    // estuviera en la página tres (S2). Si ninguna página contiene un término
+    // (el ítem coincidió por título, metadatos o por una variante del OCR),
+    // se conservan todas en el orden histórico. Solo se lee el texto de los
+    // primeros `scan_items` ítems (`LEXICAL_SCAN_MIN_ITEMS`).
+    let terms: Vec<Vec<char>> = extract_query_terms(question)
+        .iter()
+        .map(|term| fold(term))
+        .collect();
+    const PAGES_WITH_TEXT: &str = "FROM assets a
+         WHERE a.item_id = ?1
+           AND (EXISTS(SELECT 1 FROM extractions e
+                       WHERE e.asset_id = a.id
+                         AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                OR EXISTS(SELECT 1 FROM transcriptions t
+                          WHERE t.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
+         ORDER BY a.created_at ASC, a.id ASC";
+    let mut ids_stmt = conn
+        .prepare(&format!("SELECT a.id {PAGES_WITH_TEXT} LIMIT ?2"))
         .map_err(|e| format!("Failed to prepare RAG lexical asset query: {e}"))?;
+    let mut text_stmt = conn
+        .prepare(&format!(
+            "SELECT a.id,
+                    COALESCE((SELECT group_concat(e.text_content, ' ')
+                              FROM extractions e WHERE e.asset_id = a.id), '')
+                    || ' ' ||
+                    COALESCE((SELECT group_concat(t.text_content, ' ')
+                              FROM transcriptions t WHERE t.asset_id = a.id), '')
+             {PAGES_WITH_TEXT}"
+        ))
+        .map_err(|e| format!("Failed to prepare RAG lexical page text query: {e}"))?;
 
     // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
     // cada ítem al presupuesto total: ningún ítem necesita más que eso.
     let mut coverage = ChunkCoverage::new(conn, filter)?;
     let mut per_item: Vec<Vec<String>> = Vec::new();
-    for item in items.iter().take(limit) {
-        let mut values: Vec<rusqlite::types::Value> =
-            vec![item.item_id.clone().into(), (limit as i64).into()];
-        values.extend(terms.iter().map(|term| term.clone().into()));
-        let rows = stmt
-            .query_map(rusqlite::params_from_iter(values), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
-            .collect::<Result<Vec<(String, i64)>, _>>()
-            .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
-        let any_hit = rows.first().is_some_and(|(_, hits)| *hits > 0);
-        let mut ids = Vec::with_capacity(rows.len());
-        for (asset_id, hits) in rows {
-            if (!any_hit || hits > 0) && coverage.admits(&asset_id)? {
+    for (rank, item) in items.iter().take(limit).enumerate() {
+        let ordered: Vec<String> = if rank < scan_items && !terms.is_empty() {
+            let pages = text_stmt
+                .query_map(rusqlite::params![item.item_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to run RAG lexical page text query: {e}"))?
+                .collect::<Result<Vec<(String, String)>, _>>()
+                .map_err(|e| format!("Failed to read RAG lexical page text rows: {e}"))?;
+            let mut scored: Vec<(String, usize)> = pages
+                .into_iter()
+                .map(|(asset_id, text)| {
+                    let folded = fold(&text);
+                    let hits = terms
+                        .iter()
+                        .filter(|term| !word_start_matches(&folded, term).is_empty())
+                        .count();
+                    (asset_id, hits)
+                })
+                .collect();
+            // Estable: a igual puntaje queda el orden de creación.
+            scored.sort_by(|left, right| right.1.cmp(&left.1));
+            let any_hit = scored.first().is_some_and(|(_, hits)| *hits > 0);
+            scored
+                .into_iter()
+                .filter(|(_, hits)| !any_hit || *hits > 0)
+                .map(|(asset_id, _)| asset_id)
+                .take(limit)
+                .collect()
+        } else {
+            ids_stmt
+                .query_map(rusqlite::params![item.item_id, limit as i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?
+        };
+        let mut ids = Vec::with_capacity(ordered.len());
+        for asset_id in ordered {
+            if coverage.admits(&asset_id)? {
                 ids.push(asset_id);
             }
         }
@@ -1348,17 +1395,11 @@ pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
     terms
 }
 
-/// Minúscula sin tilde, 1:1 por char para que los índices sigan alineados
-/// con el texto original (suficiente para español: Á→a, Ñ→ñ).
+/// Minúscula Unicode sin diacríticos, como el tokenizador de FTS
+/// (`unicode61 remove_diacritics 1`, vía [`crate::nlp::fuzzy::fold_latin`]),
+/// 1:1 por char para que los índices sigan alineados con el texto original.
 fn fold_char(c: char) -> char {
-    match c.to_lowercase().next().unwrap_or(c) {
-        'á' | 'à' | 'â' | 'ä' => 'a',
-        'é' | 'è' | 'ê' | 'ë' => 'e',
-        'í' | 'ì' | 'î' | 'ï' => 'i',
-        'ó' | 'ò' | 'ô' | 'ö' => 'o',
-        'ú' | 'ù' | 'û' | 'ü' => 'u',
-        other => other,
-    }
+    crate::nlp::fuzzy::fold_latin(c.to_lowercase().next().unwrap_or(c))
 }
 
 fn fold(text: &str) -> Vec<char> {
@@ -2717,6 +2758,68 @@ mod tests {
             ["page-3"],
             "only the page that matches the question, not the first created"
         );
+    }
+
+    /// Ítem de dos páginas: `-a` (creada primero) no trata el tema, `-b` sí.
+    fn two_page_item(conn: &Connection, item: &str, matching_text: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES (?1, 'col-1', ?1, '{}')",
+            params![item],
+        )
+        .expect("item insert");
+        for (suffix, created_at, text) in
+            [("a", 0, "precios y suscripción"), ("b", 1, matching_text)]
+        {
+            let asset_id = format!("{item}-{suffix}");
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, ?2, 'scan.png', 'image', ?3)",
+                params![asset_id, item, created_at],
+            )
+            .expect("asset insert");
+            insert_extraction(conn, &asset_id, text, 1);
+        }
+        crate::nlp::fts::fts_index_item(
+            conn,
+            item,
+            item,
+            "",
+            &format!("precios y suscripción {matching_text}"),
+        )
+        .expect("fts index");
+    }
+
+    #[test]
+    fn lexical_leg_matches_pages_written_in_accented_capitals() {
+        let conn = setup_rag_db();
+        two_page_item(&conn, "item-paper", "EL ÓRGANO OFICIAL DE LA FEDERACIÓN");
+
+        let ranked =
+            lexical_leg(&conn, "¿Cuál era el órgano de la federación?", 10).expect("lexical leg");
+
+        assert_eq!(ranked, ["item-paper-b"]);
+    }
+
+    #[test]
+    fn lexical_leg_reads_the_pages_of_only_the_best_matching_items() {
+        let conn = setup_rag_db();
+        let items = LEXICAL_SCAN_MIN_ITEMS + 2;
+        for index in 0..items {
+            two_page_item(&conn, &format!("item-{index:02}"), "el cabildo abierto");
+        }
+
+        let ranked = lexical_leg(&conn, "cabildo", 40).expect("lexical leg");
+
+        // Items whose pages were read contribute only the matching page;
+        // the rest keep the historical creation order, both pages.
+        let unscanned: Vec<&String> = ranked.iter().filter(|id| id.ends_with("-a")).collect();
+        assert_eq!(unscanned.len(), 2, "{ranked:?}");
+        assert_eq!(ranked.len(), LEXICAL_SCAN_MIN_ITEMS + 2 * 2);
     }
 
     #[test]

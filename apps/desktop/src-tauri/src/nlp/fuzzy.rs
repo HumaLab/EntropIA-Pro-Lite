@@ -33,18 +33,24 @@ const VOCAB_SQL: &str = "SELECT term, doc FROM fts_items_vocab \
 pub fn normalize_term(term: &str) -> String {
     term.chars()
         .flat_map(char::to_lowercase)
-        .map(|c| match c {
-            'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
-            'é' | 'è' | 'ê' | 'ë' => 'e',
-            'í' | 'ì' | 'î' | 'ï' => 'i',
-            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
-            'ú' | 'ù' | 'û' | 'ü' => 'u',
-            'ñ' => 'n',
-            'ç' => 'c',
-            'ý' | 'ÿ' => 'y',
-            other => other,
-        })
+        .map(fold_latin)
         .collect()
+}
+
+/// The diacritic half of [`normalize_term`], for one lowercase char: callers
+/// that must keep char offsets aligned fold char by char with it.
+pub fn fold_latin(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ä' | 'ã' | 'å' => 'a',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        'ý' | 'ÿ' => 'y',
+        other => other,
+    }
 }
 
 /// Edits a term tolerates: none under 5 letters or with a digit, one up to 7
