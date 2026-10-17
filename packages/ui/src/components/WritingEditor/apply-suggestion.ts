@@ -29,7 +29,10 @@ import { BLOCK_BREAK, findMatches } from './search'
  * how the search reads the document.
  */
 export function locateText(editor: Editor, passage: string): { from: number; to: number } | null {
-  const needle = passage.trim().split(/[^\S\n]*\n+[^\S\n]*/).join(BLOCK_BREAK)
+  const needle = passage
+    .trim()
+    .split(/[^\S\n]*\n+[^\S\n]*/)
+    .join(BLOCK_BREAK)
   if (!needle) return null
 
   // Case-sensitive: the proposal was made about these exact words, and a match

@@ -103,8 +103,7 @@ describe('relating a passage to the writer’s notes', () => {
     await pressNotes()
 
     await vi.waitFor(() => expect(asked()).toHaveLength(1))
-    const input = (asked()[0]![1] as { input: { context: { kind: string; text: string }[] } })
-      .input
+    const input = (asked()[0]![1] as { input: { context: { kind: string; text: string }[] } }).input
     expect(input.context.map((piece) => piece.kind)).toEqual(['selection', 'note'])
     expect(input.context[1]!.text).toBe('los molineros pararon')
     expect(mockInvoke).not.toHaveBeenCalledWith('writing_corpus_retrieve', expect.anything())

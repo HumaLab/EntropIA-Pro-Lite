@@ -149,10 +149,7 @@ export class NoteRepo {
                   ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
                   ORDER BY n.updated_at DESC
                   ${limit === undefined ? '' : 'LIMIT ?'}`
-    return this.client.select<NoteSearchHit>(
-      sql,
-      limit === undefined ? params : [...params, limit]
-    )
+    return this.client.select<NoteSearchHit>(sql, limit === undefined ? params : [...params, limit])
   }
 
   async create(
