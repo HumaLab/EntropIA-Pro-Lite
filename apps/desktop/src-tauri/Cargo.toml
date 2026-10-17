@@ -24,7 +24,11 @@ entropia-agent = { git = "https://github.com/HumaLab/EntropIA-Agent", branch = "
 vecscan = { path = "../../../crates/vecscan" }
 # Internet Archive connector client (search, metadata, availability).
 internet-archive = { path = "../../../crates/internet-archive" }
-tauri = { version = "2.12.1", features = ["protocol-asset"] }
+# `unstable` is required, in every build: the embedded browser (Navegador) is a
+# child webview (`Window::add_child`), which Tauri only exposes behind it. Do
+# not move it behind a Cargo feature: the Navegador ships in Pro and Lite on
+# every platform. See src/navegador/viewer.rs.
+tauri = { version = "2.12.1", features = ["protocol-asset", "unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled", "backup", "hooks"] }
@@ -209,7 +213,3 @@ local-ml = [
 # The build-mnn-from-source flag in the ocr-rs dependency ensures MNN compiles
 # locally via CMake, which resolves the linker symbols correctly.
 paddle-ocr = ["dep:ocr-rs"]
-# The embedded browser is a child webview, which Tauri gates behind `unstable`.
-# Off by default: the commands still exist (so the ACL manifest is the same in
-# every build) but answer "unavailable". See src/navegador/viewer.rs.
-navegador = ["tauri/unstable"]

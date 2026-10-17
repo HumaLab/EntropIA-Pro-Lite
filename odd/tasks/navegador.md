@@ -18,6 +18,14 @@ review panel on 2026-09-29.
   goes to a file; deleting a web source deletes its local files (copies in
   collections are independent and untouched).
 
+- 2026-10-17, user decision: the Navegador ships in every build, Pro and Lite,
+  on every platform (Windows, Linux, macOS), permanently: "quiero tener
+  disponible el navegador en todas las versiones, nunca mas quiero que no
+  esté". Chosen knowing macOS/Linux had not passed T7. Until then the browser
+  was gated by `VITE_NAVEGADOR=1` + Cargo feature `navegador` since T4 (the
+  prototype scaffold), and no task ever turned it on for releases. Both gates
+  are removed: `tauri` always carries `unstable`, `viewer_unavailable.rs` and
+  `NAVEGADOR` are gone, and `TopBar.test.ts` requires the header button.
 - D1: v1 is manual browsing + capture, no agent.
 - D2: own tables `web_sources` / `web_captures`, tied to no collection.
 - D3: copy, never move, only on request (collection now, Zotero after the

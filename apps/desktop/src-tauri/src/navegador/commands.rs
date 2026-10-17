@@ -24,7 +24,7 @@ use super::zotero_copy::run::{
 };
 use super::zotero_copy::store::{self as zotero_store, LibraryRef, ZoteroCopy};
 use super::zotero_copy::web::WebApiPort;
-use super::{bounds, viewer, UNAVAILABLE};
+use super::{bounds, viewer};
 use crate::db::commands::run_blocking_db_task;
 use crate::db::open::open_archive_connection;
 use crate::db::state::AppDbState;
@@ -78,14 +78,6 @@ async fn chosen_folder(db: &AppDbState) -> Option<PathBuf> {
     .map(PathBuf::from)
 }
 
-fn ensure_available() -> Result<(), String> {
-    if viewer::AVAILABLE {
-        Ok(())
-    } else {
-        Err(UNAVAILABLE.to_string())
-    }
-}
-
 /// Everything typed in the address bar takes this way in.
 fn typed(input: &str) -> Result<tauri::Url, String> {
     url_policy::check(input, NavigationKind::Typed).map_err(|reason| reason.to_string())
@@ -104,7 +96,6 @@ pub async fn navegador_open(
     width: f64,
     height: f64,
 ) -> Result<BrowserState, String> {
-    ensure_available()?;
     let url = typed(&url)?;
     let bounds = bounds::sanitize(x, y, width, height)?;
     // The first download can come before the view asks for the folder.
@@ -119,7 +110,6 @@ pub async fn navegador_download_dir(
     app: AppHandle,
     db: State<'_, AppDbState>,
 ) -> Result<DownloadDir, String> {
-    ensure_available()?;
     let chosen = chosen_folder(&db).await;
     viewer::set_download_dir(&app, chosen.clone());
     Ok(describe_folder(
@@ -137,7 +127,6 @@ pub async fn navegador_set_download_dir(
     db: State<'_, AppDbState>,
     path: String,
 ) -> Result<DownloadDir, String> {
-    ensure_available()?;
     let dir = download::validate_folder(&path).map_err(str::to_string)?;
     {
         let db = db.inner().clone();
@@ -168,25 +157,21 @@ pub async fn navegador_navigate(
     tab: u32,
     url: String,
 ) -> Result<BrowserState, String> {
-    ensure_available()?;
     viewer::navigate(&app, tab, typed(&url)?)
 }
 
 #[tauri::command]
 pub async fn navegador_back(app: AppHandle, tab: u32) -> Result<(), String> {
-    ensure_available()?;
     viewer::back(&app, tab)
 }
 
 #[tauri::command]
 pub async fn navegador_forward(app: AppHandle, tab: u32) -> Result<(), String> {
-    ensure_available()?;
     viewer::forward(&app, tab)
 }
 
 #[tauri::command]
 pub async fn navegador_reload(app: AppHandle, tab: u32) -> Result<(), String> {
-    ensure_available()?;
     viewer::reload(&app, tab)
 }
 
@@ -194,21 +179,18 @@ pub async fn navegador_reload(app: AppHandle, tab: u32) -> Result<(), String> {
 /// number of tabs.
 #[tauri::command]
 pub async fn navegador_new_tab(app: AppHandle) -> Result<BrowserState, String> {
-    ensure_available()?;
     viewer::new_tab(&app)
 }
 
 /// Bring `tab` to the front; the others stay alive and hidden.
 #[tauri::command]
 pub async fn navegador_activate_tab(app: AppHandle, tab: u32) -> Result<BrowserState, String> {
-    ensure_available()?;
     viewer::activate_tab(&app, tab)
 }
 
 /// Close `tab` and destroy its webview. The last tab is replaced by a blank one.
 #[tauri::command]
 pub async fn navegador_close_tab(app: AppHandle, tab: u32) -> Result<BrowserState, String> {
-    ensure_available()?;
     viewer::close_tab(&app, tab)
 }
 
@@ -220,26 +202,22 @@ pub async fn navegador_set_bounds(
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    ensure_available()?;
     viewer::set_bounds(&app, bounds::sanitize(x, y, width, height)?)
 }
 
 #[tauri::command]
 pub async fn navegador_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
-    ensure_available()?;
     viewer::set_visible(&app, visible)
 }
 
 /// Close every tab and popup and forget the browser.
 #[tauri::command]
 pub async fn navegador_close(app: AppHandle) -> Result<(), String> {
-    ensure_available()?;
     viewer::close(&app)
 }
 
 #[tauri::command]
 pub async fn navegador_state(app: AppHandle) -> Result<BrowserState, String> {
-    ensure_available()?;
     viewer::state(&app)
 }
 
@@ -248,7 +226,6 @@ pub async fn navegador_state(app: AppHandle) -> Result<BrowserState, String> {
 /// ...), optionally followed by `: detail`.
 #[tauri::command]
 pub async fn navegador_capture_page(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
-    ensure_available()?;
     let draft = viewer::capture(&app, tab, CaptureKind::Page)
         .await
         .map_err(|e| e.to_string())?;
@@ -259,7 +236,6 @@ pub async fn navegador_capture_page(app: AppHandle, tab: u32) -> Result<CaptureD
 /// Read the text selected in the page of `tab`, with the text around it.
 #[tauri::command]
 pub async fn navegador_capture_selection(app: AppHandle, tab: u32) -> Result<CaptureDraft, String> {
-    ensure_available()?;
     let draft = viewer::capture(&app, tab, CaptureKind::Selection)
         .await
         .map_err(|e| e.to_string())?;
@@ -573,17 +549,6 @@ pub async fn navegador_zotero_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_commands_answer_unavailable_exactly_when_the_feature_is_off() {
-        match ensure_available() {
-            Ok(()) => assert!(cfg!(feature = "navegador")),
-            Err(message) => {
-                assert!(!cfg!(feature = "navegador"));
-                assert_eq!(message, UNAVAILABLE);
-            }
-        }
-    }
 
     #[test]
     fn the_chosen_folder_is_reported_as_not_the_default() {

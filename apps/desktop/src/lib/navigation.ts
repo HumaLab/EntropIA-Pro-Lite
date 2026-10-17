@@ -65,7 +65,7 @@ export type View =
       title: string
     }
   | { name: 'settings' }
-  // Experimental in-app browser; reachable only with VITE_NAVEGADOR=1.
+  // In-app web browser.
   | { name: 'navegador' }
 
 type RootSectionView = Extract<

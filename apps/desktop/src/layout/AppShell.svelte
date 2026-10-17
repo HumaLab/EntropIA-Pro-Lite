@@ -31,7 +31,7 @@
     type RuntimeOperation,
     type RuntimeStatus,
   } from '$lib/runtime'
-  import { LOCAL_ML, NAVEGADOR } from '$lib/capabilities'
+  import { LOCAL_ML } from '$lib/capabilities'
   import { installNavegadorLifecycle } from '$lib/navegador-lifecycle'
   import { APP_VERSION, GITHUB_REPO_URL, PRODUCT_NAME_BADGE } from '$lib/product'
   import { watchSplitFit } from '$lib/resize-split-fit'
@@ -489,7 +489,7 @@
     document.addEventListener('keydown', handleKeydown)
 
     // The browser outlives its view; closing its tab is what ends it.
-    if (NAVEGADOR) stopNavegadorLifecycle = installNavegadorLifecycle(workspace)
+    stopNavegadorLifecycle = installNavegadorLifecycle(workspace)
 
     // The local dependency manager and managed runtime only exist in the
     // local-ML (Pro) build. Skip the dead deps/runtime wiring under the
