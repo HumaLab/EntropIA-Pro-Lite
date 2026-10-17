@@ -762,7 +762,7 @@ Si la conexión no funciona, EntropIA indica si Zotero no permitió la conexión
 
 Si abriste Zotero después, cambiá a otra pestaña del panel y volvé a **Zotero** para comprobar la conexión. Puede quedar visible la copia local de metadatos aunque Zotero no responda. **Actualizar** actualiza esa copia, no reescribe automáticamente las citas ya insertadas.
 
-**Elegir la biblioteca.** El menú **Biblioteca** de la pestaña muestra tu biblioteca **Personal** y las que EntropIA ya conoce porque las usaste o sincronizaste. Para usar un grupo por primera vez, pulsá **Agregar biblioteca**, elegí **Tipo** (**Usuario** o **Grupo**), escribí su **ID** —el número que figura en la dirección del grupo en zotero.org— y pulsá **Agregar**. EntropIA comprueba que Zotero la tenga; una biblioteca que no pudo comprobarse se marca **(sin verificar)**.
+**Elegir la biblioteca.** El menú **Biblioteca** de la pestaña muestra **Mi biblioteca** y las que EntropIA ya conoce porque las usaste o sincronizaste. Los grupos aparecen con el nombre que tienen en Zotero cuando Zotero está abierto; si no responde, se muestran como `group/` seguido de su número. Para usar un grupo por primera vez, pulsá **Agregar biblioteca**, elegí **Tipo** (**Usuario** o **Grupo**), escribí su **ID** —el número que figura en la dirección del grupo en zotero.org— y pulsá **Agregar**. EntropIA comprueba que Zotero la tenga; una biblioteca que no pudo comprobarse se marca **(sin verificar)**.
 
 ### 12.2. Buscar y citar
 
