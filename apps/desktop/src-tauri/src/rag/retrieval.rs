@@ -322,6 +322,58 @@ pub(crate) fn hybrid_retrieve_candidates(
     Ok(candidates)
 }
 
+/// Cobertura de pasajes del corpus en ESTE dispositivo: páginas con texto y,
+/// de ellas, cuántas tienen chunks en el espacio de embedding efectivo. Las
+/// que no, se recuperan enteras; `rag_chunks` no se sincroniza, así que cada
+/// dispositivo tiene su propia cobertura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunkCoverage {
+    pub assets_with_text: i64,
+    pub assets_with_chunks: i64,
+}
+
+pub(crate) fn chunk_coverage(conn: &Connection) -> Result<RagChunkCoverage, String> {
+    // Sin espacio efectivo resoluble ningún chunk cuenta (ver `retrieval_legs`).
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn).ok();
+    conn.query_row(
+        "WITH with_text AS (
+             SELECT a.id
+             FROM assets a
+             WHERE EXISTS(SELECT 1 FROM extractions e
+                          WHERE e.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                OR EXISTS(SELECT 1 FROM transcriptions t
+                          WHERE t.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)
+         )
+         SELECT
+             (SELECT COUNT(*) FROM with_text),
+             (SELECT COUNT(*) FROM with_text w
+              WHERE EXISTS(SELECT 1 FROM rag_chunks rc
+                           WHERE rc.asset_id = w.id
+                             AND rc.embedding_model = ?1
+                             AND rc.embedding_contract = ?2
+                             AND rc.dimensions = ?3))",
+        rusqlite::params![
+            effective.as_ref().map(|contract| contract.model.as_str()),
+            effective
+                .as_ref()
+                .map(|contract| contract.contract.as_str()),
+            effective
+                .as_ref()
+                .map(|contract| contract.dimensions as i64)
+        ],
+        |row| {
+            Ok(RagChunkCoverage {
+                assets_with_text: row.get(0)?,
+                assets_with_chunks: row.get(1)?,
+            })
+        },
+    )
+    .map_err(|e| format!("Failed to read RAG chunk coverage: {e}"))
+}
+
 #[cfg(test)]
 fn hybrid_retrieve(
     conn: &Connection,
@@ -3344,6 +3396,25 @@ mod tests {
                 .as_ref()
                 .map(|chunk| chunk.chunk_ordinal),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn chunk_coverage_counts_pages_with_text_and_those_with_effective_chunks() {
+        let conn = super::hybrid_fixture::corpus();
+        assert_eq!(
+            chunk_coverage(&conn).expect("coverage"),
+            RagChunkCoverage {
+                assets_with_text: 2,
+                assets_with_chunks: 1,
+            }
+        );
+
+        // Chunks of another embedding space are not coverage.
+        set_setting(&conn, "embedding_provider", "local");
+        assert_eq!(
+            chunk_coverage(&conn).expect("coverage").assets_with_chunks,
+            0
         );
     }
 

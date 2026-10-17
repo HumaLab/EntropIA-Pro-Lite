@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { locale } from '$lib/i18n'
-import type { RagAnswer, RagConversation, RagConversationSummary } from '$lib/rag'
+import type { RagAnswer, RagChunkCoverage, RagConversation, RagConversationSummary } from '$lib/rag'
 import { ragChat } from '$lib/rag-chat'
 import RagChatView from './RagChatView.svelte'
 
@@ -56,6 +56,7 @@ interface BackendState {
   renamePromise?: Promise<unknown>
   conversations: Record<string, RagConversation>
   ask: (args: { question: string; conversationId?: string }) => Promise<RagAnswer> | RagAnswer
+  coverage?: RagChunkCoverage
 }
 
 function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
@@ -100,6 +101,8 @@ function setupBackend(overrides: Partial<BackendState> = {}): BackendState {
         return state.ask(args as { question: string; conversationId?: string })
       case 'rag_delete_conversation':
         return undefined
+      case 'rag_chunk_coverage':
+        return state.coverage ?? { assetsWithText: 0, assetsWithChunks: 0 }
       default:
         throw new Error(`unexpected command: ${command}`)
     }
@@ -230,6 +233,26 @@ describe('RagChatView', () => {
     await waitFor(() => {
       expect(screen.getByText('Sin conversaciones todavía')).toBeInTheDocument()
     })
+  })
+
+  it('says when only part of the corpus has indexed passages on this device', async () => {
+    setupBackend({ coverage: { assetsWithText: 10, assetsWithChunks: 4 } })
+    render(RagChatView)
+
+    expect(
+      await screen.findByText(
+        'Pasajes indexados en 4 de 10 documentos con texto en este equipo. El resto se busca por página entera, con menos precisión.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('says nothing about coverage once every document with text has passages', async () => {
+    setupBackend({ coverage: { assetsWithText: 10, assetsWithChunks: 10 } })
+    render(RagChatView)
+
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('rag_chunk_coverage'))
+    await tick()
+    expect(screen.queryByText(/Pasajes indexados en/)).not.toBeInTheDocument()
   })
 
   it('sends a question with Enter and renders the answer with its sources', async () => {

@@ -140,6 +140,7 @@
     "allow-geocode-entity",
     "allow-geocode-item-entities",
     "allow-rag-ask",
+    "allow-rag-chunk-coverage",
     "allow-rag-list-conversations",
     "allow-rag-search-conversations",
     "allow-rag-get-conversation",

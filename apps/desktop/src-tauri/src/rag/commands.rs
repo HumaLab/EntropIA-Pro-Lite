@@ -224,6 +224,24 @@ pub async fn rag_reranker_download_model(
 /// validación y del LLM sí se propagan como `Err`.
 ///
 /// La generación es LOCAL por defecto (motor Gemma): funciona sin API key.
+/// Cuántas páginas con texto tienen pasajes indexados en este dispositivo.
+/// El Chat lo muestra para que un corpus a medio indexar no se confunda con
+/// una búsqueda sin resultados.
+#[tauri::command]
+pub async fn rag_chunk_coverage(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<retrieval::RagChunkCoverage, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        // Conexión propia: recorre todo el corpus y no debe tomar la de trabajo.
+        let conn = crate::db::open::open_archive_connection(&db_path)
+            .map_err(|e| format!("Failed to open DB for RAG chunk coverage: {e}"))?;
+        retrieval::chunk_coverage(&conn)
+    })
+    .await
+    .map_err(|e| format!("RAG chunk coverage task panicked: {e}"))?
+}
+
 #[tauri::command]
 pub async fn rag_ask(
     question: String,

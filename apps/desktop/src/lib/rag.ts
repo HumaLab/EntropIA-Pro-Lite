@@ -122,6 +122,20 @@ export function ragAsk(
   })
 }
 
+/**
+ * Documents with text on this device and how many of them have indexed
+ * passages. The rest are retrieved as whole pages; passages are local to each
+ * device, so coverage is too.
+ */
+export interface RagChunkCoverage {
+  assetsWithText: number
+  assetsWithChunks: number
+}
+
+export function ragChunkCoverage(): Promise<RagChunkCoverage> {
+  return invoke<RagChunkCoverage>('rag_chunk_coverage')
+}
+
 /** List persisted conversations ordered by updatedAt DESC. */
 export function ragListConversations(): Promise<RagConversationSummary[]> {
   return invoke<RagConversationSummary[]>('rag_list_conversations')

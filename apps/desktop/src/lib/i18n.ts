@@ -840,6 +840,8 @@ const es = {
     'Todavía no hay ninguna biblioteca de Zotero sincronizada en EntropIA. Sincronizá una con «Sincronizar biblioteca», en la pestaña Zotero de Escritura.',
   'ragChat.libraryStatusNoEmbeddings':
     'Hay bibliotecas sincronizadas, pero todavía no tienen vectores para buscar por significado: los pasajes no se pueden consultar hasta que termine el indexado.',
+  'ragChat.chunkCoveragePartial':
+    'Pasajes indexados en {chunked} de {total} documentos con texto en este equipo. El resto se busca por página entera, con menos precisión.',
   'ragChat.biblioNotice.noLibrarySynced':
     'No se buscó en la Biblioteca: no hay ninguna de las bibliotecas elegidas sincronizada en EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':
@@ -4147,6 +4149,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'No Zotero library is synced into EntropIA yet. Sync one with “Sync library”, in the Zotero tab of Writing.',
   'ragChat.libraryStatusNoEmbeddings':
     'Libraries are synced, but they have no vectors for meaning-based search yet: passages cannot be queried until indexing finishes.',
+  'ragChat.chunkCoveragePartial':
+    'Passages indexed for {chunked} of {total} documents with text on this device. The rest are searched as whole pages, less precisely.',
   'ragChat.biblioNotice.noLibrarySynced':
     'The Library was not searched: none of the chosen libraries is synced into EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':
