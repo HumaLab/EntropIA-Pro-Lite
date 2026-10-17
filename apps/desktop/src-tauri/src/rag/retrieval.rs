@@ -635,20 +635,45 @@ fn lexical_leg_filtered(
         }
     }
 
+    // Dentro del ítem, cada página se ordena por SUS coincidencias: cuántos
+    // términos de la pregunta contiene (sin stopwords, como el recorte). El
+    // BM25 de `fts_items` es por ítem, y ordenar sus páginas por fecha de
+    // creación ponía primero la tapa de un diario aunque el tema estuviera
+    // en la página tres (S2). Si ninguna página contiene un término (el ítem
+    // coincidió por título, metadatos o por una variante del OCR), se
+    // conservan todas en el orden histórico.
+    let terms = extract_query_terms(question);
+    let hits = if terms.is_empty() {
+        "0".to_string()
+    } else {
+        (0..terms.len())
+            .map(|index| format!("(instr(body, ?{}) > 0)", index + 3))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
     let mut stmt = conn
-        .prepare(
-            "SELECT a.id
-             FROM assets a
-             WHERE a.item_id = ?1
-               AND (EXISTS(SELECT 1 FROM extractions e
-                           WHERE e.asset_id = a.id
-                             AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
-                    OR EXISTS(SELECT 1 FROM transcriptions t
-                              WHERE t.asset_id = a.id
-                                AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
-             ORDER BY a.created_at ASC, a.id ASC
-             LIMIT ?2",
-        )
+        .prepare(&format!(
+            "SELECT id, {hits} AS hits
+             FROM (
+                 SELECT a.id AS id, a.created_at AS created_at,
+                        lower(COALESCE((SELECT group_concat(e.text_content, ' ')
+                                        FROM extractions e WHERE e.asset_id = a.id), '')
+                              || ' ' ||
+                              COALESCE((SELECT group_concat(t.text_content, ' ')
+                                        FROM transcriptions t WHERE t.asset_id = a.id), ''))
+                            AS body
+                 FROM assets a
+                 WHERE a.item_id = ?1
+                   AND (EXISTS(SELECT 1 FROM extractions e
+                               WHERE e.asset_id = a.id
+                                 AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                        OR EXISTS(SELECT 1 FROM transcriptions t
+                                  WHERE t.asset_id = a.id
+                                    AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
+             )
+             ORDER BY hits DESC, created_at ASC, id ASC
+             LIMIT ?2"
+        ))
         .map_err(|e| format!("Failed to prepare RAG lexical asset query: {e}"))?;
 
     // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
@@ -656,20 +681,23 @@ fn lexical_leg_filtered(
     let mut coverage = ChunkCoverage::new(conn, filter)?;
     let mut per_item: Vec<Vec<String>> = Vec::new();
     for item in items.iter().take(limit) {
-        let ids = stmt
-            .query_map(rusqlite::params![item.item_id, limit as i64], |row| {
-                row.get::<_, String>(0)
+        let mut values: Vec<rusqlite::types::Value> =
+            vec![item.item_id.clone().into(), (limit as i64).into()];
+        values.extend(terms.iter().map(|term| term.clone().into()));
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
             .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
-            .collect::<Result<Vec<String>, _>>()
+            .collect::<Result<Vec<(String, i64)>, _>>()
             .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
-        let mut admitted = Vec::with_capacity(ids.len());
-        for asset_id in ids {
-            if coverage.admits(&asset_id)? {
-                admitted.push(asset_id);
+        let any_hit = rows.first().is_some_and(|(_, hits)| *hits > 0);
+        let mut ids = Vec::with_capacity(rows.len());
+        for (asset_id, hits) in rows {
+            if (!any_hit || hits > 0) && coverage.admits(&asset_id)? {
+                ids.push(asset_id);
             }
         }
-        let ids = admitted;
 
         if !ids.is_empty() {
             per_item.push(ids);
@@ -1986,7 +2014,9 @@ mod tests {
         assert!(terms.contains(&"belgrano".to_string()));
         assert!(terms.contains(&"cabildo".to_string()));
         assert!(
-            !terms.iter().any(|t| t == "cuándo" || t == "de" || t == "al"),
+            !terms
+                .iter()
+                .any(|t| t == "cuándo" || t == "de" || t == "al"),
             "stopwords never anchor a window"
         );
 
@@ -2588,6 +2618,55 @@ mod tests {
     ///
     /// Drenando ítem por ítem, el ítem gordo llenaba el presupuesto entero y el
     /// segundo ítem —que también matchea— quedaba afuera.
+    #[test]
+    fn lexical_leg_ranks_the_pages_of_an_item_by_their_own_matches() {
+        let conn = setup_rag_db();
+        conn.execute(
+            "INSERT INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata)
+             VALUES ('item-paper', 'col-1', 'El Obrero, 1905', '{}')",
+            [],
+        )
+        .expect("item insert");
+        // Páginas en orden de creación: la que trata el tema es la última.
+        let pages = [
+            ("page-1", "precios y suscripción del periódico"),
+            ("page-2", "la huelga del puerto"),
+            ("page-3", "la mujer y su emancipación, dice la mujer"),
+        ];
+        for (index, (asset_id, text)) in pages.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, 'item-paper', 'scan.png', 'image', ?2)",
+                params![asset_id, index as i64],
+            )
+            .expect("asset insert");
+            insert_extraction(&conn, asset_id, text, 1);
+        }
+        let item_text: Vec<&str> = pages.iter().map(|(_, text)| *text).collect();
+        crate::nlp::fts::fts_index_item(
+            &conn,
+            "item-paper",
+            "El Obrero, 1905",
+            "",
+            &item_text.join(" "),
+        )
+        .expect("fts index");
+
+        let ranked = lexical_leg(&conn, "¿Qué dice El Obrero sobre la mujer?", 10)
+            .expect("lexical leg should succeed");
+
+        assert_eq!(
+            ranked,
+            ["page-3"],
+            "only the page that matches the question, not the first created"
+        );
+    }
+
     #[test]
     fn lexical_leg_does_not_let_one_multi_asset_item_starve_the_others() {
         let conn = setup_rag_db();
