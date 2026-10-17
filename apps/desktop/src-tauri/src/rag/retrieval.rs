@@ -1246,7 +1246,8 @@ pub(crate) fn pack_sources(
 }
 
 /// Términos de la pregunta para anclar snippets: split por whitespace, se
-/// recorta puntuación en los bordes, lowercase, se conservan términos de
+/// recorta puntuación en los bordes, lowercase, se descartan las stopwords
+/// (las mismas que la pierna léxica, `nlp::fts`) y se conservan términos de
 /// 4+ chars, ordenados del más largo al más corto (sin duplicados).
 pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
     let mut terms: Vec<String> = question
@@ -1256,6 +1257,7 @@ pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
                 .to_lowercase()
         })
         .filter(|word| word.chars().count() >= MIN_TERM_CHARS)
+        .filter(|word| !crate::nlp::fts::is_stopword(word))
         .collect();
 
     // Más largo primero: el término más específico ancla la ventana.
@@ -1266,9 +1268,50 @@ pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
     terms
 }
 
-/// Ventana de snippet centrada en la primera ocurrencia (case-insensitive)
-/// del término más largo encontrado; si ningún término aparece, arranca al
-/// inicio del texto. Opera SIEMPRE sobre chars (texto Unicode en español).
+/// Minúscula sin tilde, 1:1 por char para que los índices sigan alineados
+/// con el texto original (suficiente para español: Á→a, Ñ→ñ).
+fn fold_char(c: char) -> char {
+    match c.to_lowercase().next().unwrap_or(c) {
+        'á' | 'à' | 'â' | 'ä' => 'a',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'ö' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' => 'u',
+        other => other,
+    }
+}
+
+fn fold(text: &str) -> Vec<char> {
+    text.chars().map(fold_char).collect()
+}
+
+/// Posiciones (índice de char) donde `needle` empieza una palabra de
+/// `haystack`: "mujer" encuentra "mujeres" pero "obrero" no encuentra
+/// "ELOBRERO". Los dos lados llegan plegados con [`fold`].
+fn word_start_matches(haystack: &[char], needle: &[char]) -> Vec<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+    haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(position, window)| {
+            *window == needle && (*position == 0 || !haystack[position - 1].is_alphanumeric())
+        })
+        .map(|(position, _)| position)
+        .collect()
+}
+
+/// Ventana de snippet de mayor densidad de términos de la pregunta.
+///
+/// Cada término coincide solo al inicio de una palabra, sin distinguir
+/// mayúsculas ni tildes, y pesa por su rareza dentro del texto (IDF sobre
+/// las palabras del texto): el nombre de la publicación, que aparece en
+/// todas partes, pesa menos que el tema. Cada ventana candidata se centra en
+/// una aparición y suma el peso de los términos distintos que contiene (las
+/// repeticiones suman de forma sublineal); gana la de mayor puntaje y, a
+/// igualdad, la primera. Si ningún término aparece, arranca al inicio del
+/// texto. Opera SIEMPRE sobre chars (texto Unicode en español).
 ///
 /// Devuelve `(snippet, índice_de_char_donde_arranca_la_ventana)`.
 pub(crate) fn snippet_window(text: &str, terms: &[String], max_chars: usize) -> (String, usize) {
@@ -1277,36 +1320,64 @@ pub(crate) fn snippet_window(text: &str, terms: &[String], max_chars: usize) -> 
         return (text.to_string(), 0);
     }
 
-    // Lowercase 1:1 por char para mantener alineados los índices (suficiente
-    // para español: Á→á, Ñ→ñ son todos mapeos de un char).
-    let lowered: Vec<char> = chars
+    let folded: Vec<char> = chars.iter().copied().map(fold_char).collect();
+    let words = folded
         .iter()
-        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .enumerate()
+        .filter(|(index, c)| {
+            c.is_alphanumeric() && (*index == 0 || !folded[index - 1].is_alphanumeric())
+        })
+        .count()
+        .max(1) as f64;
+    let occurrences: Vec<Vec<usize>> = terms
+        .iter()
+        .map(|term| word_start_matches(&folded, &fold(term)))
+        .collect();
+    let weights: Vec<f64> = occurrences
+        .iter()
+        .map(|positions| {
+            if positions.is_empty() {
+                0.0
+            } else {
+                (1.0 + words / positions.len() as f64).ln()
+            }
+        })
         .collect();
 
-    let match_pos = terms.iter().find_map(|term| find_chars(&lowered, term));
-
-    let start = match match_pos {
-        Some(pos) => pos
-            .saturating_sub(max_chars / 2)
-            .min(chars.len().saturating_sub(max_chars)),
-        None => 0,
+    let latest_start = chars.len().saturating_sub(max_chars);
+    let score = |start: usize| -> f64 {
+        let end = start + max_chars;
+        occurrences
+            .iter()
+            .zip(&weights)
+            .map(|(positions, weight)| {
+                let inside = positions
+                    .iter()
+                    .filter(|position| **position >= start && **position < end)
+                    .count();
+                if inside == 0 {
+                    0.0
+                } else {
+                    weight * (1.0 + (inside as f64).ln())
+                }
+            })
+            .sum()
     };
+
+    let mut anchors: Vec<usize> = occurrences.iter().flatten().copied().collect();
+    anchors.sort_unstable();
+    let mut best: Option<(f64, usize)> = None;
+    for anchor in anchors {
+        let start = anchor.saturating_sub(max_chars / 2).min(latest_start);
+        let candidate = score(start);
+        if best.is_none_or(|(best_score, _)| candidate > best_score) {
+            best = Some((candidate, start));
+        }
+    }
+    let start = best.map_or(0, |(_, start)| start);
 
     let snippet: String = chars[start..].iter().take(max_chars).collect();
     (snippet, start)
-}
-
-/// Busca `needle` (ya en lowercase) dentro de `haystack` (chars en lowercase).
-/// Devuelve el índice de char del primer match.
-fn find_chars(haystack: &[char], needle: &str) -> Option<usize> {
-    let needle: Vec<char> = needle.chars().collect();
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
 }
 
 /// Timestamps de un registro con texto combinado: SOLO se resuelven cuando el
@@ -1329,14 +1400,13 @@ fn resolve_source_timestamps(
 }
 
 /// Posición (en chars) de la primera ocurrencia del término más largo que
-/// aparece en el texto, con el mismo lowering 1:1 por char de `snippet_window`
-/// (los términos llegan ordenados del más largo al más corto).
+/// aparece en el texto, con la misma coincidencia por inicio de palabra de
+/// `snippet_window` (los términos llegan ordenados del más largo al más corto).
 fn find_term_anchor(text: &str, terms: &[String]) -> Option<usize> {
-    let lowered: Vec<char> = text
-        .chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
-    terms.iter().find_map(|term| find_chars(&lowered, term))
+    let folded = fold(text);
+    terms
+        .iter()
+        .find_map(|term| word_start_matches(&folded, &fold(term)).first().copied())
 }
 
 /// Resuelve timestamps desde el JSON de `transcriptions.segments`:
@@ -1915,8 +1985,10 @@ mod tests {
         let terms = extract_query_terms("¿Cuándo llegó Belgrano al Cabildo de Buenos Aires?");
         assert!(terms.contains(&"belgrano".to_string()));
         assert!(terms.contains(&"cabildo".to_string()));
-        assert!(terms.contains(&"cuándo".to_string()));
-        assert!(!terms.iter().any(|t| t == "de" || t == "al"));
+        assert!(
+            !terms.iter().any(|t| t == "cuándo" || t == "de" || t == "al"),
+            "stopwords never anchor a window"
+        );
 
         let lengths: Vec<usize> = terms.iter().map(|t| t.chars().count()).collect();
         let mut sorted = lengths.clone();
@@ -1942,6 +2014,45 @@ mod tests {
         assert!(snippet.to_lowercase().contains("cabildo"));
         assert!(start > 0, "window should not start at text begin");
         assert!(snippet.chars().count() <= 200);
+    }
+
+    #[test]
+    fn extract_query_terms_drops_stopwords_like_the_lexical_leg() {
+        let terms =
+            extract_query_terms("¿Qué mirada sobre la mujer tiene el periódico 'El Obrero'?");
+        assert_eq!(terms, ["periódico", "mirada", "obrero", "mujer"]);
+    }
+
+    #[test]
+    fn snippet_window_ignores_a_term_glued_inside_another_word() {
+        let filler = "texto de relleno sin relación alguna. ".repeat(60);
+        let text = format!(
+            "<div align=\"center\">\n\n# ELOBRERO\n\n</div>\n\nPrecios y suscripción.\n\n\
+             {filler}## La Mujer\n\nMuchos dicen que la mujer es inferior.\n\n{filler}"
+        );
+        let terms =
+            extract_query_terms("¿Qué mirada sobre la mujer tiene el periódico 'El Obrero'?");
+
+        let (snippet, start) = snippet_window(&text, &terms, 600);
+
+        assert!(snippet.contains("## La Mujer"), "{snippet}");
+        assert!(!snippet.contains("ELOBRERO"));
+        assert!(start > 0);
+    }
+
+    #[test]
+    fn snippet_window_prefers_the_window_with_more_distinct_query_terms() {
+        let filler = "relleno ".repeat(150);
+        let text = format!("periódico {filler} la mirada sobre la mujer {filler}");
+        let terms = vec![
+            "periódico".to_string(),
+            "mirada".to_string(),
+            "mujer".to_string(),
+        ];
+
+        let (snippet, _start) = snippet_window(&text, &terms, 200);
+
+        assert!(snippet.contains("la mirada sobre la mujer"), "{snippet}");
     }
 
     #[test]

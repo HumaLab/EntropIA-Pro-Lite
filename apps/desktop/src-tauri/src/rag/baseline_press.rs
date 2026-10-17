@@ -380,20 +380,21 @@ fn press_reports(unit: RetrievalUnit) -> Vec<PressCaseReport> {
     reports
 }
 
+/// Antes de F1 este caso salía `PassageSelection`: la página se recuperaba
+/// primera y el recorte por "término más largo, primera aparición" se
+/// anclaba en la cabecera ("ELOBRERO"). Con la ventana por densidad,
+/// stopwords e inicio de palabra, el modo Asset también lleva el artículo.
 #[test]
-fn press_baseline_attributes_the_reference_case_to_passage_selection_in_asset_mode() {
+fn press_baseline_reference_case_reaches_the_context_in_asset_mode() {
     let reports = press_reports(RetrievalUnit::Asset);
     let reference = &reports[0];
     assert_eq!(reference.case_id, "el-obrero-la-mujer");
-    // La página se recupera primera en las dos piernas y en la fusión…
     assert!(reference
         .stages
         .iter()
         .all(|stage| stage.evidence_position == Some(1)));
-    // …pero el recorte que llega al LLM no contiene el artículo.
-    assert_eq!(reference.attribution, FailureAttribution::PassageSelection);
-    assert_eq!(reference.passage_position, None);
-    assert_eq!(reference.passage_recall_at_k, 0.0);
+    assert_eq!(reference.attribution, FailureAttribution::None);
+    assert_eq!(reference.passage_position, Some(1));
 }
 
 #[test]

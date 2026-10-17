@@ -297,7 +297,7 @@ fn drop_stopwords_preserving_nonempty(tokens: Vec<String>) -> Vec<String> {
 ///
 /// Applied ONLY when building an `Any`-mode expression — never to the
 /// embedding input and never to what gets indexed.
-fn is_stopword(token: &str) -> bool {
+pub(crate) fn is_stopword(token: &str) -> bool {
     const STOPWORDS: &[&str] = &[
         // Spanish
         "a", "al", "algo", "algunas", "algunos", "ante", "antes", "aqui", "aquí", "como", "cómo",

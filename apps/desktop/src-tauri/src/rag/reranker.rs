@@ -987,7 +987,7 @@ mod tests {
 
     #[test]
     fn documents_are_unicode_bounded_and_windowed_near_query_terms() {
-        let text = format!("{}objetivo{}", "ñ".repeat(7000), "🦉".repeat(7000));
+        let text = format!("{} objetivo {}", "ñ".repeat(7000), "🦉".repeat(7000));
         let candidates = vec![candidate("a", text, 0.1)];
 
         let documents = candidate_documents("buscar objetivo", &candidates);
