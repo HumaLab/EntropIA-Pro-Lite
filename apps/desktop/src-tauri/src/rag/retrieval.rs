@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::{RagSource, RagSourceProvenance};
+use crate::processing::eligibility::EffectiveEmbeddingContract;
 use crate::nlp::vector::cosine_distance_to_blob;
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
@@ -556,6 +557,19 @@ pub(crate) fn chunk_lexical_leg(
     question: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
+    chunk_lexical_leg_in(conn, question, limit, &effective)
+}
+
+/// Pierna léxica por chunk, restringida a los chunks del espacio efectivo,
+/// igual que la pierna vectorial: un chunk de otro espacio no cuenta como
+/// pasaje indexado.
+fn chunk_lexical_leg_in(
+    conn: &Connection,
+    question: &str,
+    limit: usize,
+    effective: &EffectiveEmbeddingContract,
+) -> Result<Vec<String>, String> {
     let fts_query = crate::nlp::fts::sanitize_fts5_query_with_mode(
         question,
         crate::nlp::fts::FtsMatchMode::Any,
@@ -565,17 +579,28 @@ pub(crate) fn chunk_lexical_leg(
     }
     let mut stmt = conn
         .prepare(
-            "SELECT chunk_id
+            "SELECT rag_chunks_fts.chunk_id
              FROM rag_chunks_fts
+             JOIN rag_chunks rc ON rc.id = rag_chunks_fts.chunk_id
              WHERE rag_chunks_fts MATCH ?1
-             ORDER BY bm25(rag_chunks_fts), chunk_id
+               AND rc.embedding_model = ?3
+               AND rc.embedding_contract = ?4
+               AND rc.dimensions = ?5
+             ORDER BY bm25(rag_chunks_fts), rag_chunks_fts.chunk_id
              LIMIT ?2",
         )
         .map_err(|error| format!("Failed to prepare RAG chunk lexical query: {error}"))?;
     let run = |stmt: &mut rusqlite::Statement<'_>, expr: &str| {
-        stmt.query_map(rusqlite::params![expr, limit as i64], |row| {
-            row.get::<_, String>(0)
-        })
+        stmt.query_map(
+            rusqlite::params![
+                expr,
+                limit as i64,
+                effective.model,
+                effective.contract,
+                effective.dimensions as i64
+            ],
+            |row| row.get::<_, String>(0),
+        )
         .map_err(|error| format!("Failed to run RAG chunk lexical query: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Failed to read RAG chunk lexical rows: {error}"))
@@ -1315,6 +1340,33 @@ mod tests {
         }
     }
 
+    const RAG_CHUNKS_MIGRATION_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0029_rag_chunks.sql");
+
+    /// Chunk único de una página, en el espacio canónico (el efectivo sin
+    /// settings). El trigger de la migración lo indexa en `rag_chunks_fts`.
+    fn index_canonical_chunk(conn: &Connection, chunk_id: &str, asset_id: &str, text: &str) {
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (?1, ?2, (SELECT item_id FROM assets WHERE id = ?2), 'extraction',
+                       'source', 0, ?3, 0, ?4, 'hash', 'rag-chunk-v1', X'00', ?5, ?6, ?7)",
+            params![
+                chunk_id,
+                asset_id,
+                text,
+                text.chars().count() as i64,
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("canonical chunk should insert");
+    }
+
     #[test]
     fn chunk_lexical_search_shares_asset_any_mode_stopword_semantics() {
         let conn = setup_rag_db();
@@ -1334,19 +1386,15 @@ mod tests {
             "sobre sobre sobre",
             None,
         );
-        conn.execute_batch(
-            r#"
-            CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(
-                chunk_id UNINDEXED,
-                text_content
-            );
-            INSERT INTO rag_chunks_fts(chunk_id, text_content)
-            VALUES
-                ('chunk-stopwords', 'sobre sobre sobre'),
-                ('chunk-relevant', 'cabildo');
-            "#,
-        )
-        .expect("chunk FTS fixture should initialize");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        index_canonical_chunk(
+            &conn,
+            "chunk-stopwords",
+            "asset-stopwords",
+            "sobre sobre sobre",
+        );
+        index_canonical_chunk(&conn, "chunk-relevant", "asset-relevant", "cabildo");
 
         let asset_ranked =
             lexical_leg(&conn, "sobre el cabildo", 10).expect("asset search should work");
@@ -1367,11 +1415,12 @@ mod tests {
             "../../../../../packages/store/src/migrations/0037_fts_vocab.sql"
         ))
         .expect("vocabulary table");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
         conn.execute_batch(
-            "CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);
-             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
-        .expect("chunk index and settings");
+        .expect("settings");
         let pages = [
             ("right-1", "el sindicato reclamo"),
             ("right-2", "asamblea del sindicato"),
@@ -1388,11 +1437,7 @@ mod tests {
                 text,
                 None,
             );
-            conn.execute(
-                "INSERT INTO rag_chunks_fts(chunk_id, text_content) VALUES (?1, ?2)",
-                params![format!("chunk-{id}"), text],
-            )
-            .expect("chunk insert");
+            index_canonical_chunk(&conn, &format!("chunk-{id}"), &format!("asset-{id}"), text);
         }
         conn
     }
@@ -2589,6 +2634,37 @@ mod tests {
             .expect("chunk vector leg should succeed");
 
         assert_eq!(ranked, ["chunk-local"]);
+    }
+
+    #[test]
+    fn chunk_lexical_leg_ignores_chunks_of_another_embedding_space() {
+        let conn = setup_rag_db();
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "cabildo abierto",
+            None,
+        );
+        index_canonical_chunk(&conn, "chunk-current", "asset-1", "cabildo abierto");
+        insert_embedded_chunk(
+            &conn,
+            "chunk-stale",
+            "asset-1",
+            "item-1",
+            1,
+            "cabildo cerrado",
+            20,
+            &unit_vector(0),
+            ("modelo-anterior", "contrato-anterior"),
+        );
+
+        let ranked = chunk_lexical_leg(&conn, "cabildo", 10).expect("chunk leg");
+
+        assert_eq!(ranked, ["chunk-current"]);
     }
 
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {
