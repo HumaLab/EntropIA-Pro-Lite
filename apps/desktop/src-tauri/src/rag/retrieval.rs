@@ -774,7 +774,7 @@ fn lexical_leg_filtered(
                             AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
          ORDER BY a.created_at ASC, a.id ASC";
     let mut ids_stmt = conn
-        .prepare(&format!("SELECT a.id {PAGES_WITH_TEXT} LIMIT ?2"))
+        .prepare(&format!("SELECT a.id {PAGES_WITH_TEXT}"))
         .map_err(|e| format!("Failed to prepare RAG lexical asset query: {e}"))?;
     let mut text_stmt = conn
         .prepare(&format!(
@@ -788,12 +788,14 @@ fn lexical_leg_filtered(
         ))
         .map_err(|e| format!("Failed to prepare RAG lexical page text query: {e}"))?;
 
-    // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
-    // cada ítem al presupuesto total: ningún ítem necesita más que eso.
+    // Assets por ítem, en orden de relevancia BM25 del ítem. Cada ítem se acota
+    // al presupuesto total DESPUÉS del filtro de cobertura: si el tope cortara
+    // antes, las páginas sin chunks de un ítem grande cuyas primeras páginas sí
+    // los tienen nunca llegarían a esta pierna.
     let mut coverage = ChunkCoverage::new(conn, filter)?;
     let mut per_item: Vec<Vec<String>> = Vec::new();
     for (rank, item) in items.iter().take(limit).enumerate() {
-        let ordered: Vec<String> = if rank < scan_items && !terms.is_empty() {
+        let ids: Vec<String> = if rank < scan_items && !terms.is_empty() {
             let pages = text_stmt
                 .query_map(rusqlite::params![item.item_id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -815,27 +817,39 @@ fn lexical_leg_filtered(
             // Estable: a igual puntaje queda el orden de creación.
             scored.sort_by(|left, right| right.1.cmp(&left.1));
             let any_hit = scored.first().is_some_and(|(_, hits)| *hits > 0);
-            scored
-                .into_iter()
-                .filter(|(_, hits)| !any_hit || *hits > 0)
-                .map(|(asset_id, _)| asset_id)
-                .take(limit)
-                .collect()
-        } else {
-            ids_stmt
-                .query_map(rusqlite::params![item.item_id, limit as i64], |row| {
-                    row.get::<_, String>(0)
-                })
-                .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
-                .collect::<Result<Vec<String>, _>>()
-                .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?
-        };
-        let mut ids = Vec::with_capacity(ordered.len());
-        for asset_id in ordered {
-            if coverage.admits(&asset_id)? {
-                ids.push(asset_id);
+            let mut admitted = Vec::new();
+            for (asset_id, hits) in scored {
+                if admitted.len() == limit {
+                    break;
+                }
+                if (!any_hit || hits > 0) && coverage.admits(&asset_id)? {
+                    admitted.push(asset_id);
+                }
             }
-        }
+            admitted
+        } else {
+            // Sin `LIMIT` en SQL: las filas se leen de a una y se corta al
+            // llegar al tope de páginas admitidas.
+            let mut rows = ids_stmt
+                .query(rusqlite::params![item.item_id])
+                .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?;
+            let mut admitted = Vec::new();
+            while admitted.len() < limit {
+                let Some(row) = rows
+                    .next()
+                    .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?
+                else {
+                    break;
+                };
+                let asset_id: String = row
+                    .get(0)
+                    .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
+                if coverage.admits(&asset_id)? {
+                    admitted.push(asset_id);
+                }
+            }
+            admitted
+        };
 
         if !ids.is_empty() {
             per_item.push(ids);
@@ -3382,6 +3396,62 @@ mod tests {
             .expect("chunk vector leg should succeed");
 
         assert_eq!(ranked, ["chunk-local"]);
+    }
+
+    #[test]
+    fn lexical_fallback_filters_chunked_pages_before_the_per_item_limit() {
+        let conn = setup_chunk_packing_db();
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("default provider resolves");
+        conn.execute(
+            "INSERT INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata)
+             VALUES ('item-big', 'col-1', 'Expediente', '{}')",
+            [],
+        )
+        .expect("item insert");
+        for index in 0..25 {
+            let asset_id = format!("page-{index:02}");
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, 'item-big', 'scan.png', 'image', ?2)",
+                params![asset_id, index as i64],
+            )
+            .expect("asset insert");
+            insert_extraction(&conn, &asset_id, "acta del cabildo", 1);
+            if index < 24 {
+                insert_embedded_chunk(
+                    &conn,
+                    &format!("chunk-{index:02}"),
+                    &asset_id,
+                    "item-big",
+                    0,
+                    "acta del cabildo",
+                    0,
+                    &unit_vector(0),
+                    (&effective.model, &effective.contract),
+                );
+            }
+        }
+        crate::nlp::fts::fts_index_item(&conn, "item-big", "Expediente", "", "acta del cabildo")
+            .expect("fts index");
+
+        // Both the scanned path and the unscanned (creation order) path.
+        for scan_items in [LEXICAL_SCAN_MIN_ITEMS, 0] {
+            let ranked = lexical_leg_filtered(
+                &conn,
+                "cabildo",
+                24,
+                AssetFilter::WithoutChunks(&effective),
+                scan_items,
+            )
+            .expect("lexical leg should succeed");
+            assert_eq!(ranked, ["page-24"], "scan_items={scan_items}");
+        }
     }
 
     #[test]
