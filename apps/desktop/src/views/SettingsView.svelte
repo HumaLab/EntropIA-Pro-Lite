@@ -265,6 +265,7 @@
     rerankDepth: string
     rrfK: string
     snippetMaxChars: string
+    passageMaxChars: string
     contextMaxChars: string
     historyTurns: string
     historyTurnMaxChars: string
@@ -279,6 +280,7 @@
     rerankDepth: SETTINGS_KEYS.RAG_RERANK_DEPTH,
     rrfK: SETTINGS_KEYS.RAG_RRF_K,
     snippetMaxChars: SETTINGS_KEYS.RAG_SNIPPET_MAX_CHARS,
+    passageMaxChars: SETTINGS_KEYS.RAG_PASSAGE_MAX_CHARS,
     contextMaxChars: SETTINGS_KEYS.RAG_CONTEXT_MAX_CHARS,
     historyTurns: SETTINGS_KEYS.RAG_HISTORY_TURNS,
     historyTurnMaxChars: SETTINGS_KEYS.RAG_HISTORY_TURN_MAX_CHARS,
@@ -906,6 +908,9 @@
       snippetMaxChars:
         validIntegerText(settingsMap.get(keys.snippetMaxChars) ?? null, 200, 8000) ??
         DEFAULT_RAG_PARAMS.snippetMaxChars,
+      passageMaxChars:
+        validIntegerText(settingsMap.get(keys.passageMaxChars) ?? null, 800, 12000) ??
+        DEFAULT_RAG_PARAMS.passageMaxChars,
       contextMaxChars:
         validIntegerText(settingsMap.get(keys.contextMaxChars) ?? null, 1000, 350000) ??
         DEFAULT_RAG_PARAMS.contextMaxChars,
@@ -963,6 +968,7 @@
       ['rerankDepth', (value) => !value.trim() || validIntegerText(value, 1, 200) !== null],
       ['rrfK', (value) => !value.trim() || validIntegerText(value, 1, 500) !== null],
       ['snippetMaxChars', (value) => !value.trim() || validIntegerText(value, 200, 8000) !== null],
+      ['passageMaxChars', (value) => !value.trim() || validIntegerText(value, 800, 12000) !== null],
       [
         'contextMaxChars',
         (value) => !value.trim() || validIntegerText(value, 1000, 350000) !== null,
@@ -2904,6 +2910,12 @@
                   hint={t('settings.ragParams.hint.snippetMaxChars')}
                   type="text"
                   bind:value={ragParams.snippetMaxChars}
+                />
+                <Input
+                  label="passageMaxChars (800-12000)"
+                  hint={t('settings.ragParams.hint.passageMaxChars')}
+                  type="text"
+                  bind:value={ragParams.passageMaxChars}
                 />
                 <Input
                   label="contextMaxChars (1000-350000)"

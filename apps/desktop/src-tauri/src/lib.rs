@@ -1503,6 +1503,7 @@ pub fn run() {
             geo::commands::geocode_entity,
             geo::commands::geocode_item_entities,
             rag::commands::rag_ask,
+            rag::commands::rag_chunk_coverage,
             rag::commands::rag_list_conversations,
             rag::commands::rag_search_conversations,
             rag::commands::rag_get_conversation,

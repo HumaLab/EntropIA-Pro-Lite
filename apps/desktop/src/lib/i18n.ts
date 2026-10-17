@@ -840,6 +840,8 @@ const es = {
     'Todavía no hay ninguna biblioteca de Zotero sincronizada en EntropIA. Sincronizá una con «Sincronizar biblioteca», en la pestaña Zotero de Escritura.',
   'ragChat.libraryStatusNoEmbeddings':
     'Hay bibliotecas sincronizadas, pero todavía no tienen vectores para buscar por significado: los pasajes no se pueden consultar hasta que termine el indexado.',
+  'ragChat.chunkCoveragePartial':
+    'Pasajes indexados en {chunked} de {total} documentos con texto en este equipo. El resto se busca por página entera, con menos precisión.',
   'ragChat.biblioNotice.noLibrarySynced':
     'No se buscó en la Biblioteca: no hay ninguna de las bibliotecas elegidas sincronizada en EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':
@@ -1660,6 +1662,8 @@ const es = {
   'settings.ragParams.hint.rrfK': 'RRF K: suaviza el ranking al fusionar búsquedas (1-500)',
   'settings.ragParams.hint.snippetMaxChars':
     'Fragmento: limita caracteres tomados de cada resultado (200-8000)',
+  'settings.ragParams.hint.passageMaxChars':
+    'Pasaje: limita cada pasaje indexado con sus vecinos; si lo excede, se recorta por pasajes enteros (800-12000)',
   'settings.ragParams.hint.contextMaxChars':
     'Contexto: limita el texto total enviado al modelo (1000-350000; Pro local admite ventana de 131K tokens)',
   'settings.ragParams.hint.historyTurns': 'Historial: cantidad de turnos previos incluidos (0-20)',
@@ -4147,6 +4151,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'No Zotero library is synced into EntropIA yet. Sync one with “Sync library”, in the Zotero tab of Writing.',
   'ragChat.libraryStatusNoEmbeddings':
     'Libraries are synced, but they have no vectors for meaning-based search yet: passages cannot be queried until indexing finishes.',
+  'ragChat.chunkCoveragePartial':
+    'Passages indexed for {chunked} of {total} documents with text on this device. The rest are searched as whole pages, less precisely.',
   'ragChat.biblioNotice.noLibrarySynced':
     'The Library was not searched: none of the chosen libraries is synced into EntropIA.',
   'ragChat.biblioNotice.noEmbeddings':
@@ -4445,6 +4451,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ragParams.hint.rrfK': 'RRF K: smooths ranking when merging searches (1-500)',
   'settings.ragParams.hint.snippetMaxChars':
     'Snippet: limits characters taken from each result (200-8000)',
+  'settings.ragParams.hint.passageMaxChars':
+    'Passage: limits each indexed passage with its neighbours; beyond it, whole passages are dropped (800-12000)',
   'settings.ragParams.hint.contextMaxChars':
     'Context: limits total text sent to the model (1000-350000; local Pro supports a 131K-token window)',
   'settings.ragParams.hint.historyTurns': 'History: number of previous turns included (0-20)',

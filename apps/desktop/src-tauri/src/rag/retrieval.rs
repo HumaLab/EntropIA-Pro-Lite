@@ -14,17 +14,41 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::params::RagParams;
-use super::{RagSource, RagSourceProvenance};
-use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
+use super::{RagDegradation, RagSource, RagSourceProvenance};
 use crate::nlp::vector::cosine_distance_to_blob;
+use crate::processing::eligibility::EffectiveEmbeddingContract;
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
+
+/// Pasajes (chunks recuperados) que una misma página puede aportar. Uno solo
+/// perdía otros artículos relevantes de una página de diario; sin tope, una
+/// página larga podía ocupar todas las fuentes. Los adyacentes se unen en un
+/// solo pasaje al empaquetar (`pack_sources`).
+const MAX_PASSAGES_PER_ASSET: usize = 3;
+
+/// Ítems cuyas páginas lee la pierna léxica por asset para ordenarlas por sus
+/// propias coincidencias (ver `lexical_leg_filtered`). Leer páginas cuesta
+/// por página, y un diario puede tener cientos por ítem: sin tope, cada
+/// pregunta leía el texto de las páginas de hasta `rag_candidates_per_leg`
+/// (24) ítems. Ocho cubre los `top_k` ítems que pueden llegar al prompt solo
+/// por el rango de esta pierna (6 por defecto) con margen; si el usuario
+/// sube `top_k`, el tope sube con él (`top_k.max(8)`). Los ítems siguientes
+/// siguen entrando, con sus páginas en el orden histórico: el tope no quita
+/// recall, solo deja de leer texto.
+const LEXICAL_SCAN_MIN_ITEMS: usize = 8;
 
 // El tope de candidatos RRF vive ahora en `params::DEFAULT_FUSION_CANDIDATE_LIMIT`
 // (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
 // que el usuario no podía tocar.
 
+/// Unidad de recuperación (`rag_retrieval_unit`).
+///
+/// `Chunk` (el default) es híbrida POR ASSET: el asset con chunks en el
+/// espacio de embedding efectivo se recupera por pasaje; el que no los tiene
+/// (procesado antes de los chunks, o sin proveedor de embeddings) sigue
+/// entrando entero, por `vec_assets` y `fts_items`, como en `Asset`. `Asset`
+/// queda como modo explícito: la página entera, recortada por ventana.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetrievalUnit {
     Asset,
@@ -34,8 +58,8 @@ pub(crate) enum RetrievalUnit {
 impl RetrievalUnit {
     pub(crate) fn from_setting(value: Option<&str>) -> Result<Self, String> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("asset") => Ok(Self::Asset),
-            Some("chunk") => Ok(Self::Chunk),
+            Some("asset") => Ok(Self::Asset),
+            None | Some("chunk") => Ok(Self::Chunk),
             Some(other) => Err(format!(
                 "Unidad de recuperación RAG no soportada: {other}. Usá 'asset' o 'chunk'."
             )),
@@ -45,7 +69,7 @@ impl RetrievalUnit {
 
 impl Default for RetrievalUnit {
     fn default() -> Self {
-        Self::Asset
+        Self::Chunk
     }
 }
 
@@ -99,6 +123,196 @@ pub(crate) struct RetrievalQuery<'a> {
     pub(crate) embedding: Option<&'a [f32]>,
 }
 
+/// Registro que propone una pierna: una página entera o un chunk. Las piernas
+/// de las dos unidades se fusionan juntas, así que el tipo viaja con el id.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum RecordKey {
+    Asset(String),
+    Chunk(String),
+}
+
+/// De dónde sale una pierna. El diagnóstico del baseline la informa por
+/// separado; la fusión no la distingue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegKind {
+    AssetVector,
+    AssetLexical,
+    ChunkVector,
+    ChunkLexical,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RetrievalLeg {
+    // Lo lee el diagnóstico por pierna del baseline (solo en tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) kind: LegKind,
+    pub(crate) records: Vec<RecordKey>,
+}
+
+/// Qué páginas puede proponer una pierna por asset.
+#[derive(Clone, Copy)]
+enum AssetFilter<'a> {
+    All,
+    /// Solo las que NO tienen chunks en el espacio efectivo: las que sí los
+    /// tienen ya entran por las piernas de chunks.
+    WithoutChunks(&'a EffectiveEmbeddingContract),
+}
+
+/// Pregunta, por asset, si ya tiene chunks en el espacio efectivo.
+struct ChunkCoverage<'c, 'a> {
+    stmt: Option<(rusqlite::Statement<'c>, &'a EffectiveEmbeddingContract)>,
+}
+
+impl<'c, 'a> ChunkCoverage<'c, 'a> {
+    fn new(conn: &'c Connection, filter: AssetFilter<'a>) -> Result<Self, String> {
+        let stmt = match filter {
+            AssetFilter::All => None,
+            AssetFilter::WithoutChunks(effective) => Some((
+                conn.prepare(
+                    "SELECT EXISTS(SELECT 1 FROM rag_chunks
+                                   WHERE asset_id = ?1
+                                     AND embedding_model = ?2
+                                     AND embedding_contract = ?3
+                                     AND dimensions = ?4)",
+                )
+                .map_err(|e| format!("Failed to prepare RAG chunk coverage check: {e}"))?,
+                effective,
+            )),
+        };
+        Ok(Self { stmt })
+    }
+
+    /// `true` si la pierna por asset puede proponer esta página.
+    fn admits(&mut self, asset_id: &str) -> Result<bool, String> {
+        let Some((stmt, effective)) = self.stmt.as_mut() else {
+            return Ok(true);
+        };
+        let covered: bool = stmt
+            .query_row(
+                rusqlite::params![
+                    asset_id,
+                    effective.model,
+                    effective.contract,
+                    effective.dimensions as i64
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Failed to check RAG chunk coverage of {asset_id}: {e}"))?;
+        Ok(!covered)
+    }
+}
+
+/// Las piernas de una recuperación, en el orden en que se fusionan.
+///
+/// En `Chunk` la decisión es POR ASSET y vive acá, no en el comando, para
+/// que la compartan el Chat (`rag_ask`) y Escritura
+/// (`writing_corpus_retrieve`): las piernas de chunks proponen pasajes y las
+/// de asset solo proponen páginas sin chunks en el espacio efectivo. Así una
+/// página nunca entra dos veces y la que no tiene chunks no se pierde.
+#[cfg(test)]
+pub(crate) fn retrieval_legs(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<Vec<RetrievalLeg>, String> {
+    Ok(legs_reporting(conn, queries, params, unit)?.0)
+}
+
+/// Código de [`RagDegradation`]: sin espacio de embedding resoluble no hay
+/// pasajes indexados que cuenten, y todo el corpus se recupera por página.
+pub(crate) const DEGRADATION_WHOLE_PAGES_ONLY: &str = "whole_pages_only";
+
+fn legs_reporting(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<(Vec<RetrievalLeg>, Vec<RagDegradation>), String> {
+    let mut degradation = Vec::new();
+    // Sin espacio efectivo resoluble (proveedor desconocido) no hay chunks que
+    // cuenten como indexados: se recupera como en `Asset`, igual que la pierna
+    // vectorial cae cuando la consulta no se puede embeber. No en silencio: va
+    // al log y a `degradation`, que la respuesta lleva a la interfaz.
+    let effective = match unit {
+        RetrievalUnit::Asset => None,
+        RetrievalUnit::Chunk => {
+            match crate::processing::eligibility::resolve_effective_embedding_contract(conn) {
+                Ok(effective) => Some(effective),
+                Err(error) => {
+                    log::warn!(
+                        target: "rag",
+                        "Recuperación por pasajes deshabilitada (se usan páginas enteras): {error}"
+                    );
+                    degradation.push(RagDegradation {
+                        code: DEGRADATION_WHOLE_PAGES_ONLY.to_string(),
+                        detail: error,
+                    });
+                    None
+                }
+            }
+        }
+    };
+    let filter = effective
+        .as_ref()
+        .map_or(AssetFilter::All, AssetFilter::WithoutChunks);
+    let limit = params.candidates_per_leg;
+    let assets = |ids: Vec<String>| ids.into_iter().map(RecordKey::Asset).collect();
+    let chunks = |ids: Vec<String>| ids.into_iter().map(RecordKey::Chunk).collect();
+
+    let mut legs = Vec::with_capacity(queries.len().saturating_mul(4));
+    for query in queries {
+        if let Some(effective) = effective.as_ref() {
+            if let Some(embedding) = query.embedding {
+                legs.push(RetrievalLeg {
+                    kind: LegKind::ChunkVector,
+                    records: chunks(chunk_vector_leg_in(
+                        conn,
+                        embedding,
+                        limit,
+                        params.min_similarity,
+                        effective,
+                    )?),
+                });
+            }
+            legs.push(RetrievalLeg {
+                kind: LegKind::ChunkLexical,
+                records: chunks(chunk_lexical_leg_in(conn, query.text, limit, effective)?),
+            });
+        }
+        if let Some(embedding) = query.embedding {
+            legs.push(RetrievalLeg {
+                kind: LegKind::AssetVector,
+                records: assets(vector_leg_filtered(
+                    conn,
+                    embedding,
+                    limit,
+                    params.min_similarity,
+                    filter,
+                )?),
+            });
+        }
+        legs.push(RetrievalLeg {
+            kind: LegKind::AssetLexical,
+            records: assets(lexical_leg_filtered(
+                conn,
+                query.text,
+                limit,
+                filter,
+                params.top_k.max(LEXICAL_SCAN_MIN_ITEMS),
+            )?),
+        });
+    }
+    Ok((legs, degradation))
+}
+
+/// Candidatos de una recuperación y lo que tuvo que resignar para obtenerlos.
+#[derive(Debug, Default)]
+pub(crate) struct HybridRetrieval {
+    pub(crate) candidates: Vec<RrfCandidate>,
+    pub(crate) degradation: Vec<RagDegradation>,
+}
+
 /// Recuperación híbrida hasta la lista RRF de candidatos. Los registros son
 /// owned para que cualquier reranking ocurra después de liberar SQLite.
 pub(crate) fn hybrid_retrieve_candidates(
@@ -107,29 +321,19 @@ pub(crate) fn hybrid_retrieve_candidates(
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
-    let mut legs = Vec::with_capacity(queries.len().saturating_mul(2));
-    for query in queries {
-        if let Some(embedding) = query.embedding {
-            legs.push(match unit {
-                RetrievalUnit::Asset => vector_leg(
-                    conn,
-                    embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-                RetrievalUnit::Chunk => chunk_vector_leg(
-                    conn,
-                    embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-            });
-        }
-        legs.push(match unit {
-            RetrievalUnit::Asset => lexical_leg(conn, query.text, params.candidates_per_leg)?,
-            RetrievalUnit::Chunk => chunk_lexical_leg(conn, query.text, params.candidates_per_leg)?,
-        });
-    }
+    Ok(retrieve_reporting(conn, queries, params, unit)?.candidates)
+}
+
+/// [`hybrid_retrieve_candidates`] más las degradaciones declaradas, para el
+/// Chat, que las devuelve en la respuesta.
+pub(crate) fn retrieve_reporting(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<HybridRetrieval, String> {
+    let (legs, degradation) = legs_reporting(conn, queries, params, unit)?;
+    let legs: Vec<Vec<RecordKey>> = legs.into_iter().map(|leg| leg.records).collect();
     let fused = rrf_fuse(&legs, params.fusion_candidate_limit, params.rrf_k as f64);
 
     // Solo materializamos los `rerank_depth` mejores. `load_source_record` lee
@@ -143,20 +347,87 @@ pub(crate) fn hybrid_retrieve_candidates(
     // candidato ocupa su lugar, igual que antes.
     let wanted = params.rerank_depth.max(params.top_k).max(1);
     let mut candidates = Vec::with_capacity(wanted.min(fused.len()));
-    let mut cited_assets = HashSet::with_capacity(wanted);
-    for (record_id, score) in fused {
+    let mut passages_per_asset: HashMap<String, usize> = HashMap::with_capacity(wanted);
+    for (key, score) in fused {
         if candidates.len() >= wanted {
             break;
         }
-        if let Some(record) = load_source_record_for_unit(conn, unit, &record_id)? {
-            if unit == RetrievalUnit::Chunk && !cited_assets.insert(record.asset_id.clone()) {
-                continue;
+        let record = match &key {
+            RecordKey::Asset(asset_id) => load_source_record(conn, asset_id)?,
+            RecordKey::Chunk(chunk_id) => {
+                load_source_record_for_unit(conn, RetrievalUnit::Chunk, chunk_id)?
+            }
+        };
+        if let Some(record) = record {
+            if record.chunk.is_some() {
+                let passages = passages_per_asset
+                    .entry(record.asset_id.clone())
+                    .or_default();
+                if *passages >= MAX_PASSAGES_PER_ASSET {
+                    continue;
+                }
+                *passages += 1;
             }
             candidates.push(RrfCandidate { record, score });
         }
     }
 
-    Ok(candidates)
+    Ok(HybridRetrieval {
+        candidates,
+        degradation,
+    })
+}
+
+/// Cobertura de pasajes del corpus en ESTE dispositivo: páginas con texto y,
+/// de ellas, cuántas tienen chunks en el espacio de embedding efectivo. Las
+/// que no, se recuperan enteras; `rag_chunks` no se sincroniza, así que cada
+/// dispositivo tiene su propia cobertura.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RagChunkCoverage {
+    pub assets_with_text: i64,
+    pub assets_with_chunks: i64,
+}
+
+pub(crate) fn chunk_coverage(conn: &Connection) -> Result<RagChunkCoverage, String> {
+    // Sin espacio efectivo resoluble ningún chunk cuenta (ver `retrieval_legs`).
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn).ok();
+    conn.query_row(
+        "WITH with_text AS (
+             SELECT a.id
+             FROM assets a
+             WHERE EXISTS(SELECT 1 FROM extractions e
+                          WHERE e.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                OR EXISTS(SELECT 1 FROM transcriptions t
+                          WHERE t.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)
+         )
+         SELECT
+             (SELECT COUNT(*) FROM with_text),
+             (SELECT COUNT(*) FROM with_text w
+              WHERE EXISTS(SELECT 1 FROM rag_chunks rc
+                           WHERE rc.asset_id = w.id
+                             AND rc.embedding_model = ?1
+                             AND rc.embedding_contract = ?2
+                             AND rc.dimensions = ?3))",
+        rusqlite::params![
+            effective.as_ref().map(|contract| contract.model.as_str()),
+            effective
+                .as_ref()
+                .map(|contract| contract.contract.as_str()),
+            effective
+                .as_ref()
+                .map(|contract| contract.dimensions as i64)
+        ],
+        |row| {
+            Ok(RagChunkCoverage {
+                assets_with_text: row.get(0)?,
+                assets_with_chunks: row.get(1)?,
+            })
+        },
+    )
+    .map_err(|e| format!("Failed to read RAG chunk coverage: {e}"))
 }
 
 #[cfg(test)]
@@ -200,6 +471,22 @@ pub(crate) fn vector_leg(
     limit: usize,
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
+    vector_leg_filtered(
+        conn,
+        query_embedding,
+        limit,
+        min_similarity,
+        AssetFilter::All,
+    )
+}
+
+fn vector_leg_filtered(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+    min_similarity: f64,
+    filter: AssetFilter<'_>,
+) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare("SELECT v.asset_id, v.embedding FROM vec_assets v")
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
@@ -224,10 +511,12 @@ pub(crate) fn vector_leg(
                               AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0)",
         )
         .map_err(|e| format!("Failed to prepare RAG vector text check: {e}"))?;
+    let mut coverage = ChunkCoverage::new(conn, filter)?;
     rank_assets_with_text(scored, limit, |asset_id| {
-        has_text
+        let with_text: bool = has_text
             .query_row([asset_id], |row| row.get(0))
-            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))
+            .map_err(|e| format!("Failed to check RAG vector text of {asset_id}: {e}"))?;
+        Ok(with_text && coverage.admits(asset_id)?)
     })
 }
 
@@ -354,11 +643,28 @@ fn score_embeddings<P: rusqlite::Params>(
     Ok(scored)
 }
 
+/// Pierna vectorial por chunk. Solo puntúa chunks del espacio de embedding
+/// EFECTIVO (`resolve_effective_embedding_contract`), el mismo con el que el
+/// procesamiento los estampa y con el que se embebe la consulta: filtrar por
+/// el contrato canónico dejaba sin pierna semántica a quien usa el proveedor
+/// local o un modelo API propio.
+#[cfg(test)]
 pub(crate) fn chunk_vector_leg(
     conn: &Connection,
     query_embedding: &[f32],
     limit: usize,
     min_similarity: f64,
+) -> Result<Vec<String>, String> {
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
+    chunk_vector_leg_in(conn, query_embedding, limit, min_similarity, &effective)
+}
+
+fn chunk_vector_leg_in(
+    conn: &Connection,
+    query_embedding: &[f32],
+    limit: usize,
+    min_similarity: f64,
+    effective: &EffectiveEmbeddingContract,
 ) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
@@ -372,8 +678,8 @@ pub(crate) fn chunk_vector_leg(
     let mut scored = score_embeddings(
         &mut stmt,
         rusqlite::params![
-            CANONICAL_EMBEDDING_MODEL,
-            CANONICAL_EMBEDDING_CONTRACT_V1,
+            effective.model,
+            effective.contract,
             query_embedding.len() as i64
         ],
         query_embedding,
@@ -397,10 +703,27 @@ pub(crate) fn chunk_vector_leg(
 /// (extracción O transcripción no vacía) de cada ítem preservando el orden de
 /// relevancia. El rank léxico de un asset es su posición en esta lista
 /// aplanada.
+#[cfg(test)]
 pub(crate) fn lexical_leg(
     conn: &Connection,
     question: &str,
     limit: usize,
+) -> Result<Vec<String>, String> {
+    lexical_leg_filtered(
+        conn,
+        question,
+        limit,
+        AssetFilter::All,
+        LEXICAL_SCAN_MIN_ITEMS,
+    )
+}
+
+fn lexical_leg_filtered(
+    conn: &Connection,
+    question: &str,
+    limit: usize,
+    filter: AssetFilter<'_>,
+    scan_items: usize,
 ) -> Result<Vec<String>, String> {
     // El input es una pregunta en lenguaje natural, no una lista de keywords:
     // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
@@ -427,33 +750,106 @@ pub(crate) fn lexical_leg(
         }
     }
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT a.id
-             FROM assets a
-             WHERE a.item_id = ?1
-               AND (EXISTS(SELECT 1 FROM extractions e
-                           WHERE e.asset_id = a.id
-                             AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
-                    OR EXISTS(SELECT 1 FROM transcriptions t
-                              WHERE t.asset_id = a.id
-                                AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
-             ORDER BY a.created_at ASC, a.id ASC
-             LIMIT ?2",
-        )
+    // Dentro del ítem, cada página se ordena por SUS coincidencias: cuántos
+    // términos de la pregunta contiene (sin stopwords, como el recorte),
+    // plegados en Rust igual que FTS (minúscula Unicode, sin diacríticos):
+    // `lower()` de SQLite solo baja el ASCII y "ÓRGANO" no encontraba
+    // "órgano". El BM25 de `fts_items` es por ítem, y ordenar sus páginas por
+    // fecha de creación ponía primero la tapa de un diario aunque el tema
+    // estuviera en la página tres (S2). Si ninguna página contiene un término
+    // (el ítem coincidió por título, metadatos o por una variante del OCR),
+    // se conservan todas en el orden histórico. Solo se lee el texto de los
+    // primeros `scan_items` ítems (`LEXICAL_SCAN_MIN_ITEMS`).
+    let terms: Vec<Vec<char>> = extract_query_terms(question)
+        .iter()
+        .map(|term| fold(term))
+        .collect();
+    const PAGES_WITH_TEXT: &str = "FROM assets a
+         WHERE a.item_id = ?1
+           AND (EXISTS(SELECT 1 FROM extractions e
+                       WHERE e.asset_id = a.id
+                         AND LENGTH(TRIM(COALESCE(e.text_content, ''))) > 0)
+                OR EXISTS(SELECT 1 FROM transcriptions t
+                          WHERE t.asset_id = a.id
+                            AND LENGTH(TRIM(COALESCE(t.text_content, ''))) > 0))
+         ORDER BY a.created_at ASC, a.id ASC";
+    let mut ids_stmt = conn
+        .prepare(&format!("SELECT a.id {PAGES_WITH_TEXT}"))
         .map_err(|e| format!("Failed to prepare RAG lexical asset query: {e}"))?;
+    let mut text_stmt = conn
+        .prepare(&format!(
+            "SELECT a.id,
+                    COALESCE((SELECT group_concat(e.text_content, ' ')
+                              FROM extractions e WHERE e.asset_id = a.id), '')
+                    || ' ' ||
+                    COALESCE((SELECT group_concat(t.text_content, ' ')
+                              FROM transcriptions t WHERE t.asset_id = a.id), '')
+             {PAGES_WITH_TEXT}"
+        ))
+        .map_err(|e| format!("Failed to prepare RAG lexical page text query: {e}"))?;
 
-    // Assets por ítem, en orden de relevancia BM25 del ítem. El `LIMIT` acota
-    // cada ítem al presupuesto total: ningún ítem necesita más que eso.
+    // Assets por ítem, en orden de relevancia BM25 del ítem. Cada ítem se acota
+    // al presupuesto total DESPUÉS del filtro de cobertura: si el tope cortara
+    // antes, las páginas sin chunks de un ítem grande cuyas primeras páginas sí
+    // los tienen nunca llegarían a esta pierna.
+    let mut coverage = ChunkCoverage::new(conn, filter)?;
     let mut per_item: Vec<Vec<String>> = Vec::new();
-    for item in items.iter().take(limit) {
-        let ids = stmt
-            .query_map(rusqlite::params![item.item_id, limit as i64], |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
+    for (rank, item) in items.iter().take(limit).enumerate() {
+        let ids: Vec<String> = if rank < scan_items && !terms.is_empty() {
+            let pages = text_stmt
+                .query_map(rusqlite::params![item.item_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Failed to run RAG lexical page text query: {e}"))?
+                .collect::<Result<Vec<(String, String)>, _>>()
+                .map_err(|e| format!("Failed to read RAG lexical page text rows: {e}"))?;
+            let mut scored: Vec<(String, usize)> = pages
+                .into_iter()
+                .map(|(asset_id, text)| {
+                    let folded = fold(&text);
+                    let hits = terms
+                        .iter()
+                        .filter(|term| !word_start_matches(&folded, term).is_empty())
+                        .count();
+                    (asset_id, hits)
+                })
+                .collect();
+            // Estable: a igual puntaje queda el orden de creación.
+            scored.sort_by(|left, right| right.1.cmp(&left.1));
+            let any_hit = scored.first().is_some_and(|(_, hits)| *hits > 0);
+            let mut admitted = Vec::new();
+            for (asset_id, hits) in scored {
+                if admitted.len() == limit {
+                    break;
+                }
+                if (!any_hit || hits > 0) && coverage.admits(&asset_id)? {
+                    admitted.push(asset_id);
+                }
+            }
+            admitted
+        } else {
+            // Sin `LIMIT` en SQL: las filas se leen de a una y se corta al
+            // llegar al tope de páginas admitidas.
+            let mut rows = ids_stmt
+                .query(rusqlite::params![item.item_id])
+                .map_err(|e| format!("Failed to run RAG lexical asset query: {e}"))?;
+            let mut admitted = Vec::new();
+            while admitted.len() < limit {
+                let Some(row) = rows
+                    .next()
+                    .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?
+                else {
+                    break;
+                };
+                let asset_id: String = row
+                    .get(0)
+                    .map_err(|e| format!("Failed to read RAG lexical asset rows: {e}"))?;
+                if coverage.admits(&asset_id)? {
+                    admitted.push(asset_id);
+                }
+            }
+            admitted
+        };
 
         if !ids.is_empty() {
             per_item.push(ids);
@@ -485,10 +881,24 @@ pub(crate) fn lexical_leg(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn chunk_lexical_leg(
     conn: &Connection,
     question: &str,
     limit: usize,
+) -> Result<Vec<String>, String> {
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
+    chunk_lexical_leg_in(conn, question, limit, &effective)
+}
+
+/// Pierna léxica por chunk, restringida a los chunks del espacio efectivo:
+/// "tener chunks" significa lo mismo para las dos piernas de chunks y para
+/// el filtro de las piernas por asset.
+fn chunk_lexical_leg_in(
+    conn: &Connection,
+    question: &str,
+    limit: usize,
+    effective: &EffectiveEmbeddingContract,
 ) -> Result<Vec<String>, String> {
     let fts_query = crate::nlp::fts::sanitize_fts5_query_with_mode(
         question,
@@ -499,17 +909,28 @@ pub(crate) fn chunk_lexical_leg(
     }
     let mut stmt = conn
         .prepare(
-            "SELECT chunk_id
+            "SELECT rag_chunks_fts.chunk_id
              FROM rag_chunks_fts
+             JOIN rag_chunks rc ON rc.id = rag_chunks_fts.chunk_id
              WHERE rag_chunks_fts MATCH ?1
-             ORDER BY bm25(rag_chunks_fts), chunk_id
+               AND rc.embedding_model = ?3
+               AND rc.embedding_contract = ?4
+               AND rc.dimensions = ?5
+             ORDER BY bm25(rag_chunks_fts), rag_chunks_fts.chunk_id
              LIMIT ?2",
         )
         .map_err(|error| format!("Failed to prepare RAG chunk lexical query: {error}"))?;
     let run = |stmt: &mut rusqlite::Statement<'_>, expr: &str| {
-        stmt.query_map(rusqlite::params![expr, limit as i64], |row| {
-            row.get::<_, String>(0)
-        })
+        stmt.query_map(
+            rusqlite::params![
+                expr,
+                limit as i64,
+                effective.model,
+                effective.contract,
+                effective.dimensions as i64
+            ],
+            |row| row.get::<_, String>(0),
+        )
         .map_err(|error| format!("Failed to run RAG chunk lexical query: {error}"))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Failed to read RAG chunk lexical rows: {error}"))
@@ -537,8 +958,11 @@ pub(crate) fn chunk_lexical_leg(
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
 /// con rank arrancando en 1. Orden descendente por score; los empates se
 /// resuelven determinísticamente por asset_id ascendente.
-pub(crate) fn rrf_fuse(legs: &[Vec<String>], limit: usize, rrf_k: f64) -> Vec<(String, f64)> {
-    let mut scores: HashMap<String, f64> = HashMap::new();
+pub(crate) fn rrf_fuse<K>(legs: &[Vec<K>], limit: usize, rrf_k: f64) -> Vec<(K, f64)>
+where
+    K: Clone + Eq + std::hash::Hash + Ord,
+{
+    let mut scores: HashMap<K, f64> = HashMap::new();
     for leg in legs {
         for (rank0, asset_id) in leg.iter().enumerate() {
             let rank = (rank0 + 1) as f64;
@@ -546,7 +970,7 @@ pub(crate) fn rrf_fuse(legs: &[Vec<String>], limit: usize, rrf_k: f64) -> Vec<(S
         }
     }
 
-    let mut fused: Vec<(String, f64)> = scores.into_iter().collect();
+    let mut fused: Vec<(K, f64)> = scores.into_iter().collect();
     fused.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -701,6 +1125,7 @@ pub(crate) fn load_source_record_for_unit(
 /// snippet y timestamps, frenando cuando el contexto total supera el tope.
 /// Si el PRIMER snippet ya supera el tope, se trunca en vez de descartarse:
 /// con registros disponibles nunca se devuelven cero fuentes.
+#[cfg(test)]
 pub(crate) fn build_sources(
     candidates: Vec<RrfCandidate>,
     question: &str,
@@ -713,84 +1138,218 @@ pub(crate) fn build_sources(
     let mut total_chars = 0usize;
 
     for RrfCandidate { record, score } in candidates.into_iter().take(top_k) {
-        let (mut snippet, window_start) =
-            snippet_window(&record.text_content, &terms, snippet_max_chars);
-        let snippet_chars = snippet.chars().count();
-        if total_chars + snippet_chars > context_max_chars {
-            if !sources.is_empty() {
-                // La lista de fuentes debe reflejar exactamente lo que entra al prompt.
-                break;
-            }
-            // Garantía defensiva: el primer registro nunca deja la respuesta
-            // sin fuentes — se trunca (char-safe) al presupuesto de contexto.
-            snippet = snippet.chars().take(context_max_chars).collect();
-        }
-        total_chars += snippet.chars().count();
-
-        let timestamps = resolve_source_timestamps(&record, &terms, window_start);
-
-        sources.push(RagSource {
-            index: (sources.len() + 1) as u32,
-            asset_id: record.asset_id,
-            item_id: record.item_id,
-            item_title: record.item_title,
-            collection_id: record.collection_id,
-            collection_name: record.collection_name,
-            snippet,
+        if !push_window_source(
+            &mut sources,
+            &mut total_chars,
+            record,
             score,
-            start_seconds: timestamps.map(|(start, _)| start),
-            end_seconds: timestamps.map(|(_, end)| end),
-            provenance: None,
-            bibliography: None,
-        });
+            &terms,
+            snippet_max_chars,
+            context_max_chars,
+        ) {
+            break;
+        }
     }
 
     sources
 }
 
+/// Agrega una página entera como fuente, recortada por `snippet_window`.
+/// Devuelve `false` cuando el presupuesto de contexto ya no la admite: la
+/// lista de fuentes debe reflejar exactamente lo que entra al prompt.
+fn push_window_source(
+    sources: &mut Vec<RagSource>,
+    total_chars: &mut usize,
+    record: SourceRecord,
+    score: f64,
+    terms: &[String],
+    snippet_max_chars: usize,
+    context_max_chars: usize,
+) -> bool {
+    let (mut snippet, window_start) =
+        snippet_window(&record.text_content, terms, snippet_max_chars);
+    let snippet_chars = snippet.chars().count();
+    if *total_chars + snippet_chars > context_max_chars {
+        if !sources.is_empty() {
+            return false;
+        }
+        // Garantía defensiva: el primer registro nunca deja la respuesta
+        // sin fuentes — se trunca (char-safe) al presupuesto de contexto.
+        snippet = snippet.chars().take(context_max_chars).collect();
+    }
+    *total_chars += snippet.chars().count();
+
+    let timestamps = resolve_source_timestamps(&record, terms, window_start);
+
+    sources.push(RagSource {
+        index: (sources.len() + 1) as u32,
+        asset_id: record.asset_id,
+        item_id: record.item_id,
+        item_title: record.item_title,
+        collection_id: record.collection_id,
+        collection_name: record.collection_name,
+        snippet,
+        score,
+        start_seconds: timestamps.map(|(start, _)| start),
+        end_seconds: timestamps.map(|(_, end)| end),
+        provenance: None,
+        bibliography: None,
+    });
+    true
+}
+
 #[derive(Debug)]
 struct CanonicalChunk {
     id: String,
+    ordinal: i64,
     text: String,
     start_char: usize,
     end_char: usize,
 }
 
-/// Empaqueta candidatos en bloques citables. Asset conserva la semántica
-/// histórica; chunk amplía solo un vecino canónico por lado y adjunta
-/// procedencia suficiente para mantener estable la identidad de la cita.
+/// Une chunks consecutivos de una misma fuente, sin repetir el solape
+/// canónico. Devuelve `(texto, start_char, end_char)` del tramo contiguo que
+/// arranca en el primer chunk.
+fn join_chunks(chunks: &[CanonicalChunk]) -> (String, usize, usize) {
+    let start = chunks.first().map_or(0, |chunk| chunk.start_char);
+    let mut end = start;
+    let mut text = String::new();
+    for chunk in chunks {
+        if chunk.start_char > end {
+            break;
+        }
+        let overlap = end.saturating_sub(chunk.start_char);
+        text.extend(chunk.text.chars().skip(overlap));
+        end = end.max(chunk.end_char);
+    }
+    (text, start, end)
+}
+
+/// Ajusta el pasaje unido a `budget` cortando SIEMPRE en límite de chunk,
+/// nunca por ventana de términos: primero cae el vecino posterior, después
+/// el anterior. Si los dos extremos son chunks recuperados (`centers`, en
+/// orden de ranking), cae el extremo peor rankeado: el mejor recuperado
+/// (`centers[0]`) se queda siempre y el pasaje sigue siendo contiguo. Solo un
+/// chunk que por sí mismo excede el presupuesto se corta, y por el final.
+fn fit_passage(
+    mut chunks: Vec<CanonicalChunk>,
+    centers: &[i64],
+    budget: usize,
+) -> (Vec<CanonicalChunk>, String, usize, usize) {
+    loop {
+        let (text, start, end) = join_chunks(&chunks);
+        if text.chars().count() <= budget {
+            return (chunks, text, start, end);
+        }
+        if chunks.len() > 1 {
+            let rank = |chunk: Option<&CanonicalChunk>| {
+                chunk.and_then(|chunk| centers.iter().position(|center| *center == chunk.ordinal))
+            };
+            let drop_last = match (rank(chunks.first()), rank(chunks.last())) {
+                (_, None) => true,
+                (None, Some(_)) => false,
+                (Some(first), Some(last)) => last > first,
+            };
+            if drop_last {
+                chunks.pop();
+            } else {
+                chunks.remove(0);
+            }
+            continue;
+        }
+        let text: String = text.chars().take(budget).collect();
+        let end = start + text.chars().count();
+        return (chunks, text, start, end);
+    }
+}
+
+/// Un bloque a empaquetar: una página entera, o los chunks recuperados de
+/// una misma fuente que quedan a un vecino de distancia (`centers`, en orden
+/// de ranking; el primero da la identidad y el score del bloque).
+struct PackGroup {
+    candidate: RrfCandidate,
+    centers: Vec<i64>,
+}
+
+/// Une los candidatos de una misma fuente cuyos vecindarios (±1 chunk) se
+/// tocan: dos pasajes que comparten texto son un solo pasaje, y como bloques
+/// separados repetían el solape y gastaban dos fuentes. El bloque ocupa el
+/// lugar de su mejor candidato.
+fn group_adjacent_passages(candidates: Vec<RrfCandidate>) -> Vec<PackGroup> {
+    let mut groups: Vec<PackGroup> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let Some(chunk) = candidate.record.chunk.as_ref() else {
+            groups.push(PackGroup {
+                candidate,
+                centers: Vec::new(),
+            });
+            continue;
+        };
+        let ordinal = chunk.chunk_ordinal;
+        let joins = groups.iter_mut().find(|group| {
+            group.candidate.record.asset_id == candidate.record.asset_id
+                && group.candidate.record.chunk.as_ref().is_some_and(|first| {
+                    first.source_kind == chunk.source_kind && first.source_id == chunk.source_id
+                })
+                && group
+                    .centers
+                    .iter()
+                    .any(|center| center.abs_diff(ordinal) <= 2)
+        });
+        match joins {
+            Some(group) => group.centers.push(ordinal),
+            None => groups.push(PackGroup {
+                centers: vec![ordinal],
+                candidate,
+            }),
+        }
+    }
+    groups
+}
+
+/// Empaqueta candidatos en bloques citables, según el tipo de cada registro:
+/// la página entera (sin chunks, o modo Asset) conserva la semántica
+/// histórica, recortada por `snippet_window` a `snippet_max_chars`; el chunk
+/// entra ENTERO con un vecino canónico por lado, con su propio presupuesto
+/// (`passage_max_chars`) y procedencia del rango efectivamente enviado. La
+/// recuperación híbrida por asset mezcla los dos tipos en una misma lista.
 pub(crate) fn pack_sources(
     conn: &Connection,
     candidates: Vec<RrfCandidate>,
     question: &str,
-    retrieval_unit: RetrievalUnit,
     top_k: usize,
     snippet_max_chars: usize,
+    passage_max_chars: usize,
     context_max_chars: usize,
 ) -> Result<Vec<RagSource>, String> {
-    if retrieval_unit == RetrievalUnit::Asset {
-        return Ok(build_sources(
-            candidates,
-            question,
-            top_k,
-            snippet_max_chars,
-            context_max_chars,
-        ));
-    }
-
     let terms = extract_query_terms(question);
     let mut sources = Vec::new();
     let mut total_chars = 0usize;
 
-    for RrfCandidate { mut record, score } in candidates.into_iter().take(top_k) {
+    for PackGroup {
+        candidate: RrfCandidate { mut record, score },
+        centers,
+    } in group_adjacent_passages(candidates).into_iter().take(top_k)
+    {
         let Some(center) = record.chunk.clone() else {
+            if !push_window_source(
+                &mut sources,
+                &mut total_chars,
+                record,
+                score,
+                &terms,
+                snippet_max_chars,
+                context_max_chars,
+            ) {
+                break;
+            }
             continue;
         };
-        let min_ordinal = center.chunk_ordinal.saturating_sub(1);
-        let max_ordinal = center.chunk_ordinal.saturating_add(1);
+        let min_ordinal = centers.iter().min().copied().unwrap_or(0).saturating_sub(1);
+        let max_ordinal = centers.iter().max().copied().unwrap_or(0).saturating_add(1);
         let mut stmt = conn
             .prepare(
-                "SELECT id, text_content, start_char, end_char
+                "SELECT id, chunk_ordinal, text_content, start_char, end_char
                  FROM rag_chunks
                  WHERE asset_id = ?1
                    AND source_kind = ?2
@@ -811,9 +1370,10 @@ pub(crate) fn pack_sources(
                 |row| {
                     Ok(CanonicalChunk {
                         id: row.get(0)?,
-                        text: row.get(1)?,
-                        start_char: row.get::<_, i64>(2)? as usize,
-                        end_char: row.get::<_, i64>(3)? as usize,
+                        ordinal: row.get(1)?,
+                        text: row.get(2)?,
+                        start_char: row.get::<_, i64>(3)? as usize,
+                        end_char: row.get::<_, i64>(4)? as usize,
                     })
                 },
             )
@@ -824,40 +1384,30 @@ pub(crate) fn pack_sources(
             continue;
         }
 
-        let packed_start = chunks[0].start_char;
-        let mut packed_end = packed_start;
-        let mut packed_text = String::new();
-        for chunk in &chunks {
-            if chunk.start_char > packed_end {
-                break;
-            }
-            let overlap = packed_end.saturating_sub(chunk.start_char);
-            packed_text.extend(chunk.text.chars().skip(overlap));
-            packed_end = packed_end.max(chunk.end_char);
+        let remaining = context_max_chars.saturating_sub(total_chars);
+        let budget = if sources.is_empty() {
+            // El primer pasaje nunca deja la respuesta sin fuentes: se ajusta
+            // también al presupuesto total, en límite de chunk.
+            passage_max_chars.min(context_max_chars)
+        } else {
+            passage_max_chars
+        };
+        let (chunks, packed_text, packed_start, packed_end) = fit_passage(chunks, &centers, budget);
+        let packed_chars = packed_text.chars().count();
+        if packed_chars > remaining {
+            // La lista de fuentes debe reflejar exactamente lo que entra al prompt.
+            break;
         }
+        let chunk_ids = chunks
+            .iter()
+            .filter(|chunk| chunk.start_char < packed_end && chunk.end_char > packed_start)
+            .map(|chunk| chunk.id.clone())
+            .collect();
+        total_chars += packed_chars;
 
         record.text_content = packed_text;
         record.source_start_char = packed_start;
-        let (mut snippet, window_start) =
-            snippet_window(&record.text_content, &terms, snippet_max_chars);
-        let snippet_chars = snippet.chars().count();
-        if total_chars + snippet_chars > context_max_chars {
-            if !sources.is_empty() {
-                break;
-            }
-            snippet = snippet.chars().take(context_max_chars).collect();
-        }
-        let final_chars = snippet.chars().count();
-        let final_start = packed_start + window_start;
-        let final_end = final_start + final_chars;
-        let chunk_ids = chunks
-            .iter()
-            .filter(|chunk| chunk.start_char < final_end && chunk.end_char > final_start)
-            .map(|chunk| chunk.id.clone())
-            .collect();
-        total_chars += final_chars;
-
-        let timestamps = resolve_source_timestamps(&record, &terms, window_start);
+        let timestamps = resolve_source_timestamps(&record, &terms, 0);
         sources.push(RagSource {
             index: (sources.len() + 1) as u32,
             asset_id: record.asset_id,
@@ -865,7 +1415,7 @@ pub(crate) fn pack_sources(
             item_title: record.item_title,
             collection_id: record.collection_id,
             collection_name: record.collection_name,
-            snippet,
+            snippet: record.text_content,
             score,
             start_seconds: timestamps.map(|(start, _)| start),
             end_seconds: timestamps.map(|(_, end)| end),
@@ -874,8 +1424,8 @@ pub(crate) fn pack_sources(
                 source_kind: center.source_kind,
                 source_id: center.source_id,
                 chunk_ids,
-                start_char: final_start,
-                end_char: final_end,
+                start_char: packed_start,
+                end_char: packed_end,
             }),
             bibliography: None,
         });
@@ -885,7 +1435,8 @@ pub(crate) fn pack_sources(
 }
 
 /// Términos de la pregunta para anclar snippets: split por whitespace, se
-/// recorta puntuación en los bordes, lowercase, se conservan términos de
+/// recorta puntuación en los bordes, lowercase, se descartan las stopwords
+/// (las mismas que la pierna léxica, `nlp::fts`) y se conservan términos de
 /// 4+ chars, ordenados del más largo al más corto (sin duplicados).
 pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
     let mut terms: Vec<String> = question
@@ -895,6 +1446,7 @@ pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
                 .to_lowercase()
         })
         .filter(|word| word.chars().count() >= MIN_TERM_CHARS)
+        .filter(|word| !crate::nlp::fts::is_stopword(word))
         .collect();
 
     // Más largo primero: el término más específico ancla la ventana.
@@ -905,9 +1457,44 @@ pub(crate) fn extract_query_terms(question: &str) -> Vec<String> {
     terms
 }
 
-/// Ventana de snippet centrada en la primera ocurrencia (case-insensitive)
-/// del término más largo encontrado; si ningún término aparece, arranca al
-/// inicio del texto. Opera SIEMPRE sobre chars (texto Unicode en español).
+/// Minúscula Unicode sin diacríticos, como el tokenizador de FTS
+/// (`unicode61 remove_diacritics 1`, vía [`crate::nlp::fuzzy::fold_latin`]),
+/// 1:1 por char para que los índices sigan alineados con el texto original.
+fn fold_char(c: char) -> char {
+    crate::nlp::fuzzy::fold_latin(c.to_lowercase().next().unwrap_or(c))
+}
+
+fn fold(text: &str) -> Vec<char> {
+    text.chars().map(fold_char).collect()
+}
+
+/// Posiciones (índice de char) donde `needle` empieza una palabra de
+/// `haystack`: "mujer" encuentra "mujeres" pero "obrero" no encuentra
+/// "ELOBRERO". Los dos lados llegan plegados con [`fold`].
+fn word_start_matches(haystack: &[char], needle: &[char]) -> Vec<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+    haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter(|(position, window)| {
+            *window == needle && (*position == 0 || !haystack[position - 1].is_alphanumeric())
+        })
+        .map(|(position, _)| position)
+        .collect()
+}
+
+/// Ventana de snippet de mayor densidad de términos de la pregunta.
+///
+/// Cada término coincide solo al inicio de una palabra, sin distinguir
+/// mayúsculas ni tildes, y pesa por su rareza dentro del texto (IDF sobre
+/// las palabras del texto): el nombre de la publicación, que aparece en
+/// todas partes, pesa menos que el tema. Cada ventana candidata se centra en
+/// una aparición y suma el peso de los términos distintos que contiene (las
+/// repeticiones suman de forma sublineal); gana la de mayor puntaje y, a
+/// igualdad, la primera. Si ningún término aparece, arranca al inicio del
+/// texto. Opera SIEMPRE sobre chars (texto Unicode en español).
 ///
 /// Devuelve `(snippet, índice_de_char_donde_arranca_la_ventana)`.
 pub(crate) fn snippet_window(text: &str, terms: &[String], max_chars: usize) -> (String, usize) {
@@ -916,36 +1503,64 @@ pub(crate) fn snippet_window(text: &str, terms: &[String], max_chars: usize) -> 
         return (text.to_string(), 0);
     }
 
-    // Lowercase 1:1 por char para mantener alineados los índices (suficiente
-    // para español: Á→á, Ñ→ñ son todos mapeos de un char).
-    let lowered: Vec<char> = chars
+    let folded: Vec<char> = chars.iter().copied().map(fold_char).collect();
+    let words = folded
         .iter()
-        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .enumerate()
+        .filter(|(index, c)| {
+            c.is_alphanumeric() && (*index == 0 || !folded[index - 1].is_alphanumeric())
+        })
+        .count()
+        .max(1) as f64;
+    let occurrences: Vec<Vec<usize>> = terms
+        .iter()
+        .map(|term| word_start_matches(&folded, &fold(term)))
+        .collect();
+    let weights: Vec<f64> = occurrences
+        .iter()
+        .map(|positions| {
+            if positions.is_empty() {
+                0.0
+            } else {
+                (1.0 + words / positions.len() as f64).ln()
+            }
+        })
         .collect();
 
-    let match_pos = terms.iter().find_map(|term| find_chars(&lowered, term));
-
-    let start = match match_pos {
-        Some(pos) => pos
-            .saturating_sub(max_chars / 2)
-            .min(chars.len().saturating_sub(max_chars)),
-        None => 0,
+    let latest_start = chars.len().saturating_sub(max_chars);
+    let score = |start: usize| -> f64 {
+        let end = start + max_chars;
+        occurrences
+            .iter()
+            .zip(&weights)
+            .map(|(positions, weight)| {
+                let inside = positions
+                    .iter()
+                    .filter(|position| **position >= start && **position < end)
+                    .count();
+                if inside == 0 {
+                    0.0
+                } else {
+                    weight * (1.0 + (inside as f64).ln())
+                }
+            })
+            .sum()
     };
+
+    let mut anchors: Vec<usize> = occurrences.iter().flatten().copied().collect();
+    anchors.sort_unstable();
+    let mut best: Option<(f64, usize)> = None;
+    for anchor in anchors {
+        let start = anchor.saturating_sub(max_chars / 2).min(latest_start);
+        let candidate = score(start);
+        if best.is_none_or(|(best_score, _)| candidate > best_score) {
+            best = Some((candidate, start));
+        }
+    }
+    let start = best.map_or(0, |(_, start)| start);
 
     let snippet: String = chars[start..].iter().take(max_chars).collect();
     (snippet, start)
-}
-
-/// Busca `needle` (ya en lowercase) dentro de `haystack` (chars en lowercase).
-/// Devuelve el índice de char del primer match.
-fn find_chars(haystack: &[char], needle: &str) -> Option<usize> {
-    let needle: Vec<char> = needle.chars().collect();
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
 }
 
 /// Timestamps de un registro con texto combinado: SOLO se resuelven cuando el
@@ -968,14 +1583,13 @@ fn resolve_source_timestamps(
 }
 
 /// Posición (en chars) de la primera ocurrencia del término más largo que
-/// aparece en el texto, con el mismo lowering 1:1 por char de `snippet_window`
-/// (los términos llegan ordenados del más largo al más corto).
+/// aparece en el texto, con la misma coincidencia por inicio de palabra de
+/// `snippet_window` (los términos llegan ordenados del más largo al más corto).
 fn find_term_anchor(text: &str, terms: &[String]) -> Option<usize> {
-    let lowered: Vec<char> = text
-        .chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
-    terms.iter().find_map(|term| find_chars(&lowered, term))
+    let folded = fold(text);
+    terms
+        .iter()
+        .find_map(|term| word_start_matches(&folded, &fold(term)).first().copied())
 }
 
 /// Resuelve timestamps desde el JSON de `transcriptions.segments`:
@@ -1014,6 +1628,130 @@ pub(crate) fn resolve_timestamps(
     }
 
     None
+}
+
+/// Corpus mínimo con el esquema real de `rag_chunks` (migración 0029) para
+/// probar la decisión Chunk/Asset por asset desde el Chat y desde Escritura.
+#[cfg(test)]
+pub(crate) mod hybrid_fixture {
+    use rusqlite::{params, Connection};
+
+    use crate::nlp::embeddings::{
+        floats_to_blob, CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS,
+        CANONICAL_EMBEDDING_MODEL,
+    };
+
+    const RAG_CHUNKS_MIGRATION_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0029_rag_chunks.sql");
+
+    /// Página con chunks en el espacio efectivo (canónico, sin settings).
+    pub(crate) const CHUNKED_ASSET: &str = "asset-chunked";
+    /// Página procesada antes de los chunks: solo vector y texto del asset.
+    pub(crate) const PLAIN_ASSET: &str = "asset-plain";
+    pub(crate) const CHUNKED_TEXT: &str = "el cabildo abierto de mayo";
+    /// Donde empieza el único chunk de la página con chunks.
+    pub(crate) const CHUNK_START: usize = 3;
+
+    pub(crate) fn axis(index: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; CANONICAL_EMBEDDING_DIMENSIONS];
+        vector[index] = 1.0;
+        vector
+    }
+
+    fn insert_page(conn: &Connection, asset_id: &str, item_id: &str, text: &str, vector: &[f32]) {
+        conn.execute(
+            "INSERT OR IGNORE INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES (?1, 'col-1', ?1, '{}')",
+            params![item_id],
+        )
+        .expect("item");
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, 'p.png', 'image', 1)",
+            params![asset_id, item_id],
+        )
+        .expect("asset");
+        conn.execute(
+            "INSERT INTO extractions(id, asset_id, text_content, method, confidence, created_at)
+             VALUES (?1, ?2, ?3, 'ocr', 0.9, 1)",
+            params![format!("ext-{asset_id}"), asset_id, text],
+        )
+        .expect("extraction");
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                asset_id,
+                item_id,
+                floats_to_blob(vector),
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("asset vector");
+        crate::nlp::fts::fts_index_item(conn, item_id, item_id, "", text).expect("fts index");
+    }
+
+    /// Dos páginas que mencionan "cabildo": una con chunks, otra sin.
+    pub(crate) fn corpus() -> Connection {
+        let conn = Connection::open_in_memory().expect("in-memory DB");
+        conn.execute_batch(
+            "CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE items (id TEXT PRIMARY KEY, collection_id TEXT, title TEXT NOT NULL, metadata TEXT);
+             CREATE TABLE assets (id TEXT PRIMARY KEY, item_id TEXT NOT NULL, path TEXT NOT NULL,
+                                  type TEXT NOT NULL, created_at INTEGER NOT NULL);
+             CREATE TABLE extractions (id TEXT PRIMARY KEY, asset_id TEXT NOT NULL, text_content TEXT NOT NULL,
+                                       method TEXT, confidence REAL, created_at INTEGER NOT NULL);
+             CREATE TABLE transcriptions (id TEXT PRIMARY KEY, asset_id TEXT UNIQUE, text_content TEXT NOT NULL,
+                                          language TEXT, duration_ms INTEGER, model TEXT, segments TEXT,
+                                          confidence REAL, created_at INTEGER NOT NULL);
+             CREATE TABLE vec_assets (asset_id TEXT PRIMARY KEY, item_id TEXT NOT NULL, embedding BLOB NOT NULL,
+                                      embedding_model TEXT NOT NULL DEFAULT 'legacy',
+                                      embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+                                      dimensions INTEGER NOT NULL DEFAULT 0);",
+        )
+        .expect("corpus schema");
+        conn.execute_batch(crate::nlp::fts::FTS_ITEMS_DDL)
+            .expect("fts_items");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+
+        insert_page(&conn, CHUNKED_ASSET, "item-chunked", CHUNKED_TEXT, &axis(1));
+        let chunk_text: String = CHUNKED_TEXT.chars().skip(CHUNK_START).collect();
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES ('chunk-1', ?1, 'item-chunked', 'extraction', ?2, 0, ?3, ?4, ?5,
+                       'hash', 'rag-chunk-800-100-char-v1', ?6, ?7, ?8, ?9)",
+            params![
+                CHUNKED_ASSET,
+                format!("ext-{CHUNKED_ASSET}"),
+                chunk_text,
+                CHUNK_START as i64,
+                CHUNKED_TEXT.chars().count() as i64,
+                floats_to_blob(&axis(1)),
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("chunk");
+        insert_page(
+            &conn,
+            PLAIN_ASSET,
+            "item-plain",
+            "el cabildo y la revolución",
+            &axis(2),
+        );
+        conn
+    }
 }
 
 // ── Unit tests ───────────────────────────────────────────────────────────────
@@ -1218,6 +1956,33 @@ mod tests {
         }
     }
 
+    const RAG_CHUNKS_MIGRATION_SQL: &str =
+        include_str!("../../../../../packages/store/src/migrations/0029_rag_chunks.sql");
+
+    /// Chunk único de una página, en el espacio canónico (el efectivo sin
+    /// settings). El trigger de la migración lo indexa en `rag_chunks_fts`.
+    fn index_canonical_chunk(conn: &Connection, chunk_id: &str, asset_id: &str, text: &str) {
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (?1, ?2, (SELECT item_id FROM assets WHERE id = ?2), 'extraction',
+                       'source', 0, ?3, 0, ?4, 'hash', 'rag-chunk-v1', X'00', ?5, ?6, ?7)",
+            params![
+                chunk_id,
+                asset_id,
+                text,
+                text.chars().count() as i64,
+                CANONICAL_EMBEDDING_MODEL,
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS as i64
+            ],
+        )
+        .expect("canonical chunk should insert");
+    }
+
     #[test]
     fn chunk_lexical_search_shares_asset_any_mode_stopword_semantics() {
         let conn = setup_rag_db();
@@ -1237,19 +2002,15 @@ mod tests {
             "sobre sobre sobre",
             None,
         );
-        conn.execute_batch(
-            r#"
-            CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(
-                chunk_id UNINDEXED,
-                text_content
-            );
-            INSERT INTO rag_chunks_fts(chunk_id, text_content)
-            VALUES
-                ('chunk-stopwords', 'sobre sobre sobre'),
-                ('chunk-relevant', 'cabildo');
-            "#,
-        )
-        .expect("chunk FTS fixture should initialize");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        index_canonical_chunk(
+            &conn,
+            "chunk-stopwords",
+            "asset-stopwords",
+            "sobre sobre sobre",
+        );
+        index_canonical_chunk(&conn, "chunk-relevant", "asset-relevant", "cabildo");
 
         let asset_ranked =
             lexical_leg(&conn, "sobre el cabildo", 10).expect("asset search should work");
@@ -1270,11 +2031,12 @@ mod tests {
             "../../../../../packages/store/src/migrations/0037_fts_vocab.sql"
         ))
         .expect("vocabulary table");
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
         conn.execute_batch(
-            "CREATE VIRTUAL TABLE rag_chunks_fts USING fts5(chunk_id UNINDEXED, text_content);
-             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )
-        .expect("chunk index and settings");
+        .expect("settings");
         let pages = [
             ("right-1", "el sindicato reclamo"),
             ("right-2", "asamblea del sindicato"),
@@ -1291,11 +2053,7 @@ mod tests {
                 text,
                 None,
             );
-            conn.execute(
-                "INSERT INTO rag_chunks_fts(chunk_id, text_content) VALUES (?1, ?2)",
-                params![format!("chunk-{id}"), text],
-            )
-            .expect("chunk insert");
+            index_canonical_chunk(&conn, &format!("chunk-{id}"), &format!("asset-{id}"), text);
         }
         conn
     }
@@ -1410,8 +2168,12 @@ mod tests {
         let terms = extract_query_terms("¿Cuándo llegó Belgrano al Cabildo de Buenos Aires?");
         assert!(terms.contains(&"belgrano".to_string()));
         assert!(terms.contains(&"cabildo".to_string()));
-        assert!(terms.contains(&"cuándo".to_string()));
-        assert!(!terms.iter().any(|t| t == "de" || t == "al"));
+        assert!(
+            !terms
+                .iter()
+                .any(|t| t == "cuándo" || t == "de" || t == "al"),
+            "stopwords never anchor a window"
+        );
 
         let lengths: Vec<usize> = terms.iter().map(|t| t.chars().count()).collect();
         let mut sorted = lengths.clone();
@@ -1437,6 +2199,45 @@ mod tests {
         assert!(snippet.to_lowercase().contains("cabildo"));
         assert!(start > 0, "window should not start at text begin");
         assert!(snippet.chars().count() <= 200);
+    }
+
+    #[test]
+    fn extract_query_terms_drops_stopwords_like_the_lexical_leg() {
+        let terms =
+            extract_query_terms("¿Qué mirada sobre la mujer tiene el periódico 'El Obrero'?");
+        assert_eq!(terms, ["periódico", "mirada", "obrero", "mujer"]);
+    }
+
+    #[test]
+    fn snippet_window_ignores_a_term_glued_inside_another_word() {
+        let filler = "texto de relleno sin relación alguna. ".repeat(60);
+        let text = format!(
+            "<div align=\"center\">\n\n# ELOBRERO\n\n</div>\n\nPrecios y suscripción.\n\n\
+             {filler}## La Mujer\n\nMuchos dicen que la mujer es inferior.\n\n{filler}"
+        );
+        let terms =
+            extract_query_terms("¿Qué mirada sobre la mujer tiene el periódico 'El Obrero'?");
+
+        let (snippet, start) = snippet_window(&text, &terms, 600);
+
+        assert!(snippet.contains("## La Mujer"), "{snippet}");
+        assert!(!snippet.contains("ELOBRERO"));
+        assert!(start > 0);
+    }
+
+    #[test]
+    fn snippet_window_prefers_the_window_with_more_distinct_query_terms() {
+        let filler = "relleno ".repeat(150);
+        let text = format!("periódico {filler} la mirada sobre la mujer {filler}");
+        let terms = vec![
+            "periódico".to_string(),
+            "mirada".to_string(),
+            "mujer".to_string(),
+        ];
+
+        let (snippet, _start) = snippet_window(&text, &terms, 200);
+
+        assert!(snippet.contains("la mirada sobre la mujer"), "{snippet}");
     }
 
     #[test]
@@ -1973,6 +2774,117 @@ mod tests {
     /// Drenando ítem por ítem, el ítem gordo llenaba el presupuesto entero y el
     /// segundo ítem —que también matchea— quedaba afuera.
     #[test]
+    fn lexical_leg_ranks_the_pages_of_an_item_by_their_own_matches() {
+        let conn = setup_rag_db();
+        conn.execute(
+            "INSERT INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata)
+             VALUES ('item-paper', 'col-1', 'El Obrero, 1905', '{}')",
+            [],
+        )
+        .expect("item insert");
+        // Páginas en orden de creación: la que trata el tema es la última.
+        let pages = [
+            ("page-1", "precios y suscripción del periódico"),
+            ("page-2", "la huelga del puerto"),
+            ("page-3", "la mujer y su emancipación, dice la mujer"),
+        ];
+        for (index, (asset_id, text)) in pages.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, 'item-paper', 'scan.png', 'image', ?2)",
+                params![asset_id, index as i64],
+            )
+            .expect("asset insert");
+            insert_extraction(&conn, asset_id, text, 1);
+        }
+        let item_text: Vec<&str> = pages.iter().map(|(_, text)| *text).collect();
+        crate::nlp::fts::fts_index_item(
+            &conn,
+            "item-paper",
+            "El Obrero, 1905",
+            "",
+            &item_text.join(" "),
+        )
+        .expect("fts index");
+
+        let ranked = lexical_leg(&conn, "¿Qué dice El Obrero sobre la mujer?", 10)
+            .expect("lexical leg should succeed");
+
+        assert_eq!(
+            ranked,
+            ["page-3"],
+            "only the page that matches the question, not the first created"
+        );
+    }
+
+    /// Ítem de dos páginas: `-a` (creada primero) no trata el tema, `-b` sí.
+    fn two_page_item(conn: &Connection, item: &str, matching_text: &str) {
+        conn.execute(
+            "INSERT OR IGNORE INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata) VALUES (?1, 'col-1', ?1, '{}')",
+            params![item],
+        )
+        .expect("item insert");
+        for (suffix, created_at, text) in
+            [("a", 0, "precios y suscripción"), ("b", 1, matching_text)]
+        {
+            let asset_id = format!("{item}-{suffix}");
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, ?2, 'scan.png', 'image', ?3)",
+                params![asset_id, item, created_at],
+            )
+            .expect("asset insert");
+            insert_extraction(conn, &asset_id, text, 1);
+        }
+        crate::nlp::fts::fts_index_item(
+            conn,
+            item,
+            item,
+            "",
+            &format!("precios y suscripción {matching_text}"),
+        )
+        .expect("fts index");
+    }
+
+    #[test]
+    fn lexical_leg_matches_pages_written_in_accented_capitals() {
+        let conn = setup_rag_db();
+        two_page_item(&conn, "item-paper", "EL ÓRGANO OFICIAL DE LA FEDERACIÓN");
+
+        let ranked =
+            lexical_leg(&conn, "¿Cuál era el órgano de la federación?", 10).expect("lexical leg");
+
+        assert_eq!(ranked, ["item-paper-b"]);
+    }
+
+    #[test]
+    fn lexical_leg_reads_the_pages_of_only_the_best_matching_items() {
+        let conn = setup_rag_db();
+        let items = LEXICAL_SCAN_MIN_ITEMS + 2;
+        for index in 0..items {
+            two_page_item(&conn, &format!("item-{index:02}"), "el cabildo abierto");
+        }
+
+        let ranked = lexical_leg(&conn, "cabildo", 40).expect("lexical leg");
+
+        // Items whose pages were read contribute only the matching page;
+        // the rest keep the historical creation order, both pages.
+        let unscanned: Vec<&String> = ranked.iter().filter(|id| id.ends_with("-a")).collect();
+        assert_eq!(unscanned.len(), 2, "{ranked:?}");
+        assert_eq!(ranked.len(), LEXICAL_SCAN_MIN_ITEMS + 2 * 2);
+    }
+
+    #[test]
     fn lexical_leg_does_not_let_one_multi_asset_item_starve_the_others() {
         let conn = setup_rag_db();
 
@@ -2247,11 +3159,12 @@ mod tests {
     }
 
     #[test]
-    fn retrieval_unit_selection_is_explicit_and_defaults_to_asset() {
+    fn retrieval_unit_selection_is_explicit_and_defaults_to_chunk() {
         assert_eq!(
             RetrievalUnit::from_setting(None).expect("missing setting must be valid"),
-            RetrievalUnit::Asset
+            RetrievalUnit::Chunk
         );
+        assert_eq!(RetrievalUnit::default(), RetrievalUnit::Chunk);
         assert_eq!(
             RetrievalUnit::from_setting(Some("asset")).expect("asset setting must be valid"),
             RetrievalUnit::Asset
@@ -2390,6 +3303,366 @@ mod tests {
         .expect("canonical chunk should insert");
     }
 
+    fn set_setting(conn: &Connection, key: &str, value: &str) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("settings table");
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .expect("setting insert");
+    }
+
+    /// Chunk de una sola fuente de extracción, con el vector y el sello de
+    /// embedding que se le pidan.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_embedded_chunk(
+        conn: &Connection,
+        id: &str,
+        asset_id: &str,
+        item_id: &str,
+        ordinal: i64,
+        text: &str,
+        start_char: i64,
+        embedding: &[f32],
+        stamp: (&str, &str),
+    ) {
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (
+                ?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'source-hash',
+                'rag-chunk-v1', ?9, ?10, ?11, ?12
+             )",
+            params![
+                id,
+                asset_id,
+                item_id,
+                format!("ext-{asset_id}-1"),
+                ordinal,
+                text,
+                start_char,
+                start_char + text.chars().count() as i64,
+                floats_to_blob(embedding),
+                stamp.0,
+                stamp.1,
+                embedding.len() as i64
+            ],
+        )
+        .expect("embedded chunk should insert");
+    }
+
+    fn unit_vector(axis: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; CANONICAL_EMBEDDING_DIMENSIONS];
+        vector[axis] = 1.0;
+        vector
+    }
+
+    #[test]
+    fn chunk_vector_leg_reads_chunks_stamped_with_the_effective_local_contract() {
+        let conn = setup_chunk_packing_db();
+        set_setting(&conn, "embedding_provider", "local");
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("local provider resolves");
+        assert_ne!(effective.contract, CANONICAL_EMBEDDING_CONTRACT_V1);
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "texto sin palabras de la consulta",
+            None,
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-local",
+            "asset-1",
+            "item-1",
+            0,
+            "texto sin palabras de la consulta",
+            0,
+            &unit_vector(3),
+            (&effective.model, &effective.contract),
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-other-space",
+            "asset-1",
+            "item-1",
+            1,
+            "otro espacio",
+            40,
+            &unit_vector(3),
+            ("otro-modelo", "otro-contrato"),
+        );
+
+        let ranked = chunk_vector_leg(&conn, &unit_vector(3), 10, 0.0)
+            .expect("chunk vector leg should succeed");
+
+        assert_eq!(ranked, ["chunk-local"]);
+    }
+
+    #[test]
+    fn lexical_fallback_filters_chunked_pages_before_the_per_item_limit() {
+        let conn = setup_chunk_packing_db();
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("default provider resolves");
+        conn.execute(
+            "INSERT INTO collections(id, name) VALUES ('col-1', 'Archivo')",
+            [],
+        )
+        .expect("collection insert");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title, metadata)
+             VALUES ('item-big', 'col-1', 'Expediente', '{}')",
+            [],
+        )
+        .expect("item insert");
+        for index in 0..25 {
+            let asset_id = format!("page-{index:02}");
+            conn.execute(
+                "INSERT INTO assets(id, item_id, path, type, created_at)
+                 VALUES (?1, 'item-big', 'scan.png', 'image', ?2)",
+                params![asset_id, index as i64],
+            )
+            .expect("asset insert");
+            insert_extraction(&conn, &asset_id, "acta del cabildo", 1);
+            if index < 24 {
+                insert_embedded_chunk(
+                    &conn,
+                    &format!("chunk-{index:02}"),
+                    &asset_id,
+                    "item-big",
+                    0,
+                    "acta del cabildo",
+                    0,
+                    &unit_vector(0),
+                    (&effective.model, &effective.contract),
+                );
+            }
+        }
+        crate::nlp::fts::fts_index_item(&conn, "item-big", "Expediente", "", "acta del cabildo")
+            .expect("fts index");
+
+        // Both the scanned path and the unscanned (creation order) path.
+        for scan_items in [LEXICAL_SCAN_MIN_ITEMS, 0] {
+            let ranked = lexical_leg_filtered(
+                &conn,
+                "cabildo",
+                24,
+                AssetFilter::WithoutChunks(&effective),
+                scan_items,
+            )
+            .expect("lexical leg should succeed");
+            assert_eq!(ranked, ["page-24"], "scan_items={scan_items}");
+        }
+    }
+
+    #[test]
+    fn hybrid_retrieval_falls_back_to_the_asset_for_pages_without_effective_chunks() {
+        use super::hybrid_fixture::{axis, corpus, CHUNKED_ASSET, PLAIN_ASSET};
+        let conn = corpus();
+        let embedding = axis(2);
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: Some(&embedding),
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+        let kinds: Vec<(&str, bool)> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.record.asset_id.as_str(),
+                    candidate.record.chunk.is_some(),
+                )
+            })
+            .collect();
+        assert!(kinds.contains(&(CHUNKED_ASSET, true)), "{kinds:?}");
+        assert!(kinds.contains(&(PLAIN_ASSET, false)), "{kinds:?}");
+        assert!(
+            !kinds.contains(&(CHUNKED_ASSET, false)),
+            "a page with chunks is never also retrieved whole: {kinds:?}"
+        );
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 1600, 10_000)
+            .expect("mixed evidence should pack");
+        let packed: Vec<(&str, bool)> = sources
+            .iter()
+            .map(|source| (source.asset_id.as_str(), source.provenance.is_some()))
+            .collect();
+        assert!(packed.contains(&(CHUNKED_ASSET, true)), "{packed:?}");
+        assert!(packed.contains(&(PLAIN_ASSET, false)), "{packed:?}");
+    }
+
+    #[test]
+    fn chunk_lexical_leg_ignores_chunks_of_another_embedding_space() {
+        let conn = setup_rag_db();
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "cabildo abierto",
+            None,
+        );
+        index_canonical_chunk(&conn, "chunk-current", "asset-1", "cabildo abierto");
+        insert_embedded_chunk(
+            &conn,
+            "chunk-stale",
+            "asset-1",
+            "item-1",
+            1,
+            "cabildo cerrado",
+            20,
+            &unit_vector(0),
+            ("modelo-anterior", "contrato-anterior"),
+        );
+
+        let ranked = chunk_lexical_leg(&conn, "cabildo", 10).expect("chunk leg");
+
+        assert_eq!(ranked, ["chunk-current"]);
+    }
+
+    #[test]
+    fn hybrid_retrieval_degrades_to_whole_pages_when_the_embedding_space_is_unknown() {
+        use super::hybrid_fixture::{corpus, CHUNKED_ASSET, PLAIN_ASSET};
+        let conn = corpus();
+        set_setting(&conn, "embedding_provider", "mystery");
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("an unknown provider must not fail retrieval");
+
+        let mut pages: Vec<(&str, bool)> = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.record.asset_id.as_str(),
+                    candidate.record.chunk.is_some(),
+                )
+            })
+            .collect();
+        pages.sort();
+        assert_eq!(pages, [(CHUNKED_ASSET, false), (PLAIN_ASSET, false)]);
+    }
+
+    #[test]
+    fn local_provider_retrieves_a_passage_with_no_lexical_match_by_the_chunk_vector_leg() {
+        let conn = setup_rag_db();
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        set_setting(&conn, "embedding_provider", "local");
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("local provider resolves");
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "El Obrero"),
+            "asset-1",
+            "la emancipación de la mujer",
+            None,
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-1",
+            "asset-1",
+            "item-1",
+            0,
+            "la emancipación de la mujer",
+            0,
+            &unit_vector(7),
+            (&effective.model, &effective.contract),
+        );
+        let embedding = unit_vector(7);
+        let query = RetrievalQuery {
+            text: "feminismo libertario",
+            embedding: Some(&embedding),
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0]
+                .record
+                .chunk
+                .as_ref()
+                .map(|chunk| chunk.chunk_ordinal),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn chunk_coverage_counts_pages_with_text_and_those_with_effective_chunks() {
+        let conn = super::hybrid_fixture::corpus();
+        assert_eq!(
+            chunk_coverage(&conn).expect("coverage"),
+            RagChunkCoverage {
+                assets_with_text: 2,
+                assets_with_chunks: 1,
+            }
+        );
+
+        // Chunks of another embedding space are not coverage.
+        set_setting(&conn, "embedding_provider", "local");
+        assert_eq!(
+            chunk_coverage(&conn).expect("coverage").assets_with_chunks,
+            0
+        );
+    }
+
+    #[test]
+    fn hybrid_retrieval_declares_the_degradation_to_whole_pages() {
+        use super::hybrid_fixture::corpus;
+        let conn = corpus();
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let healthy =
+            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
+                .expect("retrieval");
+        assert!(healthy.degradation.is_empty());
+
+        set_setting(&conn, "embedding_provider", "mystery");
+        let degraded =
+            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
+                .expect("an unknown provider must not fail retrieval");
+        assert_eq!(degraded.degradation.len(), 1);
+        assert_eq!(degraded.degradation[0].code, "whole_pages_only");
+        assert!(degraded.degradation[0].detail.contains("mystery"));
+        assert_eq!(degraded.candidates.len(), 2);
+    }
+
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {
         let record = load_source_record_for_unit(conn, RetrievalUnit::Chunk, chunk_id)
             .expect("chunk source load should succeed")
@@ -2468,8 +3741,8 @@ mod tests {
             &conn,
             vec![chunk_candidate(&conn, "chunk-center", 0.9)],
             "KLMN",
-            RetrievalUnit::Chunk,
             1,
+            100,
             100,
             100,
         )
@@ -2582,22 +3855,34 @@ mod tests {
             10,
         );
 
-        let sources = pack_sources(
-            &conn,
-            vec![chunk_candidate(&conn, "main-center", 0.8)],
-            "AAAAA",
-            RetrievalUnit::Chunk,
-            1,
-            12,
-            12,
-        )
-        .expect("budgeted chunk evidence should pack");
+        let pack = |budget: usize| {
+            pack_sources(
+                &conn,
+                vec![chunk_candidate(&conn, "main-center", 0.8)],
+                "AAAAA",
+                1,
+                budget,
+                budget,
+                budget,
+            )
+            .expect("budgeted chunk evidence should pack")
+        };
 
-        assert_eq!(sources[0].snippet, "AAAAABBBBBCC");
-        let provenance = provenance(&sources[0]);
-        assert_eq!(provenance.chunk_ids, ["main-prev", "main-center"]);
-        assert_eq!((provenance.start_char, provenance.end_char), (0, 12));
+        // Over budget, the passage loses whole neighbours (the next one
+        // first), never a window around the query term.
+        let sources = pack(20);
+        assert_eq!(sources[0].snippet, "AAAAABBBBBCCCCCDDDDD");
+        let kept = provenance(&sources[0]);
+        assert_eq!(kept.chunk_ids, ["main-prev", "main-center"]);
+        assert_eq!((kept.start_char, kept.end_char), (0, 20));
         assert!(!sources[0].snippet.contains("WRONG"));
+
+        // The retrieved chunk always stays; only it alone is cut, at its end.
+        let sources = pack(12);
+        assert_eq!(sources[0].snippet, "BBBBBCCCCCDD");
+        let kept = provenance(&sources[0]);
+        assert_eq!(kept.chunk_ids, ["main-center"]);
+        assert_eq!((kept.start_char, kept.end_char), (5, 17));
     }
 
     #[test]
@@ -2635,17 +3920,9 @@ mod tests {
             chunk_candidate(&conn, "chunk-c", 0.7),
         ];
 
-        let budgeted = pack_sources(
-            &conn,
-            candidates.clone(),
-            "",
-            RetrievalUnit::Chunk,
-            3,
-            100,
-            10,
-        )
-        .expect("context-budgeted evidence should pack");
-        let top_k_limited = pack_sources(&conn, candidates, "", RetrievalUnit::Chunk, 2, 100, 100)
+        let budgeted = pack_sources(&conn, candidates.clone(), "", 3, 100, 100, 10)
+            .expect("context-budgeted evidence should pack");
+        let top_k_limited = pack_sources(&conn, candidates, "", 2, 100, 100, 100)
             .expect("top-k evidence should pack");
 
         for sources in [&budgeted, &top_k_limited] {
@@ -2669,6 +3946,271 @@ mod tests {
         }
     }
 
+    /// Tres chunks canónicos de 800 con solape de 100 sobre un texto de 2.200
+    /// chars. El vecino anterior repite el término más largo de la pregunta;
+    /// el central es el que la pierna recuperó.
+    fn three_consecutive_chunks(conn: &Connection) -> String {
+        let prev = format!("{} ", "periódico obrero cabecera".repeat(40));
+        let center = format!("{} ", "la mujer emancipada".repeat(60));
+        let next = "cierre del artículo ".repeat(80);
+        let text: String = format!("{prev}{center}{next}").chars().take(2200).collect();
+        insert_ocr_doc(
+            conn,
+            ("col-1", "Archivo"),
+            ("item-1", "El Obrero"),
+            "asset-1",
+            &text,
+            None,
+        );
+        let slice = |start: usize, end: usize| -> String {
+            text.chars().skip(start).take(end - start).collect()
+        };
+        for (id, ordinal, start, end) in [
+            ("chunk-prev", 0, 0, 800),
+            ("chunk-center", 1, 700, 1500),
+            ("chunk-next", 2, 1400, 2200),
+        ] {
+            insert_chunk(
+                conn,
+                id,
+                "asset-1",
+                "item-1",
+                "extraction",
+                "ext-1",
+                ordinal,
+                &slice(start, end),
+                start as i64,
+                end as i64,
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn pack_sources_sends_the_joined_passage_whole_without_a_term_window() {
+        let conn = setup_chunk_packing_db();
+        let text = three_consecutive_chunks(&conn);
+
+        let sources = pack_sources(
+            &conn,
+            vec![chunk_candidate(&conn, "chunk-center", 0.9)],
+            "¿Qué mirada sobre la mujer tiene el periódico?",
+            1,
+            1600,
+            crate::rag::params::DEFAULT_PASSAGE_MAX_CHARS,
+            10_000,
+        )
+        .expect("chunk evidence should pack");
+
+        assert_eq!(sources[0].snippet, text, "no window cut the passage");
+        let provenance = provenance(&sources[0]);
+        assert_eq!((provenance.start_char, provenance.end_char), (0, 2200));
+        assert_eq!(
+            provenance.chunk_ids,
+            ["chunk-prev", "chunk-center", "chunk-next"]
+        );
+    }
+
+    /// Una página con `count` chunks canónicos de 10 chars sin solape, todos
+    /// con "cabildo", en el espacio efectivo.
+    fn page_with_matching_chunks(conn: &Connection, count: i64) {
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        insert_ocr_doc(
+            conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "cabildo",
+            None,
+        );
+        for ordinal in 0..count {
+            insert_embedded_chunk(
+                conn,
+                &format!("chunk-{ordinal}"),
+                "asset-1",
+                "item-1",
+                ordinal,
+                &format!("cabildo {ordinal:02}"),
+                ordinal * 10,
+                &unit_vector(0),
+                (CANONICAL_EMBEDDING_MODEL, CANONICAL_EMBEDDING_CONTRACT_V1),
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_retrieval_keeps_up_to_three_passages_per_page() {
+        let conn = setup_rag_db();
+        page_with_matching_chunks(&conn, 5);
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.record.asset_id == "asset-1"
+                && candidate.record.chunk.is_some()));
+    }
+
+    /// Six canonical 800-char chunks with 100-char overlap over one source.
+    fn canonical_window_chunks() -> (String, Vec<CanonicalChunk>) {
+        let source: String = (0..4300)
+            .map(|position| char::from(b'a' + ((position / 100) % 26) as u8))
+            .collect();
+        let chunks = (0..6)
+            .map(|ordinal| {
+                let start = ordinal as usize * 700;
+                CanonicalChunk {
+                    id: format!("chunk-{ordinal}"),
+                    ordinal,
+                    text: source.chars().skip(start).take(800).collect(),
+                    start_char: start,
+                    end_char: start + 800,
+                }
+            })
+            .collect();
+        (source, chunks)
+    }
+
+    #[test]
+    fn fit_passage_keeps_the_best_ranked_center_when_centers_sit_at_both_ends() {
+        let (source, chunks) = canonical_window_chunks();
+
+        // Ranking order: chunk 4 is the best retrieved chunk of the group.
+        let (kept, text, start, end) = fit_passage(chunks, &[4, 2, 0], 2400);
+
+        let ordinals: Vec<i64> = kept.iter().map(|chunk| chunk.ordinal).collect();
+        assert!(ordinals.contains(&4), "best center dropped: {ordinals:?}");
+        assert!(text.chars().count() <= 2400);
+        let sent: String = source.chars().skip(start).take(end - start).collect();
+        assert_eq!(text, sent, "provenance covers exactly the text sent");
+    }
+
+    #[test]
+    fn fit_passage_drops_the_worse_ranked_end_before_the_best_center() {
+        let (_, chunks) = canonical_window_chunks();
+
+        for centers in [[0, 4], [2, 4]] {
+            let (kept, text, _, _) = fit_passage(chunks_clone(&chunks), &centers, 2400);
+            let ordinals: Vec<i64> = kept.iter().map(|chunk| chunk.ordinal).collect();
+            assert!(
+                ordinals.contains(&centers[0]),
+                "{centers:?} -> {ordinals:?}"
+            );
+            assert!(text.chars().count() <= 2400);
+        }
+    }
+
+    fn chunks_clone(chunks: &[CanonicalChunk]) -> Vec<CanonicalChunk> {
+        chunks
+            .iter()
+            .map(|chunk| CanonicalChunk {
+                id: chunk.id.clone(),
+                ordinal: chunk.ordinal,
+                text: chunk.text.clone(),
+                start_char: chunk.start_char,
+                end_char: chunk.end_char,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pack_sources_joins_adjacent_passages_of_one_source_into_one() {
+        let conn = setup_rag_db();
+        page_with_matching_chunks(&conn, 8);
+        let candidates = vec![
+            chunk_candidate(&conn, "chunk-2", 0.9),
+            chunk_candidate(&conn, "chunk-6", 0.8),
+            chunk_candidate(&conn, "chunk-3", 0.7),
+        ];
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 2400, 10_000)
+            .expect("passages should pack");
+
+        assert_eq!(sources.len(), 2, "chunk-3 joins chunk-2's passage");
+        let joined = provenance(&sources[0]);
+        assert_eq!(
+            joined.chunk_ids,
+            ["chunk-1", "chunk-2", "chunk-3", "chunk-4"]
+        );
+        assert_eq!((joined.start_char, joined.end_char), (10, 50));
+        assert_eq!(
+            sources[0].snippet,
+            "cabildo 01cabildo 02cabildo 03cabildo 04"
+        );
+        let apart = provenance(&sources[1]);
+        assert_eq!(apart.chunk_ids, ["chunk-5", "chunk-6", "chunk-7"]);
+        assert_eq!(sources[1].index, 2);
+    }
+
+    #[test]
+    fn pack_sources_packs_pages_and_passages_side_by_side() {
+        let conn = setup_chunk_packing_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-chunked", "Acta con chunks"),
+            "asset-chunked",
+            "texto del activo",
+            None,
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-page", "Acta sin chunks"),
+            "asset-page",
+            "el cabildo de la página entera",
+            None,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-1",
+            "asset-chunked",
+            "item-chunked",
+            "extraction",
+            "ext-1",
+            0,
+            "pasaje del cabildo",
+            0,
+            18,
+        );
+        let page = load_source_record(&conn, "asset-page")
+            .expect("asset load should succeed")
+            .expect("asset should exist");
+        let candidates = vec![
+            chunk_candidate(&conn, "chunk-1", 0.9),
+            RrfCandidate {
+                record: page,
+                score: 0.8,
+            },
+        ];
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 100, 100, 1000)
+            .expect("mixed evidence should pack");
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].snippet, "pasaje del cabildo");
+        assert!(sources[0].provenance.is_some());
+        assert_eq!(sources[1].asset_id, "asset-page");
+        assert_eq!(sources[1].snippet, "el cabildo de la página entera");
+        assert!(
+            sources[1].provenance.is_none(),
+            "a whole page has no chunk span"
+        );
+        assert_eq!(sources[1].index, 2);
+    }
+
     #[test]
     fn pack_sources_asset_mode_preserves_snippets_timestamps_and_no_provenance() {
         let conn = setup_rag_db();
@@ -2689,8 +4231,8 @@ mod tests {
             &conn,
             vec![RrfCandidate { record, score: 1.0 }],
             "cabildo",
-            RetrievalUnit::Asset,
             1,
+            100,
             100,
             100,
         )

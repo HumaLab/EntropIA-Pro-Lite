@@ -916,39 +916,12 @@ pub async fn writing_corpus_retrieve(
 ) -> WritingResult<Vec<super::retrieval::RetrievedPassage>> {
     let db_path = db.db_path.clone();
     let worker = db.worker_conn.clone();
-    let wanted = super::retrieval::bounded(limit);
 
     tokio::task::spawn_blocking(move || {
-        let query = super::retrieval::require_query(&passage)?.to_string();
-
-        let (params, unit_setting) = {
-            let conn = open(&db_path)?;
-            (
-                crate::rag::params::rag_params_from_settings(&conn),
-                crate::settings::get_setting(&conn, "rag_retrieval_unit"),
-            )
-        };
-        let unit = crate::rag::retrieval::RetrievalUnit::from_setting(unit_setting.as_deref())
-            .map_err(|e| WritingError::new("retrieval_unit_invalid", e))?;
-
-        let embedding = crate::rag::commands::embed_query_for_writing(&db_path, &query);
-        let queries = vec![crate::rag::retrieval::RetrievalQuery {
-            text: &query,
-            embedding: embedding.as_deref(),
-        }];
-
-        let conn = worker.lock().map_err(|_| {
-            WritingError::new("db_unavailable", "la conexión de trabajo está tomada")
-        })?;
-        let candidates =
-            crate::rag::retrieval::hybrid_retrieve_candidates(&conn, &queries, &params, unit)
-                .map_err(|e| WritingError::new("retrieval_failed", e))?;
-
-        Ok(super::retrieval::passages(
-            candidates,
-            wanted,
-            params.snippet_max_chars,
-        ))
+        let settings = open(&db_path)?;
+        super::retrieval::corpus_evidence(&settings, &worker, &passage, limit, |query| {
+            crate::rag::commands::embed_query_for_writing(&db_path, query)
+        })
     })
     .await
     .map_err(|e| joined("writing_corpus_retrieve", e))?

@@ -224,6 +224,24 @@ pub async fn rag_reranker_download_model(
 /// validación y del LLM sí se propagan como `Err`.
 ///
 /// La generación es LOCAL por defecto (motor Gemma): funciona sin API key.
+/// Cuántas páginas con texto tienen pasajes indexados en este dispositivo.
+/// El Chat lo muestra para que un corpus a medio indexar no se confunda con
+/// una búsqueda sin resultados.
+#[tauri::command]
+pub async fn rag_chunk_coverage(
+    db: tauri::State<'_, crate::db::state::AppDbState>,
+) -> Result<retrieval::RagChunkCoverage, String> {
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || {
+        // Conexión propia: recorre todo el corpus y no debe tomar la de trabajo.
+        let conn = crate::db::open::open_archive_connection(&db_path)
+            .map_err(|e| format!("Failed to open DB for RAG chunk coverage: {e}"))?;
+        retrieval::chunk_coverage(&conn)
+    })
+    .await
+    .map_err(|e| format!("RAG chunk coverage task panicked: {e}"))?
+}
+
 #[tauri::command]
 pub async fn rag_ask(
     question: String,
@@ -353,6 +371,7 @@ pub async fn rag_ask(
             conversation_id,
             bibliography_notice: None,
             bibliography_notice_detail: None,
+            retrieval_degradation: Vec::new(),
         });
     }
 
@@ -403,10 +422,10 @@ pub async fn rag_ask(
     let trace = phase.trace;
     // Biblioteca-only questions skip the corpus leg entirely (no embedding, no
     // rerank): it would only spend time on material the user did not ask for.
-    phase.candidates = if !scope.includes_corpus() {
-        Vec::new()
+    let corpus_retrieval = if !scope.includes_corpus() {
+        retrieval::HybridRetrieval::default()
     } else {
-        tokio::task::spawn_blocking(move || -> Result<Vec<retrieval::RrfCandidate>, String> {
+        tokio::task::spawn_blocking(move || -> Result<retrieval::HybridRetrieval, String> {
             let embed_started = std::time::Instant::now();
             let original_embedding = embed_query_local(&retrieval_db_path, &original_question);
             let rewritten_embedding = rewrite_for_retrieval
@@ -442,29 +461,33 @@ pub async fn rag_ask(
             );
 
             let conn = retrieval_conn.lock().map_err(|error| error.to_string())?;
-            let candidates = retrieval::hybrid_retrieve_candidates(
-                &conn,
-                &queries,
-                &retrieval_params,
-                retrieval_unit,
-            )?;
+            let retrieved =
+                retrieval::retrieve_reporting(&conn, &queries, &retrieval_params, retrieval_unit)?;
             trace_stage(
                 trace,
                 "hybrid_retrieval",
                 retrieval_started.elapsed(),
                 &format!(
-                    "queries={} materialized={} rerank_depth={} fusion_limit={}",
+                    "queries={} materialized={} rerank_depth={} fusion_limit={} degradation={}",
                     queries.len(),
-                    candidates.len(),
+                    retrieved.candidates.len(),
                     retrieval_params.rerank_depth,
-                    retrieval_params.fusion_candidate_limit
+                    retrieval_params.fusion_candidate_limit,
+                    retrieved
+                        .degradation
+                        .iter()
+                        .map(|degradation| degradation.code.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ),
             );
-            Ok(candidates)
+            Ok(retrieved)
         })
         .await
         .map_err(|error| format!("RAG embedding/retrieval task panicked: {error}"))??
     };
+    phase.candidates = corpus_retrieval.candidates;
+    let retrieval_degradation = corpus_retrieval.degradation;
     let retrieval_question = rewritten_question.unwrap_or_else(|| question.clone());
 
     // Second leg, run on its own: the Zotero libraries' passages. Never fused
@@ -612,9 +635,9 @@ pub async fn rag_ask(
             &conn,
             candidates,
             &source_question,
-            retrieval_unit,
             source_params.top_k,
             source_params.snippet_max_chars,
+            source_params.passage_max_chars,
             source_params.context_max_chars,
         )
     })
@@ -665,6 +688,7 @@ pub async fn rag_ask(
         let mut answer = empty_answer(phase.model, conversation_id);
         answer.bibliography_notice = bibliography_notice;
         answer.bibliography_notice_detail = bibliography_notice_detail;
+        answer.retrieval_degradation = retrieval_degradation;
         return Ok(answer);
     }
 
@@ -717,6 +741,7 @@ pub async fn rag_ask(
         conversation_id,
         bibliography_notice,
         bibliography_notice_detail,
+        retrieval_degradation,
     })
 }
 
@@ -1439,6 +1464,7 @@ fn empty_answer(model: String, conversation_id: Option<String>) -> RagAnswer {
         conversation_id,
         bibliography_notice: None,
         bibliography_notice_detail: None,
+        retrieval_degradation: Vec::new(),
     }
 }
 

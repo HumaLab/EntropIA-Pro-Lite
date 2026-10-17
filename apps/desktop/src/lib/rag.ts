@@ -77,6 +77,17 @@ export interface RagAnswer {
   bibliographyNotice?: string | null
   /** Short, key-free cause behind `failed` / `embedding_unavailable`. */
   bibliographyNoticeDetail?: string | null
+  /**
+   * What corpus retrieval gave up for this answer (e.g. `whole_pages_only`:
+   * no resolvable embedding space, so whole pages were retrieved instead of
+   * passages). Absent when retrieval ran complete. Not displayed yet (F4).
+   */
+  retrievalDegradation?: RagDegradation[]
+}
+
+export interface RagDegradation {
+  code: string
+  detail: string
 }
 
 export interface RagConversationSummary {
@@ -120,6 +131,20 @@ export function ragAsk(
     scope: options.scope,
     libraries: options.libraries ?? undefined,
   })
+}
+
+/**
+ * Documents with text on this device and how many of them have indexed
+ * passages. The rest are retrieved as whole pages; passages are local to each
+ * device, so coverage is too.
+ */
+export interface RagChunkCoverage {
+  assetsWithText: number
+  assetsWithChunks: number
+}
+
+export function ragChunkCoverage(): Promise<RagChunkCoverage> {
+  return invoke<RagChunkCoverage>('rag_chunk_coverage')
 }
 
 /** List persisted conversations ordered by updatedAt DESC. */

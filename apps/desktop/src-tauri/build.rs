@@ -148,6 +148,7 @@ const APP_COMMANDS: &[&str] = &[
     "geocode_entity",
     "geocode_item_entities",
     "rag_ask",
+    "rag_chunk_coverage",
     "rag_list_conversations",
     "rag_search_conversations",
     "rag_get_conversation",

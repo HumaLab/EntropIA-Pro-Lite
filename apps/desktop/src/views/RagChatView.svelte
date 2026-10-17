@@ -9,7 +9,9 @@
   } from '$lib/bibliography-search'
   import PassageReaderDialog from '../components/PassageReaderDialog.svelte'
   import {
+    ragChunkCoverage,
     ragSearchConversations,
+    type RagChunkCoverage,
     type RagConversationSummary,
     type RagLibraryRef,
     type RagScope,
@@ -132,6 +134,30 @@
   // chat never touches it.
   $effect(() => {
     if (scope !== 'corpus') untrack(() => void loadLibraryStatus())
+  })
+
+  // Read once per view: it scans the whole corpus, and a half-indexed corpus
+  // must not read as a search with no results.
+  let chunkCoverage = $state<RagChunkCoverage | null>(null)
+  let chunkCoverageRequested = false
+  $effect(() => {
+    if (scope === 'biblioteca' || chunkCoverageRequested) return
+    chunkCoverageRequested = true
+    untrack(() => {
+      ragChunkCoverage()
+        .then((coverage) => (chunkCoverage = coverage))
+        .catch(() => (chunkCoverage = null))
+    })
+  })
+
+  const chunkCoverageMessage = $derived.by(() => {
+    if (scope === 'biblioteca' || !chunkCoverage) return null
+    const { assetsWithText, assetsWithChunks } = chunkCoverage
+    if (assetsWithText === 0 || assetsWithChunks >= assetsWithText) return null
+    return t('ragChat.chunkCoveragePartial', {
+      chunked: assetsWithChunks,
+      total: assetsWithText,
+    })
   })
 
   const libraryRefs = $derived<RagLibraryRef[]>(
@@ -761,6 +787,11 @@
         {#if libraryStatusMessage}
           <p class="rag-chat__scope-note" role="status">
             {$currentLocale && libraryStatusMessage}
+          </p>
+        {/if}
+        {#if chunkCoverageMessage}
+          <p class="rag-chat__scope-note" role="status">
+            {$currentLocale && chunkCoverageMessage}
           </p>
         {/if}
         <form

@@ -13,6 +13,8 @@
 
 #[cfg(test)]
 mod baseline;
+#[cfg(test)]
+mod baseline_press;
 pub mod commands;
 pub(crate) mod intent;
 pub(crate) mod params;
@@ -52,6 +54,20 @@ pub struct RagAnswer {
     /// Short, secret-free cause behind `failed` / `embedding_unavailable`, so
     /// the notice says what broke instead of only that something did.
     pub bibliography_notice_detail: Option<String>,
+    /// Lo que la recuperación del corpus tuvo que resignar para esta
+    /// respuesta (por ejemplo `whole_pages_only`: sin espacio de embedding
+    /// resoluble, se recuperaron páginas enteras en lugar de pasajes). Vacío
+    /// cuando corrió completa. No se persiste; la interfaz lo declara (F4).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub retrieval_degradation: Vec<RagDegradation>,
+}
+
+/// Una degradación declarada de la recuperación: un código estable para la
+/// interfaz y la causa corta, sin secretos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RagDegradation {
+    pub code: String,
+    pub detail: String,
 }
 
 /// Resumen de una conversación persistida para el listado del frontend.
@@ -174,5 +190,31 @@ mod tests {
         assert_eq!(source.asset_id, "asset-legacy");
         assert_eq!(source.snippet, "fragmento persistido");
         assert!(source.provenance.is_none());
+    }
+
+    #[test]
+    fn rag_answer_carries_the_retrieval_degradation_for_the_ui() {
+        let answer = RagAnswer {
+            answer: String::new(),
+            sources: Vec::new(),
+            model: "modelo".to_string(),
+            conversation_id: None,
+            bibliography_notice: None,
+            bibliography_notice_detail: None,
+            retrieval_degradation: vec![RagDegradation {
+                code: "whole_pages_only".to_string(),
+                detail: "Proveedor de embeddings no soportado: mystery.".to_string(),
+            }],
+        };
+
+        let json = serde_json::to_value(&answer).expect("answer serializes");
+
+        assert_eq!(
+            json["retrievalDegradation"],
+            serde_json::json!([{
+                "code": "whole_pages_only",
+                "detail": "Proveedor de embeddings no soportado: mystery."
+            }])
+        );
     }
 }

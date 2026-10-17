@@ -2,7 +2,8 @@
 //!
 //! Las claves son un CONTRATO con el frontend (pantalla de configuración):
 //! `rag_top_k`, `rag_min_similarity`, `rag_candidates_per_leg`, `rag_rrf_k`,
-//! `rag_snippet_max_chars`, `rag_context_max_chars`, `rag_history_turns`,
+//! `rag_snippet_max_chars`, `rag_passage_max_chars`, `rag_context_max_chars`,
+//! `rag_history_turns`,
 //! `rag_history_turn_max_chars`, `rag_temperature`, `rag_max_tokens`.
 //!
 //! Mismo idioma que `model_params_from_settings` en `llm/mod.rs`: un setting
@@ -31,6 +32,13 @@ pub(crate) const DEFAULT_RRF_K: usize = 60;
 /// Máximo de caracteres por snippet de fuente (`rag_snippet_max_chars`),
 /// rango 200..=8000.
 pub(crate) const DEFAULT_SNIPPET_MAX_CHARS: usize = 1600;
+
+/// Máximo de caracteres por pasaje de chunks (`rag_passage_max_chars`),
+/// rango 800..=12000. El pasaje (chunk recuperado ± un vecino) entra entero
+/// hasta este tope y, si lo excede, se recorta en límite de chunk, nunca por
+/// ventana de términos. El default cubre tres chunks canónicos de 800 con
+/// solape de 100 (2.200) con margen.
+pub(crate) const DEFAULT_PASSAGE_MAX_CHARS: usize = 2400;
 
 /// Máximo total de caracteres de contexto (`rag_context_max_chars`),
 /// rango 1000..=350000. El techo cubre el presupuesto de evidencia de la
@@ -80,6 +88,7 @@ pub(crate) struct RagParams {
     pub rerank_depth: usize,
     pub rrf_k: usize,
     pub snippet_max_chars: usize,
+    pub passage_max_chars: usize,
     pub context_max_chars: usize,
     pub history_turns: usize,
     pub history_turn_max_chars: usize,
@@ -97,6 +106,7 @@ impl Default for RagParams {
             rerank_depth: DEFAULT_RERANK_DEPTH,
             rrf_k: DEFAULT_RRF_K,
             snippet_max_chars: DEFAULT_SNIPPET_MAX_CHARS,
+            passage_max_chars: DEFAULT_PASSAGE_MAX_CHARS,
             context_max_chars: DEFAULT_CONTEXT_MAX_CHARS,
             history_turns: DEFAULT_HISTORY_TURNS,
             history_turn_max_chars: DEFAULT_HISTORY_TURN_MAX_CHARS,
@@ -109,8 +119,9 @@ impl Default for RagParams {
 /// Lee los parámetros RAG desde `app_settings`. Cada clave ausente, inválida
 /// o fuera de rango cae a su default — esta función nunca falla.
 ///
-/// Invariante cross-field: `snippet_max_chars <= context_max_chars`. Si los
-/// settings lo violan, el snippet se recorta al tope de contexto.
+/// Invariante cross-field: `snippet_max_chars <= context_max_chars` y
+/// `passage_max_chars <= context_max_chars`. Si los settings lo violan, el
+/// tope por fuente se recorta al de contexto.
 pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
     let mut params = RagParams {
         top_k: parse_setting_usize(conn, "rag_top_k", DEFAULT_TOP_K, TOP_K_MIN, TOP_K_MAX),
@@ -144,6 +155,13 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
             200,
             8000,
         ),
+        passage_max_chars: parse_setting_usize(
+            conn,
+            "rag_passage_max_chars",
+            DEFAULT_PASSAGE_MAX_CHARS,
+            800,
+            12_000,
+        ),
         context_max_chars: parse_setting_usize(
             conn,
             "rag_context_max_chars",
@@ -163,6 +181,7 @@ pub(crate) fn rag_params_from_settings(conn: &Connection) -> RagParams {
         max_tokens: parse_setting_i32(conn, "rag_max_tokens", DEFAULT_MAX_TOKENS, 64, 16_000),
     };
     params.snippet_max_chars = params.snippet_max_chars.min(params.context_max_chars);
+    params.passage_max_chars = params.passage_max_chars.min(params.context_max_chars);
 
     // Fusionar menos candidatos de los que vamos a citar deja fuentes sobre la
     // mesa por un tope de configuración, no por relevancia.
@@ -274,6 +293,31 @@ mod tests {
         assert_eq!(params.history_turn_max_chars, 1000);
         assert!((params.temperature - 0.7).abs() < 1e-6);
         assert_eq!(params.max_tokens, 4096);
+    }
+
+    #[test]
+    fn rag_params_reads_the_passage_budget_within_range_and_context() {
+        let parsed = |pairs: &[(&str, &str)]| {
+            rag_params_from_settings(&conn_with_settings(pairs)).passage_max_chars
+        };
+        assert_eq!(parsed(&[]), DEFAULT_PASSAGE_MAX_CHARS);
+        assert_eq!(parsed(&[("rag_passage_max_chars", "3200")]), 3200);
+        assert_eq!(
+            parsed(&[("rag_passage_max_chars", "799")]),
+            DEFAULT_PASSAGE_MAX_CHARS
+        );
+        assert_eq!(
+            parsed(&[("rag_passage_max_chars", "12001")]),
+            DEFAULT_PASSAGE_MAX_CHARS
+        );
+        assert_eq!(
+            parsed(&[
+                ("rag_passage_max_chars", "6000"),
+                ("rag_context_max_chars", "4000"),
+            ]),
+            4000,
+            "a passage never exceeds the whole context budget"
+        );
     }
 
     #[test]
