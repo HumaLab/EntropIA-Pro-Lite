@@ -50,7 +50,7 @@ use super::baseline::{
     attribute_failure, evidence_position, Evidence, FailureAttribution, SentSource,
 };
 use super::params::RagParams;
-use super::retrieval::{self, RetrievalQuery, RetrievalUnit};
+use super::retrieval::{self, LegKind, RecordKey, RetrievalQuery, RetrievalUnit};
 use crate::nlp::embeddings::{
     CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
 };
@@ -247,20 +247,24 @@ fn unit_name(unit: RetrievalUnit) -> &'static str {
     }
 }
 
-/// `true` si el registro de una pierna cubre la evidencia: un asset la
+fn leg_name(kind: LegKind) -> &'static str {
+    match kind {
+        LegKind::AssetVector => "asset_vector",
+        LegKind::AssetLexical => "asset_lexical",
+        LegKind::ChunkVector => "chunk_vector",
+        LegKind::ChunkLexical => "chunk_lexical",
+    }
+}
+
+/// `true` si el registro de una pierna cubre la evidencia: una página la
 /// contiene entera; un chunk, solo si su rango se cruza con el de la cita.
-fn record_covers(
-    conn: &Connection,
-    unit: RetrievalUnit,
-    record_id: &str,
-    cue_range: (usize, usize),
-) -> bool {
-    match unit {
-        RetrievalUnit::Asset => record_id == PAGE_ASSET,
-        RetrievalUnit::Chunk => conn
+fn record_covers(conn: &Connection, key: &RecordKey, cue_range: (usize, usize)) -> bool {
+    match key {
+        RecordKey::Asset(asset_id) => asset_id == PAGE_ASSET,
+        RecordKey::Chunk(chunk_id) => conn
             .query_row(
                 "SELECT asset_id, start_char, end_char FROM rag_chunks WHERE id = ?1",
-                [record_id],
+                [chunk_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -286,55 +290,34 @@ fn evaluate_press_case(
     let cue_range = (cue_start, cue_start + case.cue.chars().count());
     let embedding = press_embedding(case.question);
 
-    let (vector, lexical) = match unit {
-        RetrievalUnit::Asset => (
-            retrieval::vector_leg(
-                conn,
-                &embedding,
-                params.candidates_per_leg,
-                params.min_similarity,
-            ),
-            retrieval::lexical_leg(conn, case.question, params.candidates_per_leg),
-        ),
-        RetrievalUnit::Chunk => (
-            retrieval::chunk_vector_leg(
-                conn,
-                &embedding,
-                params.candidates_per_leg,
-                params.min_similarity,
-            ),
-            retrieval::chunk_lexical_leg(conn, case.question, params.candidates_per_leg),
-        ),
-    };
-    let legs = [
-        ("vector", vector.expect("vector leg")),
-        ("lexical", lexical.expect("lexical leg")),
-    ];
-    let fused = retrieval::rrf_fuse(
-        &legs.iter().map(|(_, ids)| ids.clone()).collect::<Vec<_>>(),
-        params.fusion_candidate_limit,
-        params.rrf_k as f64,
-    );
-    let covers = |id: &String| record_covers(conn, unit, id, cue_range);
-    let mut stages: Vec<StagePosition> = legs
-        .iter()
-        .map(|(stage, ids)| StagePosition {
-            stage,
-            records: ids.len(),
-            evidence_position: evidence_position(ids, covers),
-        })
-        .collect();
-    let fused_ids: Vec<String> = fused.into_iter().map(|(id, _)| id).collect();
-    stages.push(StagePosition {
-        stage: "fused",
-        records: fused_ids.len(),
-        evidence_position: evidence_position(&fused_ids, covers),
-    });
-
     let query = RetrievalQuery {
         text: case.question,
         embedding: Some(&embedding),
     };
+    let legs = retrieval::retrieval_legs(conn, &[query], params, unit).expect("retrieval legs");
+    let fused = retrieval::rrf_fuse(
+        &legs
+            .iter()
+            .map(|leg| leg.records.clone())
+            .collect::<Vec<_>>(),
+        params.fusion_candidate_limit,
+        params.rrf_k as f64,
+    );
+    let covers = |key: &RecordKey| record_covers(conn, key, cue_range);
+    let mut stages: Vec<StagePosition> = legs
+        .iter()
+        .map(|leg| StagePosition {
+            stage: leg_name(leg.kind),
+            records: leg.records.len(),
+            evidence_position: evidence_position(&leg.records, covers),
+        })
+        .collect();
+    let fused_keys: Vec<RecordKey> = fused.into_iter().map(|(key, _)| key).collect();
+    stages.push(StagePosition {
+        stage: "fused",
+        records: fused_keys.len(),
+        evidence_position: evidence_position(&fused_keys, covers),
+    });
     let candidates = retrieval::hybrid_retrieve_candidates(conn, &[query], params, unit)
         .expect("hybrid retrieval");
     let sources = retrieval::pack_sources(
@@ -419,13 +402,17 @@ fn press_baseline_reports_every_case_with_its_attribution_and_stage_positions() 
         assert_eq!(reports.len(), PRESS_CASES.len());
         for report in &reports {
             assert_eq!(report.unit, unit_name(unit));
+            let expected: &[&str] = match unit {
+                RetrievalUnit::Asset => &["asset_vector", "asset_lexical", "fused"],
+                RetrievalUnit::Chunk => &["chunk_vector", "chunk_lexical", "fused"],
+            };
             assert_eq!(
                 report
                     .stages
                     .iter()
                     .map(|stage| stage.stage)
                     .collect::<Vec<_>>(),
-                ["vector", "lexical", "fused"]
+                expected
             );
             assert!(report.sources_sent > 0, "{} sent nothing", report.case_id);
         }

@@ -98,6 +98,80 @@ pub(crate) struct RetrievalQuery<'a> {
     pub(crate) embedding: Option<&'a [f32]>,
 }
 
+/// Registro que propone una pierna: una página entera o un chunk. Las piernas
+/// de las dos unidades se fusionan juntas, así que el tipo viaja con el id.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum RecordKey {
+    Asset(String),
+    Chunk(String),
+}
+
+/// De dónde sale una pierna. El diagnóstico del baseline la informa por
+/// separado; la fusión no la distingue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegKind {
+    AssetVector,
+    AssetLexical,
+    ChunkVector,
+    ChunkLexical,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RetrievalLeg {
+    // Lo lee el diagnóstico por pierna del baseline (solo en tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) kind: LegKind,
+    pub(crate) records: Vec<RecordKey>,
+}
+
+/// Las piernas de una recuperación, en el orden en que se fusionan.
+pub(crate) fn retrieval_legs(
+    conn: &Connection,
+    queries: &[RetrievalQuery<'_>],
+    params: &RagParams,
+    unit: RetrievalUnit,
+) -> Result<Vec<RetrievalLeg>, String> {
+    let limit = params.candidates_per_leg;
+    let assets = |ids: Vec<String>| ids.into_iter().map(RecordKey::Asset).collect();
+    let chunks = |ids: Vec<String>| ids.into_iter().map(RecordKey::Chunk).collect();
+
+    let mut legs = Vec::with_capacity(queries.len().saturating_mul(2));
+    for query in queries {
+        match unit {
+            RetrievalUnit::Asset => {
+                if let Some(embedding) = query.embedding {
+                    legs.push(RetrievalLeg {
+                        kind: LegKind::AssetVector,
+                        records: assets(vector_leg(conn, embedding, limit, params.min_similarity)?),
+                    });
+                }
+                legs.push(RetrievalLeg {
+                    kind: LegKind::AssetLexical,
+                    records: assets(lexical_leg(conn, query.text, limit)?),
+                });
+            }
+            RetrievalUnit::Chunk => {
+                if let Some(embedding) = query.embedding {
+                    legs.push(RetrievalLeg {
+                        kind: LegKind::ChunkVector,
+                        records: chunks(chunk_vector_leg(
+                            conn,
+                            embedding,
+                            limit,
+                            params.min_similarity,
+                        )?),
+                    });
+                }
+                legs.push(RetrievalLeg {
+                    kind: LegKind::ChunkLexical,
+                    records: chunks(chunk_lexical_leg(conn, query.text, limit)?),
+                });
+            }
+        }
+    }
+    Ok(legs)
+}
+
 /// Recuperación híbrida hasta la lista RRF de candidatos. Los registros son
 /// owned para que cualquier reranking ocurra después de liberar SQLite.
 pub(crate) fn hybrid_retrieve_candidates(
@@ -106,29 +180,10 @@ pub(crate) fn hybrid_retrieve_candidates(
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
-    let mut legs = Vec::with_capacity(queries.len().saturating_mul(2));
-    for query in queries {
-        if let Some(embedding) = query.embedding {
-            legs.push(match unit {
-                RetrievalUnit::Asset => vector_leg(
-                    conn,
-                    embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-                RetrievalUnit::Chunk => chunk_vector_leg(
-                    conn,
-                    embedding,
-                    params.candidates_per_leg,
-                    params.min_similarity,
-                )?,
-            });
-        }
-        legs.push(match unit {
-            RetrievalUnit::Asset => lexical_leg(conn, query.text, params.candidates_per_leg)?,
-            RetrievalUnit::Chunk => chunk_lexical_leg(conn, query.text, params.candidates_per_leg)?,
-        });
-    }
+    let legs: Vec<Vec<RecordKey>> = retrieval_legs(conn, queries, params, unit)?
+        .into_iter()
+        .map(|leg| leg.records)
+        .collect();
     let fused = rrf_fuse(&legs, params.fusion_candidate_limit, params.rrf_k as f64);
 
     // Solo materializamos los `rerank_depth` mejores. `load_source_record` lee
@@ -143,12 +198,18 @@ pub(crate) fn hybrid_retrieve_candidates(
     let wanted = params.rerank_depth.max(params.top_k).max(1);
     let mut candidates = Vec::with_capacity(wanted.min(fused.len()));
     let mut cited_assets = HashSet::with_capacity(wanted);
-    for (record_id, score) in fused {
+    for (key, score) in fused {
         if candidates.len() >= wanted {
             break;
         }
-        if let Some(record) = load_source_record_for_unit(conn, unit, &record_id)? {
-            if unit == RetrievalUnit::Chunk && !cited_assets.insert(record.asset_id.clone()) {
+        let record = match &key {
+            RecordKey::Asset(asset_id) => load_source_record(conn, asset_id)?,
+            RecordKey::Chunk(chunk_id) => {
+                load_source_record_for_unit(conn, RetrievalUnit::Chunk, chunk_id)?
+            }
+        };
+        if let Some(record) = record {
+            if record.chunk.is_some() && !cited_assets.insert(record.asset_id.clone()) {
                 continue;
             }
             candidates.push(RrfCandidate { record, score });
@@ -542,8 +603,11 @@ pub(crate) fn chunk_lexical_leg(
 /// Reciprocal Rank Fusion: score(asset) = Σ sobre piernas de 1/(rrf_k + rank),
 /// con rank arrancando en 1. Orden descendente por score; los empates se
 /// resuelven determinísticamente por asset_id ascendente.
-pub(crate) fn rrf_fuse(legs: &[Vec<String>], limit: usize, rrf_k: f64) -> Vec<(String, f64)> {
-    let mut scores: HashMap<String, f64> = HashMap::new();
+pub(crate) fn rrf_fuse<K>(legs: &[Vec<K>], limit: usize, rrf_k: f64) -> Vec<(K, f64)>
+where
+    K: Clone + Eq + std::hash::Hash + Ord,
+{
+    let mut scores: HashMap<K, f64> = HashMap::new();
     for leg in legs {
         for (rank0, asset_id) in leg.iter().enumerate() {
             let rank = (rank0 + 1) as f64;
@@ -551,7 +615,7 @@ pub(crate) fn rrf_fuse(legs: &[Vec<String>], limit: usize, rrf_k: f64) -> Vec<(S
         }
     }
 
-    let mut fused: Vec<(String, f64)> = scores.into_iter().collect();
+    let mut fused: Vec<(K, f64)> = scores.into_iter().collect();
     fused.sort_by(|a, b| {
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
