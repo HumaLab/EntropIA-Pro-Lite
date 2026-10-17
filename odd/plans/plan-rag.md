@@ -369,3 +369,31 @@ procesado (re-embebido), así que va con el contrato nuevo de F2. (2) Caso borde
 modelo (contrato hash) aunque embebe el BGE-M3 local. (3) El frontend ya asume `local` por defecto en
 Pro (`src/lib/settings.ts:233`); conviene verificar si persiste el valor en instalaciones nuevas, que
 haría este caso raro en la práctica.
+
+### 8.2 Pendientes del Juicio Final sobre F1
+
+Referencias contra `a663dd26`; `retrieval.rs` es `apps/desktop/src-tauri/src/rag/retrieval.rs`.
+
+1. **La pierna léxica lee todas las páginas de cada ítem escaneado.** `lexical_leg_filtered`
+   (`retrieval.rs:721`) acota cuántos ítems lee (`LEXICAL_SCAN_MIN_ITEMS`, `:39`; `rank < scan_items`,
+   `:797-798`), pero no cuántas páginas por ítem: `text_stmt` (`:779-789`) trae el texto completo de
+   todas las páginas con texto del ítem (`:799-805`) y las pliega y puntúa en Rust (`:806-815`) en cada
+   pregunta. En un ítem de cientos de páginas (un diario encuadernado) el costo crece con el ítem, no con
+   la pregunta. **Fase:** F4, o junto con el índice por página de F3, que reemplazaría la lectura.
+2. **Cobertura consultada página por página.** Desde la corrección JD-A1 (`2eca2928`), el filtro de
+   cobertura corre antes del tope por ítem: cada página candidata pasa por `coverage.admits`
+   (`retrieval.rs:825`, `:847`), que ejecuta una consulta `EXISTS` sobre `rag_chunks` (`:172`,
+   `:186-200`). Si un ítem tiene chunks en todas sus páginas, todas se consultan y ninguna se admite.
+   Cada consulta usa `idx_rag_chunks_asset_id` (migración 0029). **Costo aceptado.** **Fase:** medirlo en
+   F0 con un ítem grande (cientos de páginas, todas con chunks).
+3. **`group_adjacent_passages` agrupa por orden de llegada.** Cada candidato se une al primer grupo de la
+   misma fuente cuyo centro esté a dos o menos (`retrieval.rs:1278`, `:1289-1300`), sin fusionar grupos
+   entre sí. Si dos grupos quedan con vecindarios solapados (centros 1 y 5, después llega el 3 y se une
+   solo al primero), cada grupo expande su rango `±1` (`:1348-1349`) y los dos empaquetan el chunk del
+   borde: el texto se repite en el contexto y las dos procedencias (`chunk_ids`, `start_char`/`end_char`,
+   `:1401-1428`) se pisan. **Fase:** F4.
+4. **El aviso de cobertura ignora la unidad.** El Chat pide `rag_chunk_coverage` y muestra el aviso de
+   cobertura parcial según el alcance (`apps/desktop/src/views/RagChatView.svelte:141-160`), no según
+   `rag_retrieval_unit`: con `asset` explícito, donde los chunks no se usan, el aviso aparece igual
+   (`chunk_coverage`, `retrieval.rs:392`, tampoco mira la unidad). **Fase:** F4, junto con la interfaz de
+   degradación (`RagAnswer.retrievalDegradation`).
