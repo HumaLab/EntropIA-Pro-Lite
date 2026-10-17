@@ -1662,6 +1662,8 @@ const es = {
   'settings.ragParams.hint.rrfK': 'RRF K: suaviza el ranking al fusionar búsquedas (1-500)',
   'settings.ragParams.hint.snippetMaxChars':
     'Fragmento: limita caracteres tomados de cada resultado (200-8000)',
+  'settings.ragParams.hint.passageMaxChars':
+    'Pasaje: limita cada pasaje indexado con sus vecinos; si lo excede, se recorta por pasajes enteros (800-12000)',
   'settings.ragParams.hint.contextMaxChars':
     'Contexto: limita el texto total enviado al modelo (1000-350000; Pro local admite ventana de 131K tokens)',
   'settings.ragParams.hint.historyTurns': 'Historial: cantidad de turnos previos incluidos (0-20)',
@@ -4449,6 +4451,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.ragParams.hint.rrfK': 'RRF K: smooths ranking when merging searches (1-500)',
   'settings.ragParams.hint.snippetMaxChars':
     'Snippet: limits characters taken from each result (200-8000)',
+  'settings.ragParams.hint.passageMaxChars':
+    'Passage: limits each indexed passage with its neighbours; beyond it, whole passages are dropped (800-12000)',
   'settings.ragParams.hint.contextMaxChars':
     'Context: limits total text sent to the model (1000-350000; local Pro supports a 131K-token window)',
   'settings.ragParams.hint.historyTurns': 'History: number of previous turns included (0-20)',
