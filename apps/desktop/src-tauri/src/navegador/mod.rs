@@ -2,14 +2,13 @@
 //! this module hands it IPC, and every address it may load goes through
 //! [`url_policy`] first. Each tab is its own child webview (see [`tabs`]).
 //!
-//! The commands are always compiled and registered, so the ACL manifest is the
-//! same in every build. The child webview itself needs Tauri's `unstable`
-//! feature and lives behind the `navegador` Cargo feature; without it every
-//! command answers with [`UNAVAILABLE`].
+//! It ships in every build (Pro and Lite, every platform). The child webview
+//! needs Tauri's `unstable` feature, which `Cargo.toml` turns on for `tauri`
+//! unconditionally; there is no switch that leaves the commands without a
+//! browser.
 
 pub mod bounds;
-// Parsing is compiled in every build; only the viewer that feeds it needs the
-// `navegador` feature.
+// Parsing what the viewer captured.
 #[allow(dead_code)]
 pub mod capture;
 // Where saved captures live on disk and the one safe way into that tree.
@@ -18,8 +17,7 @@ pub mod capture_files;
 pub mod commands;
 #[allow(dead_code)]
 pub mod download;
-// Naming and limits are pure; only the viewer that opens the windows needs the
-// `navegador` feature.
+// Naming and limits of the popup windows the viewer opens.
 #[allow(dead_code)]
 pub mod popup;
 // Saving what was captured: files first, then one database transaction. Pure
@@ -38,33 +36,25 @@ pub mod text_pdf;
 // The startup sweep of the capture folder.
 #[allow(dead_code)]
 pub mod sweep;
-// Labels, the limit and the tab list are pure; the viewer that builds the
-// webviews needs the `navegador` feature.
+// Labels, the limit and the tab list; the viewer builds the webviews.
 #[allow(dead_code)]
 pub mod tabs;
 // Copying a saved source to Zotero: a durable queue and the connector writes.
 #[allow(dead_code)]
 pub mod zotero_copy;
-// The navigation callbacks that use the rest of the policy exist only when the
-// `navegador` feature is on.
+// Which addresses the browser may load, checked on every navigation.
 #[allow(dead_code)]
 pub mod url_policy;
 
-#[cfg(feature = "navegador")]
-mod viewer;
-#[cfg(not(feature = "navegador"))]
-#[path = "viewer_unavailable.rs"]
 mod viewer;
 
 pub use viewer::shutdown;
 
 /// Event the main webview listens to for changes in the browser state (its tabs
 /// and which one is active).
-#[cfg(feature = "navegador")]
 pub const STATE_EVENT: &str = "navegador://state";
 
 /// Event the main webview listens to for downloads in quarantine.
-#[cfg(feature = "navegador")]
 pub const DOWNLOAD_EVENT: &str = "navegador://download";
 
 /// Remove quarantined downloads that a crash or an abandoned draft left
@@ -101,6 +91,3 @@ pub fn sweep_captures(
         crate::app_logs::info(&app, "navegador", line);
     });
 }
-
-/// What every command answers when the build has no browser.
-pub const UNAVAILABLE: &str = "The embedded browser is not available in this build";

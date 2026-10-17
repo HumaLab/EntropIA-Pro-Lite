@@ -184,10 +184,14 @@ describe('TopBar', () => {
     ).toBeInTheDocument()
   })
 
-  it('does not offer the experimental navegador unless VITE_NAVEGADOR=1', () => {
+  // The Navegador ships in every build (Pro and Lite, every platform): no flag
+  // may hide its header button again.
+  it('always offers the navegador and opens it from the header', async () => {
     render(TopBar)
 
-    expect(screen.queryByRole('button', { name: 'Abrir el Navegador experimental' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Abrir el Navegador' }))
+
+    expect(navigateActiveMock).toHaveBeenCalledWith({ name: 'navegador' })
   })
 
   it('navigates to db browser from the database icon button', async () => {

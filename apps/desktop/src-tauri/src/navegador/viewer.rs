@@ -1,6 +1,6 @@
 //! The browser as native child webviews of the main window, one per tab
-//! (feature `navegador`, which turns on Tauri's `unstable` for
-//! `Window::add_child`).
+//! (`Window::add_child`, behind Tauri's `unstable` feature, which `Cargo.toml`
+//! always enables).
 //!
 //! Isolation, in order of what carries the weight:
 //! - A tab's label (`navegador-web-<n>`, see [`tabs`]) has no capability, so the
@@ -79,8 +79,6 @@ use super::popup;
 use super::tabs::{self, BrowserState, Placement, Tab, TabList};
 use super::url_policy::{self, NavigationKind};
 use super::{DOWNLOAD_EVENT, STATE_EVENT};
-
-pub const AVAILABLE: bool = true;
 
 const MAIN_LABEL: &str = "main";
 
