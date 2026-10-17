@@ -3295,6 +3295,58 @@ mod tests {
         assert_eq!(pages, [(CHUNKED_ASSET, false), (PLAIN_ASSET, false)]);
     }
 
+    #[test]
+    fn local_provider_retrieves_a_passage_with_no_lexical_match_by_the_chunk_vector_leg() {
+        let conn = setup_rag_db();
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        set_setting(&conn, "embedding_provider", "local");
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("local provider resolves");
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "El Obrero"),
+            "asset-1",
+            "la emancipación de la mujer",
+            None,
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-1",
+            "asset-1",
+            "item-1",
+            0,
+            "la emancipación de la mujer",
+            0,
+            &unit_vector(7),
+            (&effective.model, &effective.contract),
+        );
+        let embedding = unit_vector(7);
+        let query = RetrievalQuery {
+            text: "feminismo libertario",
+            embedding: Some(&embedding),
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0]
+                .record
+                .chunk
+                .as_ref()
+                .map(|chunk| chunk.chunk_ordinal),
+            Some(0)
+        );
+    }
+
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {
         let record = load_source_record_for_unit(conn, RetrievalUnit::Chunk, chunk_id)
             .expect("chunk source load should succeed")

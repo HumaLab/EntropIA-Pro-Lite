@@ -986,6 +986,25 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_candidate_is_reranked_on_its_whole_passage() {
+        let passage = format!(
+            "{} el periódico obrero {} la mujer emancipada",
+            "relleno ".repeat(40),
+            "texto ".repeat(40)
+        );
+        let mut chunk = candidate("a", passage.clone(), 0.1);
+        chunk.record.chunk = Some(super::super::retrieval::ChunkRecordProvenance {
+            source_kind: "extraction".to_string(),
+            source_id: "ext-a".to_string(),
+            chunk_ordinal: 3,
+        });
+
+        let documents = candidate_documents("¿Qué dice el periódico obrero?", &[chunk]);
+
+        assert_eq!(documents, [passage]);
+    }
+
+    #[test]
     fn documents_are_unicode_bounded_and_windowed_near_query_terms() {
         let text = format!("{} objetivo {}", "ñ".repeat(7000), "🦉".repeat(7000));
         let candidates = vec![candidate("a", text, 0.1)];

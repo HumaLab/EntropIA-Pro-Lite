@@ -426,3 +426,93 @@ fn press_baseline_reports_every_case_with_its_attribution_and_stage_positions() 
         }
     }
 }
+
+/// Aceptación de F1 sobre el caso real: con la unidad por defecto (sin
+/// setting), la pregunta lleva al LLM el artículo "La Mujer" y no solo la
+/// cabecera; las otras dos preguntas de la página no empeoran.
+#[test]
+fn press_default_unit_sends_the_la_mujer_article_and_keeps_the_other_cases() {
+    let unit = RetrievalUnit::from_setting(None).expect("default unit");
+    let conn = press_db();
+    load_page(&conn, true);
+    let params = RagParams::default();
+    let reference = &PRESS_CASES[0];
+    let embedding = press_embedding(reference.question);
+    let candidates = retrieval::hybrid_retrieve_candidates(
+        &conn,
+        &[RetrievalQuery {
+            text: reference.question,
+            embedding: Some(&embedding),
+        }],
+        &params,
+        unit,
+    )
+    .expect("hybrid retrieval");
+    let sources = retrieval::pack_sources(
+        &conn,
+        candidates,
+        reference.question,
+        params.top_k,
+        params.snippet_max_chars,
+        params.passage_max_chars,
+        params.context_max_chars,
+    )
+    .expect("pack sources");
+
+    let article = sources
+        .iter()
+        .find(|source| source.snippet.contains(LA_MUJER_TITLE))
+        .expect("the La Mujer article reaches the context");
+    assert!(article.snippet.contains("emancipación moral y económica"));
+    let span = article.provenance.as_ref().expect("chunk provenance");
+    assert!(span.start_char <= LA_MUJER_TITLE_CHAR && span.end_char > LA_MUJER_TITLE_CHAR);
+    assert!(
+        !article.snippet.contains("# ELOBRERO"),
+        "the article passage is not the masthead"
+    );
+
+    for report in press_reports(unit) {
+        assert_eq!(
+            report.attribution,
+            FailureAttribution::None,
+            "{} lost its evidence",
+            report.case_id
+        );
+    }
+}
+
+/// Aceptación de F1: una página procesada antes de los chunks sigue
+/// llegando, entera, por el modo Asset.
+#[test]
+fn press_page_without_chunks_still_reaches_the_context_by_the_asset_path() {
+    let conn = press_db();
+    load_page(&conn, false);
+    let params = RagParams::default();
+    let reference = &PRESS_CASES[0];
+    let embedding = press_embedding(reference.question);
+    let candidates = retrieval::hybrid_retrieve_candidates(
+        &conn,
+        &[RetrievalQuery {
+            text: reference.question,
+            embedding: Some(&embedding),
+        }],
+        &params,
+        RetrievalUnit::from_setting(None).expect("default unit"),
+    )
+    .expect("hybrid retrieval");
+    let sources = retrieval::pack_sources(
+        &conn,
+        candidates,
+        reference.question,
+        params.top_k,
+        params.snippet_max_chars,
+        params.passage_max_chars,
+        params.context_max_chars,
+    )
+    .expect("pack sources");
+
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].asset_id, PAGE_ASSET);
+    assert!(sources[0].provenance.is_none(), "a whole page, not a chunk");
+    assert!(sources[0].snippet.contains(LA_MUJER_TITLE));
+}
