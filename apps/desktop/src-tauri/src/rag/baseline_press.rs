@@ -341,7 +341,6 @@ fn evaluate_press_case(
         conn,
         candidates,
         case.question,
-        unit,
         params.top_k,
         params.snippet_max_chars,
         params.context_max_chars,

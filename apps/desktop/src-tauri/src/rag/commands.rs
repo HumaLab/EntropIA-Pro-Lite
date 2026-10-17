@@ -612,7 +612,6 @@ pub async fn rag_ask(
             &conn,
             candidates,
             &source_question,
-            retrieval_unit,
             source_params.top_k,
             source_params.snippet_max_chars,
             source_params.context_max_chars,

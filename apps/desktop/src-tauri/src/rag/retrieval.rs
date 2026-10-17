@@ -706,6 +706,7 @@ pub(crate) fn load_source_record_for_unit(
 /// snippet y timestamps, frenando cuando el contexto total supera el tope.
 /// Si el PRIMER snippet ya supera el tope, se trunca en vez de descartarse:
 /// con registros disponibles nunca se devuelven cero fuentes.
+#[cfg(test)]
 pub(crate) fn build_sources(
     candidates: Vec<RrfCandidate>,
     question: &str,
@@ -718,39 +719,64 @@ pub(crate) fn build_sources(
     let mut total_chars = 0usize;
 
     for RrfCandidate { record, score } in candidates.into_iter().take(top_k) {
-        let (mut snippet, window_start) =
-            snippet_window(&record.text_content, &terms, snippet_max_chars);
-        let snippet_chars = snippet.chars().count();
-        if total_chars + snippet_chars > context_max_chars {
-            if !sources.is_empty() {
-                // La lista de fuentes debe reflejar exactamente lo que entra al prompt.
-                break;
-            }
-            // Garantía defensiva: el primer registro nunca deja la respuesta
-            // sin fuentes — se trunca (char-safe) al presupuesto de contexto.
-            snippet = snippet.chars().take(context_max_chars).collect();
-        }
-        total_chars += snippet.chars().count();
-
-        let timestamps = resolve_source_timestamps(&record, &terms, window_start);
-
-        sources.push(RagSource {
-            index: (sources.len() + 1) as u32,
-            asset_id: record.asset_id,
-            item_id: record.item_id,
-            item_title: record.item_title,
-            collection_id: record.collection_id,
-            collection_name: record.collection_name,
-            snippet,
+        if !push_window_source(
+            &mut sources,
+            &mut total_chars,
+            record,
             score,
-            start_seconds: timestamps.map(|(start, _)| start),
-            end_seconds: timestamps.map(|(_, end)| end),
-            provenance: None,
-            bibliography: None,
-        });
+            &terms,
+            snippet_max_chars,
+            context_max_chars,
+        ) {
+            break;
+        }
     }
 
     sources
+}
+
+/// Agrega una página entera como fuente, recortada por `snippet_window`.
+/// Devuelve `false` cuando el presupuesto de contexto ya no la admite: la
+/// lista de fuentes debe reflejar exactamente lo que entra al prompt.
+fn push_window_source(
+    sources: &mut Vec<RagSource>,
+    total_chars: &mut usize,
+    record: SourceRecord,
+    score: f64,
+    terms: &[String],
+    snippet_max_chars: usize,
+    context_max_chars: usize,
+) -> bool {
+    let (mut snippet, window_start) =
+        snippet_window(&record.text_content, terms, snippet_max_chars);
+    let snippet_chars = snippet.chars().count();
+    if *total_chars + snippet_chars > context_max_chars {
+        if !sources.is_empty() {
+            return false;
+        }
+        // Garantía defensiva: el primer registro nunca deja la respuesta
+        // sin fuentes — se trunca (char-safe) al presupuesto de contexto.
+        snippet = snippet.chars().take(context_max_chars).collect();
+    }
+    *total_chars += snippet.chars().count();
+
+    let timestamps = resolve_source_timestamps(&record, terms, window_start);
+
+    sources.push(RagSource {
+        index: (sources.len() + 1) as u32,
+        asset_id: record.asset_id,
+        item_id: record.item_id,
+        item_title: record.item_title,
+        collection_id: record.collection_id,
+        collection_name: record.collection_name,
+        snippet,
+        score,
+        start_seconds: timestamps.map(|(start, _)| start),
+        end_seconds: timestamps.map(|(_, end)| end),
+        provenance: None,
+        bibliography: None,
+    });
+    true
 }
 
 #[derive(Debug)]
@@ -761,34 +787,36 @@ struct CanonicalChunk {
     end_char: usize,
 }
 
-/// Empaqueta candidatos en bloques citables. Asset conserva la semántica
-/// histórica; chunk amplía solo un vecino canónico por lado y adjunta
-/// procedencia suficiente para mantener estable la identidad de la cita.
+/// Empaqueta candidatos en bloques citables, según el tipo de cada registro:
+/// la página entera (sin chunks, o modo Asset) conserva la semántica
+/// histórica; el chunk amplía un vecino canónico por lado y adjunta
+/// procedencia suficiente para mantener estable la identidad de la cita. La
+/// recuperación híbrida por asset mezcla los dos tipos en una misma lista.
 pub(crate) fn pack_sources(
     conn: &Connection,
     candidates: Vec<RrfCandidate>,
     question: &str,
-    retrieval_unit: RetrievalUnit,
     top_k: usize,
     snippet_max_chars: usize,
     context_max_chars: usize,
 ) -> Result<Vec<RagSource>, String> {
-    if retrieval_unit == RetrievalUnit::Asset {
-        return Ok(build_sources(
-            candidates,
-            question,
-            top_k,
-            snippet_max_chars,
-            context_max_chars,
-        ));
-    }
-
     let terms = extract_query_terms(question);
     let mut sources = Vec::new();
     let mut total_chars = 0usize;
 
     for RrfCandidate { mut record, score } in candidates.into_iter().take(top_k) {
         let Some(center) = record.chunk.clone() else {
+            if !push_window_source(
+                &mut sources,
+                &mut total_chars,
+                record,
+                score,
+                &terms,
+                snippet_max_chars,
+                context_max_chars,
+            ) {
+                break;
+            }
             continue;
         };
         let min_ordinal = center.chunk_ordinal.saturating_sub(1);
@@ -2577,7 +2605,6 @@ mod tests {
             &conn,
             vec![chunk_candidate(&conn, "chunk-center", 0.9)],
             "KLMN",
-            RetrievalUnit::Chunk,
             1,
             100,
             100,
@@ -2695,7 +2722,6 @@ mod tests {
             &conn,
             vec![chunk_candidate(&conn, "main-center", 0.8)],
             "AAAAA",
-            RetrievalUnit::Chunk,
             1,
             12,
             12,
@@ -2744,18 +2770,10 @@ mod tests {
             chunk_candidate(&conn, "chunk-c", 0.7),
         ];
 
-        let budgeted = pack_sources(
-            &conn,
-            candidates.clone(),
-            "",
-            RetrievalUnit::Chunk,
-            3,
-            100,
-            10,
-        )
-        .expect("context-budgeted evidence should pack");
-        let top_k_limited = pack_sources(&conn, candidates, "", RetrievalUnit::Chunk, 2, 100, 100)
-            .expect("top-k evidence should pack");
+        let budgeted = pack_sources(&conn, candidates.clone(), "", 3, 100, 10)
+            .expect("context-budgeted evidence should pack");
+        let top_k_limited =
+            pack_sources(&conn, candidates, "", 2, 100, 100).expect("top-k evidence should pack");
 
         for sources in [&budgeted, &top_k_limited] {
             assert_eq!(sources.len(), 2);
@@ -2779,6 +2797,63 @@ mod tests {
     }
 
     #[test]
+    fn pack_sources_packs_pages_and_passages_side_by_side() {
+        let conn = setup_chunk_packing_db();
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-chunked", "Acta con chunks"),
+            "asset-chunked",
+            "texto del activo",
+            None,
+        );
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-page", "Acta sin chunks"),
+            "asset-page",
+            "el cabildo de la página entera",
+            None,
+        );
+        insert_chunk(
+            &conn,
+            "chunk-1",
+            "asset-chunked",
+            "item-chunked",
+            "extraction",
+            "ext-1",
+            0,
+            "pasaje del cabildo",
+            0,
+            18,
+        );
+        let page = load_source_record(&conn, "asset-page")
+            .expect("asset load should succeed")
+            .expect("asset should exist");
+        let candidates = vec![
+            chunk_candidate(&conn, "chunk-1", 0.9),
+            RrfCandidate {
+                record: page,
+                score: 0.8,
+            },
+        ];
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 100, 1000)
+            .expect("mixed evidence should pack");
+
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].snippet, "pasaje del cabildo");
+        assert!(sources[0].provenance.is_some());
+        assert_eq!(sources[1].asset_id, "asset-page");
+        assert_eq!(sources[1].snippet, "el cabildo de la página entera");
+        assert!(
+            sources[1].provenance.is_none(),
+            "a whole page has no chunk span"
+        );
+        assert_eq!(sources[1].index, 2);
+    }
+
+    #[test]
     fn pack_sources_asset_mode_preserves_snippets_timestamps_and_no_provenance() {
         let conn = setup_rag_db();
         insert_doc(
@@ -2798,7 +2873,6 @@ mod tests {
             &conn,
             vec![RrfCandidate { record, score: 1.0 }],
             "cabildo",
-            RetrievalUnit::Asset,
             1,
             100,
             100,
