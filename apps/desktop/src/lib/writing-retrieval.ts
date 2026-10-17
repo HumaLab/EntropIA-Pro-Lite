@@ -1,8 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { RelatedNote } from '@entropia/store'
+import { getStore } from '$lib/db'
 import type { ContextPiece } from './agent-context'
+import { plainTextOf } from './note-text'
+import { tokenize } from './text-analysis'
 
 /**
- * Corpus evidence for the agent's four evidence actions (§14.1, §14.3).
+ * Evidence for the agent's evidence actions (§14.1, §14.3): corpus passages for
+ * three of them, the writer's own notes for "Relacionar con mis notas".
  *
  * # Why the passages become context pieces here
  *
@@ -28,11 +33,21 @@ export const EVIDENCE_ACTIONS = [
   'find_evidence',
   'find_counter_evidence',
   'find_counterexamples',
-  'recall_notes',
 ] as const
 
 export function needsEvidence(action: string): boolean {
   return (EVIDENCE_ACTIONS as readonly string[]).includes(action)
+}
+
+/**
+ * The action that relates a passage to the writer's notes. Its evidence is the
+ * notes alone: given corpus passages instead, the model reads OCR as notes and
+ * relates the passage to something the writer never wrote.
+ */
+export const NOTES_ACTION = 'recall_notes'
+
+export function needsNotes(action: string): boolean {
+  return action === NOTES_ACTION
 }
 
 /**
@@ -69,5 +84,36 @@ export function evidencePieces(passages: RetrievedPassage[]): ContextPiece[] {
     // What makes this evidence rather than prose: `evidenceOf` records the
     // asset, and the writer can open it.
     sourceId: passage.asset_id,
+  }))
+}
+
+/**
+ * The writer's notes that share words with a passage, most shared first.
+ *
+ * By words only: stopwords are dropped so that "de" or "la" relate nothing, and
+ * each remaining word counts on its own, typos forgiven. A note that says the
+ * same thing in other words is not found — that needs embeddings over notes.
+ *
+ * Unlike corpus retrieval this throws: "no related notes" is an answer the
+ * writer acts on, and a failed read must not pass for it.
+ */
+export async function retrieveNotes(
+  passage: string,
+  collectionIds?: string[],
+  limit = 5
+): Promise<RelatedNote[]> {
+  const terms = tokenize(passage)
+  if (terms.length === 0) return []
+  return getStore().notes.related(terms, { collectionIds, limit })
+}
+
+/** The notes as context, each carrying its id so the proposal records it. */
+export function notePieces(notes: RelatedNote[]): ContextPiece[] {
+  return notes.map((note) => ({
+    kind: 'note' as const,
+    label: note.itemTitle,
+    // Notes are stored as HTML; the model is given the words.
+    text: plainTextOf(note.content),
+    sourceId: note.id,
   }))
 }

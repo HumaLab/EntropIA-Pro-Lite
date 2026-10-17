@@ -7,9 +7,10 @@
 //! reason is in G9: `ClienteLlm` is a trait and its provider can be swapped at
 //! the call site, but `ClienteEmbeddings` and `ClienteRerank` are concrete
 //! structs bound to OpenRouter. So every action that needs retrieval — finding
-//! evidence in the corpus, finding contradictions, recalling related notes —
-//! cannot be offered without changing the `entropia-agent` crate, whatever
-//! model the writer has configured.
+//! evidence in the corpus, finding contradictions — cannot be offered without
+//! changing the `entropia-agent` crate, whatever model the writer has
+//! configured. Recalling related notes searches the notes by their words, on
+//! this side, and needs only the chat model.
 //!
 //! Offering them anyway and failing at the moment of use would be the worst of
 //! both: the writer has already selected a passage and formed an intention.
@@ -55,11 +56,12 @@ const ACTIONS: [(&str, Requirement); 14] = [
     ("rephrase", Requirement::Chat),
     ("detect_repetition", Requirement::Chat),
     ("detect_contradiction", Requirement::Chat),
+    // The notes are searched by their words in the frontend, not retrieved.
+    ("recall_notes", Requirement::Chat),
     // Everything below needs retrieval, and retrieval is what G9 pins down.
     ("find_evidence", Requirement::Retrieval),
     ("find_counter_evidence", Requirement::Retrieval),
     ("find_counterexamples", Requirement::Retrieval),
-    ("recall_notes", Requirement::Retrieval),
 ];
 
 const NO_CHAT: &str = "no_chat_model";
@@ -162,7 +164,9 @@ mod tests {
             .iter()
             .filter(|a| a.requires == Requirement::Retrieval)
             .count();
-        assert_eq!(retrieval, 4, "the retrieval-bound set changed: {matrix:?}");
+        assert_eq!(retrieval, 3, "the retrieval-bound set changed: {matrix:?}");
+        // Notes are searched by their words, so a chat model is enough.
+        assert!(find(&super::matrix(true, false), "recall_notes").available);
     }
 
     /// Unavailability is a state, never a silence: an action that cannot run

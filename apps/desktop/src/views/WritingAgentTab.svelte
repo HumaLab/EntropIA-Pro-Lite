@@ -4,7 +4,15 @@
   import { t, type I18nKey } from '$lib/i18n'
   import { writingAgent, isResolution, type SuggestionRow } from '$lib/writing-agent'
   import { hashSourceText } from '$lib/source-selection'
-  import { evidencePieces, needsEvidence, retrievePassages } from '$lib/writing-retrieval'
+  import {
+    evidencePieces,
+    needsEvidence,
+    needsNotes,
+    notePieces,
+    retrieveNotes,
+    retrievePassages,
+  } from '$lib/writing-retrieval'
+  import { writingNotes } from '$lib/writing-notes'
   import type { ContextPiece } from '$lib/agent-context'
 
   /**
@@ -68,8 +76,8 @@
   let trouble = $state<{ id: string; code: string } | null>(null)
   /** Why the last request produced no proposal, if it produced none. */
   let asked = $state<string | null>(null)
-  /** Looking for evidence, which happens before the model is asked anything. */
-  let searching = $state(false)
+  /** Where evidence is being looked for, before the model is asked anything. */
+  let searching = $state<'corpus' | 'notes' | null>(null)
 
   /**
    * The matrix is loaded whenever the answers change, not once on mount.
@@ -122,15 +130,35 @@
       { kind: 'selection', label: t('writing.agentWillSend'), text: passage },
     ]
 
-    // The four evidence actions of §14.1 are the only ones that reach into the
-    // corpus. The rest are about the passage itself, and retrieving for them
-    // would send the writer's sources to a provider for no purpose.
+    // The three corpus evidence actions of §14.1 are the only ones that reach
+    // into the corpus. The rest are about the passage itself, and retrieving
+    // for them would send the writer's sources to a provider for no purpose.
     if (needsEvidence(actionId)) {
-      searching = true
+      searching = 'corpus'
       try {
         pieces.push(...evidencePieces(await retrievePassages(passage)))
       } finally {
-        searching = false
+        searching = null
+      }
+    }
+
+    // Relating a passage to notes needs notes. With none to give, the model
+    // would invent the relation, so it is not asked at all.
+    if (needsNotes(actionId)) {
+      const scope = writingNotes.snapshot.scope
+      searching = 'notes'
+      try {
+        const notes = await retrieveNotes(passage, scope.length > 0 ? scope : undefined)
+        if (notes.length === 0) {
+          asked = 'agent_no_related_notes'
+          return
+        }
+        pieces.push(...notePieces(notes))
+      } catch (error) {
+        asked = error instanceof Error ? error.message : String(error)
+        return
+      } finally {
+        searching = null
       }
     }
 
@@ -217,7 +245,7 @@
             class="agent__action-btn"
             variant="secondary"
             size="sm"
-            disabled={!action.available || snapshot.busy || searching || !documentId}
+            disabled={!action.available || snapshot.busy || searching !== null || !documentId}
             onclick={() => ask(action.id)}
           >
             {t(`writing.agentActionShort.${action.id}` as I18nKey)}
@@ -234,7 +262,9 @@
     <!-- Named separately from the model call: looking through the corpus and
          waiting on a provider fail differently and take different amounts of
          time, and a single "working…" hides which one is happening. -->
-    <p class="agent__notice" role="status">{t('writing.agentSearching')}</p>
+    <p class="agent__notice" role="status">
+      {t(searching === 'notes' ? 'writing.agentSearchingNotes' : 'writing.agentSearching')}
+    </p>
   {:else if snapshot.busy}
     <p class="agent__notice" role="status">{t('writing.agentAsking')}</p>
   {/if}
@@ -243,7 +273,9 @@
     <p class="agent__warning" role="alert">
       {asked === 'agent_no_credential'
         ? t('writing.agentNoCredential')
-        : t('writing.agentFailed', { message: snapshot.error ?? asked })}
+        : asked === 'agent_no_related_notes'
+          ? t('writing.agentNoRelatedNotes')
+          : t('writing.agentFailed', { message: snapshot.error ?? asked })}
     </p>
   {/if}
 

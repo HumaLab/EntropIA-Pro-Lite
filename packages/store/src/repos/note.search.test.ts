@@ -228,3 +228,50 @@ describe('matching the words of a note', () => {
     expect(await repo.search({ query: 'lso' })).toEqual([])
   })
 })
+
+describe('notes related to a passage', () => {
+  /** A note never repeats a whole sentence; one shared word is enough. */
+  it('finds a note holding any of the words, not all of them', async () => {
+    const repo = createRealDb(SEEDS)
+
+    const found = await repo.related(['molineros', 'huelga', 'puerto'])
+
+    expect(found.map((n) => n.id).sort()).toEqual(['n2', 'n3'])
+  })
+
+  it('ranks the note sharing the most words first, whatever its age', async () => {
+    const repo = createRealDb([
+      { id: 'both', itemId: 'it-1', content: 'obreros del filet' },
+      { id: 'one', itemId: 'it-1', content: 'los obreros' },
+    ])
+
+    const found = await repo.related(['obreros', 'filet'])
+
+    expect(found.map((n) => [n.id, n.matchedTerms])).toEqual([
+      ['both', 2],
+      ['one', 1],
+    ])
+  })
+
+  it('counts a typo as a shared word', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect((await repo.related(['molinerso'])).map((n) => n.id).sort()).toEqual(['n2', 'n3'])
+  })
+
+  it('finds nothing when no note shares a word, or there are no words', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect(await repo.related(['astronomia'])).toEqual([])
+    expect(await repo.related(['  '])).toEqual([])
+  })
+
+  it('stays inside the collections it was given', async () => {
+    const repo = createRealDb(SEEDS)
+
+    expect(
+      (await repo.related(['molineros'], { collectionIds: ['col-1'] })).map((n) => n.id)
+    ).toEqual(['n2'])
+    expect(await repo.related(['molineros'], { collectionIds: [] })).toEqual([])
+  })
+})
