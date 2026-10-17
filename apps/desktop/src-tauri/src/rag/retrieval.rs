@@ -21,6 +21,12 @@ use crate::processing::eligibility::EffectiveEmbeddingContract;
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
 const MIN_TERM_CHARS: usize = 4;
 
+/// Pasajes (chunks recuperados) que una misma página puede aportar. Uno solo
+/// perdía otros artículos relevantes de una página de diario; sin tope, una
+/// página larga podía ocupar todas las fuentes. Los adyacentes se unen en un
+/// solo pasaje al empaquetar (`pack_sources`).
+const MAX_PASSAGES_PER_ASSET: usize = 3;
+
 // El tope de candidatos RRF vive ahora en `params::DEFAULT_FUSION_CANDIDATE_LIMIT`
 // (setting `rag_fusion_candidate_limit`): era la única perilla de recuperación
 // que el usuario no podía tocar.
@@ -288,7 +294,7 @@ pub(crate) fn hybrid_retrieve_candidates(
     // candidato ocupa su lugar, igual que antes.
     let wanted = params.rerank_depth.max(params.top_k).max(1);
     let mut candidates = Vec::with_capacity(wanted.min(fused.len()));
-    let mut cited_assets = HashSet::with_capacity(wanted);
+    let mut passages_per_asset: HashMap<String, usize> = HashMap::with_capacity(wanted);
     for (key, score) in fused {
         if candidates.len() >= wanted {
             break;
@@ -300,8 +306,14 @@ pub(crate) fn hybrid_retrieve_candidates(
             }
         };
         if let Some(record) = record {
-            if record.chunk.is_some() && !cited_assets.insert(record.asset_id.clone()) {
-                continue;
+            if record.chunk.is_some() {
+                let passages = passages_per_asset
+                    .entry(record.asset_id.clone())
+                    .or_default();
+                if *passages >= MAX_PASSAGES_PER_ASSET {
+                    continue;
+                }
+                *passages += 1;
             }
             candidates.push(RrfCandidate { record, score });
         }
@@ -1062,6 +1074,50 @@ fn fit_passage(
     }
 }
 
+/// Un bloque a empaquetar: una página entera, o los chunks recuperados de
+/// una misma fuente que quedan a un vecino de distancia (`centers`, en orden
+/// de ranking; el primero da la identidad y el score del bloque).
+struct PackGroup {
+    candidate: RrfCandidate,
+    centers: Vec<i64>,
+}
+
+/// Une los candidatos de una misma fuente cuyos vecindarios (±1 chunk) se
+/// tocan: dos pasajes que comparten texto son un solo pasaje, y como bloques
+/// separados repetían el solape y gastaban dos fuentes. El bloque ocupa el
+/// lugar de su mejor candidato.
+fn group_adjacent_passages(candidates: Vec<RrfCandidate>) -> Vec<PackGroup> {
+    let mut groups: Vec<PackGroup> = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let Some(chunk) = candidate.record.chunk.as_ref() else {
+            groups.push(PackGroup {
+                candidate,
+                centers: Vec::new(),
+            });
+            continue;
+        };
+        let ordinal = chunk.chunk_ordinal;
+        let joins = groups.iter_mut().find(|group| {
+            group.candidate.record.asset_id == candidate.record.asset_id
+                && group.candidate.record.chunk.as_ref().is_some_and(|first| {
+                    first.source_kind == chunk.source_kind && first.source_id == chunk.source_id
+                })
+                && group
+                    .centers
+                    .iter()
+                    .any(|center| center.abs_diff(ordinal) <= 2)
+        });
+        match joins {
+            Some(group) => group.centers.push(ordinal),
+            None => groups.push(PackGroup {
+                centers: vec![ordinal],
+                candidate,
+            }),
+        }
+    }
+    groups
+}
+
 /// Empaqueta candidatos en bloques citables, según el tipo de cada registro:
 /// la página entera (sin chunks, o modo Asset) conserva la semántica
 /// histórica, recortada por `snippet_window` a `snippet_max_chars`; el chunk
@@ -1081,7 +1137,11 @@ pub(crate) fn pack_sources(
     let mut sources = Vec::new();
     let mut total_chars = 0usize;
 
-    for RrfCandidate { mut record, score } in candidates.into_iter().take(top_k) {
+    for PackGroup {
+        candidate: RrfCandidate { mut record, score },
+        centers,
+    } in group_adjacent_passages(candidates).into_iter().take(top_k)
+    {
         let Some(center) = record.chunk.clone() else {
             if !push_window_source(
                 &mut sources,
@@ -1096,8 +1156,8 @@ pub(crate) fn pack_sources(
             }
             continue;
         };
-        let min_ordinal = center.chunk_ordinal.saturating_sub(1);
-        let max_ordinal = center.chunk_ordinal.saturating_add(1);
+        let min_ordinal = centers.iter().min().copied().unwrap_or(0).saturating_sub(1);
+        let max_ordinal = centers.iter().max().copied().unwrap_or(0).saturating_add(1);
         let mut stmt = conn
             .prepare(
                 "SELECT id, chunk_ordinal, text_content, start_char, end_char
@@ -1135,7 +1195,6 @@ pub(crate) fn pack_sources(
             continue;
         }
 
-        let centers = [center.chunk_ordinal];
         let remaining = context_max_chars.saturating_sub(total_chars);
         let budget = if sources.is_empty() {
             // El primer pasaje nunca deja la respuesta sin fuentes: se ajusta
@@ -3392,6 +3451,87 @@ mod tests {
             provenance.chunk_ids,
             ["chunk-prev", "chunk-center", "chunk-next"]
         );
+    }
+
+    /// Una página con `count` chunks canónicos de 10 chars sin solape, todos
+    /// con "cabildo", en el espacio efectivo.
+    fn page_with_matching_chunks(conn: &Connection, count: i64) {
+        conn.execute_batch(RAG_CHUNKS_MIGRATION_SQL)
+            .expect("rag_chunks migration");
+        insert_ocr_doc(
+            conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "cabildo",
+            None,
+        );
+        for ordinal in 0..count {
+            insert_embedded_chunk(
+                conn,
+                &format!("chunk-{ordinal}"),
+                "asset-1",
+                "item-1",
+                ordinal,
+                &format!("cabildo {ordinal:02}"),
+                ordinal * 10,
+                &unit_vector(0),
+                (CANONICAL_EMBEDDING_MODEL, CANONICAL_EMBEDDING_CONTRACT_V1),
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_retrieval_keeps_up_to_three_passages_per_page() {
+        let conn = setup_rag_db();
+        page_with_matching_chunks(&conn, 5);
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding: None,
+        };
+
+        let candidates = hybrid_retrieve_candidates(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+        )
+        .expect("hybrid retrieval should succeed");
+
+        assert_eq!(candidates.len(), 3);
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.record.asset_id == "asset-1"
+                && candidate.record.chunk.is_some()));
+    }
+
+    #[test]
+    fn pack_sources_joins_adjacent_passages_of_one_source_into_one() {
+        let conn = setup_rag_db();
+        page_with_matching_chunks(&conn, 8);
+        let candidates = vec![
+            chunk_candidate(&conn, "chunk-2", 0.9),
+            chunk_candidate(&conn, "chunk-6", 0.8),
+            chunk_candidate(&conn, "chunk-3", 0.7),
+        ];
+
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 2400, 10_000)
+            .expect("passages should pack");
+
+        assert_eq!(sources.len(), 2, "chunk-3 joins chunk-2's passage");
+        let joined = provenance(&sources[0]);
+        assert_eq!(
+            joined.chunk_ids,
+            ["chunk-1", "chunk-2", "chunk-3", "chunk-4"]
+        );
+        assert_eq!((joined.start_char, joined.end_char), (10, 50));
+        assert_eq!(
+            sources[0].snippet,
+            "cabildo 01cabildo 02cabildo 03cabildo 04"
+        );
+        let apart = provenance(&sources[1]);
+        assert_eq!(apart.chunk_ids, ["chunk-5", "chunk-6", "chunk-7"]);
+        assert_eq!(sources[1].index, 2);
     }
 
     #[test]
