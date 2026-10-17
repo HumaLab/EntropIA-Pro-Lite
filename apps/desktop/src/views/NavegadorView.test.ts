@@ -392,6 +392,20 @@ describe('NavegadorView across mounts', () => {
     expect(screen.getByLabelText('Capturar página')).toBeEnabled()
   })
 
+  /** A webview that cannot be shown must not leave a silent, empty page area. */
+  it('says so when the browser cannot be shown again', async () => {
+    const view = await openPageView()
+    view.unmount()
+    await waitFor(() => expect(commands()).toContain('navegador_set_visible'))
+    const base = respond
+    respond = (command) =>
+      command === 'navegador_set_visible' ? new Error('webview unavailable') : base(command)
+
+    render(NavegadorView)
+
+    expect(await screen.findByText(/webview unavailable/)).toBeInTheDocument()
+  })
+
   it('keeps the capture draft and the downloads when the view is remounted', async () => {
     const view = await openPageView()
     respond = (command) => (command === 'navegador_capture_page' ? page : undefined)

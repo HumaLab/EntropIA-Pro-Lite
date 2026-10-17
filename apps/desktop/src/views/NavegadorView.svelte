@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Experimental in-app browser (VITE_NAVEGADOR=1 + Cargo feature `navegador`).
+   * In-app web browser, present in every build.
    *
    * The page is not part of this DOM: the backend draws it in a native child
    * webview laid over the window. What this view owns is an empty placeholder
@@ -302,16 +302,21 @@
   }
 
   // Show the page while nothing covers it, hide it while an overlay is open.
+  // A failure is shown rather than dropped: a page area that silently stays
+  // empty is the one failure nobody can report.
   $effect(() => {
     if (!opened) return
     const visible = !covered
     untrack(() => {
       const bounds = measure()
+      const failed = (reason: unknown) => {
+        error = t('navegador.error', { message: describe(reason) })
+      }
       if (visible && bounds) {
         lastSent = JSON.stringify(bounds)
-        void navegadorSession.show(instanceId, address, bounds).catch(() => undefined)
+        void navegadorSession.show(instanceId, address, bounds).catch(failed)
       } else if (!visible) {
-        void navegadorSession.hide(instanceId).catch(() => undefined)
+        void navegadorSession.hide(instanceId).catch(failed)
       }
     })
   })
