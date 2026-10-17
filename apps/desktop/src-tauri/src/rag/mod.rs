@@ -13,6 +13,8 @@
 
 #[cfg(test)]
 mod baseline;
+#[cfg(test)]
+mod baseline_press;
 pub mod commands;
 pub(crate) mod intent;
 pub(crate) mod params;
