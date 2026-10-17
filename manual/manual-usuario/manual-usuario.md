@@ -22,6 +22,7 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 | Configurar OCR, audio o asistencia de IA | [Proveedores y configuración](#capitulo-16-configuracion-y-herramientas-generales). |
 | Ordenar un archivo y extraer texto | [Colecciones](#capitulo-4-crear-y-organizar-un-corpus) y [OCR / transcripción](#capitulo-6-obtener-texto-de-documentos). |
 | Traer libros o documentos de Internet Archive | [Importar desde Internet Archive](#internet-archive). |
+| Navegar la web y guardar páginas o PDF como fuentes | [Navegador](#navegador). |
 | Encontrar evidencia y comparar fuentes | [Búsquedas](#capitulo-7-buscar-informacion), [análisis](#capitulo-8-analizar-documentos-y-colecciones) e [Investigación](#capitulo-10-investigacion). |
 | Redactar con notas y bibliografía | [Escritura](#capitulo-11-escritura) y [Zotero y Biblioteca](#capitulo-12-zotero). |
 | Buscar dentro de mi biblioteca de Zotero | [Biblioteca](#biblioteca). |
@@ -339,6 +340,20 @@ El botón **Exportar JSON** guarda datos de la colección y sus documentos, text
 ### 4.7. Leer los indicadores de una colección
 
 La cabecera resume documentos, tipos de archivo y resultados como **OCR**, **STT**, **Embed**, **NER** y **Triplets**. Usalos para orientarte antes de procesar; no sustituyen la revisión de cada página. La nube, el gráfico de palabras y el grafo **Relaciones 3D** pertenecen a **Análisis textual**, explicado en el [capítulo 8](#capitulo-8-analizar-documentos-y-colecciones).
+
+<a id="navegador"></a>
+### 4.8. Navegar la web y guardar fuentes
+
+El **Navegador** abre páginas web dentro de EntropIA y guarda lo que encontrás como **fuentes web** con su procedencia: dirección original y final, fecha y hora de consulta (UTC) y huella SHA-256. Abrilo con el botón **Navegador** de la barra superior.
+
+1. Escribí una dirección en **Dirección** y presioná Enter. **Atrás**, **Adelante** y **Recargar** funcionan como en cualquier navegador. Podés tener hasta 4 solapas; el botón **+** abre una nueva y cada solapa tiene su botón para cerrarla.
+2. Para guardar lo que estás leyendo, pulsá **Capturar página** o, con texto marcado en la página, **Capturar selección**. Aparece un borrador con el texto, la dirección final y la huella; revisalo y pulsá **Guardar**, o **Descartar** si no lo querés.
+3. Un PDF que descargás desde una página se verifica antes de ofrecerse: en **Descargas** aparece como **PDF verificado** y se guarda con **Guardar**. Si ya estaba entre tus fuentes, se indica **Ya está en tus fuentes** y no se guarda otra copia. Los archivos que no son PDF van a la **Carpeta de descargas**, que podés elegir con **Cambiar**; EntropIA no los abre.
+4. **Fuentes guardadas** lista lo que guardaste y permite buscar por título, dirección o texto. Desde una fuente podés **Abrir en el navegador**, **Copiar dirección**, ver el PDF guardado, **Copiar a colección**, **Copiar a Zotero** o **Eliminar fuente**.
+
+Las fuentes web no pertenecen a ninguna colección. **Copiar a colección** crea un documento nuevo e independiente, y **Copiar a Zotero** crea el elemento en la biblioteca que elijas; en ambos casos la fuente original no cambia, y borrarla no borra las copias. Si Zotero no está abierto, la copia queda en cola y se envía sola cuando responda.
+
+El Navegador no guarda cookies ni sesiones: un inicio de sesión dura mientras la aplicación está abierta. Algunas direcciones y descargas se bloquean por seguridad; el motivo se muestra debajo de la barra de dirección. El Navegador está disponible en Windows, macOS y Linux; si en tu sistema la página no se muestra, el aviso **No se pudo abrir la página** indica el motivo.
 
 ---
 
