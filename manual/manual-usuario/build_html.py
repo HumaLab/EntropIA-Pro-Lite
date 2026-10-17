@@ -34,6 +34,11 @@ CHAPTER_PATTERN = re.compile(
     r'(?m)^<a id="(?P<anchor>capitulo-\d+[^\"]*)"></a>\r?\n'
     r'## Capítulo (?P<number>\d+)\.\s*(?P<title>[^\r\n]+)$'
 )
+# Annexes follow the last chapter and are lettered, not numbered.
+ANNEX_PATTERN = re.compile(
+    r'(?m)^<a id="(?P<anchor>anexo-[a-z][^\"]*)"></a>\r?\n'
+    r'## Anexo (?P<letter>[A-Z])\.\s*(?P<title>[^\r\n]+)$'
+)
 IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 # The editions must work offline: no stylesheet, font or script may load
 # from the network (links to external pages in the text are fine).
@@ -600,6 +605,10 @@ def chapter_items(markdown: str) -> List[Tuple[str, str]]:
     items = [
         (match.group("anchor"), f"{match.group('number')}. {match.group('title')}")
         for match in matches
+    ]
+    items += [
+        (match.group("anchor"), f"Anexo {match.group('letter')}. {match.group('title')}")
+        for match in ANNEX_PATTERN.finditer(markdown)
     ]
     if len({anchor for anchor, _ in items}) != len(items):
         raise ValueError("El manual contiene anclas de capítulo repetidas.")
