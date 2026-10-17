@@ -1544,9 +1544,9 @@ Todos estos valores (fuentes finales, candidatos por parte, constante RRF, profu
 
 ### A.10. Notas y colecciones
 
-**Notas.** Las notas son textos breves escritos a mano, así que se leen todas en vez de consultar un índice. Una nota coincide cuando contiene **todas** las palabras buscadas, en cualquier orden, sin distinguir mayúsculas ni acentos. Cada palabra puede aparecer dentro de una más larga (`molin` encuentra `molineros`) o, si no aparece, con la misma tolerancia a errores de la búsqueda aproximada ([A.4](#anexo-a-busqueda-aproximada)). El título del documento al que pertenece la nota también cuenta. Las coincidencias exactas van primero y las aproximadas después. En Escritura, la búsqueda se limita a las colecciones asociadas al manuscrito.
+**Notas.** Las notas son textos breves escritos a mano, así que se leen todas en vez de consultar un índice. Una nota coincide cuando contiene **todas** las palabras buscadas, en cualquier orden, sin distinguir mayúsculas ni acentos. Cada palabra puede aparecer dentro de una más larga (`molin` encuentra `molineros`) o, si no aparece, con la misma tolerancia a errores de la búsqueda aproximada ([A.4](#anexo-a-busqueda-aproximada)). El título del documento al que pertenece la nota también cuenta. Las coincidencias exactas van primero y las aproximadas después. La búsqueda recorre todas tus notas: en Escritura no se limita a las colecciones del manuscrito.
 
-Cuando EntropIA busca notas a partir de un pasaje de tu texto, no exige todas las palabras: cuenta cuántas comparte cada nota con el pasaje, ordena de más a menos y, si hay empate, pone primero la nota editada más recientemente.
+Cuando el agente de Escritura busca notas a partir de un pasaje (acción **Notas**), no exige todas las palabras. Primero descarta las palabras vacías, como artículos y preposiciones; después cuenta cuántas de las restantes comparte cada nota y ordena de más a menos, con la nota editada más recientemente primero en caso de empate. Si el pasaje tiene cuatro o más palabras significativas, una nota necesita al menos dos en común para contar.
 
 **Buscar colecciones...** compara lo que escribís con el nombre de cada colección, sin distinguir mayúsculas. Los acentos sí cuentan: si no aparece una colección, probá escribir el nombre tal como figura.
 
