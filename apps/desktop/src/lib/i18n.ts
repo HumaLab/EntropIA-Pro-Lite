@@ -1314,6 +1314,9 @@ const es = {
   'writing.agentAsk': 'Pedirle al agente',
   'writing.agentAsking': 'Consultando al modelo…',
   'writing.agentSearching': 'Buscando evidencia en el corpus…',
+  'writing.agentSearchingNotes': 'Buscando en tus notas…',
+  'writing.agentNoRelatedNotes':
+    'Ninguna de tus notas comparte palabras con este pasaje, así que no se consultó al modelo.',
   'writing.agentNoCredential':
     'Falta la credencial de OpenRouter. Cargala en Configuración y el agente queda disponible.',
   'writing.agentFailed': 'No se pudo obtener una propuesta: {message}',
@@ -3294,6 +3297,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'writing.agentAsk': 'Ask the agent',
   'writing.agentAsking': 'Asking the model…',
   'writing.agentSearching': 'Looking for evidence in the corpus…',
+  'writing.agentSearchingNotes': 'Looking through your notes…',
+  'writing.agentNoRelatedNotes':
+    'None of your notes shares words with this passage, so the model was not asked.',
   'writing.agentNoCredential':
     'The OpenRouter credential is missing. Add it in Settings and the agent becomes available.',
   'writing.agentFailed': 'No proposal could be obtained: {message}',

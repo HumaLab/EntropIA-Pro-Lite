@@ -29,6 +29,23 @@ export interface NoteSearchOptions {
   limit?: number
 }
 
+/** Where to look for notes related to a passage. */
+export interface RelatedNotesOptions {
+  /** Collections to stay inside. An empty array is no collection, not all. */
+  collectionIds?: string[]
+  limit?: number
+  /**
+   * Fewest terms a note must share to count as related; 1 when absent. One
+   * shared word out of a long passage is usually coincidence, not a relation.
+   */
+  minMatchedTerms?: number
+}
+
+/** A note related to a passage, and how many of the passage's words it holds. */
+export interface RelatedNote extends NoteSearchHit {
+  matchedTerms: number
+}
+
 const SEARCH_LIMIT = 50
 
 export class NoteRepo {
@@ -55,11 +72,63 @@ export class NoteRepo {
    * scope costs nothing an index would save.
    */
   async search(options: NoteSearchOptions = {}): Promise<NoteSearchHit[]> {
-    if (!this.client) throw new Error('NoteRepo.search needs the raw client')
     // An empty scope is a scope, not the absence of one: narrowing to no
     // collection must find nothing rather than quietly searching everywhere.
     if (options.collectionIds && options.collectionIds.length === 0) return []
 
+    const query = options.query?.trim()
+    const limit = options.limit ?? SEARCH_LIMIT
+    if (!query) return this.#inScope(options, limit)
+
+    // The limit applies to what matched, so every note in scope is read.
+    const inScope = await this.#inScope(options)
+    const exact: NoteSearchHit[] = []
+    const approximate: NoteSearchHit[] = []
+    for (const note of inScope) {
+      // The item's title counts: a note on "Acta del gremio" is about the gremio.
+      const match = matchText(query, `${note.content} ${note.itemTitle}`)
+      if (match === 'exact') exact.push(note)
+      else if (match === 'approximate') approximate.push({ ...note, approximate: true })
+    }
+    return [...exact, ...approximate].slice(0, limit)
+  }
+
+  /**
+   * Notes that share words with a passage, the most shared first.
+   *
+   * `search` wants every word, which is right for a query someone types and
+   * wrong for a passage: a note never repeats a whole sentence of the
+   * manuscript. Here each term counts on its own, with the same tolerance for
+   * case, accents and typos, and a note is ranked by how many it holds. Ties
+   * go to the note edited most recently.
+   *
+   * The terms are the caller's: which words of a passage carry meaning is a
+   * language question, not a storage one.
+   */
+  async related(terms: string[], options: RelatedNotesOptions = {}): Promise<RelatedNote[]> {
+    if (options.collectionIds && options.collectionIds.length === 0) return []
+    const unique = [...new Set(terms.map((term) => term.trim()).filter(Boolean))]
+    if (unique.length === 0) return []
+
+    const found: RelatedNote[] = []
+    for (const note of await this.#inScope(options)) {
+      const text = `${note.content} ${note.itemTitle}`
+      const matchedTerms = unique.filter((term) => matchText(term, text) !== null).length
+      if (matchedTerms >= Math.max(1, options.minMatchedTerms ?? 1)) {
+        found.push({ ...note, matchedTerms })
+      }
+    }
+    // Stable, so notes holding as many words keep their recency order.
+    found.sort((a, b) => b.matchedTerms - a.matchedTerms)
+    return found.slice(0, options.limit ?? SEARCH_LIMIT)
+  }
+
+  /** Every note in scope, most recently edited first, with what it is on. */
+  async #inScope(
+    options: { collectionIds?: string[]; itemId?: string },
+    limit?: number
+  ): Promise<NoteSearchHit[]> {
+    if (!this.client) throw new Error('NoteRepo needs the raw client to search notes')
     const where: string[] = []
     const params: unknown[] = []
 
@@ -72,8 +141,6 @@ export class NoteRepo {
       params.push(...options.collectionIds)
     }
 
-    const query = options.query?.trim()
-    const limit = options.limit ?? SEARCH_LIMIT
     const sql = `SELECT n.id, n.item_id AS itemId, i.title AS itemTitle,
                         i.collection_id AS collectionId, n.asset_id AS assetId,
                         n.content, n.created_at AS createdAt, n.updated_at AS updatedAt
@@ -81,21 +148,8 @@ export class NoteRepo {
                    JOIN items i ON i.id = n.item_id
                   ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
                   ORDER BY n.updated_at DESC
-                  ${query ? '' : 'LIMIT ?'}`
-
-    if (!query) return this.client.select<NoteSearchHit>(sql, [...params, limit])
-
-    // The limit applies to what matched, so every note in scope is read.
-    const inScope = await this.client.select<NoteSearchHit>(sql, params)
-    const exact: NoteSearchHit[] = []
-    const approximate: NoteSearchHit[] = []
-    for (const note of inScope) {
-      // The item's title counts: a note on "Acta del gremio" is about the gremio.
-      const match = matchText(query, `${note.content} ${note.itemTitle}`)
-      if (match === 'exact') exact.push(note)
-      else if (match === 'approximate') approximate.push({ ...note, approximate: true })
-    }
-    return [...exact, ...approximate].slice(0, limit)
+                  ${limit === undefined ? '' : 'LIMIT ?'}`
+    return this.client.select<NoteSearchHit>(sql, limit === undefined ? params : [...params, limit])
   }
 
   async create(

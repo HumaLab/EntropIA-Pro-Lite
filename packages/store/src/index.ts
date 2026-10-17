@@ -70,7 +70,14 @@ export type {
   RecentlyImportedItem,
 } from './repos/item.repo'
 export type { Asset, NewAsset } from './repos/asset.repo'
-export type { Note, NewNote, NoteSearchHit, NoteSearchOptions } from './repos/note.repo'
+export type {
+  Note,
+  NewNote,
+  NoteSearchHit,
+  NoteSearchOptions,
+  RelatedNote,
+  RelatedNotesOptions,
+} from './repos/note.repo'
 export type {
   Annotation,
   AnnotationKind,

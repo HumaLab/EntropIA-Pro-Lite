@@ -81,6 +81,23 @@ describe('locating the passage a proposal was made about', () => {
 
     expect(locateText(instance, '   ')).toBeNull()
   })
+
+  /** A selection across paragraphs reaches the agent with its breaks kept. */
+  it('finds a passage that spans paragraphs', () => {
+    const instance = mount([p('antes'), p('uno'), p('dos'), p('despues')])
+
+    const at = locateText(instance, 'uno\n\ndos')
+
+    expect(at).not.toBeNull()
+    expect(instance.state.doc.textBetween(at!.from, at!.to, '\n\n')).toBe('uno\n\ndos')
+  })
+
+  /** Joining the paragraphs with a space is text that is not on the page. */
+  it('does not match paragraphs joined into one line', () => {
+    const instance = mount([p('uno'), p('dos')])
+
+    expect(locateText(instance, 'uno dos')).toBeNull()
+  })
 })
 
 describe('replacing a passage with a proposal', () => {
@@ -91,6 +108,19 @@ describe('replacing a passage with a proposal', () => {
 
     expect(done).toBe(true)
     expect(bodyOf(instance)).toEqual(['primer parrafo', 'el propuesto', 'ultimo parrafo'])
+  })
+
+  it('replaces a passage spanning paragraphs with the proposed paragraphs', () => {
+    const instance = mount([p('El escrito de prueva'), p('Es la ija.'), p('fin')])
+
+    const done = applySuggestion(
+      instance,
+      'El escrito de prueva\n\nEs la ija.',
+      'El escrito de prueba\n\nEs la hija.'
+    )
+
+    expect(done).toBe(true)
+    expect(bodyOf(instance)).toEqual(['El escrito de prueba', 'Es la hija.', 'fin'])
   })
 
   /** Nothing is written when the target moved — not even partially. */

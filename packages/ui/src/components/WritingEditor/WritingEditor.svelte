@@ -451,11 +451,15 @@
    *
    * Empty when nothing is selected, which is what disables the action: a note
    * made from no selection would be a blank note.
+   *
+   * Paragraphs stay apart, separated by a blank line: joined with a space, a
+   * passage spanning paragraphs is text that is not on the page, and an agent
+   * proposal made about it could never be located to be applied.
    */
   export function selectedText(): string {
     if (!editor) return ''
     const { from, to } = editor.state.selection
-    return editor.state.doc.textBetween(from, to, ' ').trim()
+    return editor.state.doc.textBetween(from, to, '\n\n').trim()
   }
 
   /**
