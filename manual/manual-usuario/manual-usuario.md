@@ -870,9 +870,9 @@ Con un manuscrito abierto, entrá en **Escritura → Agente**, seleccioná un pa
 - **Reiteraciones**, **Contradicciones**.
 - **Evidencia**, **Contraevidencia**, **Contraejemplos**, **Notas**.
 
-Las acciones de revisión trabajan sobre la selección. **Evidencia**, **Contraevidencia**, **Contraejemplos** y la acción llamada **Notas** añaden pasajes relacionados del corpus. **El botón Notas del agente no recupera tus notas personales en el flujo actual**; para consultarlas e insertarlas usá la pestaña **Notas** del panel de Escritura.
+Las acciones de revisión trabajan sobre la selección. **Evidencia**, **Contraevidencia** y **Contraejemplos** añaden pasajes relacionados del corpus. **Notas** busca entre tus notas las que comparten palabras con la selección (en un pasaje de cuatro o más palabras significativas, al menos dos en común) y le pide al modelo que las relacione. Busca por palabras, no por significado: una nota que dice lo mismo con otras palabras no aparece. Si ninguna nota está relacionada, avisa y no consulta al modelo.
 
-En Lite se envía a OpenRouter la selección y, cuando corresponde, los pasajes recuperados; el respaldo de Vercel no se aplica al agente. No se envía automáticamente todo el manuscrito, pero si lo seleccionás entero, ese es el texto enviado. **Esto es lo que se envió** muestra el contexto registrado después de la solicitud; no es una autorización previa.
+En Lite se envía a OpenRouter la selección y, cuando corresponde, los pasajes del corpus o las notas encontradas; el respaldo de Vercel no se aplica al agente. No se envía automáticamente todo el manuscrito, pero si lo seleccionás entero, ese es el texto enviado. **Esto es lo que se envió** muestra el contexto registrado después de la solicitud; no es una autorización previa.
 
 En **Sugerencias para revisar**, leé **Texto original**, **Texto propuesto**, **Por qué** y **Sobre qué se apoya**. Vos decidís qué hacer:
 
