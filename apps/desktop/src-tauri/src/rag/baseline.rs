@@ -400,6 +400,146 @@ fn ndcg_at_k(ranking: &[String], relevant: &HashSet<&str>, k: usize) -> f64 {
     dcg / ideal_dcg
 }
 
+/// Dónde se cortó la cadena de una pregunta, en el orden en que la evidencia
+/// recorre el pipeline (la cadena de atribución de `bench.rs` del Agente).
+/// La primera etapa que pierde la evidencia es la responsable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum FailureAttribution {
+    /// El documento con la evidencia no tiene texto: nunca se procesó.
+    NotProcessed,
+    /// Ninguna fuente enviada al LLM viene del documento con la evidencia.
+    Retrieval,
+    /// El documento llegó al contexto, pero el recorte enviado no contiene
+    /// la evidencia.
+    PassageSelection,
+    /// La evidencia llegó al contexto y la respuesta no la cita.
+    Generation,
+    /// La evidencia llegó al contexto (y, si hubo respuesta, se citó).
+    None,
+}
+
+/// Lo que una pregunta tiene que llevar al LLM: el documento y un fragmento
+/// literal de la evidencia dentro de él.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Evidence<'a> {
+    pub(super) asset_id: &'a str,
+    pub(super) cue: &'a str,
+}
+
+/// Una fuente tal como entró al prompt: su número de cita y su texto.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SentSource<'a> {
+    pub(super) index: u32,
+    pub(super) asset_id: &'a str,
+    pub(super) text: &'a str,
+}
+
+impl SentSource<'_> {
+    fn carries(&self, evidence: &Evidence<'_>) -> bool {
+        self.asset_id == evidence.asset_id && self.text.contains(evidence.cue)
+    }
+}
+
+/// Atribuye el resultado de una pregunta a una etapa. `answer = None` evalúa
+/// solo hasta el contexto: sin respuesta no hay falla de generación posible.
+pub(super) fn attribute_failure(
+    evidence: &Evidence<'_>,
+    asset_has_text: bool,
+    sent: &[SentSource<'_>],
+    answer: Option<&str>,
+) -> FailureAttribution {
+    if !asset_has_text {
+        return FailureAttribution::NotProcessed;
+    }
+    if !sent
+        .iter()
+        .any(|source| source.asset_id == evidence.asset_id)
+    {
+        return FailureAttribution::Retrieval;
+    }
+    let carriers: Vec<u32> = sent
+        .iter()
+        .filter(|source| source.carries(evidence))
+        .map(|source| source.index)
+        .collect();
+    if carriers.is_empty() {
+        return FailureAttribution::PassageSelection;
+    }
+    match answer {
+        Some(answer)
+            if !carriers
+                .iter()
+                .any(|index| answer.contains(&format!("[{index}]"))) =>
+        {
+            FailureAttribution::Generation
+        }
+        _ => FailureAttribution::None,
+    }
+}
+
+/// Posición (base 1) del primer registro relevante de un ranking, o `None`
+/// si no aparece. Es la "posición de la evidencia" que el diagnóstico
+/// informa por pierna, por fusión y después del rerank.
+pub(super) fn evidence_position<T>(ranking: &[T], relevant: impl Fn(&T) -> bool) -> Option<usize> {
+    ranking.iter().position(relevant).map(|rank0| rank0 + 1)
+}
+
+#[test]
+fn attribution_names_the_first_stage_that_lost_the_evidence() {
+    let evidence = Evidence {
+        asset_id: "page",
+        cue: "## La Mujer",
+    };
+    let header = SentSource {
+        index: 1,
+        asset_id: "page",
+        text: "# ELOBRERO precios",
+    };
+    let article = SentSource {
+        index: 2,
+        asset_id: "page",
+        text: "## La Mujer\n\nMuchos que quieren",
+    };
+    let other = SentSource {
+        index: 1,
+        asset_id: "other",
+        text: "## La Mujer",
+    };
+
+    assert_eq!(
+        attribute_failure(&evidence, false, &[article], None),
+        FailureAttribution::NotProcessed
+    );
+    assert_eq!(
+        attribute_failure(&evidence, true, &[other], None),
+        FailureAttribution::Retrieval
+    );
+    assert_eq!(
+        attribute_failure(&evidence, true, &[header], None),
+        FailureAttribution::PassageSelection
+    );
+    assert_eq!(
+        attribute_failure(&evidence, true, &[header, article], Some("Según [1]...")),
+        FailureAttribution::Generation
+    );
+    assert_eq!(
+        attribute_failure(&evidence, true, &[header, article], Some("Según [2]...")),
+        FailureAttribution::None
+    );
+    assert_eq!(
+        attribute_failure(&evidence, true, &[header, article], None),
+        FailureAttribution::None
+    );
+}
+
+#[test]
+fn evidence_position_is_one_based_and_absent_when_missing() {
+    let ranking = ["a", "b", "c"];
+    assert_eq!(evidence_position(&ranking, |id| *id == "b"), Some(2));
+    assert_eq!(evidence_position(&ranking, |id| *id == "z"), None);
+}
+
 #[cfg(not(feature = "local-ml"))]
 #[derive(Debug, Clone, Copy, Serialize, Default)]
 struct RankingMetrics {
