@@ -15,7 +15,6 @@ use serde::Deserialize;
 
 use super::params::RagParams;
 use super::{RagSource, RagSourceProvenance};
-use crate::nlp::embeddings::{CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_MODEL};
 use crate::nlp::vector::cosine_distance_to_blob;
 
 /// Longitud mínima (en chars) de un término de la pregunta para anclar snippets.
@@ -354,12 +353,18 @@ fn score_embeddings<P: rusqlite::Params>(
     Ok(scored)
 }
 
+/// Pierna vectorial por chunk. Solo puntúa chunks del espacio de embedding
+/// EFECTIVO (`resolve_effective_embedding_contract`), el mismo con el que el
+/// procesamiento los estampa y con el que se embebe la consulta: filtrar por
+/// el contrato canónico dejaba sin pierna semántica a quien usa el proveedor
+/// local o un modelo API propio.
 pub(crate) fn chunk_vector_leg(
     conn: &Connection,
     query_embedding: &[f32],
     limit: usize,
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, embedding
@@ -372,8 +377,8 @@ pub(crate) fn chunk_vector_leg(
     let mut scored = score_embeddings(
         &mut stmt,
         rusqlite::params![
-            CANONICAL_EMBEDDING_MODEL,
-            CANONICAL_EMBEDDING_CONTRACT_V1,
+            effective.model,
+            effective.contract,
             query_embedding.len() as i64
         ],
         query_embedding,
@@ -2388,6 +2393,110 @@ mod tests {
             ],
         )
         .expect("canonical chunk should insert");
+    }
+
+    fn set_setting(conn: &Connection, key: &str, value: &str) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("settings table");
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )
+        .expect("setting insert");
+    }
+
+    /// Chunk de una sola fuente de extracción, con el vector y el sello de
+    /// embedding que se le pidan.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_embedded_chunk(
+        conn: &Connection,
+        id: &str,
+        asset_id: &str,
+        item_id: &str,
+        ordinal: i64,
+        text: &str,
+        start_char: i64,
+        embedding: &[f32],
+        stamp: (&str, &str),
+    ) {
+        conn.execute(
+            "INSERT INTO rag_chunks (
+                id, asset_id, item_id, source_kind, source_id, chunk_ordinal,
+                text_content, start_char, end_char, source_text_hash,
+                chunking_contract, embedding, embedding_model,
+                embedding_contract, dimensions
+             ) VALUES (
+                ?1, ?2, ?3, 'extraction', ?4, ?5, ?6, ?7, ?8, 'source-hash',
+                'rag-chunk-v1', ?9, ?10, ?11, ?12
+             )",
+            params![
+                id,
+                asset_id,
+                item_id,
+                format!("ext-{asset_id}-1"),
+                ordinal,
+                text,
+                start_char,
+                start_char + text.chars().count() as i64,
+                floats_to_blob(embedding),
+                stamp.0,
+                stamp.1,
+                embedding.len() as i64
+            ],
+        )
+        .expect("embedded chunk should insert");
+    }
+
+    fn unit_vector(axis: usize) -> Vec<f32> {
+        let mut vector = vec![0.0; CANONICAL_EMBEDDING_DIMENSIONS];
+        vector[axis] = 1.0;
+        vector
+    }
+
+    #[test]
+    fn chunk_vector_leg_reads_chunks_stamped_with_the_effective_local_contract() {
+        let conn = setup_chunk_packing_db();
+        set_setting(&conn, "embedding_provider", "local");
+        let effective = crate::processing::eligibility::resolve_effective_embedding_contract(&conn)
+            .expect("local provider resolves");
+        assert_ne!(effective.contract, CANONICAL_EMBEDDING_CONTRACT_V1);
+        insert_ocr_doc(
+            &conn,
+            ("col-1", "Archivo"),
+            ("item-1", "Acta"),
+            "asset-1",
+            "texto sin palabras de la consulta",
+            None,
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-local",
+            "asset-1",
+            "item-1",
+            0,
+            "texto sin palabras de la consulta",
+            0,
+            &unit_vector(3),
+            (&effective.model, &effective.contract),
+        );
+        insert_embedded_chunk(
+            &conn,
+            "chunk-other-space",
+            "asset-1",
+            "item-1",
+            1,
+            "otro espacio",
+            40,
+            &unit_vector(3),
+            ("otro-modelo", "otro-contrato"),
+        );
+
+        let ranked = chunk_vector_leg(&conn, &unit_vector(3), 10, 0.0)
+            .expect("chunk vector leg should succeed");
+
+        assert_eq!(ranked, ["chunk-local"]);
     }
 
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {
