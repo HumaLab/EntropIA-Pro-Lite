@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.1.0 · **Actualizado:** 16 de octubre de 2026
+**Versión de EntropIA:** 1.1.0 · **Actualizado:** 17 de octubre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
@@ -53,6 +53,7 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 - [19. ¿Qué hago si…?](#capitulo-19-que-hago-si)
 - [20. Consejos y buenas prácticas](#capitulo-20-consejos-y-buenas-practicas)
 - [21. Glosario](#capitulo-21-glosario)
+- [Anexo A. Algoritmos de búsqueda](#anexo-a-algoritmos-de-busqueda)
 
 ---
 
@@ -521,6 +522,8 @@ La vista previa permite leer el fragmento y, cuando está disponible, volver al 
 Al abrir un resultado, comprobá el título, la colección y la página o archivo. Usá la ruta de navegación para volver. Si necesitás una lista de citas y fuentes, consultá [Chat de investigación](#capitulo-13-chat-y-agentes-de-entropia) o [Investigar](#capitulo-10-investigacion).
 
 > **Importante:** FTS es una búsqueda léxica que puede incluir variantes de escritura; **Assets similares** compara representaciones del contenido. Ninguna de las dos demuestra por sí sola que una fuente respalde una afirmación.
+
+Para saber cómo ordena y compara cada buscador, consultá el [Anexo A. Algoritmos de búsqueda](#anexo-a-algoritmos-de-busqueda).
 
 ---
 
@@ -1377,6 +1380,188 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Vercel AI Gateway:** servicio opcional que EntropIA usa como respaldo de algunas tareas de texto cuando OpenRouter falla.
 - **Vista dividida:** dos pestañas visibles al mismo tiempo.
 - **Pestaña:** pantalla de trabajo independiente. EntropIA permite hasta cuatro.
+
+---
+
+<a id="anexo-a-algoritmos-de-busqueda"></a>
+## Anexo A. Algoritmos de búsqueda
+
+Este anexo explica cómo trabaja por dentro cada buscador de EntropIA Lite. No hace falta leerlo para usar la aplicación: sirve para entender por qué una búsqueda devuelve lo que devuelve, en qué orden y qué no puede encontrar. Para elegir qué buscador usar, empezá por la tabla del [capítulo 7](#capitulo-7-buscar-informacion).
+
+### A.1. Mapa de los buscadores
+
+EntropIA combina cuatro técnicas. Cada buscador usa una o varias:
+
+| Técnica | Qué compara | Fortaleza | Límite |
+|---|---|---|---|
+| **Léxica (FTS5 con BM25)** | Las palabras escritas, sin mayúsculas ni acentos. | Rápida, local y exacta: encuentra el término que escribiste. | No reconoce sinónimos ni paráfrasis. |
+| **Aproximada (variantes)** | Palabras del índice que difieren en una o dos letras. | Recupera errores de OCR y de tipeo. | Puede traer una palabra distinta parecida; por eso se marca. |
+| **Semántica (embeddings)** | Representaciones numéricas del significado del texto. | Encuentra contenido parecido aunque use otras palabras. | Necesita material preparado e Internet; la semejanza no es una prueba. |
+| **Híbrida (fusión y reordenamiento)** | Las listas léxica y semántica combinadas y, en el Chat, reordenadas por un modelo. | Reúne lo mejor de ambas. | Depende de proveedores remotos; si fallan, la búsqueda se degrada y lo avisa. |
+
+| Buscador | Técnicas | Orden de los resultados |
+|---|---|---|
+| **Buscar colecciones...** | Coincidencia de texto en el nombre. | El de la lista de colecciones. |
+| **Buscar documentos...** (colección abierta) | Léxica + aproximada; respaldo por título y metadatos. | El de la colección (carpeta de importación y título). |
+| **Búsqueda superior** | Léxica + aproximada sobre todo el corpus; semántica e híbrida sobre la Biblioteca. | Documentos por título; obras por relevancia. |
+| **Búsquedas → Buscar por texto similar (FTS)** | Léxica + aproximada. | Relevancia BM25; las aproximadas al final. |
+| **Assets similares** | Semántica. | Mayor semejanza primero. |
+| **Escritura → Corpus** | Léxica + aproximada, solo documentos con texto. | Relevancia BM25; las aproximadas al final. |
+| **Biblioteca → Buscar obras** y **Escritura → Obras** | Híbrida sobre fichas y pasajes de Zotero. | Fusión por rango. |
+| **Notas** | Coincidencia de palabras con tolerancia a errores. | Exactas primero, luego aproximadas. |
+| **Chat de investigación** | Híbrida + reordenamiento por modelo. | Relevancia según el reordenador. |
+| **Investigar** | Híbrida + reordenamiento, paso a paso. | La decide el agente en cada paso. |
+
+<a id="anexo-a-indice-lexico"></a>
+### A.2. El índice de texto completo
+
+Casi todos los buscadores parten del mismo índice local, construido con **SQLite FTS5**. Cada documento ocupa una fila con tres campos: **título**, **metadatos** y **texto** (el OCR y las transcripciones de todas sus páginas, en orden). El índice se actualiza al obtener texto o al pulsar **Análisis → INDEX**.
+
+Al indexar y al buscar, el texto pasa por el mismo tokenizador (`unicode61` con eliminación de diacríticos):
+
+- **Mayúsculas y acentos no cuentan.** `Unión`, `union` y `UNION` son la misma palabra.
+- **La puntuación separa palabras.** `Otiz-de-Zárate` se indexa como tres palabras, y la consulta se divide igual.
+- **No hay raíces ni lematización.** `sindicato` no encuentra `sindicatos`, salvo que la búsqueda aproximada lo sugiera como variante.
+
+Antes de consultar el índice, EntropIA limpia lo que escribiste: quita las palabras `AND`, `OR`, `NOT` y `NEAR`, convierte en espacios los signos `( ) " - * ^ : , . / \` y busca cada palabra restante por separado. Por eso las comillas no fuerzan una frase literal y no hay operadores booleanos: lo que escribís siempre se interpreta como una lista de palabras.
+
+<a id="anexo-a-bm25"></a>
+### A.3. Búsqueda léxica: estricta, relajada y respaldo
+
+La búsqueda léxica sigue una escalera de tres peldaños y se queda en el primero que da resultados:
+
+1. **Estricta.** El documento debe contener **todas** las palabras, en cualquier orden y en cualquiera de los tres campos.
+2. **Relajada.** Si la estricta no encuentra nada y escribiste dos o más palabras, alcanza con que contenga **alguna**. Así una consulta larga, como el nombre completo de una institución, no queda vacía por una sola palabra ausente.
+3. **Respaldo por título y metadatos** (solo en **Buscar documentos...** y en la búsqueda superior). Si ninguno de los anteriores encuentra nada, o el índice no está disponible, busca la frase completa, tal como la escribiste, dentro del título o de los metadatos.
+
+Los resultados se ordenan con **BM25**, la fórmula de relevancia de FTS5. En términos simples, un documento sube cuando:
+
+- contiene las palabras buscadas más veces;
+- esas palabras son **raras** en el corpus (una palabra que aparece en pocos documentos pesa más que una que aparece en todos);
+- el texto es más corto, porque la misma coincidencia en una página breve dice más que en un libro entero.
+
+El orden BM25 se ve en **Búsquedas → Buscar por texto similar (FTS)** y en **Escritura → Corpus**. La búsqueda superior toma los 20 documentos mejor ubicados según BM25 y los muestra ordenados por título. **Buscar documentos...** filtra la colección y conserva su orden habitual (carpeta de importación y título), para que puedas recorrer los resultados página por página sin que cambien.
+
+<a id="anexo-a-busqueda-aproximada"></a>
+### A.4. Búsqueda aproximada: variantes de OCR y de tipeo
+
+El OCR rara vez se equivoca siempre igual. Un nombre bien escrito en la fuente puede llegar al índice como `sindicato` cientos de veces y como `sindigato`, `sinicato` o `bindicato` unas pocas. Una búsqueda exacta pierde justamente esas páginas. La búsqueda aproximada las recupera en cuatro pasos:
+
+1. **Solo palabras que existen en tu corpus.** Las variantes se toman del vocabulario del propio índice, con la cantidad de documentos que contiene cada palabra. Nunca se sugiere algo que ningún documento tenga, y los nombres propios que no figuran en un diccionario funcionan igual.
+2. **Distancia de edición.** Se mide cuántas operaciones separan dos palabras: cambiar, agregar o quitar una letra, o intercambiar dos letras vecinas (distancia de Damerau-Levenshtein restringida). La tolerancia depende del largo:
+
+   | Palabra buscada | Diferencias toleradas |
+   |---|---|
+   | Menos de 5 letras | Ninguna (`mar` y `mas` son palabras distintas). |
+   | De 5 a 7 letras | Una. |
+   | 8 letras o más | Dos. |
+   | Con algún dígito | Ninguna: fechas, folios y signaturas solo sirven exactos. |
+
+3. **La frecuencia decide.** Estar cerca no alcanza: `pescado` está a una letra de `pesado` y ambas son palabras reales. Lo que distingue una mala lectura de otra palabra es el peso:
+   - una variante **al menos cuatro veces más rara** que la palabra buscada se toma como una mala lectura de ella;
+   - una variante **al menos cuatro veces más frecuente** se toma como la corrección de lo que escribiste (por ejemplo, un error de tipeo). Se conserva solo la mejor;
+   - si ambas son **raras** (menos de 10 documentos cada una), se conservan todas las grafías: un apellido escrito de tres maneras por distintas manos no tiene una forma «correcta» que las cuentas puedan revelar;
+   - las palabras de peso parecido se dejan de lado, porque suelen ser palabras distintas o plurales.
+
+   Cada palabra suma como máximo 8 variantes, ordenadas por cercanía y frecuencia.
+4. **Siempre identificadas.** Los documentos que solo aparecen gracias a una variante se marcan con la palabra que realmente contienen, por ejemplo **Aproximado: sindigato**. En las listas ordenadas por relevancia se ubican **detrás** de todos los resultados exactos y, si la búsqueda exacta ya llena la lista, no se agregan. En **Buscar documentos...** se mezclan con los exactos dentro del orden de la colección, pero conservan la marca.
+
+El interruptor **Incluir coincidencias aproximadas** es un único ajuste compartido: vale para **Buscar documentos...**, **Escritura → Corpus**, la búsqueda de Zotero en Escritura, los pasajes de la Biblioteca y la parte léxica del Chat. La búsqueda superior y **Búsquedas** del documento siempre incluyen variantes. Si la búsqueda aproximada falla por cualquier motivo, los resultados exactos se muestran igual.
+
+> **Importante:** una coincidencia aproximada es una pista, no una equivalencia. Abrí el documento y comprobá que la palabra encontrada sea realmente la que buscabas.
+
+<a id="anexo-a-busqueda-semantica"></a>
+### A.5. Búsqueda semántica: embeddings y similitud coseno
+
+Un **embedding** es una lista de números que resume de qué trata un texto. Textos con contenido parecido producen listas parecidas, aunque usen otras palabras. EntropIA Lite genera los embeddings, por defecto, con el modelo **BGE-M3** (`baai/bge-m3`) a través de OpenRouter: cada texto se convierte en un vector de **1024 dimensiones**. Por eso necesita Internet y una clave de OpenRouter, y solo funciona sobre el material al que le aplicaste **EMBED** (o un lote de embeddings).
+
+La semejanza entre dos vectores se mide con la **similitud coseno**: compara la dirección de los dos vectores, no su longitud. Vale 1 cuando apuntan igual y baja a medida que el contenido se aleja.
+
+**Assets similares** funciona así:
+
+1. Toma el embedding de la página o el archivo seleccionado.
+2. Lo compara con los embeddings de otras páginas y archivos preparados, de cualquier colección, hasta un máximo de 2000 candidatos por consulta.
+3. Ordena por similitud coseno y muestra los 5 más cercanos, con su porcentaje de semejanza y una vista previa del texto.
+
+En archivos con más de 2000 páginas preparadas, parte del material queda fuera de cada comparación: si no aparece lo que esperabas, usá también la búsqueda léxica.
+
+> **Importante:** un porcentaje alto indica que dos textos tratan temas parecidos, no que digan lo mismo ni que uno respalde al otro.
+
+<a id="anexo-a-fusion-rrf"></a>
+### A.6. Búsqueda híbrida: fusión por rango (RRF)
+
+Las búsquedas híbridas ejecutan a la vez una búsqueda léxica y una semántica, y después combinan las dos listas. Los puntajes de cada una están en escalas que no se pueden comparar (BM25 por un lado, coseno por otro), así que EntropIA **no suma puntajes**: combina **posiciones**. La técnica se llama **Reciprocal Rank Fusion (RRF)**:
+
+- cada resultado recibe, de cada lista donde aparece, `1 / (60 + posición)`;
+- se suman los aportes de ambas listas;
+- gana lo que aparece arriba en las dos, aunque no sea el primero en ninguna.
+
+La constante 60 suaviza la diferencia entre posiciones vecinas: el primer puesto de una lista no aplasta a lo que ocupa un buen lugar en las dos. Si la parte semántica no está disponible (sin embeddings, sin Internet o con un error del proveedor), la búsqueda responde solo con la parte léxica y lo indica.
+
+<a id="anexo-a-biblioteca"></a>
+### A.7. Biblioteca y Obras de Zotero
+
+La Biblioteca tiene dos niveles de búsqueda, ambos híbridos.
+
+**Obras (fichas).** Cada obra sincronizada tiene un **perfil**: un texto armado solo con los datos del catálogo de Zotero (título, autores, año, tipo, publicación o editorial, resumen y etiquetas), nunca con los adjuntos. Así, una obra sin PDF se encuentra igual que una con texto completo. La búsqueda combina:
+
+- una parte léxica BM25 sobre los perfiles (hasta cinco candidatos por cada resultado pedido, entre 20 y 500);
+- una parte semántica por similitud coseno sobre los embeddings de los perfiles;
+- fusión RRF, después de aplicar los filtros de biblioteca, año, tipo y etiqueta.
+
+Es la que usa la búsqueda superior (hasta 5 obras) y la que suma resultados «por significado» en la búsqueda de Zotero de Escritura. En esa lista, las coincidencias de texto (título, autor, año y luego las que solo encuentra Zotero) van primero, y después las obras que solo encontró la búsqueda híbrida, marcadas como semánticas.
+
+**Pasajes.** El texto de los adjuntos se divide en fragmentos con su página o párrafo. **Biblioteca → Buscar obras** y **Escritura → Obras** buscan sobre todos los fragmentos:
+
+- **Parte léxica:** cada palabra se compara como comienzo de palabra (`sindic` encuentra `sindicato`), sin mayúsculas, acentos ni ligaduras tipográficas de los PDF. Los artículos, preposiciones y conjunciones más comunes, en español e inglés, no cuentan para la coincidencia. Una **frase exacta** se ubica primero; con **Incluir coincidencias aproximadas**, las variantes van después de las coincidencias exactas.
+- **Parte semántica:** compara el embedding de la consulta con el de cada fragmento. Para que sea rápida, primero recorre una copia comprimida de los vectores, elige cuatro veces más candidatos de los necesarios y los vuelve a puntuar con los vectores originales.
+- **Fusión RRF** de las dos partes, con 200 candidatos por parte y un tope de fragmentos por obra, para que una sola obra no ocupe toda la lista.
+
+Si la consulta no se puede convertir en embedding, responde la parte léxica. Una obra cuyo perfil cambió después de prepararse queda fuera de la parte semántica hasta que se vuelva a procesar.
+
+<a id="anexo-a-chat"></a>
+### A.8. Chat de investigación (RAG)
+
+El Chat no busca y muestra una lista: **recupera** fragmentos y se los entrega al modelo para que responda citándolos. Este procedimiento se llama **RAG** (generación aumentada por recuperación). Cada pregunta pasa por estas etapas:
+
+1. **Clasificación de intención.** Un modelo decide si la pregunta necesita consultar tus documentos o es solo conversación (por ejemplo, un saludo). Solo responde sin buscar cuando está seguro de que es conversación; si la pregunta es ambigua o la clasificación falla, consulta los documentos.
+2. **Reescritura de seguimiento.** Si la pregunta depende de la conversación (`¿y qué pasó después con él?`), se reescribe como una consulta independiente que conserva nombres, fechas e identificadores. Se busca con la pregunta original y con la reescrita.
+3. **Recuperación híbrida del corpus.**
+   - Parte semántica: similitud coseno entre la pregunta y los fragmentos de páginas con embeddings. Las páginas sin fragmentos preparados entran enteras.
+   - Parte léxica: el índice FTS5 con BM25 y, si está activado, las variantes aproximadas, siempre después de las coincidencias exactas.
+   - 24 candidatos por parte, fusionados con RRF (constante 60) en una lista de hasta 40.
+4. **Biblioteca, si la incluiste.** Los pasajes de Zotero se buscan por separado (ver [A.7](#anexo-a-biblioteca)) y se intercalan por posición con los del corpus, nunca por puntaje.
+5. **Reordenamiento.** Los 16 mejores candidatos pasan por un **reordenador** (*reranker*): un modelo que lee la pregunta y cada fragmento juntos y estima cuánto responde uno a la otra. Es más preciso que la búsqueda inicial, pero también más lento, por eso solo se aplica a los finalistas. En Lite es `cohere/rerank-4-fast` vía OpenRouter. Si falla o no hay clave, se conserva el orden de la fusión.
+6. **Armado del contexto.** Se quedan las 6 mejores fuentes, con hasta 3 pasajes por página (los pasajes vecinos se unen) y unos 10.000 caracteres en total. El modelo responde con citas `[n]` que remiten a esas fuentes.
+
+Todos estos valores (fuentes finales, candidatos por parte, constante RRF, profundidad de reordenamiento, similitud mínima, modelo del reordenador y presupuestos de texto) se pueden ajustar en **Configuración → RAG Params** ([16.2](#capitulo-16-configuracion-y-herramientas-generales)). Si alguna etapa no puede ejecutarse, por ejemplo sin embeddings, la respuesta indica qué parte de la recuperación quedó fuera.
+
+> **Importante:** que una fuente figure en la respuesta significa que la recuperación la consideró relevante, no que respalde lo que dice el modelo. Abrí cada cita y comprobá el pasaje.
+
+### A.9. Investigar
+
+**Investigar** usa un motor de recuperación híbrida propio del agente de investigación: embeddings y reordenamiento con tu clave de OpenRouter sobre las colecciones elegidas y, si la incluiste, la Biblioteca. A diferencia del Chat, el agente formula varias búsquedas a lo largo del trabajo, una por cada paso de su plan, y reúne lo que encuentra en el informe. Sin la clave, el motor recurre a la búsqueda léxica y el informe lo advierte.
+
+### A.10. Notas y colecciones
+
+**Notas.** Las notas son textos breves escritos a mano, así que se leen todas en vez de consultar un índice. Una nota coincide cuando contiene **todas** las palabras buscadas, en cualquier orden, sin distinguir mayúsculas ni acentos. Cada palabra puede aparecer dentro de una más larga (`molin` encuentra `molineros`) o, si no aparece, con la misma tolerancia a errores de la búsqueda aproximada ([A.4](#anexo-a-busqueda-aproximada)). El título del documento al que pertenece la nota también cuenta. Las coincidencias exactas van primero y las aproximadas después. En Escritura, la búsqueda se limita a las colecciones asociadas al manuscrito.
+
+Cuando EntropIA busca notas a partir de un pasaje de tu texto, no exige todas las palabras: cuenta cuántas comparte cada nota con el pasaje, ordena de más a menos y, si hay empate, pone primero la nota editada más recientemente.
+
+**Buscar colecciones...** compara lo que escribís con el nombre de cada colección, sin distinguir mayúsculas. Los acentos sí cuentan: si no aparece una colección, probá escribir el nombre tal como figura.
+
+### A.11. Consejos según el algoritmo
+
+| Si querés… | Conviene… |
+|---|---|
+| Encontrar un nombre o término exacto | Búsqueda léxica, con la palabra más rara y distintiva que conozcas. |
+| Recuperar páginas mal leídas por el OCR | Dejar activadas las coincidencias aproximadas y revisar la etiqueta **Aproximado**. |
+| Buscar una fecha, un folio o una signatura | Escribirla exacta: con dígitos no hay variantes. |
+| Encontrar singular y plural | Buscar ambas formas: el índice no reduce las palabras a su raíz. |
+| Encontrar material que trate el mismo tema con otras palabras | **Assets similares**, después de preparar los embeddings de todo el material que querés comparar. |
+| Ubicar un pasaje en tu bibliografía | **Biblioteca → Buscar obras** o **Escritura → Obras**; escribir la frase exacta la ubica primero. |
+| Obtener una explicación con fuentes | **Chat de investigación**, y abrir cada cita. |
+| Que el Chat encuentre más o menos fuentes | Ajustar **RAG Params**; empezá por la cantidad de fuentes finales. |
 
 ---
 
