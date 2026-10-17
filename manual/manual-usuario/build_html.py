@@ -189,7 +189,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   background: var(--accent);
 }
 .topbar-inner {
-  max-width: 1440px;
+  max-width: 1920px;
   min-height: 4.1rem;
   margin: 0 auto;
   padding: .7rem 1.4rem;
@@ -260,16 +260,30 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
 }
 .page-layout {
   display: grid;
-  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 52rem);
+  grid-template-columns: minmax(15rem, 18.5rem) minmax(0, 1fr);
   align-items: start;
-  justify-content: center;
   gap: 1.6rem;
-  max-width: 1440px;
+  max-width: 1920px;
   margin: 0 auto;
   padding: 1.4rem;
 }
-.sidebar { position: sticky; top: 5.4rem; display: flex; max-height: calc(100vh - 6.4rem); overflow: hidden; font-family: var(--sans); }
-.contents { display: flex; flex-direction: column; min-height: 0; padding: 1rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); }
+/* The whole index panel scrolls, with a visible bar: a nested scroll inside
+   the <details> never engaged and clipped the last entries. */
+.sidebar {
+  position: sticky;
+  top: 5.4rem;
+  max-height: calc(100vh - 6.4rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  border-radius: 8px;
+  font-family: var(--sans);
+}
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--line); }
+.sidebar::-webkit-scrollbar-thumb:hover { background: var(--subtle); }
+.contents { padding: 1rem; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--surface); }
 .contents summary {
   cursor: pointer;
   font-size: .68rem;
@@ -293,7 +307,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   font: 400 .95rem/1.3 var(--sans);
 }
 .filter-control input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.nav-list { flex: 1 1 auto; min-height: 0; overflow: auto; margin: .8rem 0 0; padding: 0; list-style: none; }
+.nav-list { margin: .8rem 0 0; padding: 0; list-style: none; }
 .nav-list li[hidden] { display: none; }
 .nav-list a {
   display: block;
@@ -317,7 +331,6 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   background: var(--surface);
   box-shadow: var(--shadow);
   overflow-wrap: break-word;
-  max-width: 74ch;
 }
 .doc-content h1, .doc-content h2, .doc-content h3, .doc-content h4 {
   font-family: var(--sans);
@@ -334,9 +347,9 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
 .doc-content h2::before { content: ""; display: block; width: 2.2rem; height: 2px; margin-bottom: .6rem; background: var(--accent); }
 .doc-content h3 { margin-top: 1.7rem; font-size: 1.22rem; }
 .doc-content h4 { margin-top: 1.3rem; font-size: 1.04rem; }
-.doc-content p { margin: .85rem 0; max-width: 70ch; }
+.doc-content p { margin: .85rem 0; }
 .doc-content li + li { margin-top: .28rem; }
-.doc-content ul, .doc-content ol { padding-left: 1.35rem; max-width: 70ch; }
+.doc-content ul, .doc-content ol { padding-left: 1.35rem; }
 .doc-content em, .doc-content i { font-style: italic; color: var(--accent); }
 .doc-content blockquote, .callout {
   margin: 1.15rem 0;
@@ -367,7 +380,7 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
 .doc-content code { padding: .08em .28em; border-radius: 3px; background: var(--code); font-size: .87em; }
 .doc-content pre code { padding: 0; background: transparent; border: 0; }
 .site-footer {
-  max-width: 1440px;
+  max-width: 1920px;
   margin: 0 auto;
   padding: 1.4rem;
   text-align: center;
@@ -383,8 +396,8 @@ a:focus-visible, summary:focus-visible, input:focus-visible, button:focus-visibl
   .topbar-inner { align-items: flex-start; flex-direction: column; }
   .page-layout { grid-template-columns: minmax(0, 1fr); padding: 1rem; }
   .sidebar { position: static; }
-  .sidebar, .contents { display: block; max-height: none; overflow: visible; }
-  .nav-list { max-height: 15rem; }
+  .sidebar { max-height: none; overflow: visible; }
+  .nav-list { max-height: 15rem; overflow-y: auto; }
 }
 @media (max-width: 540px) {
   .page-layout, .doc-content, .contents { padding-inline: .9rem; }
