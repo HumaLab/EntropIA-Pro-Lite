@@ -326,6 +326,7 @@ fn evaluate_press_case(
         case.question,
         params.top_k,
         params.snippet_max_chars,
+        params.passage_max_chars,
         params.context_max_chars,
     )
     .expect("pack sources");

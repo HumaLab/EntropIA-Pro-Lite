@@ -614,6 +614,7 @@ pub async fn rag_ask(
             &source_question,
             source_params.top_k,
             source_params.snippet_max_chars,
+            source_params.passage_max_chars,
             source_params.context_max_chars,
         )
     })

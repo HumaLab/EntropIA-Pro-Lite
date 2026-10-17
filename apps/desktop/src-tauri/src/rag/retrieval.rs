@@ -1009,15 +1009,64 @@ fn push_window_source(
 #[derive(Debug)]
 struct CanonicalChunk {
     id: String,
+    ordinal: i64,
     text: String,
     start_char: usize,
     end_char: usize,
 }
 
+/// Une chunks consecutivos de una misma fuente, sin repetir el solape
+/// canónico. Devuelve `(texto, start_char, end_char)` del tramo contiguo que
+/// arranca en el primer chunk.
+fn join_chunks(chunks: &[CanonicalChunk]) -> (String, usize, usize) {
+    let start = chunks.first().map_or(0, |chunk| chunk.start_char);
+    let mut end = start;
+    let mut text = String::new();
+    for chunk in chunks {
+        if chunk.start_char > end {
+            break;
+        }
+        let overlap = end.saturating_sub(chunk.start_char);
+        text.extend(chunk.text.chars().skip(overlap));
+        end = end.max(chunk.end_char);
+    }
+    (text, start, end)
+}
+
+/// Ajusta el pasaje unido a `budget` cortando SIEMPRE en límite de chunk,
+/// nunca por ventana de términos: primero cae el vecino posterior, después
+/// el anterior, y el chunk recuperado (`centers`) se queda. Solo un chunk
+/// que por sí mismo excede el presupuesto se corta, y por el final.
+fn fit_passage(
+    mut chunks: Vec<CanonicalChunk>,
+    centers: &[i64],
+    budget: usize,
+) -> (Vec<CanonicalChunk>, String, usize, usize) {
+    loop {
+        let (text, start, end) = join_chunks(&chunks);
+        if text.chars().count() <= budget {
+            return (chunks, text, start, end);
+        }
+        if chunks.len() > 1 {
+            let is_center = |chunk: &CanonicalChunk| centers.contains(&chunk.ordinal);
+            if !chunks.last().is_some_and(is_center) || chunks.first().is_some_and(is_center) {
+                chunks.pop();
+            } else {
+                chunks.remove(0);
+            }
+            continue;
+        }
+        let text: String = text.chars().take(budget).collect();
+        let end = start + text.chars().count();
+        return (chunks, text, start, end);
+    }
+}
+
 /// Empaqueta candidatos en bloques citables, según el tipo de cada registro:
 /// la página entera (sin chunks, o modo Asset) conserva la semántica
-/// histórica; el chunk amplía un vecino canónico por lado y adjunta
-/// procedencia suficiente para mantener estable la identidad de la cita. La
+/// histórica, recortada por `snippet_window` a `snippet_max_chars`; el chunk
+/// entra ENTERO con un vecino canónico por lado, con su propio presupuesto
+/// (`passage_max_chars`) y procedencia del rango efectivamente enviado. La
 /// recuperación híbrida por asset mezcla los dos tipos en una misma lista.
 pub(crate) fn pack_sources(
     conn: &Connection,
@@ -1025,6 +1074,7 @@ pub(crate) fn pack_sources(
     question: &str,
     top_k: usize,
     snippet_max_chars: usize,
+    passage_max_chars: usize,
     context_max_chars: usize,
 ) -> Result<Vec<RagSource>, String> {
     let terms = extract_query_terms(question);
@@ -1050,7 +1100,7 @@ pub(crate) fn pack_sources(
         let max_ordinal = center.chunk_ordinal.saturating_add(1);
         let mut stmt = conn
             .prepare(
-                "SELECT id, text_content, start_char, end_char
+                "SELECT id, chunk_ordinal, text_content, start_char, end_char
                  FROM rag_chunks
                  WHERE asset_id = ?1
                    AND source_kind = ?2
@@ -1071,9 +1121,10 @@ pub(crate) fn pack_sources(
                 |row| {
                     Ok(CanonicalChunk {
                         id: row.get(0)?,
-                        text: row.get(1)?,
-                        start_char: row.get::<_, i64>(2)? as usize,
-                        end_char: row.get::<_, i64>(3)? as usize,
+                        ordinal: row.get(1)?,
+                        text: row.get(2)?,
+                        start_char: row.get::<_, i64>(3)? as usize,
+                        end_char: row.get::<_, i64>(4)? as usize,
                     })
                 },
             )
@@ -1084,40 +1135,31 @@ pub(crate) fn pack_sources(
             continue;
         }
 
-        let packed_start = chunks[0].start_char;
-        let mut packed_end = packed_start;
-        let mut packed_text = String::new();
-        for chunk in &chunks {
-            if chunk.start_char > packed_end {
-                break;
-            }
-            let overlap = packed_end.saturating_sub(chunk.start_char);
-            packed_text.extend(chunk.text.chars().skip(overlap));
-            packed_end = packed_end.max(chunk.end_char);
+        let centers = [center.chunk_ordinal];
+        let remaining = context_max_chars.saturating_sub(total_chars);
+        let budget = if sources.is_empty() {
+            // El primer pasaje nunca deja la respuesta sin fuentes: se ajusta
+            // también al presupuesto total, en límite de chunk.
+            passage_max_chars.min(context_max_chars)
+        } else {
+            passage_max_chars
+        };
+        let (chunks, packed_text, packed_start, packed_end) = fit_passage(chunks, &centers, budget);
+        let packed_chars = packed_text.chars().count();
+        if packed_chars > remaining {
+            // La lista de fuentes debe reflejar exactamente lo que entra al prompt.
+            break;
         }
+        let chunk_ids = chunks
+            .iter()
+            .filter(|chunk| chunk.start_char < packed_end && chunk.end_char > packed_start)
+            .map(|chunk| chunk.id.clone())
+            .collect();
+        total_chars += packed_chars;
 
         record.text_content = packed_text;
         record.source_start_char = packed_start;
-        let (mut snippet, window_start) =
-            snippet_window(&record.text_content, &terms, snippet_max_chars);
-        let snippet_chars = snippet.chars().count();
-        if total_chars + snippet_chars > context_max_chars {
-            if !sources.is_empty() {
-                break;
-            }
-            snippet = snippet.chars().take(context_max_chars).collect();
-        }
-        let final_chars = snippet.chars().count();
-        let final_start = packed_start + window_start;
-        let final_end = final_start + final_chars;
-        let chunk_ids = chunks
-            .iter()
-            .filter(|chunk| chunk.start_char < final_end && chunk.end_char > final_start)
-            .map(|chunk| chunk.id.clone())
-            .collect();
-        total_chars += final_chars;
-
-        let timestamps = resolve_source_timestamps(&record, &terms, window_start);
+        let timestamps = resolve_source_timestamps(&record, &terms, 0);
         sources.push(RagSource {
             index: (sources.len() + 1) as u32,
             asset_id: record.asset_id,
@@ -1125,7 +1167,7 @@ pub(crate) fn pack_sources(
             item_title: record.item_title,
             collection_id: record.collection_id,
             collection_name: record.collection_name,
-            snippet,
+            snippet: record.text_content,
             score,
             start_seconds: timestamps.map(|(start, _)| start),
             end_seconds: timestamps.map(|(_, end)| end),
@@ -1134,8 +1176,8 @@ pub(crate) fn pack_sources(
                 source_kind: center.source_kind,
                 source_id: center.source_id,
                 chunk_ids,
-                start_char: final_start,
-                end_char: final_end,
+                start_char: packed_start,
+                end_char: packed_end,
             }),
             bibliography: None,
         });
@@ -2932,7 +2974,7 @@ mod tests {
             "a page with chunks is never also retrieved whole: {kinds:?}"
         );
 
-        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 10_000)
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 1600, 1600, 10_000)
             .expect("mixed evidence should pack");
         let packed: Vec<(&str, bool)> = sources
             .iter()
@@ -3085,6 +3127,7 @@ mod tests {
             1,
             100,
             100,
+            100,
         )
         .expect("chunk evidence should pack");
 
@@ -3195,21 +3238,34 @@ mod tests {
             10,
         );
 
-        let sources = pack_sources(
-            &conn,
-            vec![chunk_candidate(&conn, "main-center", 0.8)],
-            "AAAAA",
-            1,
-            12,
-            12,
-        )
-        .expect("budgeted chunk evidence should pack");
+        let pack = |budget: usize| {
+            pack_sources(
+                &conn,
+                vec![chunk_candidate(&conn, "main-center", 0.8)],
+                "AAAAA",
+                1,
+                budget,
+                budget,
+                budget,
+            )
+            .expect("budgeted chunk evidence should pack")
+        };
 
-        assert_eq!(sources[0].snippet, "AAAAABBBBBCC");
-        let provenance = provenance(&sources[0]);
-        assert_eq!(provenance.chunk_ids, ["main-prev", "main-center"]);
-        assert_eq!((provenance.start_char, provenance.end_char), (0, 12));
+        // Over budget, the passage loses whole neighbours (the next one
+        // first), never a window around the query term.
+        let sources = pack(20);
+        assert_eq!(sources[0].snippet, "AAAAABBBBBCCCCCDDDDD");
+        let kept = provenance(&sources[0]);
+        assert_eq!(kept.chunk_ids, ["main-prev", "main-center"]);
+        assert_eq!((kept.start_char, kept.end_char), (0, 20));
         assert!(!sources[0].snippet.contains("WRONG"));
+
+        // The retrieved chunk always stays; only it alone is cut, at its end.
+        let sources = pack(12);
+        assert_eq!(sources[0].snippet, "BBBBBCCCCCDD");
+        let kept = provenance(&sources[0]);
+        assert_eq!(kept.chunk_ids, ["main-center"]);
+        assert_eq!((kept.start_char, kept.end_char), (5, 17));
     }
 
     #[test]
@@ -3247,10 +3303,10 @@ mod tests {
             chunk_candidate(&conn, "chunk-c", 0.7),
         ];
 
-        let budgeted = pack_sources(&conn, candidates.clone(), "", 3, 100, 10)
+        let budgeted = pack_sources(&conn, candidates.clone(), "", 3, 100, 100, 10)
             .expect("context-budgeted evidence should pack");
-        let top_k_limited =
-            pack_sources(&conn, candidates, "", 2, 100, 100).expect("top-k evidence should pack");
+        let top_k_limited = pack_sources(&conn, candidates, "", 2, 100, 100, 100)
+            .expect("top-k evidence should pack");
 
         for sources in [&budgeted, &top_k_limited] {
             assert_eq!(sources.len(), 2);
@@ -3271,6 +3327,71 @@ mod tests {
             assert_eq!(provenance(&sources[0]).chunk_ids, ["chunk-b"]);
             assert_eq!(provenance(&sources[1]).chunk_ids, ["chunk-a"]);
         }
+    }
+
+    /// Tres chunks canónicos de 800 con solape de 100 sobre un texto de 2.200
+    /// chars. El vecino anterior repite el término más largo de la pregunta;
+    /// el central es el que la pierna recuperó.
+    fn three_consecutive_chunks(conn: &Connection) -> String {
+        let prev = format!("{} ", "periódico obrero cabecera".repeat(40));
+        let center = format!("{} ", "la mujer emancipada".repeat(60));
+        let next = "cierre del artículo ".repeat(80);
+        let text: String = format!("{prev}{center}{next}").chars().take(2200).collect();
+        insert_ocr_doc(
+            conn,
+            ("col-1", "Archivo"),
+            ("item-1", "El Obrero"),
+            "asset-1",
+            &text,
+            None,
+        );
+        let slice = |start: usize, end: usize| -> String {
+            text.chars().skip(start).take(end - start).collect()
+        };
+        for (id, ordinal, start, end) in [
+            ("chunk-prev", 0, 0, 800),
+            ("chunk-center", 1, 700, 1500),
+            ("chunk-next", 2, 1400, 2200),
+        ] {
+            insert_chunk(
+                conn,
+                id,
+                "asset-1",
+                "item-1",
+                "extraction",
+                "ext-1",
+                ordinal,
+                &slice(start, end),
+                start as i64,
+                end as i64,
+            );
+        }
+        text
+    }
+
+    #[test]
+    fn pack_sources_sends_the_joined_passage_whole_without_a_term_window() {
+        let conn = setup_chunk_packing_db();
+        let text = three_consecutive_chunks(&conn);
+
+        let sources = pack_sources(
+            &conn,
+            vec![chunk_candidate(&conn, "chunk-center", 0.9)],
+            "¿Qué mirada sobre la mujer tiene el periódico?",
+            1,
+            1600,
+            crate::rag::params::DEFAULT_PASSAGE_MAX_CHARS,
+            10_000,
+        )
+        .expect("chunk evidence should pack");
+
+        assert_eq!(sources[0].snippet, text, "no window cut the passage");
+        let provenance = provenance(&sources[0]);
+        assert_eq!((provenance.start_char, provenance.end_char), (0, 2200));
+        assert_eq!(
+            provenance.chunk_ids,
+            ["chunk-prev", "chunk-center", "chunk-next"]
+        );
     }
 
     #[test]
@@ -3315,7 +3436,7 @@ mod tests {
             },
         ];
 
-        let sources = pack_sources(&conn, candidates, "cabildo", 6, 100, 1000)
+        let sources = pack_sources(&conn, candidates, "cabildo", 6, 100, 100, 1000)
             .expect("mixed evidence should pack");
 
         assert_eq!(sources.len(), 2);
@@ -3351,6 +3472,7 @@ mod tests {
             vec![RrfCandidate { record, score: 1.0 }],
             "cabildo",
             1,
+            100,
             100,
             100,
         )
