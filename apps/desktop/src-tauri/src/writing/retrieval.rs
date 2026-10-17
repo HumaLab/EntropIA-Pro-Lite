@@ -108,6 +108,41 @@ pub(crate) fn passages(
     out
 }
 
+/// The body of `writing_corpus_retrieve`, without Tauri state: settings read
+/// from `settings`, the query embedded by `embed` (a network call in Lite,
+/// made without holding `worker`), then the shared hybrid retrieval on
+/// `worker` and its passages. The rerank is skipped, see the module docs.
+pub(crate) fn corpus_evidence(
+    settings: &rusqlite::Connection,
+    worker: &std::sync::Mutex<rusqlite::Connection>,
+    passage: &str,
+    limit: usize,
+    embed: impl FnOnce(&str) -> Option<Vec<f32>>,
+) -> WritingResult<Vec<RetrievedPassage>> {
+    let query = require_query(passage)?;
+    let wanted = bounded(limit);
+
+    let params = crate::rag::params::rag_params_from_settings(settings);
+    let unit_setting = crate::settings::get_setting(settings, "rag_retrieval_unit");
+    let unit = crate::rag::retrieval::RetrievalUnit::from_setting(unit_setting.as_deref())
+        .map_err(|e| WritingError::new("retrieval_unit_invalid", e))?;
+
+    let embedding = embed(query);
+    let queries = [crate::rag::retrieval::RetrievalQuery {
+        text: query,
+        embedding: embedding.as_deref(),
+    }];
+
+    let conn = worker
+        .lock()
+        .map_err(|_| WritingError::new("db_unavailable", "la conexión de trabajo está tomada"))?;
+    let candidates =
+        crate::rag::retrieval::hybrid_retrieve_candidates(&conn, &queries, &params, unit)
+            .map_err(|e| WritingError::new("retrieval_failed", e))?;
+
+    Ok(passages(candidates, wanted, params.snippet_max_chars))
+}
+
 /// How many passages an action may be given, whatever it asks for.
 ///
 /// The context builder has a budget of its own and reports what it drops, so
@@ -154,28 +189,38 @@ mod tests {
         }
     }
 
-    /// The same steps as `writing_corpus_retrieve`, after the query is embedded.
-    fn corpus_passages(unit_setting: Option<&str>) -> Vec<RetrievedPassage> {
-        use crate::rag::retrieval::{hybrid_fixture, hybrid_retrieve_candidates, RetrievalQuery};
-        let conn = hybrid_fixture::corpus();
-        let params = crate::rag::params::rag_params_from_settings(&conn);
-        let unit =
-            crate::rag::retrieval::RetrievalUnit::from_setting(unit_setting).expect("valid unit");
-        let embedding = hybrid_fixture::axis(2);
-        let query = RetrievalQuery {
-            text: "cabildo",
-            embedding: Some(&embedding),
-        };
-        let candidates =
-            hybrid_retrieve_candidates(&conn, &[query], &params, unit).expect("retrieval");
-        passages(candidates, MAX_PASSAGES, params.snippet_max_chars)
+    fn settings(unit: Option<&str>) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("settings DB");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("settings table");
+        if let Some(unit) = unit {
+            conn.execute(
+                "INSERT INTO app_settings(key, value) VALUES ('rag_retrieval_unit', ?1)",
+                [unit],
+            )
+            .expect("unit setting");
+        }
+        conn
+    }
+
+    fn evidence(unit: Option<&str>, embedding: Option<Vec<f32>>) -> Vec<RetrievedPassage> {
+        let worker = std::sync::Mutex::new(crate::rag::retrieval::hybrid_fixture::corpus());
+        corpus_evidence(&settings(unit), &worker, "  cabildo ", 8, |query| {
+            assert_eq!(query, "cabildo", "the query is trimmed before embedding");
+            embedding
+        })
+        .expect("corpus evidence")
     }
 
     #[test]
     fn corpus_evidence_keeps_pages_without_chunks_under_the_default_unit() {
-        use crate::rag::retrieval::hybrid_fixture::{CHUNKED_ASSET, CHUNK_START, PLAIN_ASSET};
-        for setting in [None, Some("chunk")] {
-            let found: Vec<(String, usize)> = corpus_passages(setting)
+        use crate::rag::retrieval::hybrid_fixture::{
+            axis, CHUNKED_ASSET, CHUNK_START, PLAIN_ASSET,
+        };
+        for (setting, embedding) in [(None, Some(axis(2))), (Some("chunk"), None)] {
+            let found: Vec<(String, usize)> = evidence(setting, embedding)
                 .into_iter()
                 .map(|passage| (passage.asset_id, passage.start_char))
                 .collect();
@@ -188,6 +233,19 @@ mod tests {
                 "{setting:?}: the page without chunks still arrives whole: {found:?}"
             );
         }
+    }
+
+    #[test]
+    fn corpus_evidence_rejects_an_unknown_retrieval_unit_and_an_empty_passage() {
+        let worker = std::sync::Mutex::new(crate::rag::retrieval::hybrid_fixture::corpus());
+        let error = corpus_evidence(&settings(Some("page")), &worker, "cabildo", 8, |_| None)
+            .expect_err("unknown unit");
+        assert_eq!(error.code, "retrieval_unit_invalid");
+        let error = corpus_evidence(&settings(None), &worker, "   ", 8, |_| {
+            panic!("nothing is embedded for an empty passage")
+        })
+        .expect_err("empty passage");
+        assert_eq!(error.code, "no_selection");
     }
 
     #[test]
