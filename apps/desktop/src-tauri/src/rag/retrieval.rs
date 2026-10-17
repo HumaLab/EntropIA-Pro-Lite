@@ -1227,8 +1227,10 @@ fn join_chunks(chunks: &[CanonicalChunk]) -> (String, usize, usize) {
 
 /// Ajusta el pasaje unido a `budget` cortando SIEMPRE en límite de chunk,
 /// nunca por ventana de términos: primero cae el vecino posterior, después
-/// el anterior, y el chunk recuperado (`centers`) se queda. Solo un chunk
-/// que por sí mismo excede el presupuesto se corta, y por el final.
+/// el anterior. Si los dos extremos son chunks recuperados (`centers`, en
+/// orden de ranking), cae el extremo peor rankeado: el mejor recuperado
+/// (`centers[0]`) se queda siempre y el pasaje sigue siendo contiguo. Solo un
+/// chunk que por sí mismo excede el presupuesto se corta, y por el final.
 fn fit_passage(
     mut chunks: Vec<CanonicalChunk>,
     centers: &[i64],
@@ -1240,8 +1242,15 @@ fn fit_passage(
             return (chunks, text, start, end);
         }
         if chunks.len() > 1 {
-            let is_center = |chunk: &CanonicalChunk| centers.contains(&chunk.ordinal);
-            if !chunks.last().is_some_and(is_center) || chunks.first().is_some_and(is_center) {
+            let rank = |chunk: Option<&CanonicalChunk>| {
+                chunk.and_then(|chunk| centers.iter().position(|center| *center == chunk.ordinal))
+            };
+            let drop_last = match (rank(chunks.first()), rank(chunks.last())) {
+                (_, None) => true,
+                (None, Some(_)) => false,
+                (Some(first), Some(last)) => last > first,
+            };
+            if drop_last {
                 chunks.pop();
             } else {
                 chunks.remove(0);
@@ -4052,6 +4061,68 @@ mod tests {
             .iter()
             .all(|candidate| candidate.record.asset_id == "asset-1"
                 && candidate.record.chunk.is_some()));
+    }
+
+    /// Six canonical 800-char chunks with 100-char overlap over one source.
+    fn canonical_window_chunks() -> (String, Vec<CanonicalChunk>) {
+        let source: String = (0..4300)
+            .map(|position| char::from(b'a' + ((position / 100) % 26) as u8))
+            .collect();
+        let chunks = (0..6)
+            .map(|ordinal| {
+                let start = ordinal as usize * 700;
+                CanonicalChunk {
+                    id: format!("chunk-{ordinal}"),
+                    ordinal,
+                    text: source.chars().skip(start).take(800).collect(),
+                    start_char: start,
+                    end_char: start + 800,
+                }
+            })
+            .collect();
+        (source, chunks)
+    }
+
+    #[test]
+    fn fit_passage_keeps_the_best_ranked_center_when_centers_sit_at_both_ends() {
+        let (source, chunks) = canonical_window_chunks();
+
+        // Ranking order: chunk 4 is the best retrieved chunk of the group.
+        let (kept, text, start, end) = fit_passage(chunks, &[4, 2, 0], 2400);
+
+        let ordinals: Vec<i64> = kept.iter().map(|chunk| chunk.ordinal).collect();
+        assert!(ordinals.contains(&4), "best center dropped: {ordinals:?}");
+        assert!(text.chars().count() <= 2400);
+        let sent: String = source.chars().skip(start).take(end - start).collect();
+        assert_eq!(text, sent, "provenance covers exactly the text sent");
+    }
+
+    #[test]
+    fn fit_passage_drops_the_worse_ranked_end_before_the_best_center() {
+        let (_, chunks) = canonical_window_chunks();
+
+        for centers in [[0, 4], [2, 4]] {
+            let (kept, text, _, _) = fit_passage(chunks_clone(&chunks), &centers, 2400);
+            let ordinals: Vec<i64> = kept.iter().map(|chunk| chunk.ordinal).collect();
+            assert!(
+                ordinals.contains(&centers[0]),
+                "{centers:?} -> {ordinals:?}"
+            );
+            assert!(text.chars().count() <= 2400);
+        }
+    }
+
+    fn chunks_clone(chunks: &[CanonicalChunk]) -> Vec<CanonicalChunk> {
+        chunks
+            .iter()
+            .map(|chunk| CanonicalChunk {
+                id: chunk.id.clone(),
+                ordinal: chunk.ordinal,
+                text: chunk.text.clone(),
+                start_char: chunk.start_char,
+                end_char: chunk.end_char,
+            })
+            .collect()
     }
 
     #[test]
