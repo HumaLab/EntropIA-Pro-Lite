@@ -10,7 +10,7 @@ onlyBuiltDependencies:
 catalog:
   '@tiptap/core': ^2.26.4
   '@tiptap/extension-document': ^2.26.4
-  '@tiptap/extension-gapcursor': ^2.26.4
+  '@tiptap/extension-gapcursor': ^3.32.0
   '@tiptap/extension-highlight': ^2.26.4
   '@tiptap/extension-link': ^2.27.3
   '@tiptap/extension-placeholder': ^2.26.4
