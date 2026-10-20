@@ -23,6 +23,6 @@ catalog:
   '@tiptap/extension-text-align': ^2.26.4
   '@tiptap/extension-text-style': ^2.27.3
   '@tiptap/extension-underline': ^2.26.4
-  '@tiptap/pm': ^2.26.4
+  '@tiptap/pm': ^3.32.0
   '@tiptap/starter-kit': ^2.26.4
   'leaflet': ^1.9.4
