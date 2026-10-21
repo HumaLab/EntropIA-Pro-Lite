@@ -73,7 +73,10 @@ Branch `feat/tiptap-v3`, stacked on `fix/deps-audit-markdown-it` (PR #158).
       prosemirror-state, one each for listItem / placeholder / gapcursor. AGENTS.md
       "Dependencies" gains the golden-test rule for future upgrades.
 - [x] T5b/T6b review follow-up (native review, two non-blocking findings). Route: delegated
-      writer. - R3-footnote-null-ids-unproved: `WritingEditor/footnote-ids.test.ts` checks that a stored
+      writer. Commit be0070fd. Checks: ui test 882/882, ui typecheck 0/0, lint 3/3, format:check
+      clean.
+
+      R3-footnote-null-ids-unproved: `WritingEditor/footnote-ids.test.ts` checks that a stored
       footnote with neither id, only `data-id`, or only `id` passes `validateCanonical`, mounts,
       and re-serializes unchanged. It also checks that footnote ids, note text and reference attrs
       survive a getHTML -> parse round trip. The round trip already passed with the old override;
@@ -81,11 +84,14 @@ Branch `feat/tiptap-v3`, stacked on `fix/deps-audit-markdown-it` (PR #158).
       the parent specs, overriding only `isRequired: false` and `default: null`. Mutation check:
       dropping `isRequired: false` fails the only-`data-id` and only-`id` cases (the neither-id
       case does not catch it). Whole-document HTML equality is not asserted: a parsed reference
-      takes its number as text (`content: 'text*'`), identical in tiptap-footnotes 2.0.4 and 3.0.1. - R3-note-load-sites-untested: `NoteEditor.externalLoad.test.ts` now covers `clearEditor`
+      takes its number as text (`content: 'text*'`), identical in tiptap-footnotes 2.0.4 and 3.0.1.
+
+      R3-note-load-sites-untested: `NoteEditor.externalLoad.test.ts` now covers `clearEditor`
       after a save and the save-and-keep reload with `focus('end')`. RED observed per site with
       that site reverted to `false`, GREEN restored. Tiptap 3 raises no `update` for a reload
       whose document is identical, so the reload test drops a strikethrough mark the stored HTML
-      cannot hold, which makes the reload change the document. - Checks: ui test 882/882, ui typecheck 0/0, lint 3/3, format:check clean.
+      cannot hold, which makes the reload change the document.
+
 - [ ] T8 Visual check by the user in `tauri dev` with `ENTROPIA_DEV_PROFILE`.
 
 ## Acceptance
