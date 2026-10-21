@@ -4068,14 +4068,13 @@ fn bounded_decoded_page_text(raw: String) -> Option<String> {
 
 /// Live Pdfium instances on this thread. A test and diagnostic seam: the
 /// reader holds at most one at a time and releases every batch before the
-/// selective OCR pass binds its own — pdfium-render's global lock is not
-/// reentrant. Thread-scoped (JD6-A-007) so concurrently running tests cannot
-/// move each other's assertions.
+/// selective OCR pass takes its own. Thread-scoped (JD6-A-007) so
+/// concurrently running tests cannot move each other's assertions.
 pub fn pdfium_instances_alive() -> usize {
     crate::ocr::pdf::pdfium_instances_alive()
 }
 
-/// Successful Pdfium binds on this thread (JD6-A-006): before/after deltas
+/// Pdfium instances handed out on this thread (JD6-A-006): before/after deltas
 /// prove a test exercised the real library instead of the lopdf fallback.
 pub fn pdfium_bind_count() -> u64 {
     crate::ocr::pdf::pdfium_bind_count()

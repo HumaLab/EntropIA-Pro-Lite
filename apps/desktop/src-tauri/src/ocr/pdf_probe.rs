@@ -1,5 +1,5 @@
 use pdfium_render::prelude::{
-    PdfPageIndex, PdfPageObjectCommon, PdfPageObjectType, PdfPageObjectsCommon, Pdfium,
+    PdfPageObjectCommon, PdfPageObjectType, PdfPageObjectsCommon, Pdfium,
 };
 use serde::Serialize;
 
@@ -63,13 +63,13 @@ pub(super) fn profile_pdf_with_engine(
         .load_pdf_from_byte_slice(bytes, None)
         .map_err(|e| format!("Failed to load PDF for profile: {e}"))?;
 
-    let page_count: usize = document.pages().len().into();
+    let page_count = super::pdf::pdfium_page_count(document.pages().len());
     let mut pages = Vec::with_capacity(page_count);
 
     for page_index in 0..page_count {
         let page = document
             .pages()
-            .get(PdfPageIndex::from(page_index as u16))
+            .get(super::pdf::pdfium_page_index(page_index)?)
             .map_err(|e| format!("Failed to get page {} for profile: {e}", page_index + 1))?;
 
         let text_chars = page
