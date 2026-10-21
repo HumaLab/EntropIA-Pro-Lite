@@ -3,15 +3,12 @@
   import { portal } from '../Portal/portal'
   import { onDestroy, onMount, tick } from 'svelte'
   import { Editor } from '@tiptap/core'
-  import StarterKit from '@tiptap/starter-kit'
-  import Underline from '@tiptap/extension-underline'
-  import Link from '@tiptap/extension-link'
-  import Placeholder from '@tiptap/extension-placeholder'
   import ActionIcon from '../Button/ActionIcon.svelte'
   import type { ActionIconName } from '../Button/ActionIcon.types'
 
   import type { NoteEditorLabels, NoteEditorProps } from './NoteEditor.types'
   import { createDictation } from '../Dictation/dictation.svelte'
+  import { createNoteExtensions } from './note-extensions'
   import {
     normalizeNoteContentForEditor,
     normalizeNoteContentForRender,
@@ -249,21 +246,7 @@
 
     const instance = new Editor({
       element: editorElement,
-      extensions: [
-        StarterKit.configure({
-          heading: { levels: [1, 2, 3] },
-        }),
-        Underline,
-        Link.configure({
-          openOnClick: false,
-          autolink: false,
-          HTMLAttributes: {
-            rel: 'noopener noreferrer nofollow',
-            target: '_blank',
-          },
-        }),
-        Placeholder.configure({ placeholder }),
-      ],
+      extensions: createNoteExtensions(placeholder),
       content: currentHtml,
       autofocus: false,
       editorProps: {
