@@ -3,13 +3,12 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::audio::{AudioDecoderOptions, CODEC_ID_NULL_AUDIO};
 use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 #[tauri::command]
 pub async fn prepare_audio_preview(
@@ -81,37 +80,41 @@ fn decode_to_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
         hint.with_extension(extension);
     }
 
-    let probed = symphonia::default::get_probe()
-        .format(
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| format!("Unsupported or unreadable audio container: {e}"))?;
 
-    let mut format = probed.format;
-    let track = format
+    let (track_id, codec_params) = format
         .tracks()
         .iter()
-        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+        .find_map(|track| {
+            let params = track.codec_params.as_ref()?.audio()?;
+            (params.codec != CODEC_ID_NULL_AUDIO).then(|| (track.id, params.clone()))
+        })
         .ok_or_else(|| "No decodable audio track found".to_string())?;
-    let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
         .map_err(|e| format!("Unsupported audio codec: {e}"))?;
 
     let mut writer: Option<hound::WavWriter<std::io::BufWriter<File>>> = None;
     let mut wrote_samples = false;
+    let mut samples: Vec<i16> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(SymphoniaError::IoError(_)) => break,
+            Ok(Some(packet)) => packet,
+            // End of stream. An I/O error (e.g. a truncated file) also ends the
+            // preview with whatever decoded so far, as before.
+            Ok(None) | Err(SymphoniaError::IoError(_)) => break,
             Err(error) => return Err(format!("Failed to read audio packet: {error}")),
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
@@ -124,8 +127,8 @@ fn decode_to_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
         if writer.is_none() {
             let spec = decoded.spec();
             let wav_spec = hound::WavSpec {
-                channels: spec.channels.count() as u16,
-                sample_rate: spec.rate,
+                channels: spec.channels().count() as u16,
+                sample_rate: spec.rate(),
                 bits_per_sample: 16,
                 sample_format: hound::SampleFormat::Int,
             };
@@ -135,13 +138,12 @@ fn decode_to_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
             );
         }
 
-        let mut buffer = SampleBuffer::<i16>::new(decoded.capacity() as u64, *decoded.spec());
-        copy_interleaved(decoded, &mut buffer);
+        decoded.copy_to_vec_interleaved(&mut samples);
 
         let writer = writer
             .as_mut()
             .ok_or_else(|| "Preview WAV writer was not initialized".to_string())?;
-        for sample in buffer.samples() {
+        for sample in &samples {
             writer
                 .write_sample(*sample)
                 .map_err(|e| format!("Failed to write preview sample: {e}"))?;
@@ -160,21 +162,6 @@ fn decode_to_pcm16_wav(source: &Path, output: &Path) -> Result<(), String> {
     }
 
     Ok(())
-}
-
-fn copy_interleaved(decoded: AudioBufferRef<'_>, buffer: &mut SampleBuffer<i16>) {
-    match decoded {
-        AudioBufferRef::U8(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::U16(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::U24(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::U32(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::S8(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::S16(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::S24(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::S32(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::F32(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-        AudioBufferRef::F64(audio) => buffer.copy_interleaved_typed(audio.as_ref()),
-    }
 }
 
 #[cfg(test)]
@@ -212,12 +199,30 @@ mod tests {
         );
         assert!(preview_path.exists());
 
-        let reader = hound::WavReader::open(preview_path).unwrap();
+        let mut reader = hound::WavReader::open(preview_path).unwrap();
         let spec = reader.spec();
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 8_000);
         assert_eq!(spec.bits_per_sample, 16);
         assert_eq!(spec.sample_format, hound::SampleFormat::Int);
+
+        let samples: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), 80, "every source sample is kept");
+        assert!(
+            samples
+                .iter()
+                .enumerate()
+                .all(|(index, sample)| *sample == test_sample(index)),
+            "16-bit PCM passes through unchanged"
+        );
+    }
+
+    fn test_sample(index: usize) -> i16 {
+        if index.is_multiple_of(2) {
+            i16::MAX / 4
+        } else {
+            i16::MIN / 4
+        }
     }
 
     fn write_test_wav(path: &Path) {
@@ -229,12 +234,7 @@ mod tests {
         };
         let mut writer = hound::WavWriter::create(path, spec).unwrap();
         for index in 0..80 {
-            let sample = if index % 2 == 0 {
-                i16::MAX / 4
-            } else {
-                i16::MIN / 4
-            };
-            writer.write_sample(sample).unwrap();
+            writer.write_sample(test_sample(index)).unwrap();
         }
         writer.finalize().unwrap();
     }
