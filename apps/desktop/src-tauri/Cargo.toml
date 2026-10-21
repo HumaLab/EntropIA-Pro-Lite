@@ -55,7 +55,7 @@ cap-std = "=4.0.3"
 cap-fs-ext = "=4.0.3"
 ndarray = { version = "=0.16.1", optional = true }
 ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray", "load-dynamic"], optional = true }
-tokenizers = { version = "0.15", default-features = false, features = ["onig"], optional = true }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 encoding_rs = "0.8"
 # Already compiled for tauri-utils and wry (same 0.28 since tauri 2.12); declared here so the
 # HTML snapshot extractor can use it directly. No new crate enters the build.
