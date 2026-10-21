@@ -90,7 +90,7 @@ describe('pasting', () => {
   it('keeps sub and sup from pasted HTML', () => {
     const instance = mount('<p>H<sub>2</sub>O y m<sup>2</sup></p>')
 
-    const content = instance.getJSON().content?.[0]?.content ?? []
+    const content = (instance.getJSON() as JSONContent).content?.[0]?.content ?? []
     expect(content.find((node) => node.text === '2')?.marks).toEqual([{ type: 'subscript' }])
     expect(content.filter((node) => node.text === '2')[1]?.marks).toEqual([{ type: 'superscript' }])
   })

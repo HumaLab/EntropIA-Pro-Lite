@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from '@tiptap/core'
+import { Node, mergeAttributes, type Attributes, type Extensions } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { mount, unmount } from 'svelte'
@@ -8,10 +8,7 @@ import Document from '@tiptap/extension-document'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import Underline from '@tiptap/extension-underline'
-import Table from '@tiptap/extension-table'
-import TableRow from '@tiptap/extension-table-row'
-import TableCell from '@tiptap/extension-table-cell'
-import TableHeader from '@tiptap/extension-table-header'
+import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
 import { Footnote, FootnoteReference, Footnotes } from 'tiptap-footnotes'
 import { TrailingParagraph } from './trailing-paragraph'
 
@@ -36,12 +33,11 @@ import { DEFAULT_WRITING_IMAGE_LABELS, type WritingImageLabels } from './writing
 /**
  * The academic editor's schema (plan-editor.md §6.2, §8.2).
  *
- * Pinned to the Tiptap 2.26.4 line the repository already carries. Spike S1
- * confirmed tables and `tiptap-footnotes@2.0.4` install alongside it with no
- * peer conflict, so nothing here required moving to Tiptap 3.
+ * On the Tiptap 3 line, with `tiptap-footnotes@3`. The JSON a manuscript is
+ * stored as did not change in the move; serialization-golden.test.ts holds it.
  *
- * StarterKit ships only bold, code, italic and strike, so `link` and
- * `underline` are added explicitly — the schema does not grow them by itself.
+ * `link` and `underline` are configured here rather than through StarterKit,
+ * so the schema is spelled out in one list.
  *
  * This list is the single definition of what a manuscript may contain. The
  * validator in `document-contract.ts` builds its schema from exactly this, so a
@@ -889,6 +885,53 @@ export const WritingImage = Node.create<{
   },
 })
 
+/**
+ * Tiptap 3 and `tiptap-footnotes@3` changed the attributes of three nodes and a
+ * mark the manuscripts are stored with. The stored JSON is what syncs between
+ * devices, and ProseMirror refuses JSON carrying an attribute its schema does
+ * not know, so an attribute added here is a document an older build cannot
+ * open; an attribute made required is a stored document this build cannot.
+ * These keep the shape the manuscripts were written in
+ * (serialization-golden.test.ts).
+ */
+/** `title` arrived with Tiptap 3's Markdown link syntax, which this editor does not use. */
+const WritingLink = Link.extend({
+  addAttributes() {
+    const { title: _title, ...attributes }: Attributes = { ...this.parent?.() }
+    return attributes
+  },
+})
+
+/** `align` arrived with Tiptap 3; cell alignment is not something a manuscript holds. */
+const WritingTableCell = TableCell.extend({
+  addAttributes() {
+    const { align: _align, ...attributes }: Attributes = { ...this.parent?.() }
+    return attributes
+  },
+})
+const WritingTableHeader = TableHeader.extend({
+  addAttributes() {
+    const { align: _align, ...attributes }: Attributes = { ...this.parent?.() }
+    return attributes
+  },
+})
+
+/**
+ * `tiptap-footnotes@3` marks both ids required. Tiptap 2 gave every attribute a
+ * null default, so a stored footnote may lack either; it must still open.
+ */
+const WritingFootnote = Footnote.extend({
+  addAttributes() {
+    const attributes: Attributes = { ...this.parent?.() }
+    // Only the requirement and the default change; whatever else the package
+    // gives these attributes (parsing, rendering) is kept.
+    for (const name of ['id', 'data-id']) {
+      attributes[name] = { ...attributes[name], isRequired: false, default: null }
+    }
+    return attributes
+  },
+})
+
 export interface WritingExtensionOptions {
   placeholder?: string
   /**
@@ -924,14 +967,26 @@ export interface WritingExtensionOptions {
  * `getSchema()` and to `new Editor()` makes two consumers share one object.
  * It also lets the placeholder be per-editor, which a module constant cannot.
  */
-export function createWritingExtensions(options: WritingExtensionOptions = {}) {
+export function createWritingExtensions(options: WritingExtensionOptions = {}): Extensions {
   return [
     // StarterKit's Document allows `block+`, which leaves no room for the
     // footnotes container the footnote extension appends at the end. Without
     // this override `addFootnote` runs and silently changes nothing — the
     // command succeeds, the schema refuses the node, and the button looks dead.
     Document.extend({ content: 'block+ footnotes?' }),
-    StarterKit.configure({ document: false, heading: { levels: [1, 2, 3, 4] } }),
+    // Tiptap 3's StarterKit also carries link, underline, a list keymap and a
+    // trailing node. Link and underline are configured below, once; the
+    // trailing node is TrailingParagraph's job, which knows where the
+    // footnotes block sits; the list keymap would change what Backspace and
+    // Delete do at a list item's edge.
+    StarterKit.configure({
+      document: false,
+      heading: { levels: [1, 2, 3, 4] },
+      link: false,
+      underline: false,
+      listKeymap: false,
+      trailingNode: false,
+    }),
     // Gapcursor comes from StarterKit, which is what lets the caret sit before
     // or after a table at the edge of the document. Naming it again here is a
     // duplicate registration, not a reinforcement.
@@ -952,14 +1007,14 @@ export function createWritingExtensions(options: WritingExtensionOptions = {}) {
     // manuscript saved there loses its alignment, indent and spacing.
     WritingTextAlign,
     ParagraphFormat,
-    Link.configure({ openOnClick: false, autolink: false }),
+    WritingLink.configure({ openOnClick: false, autolink: false }),
     Placeholder.configure({ placeholder: options.placeholder ?? '' }),
     Table.configure({ resizable: false }),
     TableRow,
-    TableCell,
-    TableHeader,
+    WritingTableCell,
+    WritingTableHeader,
     Footnotes,
-    Footnote,
+    WritingFootnote,
     FootnoteReference,
     DocumentCitation.configure({ resolveImage: options.resolveImage ?? null }),
     ZoteroCitation,

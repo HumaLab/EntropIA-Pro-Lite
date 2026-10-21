@@ -33,7 +33,7 @@ const highlight = (color: string) => ({ type: 'highlight', attrs: { color } })
 
 /** A paragraph's runs as [text, highlight | null]. */
 function runs(instance: Editor, paragraph = 0): [string, unknown][] {
-  const block = instance.getJSON().content?.[paragraph]
+  const block = (instance.getJSON() as JSONContent).content?.[paragraph]
   return (block?.content ?? []).map((node) => {
     const mark = node.marks?.find((entry) => entry.type === 'highlight')
     return [node.text ?? '', mark ? mark.attrs?.color : null]

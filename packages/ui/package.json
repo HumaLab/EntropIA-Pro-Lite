@@ -22,9 +22,6 @@
     "@tiptap/extension-subscript": "catalog:",
     "@tiptap/extension-superscript": "catalog:",
     "@tiptap/extension-table": "catalog:",
-    "@tiptap/extension-table-cell": "catalog:",
-    "@tiptap/extension-table-header": "catalog:",
-    "@tiptap/extension-table-row": "catalog:",
     "@tiptap/extension-text-align": "catalog:",
     "@tiptap/extension-text-style": "catalog:",
     "@tiptap/extension-underline": "catalog:",
@@ -32,7 +29,7 @@
     "@tiptap/starter-kit": "catalog:",
     "leaflet": "catalog:",
     "pdfjs-dist": "^4",
-    "tiptap-footnotes": "^2.0.4"
+    "tiptap-footnotes": "^3.0.1"
   },
   "peerDependencies": {
     "svelte": "^5.57.2"

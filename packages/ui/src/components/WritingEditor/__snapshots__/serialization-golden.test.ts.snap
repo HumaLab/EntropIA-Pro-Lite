@@ -1,0 +1,800 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`manuscript JSON (golden) > appends exactly one paragraph after a trailing table 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "za",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "attrs": {
+                "colspan": 1,
+                "colwidth": null,
+                "rowspan": 1,
+              },
+              "content": [
+                {
+                  "attrs": {
+                    "indent": null,
+                    "lineHeight": null,
+                    "textAlign": null,
+                  },
+                  "content": [
+                    {
+                      "text": "b",
+                      "type": "text",
+                    },
+                  ],
+                  "type": "paragraph",
+                },
+              ],
+              "type": "tableCell",
+            },
+          ],
+          "type": "tableRow",
+        },
+      ],
+      "type": "table",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "type": "paragraph",
+    },
+  ],
+  "type": "doc",
+}
+`;
+
+exports[`manuscript JSON (golden) > parses the rich HTML into the recorded JSON 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "indent": null,
+        "level": 1,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "Título",
+          "type": "text",
+        },
+      ],
+      "type": "heading",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "level": 4,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "Cuarto nivel",
+          "type": "text",
+        },
+      ],
+      "type": "heading",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": "center",
+      },
+      "content": [
+        {
+          "text": "Centrado ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "bold",
+            },
+          ],
+          "text": "negrita",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "italic",
+            },
+          ],
+          "text": "itálica",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "underline",
+            },
+          ],
+          "text": "subrayado",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "strike",
+            },
+          ],
+          "text": "tachado",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "code",
+            },
+          ],
+          "text": "código",
+          "type": "text",
+        },
+        {
+          "text": " H",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "subscript",
+            },
+          ],
+          "text": "2",
+          "type": "text",
+        },
+        {
+          "text": "O x",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "type": "superscript",
+            },
+          ],
+          "text": "3",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "https://example.com/a?b=1",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "https",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "http://example.com",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "http",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "mailto:a@b.c",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "mail",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "/relative/path",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "relativo",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "#ancla",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "ancla",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "class": null,
+                "href": "www.example.com",
+                "rel": "noopener noreferrer nofollow",
+                "target": "_blank",
+              },
+              "type": "link",
+            },
+          ],
+          "text": "sin esquema",
+          "type": "text",
+        },
+        {
+          "text": " script",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "marks": [
+            {
+              "attrs": {
+                "color": null,
+                "fontSize": "1.5em",
+              },
+              "type": "textStyle",
+            },
+          ],
+          "text": "grande",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "color": "green",
+                "fontSize": null,
+              },
+              "type": "textStyle",
+            },
+          ],
+          "text": "verde",
+          "type": "text",
+        },
+        {
+          "text": " ",
+          "type": "text",
+        },
+        {
+          "marks": [
+            {
+              "attrs": {
+                "color": "red",
+                "fontSize": null,
+              },
+              "type": "textStyle",
+            },
+          ],
+          "text": "anidado",
+          "type": "text",
+        },
+        {
+          "text": " absoluto resaltado",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "attrs": {
+                "indent": null,
+                "lineHeight": null,
+                "textAlign": null,
+              },
+              "content": [
+                {
+                  "text": "uno",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "listItem",
+        },
+        {
+          "content": [
+            {
+              "attrs": {
+                "indent": null,
+                "lineHeight": null,
+                "textAlign": null,
+              },
+              "content": [
+                {
+                  "text": "dos",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "listItem",
+        },
+      ],
+      "type": "bulletList",
+    },
+    {
+      "attrs": {
+        "start": 3,
+        "type": null,
+      },
+      "content": [
+        {
+          "content": [
+            {
+              "attrs": {
+                "indent": null,
+                "lineHeight": null,
+                "textAlign": null,
+              },
+              "content": [
+                {
+                  "text": "tres",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "listItem",
+        },
+      ],
+      "type": "orderedList",
+    },
+    {
+      "content": [
+        {
+          "attrs": {
+            "indent": null,
+            "lineHeight": null,
+            "textAlign": null,
+          },
+          "content": [
+            {
+              "text": "cita",
+              "type": "text",
+            },
+          ],
+          "type": "paragraph",
+        },
+      ],
+      "type": "blockquote",
+    },
+    {
+      "attrs": {
+        "language": null,
+      },
+      "content": [
+        {
+          "text": "bloque",
+          "type": "text",
+        },
+      ],
+      "type": "codeBlock",
+    },
+    {
+      "type": "horizontalRule",
+    },
+    {
+      "content": [
+        {
+          "content": [
+            {
+              "attrs": {
+                "colspan": 1,
+                "colwidth": null,
+                "rowspan": 1,
+              },
+              "content": [
+                {
+                  "attrs": {
+                    "indent": null,
+                    "lineHeight": null,
+                    "textAlign": null,
+                  },
+                  "content": [
+                    {
+                      "text": "Encabezado",
+                      "type": "text",
+                    },
+                  ],
+                  "type": "paragraph",
+                },
+              ],
+              "type": "tableHeader",
+            },
+            {
+              "attrs": {
+                "colspan": 1,
+                "colwidth": null,
+                "rowspan": 1,
+              },
+              "content": [
+                {
+                  "attrs": {
+                    "indent": null,
+                    "lineHeight": null,
+                    "textAlign": null,
+                  },
+                  "content": [
+                    {
+                      "text": "Otro",
+                      "type": "text",
+                    },
+                  ],
+                  "type": "paragraph",
+                },
+              ],
+              "type": "tableHeader",
+            },
+          ],
+          "type": "tableRow",
+        },
+        {
+          "content": [
+            {
+              "attrs": {
+                "colspan": 1,
+                "colwidth": null,
+                "rowspan": 1,
+              },
+              "content": [
+                {
+                  "attrs": {
+                    "indent": null,
+                    "lineHeight": null,
+                    "textAlign": null,
+                  },
+                  "content": [
+                    {
+                      "text": "Celda",
+                      "type": "text",
+                    },
+                  ],
+                  "type": "paragraph",
+                },
+              ],
+              "type": "tableCell",
+            },
+            {
+              "attrs": {
+                "colspan": 1,
+                "colwidth": null,
+                "rowspan": 1,
+              },
+              "content": [
+                {
+                  "attrs": {
+                    "indent": null,
+                    "lineHeight": null,
+                    "textAlign": null,
+                  },
+                  "type": "paragraph",
+                },
+              ],
+              "type": "tableCell",
+            },
+          ],
+          "type": "tableRow",
+        },
+      ],
+      "type": "table",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "fin",
+          "type": "text",
+        },
+        {
+          "type": "hardBreak",
+        },
+        {
+          "text": "línea",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+  ],
+  "type": "doc",
+}
+`;
+
+exports[`manuscript JSON (golden) > stores the empty document as recorded 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "type": "paragraph",
+    },
+  ],
+  "type": "doc",
+}
+`;
+
+exports[`manuscript JSON (golden) > writes the recorded JSON for citations, notes, images and footnotes 1`] = `
+{
+  "content": [
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "Una afirmación",
+          "type": "text",
+        },
+        {
+          "attrs": {
+            "class": "footnote-ref",
+            "data-id": "ref-1",
+            "href": null,
+            "referenceNumber": "1",
+          },
+          "type": "footnoteReference",
+        },
+        {
+          "text": " citada ",
+          "type": "text",
+        },
+        {
+          "attrs": {
+            "assetId": "asset-1",
+            "citationNodeId": "cit-1",
+            "collectionId": "col-1",
+            "endChar": 42,
+            "itemId": "item-1",
+            "metadataSnapshot": {
+              "title": "Fuente",
+            },
+            "pageNumber": 4,
+            "quotedParts": [
+              {
+                "kind": "text",
+                "text": "el texto citado",
+              },
+            ],
+            "quotedText": "el texto citado",
+            "sourceTextHash": "hash",
+            "startChar": 10,
+          },
+          "type": "documentCitation",
+        },
+        {
+          "text": " y ",
+          "type": "text",
+        },
+        {
+          "attrs": {
+            "citationNodeId": "zot-1",
+            "itemKey": null,
+            "itemVersion": null,
+            "items": [
+              {
+                "itemKey": "ABCD1234",
+                "locator": "12",
+                "metadataSnapshot": {
+                  "id": "acha2015",
+                },
+              },
+            ],
+            "libraryId": null,
+            "libraryType": null,
+            "locator": null,
+            "locatorType": null,
+            "metadataSnapshot": null,
+            "prefix": "ver",
+            "renderedText": "(ver Acha, 2015, p. 12)",
+            "suffix": null,
+            "suppressAuthor": false,
+          },
+          "type": "zoteroCitation",
+        },
+        {
+          "text": " con ",
+          "type": "text",
+        },
+        {
+          "attrs": {
+            "contentHash": "nhash",
+            "contentSnapshot": "una nota",
+            "itemId": "item-1",
+            "noteId": "note-1",
+            "noteLinkNodeId": "nl-1",
+          },
+          "type": "noteLink",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "attrs": {
+        "align": "left",
+        "alt": "Mapa",
+        "height": 200,
+        "src": "writing-images/a.png",
+        "title": null,
+        "width": 320,
+      },
+      "content": [
+        {
+          "text": "Leyenda",
+          "type": "text",
+        },
+      ],
+      "type": "writingImage",
+    },
+    {
+      "attrs": {
+        "indent": null,
+        "lineHeight": null,
+        "textAlign": null,
+      },
+      "content": [
+        {
+          "text": "Cierre",
+          "type": "text",
+        },
+      ],
+      "type": "paragraph",
+    },
+    {
+      "attrs": {
+        "class": "footnotes",
+      },
+      "content": [
+        {
+          "attrs": {
+            "data-id": "ref-1",
+            "id": "fn:1",
+          },
+          "content": [
+            {
+              "attrs": {
+                "indent": null,
+                "lineHeight": null,
+                "textAlign": null,
+              },
+              "content": [
+                {
+                  "text": "La nota.",
+                  "type": "text",
+                },
+              ],
+              "type": "paragraph",
+            },
+          ],
+          "type": "footnote",
+        },
+      ],
+      "type": "footnotes",
+    },
+  ],
+  "type": "doc",
+}
+`;
