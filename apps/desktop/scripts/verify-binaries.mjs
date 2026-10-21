@@ -26,7 +26,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** Manifest location, relative to the repository root. */
@@ -236,16 +236,20 @@ function extractArchive(archivePath, source, extractDir) {
   const pathname = new URL(source.url).pathname
   let command
   let args
+  let cwd
   if (/\.(tgz|tar\.gz)$/i.test(pathname)) {
+    // Relative paths from inside the extract dir: Git Bash's GNU tar reads
+    // `C:\...` as a remote host, and bsdtar has no --force-local to opt out.
     command = 'tar'
-    args = ['-xzf', archivePath, '-C', extractDir, source.member]
+    args = ['-xzf', relative(extractDir, archivePath).split(sep).join('/'), source.member]
+    cwd = extractDir
   } else if (/\.zip$/i.test(pathname)) {
     command = 'unzip'
     args = ['-o', '-q', archivePath, source.member, '-d', extractDir]
   } else {
     throw new Error(`unsupported archive type for ${source.url}; use .tgz, .tar.gz or .zip`)
   }
-  const result = spawnSync(command, args, { encoding: 'utf8' })
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
   if (result.error !== undefined)
     throw new Error(`failed to run ${command}: ${result.error.message}`)
   if (result.status !== 0) {
