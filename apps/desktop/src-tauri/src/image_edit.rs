@@ -7,7 +7,7 @@
 use crate::path_utils::{ensure_within_dir, validate_existing_file};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, GenericImageView, ImageBuffer, Pixel, Rgb, Rgba, RgbaImage};
-use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+use imageproc::geometric_transformations::{rotate_about_center, Border, Interpolation};
 use std::path::{Path, PathBuf};
 
 /// Result of an image edit operation. Returned to the frontend so it can
@@ -308,7 +308,12 @@ fn rotate_image_degrees_file(path: String, degrees: f32) -> Result<ImageEditResu
     let offset_y = ((canvas.height() - orig_h) / 2) as i64;
     image::imageops::overlay(&mut canvas, &source, offset_x, offset_y);
 
-    let rotated = rotate_about_center(&canvas, radians, Interpolation::Bilinear, background);
+    let rotated = rotate_about_center(
+        &canvas,
+        radians,
+        Interpolation::Bilinear,
+        Border::Constant(background),
+    );
     let (out_w, out_h) = (canvas.width(), canvas.height());
 
     let new_path = if alpha_capable {

@@ -15,7 +15,7 @@ const THRESHOLD_BLOCK_RADIUS: u32 = 15;
 /// Returns a `GrayImage` with binary pixel values (0 or 255).
 pub fn preprocess_image(img: DynamicImage) -> GrayImage {
     let gray = img.into_luma8();
-    adaptive_threshold(&gray, THRESHOLD_BLOCK_RADIUS)
+    adaptive_threshold(&gray, THRESHOLD_BLOCK_RADIUS, 0)
 }
 
 #[cfg(test)]

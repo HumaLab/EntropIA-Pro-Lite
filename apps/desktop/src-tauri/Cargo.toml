@@ -43,7 +43,7 @@ lopdf = "0.45"
 # and 0.9 defaults to a newer API whose symbols they do not export.
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_7543", "image_latest", "thread_safe"] }
 image = "0.25"
-imageproc = "0.25"
+imageproc = "0.27"
 png = "0.18"
 tokio = { version = "1", features = ["full"] }
 regex = "1"
