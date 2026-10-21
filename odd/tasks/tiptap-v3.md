@@ -50,14 +50,19 @@ Branch `feat/tiptap-v3`, stacked on `fix/deps-audit-markdown-it` (PR #158).
       the four sites (v3 signature; behaviour proven in T5).
 - [x] T4 StarterKit de-dup in both editors: `link`, `underline`, `listKeymap`, `trailingNode`
       off in StarterKit; Link/Underline configured once as before; TrailingParagraph kept.
-- [ ] T5 `setContent(x, false)` -> `{ emitUpdate: false }` (4 sites) + test that external loads
-      do not fire updates.
+- [x] T5 `setContent(x, false)` -> `{ emitUpdate: false }` (4 sites) + test that external loads
+      do not fire updates. Route: delegated writer. `WritingEditor.externalLoad.test.ts` and
+      `NoteEditor/__tests__/NoteEditor.externalLoad.test.ts` count `update` events whose
+      transaction changed the document during a prop-driven load. RED observed on Tiptap 3 with
+      the old `false` argument (both fail, 1 update each); GREEN with `{ emitUpdate: false }`.
+      No `clearContent` call sites exist. Note: `setEditable` emits an `update` too (v2 and v3
+      alike, no document change); WritingEditor's `lastEmitted` guard already ignores it.
 - [x] T6 TextStyle `mergeNestedSpanStyles` vs `WritingTextStyle.parseHTML`; insertContent
       regression (dictation, suggestions, search-replace, citations). The parseHTML override
       already bypasses the merge (golden: nested span keeps v2 marks). Golden caught three stored
       JSON drifts, fixed without touching the snapshots: v3 Link adds `title`, v3
-      TableCell/TableHeader add `align` (both stripped: an older build's ProseMirror refuses unknown
-      attributes), `tiptap-footnotes@3` makes footnote `id`/`data-id` required (defaults restored to
+      TableCell/TableHeader add `align` (both stripped: an older build's `validateCanonical`, via
+      ProseMirror `Node.check()`, refuses unknown attributes), `tiptap-footnotes@3` makes footnote `id`/`data-id` required (defaults restored to
       null: stored footnotes without them must still open). insertContent suites green unchanged.
 - [ ] T7 Vite optimizeDeps + AGENTS.md; full lint/typecheck (Pro and Lite)/test/format/audit.
 - [ ] T8 Visual check by the user in `tauri dev` with `ENTROPIA_DEV_PROFILE`.
@@ -76,5 +81,5 @@ T8 is the user's (Tauri native window).
 ## Progress
 
 - 2026-10-21: impact map done (explorer). Feature doc created.
-- 2026-10-21: T2-T4, T6 on Tiptap 3.32.0: ui test 876/876, ui typecheck 0/0, desktop test
+- 2026-10-21: T2-T4, T6 on Tiptap 3.32.0 (commit 0e2bb552): ui test 876/876, ui typecheck 0/0, desktop test
   3741 passed / 9 skipped, desktop typecheck 0/0, lint clean, format:check clean.
