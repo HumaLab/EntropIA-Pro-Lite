@@ -53,7 +53,7 @@
     "markdown-it": "^14.3.3",
     "pdfjs-dist": "^4",
     "pdfmake": "^0.3.11",
-    "tiptap-footnotes": "^2.0.4"
+    "tiptap-footnotes": "^3.0.1"
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",

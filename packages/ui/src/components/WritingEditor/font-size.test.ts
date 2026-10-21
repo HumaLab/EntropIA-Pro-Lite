@@ -34,7 +34,7 @@ const size = (fontSize: string) => ({ type: 'textStyle', attrs: { fontSize } })
 
 /** The first paragraph's runs as [text, fontSize | null]. */
 function runs(instance: Editor, paragraph = 0): [string, string | null][] {
-  const block = instance.getJSON().content?.[paragraph]
+  const block = (instance.getJSON() as JSONContent).content?.[paragraph]
   return (block?.content ?? []).map((node) => {
     const style = node.marks?.find((mark) => mark.type === 'textStyle')
     return [node.text ?? '', (style?.attrs?.fontSize as string | undefined) ?? null]

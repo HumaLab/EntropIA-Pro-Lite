@@ -1,4 +1,4 @@
-import { Editor } from '@tiptap/core'
+import { Editor, type JSONContent } from '@tiptap/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWritingExtensions } from './extensions'
 import { emptyDocument } from './document-contract'
@@ -126,7 +126,7 @@ describe('the writingImage node', () => {
     const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
     instance.view.someProp('handleKeyDown', (handler) => handler(instance.view, event))
 
-    const json = instance.getJSON()
+    const json: JSONContent = instance.getJSON()
     const figures = json.content?.filter((node) => node.type === 'writingImage') ?? []
     // Exactly one writingImage — never two, which is what stock splitBlock
     // does to a mid-caption Enter left unhandled — and its caption is the
@@ -220,7 +220,7 @@ describe('the writingImage node', () => {
     expect(namesOf(instance)).not.toContain('writingImage')
 
     instance.commands.undo()
-    const restored = instance.getJSON()
+    const restored: JSONContent = instance.getJSON()
     const figure = restored.content?.find((node) => node.type === 'writingImage')
     expect(figure?.attrs).toMatchObject({
       src: 'writing-images/abc.png',

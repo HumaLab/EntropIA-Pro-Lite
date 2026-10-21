@@ -9,8 +9,16 @@ import Placeholder from '@tiptap/extension-placeholder'
  */
 export function createNoteExtensions(placeholder = '') {
   return [
+    // Tiptap 3's StarterKit also carries link, underline, a list keymap and a
+    // trailing node. Link and underline are configured below, once; the other
+    // two would change how a note is edited and add an empty paragraph after a
+    // note that ends in a list, a quote or a code block.
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
+      link: false,
+      underline: false,
+      listKeymap: false,
+      trailingNode: false,
     }),
     Underline,
     Link.configure({

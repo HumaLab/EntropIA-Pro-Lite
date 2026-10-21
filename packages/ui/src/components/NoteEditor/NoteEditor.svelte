@@ -387,7 +387,7 @@
   }
 
   function clearEditor() {
-    editor?.commands.setContent('<p></p>', false)
+    editor?.commands.setContent('<p></p>', { emitUpdate: false })
     currentHtml = '<p></p>'
     originalHtml = '<p></p>'
     lastExternalHtml = normalizeNoteContentForEditor(content)
@@ -412,7 +412,7 @@
       originalHtml = html
       lastExternalHtml = html
       currentHtml = html || '<p></p>'
-      editor.commands.setContent(html, false)
+      editor.commands.setContent(html, { emitUpdate: false })
       editor.commands.focus('end')
       bumpEditorRevision()
     } catch {
@@ -453,7 +453,7 @@
     const nextEditorHtml = normalizeNoteContentForRender(normalizedExternal)
 
     if (currentEditorHtml !== nextEditorHtml) {
-      editor.commands.setContent(normalizedExternal, false)
+      editor.commands.setContent(normalizedExternal, { emitUpdate: false })
       bumpEditorRevision()
     }
   })

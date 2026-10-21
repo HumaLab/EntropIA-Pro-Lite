@@ -32,7 +32,7 @@
     "@tiptap/starter-kit": "catalog:",
     "leaflet": "catalog:",
     "pdfjs-dist": "^4",
-    "tiptap-footnotes": "^2.0.4"
+    "tiptap-footnotes": "^3.0.1"
   },
   "peerDependencies": {
     "svelte": "^5.57.2"

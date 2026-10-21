@@ -33,7 +33,7 @@ const style = (attrs: Record<string, unknown>) => ({ type: 'textStyle', attrs })
 
 /** A paragraph's runs as [text, colour | null]. */
 function runs(instance: Editor, paragraph = 0): [string, unknown][] {
-  const block = instance.getJSON().content?.[paragraph]
+  const block = (instance.getJSON() as JSONContent).content?.[paragraph]
   return (block?.content ?? []).map((node) => {
     const mark = node.marks?.find((entry) => entry.type === 'textStyle')
     return [node.text ?? '', mark?.attrs?.color ?? null]

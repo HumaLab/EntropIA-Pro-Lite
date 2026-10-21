@@ -226,7 +226,7 @@ describe('indent inside lists', () => {
   const LIST = () => doc(ul(li(p('Uno')), li(p('Dos'))))
 
   const nested = (instance: Editor) =>
-    instance.getJSON().content?.[0]?.content?.[0]?.content?.[1]?.type ?? null
+    (instance.getJSON() as JSONContent).content?.[0]?.content?.[0]?.content?.[1]?.type ?? null
 
   it('sinks the item into a nested list, and lifts it back', () => {
     const instance = mount(LIST())
@@ -331,7 +331,7 @@ describe('inside a footnote', () => {
     })
 
   const noteAttrs = (instance: Editor) =>
-    instance.getJSON().content?.[1]?.content?.[0]?.content?.[0]?.attrs
+    (instance.getJSON() as JSONContent).content?.[1]?.content?.[0]?.content?.[0]?.attrs
 
   it('neither aligns, indents nor spaces a footnote paragraph', () => {
     const instance = mount(NOTED())

@@ -293,7 +293,7 @@
       return
     }
     lastEmitted = incoming
-    editor.commands.setContent(canonical.doc, false)
+    editor.commands.setContent(canonical.doc, { emitUpdate: false })
   })
 
   $effect(() => {
