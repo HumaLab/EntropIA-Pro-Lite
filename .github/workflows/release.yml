@@ -108,7 +108,7 @@ jobs:
         run: node apps/desktop/scripts/check-runtime-bootstrap.mjs --platform ${{ matrix.runtime_platform }} --manifest-url "$ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.90.0
 
@@ -193,7 +193,7 @@ jobs:
           echo "store_version=$(node apps/desktop/scripts/version.mjs print --store)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.90.0
 
