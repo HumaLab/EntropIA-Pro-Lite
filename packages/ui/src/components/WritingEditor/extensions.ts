@@ -922,11 +922,13 @@ const WritingTableHeader = TableHeader.extend({
  */
 const WritingFootnote = Footnote.extend({
   addAttributes() {
-    return {
-      ...this.parent?.(),
-      id: { default: null },
-      'data-id': { default: null },
+    const attributes: Attributes = { ...this.parent?.() }
+    // Only the requirement and the default change; whatever else the package
+    // gives these attributes (parsing, rendering) is kept.
+    for (const name of ['id', 'data-id']) {
+      attributes[name] = { ...attributes[name], isRequired: false, default: null }
     }
+    return attributes
   },
 })
 
