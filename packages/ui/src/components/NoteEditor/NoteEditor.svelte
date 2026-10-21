@@ -272,8 +272,13 @@
         bumpEditorRevision()
       },
       onBlur: () => {
-        isFocused = false
-        bumpEditorRevision()
+        // Unmounting a focused editor (a save that removes the edit view
+        // without a prior click) blurs it while Svelte is still rendering;
+        // writing $state there throws state_unsafe_mutation. Defer it.
+        queueMicrotask(() => {
+          isFocused = false
+          bumpEditorRevision()
+        })
       },
     })
 

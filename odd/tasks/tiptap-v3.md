@@ -92,7 +92,29 @@ Branch `feat/tiptap-v3`, stacked on `fix/deps-audit-markdown-it` (PR #158).
       whose document is identical, so the reload test drops a strikethrough mark the stored HTML
       cannot hold, which makes the reload change the document.
 
-- [ ] T8 Visual check by the user in `tauri dev` with `ENTROPIA_DEV_PROFILE`.
+- [x] T8 Visual check in the real app (done by the agent at the user's request, over CDP: debug
+      exe + worktree Vite in Lite, dev profile `manual`, Tiptap 3.32.0 confirmed in the served
+      prebundle). Route: inline (parent).
+
+      Writing: a v2-saved manuscript opens identical without a new revision; typing, Enter and the
+      `- ` list rule; underline and link from the toolbar (link mark has no `title`); list
+      Backspace/Delete at item edges join as on v2 (listKeymap off), Ctrl+Z restores; table 3x3
+      with header row, Tab between cells, exactly one trailing paragraph (cells have no `align`);
+      footnote reference + note text (`addFootnote` leaves the caret in place on 2.0.4 and 3.0.1
+      alike); A+/A- and palette text colour (textStyle keeps only fontSize/color); HTML paste from
+      the Windows clipboard (bold, link, list; off-palette colour dropped as before); PNG pasted
+      from the clipboard stored as `writing-images/...`, aligned left and drag-resized
+      (470x352 -> 320x240). Version restore adds one revision (the restore) and stays stable for
+      37 s; restoring the pre-restore snapshot brings back text, footnote, table, image and
+      citation.
+
+      Notes: formatted note with real keys, pasted link (`target`/`rel` kept, no `title`), stored
+      HTML has no trailing empty paragraph; editing a v2-saved note loads it inline and saves.
+
+      Found while testing, pre-existing on Tiptap 2.27 too (A/B against main): saving an inline
+      note edit while its editor still has focus throws Svelte `state_unsafe_mutation` from
+      `NoteEditor` `onBlur` during unmount. Fixed by deferring the blur state write
+      (`queueMicrotask`); replay went from 1 error per save to 0 over 3 saves, all persisted.
 
 ## Acceptance
 
