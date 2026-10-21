@@ -50,7 +50,7 @@
     "docx": "9.9.0",
     "drizzle-orm": "^0.45.2",
     "leaflet": "catalog:",
-    "markdown-it": "^14.3.1",
+    "markdown-it": "^14.3.3",
     "pdfjs-dist": "^4",
     "pdfmake": "^0.3.11",
     "tiptap-footnotes": "^2.0.4"
