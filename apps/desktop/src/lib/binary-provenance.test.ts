@@ -86,9 +86,9 @@ function buildTgz(root: string, payload: Buffer): string {
   const staging = join(root, 'staging')
   mkdirSync(join(staging, 'bin'), { recursive: true })
   writeFileSync(join(staging, 'bin', 'x.dll'), payload)
-  const archive = join(root, 'x.tgz')
-  execFileSync('tar', ['-czf', archive, '-C', staging, 'bin/x.dll'])
-  return archive
+  // Relative paths: Git Bash's GNU tar reads `C:\...` as a remote host.
+  execFileSync('tar', ['-czf', 'x.tgz', '-C', 'staging', 'bin/x.dll'], { cwd: root })
+  return join(root, 'x.tgz')
 }
 
 function upstreamEntry(
