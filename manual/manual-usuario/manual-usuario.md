@@ -173,7 +173,7 @@ Si no hay resultados, comprobá que el texto esté guardado y usá **Análisis �
 
 ### 1.11. Trabajar con varias pantallas
 
-![Captura de Vista dividida: Inicio a la izquierda y Consulta DB a la derecha, con dos pestañas de trabajo visibles.](images/EntropIA-Dividida.webp)
+![Captura de Vista dividida: Consulta DB a la izquierda e Inicio a la derecha, cada panel con su propia pestaña.](images/EntropIA-Dividida.webp)
 
 Podés tener hasta **4 pestañas**. Cada una recuerda su propio recorrido: **← Volver** en una no cambia las demás.
 
@@ -346,6 +346,8 @@ La cabecera resume documentos, tipos de archivo y resultados como **OCR**, **STT
 ### 4.8. Navegar la web y guardar fuentes
 
 El **Navegador** abre páginas web dentro de EntropIA y guarda lo que encontrás como **fuentes web** con su procedencia: dirección original y final, fecha y hora de consulta (UTC) y huella SHA-256. Abrilo con el botón **Navegador** de la barra superior.
+
+![Captura del Navegador: una solapa abierta, los botones Atrás, Adelante, Recargar y de guardado junto a la barra Dirección, y la página web debajo.](images/EntropIA-Navegador.webp)
 
 1. Escribí una dirección en **Dirección** y presioná Enter. **Atrás**, **Adelante** y **Recargar** funcionan como en cualquier navegador. Podés tener hasta 4 solapas; el botón **+** abre una nueva y cada solapa tiene su botón para cerrarla.
 2. Para guardar lo que estás leyendo, pulsá **Capturar página** o, con texto marcado en la página, **Capturar selección**. Aparece un borrador con el texto, la dirección final y la huella; revisalo y pulsá **Guardar**, o **Descartar** si no lo querés.
@@ -616,7 +618,7 @@ También podés seleccionar una frase del manuscrito y usar **Guardar la selecci
 
 ### 10.1. Crear una investigación
 
-![Captura de Investigar: investigaciones anteriores a la izquierda y formulario Nueva investigación con Alcance de colecciones a la derecha.](images/EntropIA-Agente.webp)
+![Captura de Investigar: investigaciones anteriores a la izquierda y formulario Nueva investigación con Modelo, Buscar en y Alcance de colecciones a la derecha.](images/EntropIA-Agente.webp)
 
 1. En la barra superior, abrí **Agente de investigación**; la página se titula **Investigar**.
 2. En **Nueva investigación**, escribí una pregunta concreta y, si querés, un título.
@@ -642,7 +644,7 @@ En Lite, **Investigar** necesita Internet y OpenRouter; el respaldo de Vercel no
 
 ### 10.3. Leer y comprobar el informe
 
-![Captura de un informe de Investigación: cobertura por colección, advertencia sobre sus límites y una fuente abierta a la derecha.](images/EntropIA-Investigacion.webp)
+![Captura de un informe de Investigación: cobertura por colección, advertencia sobre sus límites, encuadre acordado y una fuente abierta a la derecha con el pasaje citado.](images/EntropIA-Investigacion.webp)
 
 El informe puede incluir el planteo, cobertura por colección, hallazgos, limitaciones y **Fuentes citadas**. Revisá los avisos de fuentes sin texto o cobertura insuficiente.
 
@@ -860,7 +862,7 @@ Ninguna de estas herramientas sustituye la comprobación de la fuente.
 
 ### 13.1. Preguntar sobre tus documentos en el Chat
 
-![Captura del Chat de investigación: pregunta, respuesta con referencias numeradas, Fuentes, historial de Conversaciones y acceso Profundizar con el Agente.](images/EntropIA-Chat-RAG.webp)
+![Captura del Chat de investigación: pregunta, respuesta con referencias numeradas, Fuentes, historial de Conversaciones, selector Buscar en y acceso Profundizar con el Agente.](images/EntropIA-Chat-RAG.webp)
 
 1. Abrí **Chat de investigación** desde la barra superior.
 2. En **Buscar en**, elegí **Corpus** (tus colecciones, la opción inicial), **Biblioteca** (las obras de Zotero sincronizadas, ver [12.4](#biblioteca)) o **Ambos**. Con Biblioteca, el menú **Bibliotecas de Zotero** permite elegir cuáles usar; debajo se indica cuántas obras y pasajes tiene cada una.
@@ -990,7 +992,7 @@ Si necesitás otra capacidad, abrí **Solicitar cambio de plan**, elegí un plan
 <a id="capitulo-16-configuracion-y-herramientas-generales"></a>
 ## Capítulo 16. Configuración y herramientas generales
 
-![Captura de Configuración en Lite: OpenRouter, AssemblyAI y GLM-OCR, sus pruebas de conexión y las pestañas de preferencias, incluida Apariencia. Los campos muestran claves ocultas.](images/EntropIA-Configuracion.webp)
+![Captura de Configuración en Lite: OpenRouter con su prueba de conexión, el respaldo Vercel AI Gateway, AssemblyAI y las pestañas de preferencias, incluida Apariencia. Los campos muestran claves ocultas.](images/EntropIA-Configuracion.webp)
 
 Abrí **Configuración** con el botón de engranaje de la barra superior. En Lite aparecen estas pestañas:
 
