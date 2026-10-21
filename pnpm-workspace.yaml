@@ -8,21 +8,18 @@ onlyBuiltDependencies:
 # redeclares them so Vite prebundles a single copy from the app's resolution
 # root; see apps/desktop/vite.config.ts). Change them here, once.
 catalog:
-  '@tiptap/core': ^2.26.4
-  '@tiptap/extension-document': ^2.26.4
-  '@tiptap/extension-gapcursor': ^2.26.4
-  '@tiptap/extension-highlight': ^2.26.4
-  '@tiptap/extension-link': ^2.27.3
-  '@tiptap/extension-placeholder': ^2.26.4
-  '@tiptap/extension-subscript': ^2.26.4
-  '@tiptap/extension-superscript': ^2.26.4
-  '@tiptap/extension-table': ^2.26.4
-  '@tiptap/extension-table-cell': ^2.26.4
-  '@tiptap/extension-table-header': ^2.26.4
-  '@tiptap/extension-table-row': ^2.26.4
-  '@tiptap/extension-text-align': ^2.26.4
-  '@tiptap/extension-text-style': ^2.27.3
-  '@tiptap/extension-underline': ^2.26.4
-  '@tiptap/pm': ^2.26.4
-  '@tiptap/starter-kit': ^2.26.4
+  '@tiptap/core': ^3.32.0
+  '@tiptap/extension-document': ^3.32.0
+  '@tiptap/extension-gapcursor': ^3.32.0
+  '@tiptap/extension-highlight': ^3.32.0
+  '@tiptap/extension-link': ^3.32.0
+  '@tiptap/extension-placeholder': ^3.32.0
+  '@tiptap/extension-subscript': ^3.32.0
+  '@tiptap/extension-superscript': ^3.32.0
+  '@tiptap/extension-table': ^3.32.0
+  '@tiptap/extension-text-align': ^3.32.0
+  '@tiptap/extension-text-style': ^3.32.0
+  '@tiptap/extension-underline': ^3.32.0
+  '@tiptap/pm': ^3.32.0
+  '@tiptap/starter-kit': ^3.32.0
   'leaflet': ^1.9.4

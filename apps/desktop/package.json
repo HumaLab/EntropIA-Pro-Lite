@@ -39,9 +39,6 @@
     "@tiptap/extension-subscript": "catalog:",
     "@tiptap/extension-superscript": "catalog:",
     "@tiptap/extension-table": "catalog:",
-    "@tiptap/extension-table-cell": "catalog:",
-    "@tiptap/extension-table-header": "catalog:",
-    "@tiptap/extension-table-row": "catalog:",
     "@tiptap/extension-text-align": "catalog:",
     "@tiptap/extension-text-style": "catalog:",
     "@tiptap/extension-underline": "catalog:",
@@ -53,7 +50,7 @@
     "markdown-it": "^14.3.3",
     "pdfjs-dist": "^4",
     "pdfmake": "^0.3.11",
-    "tiptap-footnotes": "^2.0.4"
+    "tiptap-footnotes": "^3.0.1"
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",

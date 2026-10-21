@@ -3,15 +3,12 @@
   import { portal } from '../Portal/portal'
   import { onDestroy, onMount, tick } from 'svelte'
   import { Editor } from '@tiptap/core'
-  import StarterKit from '@tiptap/starter-kit'
-  import Underline from '@tiptap/extension-underline'
-  import Link from '@tiptap/extension-link'
-  import Placeholder from '@tiptap/extension-placeholder'
   import ActionIcon from '../Button/ActionIcon.svelte'
   import type { ActionIconName } from '../Button/ActionIcon.types'
 
   import type { NoteEditorLabels, NoteEditorProps } from './NoteEditor.types'
   import { createDictation } from '../Dictation/dictation.svelte'
+  import { createNoteExtensions } from './note-extensions'
   import {
     normalizeNoteContentForEditor,
     normalizeNoteContentForRender,
@@ -249,21 +246,7 @@
 
     const instance = new Editor({
       element: editorElement,
-      extensions: [
-        StarterKit.configure({
-          heading: { levels: [1, 2, 3] },
-        }),
-        Underline,
-        Link.configure({
-          openOnClick: false,
-          autolink: false,
-          HTMLAttributes: {
-            rel: 'noopener noreferrer nofollow',
-            target: '_blank',
-          },
-        }),
-        Placeholder.configure({ placeholder }),
-      ],
+      extensions: createNoteExtensions(placeholder),
       content: currentHtml,
       autofocus: false,
       editorProps: {
@@ -289,8 +272,13 @@
         bumpEditorRevision()
       },
       onBlur: () => {
-        isFocused = false
-        bumpEditorRevision()
+        // Unmounting a focused editor (a save that removes the edit view
+        // without a prior click) blurs it while Svelte is still rendering;
+        // writing $state there throws state_unsafe_mutation. Defer it.
+        queueMicrotask(() => {
+          isFocused = false
+          bumpEditorRevision()
+        })
       },
     })
 
@@ -404,7 +392,7 @@
   }
 
   function clearEditor() {
-    editor?.commands.setContent('<p></p>', false)
+    editor?.commands.setContent('<p></p>', { emitUpdate: false })
     currentHtml = '<p></p>'
     originalHtml = '<p></p>'
     lastExternalHtml = normalizeNoteContentForEditor(content)
@@ -429,7 +417,7 @@
       originalHtml = html
       lastExternalHtml = html
       currentHtml = html || '<p></p>'
-      editor.commands.setContent(html, false)
+      editor.commands.setContent(html, { emitUpdate: false })
       editor.commands.focus('end')
       bumpEditorRevision()
     } catch {
@@ -470,7 +458,7 @@
     const nextEditorHtml = normalizeNoteContentForRender(normalizedExternal)
 
     if (currentEditorHtml !== nextEditorHtml) {
-      editor.commands.setContent(normalizedExternal, false)
+      editor.commands.setContent(normalizedExternal, { emitUpdate: false })
       bumpEditorRevision()
     }
   })

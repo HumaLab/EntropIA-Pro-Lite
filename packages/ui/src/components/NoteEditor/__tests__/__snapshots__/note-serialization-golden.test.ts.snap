@@ -1,0 +1,21 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`stored note HTML (golden) > stores empty as recorded 1`] = `""`;
+
+exports[`stored note HTML (golden) > stores endsInCode as recorded 1`] = `"<p>antes</p><pre><code>const x = 1</code></pre>"`;
+
+exports[`stored note HTML (golden) > stores endsInList as recorded 1`] = `"<p>antes</p><ul><li><p>último</p></li></ul>"`;
+
+exports[`stored note HTML (golden) > stores endsInQuote as recorded 1`] = `"<p>antes</p><blockquote><p>cita final</p></blockquote>"`;
+
+exports[`stored note HTML (golden) > stores hardBreak as recorded 1`] = `"<p>línea<br>otra</p>"`;
+
+exports[`stored note HTML (golden) > stores headings as recorded 1`] = `"<h1>Uno</h1><h2>Dos</h2><h3>Tres</h3><p>cuerpo</p>"`;
+
+exports[`stored note HTML (golden) > stores links as recorded 1`] = `"<p><a href="https://example.com/a?b=1" target="_blank" rel="noopener noreferrer nofollow">https</a> <a href="http://example.com/" target="_blank" rel="noopener noreferrer nofollow">http</a> <a href="mailto:a@b.c" target="_blank" rel="noopener noreferrer nofollow">mail</a> <a href="tel:+541100" target="_blank" rel="noopener noreferrer nofollow">tel</a> <a href="#ancla" target="_blank" rel="noopener noreferrer nofollow">ancla</a> <a href="https://example.com/" target="_blank" rel="noopener noreferrer nofollow">sin esquema</a> script</p>"`;
+
+exports[`stored note HTML (golden) > stores lists as recorded 1`] = `"<ul><li><p>uno</p></li><li><p>dos</p></li></ul><ol><li><p>tres</p></li></ol>"`;
+
+exports[`stored note HTML (golden) > stores marks as recorded 1`] = `"<p><strong>negrita</strong> <em>itálica</em> <u>subrayado</u> <code>código</code> tachado</p>"`;
+
+exports[`stored note HTML (golden) > stores plainLegacyText as recorded 1`] = `"<p>Primera línea<br>segunda línea</p><p>Otro párrafo</p>"`;

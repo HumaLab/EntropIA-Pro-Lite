@@ -1,5 +1,5 @@
 import { Extension, type CommandProps } from '@tiptap/core'
-import TextStyle from '@tiptap/extension-text-style'
+import { TextStyle } from '@tiptap/extension-text-style'
 import type { Mark, MarkType } from '@tiptap/pm/model'
 import { readTextColor } from './writing-colors'
 
@@ -62,16 +62,18 @@ export function stepFontSize(current: number, direction: 1 | -1): number {
  * of the attributes reads: an em size, or a palette colour (text-color.ts).
  */
 export const WritingTextStyle = TextStyle.extend({
+  // Replaces stock TextStyle's rule whole, so its `mergeNestedSpanStyles`
+  // (on by default since Tiptap 3) never runs here: a nested span is read on
+  // its own, as it always has been, and a pasted outer size does not leak
+  // into an inner colour's mark.
   parseHTML() {
     return [
       {
         tag: 'span',
-        getAttrs: (node) => {
-          const element = node as HTMLElement
-          return parseFontSize(element.style.fontSize) === null && readTextColor(element) === null
+        getAttrs: (element: HTMLElement) =>
+          parseFontSize(element.style.fontSize) === null && readTextColor(element) === null
             ? false
-            : {}
-        },
+            : {},
       },
     ]
   },
@@ -79,7 +81,9 @@ export const WritingTextStyle = TextStyle.extend({
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
-    fontSize: {
+    // Not `fontSize`: Tiptap 3's text-style package declares that key for its
+    // own free-value FontSize, which this editor does not use.
+    writingFontSize: {
       /** Every text run in the selection one step up the scale. */
       increaseFontSize: () => ReturnType
       /** Every text run in the selection one step down the scale. */
