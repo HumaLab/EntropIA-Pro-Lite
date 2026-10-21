@@ -64,7 +64,14 @@ Branch `feat/tiptap-v3`, stacked on `fix/deps-audit-markdown-it` (PR #158).
       TableCell/TableHeader add `align` (both stripped: an older build's `validateCanonical`, via
       ProseMirror `Node.check()`, refuses unknown attributes), `tiptap-footnotes@3` makes footnote `id`/`data-id` required (defaults restored to
       null: stored footnotes without them must still open). insertContent suites green unchanged.
-- [ ] T7 Vite optimizeDeps + AGENTS.md; full lint/typecheck (Pro and Lite)/test/format/audit.
+- [x] T7 Vite optimizeDeps + AGENTS.md; full lint/typecheck (Pro and Lite)/test/format/audit.
+      Route: delegated writer. `@tiptap/extension-table-row/-cell/-header` dropped from the catalog,
+      both manifests and `optimizeDeps.include` (v3 ships all four in `@tiptap/extension-table`,
+      now the only import). Nothing new needs an include entry: `@tiptap/extensions`,
+      `@tiptap/extension-list*` arrive inside the prebundled StarterKit / placeholder /
+      tiptap-footnotes chunks. `vite optimize --force` (no Tauri): one chunk holds
+      prosemirror-state, one each for listItem / placeholder / gapcursor. AGENTS.md
+      "Dependencies" gains the golden-test rule for future upgrades.
 - [ ] T8 Visual check by the user in `tauri dev` with `ENTROPIA_DEV_PROFILE`.
 
 ## Acceptance
@@ -83,3 +90,7 @@ T8 is the user's (Tauri native window).
 - 2026-10-21: impact map done (explorer). Feature doc created.
 - 2026-10-21: T2-T4, T6 on Tiptap 3.32.0 (commit 0e2bb552): ui test 876/876, ui typecheck 0/0, desktop test
   3741 passed / 9 skipped, desktop typecheck 0/0, lint clean, format:check clean.
+- 2026-10-21: T5 commit 98c5c0fd. T7 final checks: ui test 876/876, ui typecheck 0/0, desktop test
+  3741 passed / 9 skipped, desktop typecheck Pro 0/0 and Lite (`VITE_LOCAL_ML=0`) 0/0, lint 3/3,
+  format:check clean, `pnpm audit` "No known vulnerabilities found", `pnpm why prosemirror-state`
+  only 1.4.4. Next: T8, the user's visual check in `tauri dev` with `ENTROPIA_DEV_PROFILE`.
