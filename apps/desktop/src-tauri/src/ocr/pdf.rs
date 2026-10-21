@@ -47,7 +47,7 @@
 #[cfg(feature = "local-ml")]
 use crate::runtime::{managed_resource_path, RuntimeManager};
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
-use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
+use imageproc::geometric_transformations::{rotate_about_center, Border, Interpolation};
 use lopdf::{dictionary, Dictionary, Document, Object, ObjectId};
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
@@ -2282,7 +2282,7 @@ fn rotate_pdf_edit_image(image: DynamicImage, degrees: f32) -> Result<RgbaImage,
         &canvas,
         radians,
         Interpolation::Bilinear,
-        background,
+        Border::Constant(background),
     ))
 }
 
