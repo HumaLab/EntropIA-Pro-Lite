@@ -241,8 +241,8 @@ importers:
         specifier: ^0.3.11
         version: 0.3.11
       tiptap-footnotes:
-        specifier: ^2.0.4
-        version: 2.0.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2)
+        specifier: ^3.0.1
+        version: 3.0.1(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2)
     devDependencies:
       '@entropia/config-ts':
         specifier: workspace:*
@@ -374,8 +374,8 @@ importers:
         specifier: ^4
         version: 4.10.38
       tiptap-footnotes:
-        specifier: ^2.0.4
-        version: 2.0.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2)
+        specifier: ^3.0.1
+        version: 3.0.1(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2)
     devDependencies:
       '@entropia/config-ts':
         specifier: workspace:*
@@ -2661,13 +2661,13 @@ packages:
     resolution: {integrity: sha512-LgO3D9yZJjApUiuUfl9iFAwrtaX4+lok3wJIqttGoKCHlWUqHqbQpnxCf82L8FjgKsh4iGo78hqJwgL8F6To2A==}
     engines: {node: '>=14.0.0'}
 
-  tiptap-footnotes@2.0.4:
-    resolution: {integrity: sha512-noQ233UiPoC8VL5uxVrLvVW0ccCtyLDgpsgXdqYDRNxAZ1lOsUgAZBxu5qEjUexXAdzn1xM+dQrVYgPq3dz66A==}
+  tiptap-footnotes@3.0.1:
+    resolution: {integrity: sha512-JeQav5spy5/gEDHnwbkJrzPB46Lvn9SxefhKCcQKsUopzzqYtjaA2oTO+QxVixRJ88wLAa5KexaCIzvY6hMiSQ==}
     peerDependencies:
-      '@tiptap/core': ^2.4.0
-      '@tiptap/extension-list-item': ^2.4.0
-      '@tiptap/extension-ordered-list': ^2.4.0
-      '@tiptap/pm': ^2.4.0
+      '@tiptap/core': ^3.0.0
+      '@tiptap/extension-list-item': ^3.0.0
+      '@tiptap/extension-ordered-list': ^3.0.0
+      '@tiptap/pm': ^3.0.0
 
   tldts-core@6.1.86:
     resolution: {integrity: sha512-Je6p7pkk+KMzMv2XXKmAE3McmolOQFdxkKw0R8EYNr7sELW46JqnNeTX8ybPiQgvg1ymCoF8LXs5fzFaZvJPTA==}
@@ -2737,10 +2737,6 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
-
-  uuid@11.1.1:
-    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
-    hasBin: true
 
   vite@6.4.4:
     resolution: {integrity: sha512-xGjU/SyjeNyb0E4KxXBvYz/1C+3JXuujvf2hXNOtnlcE+58o5ajd9N2/n2VhkiJvpCP2qQasnUpx5PXNeI+p1Q==}
@@ -5016,13 +5012,12 @@ snapshots:
 
   tinyrainbow@3.2.0: {}
 
-  tiptap-footnotes@2.0.4(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2):
+  tiptap-footnotes@3.0.1(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-list-item@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/extension-ordered-list@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2)))(@tiptap/pm@2.27.2):
     dependencies:
       '@tiptap/core': 2.27.2(@tiptap/pm@2.27.2)
       '@tiptap/extension-list-item': 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-ordered-list': 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/pm': 2.27.2
-      uuid: 11.1.1
 
   tldts-core@6.1.86: {}
 
@@ -5093,8 +5088,6 @@ snapshots:
       punycode: 2.3.1
 
   util-deprecate@1.0.2: {}
-
-  uuid@11.1.1: {}
 
   vite@6.4.4(@types/node@25.6.0)(jiti@2.7.0)(lightningcss@1.32.0):
     dependencies:
