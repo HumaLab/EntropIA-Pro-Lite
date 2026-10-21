@@ -63,26 +63,34 @@ use std::sync::{Mutex, OnceLock};
 /// - `None` = not yet initialized (fall back to CWD + system library)
 static PDFIUM_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
+/// Set by the first successful bind in this process, to the resolved path it
+/// used (`None`: working directory or system library). pdfium-render 0.9
+/// keeps that library for the life of the process, so it is never cleared.
+static PDFIUM_BOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
+
 thread_local! {
-    /// How many live Pdfium instances THIS thread holds right now. The
-    /// `thread_safe` bindings hold one global, non-reentrant lock from bind to
-    /// drop, so the batch lifecycle asserts on this: at most one instance at a
-    /// time on the reading thread, and none alive while the selective OCR pass
-    /// binds its own. The counter is thread-scoped on purpose (JD6-A-007): a
-    /// concurrently running test binding its own instance must not move the
-    /// assertions of another. Instances are created and dropped on the same
-    /// thread (they hold the global lock across their whole life).
+    /// How many live Pdfium instances THIS thread holds right now. The batch
+    /// lifecycle asserts on this: at most one instance at a time on the
+    /// reading thread, and none alive while the selective OCR pass acquires
+    /// its own, so every loaded document is released before the next stage.
+    /// (pdfium-render 0.9's `thread_safe` bindings lock per call, not per
+    /// instance, so an overlap would no longer deadlock; the discipline still
+    /// bounds what stays loaded.) The counter is thread-scoped on purpose
+    /// (JD6-A-007): a concurrently running test acquiring its own instance
+    /// must not move the assertions of another.
     static PDFIUM_INSTANCES_ALIVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Successful binds on this thread — the seam that proves PDFium was
-    /// actually used instead of silently falling back to lopdf (JD6-A-006).
+    /// Successful Pdfium acquisitions on this thread (the first bind in the
+    /// process or an instance over the bound library) — the seam that proves
+    /// PDFium was actually used instead of silently falling back to lopdf
+    /// (JD6-A-006).
     static PDFIUM_BIND_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Page numbers this thread asked PDFium to read text from. A page the
     /// bomb-safe bound already refused must never appear here (JD6-A-004).
     static PDFIUM_TEXT_PAGES_REQUESTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// One bound Pdfium, counted while alive. Derefs to [`Pdfium`]; the counter
-/// drops when the instance (and the library lock it holds) goes.
+/// One Pdfium instance, counted while alive. Derefs to [`Pdfium`]; the
+/// counter drops when the instance goes.
 pub(crate) struct GuardedPdfium {
     inner: Pdfium,
 }
@@ -116,8 +124,9 @@ pub(crate) fn pdfium_instances_alive() -> usize {
     PDFIUM_INSTANCES_ALIVE.with(std::cell::Cell::get)
 }
 
-/// Successful binds on this thread (JD6-A-006): before/after deltas prove a
-/// test exercised the real library instead of the lopdf fallback.
+/// Successful Pdfium acquisitions on this thread (JD6-A-006): before/after
+/// deltas prove a test exercised the real library instead of the lopdf
+/// fallback.
 pub(crate) fn pdfium_bind_count() -> u64 {
     PDFIUM_BIND_COUNT.with(std::cell::Cell::get)
 }
@@ -136,10 +145,9 @@ pub(crate) fn pdfium_loads() -> bool {
 
 /// One batch of per-page texts (1-based page numbers) through ONE Pdfium
 /// instance: `None` marks the pages Pdfium itself could not read (the caller
-/// falls back to lopdf for those). The instance — and the global lock it
-/// holds — is released before this returns, so a long read neither
-/// monopolizes the lock nor survives into `maybe_ocr_pages`, whose page
-/// renders bind their own instance (the lock is not reentrant).
+/// falls back to lopdf for those). The instance and its document are
+/// released before this returns, so a long read never survives into
+/// `maybe_ocr_pages`, whose page renders acquire their own instance.
 pub(crate) const PDFIUM_TEXT_BATCH_PAGES: usize = 20;
 
 pub(crate) fn read_pdfium_page_texts(
@@ -155,23 +163,36 @@ pub(crate) fn read_pdfium_page_texts(
     let mut out = Vec::with_capacity(page_numbers.len());
     for &number in page_numbers {
         let index = number.saturating_sub(1);
-        let text = if index > u32::from(u16::MAX) {
-            None
-        } else {
-            match pages.get(PdfPageIndex::from(index as u16)) {
+        let text = match PdfPageIndex::try_from(index) {
+            Err(_) => None,
+            Ok(index) => match pages.get(index) {
                 // `all()` clips to the page rect and silently drops text a
                 // producer placed outside it — lopdf reads that text, and the
                 // reader must never lose what the fallback finds. The full
                 // coordinate space keeps every character.
                 Ok(page) => page.text().ok().map(|text| text.inside_rect(PdfRect::MAX)),
                 Err(_) => None,
-            }
+            },
         };
         out.push((number, text));
     }
     drop(document);
     drop(pdfium);
     Ok(out)
+}
+
+/// A Pdfium page count as `usize`. pdfium-render 0.9 reports counts as a C
+/// `int`; Pdfium never returns a negative one, and reading it as zero pages
+/// keeps every caller's bounds check honest if it ever did.
+pub(crate) fn pdfium_page_count(count: PdfPageIndex) -> usize {
+    usize::try_from(count).unwrap_or(0)
+}
+
+/// A 0-based page index Pdfium can address (a C `int` since pdfium-render
+/// 0.9), or an error instead of a silently wrapped index.
+pub(crate) fn pdfium_page_index(index: usize) -> Result<PdfPageIndex, String> {
+    PdfPageIndex::try_from(index)
+        .map_err(|_| format!("Page index {index} is beyond what Pdfium can address"))
 }
 
 /// GLM-OCR rejects page images larger than 10 decimal megabytes.
@@ -188,13 +209,13 @@ struct PdfiumPageSource<'a> {
 
 impl RenderedPageSource for PdfiumPageSource<'_> {
     fn page_count(&mut self) -> Result<usize, String> {
-        Ok(self.pages.len().into())
+        Ok(pdfium_page_count(self.pages.len()))
     }
 
     fn render_page(&mut self, index: usize) -> Result<Vec<u8>, String> {
         let page = self
             .pages
-            .get(PdfPageIndex::from(index as u16))
+            .get(pdfium_page_index(index)?)
             .map_err(|e| format!("Failed to get page {index} from PDF: {e}"))?;
 
         render_pdf_page(&page, index)
@@ -756,9 +777,23 @@ fn get_pdfium() -> Result<GuardedPdfium, String> {
         .and_then(|cache| cache.lock().ok().and_then(|path| path.clone()));
     let attempted_resolved_path = cached_path.clone();
 
+    // pdfium-render 0.9 binds ONE library per process: `Pdfium::new` stores
+    // the bindings in a process-wide cell and never unloads them, and every
+    // later `bind_to_*` answers `PdfiumLibraryBindingsAlreadyInitialized`
+    // without loading anything. Once bound, hand out instances over it.
+    if PDFIUM_BOUND.get().is_some() {
+        return Ok(acquired(reuse_bound_pdfium(cached_path.as_deref())));
+    }
+
     let bindings = match cached_path.as_ref() {
         // Initialized with a resolved DLL path — try that first, then system library
         Some(path) => Pdfium::bind_to_library(path).or_else(|path_err| {
+            if matches!(
+                path_err,
+                PdfiumError::PdfiumLibraryBindingsAlreadyInitialized
+            ) {
+                return Err(path_err);
+            }
             log::warn!(
                 target: "pdf",
                 "Failed to load pdfium from resolved path ({}): {path_err} — trying system library",
@@ -770,7 +805,18 @@ fn get_pdfium() -> Result<GuardedPdfium, String> {
         None if PDFIUM_PATH.get().is_some() => Pdfium::bind_to_system_library(),
         // Not initialized — fall back to CWD + system library (original pdfium-render behavior)
         None => Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
-            .or_else(|_| Pdfium::bind_to_system_library()),
+            .or_else(|cwd_err| match cwd_err {
+                PdfiumError::PdfiumLibraryBindingsAlreadyInitialized => Err(cwd_err),
+                _ => Pdfium::bind_to_system_library(),
+            }),
+    };
+    let bindings = match bindings {
+        // Bound meanwhile (another thread, or a caller outside this module):
+        // the library in the cell is the one every instance uses.
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+            return Ok(acquired(reuse_bound_pdfium(cached_path.as_deref())));
+        }
+        other => other,
     }
     .map_err(|e| {
         let resolved_path_note = attempted_resolved_path
@@ -798,8 +844,43 @@ fn get_pdfium() -> Result<GuardedPdfium, String> {
         )
     })?;
 
+    // Only a successful bind is remembered: a failed one leaves the cell
+    // empty, so a later call retries with whatever path is resolved by then.
+    let pdfium = Pdfium::new(bindings);
+    let source = cached_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "the working directory or the system library".to_string());
+    if PDFIUM_BOUND.set(cached_path.clone()).is_ok() {
+        log::info!(target: "pdf", "Pdfium bound for this process from {source}");
+    }
+    Ok(acquired(pdfium))
+}
+
+/// Counts one successful acquisition on this thread and wraps it.
+fn acquired(pdfium: Pdfium) -> GuardedPdfium {
     PDFIUM_BIND_COUNT.with(|count| count.set(count.get() + 1));
-    Ok(GuardedPdfium::new(Pdfium::new(bindings)))
+    GuardedPdfium::new(pdfium)
+}
+
+/// A [`Pdfium`] over the library already bound in this process. Only call it
+/// once the bindings exist: `Pdfium::default()` first asks `bind_to_library`
+/// for `./`, which answers `PdfiumLibraryBindingsAlreadyInitialized` before
+/// loading anything, and its handler for that error is the crate's only
+/// public way to build an instance over the existing bindings
+/// (pdfium-render 0.9.4, `src/pdfium.rs`, `impl Default for Pdfium`).
+fn reuse_bound_pdfium(resolved_now: Option<&Path>) -> Pdfium {
+    if let (Some(Some(bound)), Some(now)) = (PDFIUM_BOUND.get(), resolved_now) {
+        if bound != now {
+            log::debug!(
+                target: "pdf",
+                "Pdfium stays bound to {} for this process; {} is not loaded",
+                bound.display(),
+                now.display()
+            );
+        }
+    }
+    Pdfium::default()
 }
 
 /// Returns the platform-specific Pdfium library filename for error messages.
@@ -2416,14 +2497,14 @@ pub fn edit_pdf_page_to_single_page_bytes(
             .load_pdf_from_byte_slice(bytes, None)
             .map_err(|e| format!("Failed to load PDF for editing: {e}"))?;
         let pages = document.pages();
-        let page_count: usize = pages.len().into();
+        let page_count = pdfium_page_count(pages.len());
         if page_index >= page_count {
             return Err(format!(
                 "Page index {page_index} out of bounds (PDF has {page_count} pages)"
             ));
         }
         let page = pages
-            .get(PdfPageIndex::from(page_index as u16))
+            .get(pdfium_page_index(page_index)?)
             .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
         let rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let (page_width, page_height) = match rotation {
@@ -2539,7 +2620,7 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
         .map_err(|e| format!("Failed to load PDF: {e}"))?;
 
     let pages = document.pages();
-    let page_count: usize = pages.len().into();
+    let page_count = pdfium_page_count(pages.len());
 
     if page_index >= page_count {
         return Err(format!(
@@ -2547,7 +2628,7 @@ pub fn render_pdf_page_to_image(bytes: &[u8], page_index: usize) -> Result<Vec<u
         ));
     }
 
-    let page_idx: PdfPageIndex = PdfPageIndex::from(page_index as u16);
+    let page_idx = pdfium_page_index(page_index)?;
     let page = pages
         .get(page_idx)
         .map_err(|e| format!("Failed to get page {page_index} from PDF: {e}"))?;
@@ -2596,7 +2677,9 @@ fn render_pdf_page_image(
         .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render PDF page {page_index}: {e}"))?;
 
-    Ok(bitmap.as_image())
+    bitmap
+        .as_image()
+        .map_err(|e| format!("Failed to convert rendered PDF page {page_index} to an image: {e}"))
 }
 
 fn encode_png_with_max_size(image: &DynamicImage, max_size: usize) -> Result<Vec<u8>, String> {
@@ -2650,7 +2733,7 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let page = pages
-        .get(PdfPageIndex::from(0u16))
+        .get(0)
         .map_err(|e| format!("Failed to get first page from PDF: {e}"))?;
 
     let render_config = PdfRenderConfig::new()
@@ -2661,7 +2744,9 @@ pub fn render_pdf_thumbnail(bytes: &[u8]) -> Result<Vec<u8>, String> {
         .render_with_config(&render_config)
         .map_err(|e| format!("Failed to render PDF thumbnail: {e}"))?;
 
-    let dynamic_image = bitmap.as_image();
+    let dynamic_image = bitmap
+        .as_image()
+        .map_err(|e| format!("Failed to convert PDF thumbnail to an image: {e}"))?;
 
     let mut png_bytes = Vec::new();
     dynamic_image
@@ -3503,7 +3588,9 @@ mod tests {
             // Re-rendering the derived page for OCR must never lose resolution:
             // at the 2550px target the render is >= the crop's native pixels and
             // preserves the derived page's aspect ratio.
-            let pdfium = Pdfium::new(Pdfium::bind_to_library(&dll).expect("bind pdfium"));
+            // Through `get_pdfium`: pdfium-render 0.9 binds one library per
+            // process, and another test may have bound it already.
+            let pdfium = get_pdfium().expect("acquire pdfium");
             let crop_doc = pdfium
                 .load_pdf_from_byte_slice(&cropped_bytes, None)
                 .expect("load cropped");
@@ -4246,12 +4333,40 @@ mod tests {
     /// Loads the real library a bundle ships and renders a page with it. Opt-in:
     /// CI points `ENTROPIA_PDFIUM_PROBE_LIB` at the pinned download
     /// (apps/desktop/scripts/fetch-pdfium.sh) on every platform it bundles for.
+    ///
+    /// pdfium-render 0.9 binds one library per process, and an earlier test in
+    /// this process may already have bound another copy; the probe therefore
+    /// reruns itself in a fresh test process, where its bind is the first.
     #[test]
     fn pinned_pdfium_library_renders_a_pdf_page() {
+        const CHILD_MARKER: &str = "ENTROPIA_PDFIUM_PROBE_CHILD";
         let Ok(lib) = std::env::var("ENTROPIA_PDFIUM_PROBE_LIB") else {
             println!("ENTROPIA_PDFIUM_PROBE_LIB unset; skipping");
             return;
         };
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().expect("test exe"))
+                .args([
+                    "ocr::pdf::tests::pinned_pdfium_library_renders_a_pdf_page",
+                    "--exact",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_MARKER, "1")
+                .output()
+                .expect("rerun the probe in a fresh process");
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "pinned Pdfium probe failed in its own process
+stdout:
+{stdout}
+stderr:
+{stderr}"
+            );
+            return;
+        }
         let bindings = Pdfium::bind_to_library(&lib).expect("bind pinned pdfium");
         let pdfium = Pdfium::new(bindings);
         let mut document = pdfium.create_new_pdf().expect("new pdf");
