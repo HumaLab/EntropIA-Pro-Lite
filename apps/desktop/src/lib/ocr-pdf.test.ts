@@ -1,7 +1,59 @@
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Content, ContentImage, ContentUnorderedList } from 'pdfmake/interfaces'
 
 import { buildOcrPdfDefinition, generateNativeOcrPdfBytes } from './ocr-pdf'
+
+// pdfmake inflates a PNG's alpha channel through fflate's async API, which
+// runs its code in a Worker built from a blob URL. WebView2 has Worker (the
+// CSP allows `worker-src blob:`); happy-dom does not, so this runs that
+// script in-process instead.
+const workerScripts = new Map<string, Blob>()
+
+type MessageHandler = (event: { data: unknown }) => void
+
+class InlineWorker {
+  onmessage: MessageHandler | null = null
+  onerror: ((event: unknown) => void) | null = null
+  private readonly deliver: Promise<(data: unknown) => void>
+
+  constructor(url: string) {
+    const script = workerScripts.get(String(url))
+    if (!script) throw new Error(`No blob registered for worker ${String(url)}`)
+    this.deliver = script.text().then((code) => {
+      const scope: Record<string, unknown> = {
+        postMessage: (data: unknown) => queueMicrotask(() => this.onmessage?.({ data })),
+        addEventListener: () => {},
+        onmessage: null,
+      }
+      scope.self = scope
+      // The script assigns `onmessage` and reads the fields it copies onto
+      // `self` as globals; `with` resolves both against the fake scope.
+      new Function('scope', `with (scope) { ${code} }`)(scope)
+      return (data) => (scope.onmessage as MessageHandler)({ data })
+    })
+  }
+
+  postMessage(data: unknown): void {
+    void this.deliver.then((send) => send(data))
+  }
+
+  terminate(): void {}
+}
+
+beforeAll(() => {
+  const createObjectURL = URL.createObjectURL.bind(URL)
+  vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+    const url = createObjectURL(blob)
+    if (blob instanceof Blob) workerScripts.set(url, blob)
+    return url
+  })
+  vi.stubGlobal('Worker', InlineWorker)
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 const ONE_PIXEL_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
