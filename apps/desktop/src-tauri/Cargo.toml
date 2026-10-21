@@ -82,7 +82,7 @@ hex = "0.4"
 ed25519-dalek = { version = "3", optional = true }
 # Audio preview decoding (prepare_audio_preview command): decode arbitrary
 # source audio to a PCM16 WAV the webview <audio> element can play.
-symphonia = { version = "0.5", features = ["all"] }
+symphonia = { version = "0.6", features = ["all"] }
 hound = "3"
 # Embeddings use a bundled local ONNX model via Rust ort. Transcription still
 # uses Python subprocess (scripts/transcribe.py) for faster-whisper isolation.
