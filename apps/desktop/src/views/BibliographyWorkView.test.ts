@@ -92,6 +92,7 @@ function backend(
     detailError?: boolean
     open?: Record<string, unknown> | ((attachmentKey: string) => Record<string, unknown>)
     reprocessPreview?: unknown
+    annotations?: unknown
   } = {}
 ) {
   mockInvoke.mockImplementation(async (command: string, payload?: unknown) => {
@@ -122,6 +123,24 @@ function backend(
         return undefined
       case 'bibliography_reprocess_confirm':
         return { batchId: 'batch-1', results: [] }
+      case 'bibliography_annotations_list': {
+        const parentKey = (payload as { parentKey: string }).parentKey
+        const list = (options.annotations ?? { status: 'ready', annotations: [] }) as {
+          status: string
+          annotations: { parentKey: string }[]
+        }
+        return {
+          status: list.status,
+          annotations: list.annotations.filter((view) => view.parentKey === parentKey),
+        }
+      }
+      case 'bibliography_annotations_sync':
+        return { status: 'synced', report: null }
+      case 'bibliography_annotations_update':
+      case 'bibliography_annotations_resolve':
+      case 'bibliography_annotations_restore':
+      case 'bibliography_annotations_delete':
+        return null
       default:
         throw new Error(`unexpected command ${command}`)
     }
@@ -198,7 +217,12 @@ describe('BibliographyWorkView', () => {
 
     const viewer = await screen.findByTestId('work-original-viewer')
     expect(viewer.classList.contains('work-viewer')).toBe(true)
-    expect(viewer.parentElement?.classList.contains('work-section--original')).toBe(true)
+    // The viewer shares the Original pane with the "Anotaciones" panel; the
+    // layout between them is itself the pane's flex child.
+    expect(viewer.parentElement?.classList.contains('work-original-layout')).toBe(true)
+    expect(viewer.parentElement?.parentElement?.classList.contains('work-section--original')).toBe(
+      true
+    )
     expect(viewer.closest('.work-view')).not.toBeNull()
     expect(viewer.querySelector('.document-viewer')).not.toBeNull()
   })
@@ -238,6 +262,8 @@ describe('BibliographyWorkView', () => {
     expect(rule('.work-section--original')).toMatch(/min-height: 0;/)
     expect(rule('.work-viewer')).toMatch(/flex: 1;/)
     expect(rule('.work-viewer')).toMatch(/min-height: 0;/)
+    expect(rule('.work-original-layout')).toMatch(/flex: 1;/)
+    expect(rule('.work-original-layout')).toMatch(/min-height: 0;/)
   })
 
   it('keeps the Original viewer mounted and does not reopen the PDF across tabs', async () => {
@@ -542,5 +568,133 @@ describe('BibliographyWorkView', () => {
 
     await screen.findByText('El oficio de historiador')
     expect(screen.queryByRole('button', { name: 'Reprocesar texto' })).toBeNull()
+  })
+
+  describe('annotations', () => {
+    function annotation(over: Record<string, unknown> = {}) {
+      return {
+        key: 'HIGH2345',
+        parentKey: 'ATT1',
+        data: {
+          key: 'HIGH2345',
+          annotationType: 'highlight',
+          annotationColor: '#ffd400',
+          annotationText: 'el oficio del historiador',
+          annotationComment: 'clave',
+          annotationPosition: '{"pageIndex":0,"rects":[[1,2,3,4]]}',
+        },
+        syncState: 'synced',
+        conflictFields: [],
+        conflictRemote: null,
+        remoteTrashed: false,
+        lastError: null,
+        updatedAt: 0,
+        ...over,
+      }
+    }
+
+    it('lists the open PDF annotations and pulls them from Zotero', async () => {
+      backend({ annotations: { status: 'ready', annotations: [annotation()] } })
+      render(BibliographyWorkView, { props })
+
+      const entry = await screen.findByTestId('annotation-entry')
+      expect(entry).toHaveTextContent('el oficio del historiador')
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_sync', {
+          libraryRowId: 'lib-row-1',
+          reason: 'open',
+        })
+      )
+      expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_list', {
+        libraryRowId: 'lib-row-1',
+        parentKey: 'ATT1',
+      })
+    })
+
+    it('saves an edited comment as the full desired object', async () => {
+      backend({ annotations: { status: 'ready', annotations: [annotation()] } })
+      render(BibliographyWorkView, { props })
+
+      const comment = await screen.findByRole('textbox', { name: 'Comentario de la anotación' })
+      await fireEvent.input(comment, { target: { value: 'nueva nota' } })
+      await fireEvent.blur(comment)
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_update', {
+          libraryRowId: 'lib-row-1',
+          key: 'HIGH2345',
+          data: expect.objectContaining({
+            annotationComment: 'nueva nota',
+            annotationText: 'el oficio del historiador',
+          }),
+        })
+      )
+    })
+
+    it('explains why nothing syncs without a Zotero key', async () => {
+      backend({ annotations: { status: 'no_key', annotations: [] } })
+      render(BibliographyWorkView, { props })
+
+      expect(
+        await screen.findByText(/guardá en Ajustes una clave de la Web API/)
+      ).toBeInTheDocument()
+    })
+
+    it('resolves a conflict only once every disputed entry has a decision', async () => {
+      backend({
+        annotations: {
+          status: 'ready',
+          annotations: [
+            annotation({
+              syncState: 'conflict',
+              conflictFields: ['annotationComment', '__existence'],
+              conflictRemote: { annotationComment: 'de Zotero', __existence: 'trashed' },
+            }),
+          ],
+        },
+      })
+      render(BibliographyWorkView, { props })
+
+      const conflict = await screen.findByTestId('annotation-conflict')
+      const apply = within(conflict).getByRole('button', { name: 'Aplicar' })
+      expect(apply).toBeDisabled()
+      await fireEvent.click(within(conflict).getByRole('button', { name: 'Usar Zotero' }))
+      expect(apply).toBeDisabled()
+      await fireEvent.click(within(conflict).getByRole('button', { name: 'Conservar la anotación' }))
+      await fireEvent.click(apply)
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_resolve', {
+          libraryRowId: 'lib-row-1',
+          key: 'HIGH2345',
+          decisions: { annotationComment: 'zotero', __existence: 'keep' },
+        })
+      )
+    })
+
+    it('keeps trashed annotations in a collapsed group with Restore', async () => {
+      backend({
+        annotations: {
+          status: 'ready',
+          annotations: [
+            annotation({
+              key: 'TRSH2345',
+              remoteTrashed: true,
+              data: { ...annotation().data, key: 'TRSH2345', deleted: 1 },
+            }),
+          ],
+        },
+      })
+      render(BibliographyWorkView, { props })
+
+      const toggle = await screen.findByRole('button', { name: /En la papelera de Zotero \(1\)/ })
+      expect(screen.queryByTestId('annotation-trashed')).not.toBeInTheDocument()
+      await fireEvent.click(toggle)
+      await fireEvent.click(screen.getByRole('button', { name: 'Restaurar' }))
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_restore', {
+          libraryRowId: 'lib-row-1',
+          key: 'TRSH2345',
+        })
+      )
+    })
   })
 })
