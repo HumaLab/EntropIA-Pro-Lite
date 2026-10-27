@@ -10,10 +10,12 @@ import {
 } from '../geometry'
 import {
   charsFromTextItems,
+  charsFromTextLayer,
   formatSortIndex,
   getClosestOffset,
   getSortIndex,
   getSortIndexRect,
+  rectsDist,
 } from '../sortIndex'
 import { TextLayerController } from '../textLayerController'
 import type { PdfRect } from '../types'
@@ -90,7 +92,7 @@ describe('coordinates', () => {
   })
 })
 
-describe('sort index', () => {
+describe('sort index (zotero/reader@0b16e731)', () => {
   const chars = charsFromTextItems([
     { str: 'Hello', transform: [10, 0, 0, 10, 100, 700], width: 50, height: 10 },
     { str: '   ', transform: [10, 0, 0, 10, 150, 700], width: 30, height: 10 },
@@ -104,22 +106,72 @@ describe('sort index', () => {
 
   it('formats page, offset and top with zero padding', () => {
     expect(formatSortIndex(3, 42, 101.9)).toBe('00003|000042|00101')
-    expect(formatSortIndex(0, 0, -4)).toBe('00000|000000|00000')
+  })
+
+  it('measures distance like rectsDist: corners by hypot, sides by gap, overlap 0', () => {
+    expect(rectsDist([0, 0, 10, 10], [13, 14, 20, 20])).toBe(5)
+    expect(rectsDist([0, 0, 10, 10], [15, 2, 20, 8])).toBe(5)
+    expect(rectsDist([0, 0, 10, 10], [5, 5, 20, 20])).toBe(0)
   })
 
   it('gives offset 0 for an annotation nearest the first character, and for an empty page', () => {
     expect(getClosestOffset(chars, [95, 700, 101, 710])).toBe(0)
-    expect(getSortIndex(0, chars, LETTER, { rects: [[95, 700, 101, 710]] })).toBe('00000|000000|00082')
-    expect(getSortIndex(2, [], LETTER, { rects: [[95, 700, 101, 710]] })).toBe('00002|000000|00082')
+    expect(getSortIndex(chars, LETTER, { pageIndex: 0, rects: [[95, 700, 101, 710]] })).toBe(
+      '00000|000000|00082'
+    )
+    expect(getSortIndex([], LETTER, { pageIndex: 2, rects: [[95, 700, 101, 710]] })).toBe(
+      '00002|000000|00082'
+    )
   })
 
   it('takes the closest character for notes and areas too', () => {
     const noteBesideWorld: PdfRect[] = [[155, 648, 177, 670]]
-    expect(getSortIndex(1, chars, LETTER, { rects: noteBesideWorld })).toBe('00001|000009|00122')
+    expect(getSortIndex(chars, LETTER, { pageIndex: 1, rects: noteBesideWorld })).toBe(
+      '00001|000009|00122'
+    )
+  })
+
+  it('measures top from the page height, so a CropBox origin does not shift it', () => {
+    const cropped = [36, 48, 576, 744]
+    expect(getSortIndex([], cropped, { pageIndex: 0, rects: [[100, 600, 120, 650]] })).toBe(
+      '00000|000000|00046'
+    )
+    expect(getSortIndex([], cropped, { pageIndex: 0, rects: [[100, 600, 120, 900]] })).toBe(
+      '00000|000000|00000'
+    )
+  })
+
+  it('picks the "top-most" rect by x2, exactly as the reader does', () => {
+    const rects: PdfRect[] = [
+      [10, 700, 50, 710],
+      [10, 680, 300, 690],
+    ]
+    expect(getSortIndexRect({ pageIndex: 0, rects })).toEqual([10, 680, 300, 690])
   })
 
   it('uses the bounds of ink strokes', () => {
-    expect(getSortIndexRect({ paths: [[10, 20, 30, 40], [5, 50]] })).toEqual([5, 20, 30, 50])
+    expect(getSortIndexRect({ pageIndex: 0, paths: [[10, 20, 30, 40], [5, 50]] })).toEqual([
+      5, 20, 30, 50,
+    ])
+  })
+
+  it('reads glyph boxes from a rendered text layer and gives up without layout', () => {
+    const container = document.createElement('div')
+    container.innerHTML = '<span>Ab</span>'
+    document.body.append(container)
+    const viewport = createMarkupViewport(LETTER, 1, 0)
+    expect(charsFromTextLayer(container, viewport)).toBeNull()
+    const spy = vi.spyOn(Range.prototype, 'getBoundingClientRect')
+    let call = 0
+    spy.mockImplementation(() => {
+      const left = 10 + 8 * call++
+      return { left, top: 100, width: 8, height: 12, right: left + 8, bottom: 112, x: left, y: 100, toJSON: () => ({}) } as DOMRect
+    })
+    const glyphs = charsFromTextLayer(container, viewport)
+    expect(glyphs).toHaveLength(2)
+    close(glyphs?.[1]?.rect ?? [], [18, 680, 26, 692])
+    spy.mockRestore()
+    container.remove()
   })
 })
 

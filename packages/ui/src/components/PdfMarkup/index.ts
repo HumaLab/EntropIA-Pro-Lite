@@ -34,11 +34,13 @@ export {
 export type { ViewportBox } from './geometry'
 export {
   charsFromTextItems,
+  charsFromTextLayer,
+  rectsDist,
   formatSortIndex,
   getClosestOffset,
   getSortIndex,
   getSortIndexRect,
 } from './sortIndex'
-export type { PageChar, TextItemLike } from './sortIndex'
+export type { PageChar, SortPosition, TextItemLike, ViewportToPdf } from './sortIndex'
 export { TextLayerController, sameTextLayerIdentity } from './textLayerController'
 export type { TextLayerHandle, TextLayerIdentity } from './textLayerController'

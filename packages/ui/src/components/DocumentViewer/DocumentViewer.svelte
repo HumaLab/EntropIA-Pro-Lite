@@ -15,7 +15,12 @@
     type MarkupViewport,
   } from '../PdfMarkup/types'
   import { TextLayerController } from '../PdfMarkup/textLayerController'
-  import { charsFromTextItems, getSortIndex, type PageChar } from '../PdfMarkup/sortIndex'
+  import {
+    charsFromTextItems,
+    charsFromTextLayer,
+    getSortIndex,
+    type PageChar,
+  } from '../PdfMarkup/sortIndex'
   import type { PdfMarkupDraft, PdfMarkupGeometryChange, PdfRect } from '../PdfMarkup/types'
   import type { PDFPageProxy } from 'pdfjs-dist'
 
@@ -159,8 +164,14 @@
   async function sortIndexFor(pageIndex: number, rects: PdfRect[]): Promise<string | undefined> {
     const viewport = markupViewport
     if (!viewport) return undefined
-    const chars = await pageChars(markupPageProxy)
-    return getSortIndex(pageIndex, chars, viewport.viewBox, { rects })
+    // The rendered text layer gives one box per glyph; the text items, split
+    // evenly, are the fallback when it is off or cannot be measured.
+    const fromLayer =
+      textSelection && textLayerContainer
+        ? charsFromTextLayer(textLayerContainer, viewport)
+        : null
+    const chars = fromLayer ?? (await pageChars(markupPageProxy))
+    return getSortIndex(chars, viewport.viewBox, { pageIndex, rects })
   }
 
   async function handleMarkupCreate(draft: PdfMarkupDraft) {
