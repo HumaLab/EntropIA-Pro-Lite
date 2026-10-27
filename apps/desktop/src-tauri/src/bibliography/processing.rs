@@ -3477,6 +3477,7 @@ impl BibliographyExtractExecutor {
             task,
             stop,
             bytes,
+            &source_hash,
             pages,
             native_blank,
             OcrPageSelection::Automatic,
@@ -3605,6 +3606,7 @@ impl BibliographyExtractExecutor {
             task,
             stop,
             &basis.bytes,
+            &source_sha256,
             pages,
             basis.native_blank,
             OcrPageSelection::Exactly(&plan.ocr_pages),
@@ -3638,6 +3640,16 @@ impl BibliographyExtractExecutor {
     /// answer and a DEFINITIVE failure verdict (JD8-A-002) — without
     /// re-sending content, and demand loss stops before
     /// the next provider call.
+    ///
+    /// Before a single provider request is planned, the derived cache is asked
+    /// for the candidate pages under the ORIGINAL file hash and the provider's
+    /// current OCR contract (§2.4). A hit is settled through
+    /// `settled_page_row` with the local native page, exactly as a paid answer
+    /// would be (L6: the cached text is the provider's raw answer), advances
+    /// the progress count like a re-walked checkpoint, and is never re-cached.
+    /// Only misses are planned and sent; the whole-PDF windows are cut at the
+    /// cached pages, so no range includes a page that was already paid for.
+    ///
     /// An empty OCR answer keeps the native row untouched — unless the
     /// native text is garbled raw glyph codes, which OCR owns: the page is
     /// then recorded empty and the codes are never kept. A non-empty
@@ -3652,6 +3664,7 @@ impl BibliographyExtractExecutor {
         task: &crate::processing::scheduler::ClaimedTask,
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
+        source_hash: &str,
         pages: Vec<ExtractPageText>,
         native_blank: bool,
         selection: OcrPageSelection<'_>,
@@ -3675,18 +3688,37 @@ impl BibliographyExtractExecutor {
         // the document is mostly scan: one request per window of pages, no
         // page rendering. A window the provider rejects (not a rate limit or
         // a credential problem) drops back to the per-page path below.
-        let needing = match &selection {
+        let candidates = match &selection {
             OcrPageSelection::Automatic => ocr_candidate_pages(&pages, native_blank),
             // 2.3 "El ejecutor no vuelve a elegir páginas": the approved plan
             // is the page list, without recomputation.
             OcrPageSelection::Exactly(list) => list.to_vec(),
         };
+        // §2.4: ask the cache BEFORE planning any provider request, so a
+        // cached page never becomes part of a window. The read never fails the
+        // pass: a missing table, an unreadable cache or an archive that cannot
+        // name an account simply yields no hits and the pass pays as before.
+        let cached_pages = read_cached_ocr_pages(
+            &ctx.db_path,
+            source_hash,
+            self.ocr_contract().as_deref(),
+            &candidates,
+        );
+        // A hit costs nothing and is not a miss: only misses are planned and
+        // sent. The progress total still counts every candidate, so a hit
+        // advances it exactly like a checkpoint re-walked after a restart.
+        let needing: Vec<i64> = candidates
+            .iter()
+            .copied()
+            .filter(|page| !cached_pages.contains_key(page))
+            .collect();
         // Honest page progress before the first provider call: the task row
         // reads 0 over the pages that need OCR, and every settled page — a
-        // cached checkpoint re-walked after a restart included — advances it.
-        // The count is rebuilt from the pages this pass settles, so it
-        // survives a restart exactly like the checkpoints beside it.
-        let pages_needed = needing.len() as i64;
+        // cached checkpoint re-walked after a restart or a cached answer
+        // replayed from another device included — advances it. The count is
+        // rebuilt from the pages this pass settles, so it survives a restart
+        // exactly like the checkpoints beside it.
+        let pages_needed = candidates.len() as i64;
         let mut landed: std::collections::HashSet<i64> = std::collections::HashSet::new();
         if pages_needed > 0 {
             record_page_progress(ctx, task, 0, pages_needed)?;
@@ -3698,8 +3730,11 @@ impl BibliographyExtractExecutor {
         let allow_windows = matches!(selection, OcrPageSelection::Automatic);
         if let Some(per_request) = provider.pdf_pages_per_request().filter(|_| allow_windows) {
             if crate::bibliography::selective_ocr::should_use_pdf_mode(needing.len(), pages.len()) {
+                let mut cached_numbers: Vec<i64> = cached_pages.keys().copied().collect();
+                cached_numbers.sort_unstable();
                 for (first, last) in crate::bibliography::selective_ocr::plan_pdf_windows(
                     &needing,
+                    &cached_numbers,
                     pages.len(),
                     per_request,
                 ) {
@@ -3757,6 +3792,25 @@ impl BibliographyExtractExecutor {
         let mut ocr_failed_pages: Vec<i64> = Vec::new();
         let mut ocr_outcomes: Vec<OcrPageAnswer> = Vec::new();
         for page in pages {
+            let page_number = page.page_number;
+            // §2.4: a page the effective account already paid for is settled
+            // from the cache exactly like a provider answer would be — the
+            // cache stores the provider's RAW answer, so `settled_page_row`
+            // runs on it with this device's own native page as the base (L6).
+            // It counts in the progress it was always going to show, and it is
+            // never re-cached: no new local row, no rewritten account row.
+            if let Some(cached) = cached_pages.get(&page_number) {
+                // A replayed cached answer IS an OCR answer for this page:
+                // another device paid for it. The receipt must say so exactly
+                // as a paid answer does, or a blank scan settled from cache
+                // stays a reprocess candidate (`REASON_EMPTY_WITHOUT_OCR`)
+                // with an estimate for pages that were already answered.
+                ocr_attempted = true;
+                out.push(settled_page_row(page, cached.text.clone()));
+                landed.insert(page_number);
+                record_page_progress(ctx, task, landed.len() as i64, pages_needed)?;
+                continue;
+            }
             if !needing.contains(&page.page_number) {
                 out.push(page);
                 continue;
@@ -3764,7 +3818,6 @@ impl BibliographyExtractExecutor {
             // Whatever comes back — text, a blank answer, or a hard failure
             // keeping the native row — this page's fate is settled below, and
             // every settled page advances the progress count exactly once.
-            let page_number = page.page_number;
             let answer: Option<String> = match windowed.remove(&page_number) {
                 Some(text) => Some(text),
                 None => {
@@ -4164,6 +4217,41 @@ fn record_page_progress(
             Ok(())
         }
     }
+}
+
+/// The OCR answers this archive's effective account already paid for the
+/// candidate pages, read before any provider request is planned (§2.4).
+///
+/// Never fails the pass: a database that cannot be opened, a cache read that
+/// errors or an executor with no OCR contract simply yields no hits, and the
+/// pass then pays exactly as it did before. Cached pages are an optimization,
+/// never a condition of the paid extraction.
+fn read_cached_ocr_pages(
+    db_path: &std::path::Path,
+    source_hash: &str,
+    ocr_contract: Option<&str>,
+    pages: &[i64],
+) -> std::collections::HashMap<i64, crate::sync::derived::CachedOcrAnswer> {
+    let Some(contract) = ocr_contract
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return std::collections::HashMap::new();
+    };
+    if pages.is_empty() || source_hash.is_empty() {
+        return std::collections::HashMap::new();
+    }
+    let conn = match open_archive_connection(db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            log::warn!(
+                target: "bibliography",
+                "derived OCR cache read skipped: {error}"
+            );
+            return std::collections::HashMap::new();
+        }
+    };
+    crate::sync::derived::cached_ocr_pages(&conn, source_hash, contract, pages)
 }
 
 /// One OCR answer's place in the page layer: a non-empty answer replaces the

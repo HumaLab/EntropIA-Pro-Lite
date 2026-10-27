@@ -468,6 +468,123 @@ pub(crate) fn cached_vectors(
     hits
 }
 
+/// One cached OCR answer as the reading device replays it (§2.4): the
+/// provider's outcome and its RAW answer (L6). The reader converts it with
+/// `settled_page_row` against its own native page; a converted answer stored
+/// here would be converted a second time and publish different text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CachedOcrAnswer {
+    /// `text` or `empty` (`sync_derived_ocr_pages.outcome`).
+    pub outcome: String,
+    /// The provider's raw answer, `''` when `outcome = 'empty'`.
+    pub text: String,
+}
+
+/// The OCR pages the effective account already paid for, keyed by page number
+/// under one `(file, contract)` pair (§2.4). This is the read side of the OCR
+/// cache: the device that did not pay replays these through
+/// `settled_page_row` instead of calling the provider.
+///
+/// Only rows of [`effective_account`] answer — the session account or, without
+/// a session, the archive's bound account (§2.9). Rows of `''` and rows of any
+/// other account are inert, so a second device of the same account never pays
+/// twice (S3/S8) and a changed account never installs the previous one's OCR
+/// (S7/D6).
+///
+/// These rows arrive from the server too (T8), so they are untrusted input: an
+/// answer whose `text_hash` disagrees with its own text, an unknown outcome, or
+/// an `empty` outcome carrying text is unusable and skipped, never repaired. A
+/// read reports all of its skips in one summary line. A missing derived table,
+/// an unreadable row or an archive that cannot name an account yields no hits:
+/// the caller then pays as it did before, and the cache can never become a
+/// source of unknown or foreign OCR text.
+pub(crate) fn cached_ocr_pages(
+    conn: &Connection,
+    source_hash: &str,
+    ocr_contract: &str,
+    pages: &[i64],
+) -> HashMap<i64, CachedOcrAnswer> {
+    let mut hits = HashMap::new();
+    if pages.is_empty() || source_hash.is_empty() || ocr_contract.is_empty() {
+        return hits;
+    }
+    if !cache_tables_present(conn) {
+        return hits;
+    }
+    let Some(account) = effective_account(conn) else {
+        return hits;
+    };
+    let mut skipped_text_hash = 0_usize;
+    let mut skipped_outcome = 0_usize;
+    'batches: for batch in pages.chunks(READ_BATCH) {
+        let placeholders = vec!["?"; batch.len()].join(",");
+        let sql = format!(
+            "SELECT page_number, outcome, text_content, text_hash
+               FROM sync_derived_ocr_pages
+              WHERE account_id = ?1 AND source_hash = ?2 AND ocr_contract = ?3
+                AND page_number IN ({placeholders})"
+        );
+        let mut statement = match conn.prepare(&sql) {
+            Ok(statement) => statement,
+            Err(error) => {
+                log::warn!(target: "sync", "derived OCR cache read skipped: {error}");
+                break 'batches;
+            }
+        };
+        let parameters = params_from_iter(
+            std::iter::once(account.clone())
+                .chain(std::iter::once(source_hash.to_string()))
+                .chain(std::iter::once(ocr_contract.to_string()))
+                .chain(batch.iter().map(|page| page.to_string())),
+        );
+        let rows = match statement.query_map(parameters, |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        }) {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!(target: "sync", "derived OCR cache read skipped: {error}");
+                break 'batches;
+            }
+        };
+        for row in rows {
+            let (page_number, outcome, text, text_hash) = match row {
+                Ok(row) => row,
+                Err(error) => {
+                    log::warn!(target: "sync", "derived OCR page row skipped: {error}");
+                    continue;
+                }
+            };
+            if text_hash != sha256_hex(text.as_bytes()) {
+                skipped_text_hash += 1;
+                continue;
+            }
+            match outcome.as_str() {
+                "text" => {}
+                "empty" if text.is_empty() => {}
+                _ => {
+                    skipped_outcome += 1;
+                    continue;
+                }
+            }
+            hits.insert(page_number, CachedOcrAnswer { outcome, text });
+        }
+    }
+    let skipped = skipped_text_hash + skipped_outcome;
+    if skipped > 0 {
+        log::warn!(
+            target: "sync",
+            "skipped {skipped} derived OCR page row(s) under contract {}: {skipped_text_hash} whose text_hash disagrees with the answer, {skipped_outcome} with an unusable outcome",
+            ocr_contract.chars().take(12).collect::<String>()
+        );
+    }
+    hits
+}
+
 /// Records one paid OCR answer — including an empty one — from the transaction
 /// that publishes its page (§2.3). A no-op on a connection without the derived
 /// tables.
@@ -1201,6 +1318,186 @@ mod tests {
         clear_sync_state(&conn).expect("logout");
         let offline = cached_vectors(&conn, CONTRACT, 1, &["a-input".to_string()]);
         assert_eq!(offline.get("a-input"), Some(&blob(1, 2)));
+    }
+
+    /// §2.4 read contract for OCR pages: only the effective account's own
+    /// rows, only under the asked file hash and contract, and only rows that
+    /// agree with themselves (`text_hash` matches the answer; `empty` carries
+    /// no text). A missing table or an archive that cannot name an account
+    /// reads nothing.
+    #[test]
+    fn cached_ocr_pages_only_reads_usable_rows_of_the_effective_account() {
+        // No derived tables at all (an archive whose bootstrap never ran).
+        let bare = Connection::open_in_memory().expect("bare db");
+        assert!(
+            cached_ocr_pages(&bare, SOURCE_HASH, OCR_CONTRACT, &[1]).is_empty(),
+            "a missing cache reads as an empty cache"
+        );
+
+        let conn = new_synced_test_db();
+        // Written before the archive's first binding: inert until adopted.
+        insert_ocr_page(
+            &conn,
+            "",
+            SOURCE_HASH,
+            1,
+            OCR_CONTRACT,
+            "text",
+            "sin cuenta",
+            "local",
+        )
+        .expect("unbound page");
+        assert!(
+            cached_ocr_pages(&conn, SOURCE_HASH, OCR_CONTRACT, &[1]).is_empty(),
+            "an archive that names no account reads nothing"
+        );
+
+        login(&conn, ACCOUNT_A);
+        insert_ocr_page(
+            &conn,
+            ACCOUNT_A,
+            SOURCE_HASH,
+            2,
+            OCR_CONTRACT,
+            "text",
+            "page two",
+            "local",
+        )
+        .expect("account page");
+        insert_ocr_page(
+            &conn,
+            ACCOUNT_A,
+            SOURCE_HASH,
+            3,
+            OCR_CONTRACT,
+            "empty",
+            "",
+            "remote",
+        )
+        .expect("paid empty page");
+        insert_ocr_page(
+            &conn,
+            ACCOUNT_B,
+            SOURCE_HASH,
+            4,
+            OCR_CONTRACT,
+            "text",
+            "otra cuenta",
+            "remote",
+        )
+        .expect("other account page");
+        insert_ocr_page(
+            &conn,
+            ACCOUNT_A,
+            "another-source",
+            5,
+            OCR_CONTRACT,
+            "text",
+            "otro archivo",
+            "remote",
+        )
+        .expect("other file page");
+        insert_ocr_page(
+            &conn,
+            ACCOUNT_A,
+            SOURCE_HASH,
+            6,
+            "other-contract",
+            "text",
+            "otro contrato",
+            "remote",
+        )
+        .expect("other contract page");
+        // Damaged rows a foreign archive or the server could hold: the answer
+        // and its hash disagree, or an `empty` outcome carries text.
+        conn.execute(
+            "INSERT INTO sync_derived_ocr_pages
+               (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+                text_hash, origin, pushed, created_at)
+             VALUES (?1, ?2, 7, ?3, 'text', 'texto que no coincide', ?4, 'remote', 1, 1)",
+            params![
+                ACCOUNT_A,
+                SOURCE_HASH,
+                OCR_CONTRACT,
+                sha256_hex(b"otro texto")
+            ],
+        )
+        .expect("corrupted page");
+        conn.execute(
+            "INSERT INTO sync_derived_ocr_pages
+               (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+                text_hash, origin, pushed, created_at)
+             VALUES (?1, ?2, 8, ?3, 'empty', 'texto filtrado', ?4, 'remote', 1, 1)",
+            params![
+                ACCOUNT_A,
+                SOURCE_HASH,
+                OCR_CONTRACT,
+                sha256_hex(b"texto filtrado")
+            ],
+        )
+        .expect("inconsistent empty page");
+
+        let asked = [1_i64, 2, 3, 4, 5, 6, 7, 8, 9];
+        let hits = cached_ocr_pages(&conn, SOURCE_HASH, OCR_CONTRACT, &asked);
+        assert_eq!(
+            hits.len(),
+            3,
+            "only the account's own usable rows: {hits:?}"
+        );
+        assert_eq!(
+            hits.get(&1),
+            Some(&CachedOcrAnswer {
+                outcome: "text".to_string(),
+                text: "sin cuenta".to_string(),
+            }),
+            "the adopted row belongs to the account now"
+        );
+        assert_eq!(
+            hits.get(&2),
+            Some(&CachedOcrAnswer {
+                outcome: "text".to_string(),
+                text: "page two".to_string(),
+            })
+        );
+        assert_eq!(
+            hits.get(&3),
+            Some(&CachedOcrAnswer {
+                outcome: "empty".to_string(),
+                text: String::new(),
+            }),
+            "a paid empty answer travels like any other"
+        );
+        assert!(!hits.contains_key(&4), "another account's page is inert");
+        assert!(!hits.contains_key(&5), "another file never answers");
+        assert!(!hits.contains_key(&6), "another contract never answers");
+        assert!(!hits.contains_key(&7), "a text_hash mismatch is unusable");
+        assert!(
+            !hits.contains_key(&8),
+            "an empty outcome carrying text is unusable"
+        );
+        assert!(!hits.contains_key(&9), "an absent page is a miss");
+
+        assert!(
+            cached_ocr_pages(&conn, SOURCE_HASH, OCR_CONTRACT, &[]).is_empty(),
+            "no pages, no read"
+        );
+        assert!(
+            cached_ocr_pages(&conn, "", OCR_CONTRACT, &asked).is_empty(),
+            "the file hash is the key: an empty one names nothing"
+        );
+        assert!(
+            cached_ocr_pages(&conn, SOURCE_HASH, "", &asked).is_empty(),
+            "the contract is the key too"
+        );
+
+        // Without a session the archive reads through its bound account, so
+        // the owner never pays twice for its own pages (§2.9, S8).
+        clear_sync_state(&conn).expect("logout");
+        let offline = cached_ocr_pages(&conn, SOURCE_HASH, OCR_CONTRACT, &[2]);
+        assert_eq!(
+            offline.get(&2).map(|answer| answer.text.as_str()),
+            Some("page two")
+        );
     }
 
     /// §2.2 DDL: the tables are in `SYNC_TABLES`, both carry `account_id` in the

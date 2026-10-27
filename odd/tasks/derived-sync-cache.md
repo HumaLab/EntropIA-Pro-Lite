@@ -44,7 +44,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T1 | Cache tables in `ensure_sync_schema` + account semantics (marks, `''` adoption, logout reset, effective account) | S2, S7, S8 | §2.2, §2.9, WU1 (account tests) | worker | c8f951bf |
 | T2 | Versioned OCR contract | S2 | D3, WU3 | worker | dde1d82a |
 | T3 | Write paid results to the cache in the same transaction (item, chunk, OCR outcomes incl. empty) | S3 | §2.3, WU1 | worker | ee754978 |
-| T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | — |
+| T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | 75223749 |
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | — |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | — |
 | T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | — |

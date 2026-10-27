@@ -15203,3 +15203,734 @@ fn local_chunk_reuse_still_skips_the_provider_with_an_empty_derived_cache() {
         "the re-profile republished the same vectors"
     );
 }
+
+// ── T5: read the OCR cache before paying (plan §2.4 / WU2) ─────────────────
+//
+// The paying device cached every answer under `(sha256 of the original file,
+// page, OCR contract)` (T3). The reading device replays its OWN native page
+// through `settled_page_row` with the RAW cached answer (L6), so it publishes
+// what paying would have published — and it plans its provider requests from
+// the misses only: a cached page is physically cut out of every whole-PDF
+// window (§2.4), because dropping it from `needing` alone would still ship it
+// inside the window that covers a pending page.
+
+/// The contract a provider's answers are cached under (D3).
+fn provider_contract(provider: &dyn PageOcrProvider) -> String {
+    entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        provider.name(),
+        provider.model_id(),
+    )
+}
+
+/// One answer another device of the account already paid for and pushed.
+fn seed_cached_ocr_page(
+    conn: &rusqlite::Connection,
+    account: &str,
+    source_hash: &str,
+    page_number: i64,
+    ocr_contract: &str,
+    outcome: &str,
+    text: &str,
+) {
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'remote', 1, 1)",
+        rusqlite::params![
+            account,
+            source_hash,
+            page_number,
+            ocr_contract,
+            outcome,
+            text,
+            sha256_hex(text.as_bytes())
+        ],
+    )
+    .expect("seed cached OCR page");
+}
+
+fn fixture_hash(dir: &tempfile::TempDir, name: &str) -> String {
+    sha256_hex(&std::fs::read(dir.path().join(name)).expect("read the fixture file"))
+}
+
+/// `(page, method, text_content, text_hash, text_chars, quality)` of every
+/// published page row, in page order.
+type PublishedPage = (i64, String, String, String, i64, String);
+
+fn published_pages(conn: &rusqlite::Connection, attachment_id: &str) -> Vec<PublishedPage> {
+    conn.prepare(
+        "SELECT page_number, method, text_content, text_hash, text_chars, quality
+           FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+    )
+    .expect("published pages query")
+    .query_map([attachment_id], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+        ))
+    })
+    .expect("published pages map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("published pages collect")
+}
+
+/// A provider that reads whole PDFs, logs every requested range, and can be
+/// tuned to the `pages_per_request` the window plan is asserted on.
+struct RangeRecordingProvider {
+    ranges: Mutex<Vec<(u32, u32)>>,
+    page_calls: Mutex<usize>,
+    pages_per_request: usize,
+}
+
+impl RangeRecordingProvider {
+    fn new(pages_per_request: usize) -> Arc<Self> {
+        Arc::new(Self {
+            ranges: Mutex::new(Vec::new()),
+            page_calls: Mutex::new(0),
+            pages_per_request,
+        })
+    }
+
+    fn answer(page: u32) -> String {
+        format!("Contenido reconocido de la pagina {page} del documento escaneado")
+    }
+}
+
+impl PageOcrProvider for RangeRecordingProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        *self.page_calls.lock().expect("page calls") += 1;
+        Ok("Texto reconocido por pagina de respaldo con longitud suficiente para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        Some(self.pages_per_request)
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.ranges
+            .lock()
+            .expect("ranges")
+            .push((first_page, last_page));
+        Ok((first_page..=last_page).map(Self::answer).collect())
+    }
+
+    fn name(&self) -> &str {
+        "range-recorder"
+    }
+}
+
+/// WU2 / S3: the same page an owner paid for is published on this device from
+/// the cached answer — same method, text and stamps as the paid run — with
+/// ZERO provider calls and nothing rendered. The hit is not re-cached as a new
+/// local row: it stays the remote row it came from.
+#[test]
+fn a_cached_ocr_answer_publishes_like_a_paid_run_without_a_provider_call() {
+    let answer = "Respuesta reconocida de la unica pagina";
+
+    // The baseline device pays for the answer.
+    let (paid_dir, mut paid) = migrated_db();
+    let (_library, paid_attachment) = seed_scanned_pdf(&paid_dir, &mut paid, 1);
+    admit_extract_demand(&paid, &paid_attachment);
+    let paid_renderer = fresh_renderer();
+    let paid_provider = FakeOcrProvider::with_text(answer);
+    let paid_outcome =
+        run_extract_with_provider(&paid_dir, &paid, &paid_renderer, paid_provider.clone());
+    assert!(
+        matches!(paid_outcome, RunOneOutcome::Succeeded { .. }),
+        "{paid_outcome:?}"
+    );
+    assert_eq!(
+        paid_provider.calls.lock().expect("calls").len(),
+        1,
+        "the baseline pays for its page"
+    );
+    let paid_pages = published_pages(&paid, &paid_attachment);
+
+    // The reading device replays the owner's answer.
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("esta respuesta no debe usarse");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        answer,
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "a cached page costs no provider call: {:?}",
+        provider.calls.lock().expect("calls")
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "a cached page is settled before any render"
+    );
+    let cached_pages = published_pages(&conn, &attachment_id);
+    assert_eq!(
+        cached_pages, paid_pages,
+        "a cached answer publishes exactly what paying publishes"
+    );
+    assert_eq!(
+        cached_pages[0].1, "ocr",
+        "a text answer is method `ocr` on both devices"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "the hit is not re-cached: {rows:?}");
+    assert_eq!(rows[0].origin, "remote", "the owner's row is left alone");
+    assert_eq!(rows[0].account, "account-a");
+}
+
+/// WU2: an EMPTY answer was paid for too. A hit replays through
+/// `settled_page_row` against the reading device's own native page, so the
+/// page keeps its native row — exactly what a paid empty answer leaves — and
+/// GLM-OCR is never asked again.
+#[test]
+fn a_cached_empty_ocr_answer_costs_nothing_and_keeps_the_native_page() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "CACHEMPTY1",
+        "Obra con respuesta vacia",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "vacia.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "CACHEMPTYATT1",
+        "linked_file",
+        Some(&path),
+        "vacia.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "vacia.pdf"),
+        1,
+        &contract,
+        "empty",
+        "",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "a cached empty answer is never re-sent to GLM-OCR"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "no page is rendered for a cached answer"
+    );
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(
+        method, "native",
+        "the native row is kept, as a paid empty answer"
+    );
+    assert!(text.contains("ok"), "native text survives: {text}");
+    assert_eq!(
+        derived_ocr_rows(&conn).len(),
+        1,
+        "the empty hit is not re-cached as a local row"
+    );
+}
+
+/// WU2 / D3: a page cached under another OCR contract is a different answer;
+/// it is never served and the provider answers under the current contract.
+#[test]
+fn a_cached_ocr_answer_under_another_contract_is_not_served() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta del contrato vigente");
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        "ocr-v1:other-provider:other-model:p1",
+        "text",
+        "Respuesta de otro contrato",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "another contract is a different key: the provider is called"
+    );
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(method, "ocr");
+    assert_eq!(text, "Respuesta del contrato vigente");
+}
+
+/// WU2 / §2.9 (D6): only the effective account's rows answer. The very same
+/// cache key exists under another account, so this is a real read: those rows
+/// are present and inert, and this account pays.
+#[test]
+fn another_accounts_cached_ocr_page_never_answers() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-b"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta pagada por la cuenta B");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        "Respuesta privada de la cuenta A",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "another account's row is inert: the provider is called"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta pagada por la cuenta B");
+    let rows = derived_ocr_rows(&conn);
+    let a_rows: Vec<&CachedOcrPage> = rows
+        .iter()
+        .filter(|row| row.account == "account-a")
+        .collect();
+    assert_eq!(
+        a_rows.len(),
+        1,
+        "reading never rewrites the other account's row"
+    );
+    assert_eq!(a_rows[0].text_content, "Respuesta privada de la cuenta A");
+}
+
+/// WU2 / §2.4: cached rows are untrusted input (they travel through the
+/// server). A row whose `text_hash` does not match its own text is unusable:
+/// it is skipped, logged once, never deleted, and the provider answers.
+#[test]
+fn a_corrupted_cached_ocr_row_is_ignored_and_the_provider_is_called() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta del proveedor vigente");
+    let contract = provider_contract(provider.as_ref());
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, 1, ?3, 'text', 'texto que no coincide con su hash',
+                 ?4, 'remote', 1, 1)",
+        rusqlite::params![
+            "account-a",
+            fixture_hash(&dir, "escaneado.pdf"),
+            contract,
+            sha256_hex(b"un hash de otro texto"),
+        ],
+    )
+    .expect("seed corrupted OCR row");
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "a corrupted row never answers: the provider is called"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta del proveedor vigente");
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the corrupted row is never repaired, and first writer wins: {rows:?}"
+    );
+    assert_eq!(rows[0].text_content, "texto que no coincide con su hash");
+    assert_eq!(rows[0].text_hash, sha256_hex(b"un hash de otro texto"));
+}
+
+/// S8: without a session, the archive's bound account still owns what it paid
+/// for, so replaying its cached OCR costs nothing.
+#[test]
+fn without_a_session_the_bound_accounts_cached_ocr_costs_nothing() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, None);
+    // The archive was bound to this account before the logout; the mark
+    // survives it (§2.9), and reading is never paying twice for it.
+    entropia_desktop_lib::sync::session::meta_set(&conn, "derived_bound_account", "account-a")
+        .expect("bound account mark");
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("respuesta no usada");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        "Respuesta pagada antes del logout",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "no session still means no OCR payment for the bound account's pages"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta pagada antes del logout");
+}
+
+/// What one ten-page scan run observed, for the window assertions.
+struct WindowScanRun {
+    ranges: Vec<(u32, u32)>,
+    page_calls: usize,
+    cached: Vec<(i64, String)>,
+    published: Vec<PublishedPage>,
+}
+
+/// A ten-page scanned PDF with `cached_pages` already paid for by the account
+/// and every other page missing, processed by a whole-document provider whose
+/// own limit (100) is wider than the document.
+fn run_ten_page_scan_with_cached_pages(cached_pages: &[i64]) -> WindowScanRun {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 10);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(100);
+    let contract = provider_contract(provider.as_ref());
+    let source_hash = fixture_hash(&dir, "escaneado.pdf");
+    let cached: Vec<(i64, String)> = cached_pages
+        .iter()
+        .map(|page| (*page, format!("Respuesta ya pagada de la pagina {page}")))
+        .collect();
+    for (page, answer) in &cached {
+        seed_cached_ocr_page(
+            &conn,
+            "account-a",
+            &source_hash,
+            *page,
+            &contract,
+            "text",
+            answer,
+        );
+    }
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "whole-document mode renders no page"
+    );
+    let ranges = provider.ranges.lock().expect("ranges").clone();
+    let page_calls = *provider.page_calls.lock().expect("page calls");
+    WindowScanRun {
+        ranges,
+        page_calls,
+        cached,
+        published: published_pages(&conn, &attachment_id),
+    }
+}
+
+/// WU2: no range sent to `recognize_pdf_pages` contains a cached page, the
+/// union of the ranges is exactly the miss set, and every page publishes what
+/// paying would have published.
+fn assert_ranges_cover_exactly_the_misses(run: &WindowScanRun, total_pages: i64) {
+    let cached: Vec<i64> = run.cached.iter().map(|(page, _)| *page).collect();
+    for (first, last) in &run.ranges {
+        for page in &cached {
+            assert!(
+                !(*page >= i64::from(*first) && *page <= i64::from(*last)),
+                "a whole-document range ({first}-{last}) contains cached page {page}"
+            );
+        }
+    }
+    let mut covered: Vec<i64> = run
+        .ranges
+        .iter()
+        .flat_map(|(first, last)| (*first..=*last).map(i64::from))
+        .collect();
+    covered.sort_unstable();
+    let mut misses: Vec<i64> = (1..=total_pages)
+        .filter(|page| !cached.contains(page))
+        .collect();
+    misses.sort_unstable();
+    assert_eq!(
+        covered, misses,
+        "the provider receives exactly the misses, each of them once"
+    );
+    assert_eq!(run.page_calls, 0, "window mode needs no per-page call");
+
+    assert_eq!(
+        run.published.len() as i64,
+        total_pages,
+        "every page is published"
+    );
+    for (page, method, text, _hash, _chars, _quality) in &run.published {
+        assert_eq!(method, "ocr", "page {page} publishes as OCR");
+        match run
+            .cached
+            .iter()
+            .find(|(cached_page, _)| cached_page == page)
+        {
+            Some((_, answer)) => assert_eq!(text, answer, "page {page} replays the cache"),
+            None => assert_eq!(
+                text,
+                &RangeRecordingProvider::answer(*page as u32),
+                "page {page} replays the provider answer"
+            ),
+        }
+    }
+}
+
+/// WU2: contiguous cached pages cut one clean window out of the document; the
+/// provider is asked only for the missing run, never for the whole file.
+#[test]
+fn contiguous_cached_pages_are_cut_out_of_the_whole_document_window() {
+    let cached = [1_i64, 2, 3, 4];
+    let run = run_ten_page_scan_with_cached_pages(&cached);
+    assert_eq!(
+        run.ranges,
+        vec![(5, 10)],
+        "the four cached pages are cut out of the single window"
+    );
+    assert_ranges_cover_exactly_the_misses(&run, 10);
+}
+
+/// WU2: alternating cached pages leave only the miss runs; a window never
+/// spans a cached page.
+#[test]
+fn alternating_cached_pages_leave_only_the_miss_runs_to_the_provider() {
+    let cached = [1_i64, 3, 5, 7];
+    let run = run_ten_page_scan_with_cached_pages(&cached);
+    assert_eq!(
+        run.ranges,
+        vec![(2, 2), (4, 4), (6, 6), (8, 10)],
+        "each miss run is its own request and none crosses a cached page"
+    );
+    assert_ranges_cover_exactly_the_misses(&run, 10);
+}
+
+/// PRESERVE: without a single cached page the window plan is exactly the one
+/// the executor produced before T5 — aligned from page 1 in
+/// `pages_per_request` windows, dropping windows with no pending page.
+#[test]
+fn an_empty_ocr_cache_keeps_the_same_whole_document_windows() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 5);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(2);
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.ranges.lock().expect("ranges").as_slice(),
+        &[(1, 2), (3, 4), (5, 5)],
+        "an empty cache changes nothing about the window plan"
+    );
+    assert_eq!(*provider.page_calls.lock().expect("page calls"), 0);
+}
+
+/// The task receipt of one attachment's extraction.
+fn extract_receipt(conn: &rusqlite::Connection, task_id: &str) -> serde_json::Value {
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("extract receipt");
+    serde_json::from_str(&receipt).expect("receipt JSON")
+}
+
+/// T5 review fix / §2.4: a replayed cached answer IS an OCR answer for that
+/// page — another device paid for it — so the receipt records
+/// `ocrAttempted: true` exactly like the run that paid. Without it a blank
+/// scan settled from the cache stays a reprocess candidate (with an estimated
+/// cost) even though every page was already answered.
+#[test]
+fn a_cached_empty_ocr_answer_marks_the_pass_as_ocr_attempted() {
+    // Baseline: the device that pays records the flag.
+    let (paid_dir, mut paid) = migrated_db();
+    let (_library, paid_attachment) = seed_scanned_pdf(&paid_dir, &mut paid, 1);
+    let paid_task = admit_extract_demand(&paid, &paid_attachment);
+    let paid_renderer = fresh_renderer();
+    let paid_provider = FakeOcrProvider::with_text("");
+    let paid_outcome =
+        run_extract_with_provider(&paid_dir, &paid, &paid_renderer, paid_provider.clone());
+    assert!(
+        matches!(paid_outcome, RunOneOutcome::Succeeded { .. }),
+        "{paid_outcome:?}"
+    );
+    assert_eq!(
+        paid_provider.calls.lock().expect("calls").len(),
+        1,
+        "the baseline pays for its blank page"
+    );
+    let paid_receipt = extract_receipt(&paid, &paid_task);
+    assert_eq!(
+        paid_receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "the paid run says OCR was attempted: {paid_receipt}"
+    );
+
+    // The reading device replays the paid empty answer.
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "empty",
+        "",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "the cached empty answer costs no provider call"
+    );
+    let receipt = extract_receipt(&conn, &task_id);
+    assert_eq!(
+        receipt["ocrAttempted"], paid_receipt["ocrAttempted"],
+        "a cached answer counts exactly like a paid one: {receipt}"
+    );
+    assert_eq!(
+        receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "{receipt}"
+    );
+}
+
+/// WU2 / §2.4: `should_use_pdf_mode` is decided on the MISS count. Six of ten
+/// pages cached leaves four misses, under half the document, so no
+/// whole-document request is made and per-page recognition touches only the
+/// four missing pages.
+#[test]
+fn fewer_misses_than_half_switch_to_per_page_recognition_only_for_the_misses() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 10);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(100);
+    let contract = provider_contract(provider.as_ref());
+    let source_hash = fixture_hash(&dir, "escaneado.pdf");
+    for page in 1_i64..=6 {
+        seed_cached_ocr_page(
+            &conn,
+            "account-a",
+            &source_hash,
+            page,
+            &contract,
+            "text",
+            &format!("Respuesta ya pagada de la pagina {page}"),
+        );
+    }
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.ranges.lock().expect("ranges").is_empty(),
+        "four misses of ten pages is under half: no whole-document request"
+    );
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[7, 8, 9, 10],
+        "per-page recognition touches only the four misses"
+    );
+    assert_eq!(
+        *provider.page_calls.lock().expect("page calls"),
+        4,
+        "one page call per miss"
+    );
+    for (page, method, text, _hash, _chars, _quality) in published_pages(&conn, &attachment_id) {
+        assert_eq!(method, "ocr", "page {page} publishes as OCR");
+        if page <= 6 {
+            assert_eq!(text, format!("Respuesta ya pagada de la pagina {page}"));
+        } else {
+            assert_eq!(
+                text,
+                "Texto reconocido por pagina de respaldo con longitud suficiente para ser rico"
+            );
+        }
+    }
+}
