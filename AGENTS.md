@@ -22,6 +22,7 @@
 - `tauri dev` opens the same archive as the installed app (`%APPDATA%\com.entropia.shared`) and finds its sync session in the OS keyring. A new migration applied there is irreversible, and one sync raises the account's `schema_tag` for every device.
 - Debug builds only: set `ENTROPIA_DEV_PROFILE=<name>` (`A-Z a-z 0-9 - _`, max 32) before `pnpm exec tauri dev`. Data goes to `<data>/com.entropia.shared/dev-profiles/<name>`, cache likewise under `%LOCALAPPDATA%`; sync is off (no engine, no keyring, sync commands answer `sync_disabled_in_dev_profile`). Release builds never read the variable. See `src-tauri/src/dev_profile.rs`.
 - Check the startup line first: `[setup] profile=dev:<name> data_dir=... sync=disabled`. If it says `profile=shared`, close the app.
+- The profile turns off EntropIA device sync only. Zotero Web API writers (Navegador's copy to Zotero, the Biblioteca annotations) still write to the real Zotero account: the API key comes from the shared OS keyring. The account id lives in the profile's archive, so verify the key once in the profile's Settings before annotations sync.
 - `tauri.conf.json` watches no sibling checkout: to hot-reload over a local `EntropIA-Agent` checkout, rerun dev with `pnpm exec tauri dev --config '{"build":{"additionalWatchFolders":["../../../../EntropIA-Agent/src"]}}'` (paths are relative to `apps/desktop/src-tauri`).
 
 ## Pro vs Lite variant rules
