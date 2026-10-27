@@ -5,6 +5,7 @@
   import {
     EXISTENCE_FIELD,
     existenceReason,
+    isInZoteroTrash,
     type AnnotationView,
     type ConflictDecision,
     type ZoteroAnnotationType,
@@ -28,6 +29,8 @@
     syncing?: boolean
     canSync?: boolean
     otherFormatCount?: number
+    /** False when the PDF is not on this device: comments stay editable. */
+    pdfAvailable?: boolean
     onSelect?: (key: string, page: number | null) => void
     onCommentChange?: (key: string, comment: string) => void
     onDelete?: (view: AnnotationView) => void
@@ -43,6 +46,7 @@
     syncing = false,
     canSync = true,
     otherFormatCount = 0,
+    pdfAvailable = true,
     onSelect = () => {},
     onCommentChange = () => {},
     onDelete = () => {},
@@ -54,13 +58,8 @@
   const currentLocale = locale
   const COMMENT_DEBOUNCE_MS = 600
 
-  function isTrashed(view: AnnotationView) {
-    const flag = view.data?.deleted
-    return flag === 1 || flag === true
-  }
-
-  const live = $derived(annotations.filter((view) => !isTrashed(view)).sort(compareViews))
-  const trashed = $derived(annotations.filter(isTrashed).sort(compareViews))
+  const live = $derived(annotations.filter((view) => !isInZoteroTrash(view)).sort(compareViews))
+  const trashed = $derived(annotations.filter(isInZoteroTrash).sort(compareViews))
 
   const groups = $derived.by(() => {
     const byPage = new Map<number | null, AnnotationView[]>()
@@ -216,6 +215,12 @@
       <ActionIcon name={syncing ? 'loader' : 'refresh'} size={14} />
     </IconButton>
   </header>
+
+  {#if !pdfAvailable}
+    <p class="annotations-panel__status" data-testid="annotations-pdf-unavailable">
+      {$currentLocale && t('bibliographyAnnotations.pdfUnavailable')}
+    </p>
+  {/if}
 
   {#if statusMessage}
     <p class="annotations-panel__status" role="status">{statusMessage}</p>

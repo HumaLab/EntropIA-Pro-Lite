@@ -179,8 +179,18 @@
   let destroyed = false
 
   /** The PDF attachment on screen, whose annotations the panel lists. */
+  /**
+   * The PDF attachment chosen, whose annotations the panel lists. Taken from
+   * the catalog, not from the opened file: without the PDF on this device the
+   * panel still lists them and comments stay editable (plan section 10).
+   */
   const annotatedKey = $derived(
-    opened?.originalKind === 'pdf' && opened.originalPath ? activeKey : null
+    currentAttachment && isPdfAttachment(currentAttachment.contentType, currentAttachment.filename)
+      ? activeKey
+      : null
+  )
+  const pdfOnDevice = $derived(
+    !openLoading && !openFailed && !opened?.openError && Boolean(opened?.originalPath)
   )
   const markups = $derived(
     annotationViews.map(viewToMarkup).filter((markup): markup is PdfMarkup => markup !== null)
@@ -319,6 +329,14 @@
     void mutate(() => resolveAnnotationConflict(libraryRowId, key, decisions))
   }
 
+  /** A swatch picked while an annotation is selected recolors it. */
+  function handleMarkupColorChange(color: string) {
+    const view = selectedMarkupId ? viewByKey(selectedMarkupId) : null
+    if (!view?.data || view.syncState === 'conflict' || view.data.annotationColor === color) return
+    const data = withField(view.data, 'annotationColor', color)
+    void mutate(() => updateAnnotation(libraryRowId, view.key, data))
+  }
+
   function handlePanelSelect(key: string, targetPage: number | null) {
     selectedMarkupId = key
     if (targetPage !== null) page = targetPage
@@ -446,6 +464,24 @@
   )
 </script>
 
+{#snippet annotationsPanel()}
+          <BibliographyAnnotationsPanel
+            annotations={annotationViews}
+            selectedKey={selectedMarkupId}
+            statusMessage={annotationStatusMessage}
+            {syncing}
+            canSync={annotationStatus === 'ready'}
+            {otherFormatCount}
+            onSelect={handlePanelSelect}
+            onCommentChange={handleCommentChange}
+            onDelete={requestDelete}
+            onRestore={handleRestore}
+            onResolve={handleResolve}
+            onSync={() => void runSync('edit')}
+            pdfAvailable={pdfOnDevice}
+          />
+{/snippet}
+
 <div class="work-view" class:work-view--fill={showsPdf}>
   {#if detailFailed}
     <div class="surface-message surface-message--center empty">
@@ -529,6 +565,9 @@
         <p class="surface-message surface-message--error" role="alert">
           {opened?.openError ?? t('bibliographyWork.error')}
         </p>
+        {#if annotatedKey}
+          {@render annotationsPanel()}
+        {/if}
       {:else if opened?.originalKind === 'pdf' && opened.originalPath}
         <div class="work-original-layout">
           <div class="work-viewer" data-testid="work-original-viewer">
@@ -550,26 +589,14 @@
               onMarkupChange={handleMarkupChange}
               onMarkupDelete={handleMarkupDelete}
               onMarkupSelect={(id) => (selectedMarkupId = id)}
+              onMarkupColorChange={handleMarkupColorChange}
               onPageChange={(next, count) => {
                 total = count
                 page = next
               }}
             />
           </div>
-          <BibliographyAnnotationsPanel
-            annotations={annotationViews}
-            selectedKey={selectedMarkupId}
-            statusMessage={annotationStatusMessage}
-            {syncing}
-            canSync={annotationStatus === 'ready'}
-            {otherFormatCount}
-            onSelect={handlePanelSelect}
-            onCommentChange={handleCommentChange}
-            onDelete={requestDelete}
-            onRestore={handleRestore}
-            onResolve={handleResolve}
-            onSync={() => void runSync('edit')}
-          />
+          {@render annotationsPanel()}
         </div>
         {#if total > 1}
           <div class="work-viewer-pager">

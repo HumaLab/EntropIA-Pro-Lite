@@ -696,5 +696,42 @@ describe('BibliographyWorkView', () => {
         })
       )
     })
+
+    it('still lists annotations and edits comments when the PDF is not on this device', async () => {
+      backend({
+        annotations: { status: 'ready', annotations: [annotation()] },
+        open: opened({ originalPath: null, openError: 'El archivo no está en este dispositivo.' }),
+      })
+      render(BibliographyWorkView, { props })
+
+      expect(await screen.findByTestId('annotations-pdf-unavailable')).toBeInTheDocument()
+      const comment = await screen.findByRole('textbox', { name: 'Comentario de la anotación' })
+      await fireEvent.input(comment, { target: { value: 'sin pdf' } })
+      await fireEvent.blur(comment)
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith(
+          'bibliography_annotations_update',
+          expect.objectContaining({ key: 'HIGH2345' })
+        )
+      )
+    })
+
+    it('recolors the selected annotation from the toolbar palette', async () => {
+      backend({ annotations: { status: 'ready', annotations: [annotation()] } })
+      render(BibliographyWorkView, { props })
+
+      const entry = await screen.findByTestId('annotation-entry')
+      await fireEvent.click(within(entry).getByText('el oficio del historiador'))
+      const toolbar = await screen.findByTestId('markup-toolbar')
+      await fireEvent.click(within(toolbar).getByRole('button', { name: 'Color #ff6666' }))
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_update', {
+          libraryRowId: 'lib-row-1',
+          key: 'HIGH2345',
+          data: expect.objectContaining({ annotationColor: '#ff6666' }),
+        })
+      )
+    })
   })
 })
+

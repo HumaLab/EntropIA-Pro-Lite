@@ -194,8 +194,30 @@ export function existenceReason(view: AnnotationView): ExistenceReason | null {
   return typeof reason === 'string' ? (reason as ExistenceReason) : null
 }
 
-/** A trashed annotation stays out of the viewer until restored (plan section 9). */
+/** `pending`, `waiting_parent` and `error` hold a local intent not yet sent. */
+function holdsLocalIntent(view: AnnotationView): boolean {
+  return view.syncState === 'pending' || view.syncState === 'waiting_parent' || view.syncState === 'error'
+}
+
+function markedDeleted(view: AnnotationView): boolean {
+  const flag = view.data?.deleted
+  return flag === 1 || flag === true
+}
+
+/**
+ * In Zotero's trash for the panel: the read-only group with Restore. A row in
+ * conflict stays out of it, since its decisions live in the list.
+ */
+export function isInZoteroTrash(view: AnnotationView): boolean {
+  if (view.syncState === 'conflict') return false
+  return markedDeleted(view) || (view.remoteTrashed && !holdsLocalIntent(view))
+}
+
+/**
+ * A trashed annotation stays out of the viewer until a restore is pending
+ * (plan section 9), conflicts included: keeping it is a decision in the panel.
+ */
 export function isVisibleInViewer(view: AnnotationView): boolean {
-  const trashed = view.data?.deleted
-  return !(trashed === 1 || trashed === true)
+  if (markedDeleted(view)) return false
+  return !view.remoteTrashed || holdsLocalIntent(view)
 }

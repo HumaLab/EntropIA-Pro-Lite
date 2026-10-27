@@ -4,6 +4,7 @@ import {
   createAnnotation,
   deleteAnnotation,
   existenceReason,
+  isInZoteroTrash,
   isVisibleInViewer,
   listAnnotations,
   parsePosition,
@@ -92,5 +93,28 @@ describe('bibliography-annotations', () => {
     expect(isVisibleInViewer(view({ data: { deleted: 1 } }))).toBe(false)
     expect(existenceReason(view({ conflictRemote: { __existence: 'trashed' } }))).toBe('trashed')
     expect(existenceReason(view())).toBeNull()
+  })
+
+  it('keeps a remotely trashed annotation hidden unless a restore is pending', () => {
+    const trashed = view({ remoteTrashed: true, data: { ...view().data, deleted: 1 } })
+    expect(isVisibleInViewer(trashed)).toBe(false)
+    expect(isInZoteroTrash(trashed)).toBe(true)
+
+    const restoring = view({
+      remoteTrashed: true,
+      syncState: 'pending',
+      data: { ...view().data, deleted: 0 },
+    })
+    expect(isVisibleInViewer(restoring)).toBe(true)
+    expect(isInZoteroTrash(restoring)).toBe(false)
+
+    const conflicted = view({
+      remoteTrashed: true,
+      syncState: 'conflict',
+      conflictFields: ['__existence'],
+      conflictRemote: { __existence: 'trashed' },
+    })
+    expect(isVisibleInViewer(conflicted)).toBe(false)
+    expect(isInZoteroTrash(conflicted)).toBe(false)
   })
 })
