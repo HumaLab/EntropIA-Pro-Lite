@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use entropia_desktop_lib::bibliography::derived_backfill::{run_backfill, BackfillStatus};
 use entropia_desktop_lib::processing::eligibility::{
     self, EmbeddingDecision, EmbeddingStaleReason,
 };
@@ -612,4 +613,117 @@ fn without_the_derived_tables_the_publish_is_unchanged() {
         )
         .expect("derived table count");
     assert_eq!(derived_tables, 0);
+}
+
+/// T7 (§2.3b, §2.8): an archive that already embedded a Collection before the
+/// channel existed exports its fragments and aggregate, and the keys it seeds are
+/// exactly the ones a paid run asked for — a device that only has the cache then
+/// finishes with zero `embed_text` calls.
+#[test]
+fn the_backfill_seeds_a_fresh_asset_so_a_fresh_device_pays_nothing() {
+    // The owner paid before the derived cache existed: publish with no tables.
+    let owner = archive(false);
+    let owner_conn = owner.conn();
+    admit_embedding(&owner_conn);
+    let owner_embedder = Arc::new(CountingEmbedder::default());
+    succeeded(&run_embedding(&owner, &owner_conn, owner_embedder.clone()));
+    let paid_calls = owner_embedder.calls();
+    let paid_rows = published(&owner_conn);
+    assert!(paid_calls.len() >= 2, "fragments plus the aggregate");
+
+    // The upgrade creates the tables; the owner's session seeds what it already
+    // paid for.
+    ensure_sync_schema(&owner_conn).expect("sync schema");
+    set_meta(&owner_conn, "account_id", "acct-A");
+    set_meta(&owner_conn, "derived_bound_account", "acct-A");
+    set_meta(&owner_conn, "derived_owner_account", "acct-A");
+    let report = run_backfill(&owner_conn);
+
+    assert_eq!(report.status, BackfillStatus::Completed);
+    assert_eq!(report.account.as_deref(), Some("acct-A"));
+    assert_eq!(
+        report.collection_assets, 1,
+        "the asset is Fresh under the effective contract"
+    );
+    assert_eq!(
+        report.collection_vectors,
+        paid_calls.len(),
+        "one fragment per paid chunk plus the aggregate"
+    );
+    assert_eq!(report.vectors, 0, "no bibliography vectors in this archive");
+    assert_eq!(report.failures, 0);
+    assert!(report.completed());
+
+    // The seeded keys are the exact ones the paid run hashed.
+    let mut seeded_keys: Vec<String> = cached_vectors(&owner_conn)
+        .into_iter()
+        .map(|(input_hash, _)| input_hash)
+        .collect();
+    let mut paid_keys: Vec<String> = paid_calls.iter().map(|text| sha256_hex(text)).collect();
+    seeded_keys.sort();
+    paid_keys.sort();
+    assert_eq!(seeded_keys, paid_keys);
+
+    // A fresh device of the same account: the catalog and the cache, no local
+    // chunk set. It owes the chunk set and pays nothing for it.
+    owner_conn
+        .execute("DELETE FROM rag_chunks", [])
+        .expect("fresh device has no local chunk set");
+    assert_eq!(
+        eligibility::embedding_decision(&owner_conn, ASSET).expect("decision"),
+        EmbeddingDecision::Eligible {
+            reason: EmbeddingStaleReason::IncompleteChunks
+        }
+    );
+    admit_embedding(&owner_conn);
+    let reader_embedder = Arc::new(CountingEmbedder::default());
+    succeeded(&run_embedding(&owner, &owner_conn, reader_embedder.clone()));
+    assert!(
+        reader_embedder.calls().is_empty(),
+        "the seeded cache must not call the provider: {:?}",
+        reader_embedder.calls()
+    );
+    assert_eq!(
+        published(&owner_conn),
+        paid_rows,
+        "the cached publish is byte-identical to the paid one"
+    );
+}
+
+/// T7 (§2.3b): only an asset the archive confirms `Fresh` under the current
+/// effective contract is seeded — anything else is a result a later run still has
+/// to compute.
+#[test]
+fn the_backfill_does_not_seed_an_asset_that_is_not_fresh() {
+    let owner = archive(false);
+    let owner_conn = owner.conn();
+    admit_embedding(&owner_conn);
+    succeeded(&run_embedding(
+        &owner,
+        &owner_conn,
+        Arc::new(CountingEmbedder::default()),
+    ));
+    // A chunk set that no longer covers its source: `IncompleteChunks`, not
+    // `Fresh`, so part of the work is still owed and must not be pretended.
+    owner_conn
+        .execute(
+            "DELETE FROM rag_chunks WHERE id = (SELECT id FROM rag_chunks WHERE asset_id = ?1 LIMIT 1)",
+            [ASSET],
+        )
+        .expect("drop one stored fragment");
+    assert!(matches!(
+        eligibility::embedding_decision(&owner_conn, ASSET).expect("decision"),
+        EmbeddingDecision::Eligible { .. }
+    ));
+
+    ensure_sync_schema(&owner_conn).expect("sync schema");
+    set_meta(&owner_conn, "account_id", "acct-A");
+    set_meta(&owner_conn, "derived_bound_account", "acct-A");
+    set_meta(&owner_conn, "derived_owner_account", "acct-A");
+    let report = run_backfill(&owner_conn);
+
+    assert_eq!(report.status, BackfillStatus::Completed);
+    assert_eq!(report.collection_assets, 0);
+    assert_eq!(report.collection_vectors, 0);
+    assert!(cached_vectors(&owner_conn).is_empty());
 }
