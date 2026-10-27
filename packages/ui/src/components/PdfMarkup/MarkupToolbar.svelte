@@ -66,7 +66,7 @@
       data-testid={`markup-tool-${name}`}
       onclick={() => onToolChange(name)}
     >
-      <ActionIcon name={ICONS[name]} size={16} />
+      <ActionIcon name={ICONS[name]} size={20} />
     </Button>
   {/each}
   <span class="markup-toolbar__divider" aria-hidden="true"></span>

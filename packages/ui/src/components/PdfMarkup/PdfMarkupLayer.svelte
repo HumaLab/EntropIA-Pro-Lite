@@ -457,7 +457,7 @@
         title={labels.popoverHighlight}
         onclick={() => createFromSelection('highlight', activePopoverColor)}
       >
-        <ActionIcon name="highlight" size={16} />
+        <ActionIcon name="highlight" size={20} />
       </Button>
       <Button
         variant="ghost"
@@ -467,7 +467,7 @@
         title={labels.popoverUnderline}
         onclick={() => createFromSelection('underline', activePopoverColor)}
       >
-        <ActionIcon name="underline" size={16} />
+        <ActionIcon name="underline" size={20} />
       </Button>
     </div>
   {/if}
@@ -507,6 +507,24 @@
 
   .pdf-markup-layer__text :global(::selection) {
     background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+
+  /* The parts of pdf.js 4.10 `pdf_viewer.css` the text layer relies on. */
+  .pdf-markup-layer__text :global(br::selection) {
+    background: transparent;
+  }
+
+  .pdf-markup-layer__text :global(span.markedContent) {
+    top: 0;
+    height: 0;
+  }
+
+  .pdf-markup-layer__text :global(.endOfContent) {
+    display: block;
+    position: absolute;
+    inset: 100% 0 0;
+    cursor: default;
+    user-select: none;
   }
 
   .pdf-markup-layer__overlay {
