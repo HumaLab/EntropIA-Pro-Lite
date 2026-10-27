@@ -10,6 +10,7 @@ pub mod attachment;
 pub mod chunks;
 pub mod commands;
 pub mod compose;
+pub mod derived_backfill;
 pub mod detail;
 pub mod eval;
 pub mod generation;
