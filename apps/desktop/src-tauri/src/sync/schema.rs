@@ -88,6 +88,46 @@ CREATE TABLE IF NOT EXISTS sync_blob_index (
   file_mtime_ms INTEGER NOT NULL,
   uploaded INTEGER NOT NULL DEFAULT 0
 );
+
+-- Derived cache of paid Bibliography results (plan-sync-bibliografia-derivada
+-- §2.2). Created here, next to the other `sync_*` tables, so the archive's
+-- schema_tag does not move: no JS migration owns these. Account semantics (the
+-- `account_id` in every primary key, the durable marks, adoption and logout
+-- reset) live in `sync/derived.rs` (§2.9).
+
+CREATE TABLE IF NOT EXISTS sync_derived_vectors (
+  account_id    TEXT NOT NULL,          -- originating account; '' only before the archive's first-ever binding (see 2.9)
+  contract_hash TEXT NOT NULL,
+  input_hash    TEXT NOT NULL,          -- profile hash, or sha256 of the exact text sent to the embedder
+  dimensions    INTEGER NOT NULL,
+  embedding     BLOB NOT NULL,          -- f32 LE, dimensions*4 bytes
+  origin        TEXT NOT NULL CHECK (origin IN ('local','remote')),
+  pushed        INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (account_id, contract_hash, input_hash)
+);
+
+CREATE TABLE IF NOT EXISTS sync_derived_ocr_pages (
+  account_id    TEXT NOT NULL,          -- see 2.9
+  source_hash   TEXT NOT NULL,          -- sha256 of the file, see open decision D2
+  page_number   INTEGER NOT NULL,
+  ocr_contract  TEXT NOT NULL,          -- provider + model + prompt/parser version
+  outcome       TEXT NOT NULL CHECK (outcome IN ('text','empty')),  -- the provider's answer, not the published row
+  text_content  TEXT NOT NULL,          -- answer as Markdown; '' when outcome = 'empty'
+  text_hash     TEXT NOT NULL,
+  origin        TEXT NOT NULL CHECK (origin IN ('local','remote')),
+  pushed        INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (account_id, source_hash, page_number, ocr_contract)
+);
+
+CREATE TABLE IF NOT EXISTS sync_derived_contracts (   -- mirror of the immutable contract row
+  contract_hash     TEXT PRIMARY KEY,
+  provider          TEXT NOT NULL,
+  model             TEXT NOT NULL,
+  dimensions        INTEGER NOT NULL,
+  chunking_contract TEXT NOT NULL
+);
 "#;
 
 /// Names of every `sync_*` table this module creates. Used by tests (and later
@@ -104,12 +144,18 @@ pub const SYNC_TABLES: &[&str] = &[
     "sync_pending_fts",
     "sync_topic_aliases",
     "sync_blob_index",
+    "sync_derived_vectors",
+    "sync_derived_ocr_pages",
+    "sync_derived_contracts",
 ];
 
-/// Creates all `sync_*` tables and indexes (DESIGN §6). Idempotent.
+/// Creates all `sync_*` tables and indexes (DESIGN §6). Idempotent. Also seeds
+/// the derived cache's durable account marks for an archive that already has a
+/// live session (plan-sync-bibliografia-derivada §2.9).
 pub fn ensure_sync_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(SYNC_SCHEMA_DDL)
-        .map_err(|e| format!("Failed to ensure sync schema: {e}"))
+        .map_err(|e| format!("Failed to ensure sync schema: {e}"))?;
+    crate::sync::derived::ensure_account_marks(conn)
 }
 
 #[cfg(test)]

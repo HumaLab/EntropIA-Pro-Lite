@@ -250,8 +250,11 @@ const SESSION_META_KEYS: &[&str] = &[
 
 /// State tables fully emptied on logout / account change (DESIGN §6.3). Note
 /// `sync_blob_index` is NOT in this list: its hashes are content-derived and
-/// retained; only the `uploaded` flag is reset (see [`clear_sync_state`]).
-const SESSION_STATE_TABLES: &[&str] = &[
+/// retained; only the `uploaded` flag is reset (see [`clear_sync_state`]). The
+/// `sync_derived_*` tables are not in it either: they hold paid results, so
+/// [`crate::sync::derived::clear_account_metadata`] resets `pushed` and keeps the
+/// rows (plan-sync-bibliografia-derivada §2.9).
+pub(crate) const SESSION_STATE_TABLES: &[&str] = &[
     "sync_oplog",
     "sync_row_versions",
     "sync_conflicts",
@@ -264,8 +267,9 @@ const SESSION_STATE_TABLES: &[&str] = &[
 
 /// Wipes ALL local sync state per DESIGN §6.3, in one transaction:
 /// delete the per-session state tables, clear session plus writing- and
-/// research-account `sync_meta`, and reset `uploaded=0` across the WHOLE `sync_blob_index`
-/// (hashes survive — they are content-derived). Does NOT touch the keyring;
+/// research-account `sync_meta`, reset `uploaded=0` across the WHOLE `sync_blob_index`
+/// (hashes survive — they are content-derived), and reset the derived cache's
+/// `pushed` flags while keeping its rows (plan §2.9). Does NOT touch the keyring;
 /// callers handle the token separately (revoke remote first, then
 /// [`delete_token`]).
 pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
@@ -299,6 +303,13 @@ pub fn clear_sync_state(conn: &Connection) -> Result<(), String> {
     })?;
 
     crate::sync::web_capture::clear_account_metadata(&tx_guard)?;
+
+    // §2.9: the derived cache keeps its rows (they are paid content) but resets
+    // `pushed` and drops this channel's account metadata (capability, catch-up
+    // epoch, cursor, last pull start, wait verdict). The `derived_backfill:*`
+    // marks describe local rows, and the binding/owner marks are not session
+    // metadata: all three survive a logout.
+    crate::sync::derived::clear_account_metadata(&tx_guard)?;
 
     // Reset every blob's uploaded flag (DESIGN §6.3): uploaded=1 only ever held
     // for the account that set it; a new account must re-confirm via HEAD/PUT.
@@ -354,6 +365,10 @@ pub(crate) fn write_sync_session(
     meta_set(&tx, "device_id", device_id)?;
     meta_set(&tx, SYNC_SESSION_INCARNATION_KEY, &incarnation)?;
     meta_set(&tx, "capture_enabled", "1")?;
+    // §2.9: the archive's first-ever binding adopts the rows written before any
+    // login and seals both durable marks; a later binding only moves the bound
+    // mark. Same transaction as the session, so neither can be half-written.
+    crate::sync::derived::bind_account(&tx, account_id)?;
     tx.commit()
         .map_err(|e| format!("[sync] failed to commit login session: {e}"))
 }
