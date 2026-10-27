@@ -24,7 +24,8 @@ pub struct WebAnnotationApi {
     client: Client,
     base: String,
     key: String,
-    user_id: u64,
+    /// `users/<id>`, or `groups/<id>` for the live tests' test group.
+    library_path: String,
     backoff: Cell<Option<u64>>,
 }
 
@@ -38,13 +39,22 @@ impl WebAnnotationApi {
             client,
             base: base.trim_end_matches('/').to_string(),
             key: key.trim().to_string(),
-            user_id,
+            library_path: format!("users/{user_id}"),
             backoff: Cell::new(None),
         })
     }
 
+    /// The same API over a group library. Only the live tests use it: the
+    /// Biblioteca annotates the personal library alone.
+    #[cfg(test)]
+    pub fn for_group(base: &str, key: &str, group_id: u64) -> Result<Self, String> {
+        let mut api = Self::new(base, key, 0)?;
+        api.library_path = format!("groups/{group_id}");
+        Ok(api)
+    }
+
     fn url(&self, path: &str) -> String {
-        format!("{}/users/{}{}", self.base, self.user_id, path)
+        format!("{}/{}{}", self.base, self.library_path, path)
     }
 
     fn send(&self, request: RequestBuilder, writes: bool) -> Result<Response, ApiError> {

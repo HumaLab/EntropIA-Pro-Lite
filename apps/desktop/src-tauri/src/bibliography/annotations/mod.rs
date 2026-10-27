@@ -19,6 +19,8 @@ pub mod wire;
 #[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
+mod live_tests;
+#[cfg(test)]
 mod machine_tests;
 
 pub use machine::*;
