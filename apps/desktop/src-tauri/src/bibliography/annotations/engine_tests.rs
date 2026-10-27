@@ -550,3 +550,20 @@ fn network_failures_back_off_exponentially_until_a_run_goes_through() {
     assert_eq!((state.paused_until, state.pause_reason), (None, None), "a clean run resets it");
     assert_eq!(api.comment("AAAA2222"), Some(json!("x")));
 }
+
+#[test]
+fn an_edit_then_a_delete_in_the_next_run_deletes_without_a_conflict() {
+    let scope = scope("lib-edit-delete");
+    let conn = archive_with_library(&scope.library_row_id);
+    let api = FakeApi::new();
+    api.put("AAAA2222", "one");
+    run(&conn, &scope, &api);
+    edit_comment(&conn, &scope, "AAAA2222", "edited");
+    run(&conn, &scope, &api);
+    let mut doomed = row(&conn, &scope, "AAAA2222");
+    local_delete(&mut doomed).unwrap();
+    repo::save(&conn, &scope, &doomed, 1).unwrap();
+    run(&conn, &scope, &api);
+    assert_eq!(api.comment("AAAA2222"), None, "deleted in Zotero");
+    assert!(repo::load(&conn, &scope, "AAAA2222").unwrap().is_none());
+}

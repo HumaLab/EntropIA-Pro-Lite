@@ -121,6 +121,14 @@ pub fn merge_remote(row: &mut AnnotationRow, change: RemoteChange) -> Result<Row
     if row.sent_gen.is_some() {
         return Err(MachineError::RequestInFlight);
     }
+    // A version the row already holds is nothing new: typically our own last
+    // write, which lands after the pull of the run that sent it and comes
+    // back with the next one. Merging it would read our edit as Zotero's.
+    if let (RemoteChange::Item { version, .. }, Some(base_version)) = (&change, row.base_version) {
+        if *version <= base_version {
+            return Ok(RowAction::Save);
+        }
+    }
     let merge_base = row.base_json.clone().unwrap_or_default();
     Ok(merge_with_base(row, change, &merge_base))
 }

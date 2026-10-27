@@ -595,3 +595,21 @@ fn a_remote_trash_during_a_field_conflict_adds_an_existence_choice() {
         data(json!({"annotationComment": "B", "deleted": 0}))
     );
 }
+
+#[test]
+fn a_pull_of_our_own_last_write_is_not_a_remote_change() {
+    // The PATCH of a run lands after that run's pull: the next pull brings the
+    // same version back. Nothing new arrived, so a delete made since is not
+    // "modified in Zotero after you deleted it".
+    let mut row = synced_row("A");
+    edit(&mut row, "annotationComment", json!("B"));
+    send(&mut row);
+    apply_outcome(&mut row, Outcome::Applied { version: 6 });
+    ok(&row);
+    let own_write = row.base_json.clone().unwrap();
+    local_delete(&mut row).unwrap();
+    merge_remote(&mut row, RemoteChange::Item { version: 6, data: own_write }).unwrap();
+    ok(&row);
+    assert!(row.conflict_fields.is_empty(), "{:?}", row.conflict_fields);
+    assert!(matches!(send(&mut row), Request::Delete { version: 6, .. }));
+}
