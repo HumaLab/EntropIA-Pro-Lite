@@ -722,7 +722,7 @@ describe('BibliographyWorkView', () => {
 
       const entry = await screen.findByTestId('annotation-entry')
       await fireEvent.click(within(entry).getByText('el oficio del historiador'))
-      const toolbar = await screen.findByTestId('markup-toolbar')
+      const toolbar = await screen.findByTestId('annotation-toolbar')
       await fireEvent.click(within(toolbar).getByRole('button', { name: 'Color #ff6666' }))
       await waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_update', {

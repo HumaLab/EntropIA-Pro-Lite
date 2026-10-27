@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, untrack } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { ActionIcon, Button, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import {
@@ -77,6 +77,15 @@
   })
 
   let trashOpen = $state(false)
+  let trashSection: HTMLElement | undefined = $state()
+
+  /** Opening the trash group brings it into view: it sits at the panel's end. */
+  async function toggleTrash() {
+    trashOpen = !trashOpen
+    if (!trashOpen) return
+    await tick()
+    trashSection?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+  }
 
   // ── Area and ink previews, one per annotation revision ─────────────
   const thumbnails = $state<Record<string, string>>({})
@@ -315,7 +324,7 @@
 
               <textarea
                 class="annotation-entry__comment"
-                rows="2"
+                rows="1"
                 aria-label={$currentLocale && t('bibliographyAnnotations.commentLabel')}
                 placeholder={$currentLocale && t('bibliographyAnnotations.commentPlaceholder')}
                 value={commentOf(view)}
@@ -401,12 +410,12 @@
   {/each}
 
   {#if trashed.length > 0}
-    <section class="annotations-panel__trash">
+    <section class="annotations-panel__trash" bind:this={trashSection}>
       <button
         type="button"
         class="annotations-panel__trash-toggle"
         aria-expanded={trashOpen}
-        onclick={() => (trashOpen = !trashOpen)}
+        onclick={() => void toggleTrash()}
       >
         <ActionIcon name={trashOpen ? 'chevron-down' : 'chevron-right'} size={12} />
         {$currentLocale && t('bibliographyAnnotations.trashGroup', { count: trashed.length })}
@@ -593,14 +602,17 @@
     background: var(--color-danger-soft);
   }
 
+  /* Sized by the image itself: a column flex child would stretch it to the
+     full width and letterbox a narrow region. */
   .annotation-entry__preview {
     display: block;
+    align-self: flex-start;
+    width: auto;
+    height: auto;
     max-width: 100%;
     max-height: 160px;
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-sm);
-    background: var(--color-surface-sunken);
-    object-fit: contain;
   }
 
   .annotation-entry__comment {
@@ -613,7 +625,10 @@
     color: var(--color-text-primary);
     font: inherit;
     font-size: var(--font-size-sm);
-    resize: vertical;
+    /* One line while empty; grows with the comment. */
+    field-sizing: content;
+    max-height: 12lh;
+    resize: none;
   }
 
   .annotation-entry__comment:focus-visible {

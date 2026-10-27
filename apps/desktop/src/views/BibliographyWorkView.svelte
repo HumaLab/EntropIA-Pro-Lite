@@ -591,6 +591,7 @@
               allowedTools={ANNOTATION_TOOLS}
               palette={ZOTERO_COLORS}
               textSelection
+              pdfFit="width"
               {selectedMarkupId}
               {markupLabels}
               onMarkupCreate={handleMarkupCreate}
@@ -610,34 +611,38 @@
           </div>
           {@render annotationsPanel()}
         </div>
-        {#if total > 1}
-          <div class="work-viewer-pager">
-            <IconButton
-              size="sm"
-              variant="ghost"
-              label={$currentLocale && t('item.previousPage')}
-              title={$currentLocale && t('item.previousPage')}
-              disabled={page <= 1}
-              onclick={() => (page = Math.max(1, page - 1))}
-            >
-              <ActionIcon name="chevron-left" size={14} />
-            </IconButton>
-            <span class="work-viewer-pager__count">
-              {$currentLocale && t('navegador.pdf.page', { page, total })}
-            </span>
-            <IconButton
-              size="sm"
-              variant="ghost"
-              label={$currentLocale && t('item.nextPage')}
-              title={$currentLocale && t('item.nextPage')}
-              disabled={page >= total}
-              onclick={() => (page = Math.min(total, page + 1))}
-            >
-              <ActionIcon name="chevron-right" size={14} />
-            </IconButton>
-          </div>
-        {/if}
-        <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+        <!-- One footer row: the note at the start, the pager centered. Two
+             stacked rows took height the viewer needs. -->
+        <div class="work-viewer-footer">
+          <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+          {#if total > 1}
+            <div class="work-viewer-pager">
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.previousPage')}
+                title={$currentLocale && t('item.previousPage')}
+                disabled={page <= 1}
+                onclick={() => (page = Math.max(1, page - 1))}
+              >
+                <ActionIcon name="chevron-left" size={14} />
+              </IconButton>
+              <span class="work-viewer-pager__count">
+                {$currentLocale && t('navegador.pdf.page', { page, total })}
+              </span>
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.nextPage')}
+                title={$currentLocale && t('item.nextPage')}
+                disabled={page >= total}
+                onclick={() => (page = Math.min(total, page + 1))}
+              >
+                <ActionIcon name="chevron-right" size={14} />
+              </IconButton>
+            </div>
+          {/if}
+        </div>
       {:else if opened?.originalKind === 'html'}
         <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
         <p class="work-snapshot">{opened.snapshotText}</p>
@@ -831,6 +836,8 @@
   .work-view--fill {
     height: 100%;
     min-height: 0;
+    /* Reading and annotating a PDF wants the whole pane. */
+    max-width: none;
   }
 
   .work-header {
@@ -966,6 +973,25 @@
   .work-viewer :global(.document-viewer) {
     flex: 1;
     min-height: 0;
+  }
+
+  .work-viewer-footer {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .work-viewer-footer .work-note {
+    grid-column: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .work-viewer-footer .work-viewer-pager {
+    grid-column: 2;
   }
 
   .work-viewer-pager {
