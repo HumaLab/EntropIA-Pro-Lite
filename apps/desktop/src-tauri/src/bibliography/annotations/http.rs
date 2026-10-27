@@ -57,13 +57,24 @@ impl WebAnnotationApi {
             self.backoff.set(Some(seconds));
         }
         let status = response.status();
+        let retry_after = header_u64(response.headers(), "Retry-After");
         match status.as_u16() {
             401 | 403 => Err(ApiError::Credentials),
-            409 | 429 | 503 => Err(ApiError::RetryAfter {
-                seconds: header_u64(response.headers(), "Retry-After").unwrap_or(DEFAULT_RETRY_SECONDS),
+            409 | 429 => Err(ApiError::RetryAfter {
+                seconds: retry_after.unwrap_or(DEFAULT_RETRY_SECONDS),
             }),
-            code if status.is_server_error() => Err(ApiError::Server { code }),
+            code if status.is_server_error() => Err(ApiError::Server { code, retry_after }),
             _ => Ok(response),
+        }
+    }
+
+    /// Server text never carries the key back into an error or a row.
+    fn redact(&self, text: &str) -> String {
+        let clipped: String = text.chars().take(200).collect();
+        if self.key.is_empty() {
+            clipped
+        } else {
+            clipped.replace(&self.key, "[redacted]")
         }
     }
 
@@ -73,12 +84,17 @@ impl WebAnnotationApi {
             return Ok((Value::Null, response.headers().clone()));
         }
         if !response.status().is_success() {
-            return Err(ApiError::Server { code: response.status().as_u16() });
+            return Err(ApiError::Server { code: response.status().as_u16(), retry_after: None });
         }
         let headers = response.headers().clone();
-        let body = response.json::<Value>().map_err(|_| ApiError::Unreachable { after_send: false })?;
+        let body = response.json::<Value>().map_err(|_| unreadable())?;
         Ok((body, headers))
     }
+}
+
+/// A read whose answer cannot be used: nothing is concluded from it.
+fn unreadable() -> ApiError {
+    ApiError::Unreachable { after_send: false }
 }
 
 fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
@@ -88,7 +104,7 @@ fn header_u64(headers: &HeaderMap, name: &str) -> Option<u64> {
 fn library_version(headers: &HeaderMap) -> Result<i64, ApiError> {
     header_u64(headers, "Last-Modified-Version")
         .map(|version| version as i64)
-        .ok_or(ApiError::Unreachable { after_send: false })
+        .ok_or_else(unreadable)
 }
 
 /// The `rel="next"` target of a `Link` header.
@@ -109,6 +125,12 @@ pub fn parse_item(value: &Value) -> Option<ServerItem> {
     Some(ServerItem { version, data })
 }
 
+/// Zotero's "Parent item … not found" for a child whose parent it lacks.
+pub fn mentions_missing_parent(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("parent item") && lower.contains("not found")
+}
+
 /// The per-object results of a POST, in request order.
 pub fn parse_create_results(body: &Value, count: usize, header_version: Option<i64>) -> Vec<CreateResult> {
     (0..count)
@@ -126,16 +148,18 @@ pub fn parse_create_results(body: &Value, count: usize, header_version: Option<i
                 return CreateResult::Created { version: header_version.unwrap_or(0) };
             }
             if let Some(entry) = body.get("failed").and_then(|s| s.get(&slot)) {
-                let code = entry.get("code").and_then(Value::as_u64).unwrap_or(400) as u16;
+                let Some(code) = entry.get("code").and_then(Value::as_u64) else {
+                    return CreateResult::NoAnswer;
+                };
+                let code = code as u16;
                 let message = entry.get("message").and_then(Value::as_str).unwrap_or_default().to_string();
                 if code == 412 {
                     return CreateResult::Exists;
                 }
-                let parent_missing = message.to_ascii_lowercase().contains("parent item")
-                    && message.to_ascii_lowercase().contains("not found");
+                let parent_missing = code == 404 || mentions_missing_parent(&message);
                 return CreateResult::Failed { code, message, parent_missing };
             }
-            CreateResult::Failed { code: 0, message: "Zotero did not answer for this object".into(), parent_missing: false }
+            CreateResult::NoAnswer
         })
         .collect()
 }
@@ -147,14 +171,11 @@ impl AnnotationApi for WebAnnotationApi {
             "/items?itemType=annotation&since={since}&format=versions&includeTrashed=1"
         ));
         let (body, headers) = self.get_json(&url)?;
-        let value = body
-            .as_object()
-            .map(|map| {
-                map.iter()
-                    .filter_map(|(key, version)| Some((key.clone(), version.as_i64()?)))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let map = body.as_object().ok_or_else(unreadable)?;
+        let mut value = BTreeMap::new();
+        for (key, version) in map {
+            value.insert(key.clone(), version.as_i64().ok_or_else(unreadable)?);
+        }
         Ok(Versioned { value, library_version: library_version(&headers)? })
     }
 
@@ -173,7 +194,14 @@ impl AnnotationApi for WebAnnotationApi {
                 return Ok(Versioned { value: items, library_version: page_version });
             }
             version = Some(page_version);
-            items.extend(body.as_array().into_iter().flatten().filter_map(parse_item));
+            for entry in body.as_array().ok_or_else(unreadable)? {
+                // A pull that skipped an item would move the cursor past it.
+                let item = parse_item(entry).ok_or_else(unreadable)?;
+                if item.data.get("key").and_then(Value::as_str).is_none() {
+                    return Err(unreadable());
+                }
+                items.push(item);
+            }
             match next_link(&headers) {
                 Some(next) => url = next,
                 None => break,
@@ -184,17 +212,21 @@ impl AnnotationApi for WebAnnotationApi {
 
     fn deleted_since(&self, since: i64) -> Result<Versioned<Vec<String>>, ApiError> {
         let (body, headers) = self.get_json(&self.url(&format!("/deleted?since={since}")))?;
-        let value = body
-            .get("items")
-            .and_then(Value::as_array)
-            .map(|keys| keys.iter().filter_map(|key| key.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
+        let keys = body.get("items").and_then(Value::as_array).ok_or_else(unreadable)?;
+        let mut value = Vec::with_capacity(keys.len());
+        for key in keys {
+            value.push(key.as_str().ok_or_else(unreadable)?.to_string());
+        }
         Ok(Versioned { value, library_version: library_version(&headers)? })
     }
 
     fn item(&self, key: &str) -> Result<Option<ServerItem>, ApiError> {
         let (body, _) = self.get_json(&self.url(&format!("/items/{key}?includeTrashed=1&format=json")))?;
-        Ok(if body.is_null() { None } else { parse_item(&body) })
+        // Only a real 404 says "not there"; an unreadable success says nothing.
+        if body.is_null() {
+            return Ok(None);
+        }
+        parse_item(&body).map(Some).ok_or_else(unreadable)
     }
 
     fn create(&self, items: &[Data]) -> Result<Vec<CreateResult>, ApiError> {
@@ -203,18 +235,29 @@ impl AnnotationApi for WebAnnotationApi {
         let status = response.status();
         let header_version = header_u64(response.headers(), "Last-Modified-Version").map(|v| v as i64);
         if !status.is_success() {
-            let message = response.text().unwrap_or_default();
+            let message = self.redact(&response.text().unwrap_or_default());
+            let parent_missing = status == StatusCode::NOT_FOUND || mentions_missing_parent(&message);
             return Ok(items
                 .iter()
                 .map(|_| CreateResult::Failed {
                     code: status.as_u16(),
-                    message: message.chars().take(200).collect(),
-                    parent_missing: false,
+                    message: message.clone(),
+                    parent_missing,
                 })
                 .collect());
         }
-        let answer = response.json::<Value>().map_err(|_| ApiError::Unreachable { after_send: true })?;
-        Ok(parse_create_results(&answer, items.len(), header_version))
+        let answer = response
+            .json::<Value>()
+            .map_err(|_| ApiError::Server { code: status.as_u16(), retry_after: None })?;
+        Ok(parse_create_results(&answer, items.len(), header_version)
+            .into_iter()
+            .map(|result| match result {
+                CreateResult::Failed { code, message, parent_missing } => {
+                    CreateResult::Failed { code, message: self.redact(&message), parent_missing }
+                }
+                other => other,
+            })
+            .collect())
     }
 
     fn patch(&self, key: &str, version: i64, fields: &Data) -> Result<WriteResult, ApiError> {
@@ -223,7 +266,7 @@ impl AnnotationApi for WebAnnotationApi {
             .patch(self.url(&format!("/items/{key}")))
             .header("If-Unmodified-Since-Version", version.to_string())
             .json(&Value::Object(fields.clone()));
-        write_result(self.send(request, true)?)
+        self.write_result(self.send(request, true)?)
     }
 
     fn delete(&self, key: &str, version: i64) -> Result<WriteResult, ApiError> {
@@ -231,7 +274,7 @@ impl AnnotationApi for WebAnnotationApi {
             .client
             .delete(self.url(&format!("/items/{key}")))
             .header("If-Unmodified-Since-Version", version.to_string());
-        write_result(self.send(request, true)?)
+        self.write_result(self.send(request, true)?)
     }
 
     fn take_backoff(&self) -> Backoff {
@@ -239,21 +282,24 @@ impl AnnotationApi for WebAnnotationApi {
     }
 }
 
-fn write_result(response: Response) -> Result<WriteResult, ApiError> {
-    let status = response.status();
-    Ok(match status.as_u16() {
-        200..=299 => WriteResult::Done {
-            version: header_u64(response.headers(), "Last-Modified-Version")
-                .map(|v| v as i64)
-                .ok_or(ApiError::Unreachable { after_send: true })?,
-        },
-        404 => WriteResult::NotFound,
-        412 => WriteResult::Stale,
-        code => WriteResult::Rejected {
-            code,
-            message: response.text().unwrap_or_default().chars().take(200).collect(),
-        },
-    })
+impl WebAnnotationApi {
+    fn write_result(&self, response: Response) -> Result<WriteResult, ApiError> {
+        let status = response.status();
+        Ok(match status.as_u16() {
+            200..=299 => WriteResult::Done {
+                // A success without the new version cannot be acknowledged.
+                version: header_u64(response.headers(), "Last-Modified-Version")
+                    .map(|v| v as i64)
+                    .ok_or(ApiError::Server { code: status.as_u16(), retry_after: None })?,
+            },
+            404 => WriteResult::NotFound,
+            412 => WriteResult::Stale,
+            code => WriteResult::Rejected {
+                code,
+                message: self.redact(&response.text().unwrap_or_default()),
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -278,7 +324,24 @@ mod tests {
         assert_eq!(results[2], CreateResult::Exists);
         assert!(matches!(results[3], CreateResult::Failed { parent_missing: true, .. }));
         assert!(matches!(results[4], CreateResult::Failed { parent_missing: false, code: 400, .. }));
-        assert!(matches!(results[5], CreateResult::Failed { code: 0, .. }));
+        assert_eq!(results[5], CreateResult::NoAnswer);
+    }
+
+    #[test]
+    fn a_failed_entry_without_a_code_is_no_answer_and_404_is_a_missing_parent() {
+        let body = json!({"failed": {
+            "0": {"key": "AAAA2222", "message": "?"},
+            "1": {"key": "BBBB3333", "code": 404, "message": "Not found"}
+        }});
+        let results = parse_create_results(&body, 2, None);
+        assert_eq!(results[0], CreateResult::NoAnswer);
+        assert!(matches!(results[1], CreateResult::Failed { parent_missing: true, .. }));
+    }
+
+    #[test]
+    fn server_text_never_carries_the_key() {
+        let api = WebAnnotationApi::new("http://127.0.0.1:1", "SeCrEtKeY123", 1).unwrap();
+        assert_eq!(api.redact("bad key SeCrEtKeY123 here"), "bad key [redacted] here");
     }
 
     #[test]

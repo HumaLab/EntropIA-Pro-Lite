@@ -34,6 +34,9 @@ struct Zotero {
     backoff: Option<u64>,
     /// Parent keys that exist on the server.
     parents: Vec<String>,
+    /// Runs once, while the next write is "in flight" (after the server
+    /// applied it, before the answer): a local command racing the request.
+    during_write: Option<Box<dyn FnOnce()>>,
 }
 
 struct FakeApi(RefCell<Zotero>);
@@ -92,6 +95,13 @@ impl FakeApi {
                 Ok(None)
             }
             other => Ok(other),
+        }
+    }
+
+    fn race(&self) {
+        let hook = self.0.borrow_mut().during_write.take();
+        if let Some(hook) = hook {
+            hook();
         }
     }
 
@@ -199,6 +209,7 @@ impl AnnotationApi for FakeApi {
             }
         };
         drop(z);
+        self.race();
         Self::finish(fault, result)
     }
 
@@ -219,6 +230,7 @@ impl AnnotationApi for FakeApi {
             }
         };
         drop(z);
+        self.race();
         Self::finish(fault, result)
     }
 
@@ -450,4 +462,91 @@ fn a_restart_reconciles_a_request_whose_answer_was_never_recorded() {
     run(&conn, &restarted, &api);
     assert_eq!(api.comment("AAAA2222"), Some(json!("A")), "the revert wins");
     assert!(wire::is_valid_key("AAAA2222"));
+}
+
+/// Opens a second connection on the same file, as a command would.
+fn file_archive(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{name}.sqlite"));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
+    let memory = archive_with_library(name);
+    memory.backup(rusqlite::DatabaseName::Main, &path, None).unwrap();
+    drop(conn);
+    (dir, path)
+}
+
+#[test]
+fn an_edit_made_while_a_patch_is_in_flight_is_not_overwritten() {
+    let scope = scope("lib-race");
+    let (_dir, path) = file_archive(&scope.library_row_id);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let api = FakeApi::new();
+    api.put("AAAA2222", "A");
+    run(&conn, &scope, &api);
+    edit_comment(&conn, &scope, "AAAA2222", "B");
+    let racing_path = path.clone();
+    let racing_scope = scope.clone();
+    api.0.borrow_mut().during_write = Some(Box::new(move || {
+        let other = rusqlite::Connection::open(&racing_path).unwrap();
+        edit_comment(&other, &racing_scope, "AAAA2222", "C");
+    }));
+    run(&conn, &scope, &api);
+    assert_eq!(api.comment("AAAA2222"), Some(json!("B")), "B reached Zotero");
+    let stored = row(&conn, &scope, "AAAA2222");
+    assert_eq!(stored.desired().unwrap()["annotationComment"], json!("C"), "the racing edit survives");
+    assert_eq!(stored.sync_state, SyncState::Pending);
+    run(&conn, &scope, &api);
+    assert_eq!(api.comment("AAAA2222"), Some(json!("C")));
+}
+
+#[test]
+fn an_undo_made_while_a_delete_is_in_flight_recreates_the_annotation() {
+    let scope = scope("lib-race-delete");
+    let (_dir, path) = file_archive(&scope.library_row_id);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let api = FakeApi::new();
+    api.put("AAAA2222", "keep me");
+    run(&conn, &scope, &api);
+    let mut doomed = row(&conn, &scope, "AAAA2222");
+    local_delete(&mut doomed).unwrap();
+    repo::save(&conn, &scope, &doomed, 1).unwrap();
+    let racing_path = path.clone();
+    let racing_scope = scope.clone();
+    api.0.borrow_mut().during_write = Some(Box::new(move || {
+        let other = rusqlite::Connection::open(&racing_path).unwrap();
+        let mut current = repo::load(&other, &racing_scope, "AAAA2222").unwrap().unwrap();
+        let desired = current.base_json.clone().unwrap();
+        local_edit(&mut current, desired);
+        repo::save(&other, &racing_scope, &current, 1).unwrap();
+    }));
+    run(&conn, &scope, &api);
+    assert!(repo::load(&conn, &scope, "AAAA2222").unwrap().is_none(), "the old key is gone");
+    let rows = repo::by_parent(&conn, &scope, "PARENT22").unwrap();
+    assert_eq!(rows.len(), 1, "the annotation lives on under a new key");
+    assert_eq!(rows[0].desired().unwrap()["annotationComment"], json!("keep me"));
+}
+
+
+#[test]
+fn network_failures_back_off_exponentially_until_a_run_goes_through() {
+    let scope = scope("lib-backoff-grow");
+    let conn = archive_with_library(&scope.library_row_id);
+    let api = FakeApi::new();
+    api.put("AAAA2222", "one");
+    run(&conn, &scope, &api);
+    edit_comment(&conn, &scope, "AAAA2222", "x");
+    let mut delays = Vec::new();
+    for _ in 0..3 {
+        api.fault(Fault::Offline);
+        let report = run(&conn, &scope, &api);
+        assert_eq!(report.paused.as_deref(), Some("unreachable"));
+        delays.push(repo::sync_state(&conn, &scope).unwrap().paused_until.unwrap() - 1_000);
+        unpause(&conn, &scope);
+    }
+    assert_eq!(delays, vec![60_000, 120_000, 240_000]);
+    run(&conn, &scope, &api);
+    let state = repo::sync_state(&conn, &scope).unwrap();
+    assert_eq!((state.paused_until, state.pause_reason), (None, None), "a clean run resets it");
+    assert_eq!(api.comment("AAAA2222"), Some(json!("x")));
 }

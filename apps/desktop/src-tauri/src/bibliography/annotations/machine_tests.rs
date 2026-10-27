@@ -572,3 +572,26 @@ fn restoring_a_trashed_annotation_sends_deleted_zero() {
     ok(&row);
     assert_eq!(patch_fields(send(&mut row)), data(json!({"deleted": 0})));
 }
+
+#[test]
+fn a_remote_trash_during_a_field_conflict_adds_an_existence_choice() {
+    let mut row = comment_conflict();
+    merge_remote(&mut row, trashed(7, "C")).unwrap();
+    ok(&row);
+    assert_eq!(row.existence_reason(), Some(ExistenceReason::Trashed));
+    assert!(row.conflict_fields.iter().any(|field| field == "annotationComment"));
+    assert!(
+        !super::wire::is_trashed(row.local_json.as_ref().unwrap()),
+        "the trash is a decision, never merged into the local intent"
+    );
+    resolve(
+        &mut row,
+        &decisions(&[(EXISTENCE, Decision::Keep), ("annotationComment", Decision::Local)]),
+    )
+    .unwrap();
+    ok(&row);
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "B", "deleted": 0}))
+    );
+}

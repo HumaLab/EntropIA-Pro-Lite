@@ -26,6 +26,8 @@ pub enum CreateResult {
     Created { version: i64 },
     /// `failed` with code 412: the key already exists.
     Exists,
+    /// The answer has no entry for this object: its outcome is unknown.
+    NoAnswer,
     /// `failed` with another code; `parent` when Zotero says the parent item
     /// was not found.
     Failed { code: u16, message: String, parent_missing: bool },
@@ -49,11 +51,12 @@ pub enum ApiError {
     /// Nothing answered, or the answer was cut or unreadable. `after_send`
     /// tells whether the body may have reached the server.
     Unreachable { after_send: bool },
-    /// 5xx.
-    Server { code: u16 },
+    /// 5xx, or a success whose body cannot be read: a write may have
+    /// landed. 503 may carry `Retry-After` (seconds).
+    Server { code: u16, retry_after: Option<u64> },
     /// 401 or 403.
     Credentials,
-    /// 409, 429 or 503 with `Retry-After` (seconds).
+    /// 409 or 429 with `Retry-After` (seconds): the request was refused.
     RetryAfter { seconds: u64 },
 }
 

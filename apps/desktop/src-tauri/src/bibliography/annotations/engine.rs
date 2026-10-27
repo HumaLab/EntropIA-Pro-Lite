@@ -16,7 +16,8 @@ use super::machine::{
     apply_outcome, begin_send, mark_outstanding_uncertain, merge_remote, next_request, reconcile,
     release_waiting_parent, Next, Observed, Outcome, ParentStatus, RemoteChange, Request, RowAction,
 };
-use super::model::{AnnotationRow, Sent, SyncState};
+use super::model::{AnnotationRow, SyncState};
+use super::wire::Data;
 use super::repo::{self, LibrarySyncState, Scope};
 
 /// Zotero takes at most 50 objects per write and per `itemKey` read.
@@ -24,6 +25,15 @@ pub const BATCH: usize = 50;
 
 /// Pull runs that see the library change mid-download restart this often.
 const PULL_ATTEMPTS: usize = 2;
+
+/// Network retry delays (plan section 5, error policy).
+const NETWORK_RETRY_MIN_MS: i64 = 60_000;
+const NETWORK_RETRY_MAX_MS: i64 = 3_600_000;
+
+/// `unreachable:3` reads as `unreachable` outside the engine.
+fn pause_kind(reason: &str) -> &str {
+    reason.split(':').next().unwrap_or(reason)
+}
 
 /// Whether the parent attachment is still in the local catalog, which
 /// mirrors Zotero Desktop.
@@ -124,22 +134,29 @@ struct Stop;
 impl Run<'_> {
     fn go(&mut self) -> Result<(), String> {
         let state = repo::sync_state(self.conn, self.scope)?;
-        if state.paused_until.is_some_and(|until| until > self.now_ms) {
-            self.report.paused = state.pause_reason.clone();
+        // A credentials pause ends when the key checks out again: callers run
+        // the engine only after verifying it.
+        let credentials_pause = state.pause_reason.as_deref() == Some("credentials");
+        if !credentials_pause && state.paused_until.is_some_and(|until| until > self.now_ms) {
+            self.report.paused = state.pause_reason.as_deref().map(pause_kind).map(str::to_string);
             return Ok(());
         }
-        if state.paused_until.is_some() {
+        let stopped = self.reconcile_uncertain()?.is_err()
+            || self.pull()?.is_err()
+            || self.check_backoff()?.is_err()
+            || {
+                for mut row in repo::in_state(self.conn, self.scope, SyncState::WaitingParent)? {
+                    if release_waiting_parent(&mut row) {
+                        repo::save(self.conn, self.scope, &row, self.now_ms)?;
+                    }
+                }
+                self.push()?.is_err()
+            };
+        // A pause ends only with a run that went through: the network backoff
+        // keeps growing until Zotero answers again.
+        if !stopped && state.paused_until.is_some() {
             self.set_pause(None, None)?;
         }
-        if self.reconcile_uncertain()?.is_err() || self.pull()?.is_err() {
-            return Ok(());
-        }
-        for mut row in repo::in_state(self.conn, self.scope, SyncState::WaitingParent)? {
-            if release_waiting_parent(&mut row) {
-                repo::save(self.conn, self.scope, &row, self.now_ms)?;
-            }
-        }
-        let _ = self.push()?;
         self.report.uncertain = repo::outstanding(self.conn, self.scope)?.len();
         Ok(())
     }
@@ -152,15 +169,34 @@ impl Run<'_> {
     }
 
     /// Turns a failed call into a pause. Returns `Stop` so callers bail out.
+    ///
+    /// Network and server failures back off exponentially, 1 min to 1 h
+    /// (plan section 5, error policy); the attempt count rides in
+    /// `pause_reason` as `unreachable:N` until a run goes through.
     fn pause_for(&mut self, error: &ApiError) -> Result<Stop, String> {
+        let previous = repo::sync_state(self.conn, self.scope)?.pause_reason;
+        let attempt = previous
+            .as_deref()
+            .and_then(|reason| reason.strip_prefix("unreachable:"))
+            .and_then(|count| count.parse::<u32>().ok())
+            .unwrap_or(0)
+            + 1;
+        let backoff_ms = (NETWORK_RETRY_MIN_MS << (attempt - 1).min(6)).min(NETWORK_RETRY_MAX_MS);
         let (until, reason) = match error {
-            ApiError::Credentials => (self.now_ms + 365 * 24 * 3_600_000, "credentials"),
-            ApiError::RetryAfter { seconds } => (self.now_ms + *seconds as i64 * 1000, "retry_after"),
-            ApiError::Server { .. } => (self.now_ms + 60_000, "server"),
-            ApiError::Unreachable { .. } => (self.now_ms + 60_000, "unreachable"),
+            // Lifted by the next run after the key checks out again.
+            ApiError::Credentials => (self.now_ms + NETWORK_RETRY_MAX_MS, "credentials".to_string()),
+            ApiError::RetryAfter { seconds } => {
+                (self.now_ms + *seconds as i64 * 1000, "retry_after".to_string())
+            }
+            ApiError::Server { retry_after: Some(seconds), .. } => {
+                (self.now_ms + *seconds as i64 * 1000, "retry_after".to_string())
+            }
+            ApiError::Server { retry_after: None, .. } | ApiError::Unreachable { .. } => {
+                (self.now_ms + backoff_ms, format!("unreachable:{attempt}"))
+            }
         };
-        self.set_pause(Some(until), Some(reason))?;
-        self.report.paused = Some(reason.to_string());
+        self.set_pause(Some(until), Some(&reason))?;
+        self.report.paused = Some(pause_kind(&reason).to_string());
         Ok(Stop)
     }
 
@@ -174,17 +210,60 @@ impl Run<'_> {
         Ok(Ok(()))
     }
 
-    fn save(&mut self, key_before: &str, row: &AnnotationRow, action: &RowAction) -> Result<(), String> {
-        if *action == RowAction::Remove {
+    // --- Row transactions ---------------------------------------------------
+    //
+    // Local commands write rows through their own connections while a request
+    // is out, so the engine never applies an answer to the copy it sent from:
+    // it re-reads the row inside an IMMEDIATE transaction and runs the
+    // transition on what is stored now. A rekey (remove + save) commits as one.
+
+    /// Reads `key` fresh, applies `transition`, persists what it asks for.
+    fn settle(
+        &mut self,
+        key: &str,
+        transition: impl FnOnce(&mut AnnotationRow) -> RowAction,
+    ) -> Result<(), String> {
+        let tx = immediate(self.conn)?;
+        let mut removed = false;
+        if let Some(mut row) = repo::load(self.conn, self.scope, key)? {
+            let action = transition(&mut row);
+            removed = action == RowAction::Remove;
+            repo::apply(self.conn, self.scope, key, &row, &action, self.now_ms)?;
+        }
+        tx.commit().map_err(|error| format!("annotation write failed: {error}"))?;
+        if removed {
             self.report.removed += 1;
         }
-        repo::apply(self.conn, self.scope, key_before, row, action, self.now_ms)
+        Ok(())
+    }
+
+    /// Reads `key` fresh and records the request it needs as sent.
+    fn begin(&mut self, key: &str) -> Result<Option<(AnnotationRow, Request)>, String> {
+        let tx = immediate(self.conn)?;
+        let mut begun = None;
+        if let Some(mut row) = repo::load(self.conn, self.scope, key)? {
+            let state_before = row.sync_state;
+            match next_request(&mut row) {
+                Some(request) => {
+                    begin_send(&mut row, &request);
+                    repo::save(self.conn, self.scope, &row, self.now_ms)?;
+                    begun = Some((row, request));
+                }
+                // Collapsed to `synced` on the way: nothing to send.
+                None if row.sync_state != state_before => {
+                    repo::save(self.conn, self.scope, &row, self.now_ms)?;
+                }
+                None => {}
+            }
+        }
+        tx.commit().map_err(|error| format!("annotation write failed: {error}"))?;
+        Ok(begun)
     }
 
     // --- Reconciliation -----------------------------------------------------
 
     fn reconcile_uncertain(&mut self) -> Result<Result<(), Stop>, String> {
-        for mut row in repo::outstanding(self.conn, self.scope)? {
+        for row in repo::outstanding(self.conn, self.scope)? {
             if !row.sent_uncertain {
                 continue;
             }
@@ -193,11 +272,15 @@ impl Run<'_> {
                 Ok(None) => Observed::NotFound,
                 Err(error) => return Ok(Err(self.pause_for(&error)?)),
             };
-            let key_before = row.annotation_key.clone();
-            let action = reconcile(&mut row, observed);
-            self.save(&key_before, &row, &action)?;
+            self.settle(&row.annotation_key, |fresh| {
+                if fresh.sent_uncertain {
+                    reconcile(fresh, observed)
+                } else {
+                    RowAction::Save
+                }
+            })?;
         }
-        Ok(Ok(()))
+        self.check_backoff()
     }
 
     // --- Pull (section 4) ---------------------------------------------------
@@ -238,10 +321,7 @@ impl Run<'_> {
 
     /// Applies a complete pull in one transaction, cursor included.
     fn commit_pull(&mut self, changes: PulledChanges) -> Result<(), String> {
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|error| format!("annotation pull failed: {error}"))?;
+        let tx = immediate(self.conn)?;
         for item in changes.items {
             let Some(key) = item.data.get("key").and_then(|key| key.as_str()).map(str::to_string) else {
                 continue;
@@ -277,7 +357,10 @@ impl Run<'_> {
                 }
                 let action = merge_remote(&mut row, change).map_err(|error| error.to_string())?;
                 self.report.pulled += 1;
-                self.save(key, &row, &action)
+                if action == RowAction::Remove {
+                    self.report.removed += 1;
+                }
+                repo::apply(self.conn, self.scope, key, &row, &action, self.now_ms)
             }
         }
     }
@@ -286,16 +369,12 @@ impl Run<'_> {
 
     fn push(&mut self) -> Result<Result<(), Stop>, String> {
         let mut creates = Vec::new();
-        for mut row in repo::in_state(self.conn, self.scope, SyncState::Pending)? {
-            let key_before = row.annotation_key.clone();
-            let Some(request) = next_request(&mut row) else {
-                if row.sync_state != SyncState::Pending {
-                    self.save(&key_before, &row, &RowAction::Save)?;
-                }
+        for listed in repo::in_state(self.conn, self.scope, SyncState::Pending)? {
+            let Some((row, request)) = self.begin(&listed.annotation_key)? else {
                 continue;
             };
             match request {
-                Request::Create { .. } => creates.push((row, request)),
+                Request::Create { data, .. } => creates.push((row, data)),
                 other => {
                     if let Err(stop) = self.send_one(row, other)? {
                         return Ok(Err(stop));
@@ -304,128 +383,136 @@ impl Run<'_> {
             }
         }
         for batch in creates.chunks(BATCH) {
-            if let Err(stop) = self.send_creates(batch.to_vec())? {
+            if let Err(stop) = self.send_creates(batch)? {
                 return Ok(Err(stop));
             }
         }
         Ok(Ok(()))
     }
 
-    fn send_creates(&mut self, batch: Vec<(AnnotationRow, Request)>) -> Result<Result<(), Stop>, String> {
-        let mut rows = Vec::new();
-        let mut bodies = Vec::new();
-        for (mut row, request) in batch {
-            begin_send(&mut row, &request);
-            repo::save(self.conn, self.scope, &row, self.now_ms)?;
-            if let Request::Create { data, .. } = request {
-                bodies.push(data);
-            }
-            rows.push(row);
-        }
+    fn send_creates(&mut self, batch: &[(AnnotationRow, Data)]) -> Result<Result<(), Stop>, String> {
+        let bodies: Vec<Data> = batch.iter().map(|(_, data)| data.clone()).collect();
         let results = match self.api.create(&bodies) {
             Ok(results) => results,
             Err(error) => {
-                for mut row in rows {
-                    let key = row.annotation_key.clone();
-                    let action = apply_outcome(&mut row, outcome_of_error(&error)).into_action();
-                    self.save(&key, &row, &action)?;
+                for (row, _) in batch {
+                    let outcome = outcome_of_error(&error);
+                    self.settle(&row.annotation_key, |fresh| apply_outcome(fresh, outcome).into_action())?;
                 }
                 return Ok(Err(self.pause_for(&error)?));
             }
         };
-        for (mut row, result) in rows.into_iter().zip(results) {
+        let mut stop_with: Option<ApiError> = None;
+        for (index, (row, _)) in batch.iter().enumerate() {
             let key = row.annotation_key.clone();
-            let outcome = match result {
+            let outcome = match results.get(index).cloned().unwrap_or(CreateResult::NoAnswer) {
                 CreateResult::Created { version } => Outcome::Applied { version },
                 CreateResult::Exists => match self.api.item(&key) {
                     Ok(Some(item)) => Outcome::CreateExists { version: item.version, data: item.data },
-                    Ok(None) => Outcome::Uncertain,
-                    Err(_) => Outcome::Uncertain,
+                    Ok(None) | Err(_) => Outcome::Uncertain,
                 },
+                CreateResult::NoAnswer => Outcome::Uncertain,
+                // Refused for this object only, for a reason that is not the
+                // annotation's: it stays pending.
+                CreateResult::Failed { code: 401 | 403, .. } => {
+                    stop_with = Some(ApiError::Credentials);
+                    Outcome::Refused
+                }
+                CreateResult::Failed { code, .. } if code == 409 || code == 429 || code >= 500 => {
+                    stop_with.get_or_insert(ApiError::RetryAfter { seconds: 60 });
+                    Outcome::Refused
+                }
                 CreateResult::Failed { message, parent_missing: true, .. } => {
-                    Outcome::ParentMissing { parent: self.parent_status(&row), message }
+                    match self.parent_status(row) {
+                        Ok(parent) => Outcome::ParentMissing { parent, message },
+                        Err(error) => {
+                            stop_with = Some(error);
+                            Outcome::Refused
+                        }
+                    }
                 }
                 CreateResult::Failed { message, .. } => Outcome::Rejected { message },
             };
             self.report.sent += 1;
-            let action = apply_outcome(&mut row, outcome).into_action();
-            self.save(&key, &row, &action)?;
+            self.settle(&key, |fresh| apply_outcome(fresh, outcome).into_action())?;
+        }
+        if let Some(error) = stop_with {
+            return Ok(Err(self.pause_for(&error)?));
         }
         self.check_backoff()
     }
 
-    fn parent_status(&self, row: &AnnotationRow) -> ParentStatus {
-        match self.api.item(&row.parent_key) {
-            Ok(Some(_)) => ParentStatus::OnServer,
-            _ if self.parents.has_attachment(&row.parent_key) => ParentStatus::PendingInZotero,
-            Ok(None) => ParentStatus::Deleted,
-            Err(_) => ParentStatus::PendingInZotero,
-        }
+    /// Tells a parent still on its way to Zotero from one that was deleted.
+    /// A failed read decides nothing: the caller pauses instead.
+    fn parent_status(&self, row: &AnnotationRow) -> Result<ParentStatus, ApiError> {
+        Ok(match self.api.item(&row.parent_key)? {
+            Some(_) => ParentStatus::OnServer,
+            None if self.parents.has_attachment(&row.parent_key) => ParentStatus::PendingInZotero,
+            None => ParentStatus::Deleted,
+        })
     }
 
-    fn send_one(&mut self, mut row: AnnotationRow, request: Request) -> Result<Result<(), Stop>, String> {
+    fn send_one(&mut self, row: AnnotationRow, request: Request) -> Result<Result<(), Stop>, String> {
         let mut retries_left = 1;
-        let mut request = request;
+        let mut sent = (row, request);
         loop {
-            let key = row.annotation_key.clone();
-            begin_send(&mut row, &request);
-            repo::save(self.conn, self.scope, &row, self.now_ms)?;
-            let answer = match &request {
+            let key = sent.0.annotation_key.clone();
+            let deleting = matches!(sent.1, Request::Delete { .. });
+            let answer = match &sent.1 {
                 Request::Update { key, version, fields } => self.api.patch(key, *version, fields),
                 Request::Delete { key, version } => self.api.delete(key, *version),
                 Request::Create { .. } => unreachable!("creates go in batches"),
             };
             let outcome = match answer {
-                Ok(WriteResult::Done { version }) => {
-                    if matches!(row.sent_json, Some(Sent::Delete)) {
-                        Outcome::Gone
-                    } else {
-                        Outcome::Applied { version }
-                    }
-                }
-                Ok(WriteResult::NotFound) if matches!(row.sent_json, Some(Sent::Delete)) => Outcome::Gone,
+                Ok(WriteResult::Done { .. }) if deleting => Outcome::Gone,
+                Ok(WriteResult::Done { version }) => Outcome::Applied { version },
+                Ok(WriteResult::NotFound) if deleting => Outcome::Gone,
                 Ok(WriteResult::NotFound) => Outcome::Stale { remote: RemoteChange::PermanentlyDeleted },
                 Ok(WriteResult::Stale) => match self.api.item(&key) {
-                    Ok(Some(ServerItem { version, data })) => Outcome::Stale { remote: RemoteChange::Item { version, data } },
+                    Ok(Some(ServerItem { version, data })) => {
+                        Outcome::Stale { remote: RemoteChange::Item { version, data } }
+                    }
                     Ok(None) => Outcome::Stale { remote: RemoteChange::PermanentlyDeleted },
                     Err(error) => {
                         // The write was refused; only the follow-up read failed.
-                        let action = apply_outcome(&mut row, Outcome::Refused).into_action();
-                        self.save(&key, &row, &action)?;
+                        self.settle(&key, |fresh| apply_outcome(fresh, Outcome::Refused).into_action())?;
                         return Ok(Err(self.pause_for(&error)?));
                     }
                 },
                 Ok(WriteResult::Rejected { message, .. }) => Outcome::Rejected { message },
                 Err(error) => {
-                    let action = apply_outcome(&mut row, outcome_of_error(&error)).into_action();
-                    self.save(&key, &row, &action)?;
+                    let outcome = outcome_of_error(&error);
+                    self.settle(&key, |fresh| apply_outcome(fresh, outcome).into_action())?;
                     return Ok(Err(self.pause_for(&error)?));
                 }
             };
             self.report.sent += 1;
-            match apply_outcome(&mut row, outcome) {
-                Next::Done(action) => {
-                    self.save(&key, &row, &action)?;
-                    break;
-                }
+            let mut retry = false;
+            self.settle(&key, |fresh| match apply_outcome(fresh, outcome) {
+                Next::Done(action) => action,
                 Next::RetryOnce(action) => {
-                    self.save(&key, &row, &action)?;
-                    if retries_left == 0 {
-                        break;
-                    }
-                    retries_left -= 1;
-                    match next_request(&mut row) {
-                        Some(next) => request = next,
-                        None => {
-                            self.save(&key, &row, &RowAction::Save)?;
-                            break;
-                        }
-                    }
+                    retry = true;
+                    action
                 }
+            })?;
+            if !retry || retries_left == 0 {
+                break;
+            }
+            retries_left -= 1;
+            match self.begin(&key)? {
+                Some(next) => sent = next,
+                None => break,
             }
         }
         self.check_backoff()
     }
+}
+
+/// A write transaction that takes the lock at once, so a local command never
+/// slips between the read and the write of a row.
+pub(crate) fn immediate(conn: &Connection) -> Result<rusqlite::Transaction<'_>, String> {
+    rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| format!("annotation transaction failed: {error}"))
 }
 
 /// The machine outcome of a call that produced no usable answer.

@@ -241,6 +241,14 @@ fn remerge_conflict(row: &mut AnnotationRow, old_base: &Data, remote: &Data) {
     let Some(mut local) = row.local_json.take() else {
         return;
     };
+    // Moved to the trash in Zotero while the user keeps the annotation: that is
+    // an existence decision (4.1), never a remote-only change merged into the
+    // local intent.
+    let newly_trashed =
+        remote_trashed && !wire::is_trashed(old_base) && !wire::is_trashed(&local);
+    if newly_trashed && row.existence_reason().is_none() {
+        row.add_existence_conflict(ExistenceReason::Trashed);
+    }
     let disputed_before: Vec<String> = row
         .conflict_fields
         .iter()
@@ -267,6 +275,11 @@ fn remerge_conflict(row: &mut AnnotationRow, old_base: &Data, remote: &Data) {
     let mut remote_scratch = remote.clone();
     for field in &disputed_before {
         remote_scratch.remove(field);
+    }
+    if newly_trashed {
+        undisputed_base.remove(wire::DELETED_FIELD);
+        scratch.remove(wire::DELETED_FIELD);
+        remote_scratch.remove(wire::DELETED_FIELD);
     }
     for (field, value) in three_way(&undisputed_base, &mut scratch, &remote_scratch) {
         row.add_conflict(&field, value);

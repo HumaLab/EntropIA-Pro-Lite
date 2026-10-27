@@ -189,9 +189,9 @@ fn mutate(
             Ok(found) => found,
             Err(status) => return Err(status.to_string()),
         };
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|error| format!("annotation write failed: {error}"))?;
+        // IMMEDIATE, like the sync engine: read and write of one row are one
+        // step, so neither side ever writes from a stale copy.
+        let tx = super::engine::immediate(&conn)?;
         let mut row = repo::load(&conn, &scope, &key)?.ok_or("annotation not found")?;
         let action = change(&mut row)?;
         repo::apply(&conn, &scope, &key, &row, &action, now_ms())?;
