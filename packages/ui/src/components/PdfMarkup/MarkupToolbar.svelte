@@ -93,6 +93,9 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     background: var(--color-surface);
+    /* The viewer's toolbar anchor lets pointer events through its empty
+       space; the toolbar takes them back, as AnnotationToolbar does. */
+    pointer-events: auto;
   }
 
   .markup-toolbar__divider {
