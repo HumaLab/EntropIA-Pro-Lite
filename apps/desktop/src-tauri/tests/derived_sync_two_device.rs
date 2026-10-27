@@ -423,3 +423,215 @@ async fn a_capability_discovered_on_a_later_epoch_pushes_what_waited() {
         "derived_contracts"
     );
 }
+
+// ── T9: pull before pay (§2.6, D5) ─────────────────────────────────────────
+//
+// The freshness barrier is the part the catch-up cannot see: B already walked
+// the whole channel once, A uploads afterwards in the same epoch, and B's
+// catalogue (and therefore its derived backlog) arrives before the next pull.
+// The gate must ask for one incremental pull and let the unit re-run, so the
+// rows A uploaded answer the misses instead of being paid for again.
+
+mod gate {
+    use super::*;
+    use entropia_desktop_lib::sync::derived_gate::{evaluate, GateVerdict, ProceedReason};
+
+    const ACCOUNT: &str = ACCOUNT_A;
+
+    /// One admitted unit of B: only its id and admission instant (written by
+    /// the catalogue synchronisation that created it) matter to the gate.
+    fn admit(device: &TestDevice, task_id: &str, created_at: i64) {
+        device
+            .conn
+            .execute(
+                "INSERT INTO processing_tasks
+                   (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+                 VALUES (?1, 'bibliography_extract', ?1, 'bibliography', 'attachment', ?1, 'pending', ?2, ?2)",
+                rusqlite::params![task_id, created_at],
+            )
+            .expect("admitted unit");
+    }
+
+    fn verdict(device: &TestDevice, task_id: &str, now_ms: i64) -> GateVerdict {
+        evaluate(&device.conn, task_id, now_ms)
+    }
+
+    /// S5: B's first boot, with a session and no capability verdict yet, waits;
+    /// the first ordinary response of the sync engine answers it.
+    #[tokio::test]
+    async fn b_waits_on_its_first_boot_until_the_capability_is_known() {
+        let server = MockServer::new();
+        let mut b = TestDevice::new("device-b", "token-b");
+        b.login(&server, SERVER_URL, ACCOUNT);
+        admit(&b, "task-first-boot", 1_000);
+
+        match verdict(&b, "task-first-boot", 1_000) {
+            GateVerdict::Defer { reason, .. } => {
+                assert_eq!(
+                    reason,
+                    entropia_desktop_lib::sync::derived_gate::DeferReason::CapabilityUnknown
+                );
+            }
+            other => panic!("a first boot must wait, got {other:?}"),
+        }
+
+        // The engine runs one cycle: the ordinary response advertises the token
+        // and the epoch's catch-up lands the whole channel. The completed
+        // catch-up stamps the freshness signal with its own start, which is
+        // later than this unit's admission, so the boot's work pays at once
+        // instead of spending one more pull.
+        b.sync(&server).await;
+
+        match verdict(&b, "task-first-boot", 1_000) {
+            GateVerdict::Proceed(ProceedReason::Fresh) => {}
+            other => panic!("the catch-up covers work admitted before it, got {other:?}"),
+        }
+        assert!(
+            last_pull_started_at(&b.conn).is_some(),
+            "the catch-up stamped the freshness signal"
+        );
+        assert!(
+            b.meta("derived_pull_requested").is_none(),
+            "so no pull was asked for at all"
+        );
+    }
+
+    /// Plan §2.6 / S5 freshness: A uploads after B's catch-up; B's unit is
+    /// admitted before the next pull, so the gate asks for one incremental pull
+    /// and the rows answer the misses — no paid call is needed for them.
+    #[tokio::test]
+    async fn a_late_upload_by_a_is_pulled_before_b_pays_for_it() {
+        let server = MockServer::new();
+        let (mut a, mut b) = devices();
+        a.login(&server, SERVER_URL, ACCOUNT);
+        a.seed_paid_vector(CONTRACT, "paid-before-b", DIMENSIONS, 0x51);
+        a.sync(&server).await;
+
+        b.login(&server, SERVER_URL, ACCOUNT);
+        b.sync(&server).await; // catch-up: B now holds everything A paid so far
+        let catchup_stamp = last_pull_started_at(&b.conn).expect("catch-up stamped the signal");
+        // A finishes more material in the same epoch and uploads it.
+        a.seed_paid_vector(CONTRACT, "uploaded-late", DIMENSIONS, 0x52);
+        a.sync(&server).await;
+        // B's catalogue synchronisation admits the work AFTER that pull (the
+        // exact S5 sequence: the catalogue arrives before the next pull).
+        let admitted_at = catchup_stamp + 1;
+        admit(&b, "task-late-upload", admitted_at);
+        // Puts the admission strictly in the past, so the pull the gate is
+        // about to request can only start after it.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+
+        let pulls_before = server.derived_pull_since.lock().unwrap().len();
+        let deferred = verdict(&b, "task-late-upload", admitted_at + 1);
+        assert!(
+            matches!(deferred, GateVerdict::Defer { .. }),
+            "a cache that predates the admission cannot be trusted to be complete, got {deferred:?}"
+        );
+        assert!(
+            b.meta("derived_pull_requested").is_some(),
+            "the gate asked the engine for one incremental pull"
+        );
+
+        // The engine's next tick runs the asked-for pull and consumes the flag.
+        b.sync(&server).await;
+        let since = server.derived_pull_since.lock().unwrap().clone();
+        assert_eq!(
+            since[pulls_before..].len(),
+            1,
+            "exactly one incremental pull for the request: {:?}",
+            &since[pulls_before..]
+        );
+        assert!(b.meta("derived_pull_requested").is_none(), "consumed");
+
+        // The unit re-runs: the cache is now fresh for its admission and holds
+        // what A uploaded, so the provider is never called for it.
+        match verdict(&b, "task-late-upload", admitted_at + 2) {
+            GateVerdict::Proceed(reason) => assert_eq!(reason, ProceedReason::Fresh),
+            other => panic!("the requested pull makes the cache fresh, got {other:?}"),
+        }
+        let answered = cached_vectors(
+            &b.conn,
+            CONTRACT,
+            DIMENSIONS as usize,
+            &["uploaded-late".to_string()],
+        );
+        assert_eq!(
+            answered.get("uploaded-late"),
+            Some(&vec![0x52u8; (DIMENSIONS * 4) as usize]),
+            "the row A uploaded answers B's miss without a paid call"
+        );
+    }
+
+    /// §2.6: a pull that started after the unit's admission is fresh for that
+    /// unit for as long as it lives — freshness is the admission, not the clock
+    /// (D5's `F` was dropped so a large backlog is not throttled) — so the unit
+    /// simply pays its remaining misses and never asks for another pull.
+    #[tokio::test]
+    async fn a_pull_after_the_admission_is_not_repeated() {
+        let server = MockServer::new();
+        let mut b = TestDevice::new("device-b", "token-b");
+        b.login(&server, SERVER_URL, ACCOUNT);
+        b.sync(&server).await;
+        // Bring the epoch to the "supported and caught up with an incremental
+        // pull" state the barrier reads.
+        request_incremental_pull(&b.conn).expect("request");
+        b.sync(&server).await;
+        let pulled_at = last_pull_started_at(&b.conn).expect("pull stamp");
+        // A unit admitted BEFORE that pull, evaluated right after it and hours
+        // later: the same pull keeps covering it.
+        admit(&b, "task-fresh", pulled_at - 1_000);
+        let pulls_before = server.derived_pull_since.lock().unwrap().len();
+
+        for now in [pulled_at, pulled_at + 4 * 60 * 60 * 1000] {
+            match verdict(&b, "task-fresh", now) {
+                GateVerdict::Proceed(reason) => assert_eq!(reason, ProceedReason::Fresh),
+                other => panic!("a pull after the admission is fresh, got {other:?}"),
+            }
+            assert!(
+                b.meta("derived_pull_requested").is_none(),
+                "a fresh cache is not pulled again"
+            );
+        }
+        assert_eq!(
+            server.derived_pull_since.lock().unwrap().len(),
+            pulls_before,
+            "no extra pull left the device"
+        );
+    }
+
+    /// §2.6: the misses of several units share ONE pull — the request is a flag,
+    /// and the transport runs at most one incremental pull per cycle.
+    #[tokio::test]
+    async fn the_misses_of_several_units_share_one_pull() {
+        let server = MockServer::new();
+        let mut b = TestDevice::new("device-b", "token-b");
+        b.login(&server, SERVER_URL, ACCOUNT);
+        b.sync(&server).await;
+        request_incremental_pull(&b.conn).expect("request");
+        b.sync(&server).await;
+        let pulled_at = last_pull_started_at(&b.conn).expect("pull stamp");
+        // Both units are admitted AFTER that pull: for them the cache predates
+        // the work, so neither may trust it.
+        admit(&b, "task-a", pulled_at + 100);
+        admit(&b, "task-b", pulled_at + 200);
+        let pulls_before = server.derived_pull_since.lock().unwrap().len();
+
+        for task in ["task-a", "task-b"] {
+            assert!(
+                matches!(
+                    verdict(&b, task, pulled_at + 300),
+                    GateVerdict::Defer { .. }
+                ),
+                "{task} must wait while the cache is stale for it"
+            );
+        }
+        b.sync(&server).await;
+        let since = server.derived_pull_since.lock().unwrap().clone();
+        assert_eq!(
+            since[pulls_before..].len(),
+            1,
+            "both units' misses were covered by one pull: {:?}",
+            &since[pulls_before..]
+        );
+    }
+}

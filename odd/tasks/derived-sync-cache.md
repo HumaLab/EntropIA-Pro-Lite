@@ -47,7 +47,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | 75223749 |
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | a54cd659 |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | 9ea6a1f9 |
-| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | — |
+| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 6e1dd5d2 |
 | T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | 519a9878 |
 | T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | — |
 | T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
@@ -86,3 +86,13 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   after `ensure_capture_on_path`, and after a successful login. If `ensure_capture_on_path` fails at setup, the
   seed waits for the next start or login (accepted).
 - **L9** (T8): wire contract for the server team in `apps/desktop/src-tauri/src/sync/derived_protocol.md`.
+- **L10** (T9, D5 working values): first-boot wait (capability unknown or catch-up pending) capped at 15 min per
+  epoch; a stale-cache wait is capped per unit, anchored at its admission. Parent decision: the plan's freshness
+  age bound F was dropped; fresh means "the last pull started after this unit's admission, same epoch", because
+  F throttled large backlogs even on the paying device. Deferral is `ExecOutput::Deferred` (task parked in
+  `retry_wait`, nothing charged); the engine honors a pull request within about 60 s, one interval bypass per
+  request. A legacy server (no capability) costs one wait of about 60 s on the first launch of this build, then
+  never again in that epoch.
+- **L11** (environment): this notebook runs Node 26, whose global `localStorage` breaks happy-dom; the full
+  desktop suite needs `NODE_OPTIONS=--no-experimental-webstorage` here (CI uses Node 22). With it: Pro 3747 and
+  Lite 3711 tests pass.

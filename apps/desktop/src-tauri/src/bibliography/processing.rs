@@ -952,6 +952,12 @@ impl BibliographySyncExecutor {
                 sync_log("error", &format!("library sync failed ({code}): {message}"))
             }
             ExecOutput::Stopped => sync_log("info", "library sync stopped before finishing"),
+            // A catalog walk never asks the pull-before-pay gate: it spends no
+            // provider call. Kept honest here so a future engine that does
+            // cannot smuggle a deferral past the verdict handlers.
+            ExecOutput::Deferred { reason, .. } => {
+                sync_log("info", &format!("library sync deferred ({reason})"))
+            }
             ExecOutput::Success { .. } => {}
         }
         self.persist_verdict(ctx, run, checkpoints, progress_total, output, false)
@@ -1031,6 +1037,12 @@ impl BibliographySyncExecutor {
             ),
             ExecOutput::Blocked { .. } => reconciliation::mark_blocked(&mut conn, run_ref(run)),
             ExecOutput::Stopped => reconciliation::mark_interrupted(&mut conn, run_ref(run)),
+            // A deferral leaves the reconciliation where it was, exactly like a
+            // stop: no provider call happened, so the next attempt resumes from
+            // the committed cursor.
+            ExecOutput::Deferred { .. } => {
+                reconciliation::mark_interrupted(&mut conn, run_ref(run))
+            }
             ExecOutput::Success { .. } => Ok(run.clone()),
         };
         match transition {
@@ -2190,6 +2202,10 @@ impl BibliographyProfileExecutor {
         let embedding = match cached.get(&built.input_hash) {
             Some(blob) => blob.clone(),
             None => {
+                // §2.6: the ficha's own vector is the profile path's first paid
+                // call, so the gate runs here — after the cache read decided it
+                // is a miss, never at claim time.
+                gate_before_paid_call(ctx, task)?;
                 let vector = ctx
                     .unit(task, "profile", || {
                         let vector = self.embedder.embed(&built.canonical_text)?;
@@ -2403,6 +2419,12 @@ impl BibliographyProfileExecutor {
             .embed_wave
             .unwrap_or_else(|| self.embedder.batch_hint())
             .max(1);
+        // §2.6: pasaje vectors are paid waves too, and the cache read above
+        // decided which ones are misses. Only a unit with misses can wait, and
+        // the re-check costs nothing: a fresh cache passes straight through.
+        if !pending.is_empty() {
+            gate_before_paid_call(ctx, task)?;
+        }
         for wave in pending.chunks(wave_size) {
             if stop.stopped() {
                 return Err(ExecOutput::Stopped);
@@ -2720,8 +2742,74 @@ pub const BIBLIOGRAPHY_EXTRACT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 /// inflating memory without limit.
 pub const BIBLIOGRAPHY_PAGE_CONTENT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
+/// The pull-before-pay gate (plan-sync-bibliografia-derivada §2.6, D5) for one
+/// unit that is about to make its FIRST paid call with a cache miss in hand.
+///
+/// `Ok(())` means the misses that survived the cache read may be paid now.
+/// A deferral — the account's cache is not as complete as it can get yet —
+/// arrives as [`ExecOutput::Deferred`]: the supervisor parks the unit until the
+/// instant the gate computed and charges nothing, so it re-runs by itself
+/// (see [`crate::sync::derived_gate`]). A gate that cannot even be read never
+/// withholds the owner's work: the cache saves money, it does not block the app.
+fn gate_before_paid_call(ctx: &ExecCtx, task: &ClaimedTask) -> Result<(), ExecOutput> {
+    use crate::sync::derived_gate::{evaluate, GateVerdict};
+    let conn = match open_archive_connection(&ctx.db_path) {
+        Ok(conn) => conn,
+        Err(error) => {
+            log::warn!(
+                target: "bibliography",
+                "derived gate read skipped, paying as before: {error}"
+            );
+            return Ok(());
+        }
+    };
+    match evaluate(&conn, &task.task_id, processing_repository::now_ms()) {
+        GateVerdict::Proceed(reason) => {
+            log::info!(
+                target: "bibliography",
+                "derived gate lets {} pay ({}), cache misses only",
+                task.task_id,
+                reason.as_str()
+            );
+            Ok(())
+        }
+        GateVerdict::Defer {
+            resume_at_ms,
+            reason,
+        } => {
+            log::info!(
+                target: "bibliography",
+                "derived gate parks {} until {resume_at_ms} ({})",
+                task.task_id,
+                reason.as_str()
+            );
+            Err(ExecOutput::Deferred {
+                code: crate::sync::derived_gate::DERIVED_WAIT_CODE.to_string(),
+                reason: reason.as_str().to_string(),
+                next_retry_at_ms: resume_at_ms,
+            })
+        }
+    }
+}
+
+/// The native pass of one extraction, as a deferred attempt hands it to the
+/// next one: the free work the gate must not repeat. Only page texts, the
+/// whole-document text and the candidacy flag — the file bytes are re-read and
+/// decrypted on resume, which is what the OCR pass renders from anyway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeBasisCheckpoint {
+    page_count: i64,
+    pages: Vec<ExtractPageText>,
+    legacy_text: String,
+    native_blank: bool,
+}
+
+/// The checkpoint key of the native pass (see [`NativeBasisCheckpoint`]).
+const NATIVE_BASIS_UNIT: &str = "native-basis";
+
 /// One page's native text with its own hash and quality verdict.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractPageText {
     pub page_number: i64,
@@ -2964,6 +3052,47 @@ pub fn read_native_extraction_basis(
     app: Option<&tauri::AppHandle>,
 ) -> Result<NativeExtractionBasis, crate::processing::scheduler::ExecOutput> {
     read_native_extraction_basis_with_cancel(bytes, app, None, None)
+}
+
+/// Whether the automatic selection (the executor's) would hand at least one page
+/// to the OCR provider: the same candidate rule [`maybe_ocr_pages`] uses, run
+/// before the pass so a deferral only keeps a native pass that will be needed.
+fn ocr_candidates_will_be_needed(pages: &[ExtractPageText], native_blank: bool) -> bool {
+    !ocr_candidate_pages(pages, native_blank).is_empty()
+}
+
+/// The pre-OCR basis of one extraction, reusing the free native pass a deferred
+/// attempt already did (plan §2.6).
+///
+/// A unit the pull-before-pay gate parked re-runs later; the document has not
+/// changed (the checkpoint is bound to this task's input fingerprint and
+/// contract), so re-reading and re-extracting every page would be work the owner
+/// already waited for. The checkpoint carries no file bytes: the decryption the
+/// OCR pass renders from is redone here, which is cheap next to the page passes.
+fn read_native_basis(
+    ctx: &ExecCtx,
+    task: &ClaimedTask,
+    bytes: &[u8],
+    app: Option<&tauri::AppHandle>,
+) -> Result<NativeExtractionBasis, ExecOutput> {
+    match ctx.saved_unit::<NativeBasisCheckpoint>(task, NATIVE_BASIS_UNIT) {
+        Ok(Some(saved)) => {
+            let readable = crate::ocr::pdf::open_with_empty_password(bytes).map_err(|message| {
+                ExecOutput::Fatal {
+                    code: "extraction_failed".to_string(),
+                    message,
+                }
+            })?;
+            Ok(NativeExtractionBasis {
+                bytes: readable.into_owned(),
+                page_count: saved.page_count,
+                pages: saved.pages,
+                legacy_text: saved.legacy_text,
+                native_blank: saved.native_blank,
+            })
+        }
+        _ => read_native_extraction_basis(bytes, app),
+    }
 }
 
 /// Reads the pre-OCR basis of one PDF, with the caller's cancellation flag
@@ -3464,15 +3593,19 @@ impl BibliographyExtractExecutor {
             pages,
             legacy_text,
             native_blank,
-        } = read_native_extraction_basis(bytes, self.app.as_ref())?;
+        } = read_native_basis(ctx, task, bytes, self.app.as_ref())?;
         let bytes: &[u8] = &readable;
-        let OcrPass {
-            pages,
-            failed_pages: ocr_failed_pages,
-            attempted: ocr_attempted,
-            pages_needed: ocr_pages,
-            outcomes: ocr_outcomes,
-        } = self.maybe_ocr_pages(
+        // The gate (§2.6) can park this unit AFTER the native pass and before
+        // the first paid OCR call. Keep that free pass for the resumed attempt:
+        // a deferred unit must not re-read and re-extract the document.
+        let deferred_basis =
+            ocr_candidates_will_be_needed(&pages, native_blank).then(|| NativeBasisCheckpoint {
+                page_count,
+                pages: pages.clone(),
+                legacy_text: legacy_text.clone(),
+                native_blank,
+            });
+        let ocr_pass = self.maybe_ocr_pages(
             ctx,
             task,
             stop,
@@ -3481,7 +3614,35 @@ impl BibliographyExtractExecutor {
             pages,
             native_blank,
             OcrPageSelection::Automatic,
-        )?;
+        );
+        let OcrPass {
+            pages,
+            failed_pages: ocr_failed_pages,
+            attempted: ocr_attempted,
+            pages_needed: ocr_pages,
+            outcomes: ocr_outcomes,
+        } = match ocr_pass {
+            Ok(pass) => pass,
+            Err(deferred @ ExecOutput::Deferred { .. }) => {
+                if let Some(basis) = deferred_basis {
+                    // Best effort: a checkpoint that cannot be written only
+                    // costs the resumed attempt the native pass, never the
+                    // deferral itself.
+                    if let Err(error) = ctx.store_unit(task, NATIVE_BASIS_UNIT, &basis) {
+                        log::warn!(
+                            target: "bibliography",
+                            "could not keep the native pass of {} for the resumed attempt: {error}",
+                            task.task_id
+                        );
+                    }
+                }
+                // The unit's park is the supervisor's decision; the executors
+                // only report that the paid call was not made (and when to ask
+                // again).
+                return Err(deferred);
+            }
+            Err(other) => return Err(other),
+        };
         let (text, quality) = document_text_from_pages(&pages, legacy_text);
         Ok(ExtractedDocument {
             page_count,
@@ -3712,6 +3873,15 @@ impl BibliographyExtractExecutor {
             .copied()
             .filter(|page| !cached_pages.contains_key(page))
             .collect();
+        // §2.6: the unit is about to pay, so this is the first place the
+        // pull-before-pay gate applies — AFTER the free native pass and only
+        // when misses survived the cache read. A unit whose pages the cache
+        // answered never gets here and therefore never waits. A deferral parks
+        // the task; the resumed attempt reads the cache again from the top, so
+        // whatever the requested pull installed is used before paying.
+        if !needing.is_empty() {
+            gate_before_paid_call(ctx, task)?;
+        }
         // Honest page progress before the first provider call: the task row
         // reads 0 over the pages that need OCR, and every settled page — a
         // cached checkpoint re-walked after a restart or a cached answer

@@ -120,6 +120,10 @@ describe('i18n', () => {
     expect(t('batch.statusBibliographyBlocked', waiting)).toBe(
       'Bibliografía: 2812 en espera: configurá OpenRouter en Configuración'
     )
+    // S5 / plan §2.6: the pull-before-pay gate's wait is one exact sentence.
+    expect(t('batch.statusBibliographyWaitingSync')).toBe(
+      'Bibliografía: esperando resultados de tus otros dispositivos…'
+    )
 
     locale.set('en')
 
@@ -164,6 +168,9 @@ describe('i18n', () => {
     )
     expect(t('batch.statusBibliographyBlocked', waitingEn)).toBe(
       'Bibliography: 2812 waiting: configure OpenRouter in Settings'
+    )
+    expect(t('batch.statusBibliographyWaitingSync')).toBe(
+      'Bibliography: waiting for results from your other devices…'
     )
   })
 
