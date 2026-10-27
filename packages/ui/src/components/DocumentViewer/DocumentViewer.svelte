@@ -1251,6 +1251,19 @@
 >
   {#if type === 'image' || type === 'pdf'}
     <div class="document-viewer__toolbar-anchor">
+      <!-- First, so the zoom column stays at the right edge the anchor aligns
+           to, clear of the page, as in Collections. -->
+      {#if markupsEnabled && type === 'pdf'}
+        <MarkupToolbar
+          tool={activeMarkupTool}
+          color={activeMarkupColor}
+          {allowedTools}
+          palette={markupPalette}
+          labels={markupLabels}
+          onToolChange={setMarkupTool}
+          onColorChange={setMarkupColor}
+        />
+      {/if}
       <AnnotationToolbar
         {readOnly}
         tool={annotationTool}
@@ -1288,17 +1301,6 @@
           zoomIn: labels.pdfZoomIn,
         }}
       />
-      {#if markupsEnabled && type === 'pdf'}
-        <MarkupToolbar
-          tool={activeMarkupTool}
-          color={activeMarkupColor}
-          {allowedTools}
-          palette={markupPalette}
-          labels={markupLabels}
-          onToolChange={setMarkupTool}
-          onColorChange={setMarkupColor}
-        />
-      {/if}
     </div>
   {/if}
 
