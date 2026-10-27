@@ -186,4 +186,15 @@ describe('DocumentViewer markups', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(pdf.textLayers).toHaveLength(0)
   })
+
+  it('builds no text layer while pauseWhenHidden reports the tab hidden', async () => {
+    render(DocumentViewer, {
+      props: baseProps({ markups: [], textSelection: true, pauseWhenHidden: true }),
+    })
+    await screen.findByTestId('pdf-markup-layer')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // happy-dom lays nothing out: the scroll container measures 0x0, i.e. hidden.
+    expect(pdf.textLayers).toHaveLength(0)
+  })
 })
+

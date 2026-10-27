@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
   import AnnotationToolbar from '../AnnotationToolbar/AnnotationToolbar.svelte'
   import AudioPlayer from '../AudioPlayer/AudioPlayer.svelte'
@@ -136,6 +137,7 @@
   // pdf.js's PageViewport of the page on screen; raw, it is never mutated.
   let markupViewport = $state.raw<MarkupViewport | null>(null)
   let markupPageNumber = $state(0)
+  let markupZoom = 0
   let markupPageProxy: PDFPageProxy | null = null
   let pdfjsLib: typeof import('pdfjs-dist') | null = null
   let textLayerContainer = $state<HTMLDivElement | null>(null)
@@ -199,7 +201,12 @@
     textLayerContainer = element
   }
 
-  function buildTextLayer(page: PDFPageProxy, viewport: MarkupViewport, container: HTMLDivElement) {
+  function buildTextLayer(
+    page: PDFPageProxy,
+    viewport: MarkupViewport,
+    container: HTMLDivElement,
+    requestId: number
+  ) {
     const pdfjs = pdfjsLib
     container.replaceChildren()
     container.style.setProperty('--scale-factor', String(viewport.scale))
@@ -212,27 +219,47 @@
       container,
       viewport: viewport as unknown as import('pdfjs-dist').PageViewport,
     })
-    void layer.render().catch(() => {
-      // A cancelled text layer rejects; the next identity builds its own.
-    })
+    void layer.render().then(
+      () => {
+        // A newer page render owns the layer now: this one is stale.
+        if (requestId !== renderRequestId) {
+          layer.cancel()
+          container.replaceChildren()
+        }
+      },
+      () => {
+        // A cancelled text layer rejects; the next identity builds its own.
+      }
+    )
     return {
       cancel: () => layer.cancel(),
       remove: () => container.replaceChildren(),
     }
   }
 
-  // The text layer follows the page on screen: (attachment, page, scale).
-  $effect(() => {
+  /**
+   * Builds the text layer of the page a render request drew, under that
+   * request's id (plan section 9): identity (attachment, page, scale); a stale
+   * request builds nothing. Never while the tab is hidden.
+   */
+  function syncTextLayer(requestId: number) {
     const container = textLayerContainer
     const viewport = markupViewport
-    const page = markupPageNumber
-    const documentUrl = assetUrl
-    if (!textSelection || !container || !viewport || !markupPageProxy) return
-    if (pauseWhenHidden && pdfContainerIsEmpty()) return
     const pageProxy = markupPageProxy
-    textLayers.sync({ document: documentUrl, page, scale: viewport.scale }, () =>
-      buildTextLayer(pageProxy, viewport, container)
+    if (requestId !== renderRequestId) return
+    if (!textSelection || !container || !viewport || !pageProxy) return
+    if (pauseWhenHidden && pdfContainerIsEmpty()) return
+    textLayers.sync({ document: assetUrl, page: markupPageNumber, scale: viewport.scale }, () =>
+      buildTextLayer(pageProxy, viewport, container, requestId)
     )
+  }
+
+  // The layer's container mounts after the first render that has a viewport;
+  // that render's request builds the layer once it exists.
+  $effect(() => {
+    const container = textLayerContainer
+    if (!container || !textSelection) return
+    untrack(() => syncTextLayer(renderRequestId))
   })
   const MIN_DRAW_PX = 6
   const UNDERLINE_STROKE_PX = 2
@@ -1006,6 +1033,8 @@
     const requestId = ++renderRequestId
     const requestedPage = pdfPage
     const requestedZoom = pdfZoom
+    // A new page or zoom: the current text layer belongs to the old one.
+    if (requestedPage !== markupPageNumber || requestedZoom !== markupZoom) textLayers.clear()
     const previousRenderSettled = renderBarrier
     cancelActiveRenderTask()
     activeRenderTask = null
@@ -1059,7 +1088,9 @@
       if (markupsEnabled || textSelection) {
         markupPageProxy = page
         markupPageNumber = requestedPage
+        markupZoom = requestedZoom
         markupViewport = viewport as unknown as MarkupViewport
+        syncTextLayer(requestId)
       }
       onPageChange(requestedPage, totalPages)
     } catch (err) {
