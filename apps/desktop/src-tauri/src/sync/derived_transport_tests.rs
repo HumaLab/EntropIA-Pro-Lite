@@ -1211,3 +1211,112 @@ fn the_scope_requires_a_complete_session() {
         "no incarnation, no scope"
     );
 }
+
+// ── T9 fixes: unserved requests are consumed, catch-up stamps freshness ────
+
+/// D3: a request the phase cannot serve must be consumed. An unsupported epoch
+/// (no capability) never serves one, so without this the flag would stay set and
+/// the engine's interval ticker would run a full sync cycle every 60 s forever.
+#[tokio::test]
+async fn an_unsupported_channel_consumes_the_gate_request() {
+    let conn = new_synced_test_db();
+    login(&conn, ACCOUNT_A);
+    record_capability(&conn, EPOCH, false).expect("legacy verdict");
+    request_incremental_pull(&conn).expect("gate request");
+
+    let api = MockSyncApi::default();
+    let warn = warn_sink();
+    let outcome = run_derived_cycle(&api, "token-a", &conn, 8 * 1024 * 1024, &warn).await;
+
+    assert_eq!(outcome.capability, Some(DerivedCapability::Unsupported));
+    assert!(!outcome.pulled_incrementally);
+    assert_eq!(*api.derived_pull_calls.lock().unwrap(), 0);
+    assert!(
+        !pull_requested(&conn).expect("read"),
+        "the request is consumed: the confirm is absence, not a pending pull"
+    );
+    assert!(
+        !super::engine::tick_should_run(&conn, std::time::Duration::from_secs(1)),
+        "the ticker no longer bypasses the auto-sync interval"
+    );
+}
+
+/// D3: a failing pull also consumes the request — the gate's bounded wait
+/// proceeds, and the flag cannot spin the engine every 60 s.
+#[tokio::test]
+async fn a_failing_pull_consumes_the_gate_request() {
+    let conn = new_synced_test_db();
+    login(&conn, ACCOUNT_A);
+    support_channel(&conn);
+    request_incremental_pull(&conn).expect("gate request");
+
+    let api = MockSyncApi::default();
+    // The next derived pull answers 409 cursor_ahead: the phase cannot install it.
+    api.set_cursor_ahead(1);
+    let warn = warn_sink();
+    let outcome = run_derived_cycle(&api, "token-a", &conn, 8 * 1024 * 1024, &warn).await;
+
+    assert!(outcome.pull_requested, "the gate had asked for it");
+    assert_eq!(
+        *api.derived_pull_calls.lock().unwrap(),
+        1,
+        "it tried exactly once"
+    );
+    assert!(
+        !pull_requested(&conn).expect("read"),
+        "the failed attempt consumed the request"
+    );
+    assert!(
+        !super::engine::tick_should_run(&conn, std::time::Duration::from_secs(1)),
+        "the ticker goes back to the configured interval"
+    );
+}
+
+/// Advisory: a completed catch-up stamps the freshness signal with the instant
+/// it STARTED, so the backlog that admitted its work while the catch-up ran is
+/// fresh afterwards — no extra pull for material the catch-up already carried.
+#[tokio::test]
+async fn a_completed_catchup_stamps_the_freshness_signal_with_its_own_start() {
+    let conn = new_synced_test_db();
+    login(&conn, ACCOUNT_A);
+    record_capability(&conn, EPOCH, true).expect("capability");
+    let admitted_at = now_ms() - 60_000;
+    conn.execute(
+        "INSERT INTO processing_tasks
+           (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+         VALUES ('task-before-catchup', 'bibliography_extract', 'att-1', 'bibliography',
+                 'attachment', 'att-1', 'pending', ?1, ?1)",
+        [admitted_at],
+    )
+    .expect("admitted before the catch-up");
+
+    let mut api = MockSyncApi::default();
+    api.server_epoch = EPOCH.to_string();
+    *api.server_capabilities.lock().unwrap() = vec![BIBLIOGRAPHY_DERIVED_V1_CAPABILITY.to_string()];
+    api.queue_pull_page(PullResponse {
+        rows: vec![],
+        next_since: 3,
+        has_more: false,
+        schema_tag: String::new(),
+        server_epoch: EPOCH.to_string(),
+        server_now_ms: 0,
+        capabilities: vec![BIBLIOGRAPHY_DERIVED_V1_CAPABILITY.to_string()],
+    });
+
+    let warn = warn_sink();
+    let outcome = run_derived_cycle(&api, "token-a", &conn, 8 * 1024 * 1024, &warn).await;
+    assert!(outcome.catchup_recorded);
+
+    let stamped = last_pull_started_at(&conn).expect("the catch-up stamped the signal");
+    assert!(stamped > admitted_at, "stamped with its own start");
+    let gate_verdict = super::derived_gate::evaluate(&conn, "task-before-catchup", now_ms());
+    assert_eq!(
+        gate_verdict,
+        super::derived_gate::GateVerdict::Proceed(super::derived_gate::ProceedReason::Fresh),
+        "the catch-up covers work admitted before it began"
+    );
+    assert!(
+        !pull_requested(&conn).expect("read"),
+        "so the gate asks for nothing"
+    );
+}

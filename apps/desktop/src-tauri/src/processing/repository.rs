@@ -1411,7 +1411,11 @@ const ETA_MIN_FINISHED_ATTEMPTS: i64 = 3;
 /// open attempt is never a sample: it has no finish stamp. Attempts of tasks
 /// parked `blocked` are not samples either — they record a parking decision,
 /// not work, and their near-zero durations would drag the average into a
-/// lie. Neither are the attempts of `exclude_task_id`: the unit running
+/// lie. The pull-before-pay gate's waiting attempts (their durable code is
+/// [`crate::sync::derived_gate::DERIVED_WAIT_CODE`]) are the same kind of
+/// non-work: they wait for the account's cache, and a first boot that parks a
+/// thousand units must not make the backlog look instantaneous.
+/// Neither are the attempts of `exclude_task_id`: the unit running
 /// right now is timed by its own progress, and its attempts (interrupted
 /// hours-long walks of one huge attachment among them) are not what a fresh
 /// attachment costs. A `None` average means nothing of the kind has
@@ -1428,8 +1432,14 @@ fn finished_attempt_average(
            JOIN processing_tasks t ON t.id = a.task_id
           WHERE t.rowid > ?1 AND t.kind = ?2 AND t.state <> 'blocked'
             AND a.finished_at IS NOT NULL AND a.finished_at >= a.started_at
-            AND (?3 IS NULL OR a.task_id <> ?3)",
-        rusqlite::params![anchor, kind, exclude_task_id],
+            AND (?3 IS NULL OR a.task_id <> ?3)
+            AND COALESCE(a.error_code, '') <> ?4",
+        rusqlite::params![
+            anchor,
+            kind,
+            exclude_task_id,
+            crate::sync::derived_gate::DERIVED_WAIT_CODE
+        ],
         |row| {
             Ok((
                 row.get(0)?,
@@ -1900,6 +1910,11 @@ pub fn bibliography_sync_status(
     }
     let eta_ms = (estimable && (samples_total >= ETA_MIN_FINISHED_ATTEMPTS || page_rate_measured))
         .then_some(estimate_ms);
+    // Live work the pull-before-pay gate parked (§2.6): counted beside the
+    // blocked work, never inside it — these units move by themselves when the
+    // engine's pull lands or the bounded wait expires, so the screen says it is
+    // waiting for the other devices instead of asking the owner for anything.
+    let (profiles_waiting, extractions_waiting) = derived_waiting_subjects(conn)?;
     Ok(super::commands::BibliographySyncStatus {
         new_profiles: derived("bibliography_profile")?,
         new_extractions: derived("bibliography_extract")?,
@@ -1909,6 +1924,8 @@ pub fn bibliography_sync_status(
         extractions_total,
         profiles_blocked,
         extractions_blocked,
+        profiles_waiting,
+        extractions_waiting,
         profiles_blocked_reason: blocked_reason("bibliography_profile")?,
         extractions_blocked_reason: blocked_reason("bibliography_extract")?,
         current: running
@@ -1928,6 +1945,31 @@ pub fn bibliography_sync_status(
         progress_done,
         progress_total,
     })
+}
+
+/// Live derived work the pull-before-pay gate parked (plan §2.6, D5):
+/// `(works, attachments)` whose LATEST task is waiting for the account's
+/// derived cache, exactly the shape the status bar counts as blocked work.
+///
+/// Deferred units are not blocked — nothing is wrong and nothing is owed to the
+/// owner, they re-run by themselves when the pull lands or the bounded wait
+/// expires — so they are counted apart, under the gate's own durable code, and
+/// never inside `blocked`.
+pub fn derived_waiting_subjects(conn: &Connection) -> Result<(i64, i64), String> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(t.kind = 'bibliography_profile'), 0),
+                COALESCE(SUM(t.kind = 'bibliography_extract'), 0)
+           FROM (SELECT MAX(rowid) AS latest_rowid
+                   FROM processing_tasks
+                  WHERE domain = 'bibliography'
+                    AND kind IN ('bibliography_profile', 'bibliography_extract')
+                  GROUP BY kind, subject_id) AS latest
+           JOIN processing_tasks t ON t.rowid = latest.latest_rowid
+          WHERE t.state = 'retry_wait' AND t.last_error_code = ?1",
+        [crate::sync::derived_gate::DERIVED_WAIT_CODE],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .map_err(|error| format!("Failed to count the gate's waiting bibliography work: {error}"))
 }
 
 /// Durable status of the newest `bibliography_sync` task, or `None` when no
@@ -5007,6 +5049,50 @@ pub fn block_running_task(
         ));
     }
     close_open_attempt(conn, task_id, "interrupted")?;
+    Ok(())
+}
+
+/// Parks a running unit on the pull-before-pay gate until `resume_at_ms`
+/// (plan-sync-bibliografia-derivada §2.6, D5).
+///
+/// This is not a failure: no provider call was made, so the attempt closes as
+/// `interrupted` — the shape [`requeue_task`] leaves — and `retry_count` and
+/// `retry_cycle` are untouched, which is what "does not burn the retry budget"
+/// means. The task re-runs by itself at `next_retry_at_ms`, when the engine's
+/// pull has landed or the bounded wait expired. The deferred attempt carries
+/// `code` (today [`crate::sync::derived_gate::DERIVED_WAIT_CODE`]) in both the
+/// task row and the attempt, so the status bar can count the wait and the ETA
+/// average can leave these near-zero attempts out.
+pub fn defer_task(
+    conn: &Connection,
+    task_id: &str,
+    lease_epoch: i64,
+    next_retry_at_ms: i64,
+    code: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE processing_tasks SET state = 'retry_wait', next_retry_at = ?1,
+               last_error_code = ?2, last_error_message = ?3, owner_session = NULL,
+               updated_at = ?4
+             WHERE id = ?5 AND state = 'running' AND lease_epoch = ?6",
+            rusqlite::params![next_retry_at_ms, code, reason, now_ms, task_id, lease_epoch],
+        )
+        .map_err(|e| format!("Failed to park {task_id} on the derived gate: {e}"))?;
+    if changed == 0 {
+        return Err(format!(
+            "lease_lost: {task_id} is no longer owned by epoch {lease_epoch}"
+        ));
+    }
+    conn.execute(
+        "UPDATE processing_attempts SET outcome = 'interrupted', finished_at = ?1,
+           error_code = ?2
+         WHERE task_id = ?3 AND outcome = 'open'",
+        rusqlite::params![now_ms, code, task_id],
+    )
+    .map_err(|e| format!("Failed to close the deferred attempt of {task_id}: {e}"))?;
     Ok(())
 }
 
@@ -10856,6 +10942,55 @@ mod tests {
         assert_eq!((latest.extractions_done, latest.extractions_total), (0, 1));
     }
 
+    /// §2.6 / S5: work the pull-before-pay gate parked is counted APART from the
+    /// blocked work — the status bar says it is waiting for the other devices
+    /// instead of asking the owner for anything — and the counts travel under the
+    /// exact camelCase names `lib/writing-zotero.ts` reads.
+    #[test]
+    fn a_gate_deferred_task_is_counted_as_waiting_not_blocked() {
+        let (_dir, conn) = migrated_db();
+        conn.execute_batch(
+            "INSERT INTO processing_tasks
+                (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state,
+                 last_error_code, progress_done, created_at, updated_at)
+             VALUES ('sync-1', 'bibliography_sync', 'lib-1', 'bibliography', 'library', 'lib-1',
+                     'succeeded', NULL, 40, 1, 1),
+                    ('profile-waiting', 'bibliography_profile', 'item-1', 'bibliography', 'item', 'item-1',
+                     'retry_wait', 'derived_cache_wait', 0, 2, 2),
+                    ('extract-waiting', 'bibliography_extract', 'att-1', 'bibliography', 'attachment', 'att-1',
+                     'retry_wait', 'derived_cache_wait', 0, 3, 3),
+                    ('extract-blocked', 'bibliography_extract', 'att-2', 'bibliography', 'attachment', 'att-2',
+                     'blocked', 'configuration_required_ocr', 0, 4, 4),
+                    ('profile-paid', 'bibliography_profile', 'item-2', 'bibliography', 'item', 'item-2',
+                     'succeeded', NULL, 0, 5, 5),
+                    ('extract-rate-limited', 'bibliography_extract', 'att-3', 'bibliography', 'attachment', 'att-3',
+                     'retry_wait', 'rate_limited', 0, 6, 6)",
+        )
+        .expect("seed the gated backlog");
+
+        let status = bibliography_sync_status(&conn, "sync-1").expect("status");
+        assert_eq!(status.profiles_waiting, 1, "the parked ficha waits");
+        assert_eq!(status.extractions_waiting, 1, "the parked pasaje waits");
+        assert_eq!(
+            status.extractions_blocked, 1,
+            "blocked work keeps its own count"
+        );
+        assert_eq!(status.profiles_blocked, 0);
+        let wire = serde_json::to_value(&status).expect("wire shape");
+        assert_eq!(wire["profilesWaiting"], serde_json::json!(1));
+        assert_eq!(wire["extractionsWaiting"], serde_json::json!(1));
+        assert_eq!(
+            wire["profilesBlocked"],
+            serde_json::json!(0),
+            "the pre-existing names keep working beside the new ones"
+        );
+        assert_eq!(
+            status.profiles_waiting + status.extractions_waiting,
+            2,
+            "a retry_wait of another kind (rate limited) is not a gate wait"
+        );
+    }
+
     /// B4 (2.3 "Las tres comparaciones de contrato"): ONE parser decides the
     /// durable extraction mode. The plain contract is `Automatic`; the
     /// reprocess prefix plus exactly 64 lowercase hex characters is
@@ -10896,5 +11031,54 @@ mod tests {
                 "{foreign:?} must parse as no extraction mode"
             );
         }
+    }
+
+    /// §2.6 / D5: a unit the pull-before-pay gate parked re-runs by itself, and
+    /// its near-zero waiting attempt is not a sample of how long the work takes.
+    /// A first boot that parks a thousand units must leave the ETA average where
+    /// the paid attempts put it.
+    #[test]
+    fn the_gate_s_waiting_attempts_stay_out_of_the_eta_average() {
+        let (_dir, conn) = migrated_db();
+        let insert_task = |id: &str| {
+            conn.execute(
+                "INSERT INTO processing_tasks
+                   (id, kind, asset_id_snapshot, domain, subject_kind, subject_id, state, created_at, updated_at)
+                 VALUES (?1, 'bibliography_extract', ?1, 'bibliography', 'attachment', ?1, 'retry_wait', 1, 1)",
+                [id],
+            )
+            .expect("task row");
+        };
+        let insert_attempt = |task: &str,
+                              number: i64,
+                              started: i64,
+                              finished: i64,
+                              code: Option<&str>| {
+            conn.execute(
+                "INSERT INTO processing_attempts
+                   (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome, error_code)
+                 VALUES (?1, ?2, 1, ?3, ?4, 'interrupted', ?5)",
+                rusqlite::params![task, number, started, finished, code],
+            )
+            .expect("attempt row");
+        };
+        insert_task("paid-1");
+        insert_attempt("paid-1", 1, 0, 1_000, None);
+        insert_task("paid-2");
+        insert_attempt("paid-2", 1, 0, 2_000, None);
+        insert_task("waiting");
+        insert_attempt(
+            "waiting",
+            1,
+            5_000,
+            5_000,
+            Some(crate::sync::derived_gate::DERIVED_WAIT_CODE),
+        );
+
+        assert_eq!(
+            finished_attempt_average(&conn, 0, "bibliography_extract", None).expect("average"),
+            (2, Some(1_500)),
+            "the waiting attempt is not a work sample"
+        );
     }
 }

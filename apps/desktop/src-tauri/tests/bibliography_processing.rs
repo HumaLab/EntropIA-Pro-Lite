@@ -13403,12 +13403,35 @@ fn a_definitive_page_verdict_is_checkpointed_and_the_page_is_sent_once() {
 /// Adds the sync schema — the derived cache tables live there, created by
 /// `ensure_sync_schema` at setup — and, when `account` is given, the session
 /// whose account stamps every row written from now on (§2.9).
+///
+/// A session also records the verdict of a server that does not implement
+/// `bibliography-derived-v1` (a known epoch, `advertised: false`): these suites
+/// assert what the cache reads and writes, so the pull-before-pay gate of §2.6
+/// must pay as before instead of parking the unit. The gate's own behavior
+/// lives in `sync::derived_gate` and in the dedicated T9 tests below.
 fn enable_derived_cache(conn: &rusqlite::Connection, account: Option<&str>) {
     entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
     if let Some(account) = account {
         entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
             .expect("session account");
+        record_legacy_channel(conn);
     }
+}
+
+/// The epoch-and-absence verdict a legacy server leaves behind (§2.6). Written
+/// as the transport records it, so a shape drift here breaks loudly instead of
+/// silently parking these suites.
+const LEGACY_EPOCH: &str = "epoch-legacy";
+
+fn record_legacy_channel(conn: &rusqlite::Connection) {
+    entropia_desktop_lib::sync::session::meta_set(conn, "server_epoch", LEGACY_EPOCH)
+        .expect("server epoch");
+    entropia_desktop_lib::sync::session::meta_set(
+        conn,
+        "derived_capability",
+        &format!("{{\"epoch\":\"{LEGACY_EPOCH}\",\"advertised\":false}}"),
+    )
+    .expect("legacy capability verdict");
 }
 
 fn count_derived_tables(conn: &rusqlite::Connection) -> i64 {
@@ -15933,4 +15956,361 @@ fn fewer_misses_than_half_switch_to_per_page_recognition_only_for_the_misses() {
             );
         }
     }
+}
+
+// ── T9: pull before pay (§2.6, D5, S5) ─────────────────────────────────────
+//
+// The gate is asked after the cache read and only when misses remain, so the
+// free native pass is never blocked and a unit the cache fully answers never
+// waits. A parked unit keeps the native pass and re-runs by itself; once the
+// channel's answer exists (here: the server confirmed it has no channel, the
+// state in which the gate pays as before) the misses pay.
+
+/// A logged-in archive whose channel verdict is still unknown: the S5 first
+/// boot of B. The sync schema exists, the session account is stamped, and no
+/// ordinary response has recorded a capability yet.
+fn enable_derived_session(conn: &rusqlite::Connection, account: &str) {
+    entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
+    entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
+        .expect("session account");
+}
+
+fn native_basis_payload(conn: &rusqlite::Connection, task_id: &str) -> serde_json::Value {
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM processing_checkpoints
+              WHERE task_id = ?1 AND unit_key = 'native-basis'",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("the deferred attempt kept its native pass");
+    serde_json::from_str(&payload).expect("native basis payload")
+}
+
+/// Replaces one page of the preserved native pass and re-seals the checkpoint,
+/// so the next attempt can only publish the marker if it really reused it.
+fn rewrite_native_basis_page(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    page_number: i64,
+    text: &str,
+) {
+    let mut payload = native_basis_payload(conn, task_id);
+    let pages = payload["pages"].as_array_mut().expect("pages");
+    let page = pages
+        .iter_mut()
+        .find(|page| page["pageNumber"] == serde_json::json!(page_number))
+        .expect("page in the native pass");
+    page["textContent"] = serde_json::json!(text);
+    page["textHash"] = serde_json::json!(sha256_hex(text.as_bytes()));
+    page["textChars"] = serde_json::json!(text.chars().count() as i64);
+    page["quality"] = serde_json::json!("rich");
+    let payload = serde_json::to_string(&payload).expect("payload json");
+    conn.execute(
+        "UPDATE processing_checkpoints SET payload = ?1, payload_checksum = ?2
+          WHERE task_id = ?3 AND unit_key = 'native-basis'",
+        rusqlite::params![payload, sha256_hex(payload.as_bytes()), task_id],
+    )
+    .expect("re-seal the native pass");
+}
+
+const GATE_MARKER: &str = "Texto nativo preservado del primer intento con longitud de sobra para ser rico y no volver a pedirse";
+
+/// S5: with a session and an unknown capability the extraction parks before its
+/// FIRST paid call — and only there: the native pass already ran. The unit is
+/// parked in `retry_wait` under the gate's code, with nothing charged.
+#[test]
+fn a_session_with_an_unknown_channel_parks_the_ocr_after_the_native_pass() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0001", "Obra mixta", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con texto nativo rico y suficiente para no pedir OCR",
+        )],
+        &[],
+    ]);
+    let path = write_temp_pdf(&dir, "mixta.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT001",
+        "linked_file",
+        Some(&path),
+        "mixta.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido de la pagina escaneada con longitud suficiente para ser rico",
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    let task_id = match outcome {
+        RunOneOutcome::Deferred { task_id } => task_id,
+        other => panic!("the first paid call must wait, got {other:?}"),
+    };
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "nothing paid before the cache is as complete as it can get"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "no page was rendered for the provider either"
+    );
+    let (state, code, retry_count, attempt_count): (String, Option<String>, i64, i64) = conn
+        .query_row(
+            "SELECT state, last_error_code, retry_count, attempt_count
+               FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("parked task");
+    assert_eq!(state, "retry_wait");
+    assert_eq!(code.as_deref(), Some("derived_cache_wait"));
+    assert_eq!(retry_count, 0, "the wait costs no retry budget");
+    assert_eq!(attempt_count, 1, "only the claim that ran");
+    let payload = native_basis_payload(&conn, &task_id);
+    assert_eq!(
+        payload["pages"].as_array().expect("pages").len(),
+        2,
+        "the free native pass of the whole document survived the deferral"
+    );
+}
+
+/// S5 / D5: the resumed attempt does not redo the native extraction — the
+/// preserved pass answers it — and pays only the pages the cache did not have.
+#[test]
+fn the_attempt_that_pays_reuses_the_native_pass_of_the_deferred_one() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0002", "Obra mixta", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con texto nativo rico y suficiente para no pedir OCR",
+        )],
+        &[],
+    ]);
+    let path = write_temp_pdf(&dir, "mixta.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT002",
+        "linked_file",
+        Some(&path),
+        "mixta.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido de la pagina escaneada con longitud suficiente para ser rico",
+    );
+    let task_id = match run_extract_with_provider(&dir, &conn, &renderer, provider.clone()) {
+        RunOneOutcome::Deferred { task_id } => task_id,
+        other => panic!("expected a deferral, got {other:?}"),
+    };
+    // The resumed attempt can only publish this marker if it reused the
+    // preserved native pass instead of reading the PDF again.
+    rewrite_native_basis_page(&conn, &task_id, 1, GATE_MARKER);
+    // The channel answered meanwhile: the server has no such channel, so the
+    // gate pays as before (§2.6).
+    record_legacy_channel(&conn);
+    let wake: i64 = conn
+        .query_row(
+            "SELECT next_retry_at FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("wake time");
+
+    let outcome = run_extract_with_provider_at(&dir, &conn, &renderer, provider.clone(), wake + 1);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the resumed attempt must finish, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "only the page the cache did not have is paid"
+    );
+    let pages = published_pages(&conn, &attachment_id);
+    assert_eq!(pages.len(), 2);
+    assert_eq!(
+        pages[0].2, GATE_MARKER,
+        "page one was published from the preserved native pass, not re-extracted"
+    );
+    assert_eq!(pages[1].1, "ocr", "the miss is recognized and published");
+    assert_eq!(
+        checkpoint_rows(&conn, &task_id),
+        0,
+        "the success purge takes the native pass with the rest of the checkpoints"
+    );
+}
+
+/// §2.6: a document that needs no OCR never asks the gate, so it never waits
+/// for the channel either.
+#[test]
+fn a_document_that_needs_no_ocr_never_waits_for_the_channel() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0003", "Obra nativa", "Resumen.");
+    let pdf = make_text_pdf(&[
+        (
+            50.0,
+            750.0,
+            "Primera linea de texto nativo con contenido suficiente",
+        ),
+        (
+            50.0,
+            700.0,
+            "Segunda linea de texto nativo con contenido suficiente",
+        ),
+    ]);
+    let path = write_temp_pdf(&dir, "nativa.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT003",
+        "linked_file",
+        Some(&path),
+        "nativa.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("no deberia llamarse");
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a unit with no misses pays nothing and waits nothing, got {outcome:?}"
+    );
+    assert!(provider.calls.lock().expect("calls").is_empty());
+    let kept_native_passes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE unit_key = 'native-basis'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("checkpoint count");
+    assert_eq!(
+        kept_native_passes, 0,
+        "no native pass is kept when nothing was deferred"
+    );
+}
+
+/// §2.6: the profile executor asks the same gate before its first paid embed —
+/// its own ficha vector and then the pasaje waves — and only when a miss is
+/// left. A parked profile publishes nothing.
+#[test]
+fn a_session_with_an_unknown_channel_parks_the_profile_and_pasajes_before_paying() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "GATE0004",
+        "Obra con pasajes",
+        "GATEATT004",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_profile_demand(&conn, &item_id);
+
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 8);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Deferred { .. }),
+        "the first paid embed must wait, got {outcome:?}"
+    );
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the ficha vector is a paid call and must not happen yet"
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no pasaje wave was embedded"
+    );
+
+    // The channel answers: a legacy server, so the work pays and finishes.
+    record_legacy_channel(&conn);
+    let wake: i64 = conn
+        .query_row(
+            "SELECT next_retry_at FROM processing_tasks
+              WHERE kind = 'bibliography_profile' AND subject_id = ?1 AND state = 'retry_wait'",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("wake time");
+    let resumed: Arc<dyn ProfileEmbedder> = embedder.clone();
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(
+        BibliographyProfileExecutor::new(resumed).with_embed_wave(8),
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        wake + 1,
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the resumed profile must finish, got {outcome:?}"
+    );
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "the ficha vector is paid exactly once"
+    );
+    assert!(
+        !embedder.batches.lock().expect("batches").is_empty(),
+        "the pasaje waves are paid once the gate lets them"
+    );
+}
+
+/// §2.6: a unit whose misses the cache answered never consults the wait — the
+/// account's rows finish the work with zero provider calls, even with a session
+/// whose channel is still unknown.
+#[test]
+fn a_profile_fully_answered_by_the_cache_never_waits() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0005", "Obra cacheada", "Resumen cacheado.");
+    enable_derived_session(&conn, "account-a");
+    let effective = effective_contract(&conn);
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+    );
+    admit_profile_demand(&conn, &item_id);
+
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 8);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a fully cached unit publishes without waiting, got {outcome:?}"
+    );
+    assert!(embedder.singles.lock().expect("singles").is_empty());
+    assert!(embedder.batches.lock().expect("batches").is_empty());
 }

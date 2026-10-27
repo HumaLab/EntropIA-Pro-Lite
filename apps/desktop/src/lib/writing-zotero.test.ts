@@ -1841,15 +1841,36 @@ describe('P3 derived work of a library sync', () => {
       worksDone: 120,
       worksTotal: 450,
       worksBlocked: 0,
+      worksWaiting: 0,
       passagesDone: 30,
       passagesTotal: 400,
       passagesBlocked: 0,
+      passagesWaiting: 0,
       etaMs: 720_000,
       remaining: 700,
       remainingActive: 700,
       blocked: 0,
+      waiting: 0,
       blockedReason: '',
     })
+  })
+
+  it('counts the gate-deferred work as waiting, not as blocked', () => {
+    // §2.6 / S5: the units parked by the pull-before-pay gate are not waiting
+    // on the owner — they move by themselves when the pull lands — so they are
+    // counted beside blocked work, never inside it.
+    const derived = bibliographyDerivedProgress({
+      ...status,
+      profilesWaiting: 330,
+      extractionsWaiting: 370,
+    })
+
+    expect(derived.waiting).toBe(700)
+    expect(derived.worksWaiting).toBe(330)
+    expect(derived.passagesWaiting).toBe(370)
+    expect(derived.blocked).toBe(0)
+    expect(derived.blockedReason).toBe('')
+    expect(derived.remainingActive).toBe(700)
   })
 
   it('formats the remaining time humanely', () => {

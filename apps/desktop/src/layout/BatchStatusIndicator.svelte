@@ -102,6 +102,13 @@
     // An extraction mid-OCR carries its own page counter; kinds without
     // pages never borrow it.
     const ocr = currentWork && currentWork.pagesTotal > 0 ? currentWork : null
+    // §2.6 / S5: when EVERY remaining unit is parked by the pull-before-pay
+    // gate the footer says why in one sentence instead of showing counters that
+    // cannot move. While anything else is still queued or running the counters
+    // stay: the work is moving, only part of it waits.
+    if (derived && derived.waiting > 0 && derived.remainingActive === derived.waiting) {
+      return t('batch.statusBibliographyWaitingSync')
+    }
     if (derived && derived.remainingActive > 0) {
       const counts = {
         worksDone: derived.worksDone,
