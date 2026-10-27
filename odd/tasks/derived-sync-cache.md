@@ -47,9 +47,9 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | 75223749 |
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | a54cd659 |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | 9ea6a1f9 |
-| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 6e1dd5d2 |
-| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | 519a9878 |
-| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | a6c3cf9b |
+| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 8e9e3e07 |
+| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | afd54cc2, c8c9d44d, 77ede1d6 |
+| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | ce78d06d |
 | T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
 | T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | blocked: T10 | — |
 
@@ -102,3 +102,12 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   Lite 3711 passed (L11). Not verified here: the Pro (`local-ml`) compile, because cmake is broken on this
   notebook (L4). T10 (server) and T11 (two-device run on staging) stay blocked: nothing travels until the server
   implements `apps/desktop/src-tauri/src/sync/derived_protocol.md`.
+- **L13** (delivery, 2026-10-27): chained PRs #161 (tracker, draft) and #162-#170. RDD `assess` per slice: only
+  T8 was review-due (high risk) and too large for the reviewers, so T8 was split into contract+transport
+  (`afd54cc2`), unit tests (`c8c9d44d`) and two-device tests (`77ede1d6`); T7 and T9 were reapplied on top
+  (`8e9e3e07`, `ce78d06d`). Native review `review-fe0d7836dc8a276d` on the transport found R3-001 (a push batch
+  could reach 501 changes when a vector brought its contract row); fixed in one bounded correction, validated,
+  approved and acknowledged. Regression test `a_contract_row_never_pushes_a_batch_past_the_change_limit`
+  (RED 501 changes without the fix). Ten non-blocking review advisories remain as follow-ups. Whole crate after
+  the split: 27 suites, 3132 passed, 0 failed. The `review-refuter` and `review-validator` model routes were
+  missing from the active Pi profile; added with the user's permission.
