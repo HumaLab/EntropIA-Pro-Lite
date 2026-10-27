@@ -15,6 +15,8 @@
     type MarkupViewport,
   } from '../PdfMarkup/types'
   import { TextLayerController } from '../PdfMarkup/textLayerController'
+  import { charsFromTextItems, getSortIndex, type PageChar } from '../PdfMarkup/sortIndex'
+  import type { PdfMarkupDraft, PdfMarkupGeometryChange, PdfRect } from '../PdfMarkup/types'
   import type { PDFPageProxy } from 'pdfjs-dist'
 
   let {
@@ -133,6 +135,43 @@
   let pdfjsLib: typeof import('pdfjs-dist') | null = null
   let textLayerContainer = $state<HTMLDivElement | null>(null)
   const textLayers = new TextLayerController()
+
+  // Character boxes of the page on screen, for Zotero's sort index.
+  let pageCharsCache: { page: PDFPageProxy; chars: Promise<PageChar[]> } | null = null
+
+  function pageChars(page: PDFPageProxy | null): Promise<PageChar[]> {
+    if (!page || typeof page.getTextContent !== 'function') return Promise.resolve([])
+    if (pageCharsCache?.page === page) return pageCharsCache.chars
+    const chars = page
+      .getTextContent()
+      .then((content) =>
+        charsFromTextItems(
+          content.items.filter(
+            (item): item is import('pdfjs-dist/types/src/display/api').TextItem => 'str' in item
+          )
+        )
+      )
+      .catch(() => [])
+    pageCharsCache = { page, chars }
+    return chars
+  }
+
+  async function sortIndexFor(pageIndex: number, rects: PdfRect[]): Promise<string | undefined> {
+    const viewport = markupViewport
+    if (!viewport) return undefined
+    const chars = await pageChars(markupPageProxy)
+    return getSortIndex(pageIndex, chars, viewport.viewBox, { rects })
+  }
+
+  async function handleMarkupCreate(draft: PdfMarkupDraft) {
+    const sortIndex = await sortIndexFor(draft.pageIndex, draft.rects)
+    onMarkupCreate({ ...draft, sortIndex })
+  }
+
+  async function handleMarkupGeometryChange(change: PdfMarkupGeometryChange) {
+    const sortIndex = await sortIndexFor(markupPageNumber - 1, change.rects)
+    onMarkupChange({ ...change, sortIndex })
+  }
 
   function setMarkupTool(tool: MarkupTool) {
     internalMarkupTool = tool
@@ -1519,8 +1558,8 @@
                   labels={markupLabels}
                   onTextLayerMount={handleTextLayerMount}
                   onSelect={onMarkupSelect}
-                  onCreate={onMarkupCreate}
-                  onGeometryChange={onMarkupChange}
+                  onCreate={handleMarkupCreate}
+                  onGeometryChange={handleMarkupGeometryChange}
                   onDelete={onMarkupDelete}
                 />
               {/if}

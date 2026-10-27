@@ -151,7 +151,7 @@ describe('DocumentViewer markups', () => {
     })
     const overlay = await screen.findByTestId('pdf-markup-overlay')
     await fireEvent.pointerDown(overlay, { button: 0, clientX: 100, clientY: 100 })
-    expect(onMarkupCreate).toHaveBeenCalledOnce()
+    await waitFor(() => expect(onMarkupCreate).toHaveBeenCalledOnce())
     const draft = onMarkupCreate.mock.calls[0]?.[0]
     expect(draft.type).toBe('note')
     expect(draft.color).toBe('#2ea8e5')
@@ -159,6 +159,7 @@ describe('DocumentViewer markups', () => {
     const [x1, y1, x2, y2] = draft.rects[0]
     expect(x2 - x1).toBeCloseTo(22)
     expect(y2 - y1).toBeCloseTo(22)
+    expect(draft.sortIndex).toMatch(/^00000\|\d{6}\|\d{5}$/)
   })
 
   it('builds the text layer for the page and rebuilds it on a same-size page change', async () => {

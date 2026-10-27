@@ -57,12 +57,15 @@ export interface PdfMarkupDraft {
   rects: PdfRect[]
   text?: string
   fontSize?: number
+  /** Zotero's `annotationSortIndex`, computed by the viewer from the page text. */
+  sortIndex?: string
 }
 
 /** A geometry change of a movable markup (note, image, text). */
 export interface PdfMarkupGeometryChange {
   id: string
   rects: PdfRect[]
+  sortIndex?: string
 }
 
 /**
