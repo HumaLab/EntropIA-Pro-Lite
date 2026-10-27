@@ -49,7 +49,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | 9ea6a1f9 |
 | T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 6e1dd5d2 |
 | T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | 519a9878 |
-| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | — |
+| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | a6c3cf9b |
 | T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
 | T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | blocked: T10 | — |
 
@@ -96,3 +96,9 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 - **L11** (environment): this notebook runs Node 26, whose global `localStorage` breaks happy-dom; the full
   desktop suite needs `NODE_OPTIONS=--no-experimental-webstorage` here (CI uses Node 22). With it: Pro 3747 and
   Lite 3711 tests pass.
+- **L12** (close of the client side, 2026-10-27): T1-T9 committed, each verified independently (defects found
+  and fixed before commit in T3, T5, T7, T8, T9). Whole crate `cargo test --no-fail-fast`: 27 suites, 3131
+  passed, 0 failed; clippy `--all-targets -D warnings` and `cargo fmt --check` clean; desktop vitest Pro 3747 and
+  Lite 3711 passed (L11). Not verified here: the Pro (`local-ml`) compile, because cmake is broken on this
+  notebook (L4). T10 (server) and T11 (two-device run on staging) stay blocked: nothing travels until the server
+  implements `apps/desktop/src-tauri/src/sync/derived_protocol.md`.
