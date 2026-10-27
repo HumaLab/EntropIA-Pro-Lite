@@ -2162,10 +2162,9 @@ impl BibliographyProfileExecutor {
             message: format!("{}: {}", error.code, error.message),
         })?;
         let built = crate::bibliography::profile::build_profile(&input);
-        drop(conn);
-        if stop.stopped() {
-            return Err(ExecOutput::Stopped);
-        }
+        // §2.4: resolve the contract identity before the read, so a cache hit
+        // publishes under exactly the stamps and width the computation would
+        // have used. Resolving the identity is never a paid call.
         let (model, contract, dimensions) =
             self.embedder
                 .identity()
@@ -2173,21 +2172,44 @@ impl BibliographyProfileExecutor {
                     ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
                     other => other,
                 })?;
-        let vector = ctx
-            .unit(task, "profile", || {
-                let vector = self.embedder.embed(&built.canonical_text)?;
-                if vector.len() != dimensions || vector.iter().any(|value| !value.is_finite()) {
-                    return Err(format!(
-                        "Profile embedding does not satisfy {dimensions} finite dimensions"
-                    ));
-                }
-                Ok(CompactVec(vector))
-            })
-            .map_err(|error| match map_embedding_error(&error) {
-                ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
-                other => other,
-            })?
-            .0;
+        // §2.4: a ficha vector this account already paid for under this
+        // generation contract is published as if it had been computed here —
+        // same generation, stamps and profile revision — with no provider call.
+        let cached = crate::sync::derived::cached_vectors(
+            &conn,
+            &generation.contract_hash,
+            dimensions,
+            std::slice::from_ref(&built.input_hash),
+        );
+        drop(conn);
+        if stop.stopped() {
+            return Err(ExecOutput::Stopped);
+        }
+        // The cached blob is published verbatim: decoding and re-encoding could
+        // only move bytes away from what the paying device stored.
+        let embedding = match cached.get(&built.input_hash) {
+            Some(blob) => blob.clone(),
+            None => {
+                let vector = ctx
+                    .unit(task, "profile", || {
+                        let vector = self.embedder.embed(&built.canonical_text)?;
+                        if vector.len() != dimensions
+                            || vector.iter().any(|value| !value.is_finite())
+                        {
+                            return Err(format!(
+                                "Profile embedding does not satisfy {dimensions} finite dimensions"
+                            ));
+                        }
+                        Ok(CompactVec(vector))
+                    })
+                    .map_err(|error| match map_embedding_error(&error) {
+                        ExecOutput::Fatal { code, message } => ExecOutput::Fatal { code, message },
+                        other => other,
+                    })?
+                    .0;
+                crate::nlp::embeddings::floats_to_blob(&vector)
+            }
+        };
         if stop.stopped() {
             return Err(ExecOutput::Stopped);
         }
@@ -2228,7 +2250,7 @@ impl BibliographyProfileExecutor {
             model,
             contract,
             dimensions,
-            embedding: crate::nlp::embeddings::floats_to_blob(&vector),
+            embedding,
         };
         let receipt = serde_json::json!({
             "itemId": output.item_id,
@@ -2295,7 +2317,6 @@ impl BibliographyProfileExecutor {
             code: "storage_unavailable".to_string(),
             message: format!("{}: {}", error.code, error.message),
         })?;
-        drop(conn);
         // A stored blob that does not match the contract width is not reusable.
         reusable.retain(|_, blob| blob.len() == dimensions * 4);
         // Group pages per attachment preserving order, then segment.
@@ -2344,6 +2365,33 @@ impl BibliographyProfileExecutor {
                 });
             }
         }
+        // §2.4: pasajes this account already paid for under the effective
+        // contract are published as if they had been computed here. The key is
+        // the sha256 of the exact text sent to the embedder, so a chunk whose
+        // text moved never serves a stale vector; only true misses reach
+        // `embed_many`. Local reuse above decides first, so the cache is a
+        // second source, never a replacement.
+        let missing: Vec<String> = staged
+            .iter()
+            .filter(|chunk| chunk.embedding.is_empty())
+            .map(|chunk| chunk.input_hash.clone())
+            .collect();
+        if !missing.is_empty() {
+            let cached = crate::sync::derived::cached_vectors(
+                &conn,
+                &task.contract_hash,
+                dimensions,
+                &missing,
+            );
+            for chunk in &mut staged {
+                if chunk.embedding.is_empty() {
+                    if let Some(blob) = cached.get(&chunk.input_hash) {
+                        chunk.embedding = blob.clone();
+                    }
+                }
+            }
+        }
+        drop(conn);
         // Chunks still lacking a vector, in ordinal order.
         let pending: Vec<usize> = staged
             .iter()

@@ -23,7 +23,9 @@
 //!   session) the bound account. After an account change the previous account's
 //!   rows — including the ones written offline after its logout — are inert.
 
-use rusqlite::{params, Connection};
+use std::collections::HashMap;
+
+use rusqlite::{params, params_from_iter, Connection};
 use sha2::{Digest, Sha256};
 
 use super::session::{meta_get, meta_set};
@@ -358,6 +360,112 @@ pub(crate) fn cache_paid_vector(
         embedding,
         "local",
     )
+}
+
+/// How many input hashes one cache read names in its `IN` list. Far below
+/// SQLite's parameter limit, and enough to read a whole work's chunks in a
+/// handful of index lookups.
+const READ_BATCH: usize = 400;
+
+/// The vectors the effective account already paid for under one contract,
+/// keyed by input hash (§2.4). This is the read side of the cache: the device
+/// that did not pay publishes these exactly as if it had computed them.
+///
+/// Only rows of [`effective_account`] answer — the session account or, without
+/// a session, the archive's bound account (§2.9). Rows of `''` and rows of any
+/// other account are inert, so a second device of the same account never pays
+/// twice (S3) and a changed account never installs the previous one's results
+/// (S7/D6).
+///
+/// Every returned blob is exactly `dimensions * 4` bytes and holds finite f32
+/// values — the same validation the publisher applies to a computed vector.
+/// These rows arrive from the server too (T8), so they are untrusted input: a
+/// row that breaks either rule is unusable and skipped, never repaired, and a
+/// read reports all of its skips in one summary line instead of one line per
+/// row. A missing derived table, an unreadable row or an archive that cannot
+/// name an account yields no hits: the caller then pays as it did before, and
+/// the cache can never become a source of unknown or foreign vectors.
+pub(crate) fn cached_vectors(
+    conn: &Connection,
+    contract_hash: &str,
+    dimensions: usize,
+    input_hashes: &[String],
+) -> HashMap<String, Vec<u8>> {
+    let mut hits = HashMap::new();
+    if input_hashes.is_empty() || contract_hash.is_empty() || dimensions == 0 {
+        return hits;
+    }
+    if !cache_tables_present(conn) {
+        return hits;
+    }
+    let Some(account) = effective_account(conn) else {
+        return hits;
+    };
+    let expected = dimensions * 4;
+    let mut skipped_width = 0_usize;
+    let mut skipped_non_finite = 0_usize;
+    'batches: for batch in input_hashes.chunks(READ_BATCH) {
+        let placeholders = vec!["?"; batch.len()].join(",");
+        let sql = format!(
+            "SELECT input_hash, embedding FROM sync_derived_vectors
+              WHERE account_id = ?1 AND contract_hash = ?2
+                AND input_hash IN ({placeholders})"
+        );
+        let mut statement = match conn.prepare(&sql) {
+            Ok(statement) => statement,
+            Err(error) => {
+                log::warn!(target: "sync", "derived vector cache read skipped: {error}");
+                break 'batches;
+            }
+        };
+        let parameters = params_from_iter(
+            std::iter::once(account.as_str())
+                .chain(std::iter::once(contract_hash))
+                .chain(batch.iter().map(String::as_str)),
+        );
+        let rows = match statement.query_map(parameters, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        }) {
+            Ok(rows) => rows,
+            Err(error) => {
+                log::warn!(target: "sync", "derived vector cache read skipped: {error}");
+                break 'batches;
+            }
+        };
+        for row in rows {
+            let (input_hash, embedding) = match row {
+                Ok(row) => row,
+                Err(error) => {
+                    log::warn!(target: "sync", "derived vector row skipped: {error}");
+                    continue;
+                }
+            };
+            if embedding.len() != expected {
+                skipped_width += 1;
+                continue;
+            }
+            // A row can be the right width and still hold values no computation
+            // would ever produce: the vector is only usable when every f32 is
+            // finite, exactly as the computed path checks before publishing.
+            let finite = embedding.chunks_exact(4).all(|value| {
+                f32::from_le_bytes([value[0], value[1], value[2], value[3]]).is_finite()
+            });
+            if !finite {
+                skipped_non_finite += 1;
+                continue;
+            }
+            hits.insert(input_hash, embedding);
+        }
+    }
+    let skipped = skipped_width + skipped_non_finite;
+    if skipped > 0 {
+        log::warn!(
+            target: "sync",
+            "skipped {skipped} derived vector row(s) under contract {}: {skipped_width} with a wrong width, {skipped_non_finite} with non-finite values",
+            contract_hash.chars().take(12).collect::<String>()
+        );
+    }
+    hits
 }
 
 /// Records one paid OCR answer — including an empty one — from the transaction
@@ -950,6 +1058,149 @@ mod tests {
             2,
             "rejected pages write nothing"
         );
+    }
+
+    /// §2.4 read contract: only the effective account's own rows, only under
+    /// the asked contract, only blobs whose width matches and whose f32 values
+    /// are all finite, and nothing at all for an archive that cannot name an
+    /// account or has no derived tables.
+    #[test]
+    fn cached_vectors_only_reads_usable_rows_of_the_effective_account() {
+        // No derived tables at all (an archive whose bootstrap never ran).
+        let bare = Connection::open_in_memory().expect("bare db");
+        assert!(
+            cached_vectors(&bare, CONTRACT, 1, &["anything".to_string()]).is_empty(),
+            "a missing cache reads as an empty cache"
+        );
+
+        let conn = new_synced_test_db();
+        insert_vector(&conn, "", CONTRACT, "unbound", 1, &blob(1, 1), "local")
+            .expect("unbound vector");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "a-input",
+            1,
+            &blob(1, 2),
+            "local",
+        )
+        .expect("account vector");
+        assert!(
+            cached_vectors(
+                &conn,
+                CONTRACT,
+                1,
+                &["unbound".to_string(), "a-input".to_string()]
+            )
+            .is_empty(),
+            "an archive that names no account reads nothing"
+        );
+
+        login(&conn, ACCOUNT_A);
+        // The first binding adopted the `''` row; the account's own row stays.
+        insert_vector(
+            &conn,
+            ACCOUNT_B,
+            CONTRACT,
+            "b-input",
+            1,
+            &blob(1, 9),
+            "local",
+        )
+        .expect("other account vector");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            "other-contract",
+            "a-input",
+            1,
+            &blob(1, 5),
+            "local",
+        )
+        .expect("other contract vector");
+        // A row whose declared width disagrees with its blob never landed
+        // through the writer; a damaged or foreign archive can still hold one.
+        conn.execute(
+            "INSERT INTO sync_derived_vectors
+               (account_id, contract_hash, input_hash, dimensions, embedding, origin, pushed, created_at)
+             VALUES (?1, ?2, 'a-wide', 1, ?3, 'remote', 1, 1)",
+            params![ACCOUNT_A, CONTRACT, vec![7_u8; 8]],
+        )
+        .expect("wrong-width vector");
+        // Rows travel through the server (T8), so a right-width blob can still
+        // carry values no computation would ever produce.
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "a-nan",
+            1,
+            &f32::NAN.to_le_bytes(),
+            "remote",
+        )
+        .expect("NaN vector");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "a-inf",
+            1,
+            &f32::INFINITY.to_le_bytes(),
+            "remote",
+        )
+        .expect("infinite vector");
+
+        let asked: Vec<String> = [
+            "unbound", "a-input", "b-input", "a-wide", "a-nan", "a-inf", "missing",
+        ]
+        .iter()
+        .map(|hash| hash.to_string())
+        .collect();
+        let hits = cached_vectors(&conn, CONTRACT, 1, &asked);
+        assert_eq!(
+            hits.get("a-input"),
+            Some(&blob(1, 2)),
+            "the account's own row is a hit"
+        );
+        assert_eq!(
+            hits.get("unbound"),
+            Some(&blob(1, 1)),
+            "the adopted row belongs to the account now"
+        );
+        assert_eq!(hits.len(), 2, "no other row answers: {hits:?}");
+        assert!(
+            !hits.contains_key("b-input"),
+            "another account's row is never served"
+        );
+        assert!(
+            !hits.contains_key("a-wide"),
+            "a wrong-width blob is unusable"
+        );
+        assert!(
+            !hits.contains_key("a-nan"),
+            "a NaN is not a vector: an untrusted row never answers"
+        );
+        assert!(
+            !hits.contains_key("a-inf"),
+            "an infinite value is not a vector either"
+        );
+        assert!(!hits.contains_key("missing"), "an absent key is a miss");
+
+        assert!(
+            cached_vectors(&conn, CONTRACT, 2, &["a-input".to_string()]).is_empty(),
+            "the contract's dimensions decide the width, not the stored column"
+        );
+        assert!(
+            cached_vectors(&conn, CONTRACT, 1, &[]).is_empty(),
+            "no input hashes, no read"
+        );
+
+        // Without a session the archive reads through its bound account, so
+        // the owner never pays twice for its own material (§2.9, S8).
+        clear_sync_state(&conn).expect("logout");
+        let offline = cached_vectors(&conn, CONTRACT, 1, &["a-input".to_string()]);
+        assert_eq!(offline.get("a-input"), Some(&blob(1, 2)));
     }
 
     /// §2.2 DDL: the tables are in `SYNC_TABLES`, both carry `account_id` in the
