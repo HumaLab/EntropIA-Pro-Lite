@@ -7,7 +7,7 @@ describe('MarkupToolbar styles', () => {
     // space never blocks the page; a toolbar inside it must opt back in, or
     // every click falls through to the PDF underneath. happy-dom does no hit
     // testing, so the rule itself is pinned.
-    const rule = source.match(/\n  \.markup-toolbar \{([^}]*)\}/)?.[1] ?? ''
+    const rule = source.match(/\n {2}\.markup-toolbar \{([^}]*)\}/)?.[1] ?? ''
     expect(rule).toMatch(/pointer-events: auto;/)
   })
 })
