@@ -178,6 +178,20 @@ pub struct MockSyncApi {
     pub server_capabilities: Mutex<Vec<String>>,
     /// Number of ordinary `pull` calls served (any page).
     pub plain_pull_calls: Mutex<usize>,
+    /// Number of explicit bibliography-derived-v1 push opt-ins.
+    pub derived_push_calls: Mutex<usize>,
+    /// Number of explicit bibliography-derived-v1 pull opt-ins.
+    pub derived_pull_calls: Mutex<usize>,
+    /// Every change the derived push opt-in received, in order.
+    pub derived_pushed: Mutex<Vec<PushChange>>,
+    /// Every derived push request exactly as it was sent, in order (including
+    /// requests the size cap rejects), so a test can assert the client's batch
+    /// sizes and the streaming behaviour of a large outbox.
+    pub derived_push_requests: Mutex<Vec<PushRequest>>,
+    /// When `Some(bytes)`, a derived push whose serialized changes exceed that
+    /// many bytes is rejected with `413 payload_too_large` (the server's
+    /// `max_push_bytes`), so an oversized row can be exercised.
+    pub derived_push_max_bytes: Mutex<Option<usize>>,
     /// Number of explicit writing-envelope-v1 push opt-ins.
     pub writing_capability_push_calls: Mutex<usize>,
     /// Number of explicit writing-envelope-v1 pull opt-ins.
@@ -229,6 +243,11 @@ impl Default for MockSyncApi {
             server_epoch: "mock-epoch".to_string(),
             server_capabilities: Mutex::new(Vec::new()),
             plain_pull_calls: Mutex::new(0),
+            derived_push_calls: Mutex::new(0),
+            derived_pull_calls: Mutex::new(0),
+            derived_pushed: Mutex::new(Vec::new()),
+            derived_push_requests: Mutex::new(Vec::new()),
+            derived_push_max_bytes: Mutex::new(None),
             writing_capability_push_calls: Mutex::new(0),
             writing_capability_pull_calls: Mutex::new(0),
             pull_pages: Mutex::new(std::collections::VecDeque::new()),
@@ -534,6 +553,45 @@ impl SyncApi for MockSyncApi {
         _limit: i64,
     ) -> Result<PullResponse, SyncError> {
         *self.writing_capability_pull_calls.lock().unwrap() += 1;
+        self.pull_response(since)
+    }
+
+    async fn push_with_bibliography_derived_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        req: PushRequest,
+    ) -> Result<PushResponse, SyncError> {
+        *self.derived_push_calls.lock().unwrap() += 1;
+        self.derived_push_requests.lock().unwrap().push(req.clone());
+        if let Some(max) = *self.derived_push_max_bytes.lock().unwrap() {
+            if serde_json::to_vec(&req.changes)
+                .map(|bytes| bytes.len())
+                .unwrap_or(0)
+                > max
+            {
+                return Err(SyncError::Api {
+                    status: 413,
+                    code: "payload_too_large".to_string(),
+                    message: "derived batch too large".to_string(),
+                });
+            }
+        }
+        self.derived_pushed
+            .lock()
+            .unwrap()
+            .extend(req.changes.clone());
+        self.push_response(req)
+    }
+
+    async fn pull_with_bibliography_derived_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        since: i64,
+        _limit: i64,
+    ) -> Result<PullResponse, SyncError> {
+        *self.derived_pull_calls.lock().unwrap() += 1;
         self.pull_response(since)
     }
 

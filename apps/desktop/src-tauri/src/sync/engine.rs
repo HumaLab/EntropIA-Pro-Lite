@@ -735,6 +735,22 @@ pub async fn run_cycle<A: SyncApi>(
     )
     .await;
 
+    // 8d. Derived Bibliography cache (`bibliography-derived-v1`, plan
+    // plan-sync-bibliografia-derivada §2.5 option (b)): a dedicated channel with
+    // its own outbox (`pushed`), cursor and since-zero catch-up per epoch. It
+    // only ever runs after an ordinary response advertised the token for the
+    // current epoch, so a legacy server never receives a derived call and the
+    // corpus cycle above is unaffected either way. The network runs outside
+    // every transaction and the request scope is frozen from the session (§2.9).
+    crate::sync::derived_transport::run_derived_cycle(
+        api,
+        token,
+        conn,
+        health.limits.max_push_bytes,
+        warn,
+    )
+    .await;
+
     // Record the successful sync time (PROTOCOL step 9 status payload).
     meta_set_i64(conn, "last_sync_at", now_ms()).map_err(|e| CycleError::Fatal { message: e })?;
     Ok(())
