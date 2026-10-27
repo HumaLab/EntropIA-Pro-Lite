@@ -8,7 +8,8 @@ pub mod blobs;
 pub mod capture;
 pub mod cascade;
 pub mod commands;
-pub(crate) mod derived;
+pub mod derived;
+pub(crate) mod derived_transport;
 pub mod engine;
 pub mod http;
 pub mod pull;
@@ -30,6 +31,8 @@ pub(crate) mod writing_pull;
 pub(crate) mod writing_push;
 pub(crate) mod writing_receive;
 
+#[cfg(test)]
+mod derived_transport_tests;
 #[cfg(test)]
 mod research_blobs_tests;
 #[cfg(test)]
