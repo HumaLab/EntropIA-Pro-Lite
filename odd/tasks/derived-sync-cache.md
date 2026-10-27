@@ -41,7 +41,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 
 | ID | Task | Specs | Plan | Route | Commit |
 | --- | --- | --- | --- | --- | --- |
-| T1 | Cache tables in `ensure_sync_schema` + account semantics (marks, `''` adoption, logout reset, effective account) | S2, S7, S8 | §2.2, §2.9, WU1 (account tests) | worker | — |
+| T1 | Cache tables in `ensure_sync_schema` + account semantics (marks, `''` adoption, logout reset, effective account) | S2, S7, S8 | §2.2, §2.9, WU1 (account tests) | worker | c8f951bf |
 | T2 | Versioned OCR contract | S2 | D3, WU3 | worker | — |
 | T3 | Write paid results to the cache in the same transaction (item, chunk, OCR outcomes incl. empty) | S3 | §2.3, WU1 | worker | — |
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | — |
@@ -66,3 +66,8 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 - **L3** (user, 2026-10-27): asked whether to wait for the experts or take the plan's recommendations as the
   decisions, the user answered "arrancá". D3, D5 and D7 stay open; T2 and T9 fix working values and record
   them here.
+- **L4** (T2, D3 working value): OCR contract `ocr-v<version>:<provider>:<model>:p<version>` from
+  `bibliography/ocr_contract.rs` (`OCR_PAGE_CONTRACT_VERSION` = 1, prompt/parser fingerprint pinned by a test).
+  Pro (`local-ml`/`paddle-ocr`) compile not verified on this notebook: its `cmake` is a broken Python shim.
+- **L5** (user, 2026-10-27, mid T1): "metele con todo, me voy a dormir, espeor que tengas todo terminado apra
+  cuando me levante".

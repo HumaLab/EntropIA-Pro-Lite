@@ -15,6 +15,7 @@ pub mod eval;
 pub mod generation;
 pub mod html_text;
 pub mod ingest;
+pub mod ocr_contract;
 pub mod processing;
 pub mod profile;
 pub mod reconciliation;
