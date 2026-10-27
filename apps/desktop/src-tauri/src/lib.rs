@@ -368,9 +368,14 @@ fn processing_commit_observer(
                 },
             );
         }
-        processing::scheduler::EngineOutput::Bibliography(_) => {
-            // `processing:changed` above is the durable bibliography signal;
-            // no corpus compatibility event or follow-up applies.
+        processing::scheduler::EngineOutput::Bibliography(sync) => {
+            // `processing:changed` above is the durable bibliography signal.
+            // The library's Zotero annotations are pulled right after.
+            bibliography::annotations::commands::after_catalog_sync(
+                app_handle,
+                db_path.to_path_buf(),
+                sync.library_row_id.clone(),
+            );
         }
     }
 }

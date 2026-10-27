@@ -372,15 +372,37 @@ pub async fn bibliography_annotations_sync(
     reason: String,
     db: State<'_, AppDbState>,
 ) -> Result<AnnotationSyncResult, String> {
+    run_sync(&app, db.db_path.clone(), library_row_id, &reason).await
+}
+
+/// Pulls the annotations of a library right after its catalog sync commits
+/// (plan section 4, triggers). Best effort and off the scheduler's thread: a
+/// missing key, a group library or Zotero being closed only skip the run.
+pub fn after_catalog_sync(app: &AppHandle, db_path: std::path::PathBuf, library_row_id: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = run_sync(&app, db_path, library_row_id, "catalog_sync").await {
+            eprintln!("[annotations] sync after the catalog sync failed: {error}");
+        }
+    });
+}
+
+async fn run_sync(
+    app: &AppHandle,
+    db_path: std::path::PathBuf,
+    library_row_id: String,
+    reason: &str,
+) -> Result<AnnotationSyncResult, String> {
     if reason == "open" {
         let times = last_sync_times().lock().unwrap_or_else(|e| e.into_inner());
         if times.get(&library_row_id).is_some_and(|at| at.elapsed() < OPEN_DEBOUNCE) {
             return Ok(AnnotationSyncResult { status: "skipped", report: None });
         }
     }
-    let db_path = db.db_path.clone();
+    let scope_path = db_path.clone();
     let library = library_row_id.clone();
     let scope = blocking(move || {
+        let db_path = scope_path;
         let conn = open_archive_connection(&db_path)?;
         scope_for(&conn, &library)
     })
@@ -395,7 +417,6 @@ pub async fn bibliography_annotations_sync(
         KeyCheck::InvalidKey => return Ok(AnnotationSyncResult { status: "invalid_key", report: None }),
         KeyCheck::Unreachable => return Ok(AnnotationSyncResult { status: "unreachable", report: None }),
     }
-    let db_path = db.db_path.clone();
     let result = blocking(move || {
         // The personal library is whichever account the open Zotero is signed
         // in to; a key of another account would write someone else's library.
@@ -416,7 +437,7 @@ pub async fn bibliography_annotations_sync(
         .unwrap_or_else(|e| e.into_inner())
         .insert(library_row_id.clone(), Instant::now());
     if result.status == "synced" {
-        emit_changed(&app, &library_row_id);
+        emit_changed(app, &library_row_id);
     }
     Ok(result)
 }
