@@ -374,6 +374,14 @@ pub enum Next {
     RetryOnce(RowAction),
 }
 
+impl Next {
+    pub fn into_action(self) -> RowAction {
+        match self {
+            Next::Done(action) | Next::RetryOnce(action) => action,
+        }
+    }
+}
+
 /// Applies the answer to the request recorded by [`begin_send`].
 pub fn apply_outcome(row: &mut AnnotationRow, outcome: Outcome) -> Next {
     let sent = row.sent_json.clone();
