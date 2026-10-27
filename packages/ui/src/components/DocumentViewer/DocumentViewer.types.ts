@@ -119,6 +119,12 @@ export interface DocumentViewerProps {
   onMarkupSelect?: (id: string | null) => void
   onMarkupToolChange?: (tool: MarkupTool) => void
   onMarkupColorChange?: (color: string) => void
+  /**
+   * PDF only: the loaded pdf.js document, `null` when it is released. Lets a
+   * caller render from the open document (annotation previews) instead of
+   * loading the file a second time.
+   */
+  onPdfDocument?: (document: import('pdfjs-dist').PDFDocumentProxy | null) => void
 }
 
 export interface DocumentViewerLabels {

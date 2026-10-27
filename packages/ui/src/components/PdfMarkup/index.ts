@@ -42,5 +42,7 @@ export {
   getSortIndexRect,
 } from './sortIndex'
 export type { PageChar, SortPosition, TextItemLike, ViewportToPdf } from './sortIndex'
+export { THUMBNAIL_MAX_PX, ThumbnailRenderer, renderThumbnail, thumbnailRegion } from './thumbnails'
+export type { ThumbnailDocument, ThumbnailPage, ThumbnailRequest } from './thumbnails'
 export { TextLayerController, sameTextLayerIdentity } from './textLayerController'
 export type { TextLayerHandle, TextLayerIdentity } from './textLayerController'

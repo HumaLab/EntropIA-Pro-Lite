@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   compareViews,
   draftToData,
+  thumbnailRequest,
   viewPage,
   viewToMarkup,
   withField,
@@ -108,4 +109,23 @@ describe('bibliography-annotation-markups', () => {
     expect([a, b, c].sort(compareViews).map((entry) => entry.key)).toEqual(['CCCC4444', 'BBBB3333', 'AAAA2222'])
     expect(viewPage(c)).toBe(1)
   })
+
+  it('asks previews for areas and ink only, keyed by revision', () => {
+    const area = view(
+      { annotationType: 'image', annotationColor: '#2ea8e5', annotationPosition: '{"pageIndex":3,"rects":[[1,2,3,4]]}' },
+      { updatedAt: 42 }
+    )
+    expect(thumbnailRequest(area)).toEqual({
+      id: 'ABCD2345:42',
+      pageIndex: 3,
+      rects: [[1, 2, 3, 4]],
+      paths: undefined,
+      color: '#2ea8e5',
+      width: undefined,
+    })
+    const ink = view({ annotationType: 'ink', annotationPosition: '{"pageIndex":0,"paths":[[1,2,3,4]],"width":3}' })
+    expect(thumbnailRequest(ink)).toMatchObject({ paths: [[1, 2, 3, 4]], width: 3 })
+    expect(thumbnailRequest(view(highlight))).toBeNull()
+  })
 })
+

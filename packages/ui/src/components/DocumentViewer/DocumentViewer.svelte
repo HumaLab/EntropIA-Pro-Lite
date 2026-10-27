@@ -80,6 +80,7 @@
     onMarkupSelect = () => {},
     onMarkupToolChange = () => {},
     onMarkupColorChange = () => {},
+    onPdfDocument = () => {},
   }: DocumentViewerProps = $props()
 
   const defaultLabels: DocumentViewerLabels = {
@@ -965,6 +966,7 @@
   function destroyPdfResources() {
     const loadingTask = activeLoadingTask
     activeLoadingTask = null
+    if (pdfDoc) onPdfDocument(null)
     pdfDoc = null
     if (!loadingTask || typeof loadingTask.destroy !== 'function') return
     // destroy() frees the parsed document and terminates its dedicated worker.
@@ -1015,6 +1017,7 @@
       const doc = await loadingTask.promise
       if (requestId !== loadRequestId) return
       pdfDoc = doc
+      onPdfDocument(doc)
       totalPages = doc.numPages
       pdfPage = Math.min(Math.max(currentPage, 1), Math.max(doc.numPages, 1))
       await renderPage()

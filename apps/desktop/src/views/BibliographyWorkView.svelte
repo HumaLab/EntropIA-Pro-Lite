@@ -42,7 +42,9 @@
     ConfirmDialog,
     DocumentViewer,
     ZOTERO_COLORS,
+    ThumbnailRenderer,
     type MarkupTool,
+    type ThumbnailDocument,
     type PdfMarkup,
     type PdfMarkupDraft,
     type PdfMarkupGeometryChange,
@@ -174,6 +176,11 @@
   let selectedMarkupId = $state<string | null>(null)
   let otherFormatCount = $state(0)
   let pendingDelete = $state<AnnotationView | null>(null)
+  /** Area and ink previews, rendered from the document the viewer opened. */
+  let thumbnailRenderer = $state.raw<ThumbnailRenderer | null>(null)
+  const renderThumbnail = $derived(
+    thumbnailRenderer ? thumbnailRenderer.thumbnail.bind(thumbnailRenderer) : null
+  )
   let editSyncTimer: ReturnType<typeof setTimeout> | null = null
   let unlistenAnnotations: (() => void) | null = null
   let destroyed = false
@@ -479,6 +486,7 @@
             onResolve={handleResolve}
             onSync={() => void runSync('edit')}
             pdfAvailable={pdfOnDevice}
+            {renderThumbnail}
           />
 {/snippet}
 
@@ -590,6 +598,10 @@
               onMarkupDelete={handleMarkupDelete}
               onMarkupSelect={(id) => (selectedMarkupId = id)}
               onMarkupColorChange={handleMarkupColorChange}
+              onPdfDocument={(document) =>
+                (thumbnailRenderer = document
+                  ? new ThumbnailRenderer(document as unknown as ThumbnailDocument)
+                  : null)}
               onPageChange={(next, count) => {
                 total = count
                 page = next

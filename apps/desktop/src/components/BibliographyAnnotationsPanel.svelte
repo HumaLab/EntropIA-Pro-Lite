@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { ActionIcon, Button, IconButton } from '@entropia/ui'
   import { locale, t } from '$lib/i18n'
   import {
@@ -10,7 +10,8 @@
     type ConflictDecision,
     type ZoteroAnnotationType,
   } from '$lib/bibliography-annotations'
-  import { compareViews, viewPage } from '$lib/bibliography-annotation-markups'
+  import type { ThumbnailRequest } from '@entropia/ui'
+  import { compareViews, thumbnailRequest, viewPage } from '$lib/bibliography-annotation-markups'
 
   /**
    * The "Anotaciones" panel of the Biblioteca work view
@@ -31,6 +32,8 @@
     otherFormatCount?: number
     /** False when the PDF is not on this device: comments stay editable. */
     pdfAvailable?: boolean
+    /** Renders the preview of an area or ink annotation (a data URL). */
+    renderThumbnail?: ((request: ThumbnailRequest) => Promise<string | null>) | null
     onSelect?: (key: string, page: number | null) => void
     onCommentChange?: (key: string, comment: string) => void
     onDelete?: (view: AnnotationView) => void
@@ -47,6 +50,7 @@
     canSync = true,
     otherFormatCount = 0,
     pdfAvailable = true,
+    renderThumbnail = null,
     onSelect = () => {},
     onCommentChange = () => {},
     onDelete = () => {},
@@ -73,6 +77,26 @@
   })
 
   let trashOpen = $state(false)
+
+  // ── Area and ink previews, one per annotation revision ─────────────
+  const thumbnails = $state<Record<string, string>>({})
+
+  $effect(() => {
+    const render = renderThumbnail
+    if (!render || !pdfAvailable) return
+    for (const view of live) {
+      const request = thumbnailRequest(view)
+      if (!request || untrack(() => request.id in thumbnails)) continue
+      void render(request).then((url) => {
+        if (url) thumbnails[request.id] = url
+      })
+    }
+  })
+
+  function thumbnailOf(view: AnnotationView): string | null {
+    const request = thumbnailRequest(view)
+    return request ? (thumbnails[request.id] ?? null) : null
+  }
 
   // ── Comments: one debounced write per annotation ───────────────────
   const drafts = $state<Record<string, string>>({})
@@ -279,6 +303,15 @@
                   <ActionIcon name="delete" size={14} />
                 </IconButton>
               </div>
+
+              {#if thumbnailOf(view)}
+                <img
+                  class="annotation-entry__preview"
+                  data-testid="annotation-preview"
+                  src={thumbnailOf(view)}
+                  alt={$currentLocale && kindLabel(view.data?.annotationType)}
+                />
+              {/if}
 
               <textarea
                 class="annotation-entry__comment"
@@ -558,6 +591,16 @@
 
   .annotation-entry__badge--error {
     background: var(--color-danger-soft);
+  }
+
+  .annotation-entry__preview {
+    display: block;
+    max-width: 100%;
+    max-height: 160px;
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-sunken);
+    object-fit: contain;
   }
 
   .annotation-entry__comment {

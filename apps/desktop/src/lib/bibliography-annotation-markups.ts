@@ -1,4 +1,10 @@
-import type { PdfMarkup, PdfMarkupDraft, PdfMarkupGeometryChange, PdfRect } from '@entropia/ui'
+import type {
+  PdfMarkup,
+  PdfMarkupDraft,
+  PdfMarkupGeometryChange,
+  PdfRect,
+  ThumbnailRequest,
+} from '@entropia/ui'
 import {
   isVisibleInViewer,
   parsePosition,
@@ -110,6 +116,27 @@ export function withField(
   value: string
 ): ZoteroAnnotationData {
   return { ...data, [field]: value }
+}
+
+/**
+ * The preview request of an area or ink annotation, keyed by its revision so
+ * an edit renders a new one; `null` for every other type.
+ */
+export function thumbnailRequest(view: AnnotationView): ThumbnailRequest | null {
+  const type = view.data?.annotationType
+  if (type !== 'image' && type !== 'ink') return null
+  const position = parsePosition(view.data)
+  if (!position) return null
+  return {
+    id: `${view.key}:${view.updatedAt}`,
+    pageIndex: position.pageIndex,
+    rects: asRects(position.rects),
+    paths: Array.isArray(position.paths)
+      ? position.paths.filter(Array.isArray).map((path) => path.map(Number))
+      : undefined,
+    color: typeof view.data?.annotationColor === 'string' ? view.data.annotationColor : undefined,
+    width: typeof position.width === 'number' ? position.width : undefined,
+  }
 }
 
 /** The page an annotation is listed under (one-based), or null without a position. */
