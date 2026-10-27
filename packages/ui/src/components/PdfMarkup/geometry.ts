@@ -178,3 +178,24 @@ export function boundingPdfRect(rects: PdfRect[]): PdfRect | null {
     Math.max(...rects.map((rect) => rect[3])),
   ]
 }
+
+/** Height the selection popover needs below or above a selection, in px. */
+export const POPOVER_SPACE_PX = 48
+
+/**
+ * Where the selection popover goes: centered on the whole selection, below
+ * its last line, or above its first one when the page ends too soon.
+ */
+export function popoverAnchor(
+  boxes: ViewportBox[],
+  pageHeight: number
+): { x: number; y: number; placement: 'below' | 'above' } | null {
+  if (boxes.length === 0) return null
+  const left = Math.min(...boxes.map((box) => box.x))
+  const right = Math.max(...boxes.map((box) => box.x + box.width))
+  const top = Math.min(...boxes.map((box) => box.y))
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height))
+  const x = (left + right) / 2
+  if (bottom + 8 + POPOVER_SPACE_PX <= pageHeight) return { x, y: bottom + 8, placement: 'below' }
+  return { x, y: top - 8, placement: 'above' }
+}

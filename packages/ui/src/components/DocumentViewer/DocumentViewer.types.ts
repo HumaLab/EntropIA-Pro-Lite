@@ -106,6 +106,12 @@ export interface DocumentViewerProps {
   allowedTools?: readonly MarkupTool[]
   /** Swatches of the color pickers; the default keeps Collections' tokens. */
   palette?: readonly string[]
+  /**
+   * PDF only. `page` (default) fits the whole page in the pane, aligned left,
+   * as Collections shows a scan. `width` fits the page width between two
+   * toolbar gutters and centers it, scrolling down: a reading view.
+   */
+  pdfFit?: 'page' | 'width'
   /** PDF only, opt-in: a pdf.js text layer so text can be selected. */
   textSelection?: boolean
   markupTool?: MarkupTool

@@ -1580,6 +1580,98 @@ describe('DocumentViewer', () => {
       expect(screen.getByTestId('toolbar-zoom-info')).toHaveTextContent('100%')
     })
 
+    it('with pdfFit="width", fills the width beside the toolbar gutters and centers the page', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const pageRequest = deferred<typeof pdfMock.mockPage>()
+      pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          readOnly: true,
+          pdfFit: 'width',
+        },
+      })
+
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      expect(scrollContainer.classList.contains('document-viewer__canvas-container--centered')).toBe(true)
+      await waitFor(() => expect(pdfMock.mockDocument.getPage).toHaveBeenCalled())
+      // A short, wide pane: the page takes the width minus two 48 px gutters,
+      // not the height, so it reads at a useful size and scrolls down.
+      setupContainer(scrollContainer, 1000, 300)
+      pageRequest.resolve(pdfMock.createPage(800, 600))
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(904)
+        expect(canvas.height).toBe(678)
+      })
+      getContext.mockRestore()
+    })
+
+    it('with pdfFit="width", widens the gutters to the real toolbar width', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const pageRequest = deferred<typeof pdfMock.mockPage>()
+      pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
+
+      render(DocumentViewer, {
+        props: {
+          path: '/path/to/doc.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/path/to/doc.pdf',
+          readOnly: true,
+          pdfFit: 'width',
+        },
+      })
+
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 1000, 300)
+      // A short pane splits the toolbar into two columns, 81 px wide: the page
+      // must clear it, not slide under it.
+      const toolbar = screen.getByTestId('annotation-toolbar')
+      toolbar.getBoundingClientRect = vi.fn(() => ({
+        x: 0, y: 0, top: 0, left: 0, right: 81, bottom: 350, width: 81, height: 350, toJSON: () => ({}),
+      }))
+      await triggerResizeObservers(toolbar)
+      pageRequest.resolve(pdfMock.createPage(800, 600))
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(806)
+      })
+      getContext.mockRestore()
+    })
+
+    it('with pdfFit="width", caps the scale on a wide pane so the page stays readable', async () => {
+      const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+      getContext.mockReturnValue(stubCanvasContext())
+      const pageRequest = deferred<typeof pdfMock.mockPage>()
+      pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
+      render(DocumentViewer, {
+        props: { path: '/d.pdf', type: 'pdf', assetUrl: 'asset://localhost/d.pdf', readOnly: true, pdfFit: 'width' },
+      })
+      const scrollContainer = screen.getByTestId('pdf-scroll-container')
+      setupContainer(scrollContainer, 3000, 300)
+      pageRequest.resolve(pdfMock.createPage(800, 600))
+      // 3000 px of pane would draw the page 2904 px wide; 1.6 px per point caps it.
+      await waitFor(() => {
+        const canvas = screen.getByTestId('pdf-canvas') as HTMLCanvasElement
+        expect(canvas.width).toBe(1280)
+      })
+      getContext.mockRestore()
+    })
+
+    it('keeps the whole-page fit and left alignment without pdfFit', () => {
+      render(DocumentViewer, {
+        props: { path: '/p.pdf', type: 'pdf', assetUrl: 'asset://localhost/p.pdf' },
+      })
+      expect(
+        screen.getByTestId('pdf-scroll-container').classList.contains('document-viewer__canvas-container--centered')
+      ).toBe(false)
+    })
+
     it('fits the PDF page to the scroll container like images and re-fits on resize', async () => {
       const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
       getContext.mockReturnValue(stubCanvasContext())

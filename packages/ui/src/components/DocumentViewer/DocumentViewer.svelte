@@ -1,13 +1,15 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
-  import AnnotationToolbar from '../AnnotationToolbar/AnnotationToolbar.svelte'
+  import AnnotationToolbar, {
+    type MarkupToolbarSection,
+  } from '../AnnotationToolbar/AnnotationToolbar.svelte'
+  import type { ActionIconName } from '../Button/ActionIcon.types'
   import AudioPlayer from '../AudioPlayer/AudioPlayer.svelte'
   import type { DocumentViewerLabels, DocumentViewerProps } from './DocumentViewer.types'
   import type { AnnotationTool, EditTool, ViewerAnnotation } from './DocumentViewer.types'
   import { pdfDocumentOptions } from '../../lib/pdf-document-options'
   import PdfMarkupLayer from '../PdfMarkup/PdfMarkupLayer.svelte'
-  import MarkupToolbar from '../PdfMarkup/MarkupToolbar.svelte'
   import {
     DEFAULT_MARKUP_LABELS,
     MARKUP_TOOLS,
@@ -70,6 +72,7 @@
     allowedTools = MARKUP_TOOLS,
     palette,
     textSelection = false,
+    pdfFit = 'page',
     markupTool: markupToolProp,
     markupColor: markupColorProp,
     selectedMarkupId = null,
@@ -187,6 +190,56 @@
     onMarkupChange({ ...change, sortIndex })
   }
 
+  const MARKUP_TOOL_ICONS: Record<MarkupTool, ActionIconName> = {
+    select: 'pointer',
+    highlight: 'highlight',
+    underline: 'underline',
+    note: 'message-circle',
+    image: 'rectangle',
+    text: 'typography',
+  }
+
+  function markupToolLabel(tool: MarkupTool): string {
+    switch (tool) {
+      case 'select':
+        return markupLabels.toolSelect
+      case 'highlight':
+        return markupLabels.toolHighlight
+      case 'underline':
+        return markupLabels.toolUnderline
+      case 'note':
+        return markupLabels.toolNote
+      case 'image':
+        return markupLabels.toolImage
+      case 'text':
+        return markupLabels.toolText
+    }
+  }
+
+  /** The markup tools, drawn in the annotation toolbar's own column. */
+  const markupSection = $derived<MarkupToolbarSection | null>(
+    markupsEnabled && type === 'pdf'
+      ? {
+          tools: MARKUP_TOOLS.filter((tool) => allowedTools.includes(tool)).map((tool) => ({
+            value: tool,
+            label: markupToolLabel(tool),
+            icon: MARKUP_TOOL_ICONS[tool],
+          })),
+          tool: activeMarkupTool,
+          onToolChange: (tool: string) => setMarkupTool(tool as MarkupTool),
+          colors: markupPalette.map((value) => ({ value, label: value })),
+          color: activeMarkupColor,
+          onColorChange: setMarkupColor,
+          colorAriaLabel: markupLabels.colorAriaLabel,
+          hasSelection: selectedMarkupId !== null,
+          deleteLabel: markupLabels.deleteMarkup,
+          onDeleteSelected: () => {
+            if (selectedMarkupId) onMarkupDelete(selectedMarkupId)
+          },
+        }
+      : null
+  )
+
   function setMarkupTool(tool: MarkupTool) {
     internalMarkupTool = tool
     onMarkupToolChange(tool)
@@ -202,12 +255,7 @@
     textLayerContainer = element
   }
 
-  function buildTextLayer(
-    page: PDFPageProxy,
-    viewport: MarkupViewport,
-    container: HTMLDivElement,
-    requestId: number
-  ) {
+  function buildTextLayer(page: PDFPageProxy, viewport: MarkupViewport, container: HTMLDivElement) {
     const pdfjs = pdfjsLib
     container.replaceChildren()
     container.style.setProperty('--scale-factor', String(viewport.scale))
@@ -220,18 +268,11 @@
       container,
       viewport: viewport as unknown as import('pdfjs-dist').PageViewport,
     })
-    void layer.render().then(
-      () => {
-        // A newer page render owns the layer now: this one is stale.
-        if (requestId !== renderRequestId) {
-          layer.cancel()
-          container.replaceChildren()
-        }
-      },
-      () => {
-        // A cancelled text layer rejects; the next identity builds its own.
-      }
-    )
+    // A layer is replaced only through `textLayers.sync`, which cancels and
+    // removes it; a re-render at the same identity keeps it whole.
+    void layer.render().catch(() => {
+      // A cancelled text layer rejects; the next identity builds its own.
+    })
     return {
       cancel: () => layer.cancel(),
       remove: () => container.replaceChildren(),
@@ -251,7 +292,7 @@
     if (!textSelection || !container || !viewport || !pageProxy) return
     if (pauseWhenHidden && pdfContainerIsEmpty()) return
     textLayers.sync({ document: assetUrl, page: markupPageNumber, scale: viewport.scale }, () =>
-      buildTextLayer(pageProxy, viewport, container, requestId)
+      buildTextLayer(pageProxy, viewport, container)
     )
   }
 
@@ -261,6 +302,42 @@
     const container = textLayerContainer
     if (!container || !textSelection) return
     untrack(() => syncTextLayer(renderRequestId))
+  })
+  /** Narrowest side gutter of a width-fitted page. */
+  const PDF_TOOLBAR_GUTTER_PX = 48
+  /**
+   * Largest width fit, in CSS px per PDF point: on a wide screen a letter
+   * page stays about 980 px wide, readable, instead of filling 1400 px.
+   */
+  const PDF_WIDTH_FIT_MAX_SCALE = 1.6
+  /** Air between the toolbar and a width-fitted page. */
+  const PDF_TOOLBAR_CLEARANCE_PX = 16
+  let toolbarAnchorEl: HTMLDivElement | undefined = $state()
+  /** Width of the toolbar the anchor holds: one column or two. */
+  let toolbarWidth = $state(0)
+  const pdfGutter = $derived(Math.max(PDF_TOOLBAR_GUTTER_PX, toolbarWidth + PDF_TOOLBAR_CLEARANCE_PX))
+
+  $effect(() => {
+    const toolbar = toolbarAnchorEl?.querySelector<HTMLElement>('[data-testid="annotation-toolbar"]')
+    if (pdfFit !== 'width' || !toolbar) return
+    const measure = () => {
+      toolbarWidth = toolbar.getBoundingClientRect().width
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(toolbar)
+    return () => observer.disconnect()
+  })
+
+  // A width-fitted page re-fits when the toolbar beside it changes width.
+  let fittedGutter = 0
+  $effect(() => {
+    const gutter = pdfGutter
+    if (pdfFit !== 'width' || gutter === fittedGutter) return
+    fittedGutter = gutter
+    untrack(() => {
+      if (pdfDoc) void renderPage()
+    })
   })
   const MIN_DRAW_PX = 6
   const UNDERLINE_STROKE_PX = 2
@@ -503,6 +580,12 @@
       Number((rect.height - readPx(style.paddingTop) - readPx(style.paddingBottom)).toFixed(2))
     )
     if (width <= 0 || height <= 0) return 1
+    if (pdfFit === 'width') {
+      // Room for the toolbar column on the right, mirrored on the left so the
+      // page stays centered.
+      const readable = Math.max(1, width - 2 * pdfGutter)
+      return Math.min(readable / pageW, PDF_WIDTH_FIT_MAX_SCALE)
+    }
     return Math.min(width / pageW, height / pageH)
   }
 
@@ -1250,20 +1333,7 @@
   bind:this={containerEl}
 >
   {#if type === 'image' || type === 'pdf'}
-    <div class="document-viewer__toolbar-anchor">
-      <!-- First, so the zoom column stays at the right edge the anchor aligns
-           to, clear of the page, as in Collections. -->
-      {#if markupsEnabled && type === 'pdf'}
-        <MarkupToolbar
-          tool={activeMarkupTool}
-          color={activeMarkupColor}
-          {allowedTools}
-          palette={markupPalette}
-          labels={markupLabels}
-          onToolChange={setMarkupTool}
-          onColorChange={setMarkupColor}
-        />
-      {/if}
+    <div class="document-viewer__toolbar-anchor" bind:this={toolbarAnchorEl}>
       <AnnotationToolbar
         {readOnly}
         tool={annotationTool}
@@ -1300,6 +1370,7 @@
           zoomOut: labels.pdfZoomOut,
           zoomIn: labels.pdfZoomIn,
         }}
+        markup={markupSection}
       />
     </div>
   {/if}
@@ -1570,6 +1641,7 @@
 
     <div
       class="document-viewer__canvas-container"
+      class:document-viewer__canvas-container--centered={pdfFit === 'width'}
       data-testid="pdf-scroll-container"
       bind:this={pdfScrollEl}
     >
@@ -1931,6 +2003,23 @@
     overflow: auto;
     box-sizing: border-box;
     padding: var(--space-4);
+  }
+
+  /* `safe` keeps a page wider than the pane scrollable from its left edge. */
+  .document-viewer__canvas-container--centered {
+    justify-content: safe center;
+    /* A reader's desk: a tinted backdrop the white sheet stands out from, on
+       every theme. */
+    background: color-mix(in srgb, var(--color-text-primary) 6%, var(--color-surface));
+  }
+
+  /* A reading page needs an edge: on a light theme the white sheet otherwise
+     melts into the pane. */
+  .document-viewer__canvas-container--centered .document-viewer__pdf-stage {
+    /* Separate properties: some themes set --shadow-md to none, and none in a
+       shadow list would void the edge too. */
+    outline: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+    box-shadow: var(--shadow-md);
   }
 
   .document-viewer__pdf-stage {

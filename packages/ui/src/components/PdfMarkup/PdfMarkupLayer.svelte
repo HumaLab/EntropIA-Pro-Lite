@@ -15,6 +15,7 @@
   import {
     movePdfRect,
     noteRectAt,
+    popoverAnchor,
     resizePdfRect,
     selectionToPdfRects,
     toPdfRect,
@@ -237,7 +238,13 @@
   }
 
   // ── Text selection → highlight / underline ─────────────────────────
-  let popover = $state<{ x: number; y: number; text: string; boxes: ViewportBox[] } | null>(null)
+  let popover = $state<{
+    x: number
+    y: number
+    placement: 'below' | 'above'
+    text: string
+    boxes: ViewportBox[]
+  } | null>(null)
 
   function readSelection() {
     const selection = typeof window !== 'undefined' ? window.getSelection() : null
@@ -272,12 +279,12 @@
       return
     }
     if (tool === 'highlight' || tool === 'underline') {
-      createFromSelection(tool, color, { x: 0, y: 0, ...picked })
+      createFromSelection(tool, color, { x: 0, y: 0, placement: 'below', ...picked })
       return
     }
-    const last = picked.boxes[picked.boxes.length - 1]
-    if (!last) return
-    popover = { x: last.x + last.width, y: last.y + last.height + 6, ...picked }
+    const anchor = popoverAnchor(picked.boxes, viewport.height)
+    if (!anchor) return
+    popover = { ...anchor, ...picked }
   }
 
   let popoverColor = $state<string | null>(null)
@@ -373,9 +380,20 @@
               y={box.y}
               width={box.width}
               height={box.height}
-              rx={3}
+              rx={Math.max(2, box.width * 0.12)}
               fill={markup.color}
             />
+            <!-- Three text lines, so the square reads as a note. -->
+            {#each [0.32, 0.5, 0.68] as line, lineIndex (line)}
+              <line
+                class="pdf-markup__note-line"
+                x1={box.x + box.width * 0.24}
+                x2={box.x + box.width * (lineIndex === 2 ? 0.56 : 0.76)}
+                y1={box.y + box.height * line}
+                y2={box.y + box.height * line}
+                stroke-width={Math.max(1, box.height * 0.07)}
+              />
+            {/each}
           {:else if markup.type === 'image'}
             <rect
               class="pdf-markup__area"
@@ -434,6 +452,7 @@
       data-testid="pdf-selection-popover"
       role="toolbar"
       aria-label={labels.popoverAriaLabel}
+      class:pdf-markup-popover--above={popover.placement === 'above'}
       style={`left:${popover.x}px;top:${popover.y}px;`}
     >
       <div class="pdf-markup-popover__colors">
@@ -564,8 +583,16 @@
   }
 
   .pdf-markup__note {
-    opacity: 0.9;
-    stroke: color-mix(in srgb, var(--color-text-primary) 30%, transparent);
+    stroke: rgb(0 0 0 / 0.25);
+    stroke-width: 1;
+    filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35));
+  }
+
+  /* Drawn on the note's own color: dark ink reads on every Zotero swatch. */
+  .pdf-markup__note-line {
+    stroke: rgb(0 0 0 / 0.45);
+    stroke-linecap: round;
+    pointer-events: none;
   }
 
   .pdf-markup__area {
@@ -612,6 +639,10 @@
     box-shadow: var(--shadow-md);
     pointer-events: auto;
     transform: translateX(-50%);
+  }
+
+  .pdf-markup-popover--above {
+    transform: translate(-50%, -100%);
   }
 
   .pdf-markup-popover__colors {

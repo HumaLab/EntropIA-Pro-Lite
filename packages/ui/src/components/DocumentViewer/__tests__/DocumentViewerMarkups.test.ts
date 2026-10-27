@@ -1,12 +1,19 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DocumentViewer from '../DocumentViewer.svelte'
 import { createMarkupViewport } from '../../PdfMarkup/geometry'
 import type { PdfMarkup } from '../../PdfMarkup/types'
 
 class MockResizeObserver {
+  static instances: MockResizeObserver[] = []
+  constructor(private readonly callback: () => void) {
+    MockResizeObserver.instances.push(this)
+  }
   observe = vi.fn()
   disconnect = vi.fn()
+  trigger() {
+    this.callback()
+  }
 }
 vi.stubGlobal('ResizeObserver', MockResizeObserver)
 vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -25,10 +32,15 @@ const pdf = vi.hoisted(() => {
       textLayers.push(this)
     }
     render() {
-      const span = document.createElement('span')
-      span.textContent = 'Some text'
-      this.container.append(span)
-      return Promise.resolve()
+      // pdf.js streams the text content: the layer settles a moment later.
+      return new Promise<void>((resolve) =>
+        setTimeout(() => {
+          const span = document.createElement('span')
+          span.textContent = 'Some text'
+          this.container.append(span)
+          resolve()
+        }, 15)
+      )
     }
   }
   return { textLayers, TextLayer, viewportFactory: { current: null as null | ((scale: number) => unknown) } }
@@ -94,7 +106,7 @@ describe('DocumentViewer markups', () => {
     render(DocumentViewer, { props: baseProps({ readOnly: false }) })
     await waitFor(() => expect(screen.getByTestId('annotation-toolbar')).toBeInTheDocument())
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(screen.queryByTestId('markup-toolbar')).not.toBeInTheDocument()
+    expect(document.querySelector('[data-testid^="markup-tool-"]')).toBeNull()
     expect(screen.queryByTestId('pdf-markup-layer')).not.toBeInTheDocument()
   })
 
@@ -102,7 +114,11 @@ describe('DocumentViewer markups', () => {
     render(DocumentViewer, {
       props: baseProps({ markups: [], allowedTools: BIBLIOTECA_TOOLS }),
     })
-    const toolbar = await screen.findByTestId('markup-toolbar')
+    // One toolbar, as in Collections: the markup tools live in the
+    // annotation toolbar's column, never in a second bar beside it.
+    await screen.findByTestId('pdf-markup-layer')
+    expect(screen.getAllByRole('toolbar').filter((bar) => bar.closest('.document-viewer'))).toHaveLength(1)
+    const toolbar = screen.getByTestId('annotation-toolbar')
     for (const tool of BIBLIOTECA_TOOLS) {
       expect(toolbar.querySelector(`[data-testid="markup-tool-${tool}"]`)).not.toBeNull()
     }
@@ -113,7 +129,8 @@ describe('DocumentViewer markups', () => {
 
   it('hides tools left out of allowedTools', async () => {
     render(DocumentViewer, { props: baseProps({ markups: [], allowedTools: ['select', 'highlight'] }) })
-    const toolbar = await screen.findByTestId('markup-toolbar')
+    await screen.findByTestId('pdf-markup-layer')
+    const toolbar = screen.getByTestId('annotation-toolbar')
     expect(toolbar.querySelectorAll('[data-testid^="markup-tool-"]')).toHaveLength(2)
   })
 
@@ -195,6 +212,33 @@ describe('DocumentViewer markups', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     // happy-dom lays nothing out: the scroll container measures 0x0, i.e. hidden.
     expect(pdf.textLayers).toHaveLength(0)
+  })
+
+  it('offers Zotero colors and deletes the selected markup from the same toolbar', async () => {
+    const onMarkupDelete = vi.fn()
+    const onMarkupColorChange = vi.fn()
+    render(DocumentViewer, {
+      props: baseProps({ markups, selectedMarkupId: 'HIGH2345', onMarkupDelete, onMarkupColorChange }),
+    })
+    await screen.findByTestId('pdf-markup-layer')
+    const toolbar = screen.getByTestId('annotation-toolbar')
+    await fireEvent.click(within(toolbar).getByRole('button', { name: 'Color #ff6666' }))
+    expect(onMarkupColorChange).toHaveBeenCalledWith('#ff6666')
+    await fireEvent.click(within(toolbar).getByRole('button', { name: 'Delete annotation' }))
+    expect(onMarkupDelete).toHaveBeenCalledWith('HIGH2345')
+  })
+
+  it('keeps the text of a layer when the page re-renders at the same page and scale', async () => {
+    // A resize that lands on the same scale keeps the current layer; that
+    // layer must not then remove its own text as if it were stale.
+    render(DocumentViewer, { props: baseProps({ markups: [], textSelection: true }) })
+    await waitFor(() => expect(pdf.textLayers).toHaveLength(1))
+    const layer = screen.getByTestId('pdf-text-layer')
+    // The resize lands while the layer is still streaming its text.
+    for (const observer of MockResizeObserver.instances) observer.trigger()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(pdf.textLayers).toHaveLength(1)
+    expect(layer.querySelectorAll('span')).toHaveLength(1)
   })
 })
 

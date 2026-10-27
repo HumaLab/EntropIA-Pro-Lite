@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createMarkupViewport,
   noteRectAt,
+  popoverAnchor,
   pageIndexToPage,
   pageToPageIndex,
   selectionToPdfRects,
@@ -208,5 +209,23 @@ describe('text layer lifecycle', () => {
     controller.clear()
     expect(first.cancel).toHaveBeenCalled()
     expect(controller.identity).toBeNull()
+  })
+})
+
+describe('selection popover anchor', () => {
+  it('centers under the whole selection, not its last line', () => {
+    const anchor = popoverAnchor(
+      [
+        { x: 100, y: 100, width: 300, height: 12 },
+        { x: 100, y: 116, width: 40, height: 12 },
+      ],
+      800
+    )
+    expect(anchor).toEqual({ x: 250, y: 136, placement: 'below' })
+  })
+
+  it('goes above the selection near the bottom of the page', () => {
+    const anchor = popoverAnchor([{ x: 100, y: 770, width: 100, height: 12 }], 800)
+    expect(anchor).toEqual({ x: 150, y: 762, placement: 'above' })
   })
 })

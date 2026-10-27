@@ -1,5 +1,4 @@
 export { default as PdfMarkupLayer } from './PdfMarkupLayer.svelte'
-export { default as MarkupToolbar } from './MarkupToolbar.svelte'
 export {
   DEFAULT_MARKUP_LABELS,
   MARKUP_TOOLS,
@@ -23,6 +22,7 @@ export {
   createMarkupViewport,
   movePdfRect,
   noteRectAt,
+  popoverAnchor,
   pageIndexToPage,
   pageToPageIndex,
   resizePdfRect,
