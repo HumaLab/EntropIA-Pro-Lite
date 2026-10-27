@@ -104,6 +104,7 @@ export const ACTION_ICON_NAMES = [
   'panel-left-close',
   'pause',
   'play',
+  'pointer',
   'rectangle',
   'redo',
   'refresh',

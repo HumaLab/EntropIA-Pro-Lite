@@ -101,6 +101,7 @@
   import IconPhotoPlus from '@tabler/icons-svelte-runes/icons/photo-plus'
   import IconPlayerPause from '@tabler/icons-svelte-runes/icons/player-pause'
   import IconPlayerPlay from '@tabler/icons-svelte-runes/icons/player-play'
+  import IconPointer from '@tabler/icons-svelte-runes/icons/pointer'
   import IconPlayerSkipBack from '@tabler/icons-svelte-runes/icons/player-skip-back'
   import IconPlayerSkipForward from '@tabler/icons-svelte-runes/icons/player-skip-forward'
   import IconPlus from '@tabler/icons-svelte-runes/icons/plus'
@@ -284,6 +285,7 @@
     split: IconLayoutColumns,
     pause: IconPlayerPause,
     play: IconPlayerPlay,
+    pointer: IconPointer,
     rectangle: IconSquare,
     redo: IconArrowForwardUp,
     refresh: IconRefresh,

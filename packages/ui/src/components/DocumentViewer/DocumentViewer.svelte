@@ -5,6 +5,17 @@
   import type { DocumentViewerLabels, DocumentViewerProps } from './DocumentViewer.types'
   import type { AnnotationTool, EditTool, ViewerAnnotation } from './DocumentViewer.types'
   import { pdfDocumentOptions } from '../../lib/pdf-document-options'
+  import PdfMarkupLayer from '../PdfMarkup/PdfMarkupLayer.svelte'
+  import MarkupToolbar from '../PdfMarkup/MarkupToolbar.svelte'
+  import {
+    DEFAULT_MARKUP_LABELS,
+    MARKUP_TOOLS,
+    ZOTERO_COLORS,
+    type MarkupTool,
+    type MarkupViewport,
+  } from '../PdfMarkup/types'
+  import { TextLayerController } from '../PdfMarkup/textLayerController'
+  import type { PDFPageProxy } from 'pdfjs-dist'
 
   let {
     path: _path,
@@ -47,6 +58,20 @@
     audioStartAtSeconds = null,
     labels: labelsProp = {},
     annotationToolbarLabels = {},
+    markups,
+    allowedTools = MARKUP_TOOLS,
+    palette,
+    textSelection = false,
+    markupTool: markupToolProp,
+    markupColor: markupColorProp,
+    selectedMarkupId = null,
+    markupLabels: markupLabelsProp = {},
+    onMarkupCreate = () => {},
+    onMarkupChange = () => {},
+    onMarkupDelete = () => {},
+    onMarkupSelect = () => {},
+    onMarkupToolChange = () => {},
+    onMarkupColorChange = () => {},
   }: DocumentViewerProps = $props()
 
   const defaultLabels: DocumentViewerLabels = {
@@ -77,12 +102,88 @@
     audioFallbackBlobLoader ? () => audioFallbackBlobLoader(_path) : undefined
   )
 
-  const presetColors = [
+  const defaultPresetColors = [
     { value: 'var(--color-accent)', label: 'Accent' },
     { value: 'var(--color-success)', label: 'Success' },
     { value: 'var(--color-warning)', label: 'Warning' },
     { value: 'var(--color-danger)', label: 'Danger' },
   ]
+  const presetColors = $derived(
+    palette ? palette.map((value) => ({ value, label: value })) : defaultPresetColors
+  )
+
+  // ── Zotero-style markups (opt-in through `markups`) ────────────────
+  const markupsEnabled = $derived(markups !== undefined)
+  const markupPalette = $derived(palette ?? ZOTERO_COLORS)
+  const markupLabels = $derived({ ...DEFAULT_MARKUP_LABELS, ...markupLabelsProp })
+  let internalMarkupTool = $state<MarkupTool>('select')
+  let internalMarkupColor = $state<string | null>(null)
+  const activeMarkupTool = $derived(
+    allowedTools.includes(markupToolProp ?? internalMarkupTool)
+      ? (markupToolProp ?? internalMarkupTool)
+      : 'select'
+  )
+  const activeMarkupColor = $derived(
+    markupColorProp ?? internalMarkupColor ?? markupPalette[0] ?? ZOTERO_COLORS[0]
+  )
+  // pdf.js's PageViewport of the page on screen; raw, it is never mutated.
+  let markupViewport = $state.raw<MarkupViewport | null>(null)
+  let markupPageNumber = $state(0)
+  let markupPageProxy: PDFPageProxy | null = null
+  let pdfjsLib: typeof import('pdfjs-dist') | null = null
+  let textLayerContainer = $state<HTMLDivElement | null>(null)
+  const textLayers = new TextLayerController()
+
+  function setMarkupTool(tool: MarkupTool) {
+    internalMarkupTool = tool
+    onMarkupToolChange(tool)
+  }
+
+  function setMarkupColor(color: string) {
+    internalMarkupColor = color
+    onMarkupColorChange(color)
+  }
+
+  function handleTextLayerMount(element: HTMLDivElement | null) {
+    if (element !== textLayerContainer) textLayers.clear()
+    textLayerContainer = element
+  }
+
+  function buildTextLayer(page: PDFPageProxy, viewport: MarkupViewport, container: HTMLDivElement) {
+    const pdfjs = pdfjsLib
+    container.replaceChildren()
+    container.style.setProperty('--scale-factor', String(viewport.scale))
+    container.style.setProperty('--total-scale-factor', String(viewport.scale))
+    if (!pdfjs || typeof pdfjs.TextLayer !== 'function') {
+      return { cancel() {}, remove: () => container.replaceChildren() }
+    }
+    const layer = new pdfjs.TextLayer({
+      textContentSource: page.streamTextContent(),
+      container,
+      viewport: viewport as unknown as import('pdfjs-dist').PageViewport,
+    })
+    void layer.render().catch(() => {
+      // A cancelled text layer rejects; the next identity builds its own.
+    })
+    return {
+      cancel: () => layer.cancel(),
+      remove: () => container.replaceChildren(),
+    }
+  }
+
+  // The text layer follows the page on screen: (attachment, page, scale).
+  $effect(() => {
+    const container = textLayerContainer
+    const viewport = markupViewport
+    const page = markupPageNumber
+    const documentUrl = assetUrl
+    if (!textSelection || !container || !viewport || !markupPageProxy) return
+    if (pauseWhenHidden && pdfContainerIsEmpty()) return
+    const pageProxy = markupPageProxy
+    textLayers.sync({ document: documentUrl, page, scale: viewport.scale }, () =>
+      buildTextLayer(pageProxy, viewport, container)
+    )
+  })
   const MIN_DRAW_PX = 6
   const UNDERLINE_STROKE_PX = 2
   const UNDERLINE_HITBOX_NORMALIZED = 0.02
@@ -796,6 +897,9 @@
   }
 
   function teardownPdf() {
+    textLayers.clear()
+    markupViewport = null
+    markupPageProxy = null
     renderRequestId++
     loadRequestId++
     cancelActiveRenderTask()
@@ -823,6 +927,7 @@
     try {
       activatePdfMode()
       const pdfjs = await import('pdfjs-dist')
+      pdfjsLib = pdfjs
       pdfjs.GlobalWorkerOptions.workerSrc = new URL(
         'pdfjs-dist/build/pdf.worker.min.mjs',
         import.meta.url
@@ -901,6 +1006,11 @@
       naturalW = naturalViewport.width
       naturalH = naturalViewport.height
       onDimensionsChange({ width: naturalViewport.width, height: naturalViewport.height })
+      if (markupsEnabled || textSelection) {
+        markupPageProxy = page
+        markupPageNumber = requestedPage
+        markupViewport = viewport as unknown as MarkupViewport
+      }
       onPageChange(requestedPage, totalPages)
     } catch (err) {
       if (requestId !== renderRequestId || isRenderCancellation(err)) return
@@ -1094,6 +1204,17 @@
           zoomIn: labels.pdfZoomIn,
         }}
       />
+      {#if markupsEnabled && type === 'pdf'}
+        <MarkupToolbar
+          tool={activeMarkupTool}
+          color={activeMarkupColor}
+          {allowedTools}
+          palette={markupPalette}
+          labels={markupLabels}
+          onToolChange={setMarkupTool}
+          onColorChange={setMarkupColor}
+        />
+      {/if}
     </div>
   {/if}
 
@@ -1385,6 +1506,24 @@
               style={`width:${pdfCanvasW}px;height:${pdfCanvasH}px;transform:translate(${-pdfCropOffsetX}px,${-pdfCropOffsetY}px);`}
             >
               <canvas bind:this={canvasEl} data-testid="pdf-canvas"></canvas>
+
+              {#if (markupsEnabled || textSelection) && markupViewport}
+                <PdfMarkupLayer
+                  viewport={markupViewport}
+                  pageIndex={markupPageNumber - 1}
+                  markups={markups ?? []}
+                  tool={markupsEnabled ? activeMarkupTool : 'select'}
+                  color={activeMarkupColor}
+                  palette={markupPalette}
+                  selectedId={selectedMarkupId}
+                  labels={markupLabels}
+                  onTextLayerMount={handleTextLayerMount}
+                  onSelect={onMarkupSelect}
+                  onCreate={onMarkupCreate}
+                  onGeometryChange={onMarkupChange}
+                  onDelete={onMarkupDelete}
+                />
+              {/if}
 
               {#if hasRenderableBounds}
                 <svg
