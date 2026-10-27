@@ -377,7 +377,8 @@ export async function applyMigrations(client: DbClient): Promise<void> {
         name === '0055_bibliographic_chunk_embeddings' ||
         name === '0056_bibliographic_ingest_operations' ||
         name === '0057_web_captures' ||
-        name === '0058_processing_ner_tasks'
+        name === '0058_processing_ner_tasks' ||
+        name === '0059_zotero_annotations'
       ) {
         const appliedAt = Math.floor(Date.now() / 1000)
         const escapedName = name.replaceAll("'", "''")

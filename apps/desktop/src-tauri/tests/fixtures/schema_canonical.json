@@ -422,6 +422,18 @@
     },
     {
       "type": "index",
+      "name": "idx_zotero_annotation_items_parent",
+      "tbl_name": "zotero_annotation_items",
+      "sql": "CREATE INDEX idx_zotero_annotation_items_parent\n  ON zotero_annotation_items (library_row_id, parent_key)"
+    },
+    {
+      "type": "index",
+      "name": "idx_zotero_annotation_items_state",
+      "tbl_name": "zotero_annotation_items",
+      "sql": "CREATE INDEX idx_zotero_annotation_items_state\n  ON zotero_annotation_items (library_row_id, sync_state)"
+    },
+    {
+      "type": "index",
       "name": "idx_zotero_attachments_item",
       "tbl_name": "zotero_attachments",
       "sql": "CREATE INDEX idx_zotero_attachments_item\n  ON zotero_attachments(item_id)"
@@ -941,6 +953,18 @@
       "name": "writing_zotero_citations",
       "tbl_name": "writing_zotero_citations",
       "sql": "CREATE TABLE writing_zotero_citations (\n  id                      TEXT    PRIMARY KEY,\n  document_id             TEXT    NOT NULL REFERENCES writing_documents(id) ON DELETE CASCADE,\n  citation_node_id        TEXT    NOT NULL,\n  citation_cluster_id     TEXT    NOT NULL,\n  item_position           INTEGER NOT NULL,\n  source_origin           TEXT    NOT NULL DEFAULT 'local'\n                                  CHECK (source_origin IN ('local', 'web')),\n  source_instance_id      TEXT,\n  library_type            TEXT    NOT NULL,\n  library_id              TEXT    NOT NULL,\n  item_key                TEXT    NOT NULL,\n  item_version            INTEGER,\n  locator_type            TEXT,\n  locator                 TEXT,\n  prefix                  TEXT,\n  suffix                  TEXT,\n  suppress_author         INTEGER NOT NULL DEFAULT 0,\n  author_only             INTEGER NOT NULL DEFAULT 0,\n  item_csl_json_snapshot  TEXT    NOT NULL DEFAULT '{}',\n  integrity_status        TEXT    NOT NULL DEFAULT 'valid'\n                                  CHECK (integrity_status IN ('valid', 'zotero_unavailable', 'item_missing', 'item_modified')),\n  created_at              INTEGER NOT NULL,\n  updated_at              INTEGER NOT NULL,\n  UNIQUE (document_id, citation_cluster_id, item_position)\n)"
+    },
+    {
+      "type": "table",
+      "name": "zotero_annotation_items",
+      "tbl_name": "zotero_annotation_items",
+      "sql": "CREATE TABLE zotero_annotation_items (\n  library_row_id  TEXT    NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  web_user_id     TEXT    NOT NULL,\n  annotation_key  TEXT    NOT NULL CHECK (length(annotation_key) = 8),\n  parent_key      TEXT    NOT NULL,\n  base_version    INTEGER,\n  base_json       TEXT,\n  remote_trashed  INTEGER NOT NULL DEFAULT 0 CHECK (remote_trashed IN (0, 1)),\n  local_json      TEXT,\n  local_deleted   INTEGER NOT NULL DEFAULT 0 CHECK (local_deleted IN (0, 1)),\n  edit_gen        INTEGER NOT NULL DEFAULT 0,\n  sent_gen        INTEGER,\n  sent_json       TEXT,\n  sent_uncertain  INTEGER NOT NULL DEFAULT 0 CHECK (sent_uncertain IN (0, 1)),\n  sync_state      TEXT    NOT NULL CHECK (sync_state IN ('synced', 'pending', 'waiting_parent', 'conflict', 'error')),\n  conflict_fields TEXT    NOT NULL DEFAULT '[]',\n  conflict_json   TEXT,\n  last_error      TEXT,\n  created_at      INTEGER NOT NULL,\n  updated_at      INTEGER NOT NULL,\n  PRIMARY KEY (library_row_id, annotation_key),\n  CHECK (local_deleted = 0 OR local_json IS NULL)\n)"
+    },
+    {
+      "type": "table",
+      "name": "zotero_annotation_sync_state",
+      "tbl_name": "zotero_annotation_sync_state",
+      "sql": "CREATE TABLE zotero_annotation_sync_state (\n  library_row_id      TEXT    NOT NULL REFERENCES zotero_libraries(id) ON DELETE CASCADE,\n  web_user_id         TEXT    NOT NULL,\n  web_library_version INTEGER NOT NULL DEFAULT 0,\n  paused_until        INTEGER,\n  pause_reason        TEXT,\n  updated_at          INTEGER NOT NULL,\n  PRIMARY KEY (library_row_id, web_user_id)\n)"
     },
     {
       "type": "table",
@@ -7116,6 +7140,269 @@
       "foreign_keys_error": null
     },
     {
+      "name": "zotero_annotation_items",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "library_row_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1,
+          "hidden": 0
+        },
+        {
+          "cid": 1,
+          "name": "web_user_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 2,
+          "name": "annotation_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2,
+          "hidden": 0
+        },
+        {
+          "cid": 3,
+          "name": "parent_key",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 4,
+          "name": "base_version",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 5,
+          "name": "base_json",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 6,
+          "name": "remote_trashed",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 7,
+          "name": "local_json",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 8,
+          "name": "local_deleted",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 9,
+          "name": "edit_gen",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 10,
+          "name": "sent_gen",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 11,
+          "name": "sent_json",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 12,
+          "name": "sent_uncertain",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 13,
+          "name": "sync_state",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 14,
+          "name": "conflict_fields",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": "'[]'",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 15,
+          "name": "conflict_json",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 16,
+          "name": "last_error",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 17,
+          "name": "created_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 18,
+          "name": "updated_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "zotero_libraries",
+          "from": "library_row_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "columns_error": null,
+      "foreign_keys_error": null
+    },
+    {
+      "name": "zotero_annotation_sync_state",
+      "columns": [
+        {
+          "cid": 0,
+          "name": "library_row_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 1,
+          "hidden": 0
+        },
+        {
+          "cid": 1,
+          "name": "web_user_id",
+          "type": "TEXT",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 2,
+          "hidden": 0
+        },
+        {
+          "cid": 2,
+          "name": "web_library_version",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": "0",
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 3,
+          "name": "paused_until",
+          "type": "INTEGER",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 4,
+          "name": "pause_reason",
+          "type": "TEXT",
+          "notnull": 0,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        },
+        {
+          "cid": 5,
+          "name": "updated_at",
+          "type": "INTEGER",
+          "notnull": 1,
+          "dflt_value": null,
+          "pk": 0,
+          "hidden": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "zotero_libraries",
+          "from": "library_row_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "columns_error": null,
+      "foreign_keys_error": null
+    },
+    {
       "name": "zotero_attachment_tombstones",
       "columns": [
         {
@@ -10341,6 +10628,66 @@
       "columns_error": null
     },
     {
+      "name": "idx_zotero_annotation_items_parent",
+      "columns": [
+        {
+          "seqno": 0,
+          "cid": 0,
+          "name": "library_row_id",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 1,
+          "cid": 3,
+          "name": "parent_key",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 2,
+          "cid": -1,
+          "name": null,
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 0
+        }
+      ],
+      "columns_error": null
+    },
+    {
+      "name": "idx_zotero_annotation_items_state",
+      "columns": [
+        {
+          "seqno": 0,
+          "cid": 0,
+          "name": "library_row_id",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 1,
+          "cid": 13,
+          "name": "sync_state",
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 1
+        },
+        {
+          "seqno": 2,
+          "cid": -1,
+          "name": null,
+          "desc": 0,
+          "coll": "BINARY",
+          "key": 0
+        }
+      ],
+      "columns_error": null
+    },
+    {
       "name": "idx_zotero_attachments_item",
       "columns": [
         {
@@ -10931,6 +11278,7 @@
     "0055_bibliographic_chunk_embeddings",
     "0056_bibliographic_ingest_operations",
     "0057_web_captures",
-    "0058_processing_ner_tasks"
+    "0058_processing_ner_tasks",
+    "0059_zotero_annotations"
   ]
 }

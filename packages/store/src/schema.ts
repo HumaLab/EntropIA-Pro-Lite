@@ -1454,3 +1454,62 @@ export const webCaptures = sqliteTable(
     sourceIdx: index('idx_web_captures_source').on(table.webSourceId, table.accessedAt),
   })
 )
+
+// ---------------------------------------------------------------------------
+// Zotero annotations of the Biblioteca (migration 0059). Local only: excluded
+// from device sync. JSON columns hold the Zotero `data` object verbatim.
+// ---------------------------------------------------------------------------
+export const zoteroAnnotationItems = sqliteTable(
+  'zotero_annotation_items',
+  {
+    libraryRowId: text('library_row_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    webUserId: text('web_user_id').notNull(),
+    annotationKey: text('annotation_key').notNull(),
+    parentKey: text('parent_key').notNull(),
+    baseVersion: integer('base_version'),
+    baseJson: text('base_json'),
+    remoteTrashed: integer('remote_trashed').notNull().default(0),
+    localJson: text('local_json'),
+    localDeleted: integer('local_deleted').notNull().default(0),
+    editGen: integer('edit_gen').notNull().default(0),
+    sentGen: integer('sent_gen'),
+    sentJson: text('sent_json'),
+    sentUncertain: integer('sent_uncertain').notNull().default(0),
+    syncState: text('sync_state', {
+      enum: ['synced', 'pending', 'waiting_parent', 'conflict', 'error'],
+    }).notNull(),
+    conflictFields: text('conflict_fields').notNull().default('[]'),
+    conflictJson: text('conflict_json'),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryRowId, table.annotationKey] }),
+    parentIdx: index('idx_zotero_annotation_items_parent').on(
+      table.libraryRowId,
+      table.parentKey
+    ),
+    stateIdx: index('idx_zotero_annotation_items_state').on(table.libraryRowId, table.syncState),
+  })
+)
+
+/** Web API pull cursor and shared pause of one library for one Web account. */
+export const zoteroAnnotationSyncState = sqliteTable(
+  'zotero_annotation_sync_state',
+  {
+    libraryRowId: text('library_row_id')
+      .notNull()
+      .references(() => zoteroLibraries.id, { onDelete: 'cascade' }),
+    webUserId: text('web_user_id').notNull(),
+    webLibraryVersion: integer('web_library_version').notNull().default(0),
+    pausedUntil: integer('paused_until'),
+    pauseReason: text('pause_reason'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.libraryRowId, table.webUserId] }),
+  })
+)
