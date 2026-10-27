@@ -2455,6 +2455,25 @@ pub struct StagedWorkChunk {
     pub embedding: Vec<u8>,
 }
 
+/// Derived-cache write policy (plan-sync-bibliografia-derivada §2.3).
+///
+/// The device that pays also records the result for the other devices of the
+/// account, inside the same transaction that publishes it, so the cache can
+/// never hold a result the Bibliografía did not confirm. The cache is still
+/// only an optimization for a FUTURE saving: a write that cannot land never
+/// costs the work that was already paid for. Every failure is logged and
+/// dropped instead of failing the commit — a connection that never ran
+/// `ensure_sync_schema` (the tables are absent there, and the derived writers
+/// already treat that as a no-op) or a row shaped against a stale table.
+fn cache_paid_result(result: Result<(), String>) {
+    if let Err(error) = result {
+        log::warn!(
+            target: "bibliography",
+            "derived cache write skipped: {error}"
+        );
+    }
+}
+
 /// Scheduler publisher for one work profile. Runs inside the commit
 /// transaction: profile row and its vector land together, or nothing does.
 pub fn publish_bibliography_profile_output(
@@ -2522,6 +2541,17 @@ pub fn publish_bibliography_profile_output(
         },
         processing_repository::now_ms(),
     )?;
+    // §2.3: the vector this publish paid for is cached in the same
+    // transaction, keyed by the generation's contract hash (the task/generation
+    // pinned space, §2.4 compares it as such) and by the profile input hash the
+    // row stamps. The cache never costs the publish: see [`cache_paid_result`].
+    cache_paid_result(crate::sync::derived::cache_paid_vector(
+        conn,
+        &generation.contract_hash,
+        &output.input_hash,
+        output.dimensions as i64,
+        &output.embedding,
+    ));
     // Progress only grows when a new work lands: re-profiles update their
     // row in place and never inflate the manifest count.
     if is_new {
@@ -2568,6 +2598,23 @@ pub fn publish_bibliography_profile_output(
             processing_repository::now_ms(),
         )
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
+        // §2.3: a pasaje vector travels under the sha256 of the exact text sent
+        // to the embedder. `chunk_hash` is that function, so hashing the
+        // chunk text the row publishes proves the vector is content-addressed
+        // under the text it belongs to: if a later change ever lets
+        // `input_hash` name a different string, the paid vector is not cached
+        // under a key no reader could reproduce.
+        if !chunk.embedding.is_empty()
+            && crate::bibliography::chunks::chunk_hash(&chunk.text_content) == chunk.input_hash
+        {
+            cache_paid_result(crate::sync::derived::cache_paid_vector(
+                conn,
+                &generation.contract_hash,
+                &chunk.input_hash,
+                output.dimensions as i64,
+                &chunk.embedding,
+            ));
+        }
     }
     // The manifest floors at the distinct published union: direct demand
     // outside a sync chain has no declared manifest, and monotonic MAX
@@ -2638,6 +2685,25 @@ pub struct ExtractPageText {
     pub quality: String,
 }
 
+/// One OCR answer this run paid for, as the derived cache takes it (plan
+/// §2.2/§2.3): the page, what the provider answered (`text`, or `empty` for a
+/// blank answer that still cost money) and that answer — the RAW provider
+/// answer, not a converted one: the reader replays `settled_page_row` on it and
+/// must reach exactly the row this device publishes (D1). It travels apart from
+/// the row the answer produced, because an empty answer keeps the native row.
+///
+/// A definitive provider failure is not here: it is not a result and may not
+/// repeat (§2.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrPageAnswer {
+    pub page_number: i64,
+    /// `text` or `empty` (`sync_derived_ocr_pages.outcome`).
+    pub outcome: String,
+    /// The provider's raw answer; `''` when `outcome = 'empty'`.
+    pub text: String,
+}
+
 /// Explicit native extraction output routed by the scheduler. The rows are
 /// the product; the receipt only describes identity.
 #[derive(Debug, Clone, Serialize)]
@@ -2659,6 +2725,18 @@ pub struct BibliographyExtractComputeOutput {
     /// (a duplicate demand queued before admission learned to skip it): the
     /// publisher re-proves that and writes nothing.
     pub already_current: bool,
+    /// SHA-256 (lowercase hex) of the ORIGINAL file bytes — the derived cache's
+    /// key for an OCR page (§2.2, D2), computed once from what the executor read
+    /// off disk. Never the decrypted bytes a permissions-only PDF is rewritten
+    /// into before OCR: two devices hold the same file, not the same rewrite.
+    pub source_hash: String,
+    /// The versioned OCR contract (`ocr-v<v>:<provider>:<model>:p<v>`) the
+    /// answers below were paid under, or `None` for a native-only run. Cached
+    /// pages are reused only under the same string (D3).
+    pub ocr_contract: Option<String>,
+    /// Every provider answer this run paid for, empty answers included. The
+    /// publisher records them in the same transaction that publishes `pages`.
+    pub ocr_outcomes: Vec<OcrPageAnswer>,
 }
 
 fn extraction_text_hash(text: &str) -> String {
@@ -2725,6 +2803,11 @@ struct ExtractedDocument {
     /// The pages the OCR pass had to read (0 when it never ran): the honest
     /// `progress_total` of the task and the denominator of its page counter.
     ocr_pages: i64,
+    /// SHA-256 of the ORIGINAL file bytes (§2.2, D2): the derived cache's key
+    /// for every answer below. Empty for a web snapshot, which never OCRs.
+    source_hash: String,
+    /// The provider answers this extraction paid for, empty ones included.
+    ocr_outcomes: Vec<OcrPageAnswer>,
 }
 
 /// The receipt fields only a reprocess carries (2.3): the approved plan hash
@@ -2801,6 +2884,10 @@ fn extract_html_document(bytes: &[u8]) -> ExtractedDocument {
         ocr_failed_pages: Vec::new(),
         ocr_attempted: false,
         ocr_pages: 0,
+        // A web snapshot never reaches a provider, so it pays for no answer
+        // and has no cache key of its own.
+        source_hash: String::new(),
+        ocr_outcomes: Vec::new(),
     }
 }
 
@@ -3172,6 +3259,12 @@ impl BibliographyExtractExecutor {
                     source_bytes: metadata.len() as i64,
                     pages: Vec::new(),
                     already_current: true,
+                    // Nothing was read, recognised or paid for here: the
+                    // current extraction is already published, and whatever it
+                    // cost was cached when it landed (or is T7's seeding job).
+                    source_hash: String::new(),
+                    ocr_contract: self.ocr_contract(),
+                    ocr_outcomes: Vec::new(),
                 };
                 let receipt = serde_json::json!({
                     "attachmentId": output.attachment_id,
@@ -3246,6 +3339,8 @@ impl BibliographyExtractExecutor {
             ocr_failed_pages,
             ocr_attempted,
             ocr_pages,
+            source_hash,
+            ocr_outcomes,
         } = document;
         let text_chars = text.chars().count() as i64;
         let output = BibliographyExtractComputeOutput {
@@ -3260,6 +3355,9 @@ impl BibliographyExtractExecutor {
             source_mtime: attachment.mtime,
             source_bytes: bytes.len() as i64,
             already_current: false,
+            source_hash,
+            ocr_contract: self.ocr_contract(),
+            ocr_outcomes,
         };
         let mut receipt = serde_json::json!({
             "attachmentId": output.attachment_id,
@@ -3304,6 +3402,14 @@ impl BibliographyExtractExecutor {
         stop: &crate::processing::scheduler::StopFlag,
         bytes: &[u8],
     ) -> Result<ExtractedDocument, crate::processing::scheduler::ExecOutput> {
+        // The derived cache keys an OCR page by the sha256 of the file the
+        // owner holds (plan §2.2, D2). It is computed HERE, once, on the bytes
+        // just read off disk — never on the `readable` copy below: a
+        // permissions-only PDF is decrypted and re-serialized before OCR
+        // (`ocr::pdf::open_with_empty_password`, A-105), so hashing what the
+        // provider sees would key the same article differently on every
+        // rewrite of it.
+        let source_hash = hex::encode(Sha256::digest(bytes));
         let NativeExtractionBasis {
             bytes: readable,
             page_count,
@@ -3312,7 +3418,13 @@ impl BibliographyExtractExecutor {
             native_blank,
         } = read_native_extraction_basis(bytes, self.app.as_ref())?;
         let bytes: &[u8] = &readable;
-        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) = self.maybe_ocr_pages(
+        let OcrPass {
+            pages,
+            failed_pages: ocr_failed_pages,
+            attempted: ocr_attempted,
+            pages_needed: ocr_pages,
+            outcomes: ocr_outcomes,
+        } = self.maybe_ocr_pages(
             ctx,
             task,
             stop,
@@ -3330,6 +3442,8 @@ impl BibliographyExtractExecutor {
             ocr_failed_pages,
             ocr_attempted,
             ocr_pages,
+            source_hash,
+            ocr_outcomes,
         })
     }
 
@@ -3432,7 +3546,13 @@ impl BibliographyExtractExecutor {
                 },
             )?;
         }
-        let (pages, ocr_failed_pages, ocr_attempted, ocr_pages) = self.maybe_ocr_pages(
+        let OcrPass {
+            pages,
+            failed_pages: ocr_failed_pages,
+            attempted: ocr_attempted,
+            pages_needed: ocr_pages,
+            outcomes: ocr_outcomes,
+        } = self.maybe_ocr_pages(
             ctx,
             task,
             stop,
@@ -3451,6 +3571,10 @@ impl BibliographyExtractExecutor {
                 ocr_failed_pages,
                 ocr_attempted,
                 ocr_pages,
+                // The plan already hashed the ORIGINAL file bytes (2.3): the
+                // same hash the cache keys the answers below by.
+                source_hash: source_sha256.clone(),
+                ocr_outcomes,
             },
             ReprocessReceipt {
                 plan_hash: plan.plan_hash,
@@ -3483,11 +3607,16 @@ impl BibliographyExtractExecutor {
         pages: Vec<ExtractPageText>,
         native_blank: bool,
         selection: OcrPageSelection<'_>,
-    ) -> Result<(Vec<ExtractPageText>, Vec<i64>, bool, i64), crate::processing::scheduler::ExecOutput>
-    {
+    ) -> Result<OcrPass, crate::processing::scheduler::ExecOutput> {
         use crate::processing::scheduler::ExecOutput;
         let Some((renderer, provider)) = &self.selective_ocr else {
-            return Ok((pages, Vec::new(), false, 0));
+            return Ok(OcrPass {
+                pages,
+                failed_pages: Vec::new(),
+                attempted: false,
+                pages_needed: 0,
+                outcomes: Vec::new(),
+            });
         };
         let _capability = crate::bibliography::selective_ocr::probe_page_ocr_capability(
             true,
@@ -3578,6 +3707,7 @@ impl BibliographyExtractExecutor {
         }
         let mut out: Vec<ExtractPageText> = Vec::with_capacity(pages.len());
         let mut ocr_failed_pages: Vec<i64> = Vec::new();
+        let mut ocr_outcomes: Vec<OcrPageAnswer> = Vec::new();
         for page in pages {
             if !needing.contains(&page.page_number) {
                 out.push(page);
@@ -3682,15 +3812,68 @@ impl BibliographyExtractExecutor {
                 }
             };
             match answer {
-                Some(text) => out.push(settled_page_row(page, text)),
+                Some(text) => {
+                    // Plan §2.3: the answer the owner just paid for — windowed
+                    // or per page — is recorded for the derived cache here,
+                    // BEFORE `settled_page_row` decides what to publish: an
+                    // empty answer keeps the native row, and without this
+                    // record the next device would pay for the page again.
+                    //
+                    // The cache stores the RAW provider answer, exactly as it
+                    // arrived, and the reader replays `settled_page_row` on it
+                    // (T5). Converting here would be wrong on both sides:
+                    // `ocr_markup_to_text` is NOT idempotent (a literal `<b>`
+                    // the provider escaped as `&lt;b&gt;` survives one pass and
+                    // is stripped by the next), so this publish would convert
+                    // the answer twice and change published text, and a reader
+                    // would convert once more and change it again. The outcome
+                    // is still decided exactly as the publish path decides it —
+                    // on the converted text — so `empty` never disagrees with
+                    // the row `settled_page_row` produces.
+                    let converted = crate::ocr::markup::ocr_markup_to_text(&text);
+                    let outcome = if converted.trim().is_empty() {
+                        "empty"
+                    } else {
+                        "text"
+                    };
+                    ocr_outcomes.push(OcrPageAnswer {
+                        page_number,
+                        outcome: outcome.to_string(),
+                        // §2.2: an empty answer carries no text.
+                        text: if outcome == "empty" {
+                            String::new()
+                        } else {
+                            text.clone()
+                        },
+                    });
+                    out.push(settled_page_row(page, text))
+                }
                 // The hard-failed page keeps its native row, untouched.
                 None => out.push(page),
             }
             landed.insert(page_number);
             record_page_progress(ctx, task, landed.len() as i64, pages_needed)?;
         }
-        Ok((out, ocr_failed_pages, ocr_attempted, pages_needed))
+        Ok(OcrPass {
+            pages: out,
+            failed_pages: ocr_failed_pages,
+            attempted: ocr_attempted,
+            pages_needed,
+            outcomes: ocr_outcomes,
+        })
     }
+}
+
+/// What one selective OCR pass settled: the page rows it publishes, the pages
+/// whose provider call failed definitively (named in the receipt), whether a
+/// provider answered at all, the honest progress total, and every paid answer
+/// the derived cache takes from this run (plan §2.3).
+struct OcrPass {
+    pages: Vec<ExtractPageText>,
+    failed_pages: Vec<i64>,
+    attempted: bool,
+    pages_needed: i64,
+    outcomes: Vec<OcrPageAnswer>,
 }
 
 /// The settled fate of one OCR page (JD8-A-002): recognized text — a blank
@@ -4514,7 +4697,60 @@ pub fn publish_bibliography_extract_output(
         )
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     }
+    // §2.3: every OCR answer this run paid for is cached in the SAME
+    // transaction that publishes `pages`, empty answers included — they cost
+    // money, and `settled_page_row` keeps the native row for them, so the
+    // published rows alone never show they happened.
+    cache_extraction_ocr_answers(conn, output);
     Ok(())
+}
+
+/// Publishes one extraction's OCR answers to the derived cache (§2.3).
+///
+/// The key is `(sha256 of the original file, page, OCR contract)`, and the
+/// stored text is the provider's RAW answer: a reader replays
+/// `settled_page_row` on it, so both devices publish the same row from it (D1).
+/// A run that paid for answers always carries both the file hash and the
+/// contract of the provider that answered; a half-shaped output is logged and
+/// skipped rather than written under a key nothing would ever match.
+fn cache_extraction_ocr_answers(
+    conn: &rusqlite::Connection,
+    output: &BibliographyExtractComputeOutput,
+) {
+    if output.ocr_outcomes.is_empty() {
+        return;
+    }
+    let Some(contract) = output
+        .ocr_contract
+        .as_deref()
+        .map(str::trim)
+        .filter(|contract| !contract.is_empty())
+    else {
+        log::warn!(
+            target: "bibliography",
+            "derived cache write skipped: extraction {} holds OCR answers but names no contract",
+            output.attachment_id
+        );
+        return;
+    };
+    if output.source_hash.is_empty() {
+        log::warn!(
+            target: "bibliography",
+            "derived cache write skipped: extraction {} holds OCR answers but no file hash",
+            output.attachment_id
+        );
+        return;
+    }
+    for answer in &output.ocr_outcomes {
+        cache_paid_result(crate::sync::derived::cache_paid_ocr_page(
+            conn,
+            &output.source_hash,
+            answer.page_number,
+            contract,
+            &answer.outcome,
+            &answer.text,
+        ));
+    }
 }
 
 /// The OCR contract seam (plan-sync-bibliografia-derivada D3, WU3).

@@ -96,7 +96,6 @@ pub(crate) fn effective_account(conn: &Connection) -> Option<String> {
 /// else the bound account, else `''` (never bound) — §2.9. It only produces `''`
 /// where `effective_account` does, so a read failure fails closed to the one
 /// value the first-ever binding adopts.
-#[allow(dead_code)]
 pub(crate) fn write_account(conn: &Connection) -> String {
     effective_account(conn).unwrap_or_default()
 }
@@ -146,8 +145,11 @@ fn adopt_unbound_rows(conn: &Connection, account_id: &str) -> Result<(), String>
         [account_id],
     )
     .map_err(|e| format!("[sync] failed to adopt unbound OCR pages: {e}"))?;
-    conn.execute("DELETE FROM sync_derived_ocr_pages WHERE account_id = ''", [])
-        .map_err(|e| format!("[sync] failed to drop adopted OCR pages: {e}"))?;
+    conn.execute(
+        "DELETE FROM sync_derived_ocr_pages WHERE account_id = ''",
+        [],
+    )
+    .map_err(|e| format!("[sync] failed to drop adopted OCR pages: {e}"))?;
     Ok(())
 }
 
@@ -209,7 +211,6 @@ pub(crate) fn clear_account_metadata(conn: &Connection) -> Result<(), String> {
 /// Records one paid embedding. First writer wins (`INSERT OR IGNORE`): the same
 /// `(account, contract, input)` is the same content, so a later duplicate — a
 /// remote copy, a retried call — never replaces the stored vector.
-#[allow(dead_code)]
 pub(crate) fn insert_vector(
     conn: &Connection,
     account: &str,
@@ -250,7 +251,6 @@ pub(crate) fn insert_vector(
 /// Records one paid OCR answer, including an empty answer (`outcome='empty'`,
 /// `text=''`): the provider did charge for it, so it travels like any other.
 /// First writer wins.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_ocr_page(
     conn: &Connection,
@@ -296,6 +296,97 @@ pub(crate) fn insert_ocr_page(
     .map_err(|e| format!("[sync] failed to cache an OCR page: {e}"))
 }
 
+/// True when this connection carries the derived cache tables.
+///
+/// [`crate::sync::schema::ensure_sync_schema`] creates them from the app's
+/// `setup()` bootstrap (and from `sync_ensure_capture`), on the sync module's
+/// own connection. A processing connection can still reach a publish before
+/// that bootstrap ran — a fresh archive whose first import overlaps startup, a
+/// repaired database, an archive that never synced — so every write below asks
+/// first instead of failing on a missing table.
+fn cache_tables_present(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table'
+            AND name IN ('sync_derived_vectors', 'sync_derived_ocr_pages',
+                         'sync_derived_contracts')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count == 3)
+    .unwrap_or(false)
+}
+
+/// Copies the immutable embedding contract row into
+/// `sync_derived_contracts` (§2.2), so the device that reads a vector also
+/// knows its provider, model, width and chunking contract. First writer wins:
+/// a contract hash names one space for good. The caller has already checked
+/// [`cache_tables_present`].
+fn mirror_contract(conn: &Connection, contract_hash: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_derived_contracts
+           (contract_hash, provider, model, dimensions, chunking_contract)
+         SELECT contract_hash, provider, model, dimensions, chunking_contract
+           FROM bibliographic_embedding_contracts WHERE contract_hash = ?1",
+        [contract_hash],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("[sync] failed to mirror derived contract {contract_hash}: {e}"))
+}
+
+/// Records one paid embedding from the transaction that publishes it (§2.3):
+/// `origin='local'`, `pushed=0`, the account [`write_account`] names, and the
+/// contract row mirrored beside it. A no-op on a connection without the
+/// derived tables.
+pub(crate) fn cache_paid_vector(
+    conn: &Connection,
+    contract_hash: &str,
+    input_hash: &str,
+    dimensions: i64,
+    embedding: &[u8],
+) -> Result<(), String> {
+    if !cache_tables_present(conn) {
+        return Ok(());
+    }
+    mirror_contract(conn, contract_hash)?;
+    insert_vector(
+        conn,
+        &write_account(conn),
+        contract_hash,
+        input_hash,
+        dimensions,
+        embedding,
+        "local",
+    )
+}
+
+/// Records one paid OCR answer — including an empty one — from the transaction
+/// that publishes its page (§2.3). A no-op on a connection without the derived
+/// tables.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cache_paid_ocr_page(
+    conn: &Connection,
+    source_hash: &str,
+    page_number: i64,
+    ocr_contract: &str,
+    outcome: &str,
+    text: &str,
+) -> Result<(), String> {
+    if !cache_tables_present(conn) {
+        return Ok(());
+    }
+    insert_ocr_page(
+        conn,
+        &write_account(conn),
+        source_hash,
+        page_number,
+        ocr_contract,
+        outcome,
+        text,
+        "local",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,8 +414,10 @@ mod tests {
     }
 
     fn count(conn: &Connection, table: &str) -> i64 {
-        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
-            .expect("count rows")
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
+        .expect("count rows")
     }
 
     fn account_count(conn: &Connection, table: &str, account: &str) -> i64 {
@@ -377,8 +470,16 @@ mod tests {
     fn logout_keeps_derived_rows_with_pushed_reset_and_clears_channel_meta() {
         let conn = new_synced_test_db();
         login(&conn, ACCOUNT_A);
-        insert_vector(&conn, ACCOUNT_A, CONTRACT, "input-1", 1, &blob(1, 7), "local")
-            .expect("paid vector");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "input-1",
+            1,
+            &blob(1, 7),
+            "local",
+        )
+        .expect("paid vector");
         insert_ocr_page(
             &conn,
             ACCOUNT_A,
@@ -465,7 +566,9 @@ mod tests {
             "the owner mark is durable"
         );
         assert!(
-            meta_get(&conn, &backfill_mark).expect("read backfill mark").is_some(),
+            meta_get(&conn, &backfill_mark)
+                .expect("read backfill mark")
+                .is_some(),
             "backfill marks describe local rows and survive"
         );
         assert_eq!(
@@ -549,8 +652,16 @@ mod tests {
         );
 
         // B's own result does not touch A's row.
-        insert_vector(&conn, &write_account(&conn), CONTRACT, "b-input", 1, &blob(1, 2), "local")
-            .expect("B vector");
+        insert_vector(
+            &conn,
+            &write_account(&conn),
+            CONTRACT,
+            "b-input",
+            1,
+            &blob(1, 2),
+            "local",
+        )
+        .expect("B vector");
         assert_eq!(account_count(&conn, "sync_derived_vectors", ACCOUNT_B), 1);
         assert_eq!(account_count(&conn, "sync_derived_vectors", ACCOUNT_A), 1);
 
@@ -588,8 +699,16 @@ mod tests {
         )
         .expect("unbound page");
         // A row the logging-in account already owns wins the key collision.
-        insert_vector(&conn, ACCOUNT_A, CONTRACT, "collides", 1, &blob(1, 9), "local")
-            .expect("account vector");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "collides",
+            1,
+            &blob(1, 9),
+            "local",
+        )
+        .expect("account vector");
         insert_vector(&conn, "", CONTRACT, "collides", 1, &blob(1, 4), "local")
             .expect("unbound colliding vector");
 
@@ -675,7 +794,9 @@ mod tests {
     fn an_upgraded_archive_inherits_the_marks_from_its_live_session() {
         let upgraded = new_app_schema_db();
         upgraded
-            .execute_batch("CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
             .expect("pre-mark sync_meta");
         for (key, value) in [
             ("account_id", ACCOUNT_A),
@@ -720,8 +841,16 @@ mod tests {
 
         insert_vector(&conn, ACCOUNT_A, CONTRACT, "input", 1, &blob(1, 1), "local")
             .expect("first vector");
-        insert_vector(&conn, ACCOUNT_A, CONTRACT, "input", 1, &blob(1, 2), "remote")
-            .expect("a duplicate is ignored, not an error");
+        insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "input",
+            1,
+            &blob(1, 2),
+            "remote",
+        )
+        .expect("a duplicate is ignored, not an error");
         assert_eq!(account_count(&conn, "sync_derived_vectors", ACCOUNT_A), 1);
         assert_eq!(
             stored_embedding(&conn, ACCOUNT_A, "input"),
@@ -729,8 +858,16 @@ mod tests {
             "the first writer wins"
         );
 
-        let error = insert_vector(&conn, ACCOUNT_A, CONTRACT, "narrow", 2, &blob(1, 3), "local")
-            .expect_err("a wrong-width blob is rejected");
+        let error = insert_vector(
+            &conn,
+            ACCOUNT_A,
+            CONTRACT,
+            "narrow",
+            2,
+            &blob(1, 3),
+            "local",
+        )
+        .expect_err("a wrong-width blob is rejected");
         assert!(error.contains("dimensions"), "{error}");
         assert_eq!(
             account_count(&conn, "sync_derived_vectors", ACCOUNT_A),
