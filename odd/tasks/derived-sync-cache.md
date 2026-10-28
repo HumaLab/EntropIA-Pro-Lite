@@ -42,7 +42,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | ID | Task | Specs | Plan | Route | Commit |
 | --- | --- | --- | --- | --- | --- |
 | T1 | Cache tables in `ensure_sync_schema` + account semantics (marks, `''` adoption, logout reset, effective account) | S2, S7, S8 | §2.2, §2.9, WU1 (account tests) | worker | c8f951bf |
-| T2 | Versioned OCR contract | S2 | D3, WU3 | worker | — |
+| T2 | Versioned OCR contract | S2 | D3, WU3 | worker | dde1d82a |
 | T3 | Write paid results to the cache in the same transaction (item, chunk, OCR outcomes incl. empty) | S3 | §2.3, WU1 | worker | — |
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | — |
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | — |
@@ -71,3 +71,8 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   Pro (`local-ml`/`paddle-ocr`) compile not verified on this notebook: its `cmake` is a broken Python shim.
 - **L5** (user, 2026-10-27, mid T1): "metele con todo, me voy a dormir, espeor que tengas todo terminado apra
   cuando me levante".
+- **L6** (T3 verification): plan assumption S-f is false. `ocr_markup_to_text` is not idempotent
+  ("<p>a &lt;b&gt; c</p>" → "a <b> c" → "a c"), so the cache stores the RAW provider answer and the reader
+  replays `settled_page_row` on it. The first T3 draft double-converted and changed published text; fixed before
+  commit with a RED/GREEN test. The reprocess reuse path the plan cites (`processing.rs:3382-3392`) relies on the
+  same false assumption; pre-existing, outside this feature, not changed.
