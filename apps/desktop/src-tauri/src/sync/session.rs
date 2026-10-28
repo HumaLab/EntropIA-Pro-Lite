@@ -510,6 +510,10 @@ pub async fn sync_login(
     )
     .await?;
 
+    // A first binding makes this account the archive owner: seed the derived
+    // cache with what the archive already paid for (plan §2.3b).
+    crate::bibliography::derived_backfill::request_backfill(db.db_path.clone());
+
     crate::app_logs::info(&app_handle, LOG_SOURCE, "Sesión de sync iniciada");
     Ok(())
 }

@@ -48,7 +48,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | a54cd659 |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | 9ea6a1f9 |
 | T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | — |
-| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | — |
+| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | 519a9878 |
 | T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | — |
 | T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
 | T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | blocked: T10 | — |
@@ -80,3 +80,9 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   (`nlp/embeddings.rs:560-586`, same split/aggregate as `embed_batch`), so pasajes and Collection fragments share
   the `(contract_hash, sha256(text))` key. Pre-existing, not changed: on Pro with `embedding_provider` unset the
   engine defaults to local while the effective contract says `api` (verifier advisory A2).
+- **L8** (T7): backfill skips OCR rows whose stored text would change under a second `ocr_markup_to_text`
+  (L6), so the replay is exact; those pages pay once. Collections are seeded only for `Fresh` assets. The pass
+  writes in 500-row transactions and never holds a write transaction across a PDF read. Triggers: app setup
+  after `ensure_capture_on_path`, and after a successful login. If `ensure_capture_on_path` fails at setup, the
+  seed waits for the next start or login (accepted).
+- **L9** (T8): wire contract for the server team in `apps/desktop/src-tauri/src/sync/derived_protocol.md`.

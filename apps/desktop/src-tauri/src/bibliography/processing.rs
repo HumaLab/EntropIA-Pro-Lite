@@ -4128,27 +4128,46 @@ impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelective
     }
 
     fn name(&self) -> &str {
-        #[cfg(feature = "paddle-ocr")]
-        {
-            "paddle"
-        }
-        #[cfg(not(feature = "paddle-ocr"))]
-        {
-            "glm"
-        }
+        PRODUCTION_PAGE_OCR_PROVIDER
     }
 
     fn model_id(&self) -> &str {
-        #[cfg(feature = "paddle-ocr")]
-        {
-            crate::bibliography::ocr_contract::PADDLE_PAGE_MODEL_ID
-        }
-        #[cfg(not(feature = "paddle-ocr"))]
-        {
-            crate::ocr::glm_ocr::GLM_OCR_MODEL_ID
-        }
+        PRODUCTION_PAGE_OCR_MODEL
     }
 }
+
+/// The provider name the production page path reports (D3). Compile-time, like
+/// [`ProductionSelectiveOcr::recognize_page`]: the peer build recognizes
+/// locally, the lean one calls GLM-OCR.
+const PRODUCTION_PAGE_OCR_PROVIDER: &str = if cfg!(feature = "paddle-ocr") {
+    "paddle"
+} else {
+    "glm"
+};
+
+/// The model id beside [`PRODUCTION_PAGE_OCR_PROVIDER`].
+#[cfg(feature = "paddle-ocr")]
+const PRODUCTION_PAGE_OCR_MODEL: &str = crate::bibliography::ocr_contract::PADDLE_PAGE_MODEL_ID;
+#[cfg(not(feature = "paddle-ocr"))]
+const PRODUCTION_PAGE_OCR_MODEL: &str = crate::ocr::glm_ocr::GLM_OCR_MODEL_ID;
+
+/// The OCR contract (`ocr-v<version>:<provider>:<model>:p<version>`, D3) the
+/// production page path stamps today — the string
+/// [`BibliographyExtractExecutor::ocr_contract`] hands the cache when the
+/// extractor runs on the production provider.
+///
+/// It is resolved without an executor or an app handle on purpose: the
+/// backfill of already-paid pages (§2.3b) runs on a background thread with a
+/// plain archive connection and must key its rows under exactly the contract a
+/// later run of this build reads them with, or it would seed nothing anyone
+/// could ever reuse.
+pub fn production_page_ocr_contract() -> String {
+    crate::bibliography::ocr_contract::ocr_contract_for(
+        PRODUCTION_PAGE_OCR_PROVIDER,
+        PRODUCTION_PAGE_OCR_MODEL,
+    )
+}
+
 impl Default for BibliographyExtractExecutor {
     fn default() -> Self {
         Self::new()
@@ -4947,5 +4966,24 @@ mod ocr_contract_tests {
     #[test]
     fn a_native_only_extractor_reports_no_ocr_contract() {
         assert!(BibliographyExtractExecutor::new().ocr_contract().is_none());
+    }
+
+    /// PRESERVE (T7): the backfill resolves the production contract with no
+    /// executor and no app handle, so it may not drift from what the production
+    /// provider reports. Pulling `name`/`model_id` into constants moved no
+    /// value: this build still stamps exactly the string it stamped before, and
+    /// a version or model change has to update it here too.
+    #[test]
+    fn the_production_page_contract_is_what_this_build_always_stamped() {
+        #[cfg(feature = "paddle-ocr")]
+        assert_eq!(
+            super::production_page_ocr_contract(),
+            "ocr-v1:paddle:PP-OCRv5_mobile:p1"
+        );
+        #[cfg(not(feature = "paddle-ocr"))]
+        assert_eq!(
+            super::production_page_ocr_contract(),
+            "ocr-v1:glm:glm-ocr:p1"
+        );
     }
 }

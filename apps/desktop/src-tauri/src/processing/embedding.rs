@@ -332,11 +332,8 @@ fn cache_collection_vectors(
             )?;
         }
     }
-    let aggregate_text = validated
-        .iter()
-        .map(|(source, _, _)| source.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let aggregate_text =
+        aggregate_request_text(validated.iter().map(|(source, _, _)| source.text.as_str()));
     if !output.aggregate_input_hash.is_empty()
         && sha256_hex_label(aggregate_text.as_bytes()) == output.aggregate_input_hash
     {
@@ -590,11 +587,8 @@ impl Executor for EmbeddingExecutor {
             };
             planned_all.push((kind.clone(), source_id.clone(), text.clone(), planned));
         }
-        let full_text = planned_all
-            .iter()
-            .map(|(_, _, text, _)| text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let full_text =
+            aggregate_request_text(planned_all.iter().map(|(_, _, text, _)| text.as_str()));
         // Key half that travels: `sha256` of the exact string handed to
         // `embed_text` — the fragment's own `text_content`, or the asset's full
         // source text for the aggregate (plan assumption S-e: the engine adds no
@@ -731,8 +725,20 @@ impl Executor for EmbeddingExecutor {
     }
 }
 
+/// The exact string one asset's aggregate vector answers (§2.8): every non-empty
+/// source text the run snapshotted, joined by a blank line, in the run's own
+/// order.
+///
+/// One construction for every writer and reader of that key — the executor's
+/// paid request, the publisher's cache write and the §2.3b backfill — so the
+/// `sha256` a later run looks up can never drift from the one a paying device
+/// stored.
+pub(crate) fn aggregate_request_text<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
+    texts.into_iter().collect::<Vec<_>>().join("\n\n")
+}
+
 /// (kind, source_id, text) snapshot, same ordering as the historic backfill.
-fn snapshot_sources(
+pub(crate) fn snapshot_sources(
     conn: &Connection,
     asset_id: &str,
     _item_id: &str,
