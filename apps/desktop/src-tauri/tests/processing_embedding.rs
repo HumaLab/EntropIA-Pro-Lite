@@ -288,6 +288,19 @@ fn seed_vectors(conn: &Connection, account: &str, contract: &str, rows: &[(Strin
     }
 }
 
+/// The state of an archive that synced against a server which does not
+/// implement `bibliography-derived-v1`: the epoch is known and the channel is
+/// confirmed absent, so the pull-before-pay gate pays exactly as before (§2.6).
+/// These suites are about what the cache answers, never about the wait.
+fn set_legacy_channel(conn: &Connection) {
+    set_meta(conn, "server_epoch", "epoch-legacy");
+    set_meta(
+        conn,
+        "derived_capability",
+        "{\"epoch\":\"epoch-legacy\",\"advertised\":false}",
+    );
+}
+
 fn set_meta(conn: &Connection, key: &str, value: &str) {
     conn.execute(
         "INSERT INTO sync_meta (key, value) VALUES (?1, ?2)
@@ -324,6 +337,7 @@ fn seeded_device(
     let conn = archive.conn();
     if let Some(account) = account {
         set_meta(&conn, "account_id", account);
+        set_legacy_channel(&conn);
     }
     if let Some(bound) = bound_account {
         set_meta(&conn, "derived_bound_account", bound);
@@ -432,6 +446,7 @@ fn another_accounts_rows_are_never_used() {
     let archive = archive(true);
     let conn = archive.conn();
     set_meta(&conn, "account_id", "acct-A");
+    set_legacy_channel(&conn);
     let contract = effective_contract(&conn).hash;
     seed_vectors(&conn, "acct-other", &contract, &rows);
     admit_embedding(&conn);
@@ -467,6 +482,7 @@ fn a_paid_run_records_every_fragment_and_the_aggregate() {
     let archive = archive(true);
     let conn = archive.conn();
     set_meta(&conn, "account_id", "acct-A");
+    set_legacy_channel(&conn);
     admit_embedding(&conn);
     let embedder = Arc::new(CountingEmbedder::default());
     succeeded(&run_embedding(&archive, &conn, embedder.clone()));
@@ -554,6 +570,7 @@ fn a_failing_cache_write_does_not_fail_the_publish() {
     )
     .expect("stale cache tables");
     set_meta(&conn, "account_id", "acct-A");
+    set_legacy_channel(&conn);
     admit_embedding(&conn);
     let embedder = Arc::new(CountingEmbedder::default());
     succeeded(&run_embedding(&archive, &conn, embedder.clone()));
@@ -726,4 +743,109 @@ fn the_backfill_does_not_seed_an_asset_that_is_not_fresh() {
     assert_eq!(report.collection_assets, 0);
     assert_eq!(report.collection_vectors, 0);
     assert!(cached_vectors(&owner_conn).is_empty());
+}
+
+// ── T9: pull before pay (§2.6, D5) ─────────────────────────────────────────
+//
+// The Collections executor asks the gate after its cache read and only when a
+// fragment (or the aggregate) is still missing, so a fully cached asset never
+// waits and a parked one re-runs by itself without burning the retry budget.
+
+fn run_embedding_at(
+    archive: &Archive,
+    conn: &Connection,
+    embedder: Arc<CountingEmbedder>,
+    now_ms: i64,
+) -> RunOneOutcome {
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(EmbeddingExecutor::with_embedder(
+        archive.path.clone(),
+        embedder,
+    )));
+    run_one(
+        conn,
+        &ExecCtx {
+            db_path: archive.path.clone(),
+        },
+        &registry,
+        "embedding-session",
+        now_ms,
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("embedding run")
+}
+
+/// S5: a session whose channel verdict is still unknown parks the asset before
+/// its first paid `embed_text`; the channel's answer (here: a legacy server)
+/// releases it, and the fragments are then paid exactly once.
+#[test]
+fn a_session_with_an_unknown_channel_parks_the_first_paid_fragment() {
+    let archive = archive(true);
+    let conn = archive.conn();
+    set_meta(&conn, "account_id", "acct-A");
+    admit_embedding(&conn);
+    let embedder = Arc::new(CountingEmbedder::default());
+
+    let task_id = match run_embedding(&archive, &conn, embedder.clone()) {
+        RunOneOutcome::Deferred { task_id } => task_id,
+        other => panic!("the first paid fragment must wait, got {other:?}"),
+    };
+    assert!(
+        embedder.calls().is_empty(),
+        "nothing paid before the account's cache is as complete as it can get"
+    );
+    let (state, code, retry_count): (String, Option<String>, i64) = conn
+        .query_row(
+            "SELECT state, last_error_code, retry_count FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("parked task");
+    assert_eq!(state, "retry_wait");
+    assert_eq!(code.as_deref(), Some("derived_cache_wait"));
+    assert_eq!(retry_count, 0, "the wait costs no retry budget");
+    let wake: i64 = conn
+        .query_row(
+            "SELECT next_retry_at FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("wake time");
+
+    set_legacy_channel(&conn);
+    succeeded(&run_embedding_at(
+        &archive,
+        &conn,
+        embedder.clone(),
+        wake + 1,
+    ));
+    assert_eq!(
+        embedder.calls().len(),
+        published(&conn).chunks.len() + 1,
+        "every fragment plus the aggregate is paid exactly once after the wait"
+    );
+}
+
+/// §2.6: an asset the cache fully answers never consults the wait, even with a
+/// session whose channel is still unknown.
+#[test]
+fn a_fully_cached_asset_never_waits() {
+    let (calls, rows) = paid_baseline();
+    let archive = archive(true);
+    let conn = archive.conn();
+    set_meta(&conn, "account_id", "acct-A");
+    let contract = effective_contract(&conn).hash;
+    seed_vectors(&conn, "acct-A", &contract, &rows);
+    admit_embedding(&conn);
+    let embedder = Arc::new(CountingEmbedder::default());
+
+    succeeded(&run_embedding(&archive, &conn, embedder.clone()));
+
+    assert!(
+        embedder.calls().is_empty(),
+        "the cache answers every miss, so there is nothing to wait for: {:?}",
+        embedder.calls()
+    );
+    assert_eq!(calls.len(), rows.len(), "the paid baseline seeded it all");
 }

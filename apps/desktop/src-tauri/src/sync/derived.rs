@@ -46,8 +46,9 @@ pub(crate) const BACKFILL_PREFIX: &str = "derived_backfill:";
 /// Channel account metadata dropped on logout / account change (§2.9). Defined
 /// here from the start so the transport slice has one owner for them: the
 /// capability the server advertised, the catch-up epoch, the pull cursor, when
-/// the last pull started (the freshness barrier of §2.6), the wait verdict and
-/// the on-demand pull request of the pull-before-pay gate.
+/// the last pull started (the freshness barrier of §2.6), the bounded wait's
+/// first instant and the on-demand pull request of the pull-before-pay gate
+/// ([`super::derived_gate`]).
 const CAPABILITY_KEY: &str = "derived_capability";
 const CATCHUP_EPOCH_KEY: &str = "derived_catchup_epoch";
 pub(crate) const PULL_CURSOR_KEY: &str = "derived_cursor";
@@ -73,7 +74,7 @@ fn meta_account(conn: &Connection, key: &str) -> Result<Option<String>, String> 
 }
 
 /// The account of the active session, if any.
-fn session_account(conn: &Connection) -> Result<Option<String>, String> {
+pub(crate) fn session_account(conn: &Connection) -> Result<Option<String>, String> {
     meta_account(conn, "account_id")
 }
 
@@ -323,6 +324,39 @@ pub(crate) fn record_pull_started_at(
     meta_set(conn, LAST_PULL_STARTED_AT_KEY, &value.to_string())
 }
 
+/// The first instant an epoch's bounded wait started (§2.6, D5), or `None`
+/// while this epoch has not waited yet.
+///
+/// The value is stored with its epoch, like the pull stamp: after a rotation a
+/// previous epoch's wait can never shorten (nor extend) the new epoch's budget.
+/// [`clear_account_metadata`] drops it with the rest of the channel metadata, so
+/// the next account starts its own wait.
+pub(crate) fn first_wait_ms(conn: &Connection, epoch: &str) -> Option<i64> {
+    let raw = meta_get(conn, WAIT_VERDICT_KEY).ok().flatten()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if value.get("epoch").and_then(serde_json::Value::as_str) != Some(epoch) {
+        return None;
+    }
+    value
+        .get("first_wait_ms")
+        .and_then(serde_json::Value::as_i64)
+}
+
+/// Records the first instant of an epoch's bounded wait, once. A second call for
+/// the same epoch keeps the first instant: the deadline is per epoch, not per
+/// unit.
+pub(crate) fn remember_first_wait(
+    conn: &Connection,
+    epoch: &str,
+    started_at_ms: i64,
+) -> Result<(), String> {
+    if first_wait_ms(conn, epoch).is_some() {
+        return Ok(());
+    }
+    let value = serde_json::json!({ "epoch": epoch, "first_wait_ms": started_at_ms });
+    meta_set(conn, WAIT_VERDICT_KEY, &value.to_string())
+}
+
 /// The pull-before-pay gate's request for one incremental pull of the channel
 /// (§2.6). Sets `sync_meta['derived_pull_requested']`; the derived phase of the
 /// sync engine performs at most one incremental pull per cycle and always
@@ -472,7 +506,11 @@ fn mirror_contract(conn: &Connection, contract_hash: &str) -> Result<(), String>
 /// `origin='local'`, `pushed=0`, the account [`write_account`] names, and the
 /// contract row mirrored beside it. A no-op on a connection without the
 /// derived tables.
-pub(crate) fn cache_paid_vector(
+///
+/// Public because it is the write side of [`cached_vectors`]: the paid paths
+/// call it, and the two-device suite (`tests/derived_sync_e2e.rs`) seeds paid
+/// results through it instead of hand-writing cache rows.
+pub fn cache_paid_vector(
     conn: &Connection,
     contract_hash: &str,
     input_hash: &str,
@@ -720,8 +758,12 @@ pub fn cached_ocr_pages(
 /// Records one paid OCR answer — including an empty one — from the transaction
 /// that publishes its page (§2.3). A no-op on a connection without the derived
 /// tables.
+///
+/// Public because it is the write side of [`cached_ocr_pages`]: the paid paths
+/// call it (T3), and the two-device suite (`tests/derived_sync_e2e.rs`) seeds
+/// paid results through it instead of hand-writing cache rows.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn cache_paid_ocr_page(
+pub fn cache_paid_ocr_page(
     conn: &Connection,
     source_hash: &str,
     page_number: i64,

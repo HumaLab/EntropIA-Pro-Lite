@@ -462,6 +462,8 @@ const es = {
   'batch.statusBibliographyWaitingOcr':
     'Bibliografía: fichas {worksDone}/{worksTotal} · pasajes {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal} · {blocked} en espera',
   'batch.statusBibliographyBlocked': 'Bibliografía: {blocked} en espera: {reason}',
+  'batch.statusBibliographyWaitingSync':
+    'Bibliografía: esperando resultados de tus otros dispositivos…',
   'batch.statusAttention': '{count} requieren atención',
   'batch.openBatchTab': 'Abrir procesamiento por lote',
   'settings.save': 'Guardar cambios',
@@ -3781,6 +3783,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.statusBibliographyWaitingOcr':
     'Bibliography: works {worksDone}/{worksTotal} · passages {passagesDone}/{passagesTotal} · OCR {pagesDone}/{pagesTotal} · {blocked} waiting',
   'batch.statusBibliographyBlocked': 'Bibliography: {blocked} waiting: {reason}',
+  'batch.statusBibliographyWaitingSync':
+    'Bibliography: waiting for results from your other devices…',
   'batch.statusAttention': '{count} need attention',
   'batch.openBatchTab': 'Open batch processing',
   'settings.save': 'Save changes',

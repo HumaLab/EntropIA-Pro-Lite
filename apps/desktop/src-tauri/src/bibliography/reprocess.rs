@@ -366,6 +366,7 @@ fn exec_output_message(output: &crate::processing::scheduler::ExecOutput) -> Str
         | ExecOutput::Fatal { code, message }
         | ExecOutput::Blocked { code, message } => format!("{code}: {message}"),
         ExecOutput::Stopped => "stopped".to_string(),
+        ExecOutput::Deferred { reason, .. } => format!("deferred: {reason}"),
     }
 }
 

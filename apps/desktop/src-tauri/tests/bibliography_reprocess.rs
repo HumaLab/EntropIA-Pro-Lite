@@ -2904,10 +2904,24 @@ fn confirm_rejects_a_malformed_plan_hash() {
 // the account already paid for, so the approved list is not recomputed: only
 // the misses reach the provider.
 
+/// Adds the derived cache tables and a session, and records the verdict of a
+/// server that does not implement `bibliography-derived-v1` (a known epoch,
+/// `advertised: false`). These tests are about the cache answering a reprocess
+/// plan, not about the pull-before-pay gate of §2.6: a confirmed absence is the
+/// state in which the gate pays as before, exactly like the other suites.
 fn enable_derived_cache(conn: &rusqlite::Connection, account: &str) {
     entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
     entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
         .expect("session account");
+    let epoch = "epoch-legacy";
+    entropia_desktop_lib::sync::session::meta_set(conn, "server_epoch", epoch)
+        .expect("server epoch");
+    entropia_desktop_lib::sync::session::meta_set(
+        conn,
+        "derived_capability",
+        &format!("{{\"epoch\":\"{epoch}\",\"advertised\":false}}"),
+    )
+    .expect("legacy capability verdict");
 }
 
 #[test]

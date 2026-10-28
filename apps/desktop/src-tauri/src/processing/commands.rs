@@ -294,6 +294,16 @@ pub struct BibliographySyncStatus {
     /// espera» about these.
     pub profiles_blocked: i64,
     pub extractions_blocked: i64,
+    /// Live derived work the pull-before-pay gate parked while it waits for the
+    /// account's derived cache to arrive from the other devices (plan §2.6, D5,
+    /// S5): subjects whose latest task is waiting under
+    /// [`crate::sync::derived_gate::DERIVED_WAIT_CODE`]. Not blocked — nothing
+    /// is wrong and nothing is owed to the owner, the work re-runs by itself
+    /// when the pull lands or the bounded wait expires — and not settled: the
+    /// status bar says «esperando resultados de tus otros dispositivos» about
+    /// these instead of showing counters that cannot move.
+    pub profiles_waiting: i64,
+    pub extractions_waiting: i64,
     /// What the blocked work of each kind is parked on, read from each
     /// blocked subject's latest blocked task and named, per kind, by the
     /// first of those in window order (window order, stable across reads):

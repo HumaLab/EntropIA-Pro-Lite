@@ -617,7 +617,62 @@ impl Executor for EmbeddingExecutor {
         // builds an engine, and the two values coincide in production (`api` or
         // `local`, resolved from the same settings).
         let provider = effective.provider.clone();
+        // §2.6: every fragment and the aggregate that the cache did NOT answer
+        // is a paid `embed_text`. Before the first one, the pull-before-pay gate
+        // asks whether the account's cache can still grow; a fully cached asset
+        // has no miss and never waits. The gate reads its own connection, so the
+        // run keeps none open while it parks.
+        let misses = planned_all
+            .iter()
+            .flat_map(|(_, _, _, planned)| planned.iter())
+            .map(|chunk| sha256_hex_label(chunk.text_content.as_bytes()))
+            .chain(std::iter::once(aggregate_input_hash.clone()))
+            .any(|input_hash| !cached.contains_key(&input_hash));
         drop(conn);
+        if misses {
+            let gate_conn = match open_archive_connection(&ctx.db_path) {
+                Ok(conn) => Some(conn),
+                Err(error) => {
+                    log::warn!(
+                        target: "processing",
+                        "derived gate read skipped, paying as before: {error}"
+                    );
+                    None
+                }
+            };
+            if let Some(gate_conn) = gate_conn {
+                match crate::sync::derived_gate::evaluate(
+                    &gate_conn,
+                    &task.task_id,
+                    super::repository::now_ms(),
+                ) {
+                    crate::sync::derived_gate::GateVerdict::Proceed(reason) => {
+                        log::info!(
+                            target: "processing",
+                            "derived gate lets {} pay ({}), cache misses only",
+                            task.task_id,
+                            reason.as_str()
+                        );
+                    }
+                    crate::sync::derived_gate::GateVerdict::Defer {
+                        resume_at_ms,
+                        reason,
+                    } => {
+                        log::info!(
+                            target: "processing",
+                            "derived gate parks {} until {resume_at_ms} ({})",
+                            task.task_id,
+                            reason.as_str()
+                        );
+                        return failed(ExecOutput::Deferred {
+                            code: crate::sync::derived_gate::DERIVED_WAIT_CODE.to_string(),
+                            reason: reason.as_str().to_string(),
+                            next_retry_at_ms: resume_at_ms,
+                        });
+                    }
+                }
+            }
+        }
         let total = sources
             .iter()
             .map(|(_, _, text)| {

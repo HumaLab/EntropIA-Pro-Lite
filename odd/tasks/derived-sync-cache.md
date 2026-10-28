@@ -47,11 +47,11 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | 75223749 |
 | T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | a54cd659 |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | 9ea6a1f9 |
-| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | — |
-| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | 519a9878 |
-| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | — |
-| T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
-| T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | blocked: T10 | — |
+| T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 8e9e3e07 |
+| T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | afd54cc2, c8c9d44d, 77ede1d6 |
+| T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | ce78d06d |
+| T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | worker (EntropIA-Cloud, branch feat/bibliography-derived-v1) | EntropIA-Cloud 3839d89 |
+| T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | worker | (this commit) |
 
 ## Log
 
@@ -86,3 +86,35 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   after `ensure_capture_on_path`, and after a successful login. If `ensure_capture_on_path` fails at setup, the
   seed waits for the next start or login (accepted).
 - **L9** (T8): wire contract for the server team in `apps/desktop/src-tauri/src/sync/derived_protocol.md`.
+- **L10** (T9, D5 working values): first-boot wait (capability unknown or catch-up pending) capped at 15 min per
+  epoch; a stale-cache wait is capped per unit, anchored at its admission. Parent decision: the plan's freshness
+  age bound F was dropped; fresh means "the last pull started after this unit's admission, same epoch", because
+  F throttled large backlogs even on the paying device. Deferral is `ExecOutput::Deferred` (task parked in
+  `retry_wait`, nothing charged); the engine honors a pull request within about 60 s, one interval bypass per
+  request. A legacy server (no capability) costs one wait of about 60 s on the first launch of this build, then
+  never again in that epoch.
+- **L11** (environment): this notebook runs Node 26, whose global `localStorage` breaks happy-dom; the full
+  desktop suite needs `NODE_OPTIONS=--no-experimental-webstorage` here (CI uses Node 22). With it: Pro 3747 and
+  Lite 3711 tests pass.
+- **L12** (close of the client side, 2026-10-27): T1-T9 committed, each verified independently (defects found
+  and fixed before commit in T3, T5, T7, T8, T9). Whole crate `cargo test --no-fail-fast`: 27 suites, 3131
+  passed, 0 failed; clippy `--all-targets -D warnings` and `cargo fmt --check` clean; desktop vitest Pro 3747 and
+  Lite 3711 passed (L11). Not verified here: the Pro (`local-ml`) compile, because cmake is broken on this
+  notebook (L4). T10 (server) and T11 (two-device run on staging) stay blocked: nothing travels until the server
+  implements `apps/desktop/src-tauri/src/sync/derived_protocol.md`.
+- **L13** (delivery, 2026-10-27): chained PRs #161 (tracker, draft) and #162-#170. RDD `assess` per slice: only
+  T8 was review-due (high risk) and too large for the reviewers, so T8 was split into contract+transport
+  (`afd54cc2`), unit tests (`c8c9d44d`) and two-device tests (`77ede1d6`); T7 and T9 were reapplied on top
+  (`8e9e3e07`, `ce78d06d`). Native review `review-fe0d7836dc8a276d` on the transport found R3-001 (a push batch
+  could reach 501 changes when a vector brought its contract row); fixed in one bounded correction, validated,
+  approved and acknowledged. Regression test `a_contract_row_never_pushes_a_batch_past_the_change_limit`
+  (RED 501 changes without the fix). Ten non-blocking review advisories remain as follow-ups. Whole crate after
+  the split: 27 suites, 3132 passed, 0 failed. The `review-refuter` and `review-validator` model routes were
+  missing from the active Pi profile; added with the user's permission.
+- **L14** (T10, T11, 2026-10-27): with the user's permission, the server side was implemented in
+  `/home/agustin/OpenCode/EntropIA-Cloud` on branch `feat/bibliography-derived-v1` (commit `3839d89`, not pushed,
+  not deployed): three per-account tables, own sequence, validation, 413, quota `SYNC_MAX_DERIVED_MB` (507),
+  capability advertised last. Server suite 397 passed; independent verification PASS. T11 ran against that real
+  server locally: `tests/derived_sync_e2e.rs` 5 passed (pull-through byte-identical, account isolation, idempotent
+  re-push, corpus still converges, capability Supported) and the existing `tests/sync_e2e.rs` 12 passed.
+  Not done here: deploying the server and a run on the owner's real devices.

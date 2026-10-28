@@ -46,16 +46,24 @@
 //!   larger than the server's `max_push_bytes` travels alone; a `413` for it skips
 //!   that row for the rest of the cycle so the rows behind it keep flowing.
 //!
-//! Pull-before-pay hook (§2.6, for T9): [`super::derived::request_incremental_pull`]
+//! Pull-before-pay hook (§2.6): [`super::derived::request_incremental_pull`]
 //! sets `sync_meta['derived_pull_requested']`. The phase below performs at most
 //! one incremental pull per cycle; it always performs it when the flag is set
-//! (even within [`MIN_PULL_SPACING_MS`] of the previous one), it consumes the flag
-//! with a successful install (and a completed catch-up consumes it too: a
-//! since-zero walk is fresher than the page the gate asked for), and it records
-//! the start time in
-//! `sync_meta['derived_last_pull_started_at']` for the gate's freshness check
-//! ([`super::derived::last_pull_started_at`]). Many callers coalesce into one
-//! pull; the gate only has to observe that timestamp.
+//! (even within [`MIN_PULL_SPACING_MS`] of the previous one), and it consumes the
+//! flag with a successful install (a completed catch-up consumes it too: a
+//! since-zero walk is fresher than the page the gate asked for). A request this
+//! cycle cannot serve — capability missing, incomplete scope, failed or
+//! discarded pull, catch-up over budget — is consumed as well
+//! ([`abandon_requested_pull`]): the gate's bounded wait proceeds, and a stuck
+//! flag must never keep the engine's interval ticker running a cycle every 60 s.
+//!
+//! The gate's freshness check reads
+//! `sync_meta['derived_last_pull_started_at']`
+//! ([`super::derived::last_pull_started_at`]). An incremental pull stamps its own
+//! start; a COMPLETED catch-up stamps the instant it started, so the backlog
+//! that admitted its work while the catch-up ran is fresh without an extra pull.
+//! Many callers coalesce into one pull; the gate only has to observe that
+//! timestamp.
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -330,8 +338,9 @@ pub(crate) fn install_derived_pull_page(
             clear_pull_request(&tx)?;
         }
     } else {
-        // The freshness barrier reads the start of the last successful
-        // INCREMENTAL pull (§2.6); a catch-up is a different signal.
+        // An incremental pull stamps the start of that pull (§2.6). A completed
+        // catch-up gets its own stamp from the cycle, which knows when the walk
+        // began (the install only sees one page).
         record_pull_started_at(&tx, &prepared.scope.server_epoch, prepared.started_at_ms)?;
         clear_pull_request(&tx)?;
     }
@@ -1197,24 +1206,36 @@ pub(crate) async fn run_derived_cycle<A: SyncApi>(
         capability: Some(capability_state(conn)),
         ..DerivedCycleOutcome::default()
     };
+    // The gate's request, read once at the start: every path reports it, and
+    // every path that cannot serve it consumes it (see `abandon_requested_pull`).
+    outcome.pull_requested = pull_requested(conn).unwrap_or(false);
     if outcome.capability != Some(DerivedCapability::Supported) {
+        abandon_requested_pull(conn, outcome.pull_requested, warn);
         return outcome;
     }
     let Ok(Some(scope)) = read_scope(conn) else {
+        abandon_requested_pull(conn, outcome.pull_requested, warn);
         return outcome;
     };
     let Ok(Some(epoch)) = current_epoch(conn) else {
+        abandon_requested_pull(conn, outcome.pull_requested, warn);
         return outcome;
     };
     outcome.catchup_pending_at_start = match catchup_needed(conn, &epoch) {
         Ok(needed) => needed,
         Err(error) => {
             note(warn, format!("catch-up state unreadable: {error}"));
+            abandon_requested_pull(conn, outcome.pull_requested, warn);
             return outcome;
         }
     };
 
     if outcome.catchup_pending_at_start {
+        // The instant the catch-up started: a completed since-zero walk is the
+        // epoch's freshness signal, and a unit admitted before it began is
+        // covered by it (no extra pull for the backlog that admitted the work
+        // while the catch-up ran).
+        let catchup_started_at = now_ms();
         let mut finished = false;
         for _ in 0..MAX_CATCHUP_PAGES {
             match pull_one_page(api, token, conn, &mut outcome, warn).await {
@@ -1225,7 +1246,10 @@ pub(crate) async fn run_derived_cycle<A: SyncApi>(
                     break;
                 }
                 PageStep::Installed { .. } => continue,
-                PageStep::Discarded | PageStep::Failed => return outcome,
+                PageStep::Discarded | PageStep::Failed => {
+                    abandon_requested_pull(conn, outcome.pull_requested, warn);
+                    return outcome;
+                }
             }
         }
         outcome.catchup_recorded = !catchup_needed(conn, &epoch).unwrap_or(false);
@@ -1236,13 +1260,19 @@ pub(crate) async fn run_derived_cycle<A: SyncApi>(
                     "catch-up budget ({MAX_CATCHUP_PAGES} pages) reached this cycle; the rest stays pending"
                 ),
             );
+            abandon_requested_pull(conn, outcome.pull_requested, warn);
             return outcome;
+        }
+        if let Err(error) = record_pull_started_at(conn, &epoch, catchup_started_at) {
+            note(
+                warn,
+                format!("catch-up freshness signal unrecorded: {error}"),
+            );
         }
     }
 
     // A catch-up is already a since-zero pull of the whole channel: it is not
     // repeated by an incremental one in the same cycle.
-    outcome.pull_requested = pull_requested(conn).unwrap_or(false);
     let recent = last_pull_started_at(conn)
         .map(|started| now_ms().saturating_sub(started) < MIN_PULL_SPACING_MS)
         .unwrap_or(false);
@@ -1252,7 +1282,10 @@ pub(crate) async fn run_derived_cycle<A: SyncApi>(
             match pull_one_page(api, token, conn, &mut outcome, warn).await {
                 PageStep::Installed { has_more: true, .. } => continue,
                 PageStep::Installed { .. } => break,
-                PageStep::Discarded | PageStep::Failed => return outcome,
+                PageStep::Discarded | PageStep::Failed => {
+                    abandon_requested_pull(conn, outcome.pull_requested, warn);
+                    return outcome;
+                }
             }
         }
     }
@@ -1260,6 +1293,26 @@ pub(crate) async fn run_derived_cycle<A: SyncApi>(
     push_outbox(api, token, conn, max_push_bytes, &mut outcome, warn).await;
     outcome.pending_rows = pending_rows(conn, &scope.account_id);
     outcome
+}
+
+/// Consumes a gate request this cycle cannot serve (§2.6): the capability is not
+/// advertised, the session scope is incomplete, the catch-up could not finish or
+/// the pull failed/was discarded. The install paths consume it themselves on
+/// success; every other exit must consume it too, or a stuck flag would make the
+/// engine's interval ticker run a full sync cycle every 60 s forever
+/// (`engine::tick_should_run` reads exactly this flag). The gate's bounded wait
+/// re-checks its unit and simply proceeds when the cache does not arrive, so
+/// nothing is lost by giving the request up.
+///
+/// A request that arrives DURING the cycle is left pending: it is read once at
+/// the start, so the bypass can fire at most once per request.
+fn abandon_requested_pull(conn: &Connection, requested: bool, warn: &(dyn Fn(String) + Sync)) {
+    if !requested {
+        return;
+    }
+    if let Err(error) = clear_pull_request(conn) {
+        note(warn, format!("gate pull request stays pending: {error}"));
+    }
 }
 
 /// Prepares, fetches and installs exactly one page. Returns [`PageStep::Failed`]
