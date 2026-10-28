@@ -938,8 +938,10 @@ describe('WorkPane', () => {
       render(WorkPane, { paneId: workspace.activeTabId })
 
       // The routed work view mounts with the view's own identity: its detail
-      // read carries the catalog item id this pane was navigated to.
-      expect(await screen.findByText('Mi biblioteca')).toBeInTheDocument()
+      // read carries the catalog item id this pane was navigated to. The view
+      // is a lazy import with the PDF annotation stack behind it: on a slow CI
+      // runner the first load alone can pass findByText's 1 s default.
+      expect(await screen.findByText('Mi biblioteca', {}, { timeout: 5000 })).toBeInTheDocument()
       expect(vi.mocked(invoke)).toHaveBeenCalledWith('bibliography_work_detail', {
         itemId: 'item-1',
       })

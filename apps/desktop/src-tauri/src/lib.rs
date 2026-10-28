@@ -368,9 +368,14 @@ fn processing_commit_observer(
                 },
             );
         }
-        processing::scheduler::EngineOutput::Bibliography(_) => {
-            // `processing:changed` above is the durable bibliography signal;
-            // no corpus compatibility event or follow-up applies.
+        processing::scheduler::EngineOutput::Bibliography(sync) => {
+            // `processing:changed` above is the durable bibliography signal.
+            // The library's Zotero annotations are pulled right after.
+            bibliography::annotations::commands::after_catalog_sync(
+                app_handle,
+                db_path.to_path_buf(),
+                sync.library_row_id.clone(),
+            );
         }
     }
 }
@@ -1407,6 +1412,13 @@ pub fn run() {
             bibliography::commands::bibliography_search_passages,
             bibliography::commands::bibliography_list_works,
             bibliography::commands::bibliography_work_detail,
+            bibliography::annotations::commands::bibliography_annotations_list,
+            bibliography::annotations::commands::bibliography_annotations_create,
+            bibliography::annotations::commands::bibliography_annotations_update,
+            bibliography::annotations::commands::bibliography_annotations_delete,
+            bibliography::annotations::commands::bibliography_annotations_restore,
+            bibliography::annotations::commands::bibliography_annotations_resolve,
+            bibliography::annotations::commands::bibliography_annotations_sync,
             bibliography::commands::bibliography_open_work_attachment,
             bibliography::commands::bibliography_reprocess_candidates,
             bibliography::commands::bibliography_reprocess_candidates_cancel,

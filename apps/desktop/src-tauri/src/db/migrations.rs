@@ -200,6 +200,7 @@ static REGISTRY: &[Migration] = &[
     migration!("0056_bibliographic_ingest_operations", Atomic),
     migration!("0057_web_captures", Atomic),
     migration!("0058_processing_ner_tasks", Atomic),
+    migration!("0059_zotero_annotations", Atomic),
 ];
 
 // ---------------------------------------------------------------------------
@@ -689,8 +690,8 @@ mod tests {
         );
         assert_eq!(
             from_registry.len(),
-            58,
-            "the Phase 4 shell must keep all 58 migrations"
+            59,
+            "the Phase 4 shell must keep all 59 migrations"
         );
     }
 
@@ -713,7 +714,7 @@ mod tests {
         );
         assert_eq!(
             expected.len(),
-            27,
+            28,
             "the TS atomic condition changed shape; re-check the extractor"
         );
     }
@@ -725,7 +726,7 @@ mod tests {
             apply_migrations_with(&mut conn, REGISTRY, &fixed_clock()).expect("apply everything");
         assert_eq!(
             report.applied.len(),
-            58,
+            59,
             "every registry migration must run once"
         );
         assert_matches_canonical_fixture(

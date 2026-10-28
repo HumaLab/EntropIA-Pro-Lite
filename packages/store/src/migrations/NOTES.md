@@ -130,3 +130,13 @@ new migration must sort above every one already on main.
 ## 0058_processing_ner_tasks
 
 Kind CHECK widening for batch NER/triples. Trigger-safe single-batch.
+
+## 0059_zotero_annotations
+
+Zotero annotations of the Biblioteca (`docs/zotero-annotations-plan.md`,
+section 3). There is no foreign key to `zotero_attachments` on purpose: the
+catalog sync hard-deletes attachments it did not see, and that removal must
+neither cascade to annotation rows that may still hold unsent local edits nor
+be blocked by them. The tables are local only and stay out of device sync;
+each device pulls its annotations from the Zotero Web API. Keep comments in
+the SQL free of semicolons: the runner splits statements on them.

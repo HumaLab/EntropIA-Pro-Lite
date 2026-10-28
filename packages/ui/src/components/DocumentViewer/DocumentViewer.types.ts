@@ -1,3 +1,11 @@
+import type {
+  MarkupTool,
+  PdfMarkup,
+  PdfMarkupDraft,
+  PdfMarkupGeometryChange,
+  PdfMarkupLabels,
+} from '../PdfMarkup/types'
+
 export type AnnotationKind = 'rectangle' | 'underline'
 export type DocumentEditKind = 'crop' | 'erase' | 'rotation'
 export type ViewerAnnotationKind = AnnotationKind | DocumentEditKind
@@ -89,6 +97,40 @@ export interface DocumentViewerProps {
   audioStartAtSeconds?: number | null
   labels?: Partial<DocumentViewerLabels>
   annotationToolbarLabels?: Record<string, unknown>
+  /**
+   * PDF only, opt-in (Biblioteca): Zotero-style markups drawn over the page.
+   * Leaving it undefined keeps the viewer exactly as Collections uses it.
+   */
+  markups?: PdfMarkup[]
+  /** Markup tools offered; crop, erase and rotate are never among them. */
+  allowedTools?: readonly MarkupTool[]
+  /** Swatches of the color pickers; the default keeps Collections' tokens. */
+  palette?: readonly string[]
+  /**
+   * PDF only. `page` (default) fits the whole page in the pane, aligned left,
+   * as Collections shows a scan. `width` fits the page width between two
+   * toolbar gutters and centers it, scrolling down: a reading view.
+   */
+  pdfFit?: 'page' | 'width'
+  /** PDF only, opt-in: a pdf.js text layer so text can be selected. */
+  textSelection?: boolean
+  markupTool?: MarkupTool
+  markupColor?: string
+  selectedMarkupId?: string | null
+  markupLabels?: Partial<PdfMarkupLabels>
+  onMarkupCreate?: (draft: PdfMarkupDraft) => void
+  /** A note, area or text markup was moved or resized. */
+  onMarkupChange?: (change: PdfMarkupGeometryChange) => void
+  onMarkupDelete?: (id: string) => void
+  onMarkupSelect?: (id: string | null) => void
+  onMarkupToolChange?: (tool: MarkupTool) => void
+  onMarkupColorChange?: (color: string) => void
+  /**
+   * PDF only: the loaded pdf.js document, `null` when it is released. Lets a
+   * caller render from the open document (annotation previews) instead of
+   * loading the file a second time.
+   */
+  onPdfDocument?: (document: import('pdfjs-dist').PDFDocumentProxy | null) => void
 }
 
 export interface DocumentViewerLabels {

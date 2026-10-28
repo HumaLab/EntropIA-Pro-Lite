@@ -37,9 +37,9 @@ describe('canonical schema fixture export', () => {
     ).toBe(norm(expected))
   })
 
-  it('records every migration name in order, ending with 0058_processing_ner_tasks', () => {
-    expect(dump.migrations).toHaveLength(58)
-    expect(dump.migrations.at(-1)).toBe('0058_processing_ner_tasks')
+  it('records every migration name in order, ending with 0059_zotero_annotations', () => {
+    expect(dump.migrations).toHaveLength(59)
+    expect(dump.migrations.at(-1)).toBe('0059_zotero_annotations')
   })
 
   it('captures base tables, the FTS virtual table and the collection activity triggers', () => {

@@ -92,6 +92,8 @@ export type {
   ImageEditResult,
 } from './components/DocumentViewer/index'
 
+export * from './components/PdfMarkup/index'
+
 export { AudioPlayer } from './components/AudioPlayer/index'
 
 export { SearchBar } from './components/SearchBar/index'

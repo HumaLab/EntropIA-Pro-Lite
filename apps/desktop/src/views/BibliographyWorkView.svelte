@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { convertFileSrc } from '@tauri-apps/api/core'
   import { locale, t } from '$lib/i18n'
   import {
@@ -14,10 +14,40 @@
   import { renderOcrMarkup, sanitizeOcrHtml } from '$lib/ocr-rich-text'
   import { isPdfAttachment } from '$lib/bibliography-reprocess'
   import BibliographyReprocessDialog from '../components/BibliographyReprocessDialog.svelte'
+  import BibliographyAnnotationsPanel from '../components/BibliographyAnnotationsPanel.svelte'
+  import {
+    createAnnotation,
+    deleteAnnotation,
+    listAnnotations,
+    onAnnotationsChanged,
+    resolveAnnotationConflict,
+    restoreAnnotation,
+    syncAnnotations,
+    updateAnnotation,
+    type AnnotationList,
+    type AnnotationSyncReason,
+    type AnnotationSyncResult,
+    type AnnotationView,
+    type ConflictDecision,
+  } from '$lib/bibliography-annotations'
+  import {
+    draftToData,
+    viewToMarkup,
+    withField,
+    withGeometry,
+  } from '$lib/bibliography-annotation-markups'
   import {
     ActionIcon,
     Button,
+    ConfirmDialog,
     DocumentViewer,
+    ZOTERO_COLORS,
+    ThumbnailRenderer,
+    type MarkupTool,
+    type ThumbnailDocument,
+    type PdfMarkup,
+    type PdfMarkupDraft,
+    type PdfMarkupGeometryChange,
     IconButton,
     TabButton,
     TabList,
@@ -42,7 +72,7 @@
     title: string
   }
 
-  let { itemId, itemKey: _itemKey, libraryRowId: _libraryRowId, title }: Props = $props()
+  let { itemId, itemKey: _itemKey, libraryRowId, title }: Props = $props()
 
   const currentLocale = locale
 
@@ -126,6 +156,274 @@
     void loadDetail()
   })
 
+  // ── Zotero annotations (docs/zotero-annotations-plan.md) ────────────
+  /** The Biblioteca's tools: never crop, erase or rotate Zotero's file. */
+  const ANNOTATION_TOOLS: readonly MarkupTool[] = [
+    'select',
+    'highlight',
+    'underline',
+    'note',
+    'image',
+    'text',
+  ]
+  const EDIT_SYNC_DELAY_MS = 1500
+
+  let annotationViews = $state<AnnotationView[]>([])
+  let annotationStatus = $state<AnnotationList['status']>('ready')
+  let syncResult = $state<AnnotationSyncResult | null>(null)
+  let syncing = $state(false)
+  let annotationError = $state<string | null>(null)
+  let selectedMarkupId = $state<string | null>(null)
+  let otherFormatCount = $state(0)
+  let pendingDelete = $state<AnnotationView | null>(null)
+  /** Area and ink previews, rendered from the document the viewer opened. */
+  let thumbnailRenderer = $state.raw<ThumbnailRenderer | null>(null)
+  const renderThumbnail = $derived(
+    thumbnailRenderer ? thumbnailRenderer.thumbnail.bind(thumbnailRenderer) : null
+  )
+  let editSyncTimer: ReturnType<typeof setTimeout> | null = null
+  let unlistenAnnotations: (() => void) | null = null
+  let destroyed = false
+
+  /** The PDF attachment on screen, whose annotations the panel lists. */
+  /**
+   * The PDF attachment chosen, whose annotations the panel lists. Taken from
+   * the catalog, not from the opened file: without the PDF on this device the
+   * panel still lists them and comments stay editable (plan section 10).
+   */
+  const annotatedKey = $derived(
+    currentAttachment && isPdfAttachment(currentAttachment.contentType, currentAttachment.filename)
+      ? activeKey
+      : null
+  )
+  const pdfOnDevice = $derived(
+    !openLoading && !openFailed && !opened?.openError && Boolean(opened?.originalPath)
+  )
+  const markups = $derived(
+    annotationViews.map(viewToMarkup).filter((markup): markup is PdfMarkup => markup !== null)
+  )
+
+  async function loadAnnotations(parentKey: string | null = annotatedKey): Promise<void> {
+    if (!parentKey) {
+      annotationViews = []
+      return
+    }
+    try {
+      const list = await listAnnotations(libraryRowId, parentKey)
+      if (destroyed || parentKey !== annotatedKey) return
+      annotationStatus = list.status
+      annotationViews = list.annotations
+    } catch (error) {
+      annotationError = String(error)
+    }
+  }
+
+  /** Counts annotations on the work's non-PDF attachments (shown, never edited). */
+  async function countOtherFormats(): Promise<void> {
+    const others = attachments.filter(
+      (entry) => !isPdfAttachment(entry.contentType, entry.filename)
+    )
+    let count = 0
+    for (const entry of others) {
+      try {
+        const list = await listAnnotations(libraryRowId, entry.attachmentKey)
+        count += list.annotations.length
+      } catch {
+        // Best effort: the count is informational.
+      }
+    }
+    if (!destroyed) otherFormatCount = count
+  }
+
+  async function runSync(reason: AnnotationSyncReason): Promise<void> {
+    if (syncing) return
+    syncing = true
+    try {
+      syncResult = await syncAnnotations(libraryRowId, reason)
+    } catch (error) {
+      annotationError = String(error)
+    } finally {
+      syncing = false
+    }
+    if (!destroyed) {
+      await loadAnnotations()
+      void countOtherFormats()
+    }
+  }
+
+  function scheduleEditSync() {
+    if (editSyncTimer) clearTimeout(editSyncTimer)
+    editSyncTimer = setTimeout(() => {
+      editSyncTimer = null
+      void runSync('edit')
+    }, EDIT_SYNC_DELAY_MS)
+  }
+
+  async function mutate(change: () => Promise<unknown>): Promise<void> {
+    annotationError = null
+    try {
+      await change()
+    } catch (error) {
+      annotationError = t('bibliographyAnnotations.saveFailed', { error: String(error) })
+    }
+    await loadAnnotations()
+    scheduleEditSync()
+  }
+
+  function viewByKey(key: string) {
+    return annotationViews.find((view) => view.key === key) ?? null
+  }
+
+  function handleMarkupCreate(draft: PdfMarkupDraft) {
+    const parentKey = annotatedKey
+    if (!parentKey) return
+    void mutate(async () => {
+      const created = await createAnnotation(libraryRowId, parentKey, draftToData(draft))
+      selectedMarkupId = created.key
+    })
+  }
+
+  function handleMarkupChange(change: PdfMarkupGeometryChange) {
+    const view = viewByKey(change.id)
+    if (!view?.data) return
+    const data = withGeometry(view.data, change)
+    void mutate(() => updateAnnotation(libraryRowId, change.id, data))
+  }
+
+  function handleCommentChange(key: string, comment: string) {
+    const view = viewByKey(key)
+    if (!view?.data) return
+    const data = withField(view.data, 'annotationComment', comment)
+    void mutate(() => updateAnnotation(libraryRowId, key, data))
+  }
+
+  function requestDelete(view: AnnotationView) {
+    if (view.syncState === 'conflict') {
+      pendingDelete = view
+      return
+    }
+    void mutate(async () => {
+      try {
+        await deleteAnnotation(libraryRowId, view.key)
+      } catch (error) {
+        if (String(error).includes('needs_confirmation')) {
+          pendingDelete = view
+          return
+        }
+        throw error
+      }
+      if (selectedMarkupId === view.key) selectedMarkupId = null
+    })
+  }
+
+  function handleMarkupDelete(key: string) {
+    const view = viewByKey(key)
+    if (view) requestDelete(view)
+  }
+
+  function confirmDelete() {
+    const view = pendingDelete
+    pendingDelete = null
+    if (!view) return
+    void mutate(() => deleteAnnotation(libraryRowId, view.key, true))
+  }
+
+  function handleRestore(key: string) {
+    void mutate(() => restoreAnnotation(libraryRowId, key))
+  }
+
+  function handleResolve(key: string, decisions: Record<string, ConflictDecision>) {
+    void mutate(() => resolveAnnotationConflict(libraryRowId, key, decisions))
+  }
+
+  /** A swatch picked while an annotation is selected recolors it. */
+  function handleMarkupColorChange(color: string) {
+    const view = selectedMarkupId ? viewByKey(selectedMarkupId) : null
+    if (!view?.data || view.syncState === 'conflict' || view.data.annotationColor === color) return
+    const data = withField(view.data, 'annotationColor', color)
+    void mutate(() => updateAnnotation(libraryRowId, view.key, data))
+  }
+
+  function handlePanelSelect(key: string, targetPage: number | null) {
+    selectedMarkupId = key
+    if (targetPage !== null) page = targetPage
+  }
+
+  const annotationStatusMessage = $derived.by(() => {
+    $currentLocale
+    if (annotationError) return annotationError
+    if (annotationStatus === 'no_key') return t('bibliographyAnnotations.statusNoKey')
+    if (annotationStatus === 'not_personal') return t('bibliographyAnnotations.statusNotPersonal')
+    switch (syncResult?.status) {
+      case 'no_key':
+        return t('bibliographyAnnotations.statusNoKey')
+      case 'not_personal':
+        return t('bibliographyAnnotations.statusNotPersonal')
+      case 'other_account':
+        return t('bibliographyAnnotations.statusOtherAccount')
+      case 'account_unknown':
+        return t('bibliographyAnnotations.statusAccountUnknown')
+      case 'invalid_key':
+        return t('bibliographyAnnotations.statusInvalidKey')
+      case 'no_write':
+        return t('bibliographyAnnotations.statusNoWrite')
+      case 'unreachable':
+        return t('bibliographyAnnotations.statusUnreachable')
+      default:
+        return syncResult?.report?.paused ? t('bibliographyAnnotations.statusPaused') : null
+    }
+  })
+
+  const markupLabels = $derived.by(() => {
+    $currentLocale
+    return {
+      toolbarAriaLabel: t('bibliographyAnnotations.toolbar'),
+      toolSelect: t('bibliographyAnnotations.toolSelect'),
+      toolHighlight: t('bibliographyAnnotations.toolHighlight'),
+      toolUnderline: t('bibliographyAnnotations.toolUnderline'),
+      toolNote: t('bibliographyAnnotations.toolNote'),
+      toolImage: t('bibliographyAnnotations.toolImage'),
+      toolText: t('bibliographyAnnotations.toolText'),
+      colorAriaLabel: (color: string) => t('bibliographyAnnotations.color', { color }),
+      popoverAriaLabel: t('bibliographyAnnotations.popover'),
+      popoverHighlight: t('bibliographyAnnotations.toolHighlight'),
+      popoverUnderline: t('bibliographyAnnotations.toolUnderline'),
+      deleteMarkup: t('bibliographyAnnotations.delete'),
+    }
+  })
+
+  // A new PDF attachment on screen: list its annotations, then pull.
+  let annotationsLoadedFor: string | null = null
+  $effect(() => {
+    const parentKey = annotatedKey
+    if (parentKey === annotationsLoadedFor) return
+    annotationsLoadedFor = parentKey
+    selectedMarkupId = null
+    if (!parentKey) {
+      annotationViews = []
+      return
+    }
+    void loadAnnotations(parentKey).then(() => runSync('open'))
+  })
+
+  onMount(() => {
+    void onAnnotationsChanged((changedLibrary) => {
+      if (changedLibrary === libraryRowId) void loadAnnotations()
+    }).then((unlisten) => {
+      if (destroyed) unlisten()
+      else unlistenAnnotations = unlisten
+    })
+  })
+
+  onDestroy(() => {
+    destroyed = true
+    unlistenAnnotations?.()
+    if (editSyncTimer) {
+      clearTimeout(editSyncTimer)
+      void syncAnnotations(libraryRowId, 'edit').catch(() => {})
+    }
+  })
+
   const attachmentItems = $derived<ToolbarMenuItem[]>(
     attachments.map((entry) => ({
       kind: 'radio' as const,
@@ -172,6 +470,25 @@
     (detail?.item.creators ?? []).map(creatorName).filter(Boolean).join(', ')
   )
 </script>
+
+{#snippet annotationsPanel()}
+  <BibliographyAnnotationsPanel
+    annotations={annotationViews}
+    selectedKey={selectedMarkupId}
+    statusMessage={annotationStatusMessage}
+    {syncing}
+    canSync={annotationStatus === 'ready'}
+    {otherFormatCount}
+    onSelect={handlePanelSelect}
+    onCommentChange={handleCommentChange}
+    onDelete={requestDelete}
+    onRestore={handleRestore}
+    onResolve={handleResolve}
+    onSync={() => void runSync('edit')}
+    pdfAvailable={pdfOnDevice}
+    {renderThumbnail}
+  />
+{/snippet}
 
 <div class="work-view" class:work-view--fill={showsPdf}>
   {#if detailFailed}
@@ -256,50 +573,76 @@
         <p class="surface-message surface-message--error" role="alert">
           {opened?.openError ?? t('bibliographyWork.error')}
         </p>
-      {:else if opened?.originalKind === 'pdf' && opened.originalPath}
-        <div class="work-viewer" data-testid="work-original-viewer">
-          <DocumentViewer
-            path={opened.originalPath}
-            assetUrl={convertFileSrc(opened.originalPath)}
-            type="pdf"
-            readOnly
-            pauseWhenHidden
-            labels={viewerLabels}
-            currentPage={page}
-            onPageChange={(next, count) => {
-              total = count
-              page = next
-            }}
-          />
-        </div>
-        {#if total > 1}
-          <div class="work-viewer-pager">
-            <IconButton
-              size="sm"
-              variant="ghost"
-              label={$currentLocale && t('item.previousPage')}
-              title={$currentLocale && t('item.previousPage')}
-              disabled={page <= 1}
-              onclick={() => (page = Math.max(1, page - 1))}
-            >
-              <ActionIcon name="chevron-left" size={14} />
-            </IconButton>
-            <span class="work-viewer-pager__count">
-              {$currentLocale && t('navegador.pdf.page', { page, total })}
-            </span>
-            <IconButton
-              size="sm"
-              variant="ghost"
-              label={$currentLocale && t('item.nextPage')}
-              title={$currentLocale && t('item.nextPage')}
-              disabled={page >= total}
-              onclick={() => (page = Math.min(total, page + 1))}
-            >
-              <ActionIcon name="chevron-right" size={14} />
-            </IconButton>
-          </div>
+        {#if annotatedKey}
+          {@render annotationsPanel()}
         {/if}
-        <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+      {:else if opened?.originalKind === 'pdf' && opened.originalPath}
+        <div class="work-original-layout">
+          <div class="work-viewer" data-testid="work-original-viewer">
+            <DocumentViewer
+              path={opened.originalPath}
+              assetUrl={convertFileSrc(opened.originalPath)}
+              type="pdf"
+              readOnly
+              pauseWhenHidden
+              labels={viewerLabels}
+              currentPage={page}
+              {markups}
+              allowedTools={ANNOTATION_TOOLS}
+              palette={ZOTERO_COLORS}
+              textSelection
+              pdfFit="width"
+              {selectedMarkupId}
+              {markupLabels}
+              onMarkupCreate={handleMarkupCreate}
+              onMarkupChange={handleMarkupChange}
+              onMarkupDelete={handleMarkupDelete}
+              onMarkupSelect={(id) => (selectedMarkupId = id)}
+              onMarkupColorChange={handleMarkupColorChange}
+              onPdfDocument={(document) =>
+                (thumbnailRenderer = document
+                  ? new ThumbnailRenderer(document as unknown as ThumbnailDocument)
+                  : null)}
+              onPageChange={(next, count) => {
+                total = count
+                page = next
+              }}
+            />
+          </div>
+          {@render annotationsPanel()}
+        </div>
+        <!-- One footer row: the note at the start, the pager centered. Two
+             stacked rows took height the viewer needs. -->
+        <div class="work-viewer-footer">
+          <p class="work-note">{$currentLocale && t('bibliographyWork.originalNote')}</p>
+          {#if total > 1}
+            <div class="work-viewer-pager">
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.previousPage')}
+                title={$currentLocale && t('item.previousPage')}
+                disabled={page <= 1}
+                onclick={() => (page = Math.max(1, page - 1))}
+              >
+                <ActionIcon name="chevron-left" size={14} />
+              </IconButton>
+              <span class="work-viewer-pager__count">
+                {$currentLocale && t('navegador.pdf.page', { page, total })}
+              </span>
+              <IconButton
+                size="sm"
+                variant="ghost"
+                label={$currentLocale && t('item.nextPage')}
+                title={$currentLocale && t('item.nextPage')}
+                disabled={page >= total}
+                onclick={() => (page = Math.min(total, page + 1))}
+              >
+                <ActionIcon name="chevron-right" size={14} />
+              </IconButton>
+            </div>
+          {/if}
+        </div>
       {:else if opened?.originalKind === 'html'}
         <p class="work-note">{$currentLocale && t('bibliographyWork.snapshotNote')}</p>
         <p class="work-snapshot">{opened.snapshotText}</p>
@@ -450,6 +793,24 @@
     {/if}
   {/if}
 
+  {#if pendingDelete}
+    <ConfirmDialog
+      title={$currentLocale && t('bibliographyAnnotations.deleteConfirmTitle')}
+      titleId="bibliography-annotation-delete-title"
+      cancelLabel={$currentLocale && t('bibliographyAnnotations.cancel')}
+      confirmLabel={$currentLocale && t('bibliographyAnnotations.confirmDelete')}
+      oncancel={() => (pendingDelete = null)}
+      onconfirm={confirmDelete}
+    >
+      <p>
+        {$currentLocale &&
+          t('bibliographyAnnotations.deleteConflictConfirm', {
+            fields: pendingDelete.conflictFields.join(', '),
+          })}
+      </p>
+    </ConfirmDialog>
+  {/if}
+
   {#if reprocessOpen}
     <BibliographyReprocessDialog
       mode="work"
@@ -475,6 +836,8 @@
   .work-view--fill {
     height: 100%;
     min-height: 0;
+    /* Reading and annotating a PDF wants the whole pane. */
+    max-width: none;
   }
 
   .work-header {
@@ -582,6 +945,16 @@
     white-space: nowrap;
   }
 
+  /* The viewer and the "Anotaciones" panel side by side; the panel scrolls on
+     its own and the viewer keeps the remaining width. */
+  .work-original-layout {
+    display: grid;
+    flex: 1;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+    gap: var(--space-3);
+    min-height: 0;
+  }
+
   .work-viewer {
     /* The DocumentViewer is a flex child of this frame (the exact pattern of
        ItemAssetPanel's .left-panel-pane--document): its fit scale reads the
@@ -600,6 +973,25 @@
   .work-viewer :global(.document-viewer) {
     flex: 1;
     min-height: 0;
+  }
+
+  .work-viewer-footer {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .work-viewer-footer .work-note {
+    grid-column: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .work-viewer-footer .work-viewer-pager {
+    grid-column: 2;
   }
 
   .work-viewer-pager {

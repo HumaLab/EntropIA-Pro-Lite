@@ -9,6 +9,24 @@
     label: string
   }
 
+  /**
+   * Zotero-style markup tools (Biblioteca), drawn in this same column instead
+   * of Collections' editing tools. Present also in read-only mode: the file is
+   * never edited, only annotated.
+   */
+  export interface MarkupToolbarSection {
+    tools: Array<{ value: string; label: string; icon: ActionIconName }>
+    tool: string
+    onToolChange: (tool: string) => void
+    colors: AnnotationColorOption[]
+    color: string
+    onColorChange: (color: string) => void
+    colorAriaLabel: (color: string) => string
+    hasSelection: boolean
+    deleteLabel: string
+    onDeleteSelected: () => void
+  }
+
   interface AnnotationToolbarProps {
     tool: AnnotationTool
     editTool: EditTool
@@ -41,6 +59,7 @@
     onZoomOut?: () => void
     onZoomIn?: () => void
     labels?: Partial<AnnotationToolbarLabels>
+    markup?: MarkupToolbarSection | null
   }
 
   interface AnnotationToolbarLabels {
@@ -129,6 +148,7 @@
     onZoomOut = () => {},
     onZoomIn = () => {},
     labels: labelsProp = {},
+    markup = null,
   }: AnnotationToolbarProps = $props()
 
   const labels = $derived({ ...defaultLabels, ...labelsProp })
@@ -196,6 +216,7 @@
           colors.length +
           1) +
       (zoomPercent !== null ? 3 : 0) +
+      (markup ? markup.tools.length + markup.colors.length + 1 : 0) +
       1
   )
   const singleColumnNaturalHeight = $derived(toolbarHeightForRows(visibleToolbarItemCount))
@@ -491,6 +512,23 @@
       {/if}
     {/if}
 
+    {#if markup}
+      {#each markup.tools as option (option.value)}
+        <button
+          type="button"
+          class="annotation-toolbar__button"
+          class:annotation-toolbar__button--active={markup.tool === option.value}
+          data-testid={`markup-tool-${option.value}`}
+          aria-label={option.label}
+          aria-pressed={markup.tool === option.value}
+          use:tooltip={option.label}
+          onclick={() => markup.onToolChange(option.value)}
+        >
+          <ActionIcon name={option.icon} size={16} />
+        </button>
+      {/each}
+    {/if}
+
     {#if zoomPercent !== null}
       <button
         type="button"
@@ -539,6 +577,33 @@
         use:tooltip={labels.deleteSelected}
         disabled={!hasSelection}
         onclick={onDeleteSelected}
+      >
+        <ActionIcon name="delete" size={16} />
+      </button>
+    {/if}
+
+    {#if markup}
+      {#each markup.colors as option (option.value)}
+        <button
+          type="button"
+          class="annotation-toolbar__swatch"
+          class:annotation-toolbar__swatch--active={markup.color === option.value}
+          aria-label={markup.colorAriaLabel(option.value)}
+          aria-pressed={markup.color === option.value}
+          use:tooltip={option.label}
+          onclick={() => markup.onColorChange(option.value)}
+        >
+          <span class="annotation-toolbar__swatch-fill" style={`background:${option.value}`}></span>
+        </button>
+      {/each}
+
+      <button
+        type="button"
+        class="annotation-toolbar__button annotation-toolbar__button--danger"
+        aria-label={markup.deleteLabel}
+        use:tooltip={markup.deleteLabel}
+        disabled={!markup.hasSelection}
+        onclick={markup.onDeleteSelected}
       >
         <ActionIcon name="delete" size={16} />
       </button>

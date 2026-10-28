@@ -101,6 +101,7 @@ export default tseslint.config(
       'packages/ui/src/components/Button/ActionIcon.svelte',
       'packages/ui/src/components/Button/icons/*.svelte',
       'packages/ui/src/components/DocumentViewer/DocumentViewer.svelte',
+      'packages/ui/src/components/PdfMarkup/PdfMarkupLayer.svelte',
       'apps/desktop/src/views/CollectionAnalysisPanel.svelte',
       'apps/desktop/src/layout/AppShell.svelte',
       '**/__tests__/**',
