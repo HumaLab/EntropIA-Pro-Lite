@@ -14300,3 +14300,906 @@ fn profile_and_extract_products(cache: bool) -> PublishedProducts {
     assert_eq!(pages.len(), 2, "both pages are published");
     (work, chunks, pages)
 }
+
+// ── T4: read the derived cache before paying (plan §2.4 / WU2) ─────────────
+//
+// The device that did not pay must publish exactly what paying would have
+// published, with no provider call, from the rows the account already owns
+// (§2.4, S3, S8). These tests drive the real claim → run → publish path with a
+// counting embedder and read back the published rows byte for byte.
+
+/// The profile key a ficha vector travels under: the hash the profile row
+/// stamps, and the canonical text whose vector a computation would produce.
+fn profile_keys(conn: &rusqlite::Connection, item_id: &str) -> (String, String) {
+    let input = entropia_desktop_lib::bibliography::profile::profile_input_for_item(conn, item_id)
+        .expect("profile input")
+        .expect("the work exists in the catalog");
+    let built = entropia_desktop_lib::bibliography::profile::build_profile(&input);
+    (built.input_hash, built.canonical_text)
+}
+
+/// The `(text, text_hash)` pairs a profile run segments for one work with a
+/// single attachment — the keys pasaje vectors are cached under (§2.4).
+fn item_chunk_keys(conn: &rusqlite::Connection, item_id: &str) -> Vec<(String, String)> {
+    let pages =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(conn, item_id)
+            .expect("chunkable pages");
+    let inputs: Vec<entropia_desktop_lib::bibliography::chunks::PageInput> = pages
+        .iter()
+        .map(
+            |page| entropia_desktop_lib::bibliography::chunks::PageInput {
+                page_number: page.page_number,
+                text: page.text_content.clone(),
+            },
+        )
+        .collect();
+    entropia_desktop_lib::bibliography::chunks::segment_pages(&inputs)
+        .into_iter()
+        .map(|chunk| (chunk.text, chunk.hash))
+        .collect()
+}
+
+/// Little-endian f32 bytes, the shape every published and cached vector has.
+fn vector_blob(vector: &[f32]) -> Vec<u8> {
+    vector
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// A vector no `RecordingEmbedder` would compute, so a published blob proves
+/// the cache answered instead of the provider.
+fn marker_blob(text: &str) -> Vec<u8> {
+    vector_blob(&[(text.len() % 89) as f32 + 0.375, -1.5, 3.25, 0.0625])
+}
+
+/// A vector another device of the account already paid for and pushed.
+#[allow(clippy::too_many_arguments)]
+fn seed_cached_vector(
+    conn: &rusqlite::Connection,
+    account: &str,
+    contract_hash: &str,
+    input_hash: &str,
+    dimensions: i64,
+    blob: &[u8],
+) {
+    conn.execute(
+        "INSERT INTO sync_derived_vectors
+           (account_id, contract_hash, input_hash, dimensions, embedding, origin, pushed, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'remote', 1, 1)",
+        rusqlite::params![account, contract_hash, input_hash, dimensions, blob],
+    )
+    .expect("seed cached vector");
+}
+
+/// `(generation, contract, model, dimensions, embedding, input_hash,
+/// profile_revision)` of the published ficha vector.
+type PublishedItemVector = (String, String, String, i64, Vec<u8>, String, i64);
+
+fn published_item_vector(conn: &rusqlite::Connection, item_id: &str) -> PublishedItemVector {
+    conn.query_row(
+        "SELECT generation_id, embedding_contract, embedding_model, dimensions, embedding,
+                input_hash, profile_revision
+           FROM bibliographic_item_embeddings WHERE item_id = ?1",
+        [item_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        },
+    )
+    .expect("published work vector")
+}
+
+const T4_PAGE_A: &str = "Contenido de la primera pagina con suficiente longitud para existir por si mismo en el indice. ";
+const T4_PAGE_B: &str =
+    "Contenido de la segunda pagina tambien extenso para forzar un segundo fragmento estructural. ";
+const T4_PAGE_C: &str =
+    "Tercera pagina distinta que ningun otro dispositivo de la cuenta habia pagado antes. ";
+
+fn t4_pages(texts: &[&str]) -> Vec<(i64, String)> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (index as i64 + 1, text.repeat(6)))
+        .collect()
+}
+
+fn seed_paged_work(
+    conn: &mut rusqlite::Connection,
+    key: &str,
+    title: &str,
+    attachment_key: &str,
+    texts: &[&str],
+) -> String {
+    let item_id = seed_catalog(conn, key, title, "Resumen.");
+    let pages = t4_pages(texts);
+    let borrowed: Vec<(i64, &str)> = pages
+        .iter()
+        .map(|(number, text)| (*number, text.as_str()))
+        .collect();
+    seed_attachment_with_pages(conn, &item_id, attachment_key, &borrowed);
+    item_id
+}
+
+/// WU2 / S3: a ficha vector another device of the account already paid for is
+/// published byte for byte — same generation contract, stamps and profile
+/// revision as a computed one — and the provider is never called for it.
+#[test]
+fn a_cached_profile_vector_publishes_byte_for_byte_without_a_provider_call() {
+    let (computed_dir, mut computed) = migrated_db();
+    seed_library(&computed, "lib-1", Some(7));
+    let computed_item = seed_catalog(
+        &mut computed,
+        "CACHEHIT1",
+        "Obra cacheada",
+        "Resumen cacheado.",
+    );
+
+    let (cached_dir, mut cached) = migrated_db();
+    seed_library(&cached, "lib-1", Some(7));
+    let cached_item = seed_catalog(
+        &mut cached,
+        "CACHEHIT1",
+        "Obra cacheada",
+        "Resumen cacheado.",
+    );
+    enable_derived_cache(&cached, Some("account-a"));
+    let effective = effective_contract(&cached);
+    let (input_hash, canonical_text) = profile_keys(&cached, &cached_item);
+    let computed_blob = vector_blob(&RecordingEmbedder::vector_for(&canonical_text));
+    seed_cached_vector(
+        &cached,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &computed_blob,
+    );
+
+    admit_profile_demand(&computed, &computed_item);
+    admit_profile_demand(&cached, &cached_item);
+    let computed_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&computed_dir, &computed, Arc::clone(&computed_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the baseline profile must succeed"
+    );
+    let cached_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&cached_dir, &cached, Arc::clone(&cached_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the cached profile must succeed"
+    );
+
+    assert_eq!(
+        computed_embedder.singles.lock().expect("singles").len(),
+        1,
+        "the baseline pays for its vector"
+    );
+    assert!(
+        cached_embedder.singles.lock().expect("singles").is_empty(),
+        "a cached ficha costs no provider call: {:?}",
+        cached_embedder.singles.lock().expect("singles")
+    );
+    assert!(
+        cached_embedder.batches.lock().expect("batches").is_empty(),
+        "a work without attachments has no pasaje to embed"
+    );
+
+    let computed_row = published_item_vector(&computed, &computed_item);
+    let cached_row = published_item_vector(&cached, &cached_item);
+    assert_eq!(
+        cached_row.4, computed_blob,
+        "the published bytes are the cached bytes, not a re-encoding"
+    );
+    assert_eq!(
+        cached_row.4, computed_row.4,
+        "a hit publishes what computing publishes"
+    );
+    assert_eq!(
+        (
+            cached_row.1.clone(),
+            cached_row.2.clone(),
+            cached_row.3,
+            cached_row.5.clone(),
+            cached_row.6
+        ),
+        (
+            computed_row.1.clone(),
+            computed_row.2.clone(),
+            computed_row.3,
+            computed_row.5.clone(),
+            computed_row.6
+        ),
+        "same contract, model, width, input hash and profile revision"
+    );
+    assert_eq!(
+        cached_row.6, 1,
+        "the first profile revision, exactly as a computed run"
+    );
+    for (conn, row) in [(&computed, &computed_row), (&cached, &cached_row)] {
+        let contract_hash: String = conn
+            .query_row(
+                "SELECT contract_hash FROM bibliographic_index_generations WHERE id = ?1",
+                [&row.0],
+                |row| row.get(0),
+            )
+            .expect("published generation");
+        assert_eq!(
+            contract_hash, effective.hash,
+            "the hit publishes into the shared contract's generation"
+        );
+    }
+    assert_eq!(
+        generation_statuses(&computed),
+        generation_statuses(&cached),
+        "the hit leaves the generation in the same state as a computed run"
+    );
+}
+
+/// WU2 / S3: a work whose ficha AND pasajes are all cached reaches its
+/// "fichas 1/1 · pasajes 2/2" with zero provider calls, and every published
+/// vector is the cached blob.
+#[test]
+fn a_fully_cached_work_publishes_profile_and_pasajes_without_a_provider_call() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEFULL1",
+        "Obra completa cacheada",
+        "CACHEFULLATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("cacheada");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2, "the two long pages chunk separately");
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "a fully cached work must still publish"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the cached ficha costs no provider call: {:?}",
+        embedder.singles.lock().expect("singles")
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no cached pasaje reaches embed_many: {:?}",
+        embedder.batches.lock().expect("batches")
+    );
+
+    let published = chunk_vectors(&conn, &item_id);
+    assert_eq!(published.len(), 2, "both pasajes are published");
+    for (text, blob) in &published {
+        assert!(
+            chunks.iter().any(|(chunk_text, _)| chunk_text == text),
+            "the seeded key names the published chunk text"
+        );
+        assert_eq!(
+            blob,
+            &marker_blob(text),
+            "the published pasaje vector is the cached blob"
+        );
+    }
+}
+
+/// WU2: with only part of the pasajes cached, exactly the misses reach the
+/// provider — never the cached ones — and both kinds publish their right vector.
+#[test]
+fn a_partial_pasaje_cache_sends_only_the_true_misses_to_the_provider() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEPART1",
+        "Obra parcialmente cacheada",
+        "CACHEPARTATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &marker_blob("ficha"),
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2);
+    let (cached_text, cached_hash) = chunks[0].clone();
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &cached_hash,
+        4,
+        &marker_blob(&cached_text),
+    );
+    let missing: Vec<String> = chunks
+        .iter()
+        .filter(|(_, hash)| *hash != cached_hash)
+        .map(|(text, _)| text.clone())
+        .collect();
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the partial cache still publishes the whole work"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the cached ficha costs no provider call"
+    );
+    let batches = embedder.batches.lock().expect("batches").clone();
+    assert_eq!(batches.len(), 1, "one wave of true misses: {batches:?}");
+    assert_eq!(batches[0], missing, "only the uncached pasaje is paid for");
+
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        if missing.contains(&text) {
+            assert_eq!(
+                blob,
+                vector_blob(&RecordingEmbedder::vector_for(&text)),
+                "a miss publishes its computed vector"
+            );
+        } else {
+            assert_eq!(
+                blob,
+                marker_blob(&text),
+                "a hit publishes exactly the cached vector"
+            );
+        }
+    }
+}
+
+/// WU2: another embedding contract is a different vector space; a row under a
+/// different contract hash is never served.
+#[test]
+fn a_cached_vector_under_another_contract_is_never_served() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CACHECTR01", "Obra de otro contrato", "Resumen.");
+    enable_derived_cache(&conn, Some("account-a"));
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        "another-contract-hash",
+        &input_hash,
+        4,
+        &marker_blob("otro"),
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "a different contract is a different key: the provider is called"
+    );
+    let published = published_item_vector(&conn, &item_id);
+    assert_eq!(
+        published.4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector is published, never the other contract's row"
+    );
+}
+
+/// A right-width blob whose f32 values are unusable. Rows travel through the
+/// server once transport lands (T8), so they are untrusted input (§2.4).
+fn non_finite_blob() -> Vec<u8> {
+    [f32::NAN, 0.5, f32::INFINITY, f32::NEG_INFINITY]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// WU2 / §2.4: a cached row is untrusted input. A blob of the right width whose
+/// f32 values are not all finite is unusable — the same validation the computed
+/// path applies — so it is skipped and the provider computes the real vector.
+#[test]
+fn a_non_finite_cached_blob_is_ignored_and_the_provider_is_called() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CACHENAN01", "Obra con NaN cacheado", "Resumen.");
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    let nan_blob = non_finite_blob();
+    assert_eq!(
+        nan_blob.len(),
+        16,
+        "right width: only the finiteness check can reject it"
+    );
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &nan_blob,
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "a non-finite cached vector is unusable: the provider is called"
+    );
+    let published = published_item_vector(&conn, &item_id);
+    assert_eq!(
+        published.4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector is published"
+    );
+    assert_ne!(published.4, nan_blob, "never the unusable blob");
+}
+
+/// WU2: the width rule of §2.4 holds on read. A cached blob whose byte width
+/// does not match the contract is skipped (and logged), so the provider pays
+/// for the real vector; a correctly sized ficha row still hits.
+#[test]
+fn a_wrong_width_cached_blob_is_skipped_and_the_provider_pays() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEWIDE1",
+        "Obra con blob torcido",
+        "CACHEWIDEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("ficha ancha");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2);
+    for (_, hash) in &chunks {
+        // dimensions says 4 (16 bytes) but the blob is 8 bytes: unusable.
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &[1.0_f32.to_le_bytes(), 2.0_f32.to_le_bytes()].concat(),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the correctly sized ficha row is still a hit"
+    );
+    let sent: Vec<String> = embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let mut expected: Vec<String> = chunks.iter().map(|(text, _)| text.clone()).collect();
+    expected.sort();
+    let mut observed = sent.clone();
+    observed.sort();
+    assert_eq!(
+        observed, expected,
+        "every wrong-width pasaje is re-embedded"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_id).4,
+        profile_marker,
+        "the ficha hit publishes the cached blob"
+    );
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        assert_eq!(
+            blob,
+            vector_blob(&RecordingEmbedder::vector_for(&text)),
+            "a skipped row publishes the computed vector"
+        );
+    }
+    // The unusable rows stay where they are: reading never rewrites the cache.
+    let rows = derived_vector_rows(&conn);
+    assert_eq!(rows.len(), 3, "two pasaje rows and one ficha row: {rows:?}");
+}
+
+/// WU2 / §2.9 (D6): only the effective account's rows are read. The very same
+/// cache keys exist under another account with different vectors; the session
+/// account gets its own bytes, and a key only the other account owns pays.
+/// A real read, not a vacuous one: account B's rows do answer.
+#[test]
+fn only_the_effective_accounts_cached_rows_answer_a_run() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_b = seed_paged_work(
+        &mut conn,
+        "CACHEACCB1",
+        "Obra de la cuenta B",
+        "CACHEACCATTB",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    let item_a_only = seed_paged_work(
+        &mut conn,
+        "CACHEACCA1",
+        "Obra solo de la cuenta A",
+        "CACHEACCATTA",
+        &[T4_PAGE_C],
+    );
+    enable_derived_cache(&conn, Some("account-b"));
+    let effective = effective_contract(&conn);
+
+    let (b_profile_hash, _) = profile_keys(&conn, &item_b);
+    for account in ["account-a", "account-b"] {
+        let blob = marker_blob(account);
+        seed_cached_vector(&conn, account, &effective.hash, &b_profile_hash, 4, &blob);
+        for (text, hash) in item_chunk_keys(&conn, &item_b) {
+            seed_cached_vector(
+                &conn,
+                account,
+                &effective.hash,
+                &hash,
+                4,
+                &marker_blob(&text),
+            );
+        }
+    }
+    let (a_only_profile_hash, a_only_canonical) = profile_keys(&conn, &item_a_only);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &a_only_profile_hash,
+        4,
+        &marker_blob("cuenta a"),
+    );
+    let a_only_chunks = item_chunk_keys(&conn, &item_a_only);
+    for (text, hash) in &a_only_chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_b);
+    let b_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&b_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "B's cached work must publish"
+    );
+    assert!(
+        b_embedder.singles.lock().expect("singles").is_empty(),
+        "B's own ficha row answers"
+    );
+    assert!(
+        b_embedder.batches.lock().expect("batches").is_empty(),
+        "B's own pasaje rows answer"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_b).4,
+        marker_blob("account-b"),
+        "the published ficha vector is B's row, never A's"
+    );
+    for (text, blob) in chunk_vectors(&conn, &item_b) {
+        assert_eq!(
+            blob,
+            marker_blob(&text),
+            "the published pasaje vectors are B's rows"
+        );
+    }
+
+    admit_profile_demand(&conn, &item_a_only);
+    let a_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&a_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the work only account A paid for still publishes"
+    );
+    assert_eq!(
+        a_embedder.singles.lock().expect("singles").len(),
+        1,
+        "rows that belong to another account are inert: the provider is called"
+    );
+    let sent: Vec<String> = a_embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    assert_eq!(
+        sent,
+        a_only_chunks
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>(),
+        "another account's pasaje rows are never served"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_a_only).4,
+        vector_blob(&RecordingEmbedder::vector_for(&a_only_canonical)),
+        "the computed vector is published, never account A's row"
+    );
+}
+
+/// S8: without a session, the archive's bound account still owns what it paid
+/// for, so reprocessing it makes no paid call.
+#[test]
+fn without_a_session_the_bound_accounts_cached_work_costs_nothing() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHESESS1",
+        "Obra sin sesion",
+        "CACHESESSATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, None);
+    // The archive was bound to this account before the logout; the mark
+    // survives it (§2.9), and reading is never paying twice for it.
+    entropia_desktop_lib::sync::session::meta_set(&conn, "derived_bound_account", "account-a")
+        .expect("bound account mark");
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("sin sesion");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the offline profile must publish"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "no session still means no ficha payment"
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no session still means no pasaje payment"
+    );
+    assert_eq!(published_item_vector(&conn, &item_id).4, profile_marker);
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        assert_eq!(blob, marker_blob(&text));
+    }
+}
+
+/// S8's other half: with no session AND no bound account, the archive cannot
+/// name an owner, so nothing in the cache may answer — and the provider is
+/// called as before.
+#[test]
+fn without_a_session_or_a_bound_account_the_cache_answers_nothing() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHENONE1",
+        "Obra sin duenio",
+        "CACHENONEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, None);
+    let effective = effective_contract(&conn);
+    let (profile_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &marker_blob("ajena"),
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must publish"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "an unnamed archive pays for its ficha"
+    );
+    let sent = embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .count();
+    assert_eq!(sent, chunks.len(), "and for every pasaje");
+    assert_eq!(
+        published_item_vector(&conn, &item_id).4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector wins: the cache never answers for an unnamed archive"
+    );
+}
+
+/// PRESERVE: the local reuse of `reusable_chunk_embeddings` is untouched — with
+/// the derived tables present but no row the archive may read, a re-profile
+/// still embeds none of the unchanged pasajes again.
+#[test]
+fn local_chunk_reuse_still_skips_the_provider_with_an_empty_derived_cache() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEREUSE1",
+        "Obra reusada localmente",
+        "CACHEREUSEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    // Tables present, no session and no binding: nothing in the cache can
+    // answer, so only the pre-existing local reuse can.
+    enable_derived_cache(&conn, None);
+
+    admit_profile_demand(&conn, &item_id);
+    let first = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&first), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the first profile pays"
+    );
+    assert_eq!(
+        first.batches.lock().expect("batches").len(),
+        1,
+        "the first run embeds its pasajes"
+    );
+    let before = chunk_vectors(&conn, &item_id);
+
+    admit_profile_demand(&conn, &item_id);
+    let second = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&second), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the re-profile publishes"
+    );
+    assert!(
+        second.batches.lock().expect("batches").is_empty(),
+        "unchanged chunks are still reused from the published rows"
+    );
+    assert_eq!(
+        chunk_vectors(&conn, &item_id),
+        before,
+        "the re-profile republished the same vectors"
+    );
+}
