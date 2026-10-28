@@ -50,8 +50,8 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | 8e9e3e07 |
 | T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | afd54cc2, c8c9d44d, 77ede1d6 |
 | T9 | Pull-before-pay gate, freshness barrier, footer text | S5 | §2.6, WU5 | worker | ce78d06d |
-| T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | blocked: server code is not in this repo | — |
-| T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | blocked: T10 | — |
+| T10 | Server support (capability, wire tables, idempotency, quota) | S3 | §2.7, WU6 | worker (EntropIA-Cloud, branch feat/bibliography-derived-v1) | EntropIA-Cloud 3839d89 |
+| T11 | Two-device verification on dev profiles against staging | S3-S8 | WU7 | worker | (this commit) |
 
 ## Log
 
@@ -111,3 +111,10 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   (RED 501 changes without the fix). Ten non-blocking review advisories remain as follow-ups. Whole crate after
   the split: 27 suites, 3132 passed, 0 failed. The `review-refuter` and `review-validator` model routes were
   missing from the active Pi profile; added with the user's permission.
+- **L14** (T10, T11, 2026-10-27): with the user's permission, the server side was implemented in
+  `/home/agustin/OpenCode/EntropIA-Cloud` on branch `feat/bibliography-derived-v1` (commit `3839d89`, not pushed,
+  not deployed): three per-account tables, own sequence, validation, 413, quota `SYNC_MAX_DERIVED_MB` (507),
+  capability advertised last. Server suite 397 passed; independent verification PASS. T11 ran against that real
+  server locally: `tests/derived_sync_e2e.rs` 5 passed (pull-through byte-identical, account isolation, idempotent
+  re-push, corpus still converges, capability Supported) and the existing `tests/sync_e2e.rs` 12 passed.
+  Not done here: deploying the server and a run on the owner's real devices.

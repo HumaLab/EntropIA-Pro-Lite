@@ -506,7 +506,11 @@ fn mirror_contract(conn: &Connection, contract_hash: &str) -> Result<(), String>
 /// `origin='local'`, `pushed=0`, the account [`write_account`] names, and the
 /// contract row mirrored beside it. A no-op on a connection without the
 /// derived tables.
-pub(crate) fn cache_paid_vector(
+///
+/// Public because it is the write side of [`cached_vectors`]: the paid paths
+/// call it, and the two-device suite (`tests/derived_sync_e2e.rs`) seeds paid
+/// results through it instead of hand-writing cache rows.
+pub fn cache_paid_vector(
     conn: &Connection,
     contract_hash: &str,
     input_hash: &str,
@@ -754,8 +758,12 @@ pub fn cached_ocr_pages(
 /// Records one paid OCR answer — including an empty one — from the transaction
 /// that publishes its page (§2.3). A no-op on a connection without the derived
 /// tables.
+///
+/// Public because it is the write side of [`cached_ocr_pages`]: the paid paths
+/// call it (T3), and the two-device suite (`tests/derived_sync_e2e.rs`) seeds
+/// paid results through it instead of hand-writing cache rows.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn cache_paid_ocr_page(
+pub fn cache_paid_ocr_page(
     conn: &Connection,
     source_hash: &str,
     page_number: i64,
