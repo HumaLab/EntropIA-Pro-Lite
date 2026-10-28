@@ -209,13 +209,63 @@ mod tests {
     fn windows_cover_the_document_and_skip_native_stretches() {
         let all: Vec<i64> = (1..=205).collect();
         assert_eq!(
-            plan_pdf_windows(&all, 205, 100),
+            plan_pdf_windows(&all, &[], 205, 100),
             vec![(1, 100), (101, 200), (201, 205)]
         );
-        assert_eq!(plan_pdf_windows(&all[..20], 20, 100), vec![(1, 20)]);
+        assert_eq!(plan_pdf_windows(&all[..20], &[], 20, 100), vec![(1, 20)]);
         // Only the last window holds a page that needs OCR.
-        assert_eq!(plan_pdf_windows(&[150], 205, 100), vec![(101, 200)]);
-        assert!(plan_pdf_windows(&[], 205, 100).is_empty());
+        assert_eq!(plan_pdf_windows(&[150], &[], 205, 100), vec![(101, 200)]);
+        assert!(plan_pdf_windows(&[], &[], 205, 100).is_empty());
+    }
+
+    /// §2.4: cached pages are cut out of the document, so a window never
+    /// spans one. Each remaining run is chunked from its own start under the
+    /// provider's page limit, and a run without a miss is dropped.
+    #[test]
+    fn cached_pages_split_the_windows_into_miss_runs() {
+        // Contiguous hits: only the tail run is paid for.
+        let cached: Vec<i64> = (1..=4).collect();
+        let misses: Vec<i64> = (5..=10).collect();
+        assert_eq!(
+            plan_pdf_windows(&misses, &cached, 10, 100),
+            vec![(5, 10)],
+            "the four cached pages are cut out of the single window"
+        );
+
+        // Alternating hits: every miss becomes its own run.
+        assert_eq!(
+            plan_pdf_windows(&[2, 4, 6, 8, 9, 10], &[1, 3, 5, 7], 10, 100),
+            vec![(2, 2), (4, 4), (6, 6), (8, 10)],
+            "each miss run is its own request and none crosses a cached page"
+        );
+
+        // The provider limit still applies inside a run.
+        assert_eq!(
+            plan_pdf_windows(&[1, 3, 4, 5, 6, 7], &[2], 7, 2),
+            vec![(1, 1), (3, 4), (5, 6), (7, 7)]
+        );
+
+        // A run without a miss is dropped even when its neighbours pay.
+        assert_eq!(
+            plan_pdf_windows(&[6], &[3], 8, 2),
+            vec![(6, 7)],
+            "the run before the cached page holds no miss"
+        );
+    }
+
+    /// §2.4: when every page is cached there is no window at all — and a
+    /// cached page is never inside a window, boundary pages included.
+    #[test]
+    fn all_cached_pages_plan_no_window_at_all() {
+        let cached: Vec<i64> = (1..=10).collect();
+        assert!(plan_pdf_windows(&[], &cached, 10, 100).is_empty());
+        assert!(plan_pdf_windows(&[1, 3], &[1, 2, 3], 3, 100).is_empty());
+        assert!(plan_pdf_windows(&[1], &[1], 1, 100).is_empty());
+        assert_eq!(
+            plan_pdf_windows(&[5], &[10], 10, 2),
+            vec![(5, 6)],
+            "a cached page past the only miss still cuts the run before it"
+        );
     }
 
     #[test]
@@ -280,6 +330,22 @@ pub trait PageOcrProvider: Send + Sync {
     }
 
     fn name(&self) -> &str;
+
+    /// The model this provider bills against — the second half of the OCR
+    /// contract. Providers that run no model (test doubles) keep the
+    /// default.
+    fn model_id(&self) -> &str {
+        "unspecified"
+    }
+
+    /// The versioned contract that says which provider configuration
+    /// produced a page answer (plan D3):
+    /// `ocr-v<version>:<provider>:<model>:p<version>`. Cached pages are
+    /// stored under it and reused only when it matches, so a change of
+    /// provider, model or prompt/parser version misses them.
+    fn ocr_contract(&self) -> String {
+        crate::bibliography::ocr_contract::ocr_contract_for(self.name(), self.model_id())
+    }
 }
 
 /// Whole-document OCR pays off when most of the document needs it (a scan);
@@ -289,11 +355,20 @@ pub fn should_use_pdf_mode(needs_ocr: usize, total_pages: usize) -> bool {
     needs_ocr > 0 && needs_ocr * 2 >= total_pages
 }
 
-/// Splits `1..=total_pages` into consecutive windows of at most
-/// `pages_per_request` pages and keeps only those holding a page that needs
-/// OCR. Windows are 1-based and inclusive.
+/// Splits `1..=total_pages` into runs of consecutive pages that are NOT in
+/// `cached_pages`, chunks each run into windows of at most
+/// `pages_per_request` pages from the run's own start, and keeps only the
+/// windows holding a page that still needs OCR. Windows are 1-based and
+/// inclusive.
+///
+/// A cached page was already paid for (§2.4): a window that contained it would
+/// send it to the provider again, so every run stops at one — dropping the
+/// page from `needing_pages` alone is not enough. With no cached pages the
+/// plan is exactly the one the executor always produced: windows aligned from
+/// page 1, windows without a pending page dropped.
 pub fn plan_pdf_windows(
     needing_pages: &[i64],
+    cached_pages: &[i64],
     total_pages: usize,
     pages_per_request: usize,
 ) -> Vec<(u32, u32)> {
@@ -301,14 +376,27 @@ pub fn plan_pdf_windows(
     let mut windows = Vec::new();
     let mut first = 1usize;
     while first <= total_pages {
-        let last = (first + size - 1).min(total_pages);
-        if needing_pages
-            .iter()
-            .any(|page| *page >= first as i64 && *page <= last as i64)
-        {
-            windows.push((first as u32, last as u32));
+        if cached_pages.contains(&(first as i64)) {
+            first += 1;
+            continue;
         }
-        first = last + 1;
+        // The run of consecutive pages the provider may read.
+        let mut run_end = first;
+        while run_end < total_pages && !cached_pages.contains(&((run_end + 1) as i64)) {
+            run_end += 1;
+        }
+        let mut window_first = first;
+        while window_first <= run_end {
+            let window_last = (window_first + size - 1).min(run_end);
+            let holds_pending_page = needing_pages
+                .iter()
+                .any(|page| *page >= window_first as i64 && *page <= window_last as i64);
+            if holds_pending_page {
+                windows.push((window_first as u32, window_last as u32));
+            }
+            window_first = window_last + 1;
+        }
+        first = run_end + 1;
     }
     windows
 }
@@ -409,5 +497,56 @@ mod trait_tests {
             map_page_ocr_error("splines reticulated unexpectedly"),
             ExecOutput::Fatal { .. }
         ));
+    }
+}
+
+/// The contract seam between a provider and the derived cache (plan D3): a
+/// provider names itself and its model, and the contract derives from both.
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    struct GlmLikeProvider;
+
+    impl PageOcrProvider for GlmLikeProvider {
+        fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        fn name(&self) -> &str {
+            "glm"
+        }
+
+        fn model_id(&self) -> &str {
+            "glm-ocr"
+        }
+    }
+
+    /// A provider that runs no model (a test double, or a future local engine
+    /// without one) still gets one stable contract, never an empty field.
+    struct ModelLessProvider;
+
+    impl PageOcrProvider for ModelLessProvider {
+        fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        fn name(&self) -> &str {
+            "fake"
+        }
+    }
+
+    #[test]
+    fn a_provider_contract_is_its_name_and_model_under_the_current_version() {
+        assert_eq!(GlmLikeProvider.ocr_contract(), "ocr-v1:glm:glm-ocr:p1");
+    }
+
+    #[test]
+    fn a_provider_without_a_model_still_gets_a_stable_contract() {
+        assert_eq!(ModelLessProvider.model_id(), "unspecified");
+        assert_eq!(
+            ModelLessProvider.ocr_contract(),
+            "ocr-v1:fake:unspecified:p1"
+        );
     }
 }

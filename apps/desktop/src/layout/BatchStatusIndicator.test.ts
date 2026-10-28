@@ -26,6 +26,8 @@ type SyncStatus = {
   extractionsTotal: number
   profilesBlocked: number
   extractionsBlocked: number
+  profilesWaiting: number
+  extractionsWaiting: number
   profilesBlockedReason: { code: string | null; message: string | null } | null
   extractionsBlockedReason: { code: string | null; message: string | null } | null
   current: { kind: string; title: string; pagesDone: number; pagesTotal: number } | null
@@ -49,6 +51,8 @@ function syncStatus(overrides: Partial<SyncStatus> = {}): SyncStatus {
     extractionsTotal: 0,
     profilesBlocked: 0,
     extractionsBlocked: 0,
+    profilesWaiting: 0,
+    extractionsWaiting: 0,
     profilesBlockedReason: null,
     extractionsBlockedReason: null,
     current: null,
@@ -262,6 +266,178 @@ describe('BatchStatusIndicator', () => {
 
     expect(screen.getByText('Bibliografía: fichas 13/13 · pasajes 10/26')).toBeInTheDocument()
     expect(screen.queryByText(/OCR/)).not.toBeInTheDocument()
+  })
+
+  it('says it is waiting for the other devices while the gate defers derived work', () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        profilesWaiting: 330,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        extractionsWaiting: 370,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    // S5, plan §2.6: while the pull-before-pay gate parks the paid work, the
+    // footer says exactly this — one sentence, no counters.
+    expect(
+      screen.getByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/fichas/)).not.toBeInTheDocument()
+  })
+
+  it('renders the sentence from the real DTO shape the backend serializes', () => {
+    // Exactly the JSON `processing::commands::BibliographySyncStatus` sends:
+    // every field, camelCase, including the two waiting counts. Kept literal on
+    // purpose — a renamed or dropped field must break this test, not silently
+    // leave the footer blank.
+    const dto = {
+      state: 'succeeded',
+      errorCode: null,
+      errorMessage: null,
+      progressDone: 40,
+      progressTotal: 40,
+      itemsSeen: 40,
+      remoteTotal: 40,
+      newProfiles: 450,
+      newExtractions: 400,
+      profilesDone: 120,
+      profilesTotal: 450,
+      extractionsDone: 30,
+      extractionsTotal: 400,
+      profilesBlocked: 0,
+      extractionsBlocked: 0,
+      profilesWaiting: 330,
+      extractionsWaiting: 370,
+      profilesBlockedReason: null,
+      extractionsBlockedReason: null,
+      current: null,
+      etaMs: null,
+    } satisfies SyncStatus
+    setBibliographyProgress({ status: dto, unreadable: null })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.getByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).toBeInTheDocument()
+  })
+
+  it('goes back to the counts once the gate lets the work pay', async () => {
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        profilesWaiting: 330,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        extractionsWaiting: 370,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+    expect(
+      screen.getByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).toBeInTheDocument()
+
+    // The node is unchanged; only the deferred subjects went away (the pull
+    // landed, or the bounded wait expired).
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+      }),
+      unreadable: null,
+    })
+
+    expect(
+      await screen.findByText('Bibliografía: fichas 120/450 · pasajes 30/400')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps the counters while other derived work is still moving', () => {
+    // The gate parked part of the backlog; the rest is queued or running, so
+    // the footer keeps reporting progress instead of freezing on one sentence.
+    setBibliographyProgress({
+      status: syncStatus({
+        newProfiles: 450,
+        newExtractions: 400,
+        profilesDone: 120,
+        profilesTotal: 450,
+        profilesWaiting: 100,
+        extractionsDone: 30,
+        extractionsTotal: 400,
+        extractionsWaiting: 50,
+        current: {
+          kind: 'bibliography_extract',
+          title: 'El problema del yute',
+          pagesDone: 117,
+          pagesTotal: 1537,
+        },
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+
+    expect(
+      screen.queryByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Bibliografía: fichas 120/450 · pasajes 30/400 · OCR 117/1537')
+    ).toBeInTheDocument()
+  })
+
+  it('falls back to the waiting sentence once nothing but waiting work is left', async () => {
+    // Part of the backlog is parked and the rest is still queued: counters.
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 120,
+        profilesTotal: 250,
+        profilesWaiting: 100,
+        extractionsDone: 30,
+        extractionsTotal: 30,
+      }),
+      unreadable: null,
+    })
+
+    render(BatchStatusIndicator)
+    expect(screen.getByText('Bibliografía: fichas 120/250 · pasajes 30/30')).toBeInTheDocument()
+
+    // The last actionable unit stops moving: everything left is parked on the
+    // gate, so the footer says what it is waiting for.
+    setBibliographyProgress({
+      status: syncStatus({
+        profilesDone: 150,
+        profilesTotal: 250,
+        profilesWaiting: 100,
+        extractionsDone: 30,
+        extractionsTotal: 30,
+      }),
+      unreadable: null,
+    })
+
+    expect(
+      await screen.findByText('Bibliografía: esperando resultados de tus otros dispositivos…')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/fichas/)).not.toBeInTheDocument()
   })
 
   it('keeps the generic batch badge for user batches with no bibliography backlog', () => {

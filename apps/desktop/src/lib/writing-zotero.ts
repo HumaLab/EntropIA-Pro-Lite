@@ -153,6 +153,16 @@ export interface BibliographySyncStatus {
   /** Live blocked derived work of the backlog window: parked on an owner-side change, never done. */
   profilesBlocked: number
   extractionsBlocked: number
+  /**
+   * Live derived work the pull-before-pay gate parked while it waits for the
+   * account's cache to arrive from the other devices (plan §2.6, S5). Nothing
+   * is wrong and nothing is owed to the owner: the work re-runs by itself when
+   * the pull lands or the bounded wait expires, so these are neither done nor
+   * blocked. Optional: a status written before this signal existed counts as
+   * "not waiting".
+   */
+  profilesWaiting?: number
+  extractionsWaiting?: number
   /** What each kind's blocked work is parked on; null while that kind has none. */
   profilesBlockedReason: BibliographyBlockedReason | null
   extractionsBlockedReason: BibliographyBlockedReason | null
@@ -197,9 +207,13 @@ export interface BibliographyDerivedProgress {
   worksDone: number
   worksTotal: number
   worksBlocked: number
+  /** Works the gate deferred: waiting on the account's cache, not on the owner. */
+  worksWaiting: number
   passagesDone: number
   passagesTotal: number
   passagesBlocked: number
+  /** Passages the gate deferred: waiting on the account's cache, not on the owner. */
+  passagesWaiting: number
   etaMs: number | null
   /** Works and attachments still unsettled in the window; zero = nothing left to show. */
   remaining: number
@@ -207,6 +221,8 @@ export interface BibliographyDerivedProgress {
   remainingActive: number
   /** Unsettled work parked on a change only the owner can make. */
   blocked: number
+  /** Unsettled work the pull-before-pay gate deferred while the cache arrives. */
+  waiting: number
   /** Why the parked work waits, in the app's words where it can word them. */
   blockedReason: string
 }
@@ -269,22 +285,28 @@ export function bibliographyDerivedProgress(
   const worksTotal = status.profilesTotal ?? 0
   const worksDone = status.profilesDone ?? 0
   const worksBlocked = status.profilesBlocked ?? 0
+  const worksWaiting = status.profilesWaiting ?? 0
   const passagesTotal = status.extractionsTotal ?? 0
   const passagesDone = status.extractionsDone ?? 0
   const passagesBlocked = status.extractionsBlocked ?? 0
+  const passagesWaiting = status.extractionsWaiting ?? 0
   const blocked = worksBlocked + passagesBlocked
+  const waiting = worksWaiting + passagesWaiting
   const remaining = worksTotal - worksDone + (passagesTotal - passagesDone)
   return {
     worksDone,
     worksTotal,
     worksBlocked,
+    worksWaiting,
     passagesDone,
     passagesTotal,
     passagesBlocked,
+    passagesWaiting,
     etaMs: status.etaMs ?? null,
     remaining,
     remainingActive: remaining - blocked,
     blocked,
+    waiting,
     blockedReason: blocked > 0 ? bibliographyBlockedReason(status) : '',
   }
 }

@@ -3572,7 +3572,7 @@ fn connection_bump_restarts_enumeration_from_zero_without_mixing() {
 // ── E3b-WU2: durable per-work profile tasks ────────────────────────────────
 
 use entropia_desktop_lib::bibliography::processing::{
-    BibliographyProfileExecutor, ProfileEmbedder,
+    BibliographyProfileComputeOutput, BibliographyProfileExecutor, ProfileEmbedder,
 };
 
 /// Fake embedder: a fixed identity and scripted per-call results, so the
@@ -13392,4 +13392,2925 @@ fn a_definitive_page_verdict_is_checkpointed_and_the_page_is_sent_once() {
         serde_json::json!([1]),
         "page 1 stays named in ocrFailedPages: {receipt}"
     );
+}
+
+// ── T3: paid results reach the derived cache in the same transaction ───────
+//
+// Plan §2.3 / WU1: the device that pays also records the result, in the very
+// transaction that publishes it. These tests drive the real claim → run →
+// publish path and read the cache tables the way a second device (T4/T5) will.
+
+/// Adds the sync schema — the derived cache tables live there, created by
+/// `ensure_sync_schema` at setup — and, when `account` is given, the session
+/// whose account stamps every row written from now on (§2.9).
+///
+/// A session also records the verdict of a server that does not implement
+/// `bibliography-derived-v1` (a known epoch, `advertised: false`): these suites
+/// assert what the cache reads and writes, so the pull-before-pay gate of §2.6
+/// must pay as before instead of parking the unit. The gate's own behavior
+/// lives in `sync::derived_gate` and in the dedicated T9 tests below.
+fn enable_derived_cache(conn: &rusqlite::Connection, account: Option<&str>) {
+    entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
+    if let Some(account) = account {
+        entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
+            .expect("session account");
+        record_legacy_channel(conn);
+    }
+}
+
+/// The epoch-and-absence verdict a legacy server leaves behind (§2.6). Written
+/// as the transport records it, so a shape drift here breaks loudly instead of
+/// silently parking these suites.
+const LEGACY_EPOCH: &str = "epoch-legacy";
+
+fn record_legacy_channel(conn: &rusqlite::Connection) {
+    entropia_desktop_lib::sync::session::meta_set(conn, "server_epoch", LEGACY_EPOCH)
+        .expect("server epoch");
+    entropia_desktop_lib::sync::session::meta_set(
+        conn,
+        "derived_capability",
+        &format!("{{\"epoch\":\"{LEGACY_EPOCH}\",\"advertised\":false}}"),
+    )
+    .expect("legacy capability verdict");
+}
+
+fn count_derived_tables(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table' AND name LIKE 'sync_derived_%'",
+        [],
+        |row| row.get(0),
+    )
+    .expect("derived table count")
+}
+
+type CachedVector = (String, String, String, i64, Vec<u8>, String, i64);
+
+/// `(account, contract, input_hash, dimensions, embedding, origin, pushed)`.
+fn derived_vector_rows(conn: &rusqlite::Connection) -> Vec<CachedVector> {
+    conn.prepare(
+        "SELECT account_id, contract_hash, input_hash, dimensions, embedding, origin, pushed
+           FROM sync_derived_vectors ORDER BY input_hash",
+    )
+    .expect("derived vectors query")
+    .query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        ))
+    })
+    .expect("derived vectors map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("derived vectors collect")
+}
+
+#[derive(Debug)]
+struct CachedOcrPage {
+    account: String,
+    source_hash: String,
+    page_number: i64,
+    ocr_contract: String,
+    outcome: String,
+    text_content: String,
+    text_hash: String,
+    origin: String,
+    pushed: i64,
+}
+
+fn derived_ocr_rows(conn: &rusqlite::Connection) -> Vec<CachedOcrPage> {
+    conn.prepare(
+        "SELECT account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+                text_hash, origin, pushed
+           FROM sync_derived_ocr_pages ORDER BY page_number",
+    )
+    .expect("derived ocr query")
+    .query_map([], |row| {
+        Ok(CachedOcrPage {
+            account: row.get(0)?,
+            source_hash: row.get(1)?,
+            page_number: row.get(2)?,
+            ocr_contract: row.get(3)?,
+            outcome: row.get(4)?,
+            text_content: row.get(5)?,
+            text_hash: row.get(6)?,
+            origin: row.get(7)?,
+            pushed: row.get(8)?,
+        })
+    })
+    .expect("derived ocr map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("derived ocr collect")
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn published_page_text(
+    conn: &rusqlite::Connection,
+    attachment_id: &str,
+    page: i64,
+) -> (String, String) {
+    conn.query_row(
+        "SELECT method, text_content FROM bibliographic_page_texts
+          WHERE attachment_id = ?1 AND page_number = ?2",
+        rusqlite::params![attachment_id, page],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("published page text")
+}
+
+fn effective_contract(
+    conn: &rusqlite::Connection,
+) -> entropia_desktop_lib::processing::eligibility::EffectiveEmbeddingContract {
+    entropia_desktop_lib::processing::eligibility::resolve_effective_embedding_contract(conn)
+        .expect("effective embedding contract")
+}
+
+/// §2.3 / WU1: the vector a profile publish just paid for lands in the cache —
+/// exactly one row for a work without chunks, keyed by the generation's
+/// contract hash and by the profile input hash the row stamps, carrying the
+/// published f32 blob byte for byte, owned by the session account.
+#[test]
+fn a_published_work_vector_is_cached_in_the_publish_transaction() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "CACHEWORK1",
+        "Obra cacheada",
+        "Resumen cacheado.",
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    admit_profile_demand(&conn, &item_id);
+
+    let outcome = run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the profile task must succeed, got {outcome:?}"
+    );
+
+    let effective = effective_contract(&conn);
+    let (published_contract, input_hash, dimensions, embedding): (String, String, i64, Vec<u8>) =
+        conn.query_row(
+            "SELECT embedding_contract, input_hash, dimensions, embedding
+               FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&item_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("published work vector");
+    assert_eq!(dimensions, 4);
+
+    let rows = derived_vector_rows(&conn);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a work without attachments caches exactly its own vector, got {rows:?}"
+    );
+    let (account, contract, cached_input, cached_dimensions, cached_blob, origin, pushed) =
+        &rows[0];
+    assert_eq!(
+        account, "account-a",
+        "the row belongs to the account that paid for it"
+    );
+    assert_eq!(
+        contract, &effective.hash,
+        "the key is the generation's pinned contract hash, not the double's stamp ({published_contract})"
+    );
+    assert_eq!(
+        cached_input, &input_hash,
+        "the key is the profile input hash the vector was computed from"
+    );
+    assert_eq!(*cached_dimensions, 4);
+    assert_eq!(
+        cached_blob, &embedding,
+        "the cached vector is the published f32 blob, byte for byte"
+    );
+    assert_eq!(origin, "local", "this device paid for it");
+    assert_eq!(*pushed, 0, "nothing has been pushed yet");
+
+    // §2.2: the immutable contract row travels with the vectors so a reader
+    // can size and name the space it is looking at.
+    let mirrored: (String, String, i64, String) = conn
+        .query_row(
+            "SELECT provider, model, dimensions, chunking_contract
+               FROM sync_derived_contracts WHERE contract_hash = ?1",
+            [&effective.hash],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("mirrored contract row");
+    let source: (String, String, i64, String) = conn
+        .query_row(
+            "SELECT provider, model, dimensions, chunking_contract
+               FROM bibliographic_embedding_contracts WHERE contract_hash = ?1",
+            [&effective.hash],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("source contract row");
+    assert_eq!(mirrored, source, "the mirror copies the immutable row");
+}
+
+/// §2.3 / WU1: pasaje vectors are cached under the sha256 of the exact text
+/// sent to the embedder — the chunk's `text_hash`, the one equality
+/// `reusable_chunk_embeddings` reuses rows under.
+#[test]
+fn published_chunk_vectors_are_cached_by_their_text_hash() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CACHECHNK1", "Obra con pasajes", "Resumen.");
+    let page_a = "Contenido de la primera pagina con suficiente longitud para existir por si mismo en el indice. ".repeat(6);
+    let page_b = "Contenido de la segunda pagina tambien extenso para forzar un segundo fragmento estructural. ".repeat(6);
+    seed_attachment_with_pages(
+        &mut conn,
+        &item_id,
+        "CACHEATT1",
+        &[(1, &page_a), (2, &page_b)],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    admit_profile_demand(&conn, &item_id);
+
+    let outcome = run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the profile task must succeed, got {outcome:?}"
+    );
+
+    let effective = effective_contract(&conn);
+    let chunks: Vec<(String, String, Vec<u8>)> = conn
+        .prepare(
+            "SELECT c.id, c.text_hash, e.embedding
+               FROM bibliographic_chunks c
+               JOIN bibliographic_chunk_embeddings e ON e.chunk_id = c.id
+              WHERE c.item_id = ?1 ORDER BY c.ordinal",
+        )
+        .expect("chunk vectors query")
+        .query_map([&item_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .expect("chunk vectors map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chunk vectors collect");
+    assert_eq!(chunks.len(), 2, "the two long pages chunk separately");
+
+    let rows = derived_vector_rows(&conn);
+    assert_eq!(
+        rows.len(),
+        chunks.len() + 1,
+        "every pasaje plus the work profile vector, got {rows:?}"
+    );
+    for (chunk_id, text_hash, embedding) in &chunks {
+        let row = rows
+            .iter()
+            .find(|row| &row.2 == text_hash)
+            .unwrap_or_else(|| panic!("no cached vector keyed by chunk {chunk_id}'s text hash"));
+        assert_eq!(row.0, "account-a");
+        assert_eq!(row.1, effective.hash);
+        assert_eq!(row.3, 4);
+        assert_eq!(&row.4, embedding, "the pasaje vector is the published blob");
+        assert_eq!(row.5, "local");
+        assert_eq!(row.6, 0);
+    }
+}
+
+/// §2.3 / WU1, S3: the answer the owner paid for is cached under
+/// `(sha256 of the file, page, ocr contract)` as the Markdown the Bibliografía
+/// publishes, owned by the archive's account — `''` while it was never bound.
+#[test]
+fn a_published_ocr_answer_is_cached_under_the_file_hash_and_the_ocr_contract() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, None);
+    admit_extract_demand(&conn, &attachment_id);
+    let file_bytes = std::fs::read(dir.path().join("escaneado.pdf")).expect("read fixture");
+    let answer = "Respuesta reconocida de la unica pagina";
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(answer);
+    let contract = entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        provider.name(),
+        provider.model_id(),
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the extraction must succeed, got {outcome:?}"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "one paid page, one cached page: {rows:?}");
+    let row = &rows[0];
+    assert_eq!(
+        row.account, "",
+        "an archive that was never bound writes the '' rows the first login adopts"
+    );
+    assert_eq!(
+        row.source_hash,
+        sha256_hex(&file_bytes),
+        "the key is the sha256 of the file the owner has"
+    );
+    assert_eq!(row.page_number, 1);
+    assert_eq!(row.ocr_contract, contract);
+    assert_eq!(row.outcome, "text");
+    assert_eq!(row.text_content, answer);
+    assert_eq!(row.text_hash, sha256_hex(answer.as_bytes()));
+    assert_eq!(row.origin, "local");
+    assert_eq!(row.pushed, 0);
+
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(method, "ocr", "the answer is published as usual");
+    assert_eq!(text, answer);
+}
+
+/// §2.3: a whole-document window answers several pages in ONE paid request;
+/// every page it answered is cached, not only the last one. Same key shape as
+/// the per-page path: file hash, page, contract, answer as published.
+#[test]
+fn a_whole_document_ocr_window_caches_every_page_it_answered() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 3);
+    enable_derived_cache(&conn, None);
+    admit_extract_demand(&conn, &attachment_id);
+    let file_bytes = std::fs::read(dir.path().join("escaneado.pdf")).expect("read fixture");
+
+    let renderer = fresh_renderer();
+    let provider = PdfModeProvider::new(None);
+    let contract = entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        provider.name(),
+        provider.model_id(),
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the extraction must succeed, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.pdf_calls.lock().expect("pdf calls").len(),
+        1,
+        "the three pages came back in one whole-document request"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "window mode renders no page"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 3, "every answered page is cached: {rows:?}");
+    for (index, row) in rows.iter().enumerate() {
+        let page = index as i64 + 1;
+        assert_eq!(row.page_number, page);
+        assert_eq!(row.source_hash, sha256_hex(&file_bytes));
+        assert_eq!(row.ocr_contract, contract);
+        assert_eq!(row.outcome, "text");
+        assert_eq!(
+            row.text_content,
+            format!("Contenido reconocido de la pagina {page} del documento escaneado"),
+            "the cached answer is the page's own answer"
+        );
+        assert_eq!(row.text_hash, sha256_hex(row.text_content.as_bytes()));
+    }
+    let methods: Vec<String> = conn
+        .prepare(
+            "SELECT method FROM bibliographic_page_texts WHERE attachment_id = ?1
+              ORDER BY page_number",
+        )
+        .expect("methods query")
+        .query_map([&attachment_id], |row| row.get(0))
+        .expect("methods map")
+        .collect::<Result<_, _>>()
+        .expect("methods collect");
+    assert_eq!(methods, vec!["ocr", "ocr", "ocr"], "pages publish as usual");
+}
+
+/// A-105: the cache key is the sha256 of the FILE the owner has, never of the
+/// bytes the OCR pass reads. A permissions-only PDF (empty user password) is
+/// decrypted and re-serialized before the provider sees it, so the two hashes
+/// differ — and the cached row must carry the file's, or the same article in
+/// another device's copy would never match.
+#[test]
+fn the_cached_ocr_key_is_the_original_file_bytes_not_the_decrypted_ones() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CRYPTWRK01", "Obra con permisos", "Resumen.");
+    // A blank page: nothing native to keep, so OCR owns it.
+    let encrypted = encrypt_with_empty_user_password(&make_text_pdf_pages(&[&[]]));
+    let path = write_temp_pdf(&dir, "cifrada.pdf", &encrypted);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "CRYPTATT01",
+        "linked_file",
+        Some(&path),
+        "cifrada.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, None);
+    admit_extract_demand(&conn, &attachment_id);
+
+    let basis = entropia_desktop_lib::bibliography::processing::read_native_extraction_basis(
+        &encrypted, None,
+    )
+    .expect("the permissions-only fixture opens");
+    assert_ne!(
+        basis.bytes, encrypted,
+        "the fixture is decrypted and re-serialized before OCR"
+    );
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Texto reconocido de la pagina cifrada");
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the extraction must succeed, got {outcome:?}"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0].source_hash,
+        sha256_hex(&encrypted),
+        "the key is the original file's hash"
+    );
+    assert_ne!(
+        rows[0].source_hash,
+        sha256_hex(&basis.bytes),
+        "the transformed bytes OCR read never become the key"
+    );
+}
+
+fn encrypt_with_empty_user_password(pdf: &[u8]) -> Vec<u8> {
+    use lopdf::{EncryptionState, EncryptionVersion, Permissions};
+    let mut document = lopdf::Document::load_mem(pdf).expect("load synthetic PDF");
+    // The key derivation reads the trailer's file id; lopdf's writer only mints
+    // one on save, after encryption would already need it.
+    document.trailer.set(
+        "ID",
+        lopdf::Object::Array(vec![
+            lopdf::Object::string_literal("entropia-pro-lite-ocr-fixture"),
+            lopdf::Object::string_literal("entropia-pro-lite-ocr-fixture"),
+        ]),
+    );
+    let state = EncryptionState::try_from(EncryptionVersion::V2 {
+        document: &document,
+        owner_password: "owner-secret",
+        user_password: "",
+        key_length: 128,
+        permissions: Permissions::empty(),
+    })
+    .expect("permissions-only encryption state");
+    let mut encrypted = document;
+    encrypted.encrypt(&state).expect("encrypt");
+    let mut bytes = Vec::new();
+    encrypted
+        .save_to(&mut bytes)
+        .expect("serialize encrypted PDF");
+    bytes
+}
+
+/// §2.3 / WU1: an EMPTY answer was paid for too. It is cached as
+/// `outcome='empty'` with no text, while the published page keeps its native
+/// row — the case without which the second device would send the page to
+/// GLM-OCR again.
+#[test]
+fn an_empty_ocr_answer_is_cached_as_empty_and_the_native_page_stays() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "EMPTYANS01",
+        "Obra con pagina sin texto",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "vacia.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "EMPTYATT01",
+        "linked_file",
+        Some(&path),
+        "vacia.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, None);
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("");
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a blank answer is not a failure, got {outcome:?}"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "the blank answer was paid for: {rows:?}");
+    assert_eq!(rows[0].outcome, "empty");
+    assert_eq!(rows[0].text_content, "");
+    assert_eq!(rows[0].text_hash, sha256_hex(b""));
+
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(method, "native", "the native row is kept, as before");
+    assert!(text.contains("ok"), "native text survives: {text}");
+}
+
+/// D1: the cache stores the RAW provider answer, and the publish path keeps
+/// converting it exactly once, as it did before T3. `ocr_markup_to_text` is
+/// NOT idempotent — a literal `<b>` the provider escaped as `&lt;b&gt;`
+/// survives one conversion and is stripped by a second — so converting at the
+/// capture site would publish text no baseline run ever produced, and a reader
+/// replaying the cache would publish something else again.
+#[test]
+fn the_cached_ocr_answer_is_the_raw_provider_answer() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "RAWANSWER1",
+        "Obra con literal escapado",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "literal.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "RAWATT0001",
+        "linked_file",
+        Some(&path),
+        "literal.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, None);
+    admit_extract_demand(&conn, &attachment_id);
+
+    let raw_answer = "<p>usa &lt;b&gt; para negrita</p>";
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(raw_answer);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the extraction must succeed, got {outcome:?}"
+    );
+
+    let (method, published) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(method, "ocr");
+    assert_eq!(
+        published, "usa <b> para negrita",
+        "one conversion, exactly as before T3"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].outcome, "text");
+    assert_eq!(
+        rows[0].text_content, raw_answer,
+        "the raw answer travels, not a conversion of it"
+    );
+    assert_eq!(rows[0].text_hash, sha256_hex(raw_answer.as_bytes()));
+
+    // T5's replay: the cached answer through `settled_page_row`, over the
+    // reading device's OWN native page, reproduces this device's row.
+    let native = entropia_desktop_lib::bibliography::processing::ExtractPageText {
+        page_number: 1,
+        method: "native".to_string(),
+        text_content: "texto nativo distinto del reconocido".to_string(),
+        text_hash: "hash-nativo".to_string(),
+        text_chars: 35,
+        quality: "sparse".to_string(),
+    };
+    let replayed = entropia_desktop_lib::bibliography::processing::settled_page_row(
+        native,
+        rows[0].text_content.clone(),
+    );
+    assert_eq!(replayed.method, method);
+    assert_eq!(replayed.text_content, published);
+    assert_eq!(replayed.text_hash, sha256_hex(published.as_bytes()));
+}
+
+/// §2.3: a definitive provider failure is not a result — it can happen again,
+/// so nothing is cached and the native row is published exactly as before.
+#[test]
+fn a_definitively_failed_ocr_page_is_not_cached() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "FAILPAGE01", "Obra con fallo de OCR", "Resumen.");
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "fallo.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "FAILATT001",
+        "linked_file",
+        Some(&path),
+        "fallo.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, None);
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = Arc::new(FailingNthOcrProvider {
+        calls: Mutex::new(0),
+        fail_on_call: 0,
+        text: String::new(),
+    });
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a definitive page failure keeps the native row, got {outcome:?}"
+    );
+
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("receipt");
+    let receipt: serde_json::Value = serde_json::from_str(&receipt).expect("receipt JSON");
+    assert_eq!(receipt["ocrFailedPages"], serde_json::json!([1]));
+    assert!(
+        derived_ocr_rows(&conn).is_empty(),
+        "a failed call is not a paid result"
+    );
+}
+
+/// §2.3 / WU1: the cache row is written by the publish transaction itself, so
+/// a publish that rolls back leaves no row behind — and no paid row either.
+#[test]
+fn a_rolled_back_publish_leaves_no_derived_cache_row() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "ROLLBACK01", "Obra revertida", "Resumen.");
+    enable_derived_cache(&conn, Some("account-a"));
+    let (task, output) = profile_publish_fixture(&conn, &item_id, vec![1_u8; 16]);
+
+    let transaction = conn.unchecked_transaction().expect("begin");
+    entropia_desktop_lib::bibliography::processing::publish_bibliography_profile_output(
+        &transaction,
+        &task,
+        &output,
+    )
+    .expect("publish inside the transaction");
+    assert_eq!(
+        derived_vector_rows(&transaction).len(),
+        1,
+        "the cache row lands in the publish transaction"
+    );
+    transaction.rollback().expect("rollback");
+
+    assert!(
+        derived_vector_rows(&conn).is_empty(),
+        "a rolled back publish leaves no cache row"
+    );
+    let published: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_item_embeddings",
+            [],
+            |row| row.get(0),
+        )
+        .expect("published vectors");
+    assert_eq!(published, 0, "neither row survives the rollback");
+}
+
+/// One staging generation plus a publish-ready work profile whose vector is
+/// exactly `embedding`, for the publish-level tests below (they call the
+/// publisher directly to observe the transaction boundary).
+fn profile_publish_fixture(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    embedding: Vec<u8>,
+) -> (repository::ClaimedTask, BibliographyProfileComputeOutput) {
+    let effective = effective_contract(conn);
+    let generation =
+        entropia_desktop_lib::bibliography::generation::ensure_staging_generation_for_contract(
+            conn,
+            &entropia_desktop_lib::bibliography::generation::EmbeddingContractRow {
+                contract_hash: effective.hash.clone(),
+                provider: effective.provider.clone(),
+                model: effective.model.clone(),
+                dimensions: effective.dimensions as i64,
+                chunking_contract: "chunk-v1".to_string(),
+            },
+            repository::now_ms(),
+        )
+        .expect("staging generation");
+    let task = repository::ClaimedTask {
+        task_id: "profile-publish-task".to_string(),
+        kind: "bibliography_profile".to_string(),
+        asset_id: String::new(),
+        domain: "bibliography".to_string(),
+        subject_kind: "item".to_string(),
+        subject_id: item_id.to_string(),
+        input_revision: 0,
+        input_fingerprint: String::new(),
+        contract_hash: effective.hash.clone(),
+        lease_epoch: 1,
+        attempt_number: 1,
+    };
+    let output = BibliographyProfileComputeOutput {
+        item_id: item_id.to_string(),
+        generation_id: generation.id.clone(),
+        chunks: Vec::new(),
+        template_version: "template-v1".to_string(),
+        canonical_text: "texto canonico".to_string(),
+        input_hash: "profile-input-hash".to_string(),
+        field_provenance_json: "[]".to_string(),
+        profile_revision: 1,
+        model: "fake/model".to_string(),
+        contract: "fake-contract".to_string(),
+        dimensions: 4,
+        embedding,
+    };
+    (task, output)
+}
+
+/// §2.3 policy: a cache write that cannot land never fails nor rolls back the
+/// publish that already paid for the result. Here the derived writer rejects
+/// the vector on its own width check (four dimensions declared, a three-byte
+/// blob), and the paid row still commits, unchanged.
+#[test]
+fn a_failing_cache_write_does_not_fail_or_roll_back_the_publish() {
+    let (_dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "CACHEFAIL1",
+        "Obra con escritura rechazada",
+        "Resumen.",
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let rejected = vec![1_u8, 2, 3];
+    let (task, output) = profile_publish_fixture(&conn, &item_id, rejected.clone());
+
+    entropia_desktop_lib::bibliography::processing::publish_bibliography_profile_output(
+        &conn, &task, &output,
+    )
+    .expect("a rejected cache write must not fail the paid publish");
+
+    let published: (i64, Vec<u8>) = conn
+        .query_row(
+            "SELECT dimensions, embedding FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&item_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("the paid row is published");
+    assert_eq!(published.0, 4);
+    assert_eq!(
+        published.1, rejected,
+        "the published vector is exactly what the run paid for"
+    );
+    assert!(
+        derived_vector_rows(&conn).is_empty(),
+        "the rejected cache write leaves no row behind"
+    );
+}
+
+/// §2.3: `ensure_sync_schema` creates the cache tables at setup, and a
+/// processing connection can reach a publish before that bootstrap ran. The
+/// cache is an optimization, never a condition of the paid work: without the
+/// tables the publish still commits, and nothing is cached.
+#[test]
+fn a_publish_without_the_sync_schema_still_publishes_and_caches_nothing() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "NOSYNC0001", "Obra sin sync", "Resumen.");
+    assert_eq!(
+        count_derived_tables(&conn),
+        0,
+        "this archive never ran the sync bootstrap"
+    );
+    admit_profile_demand(&conn, &item_id);
+
+    let outcome = run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the paid publish must not fail because of the cache, got {outcome:?}"
+    );
+    let published: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM bibliographic_item_embeddings WHERE item_id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("published vector count");
+    assert_eq!(published, 1, "the vector is published as always");
+}
+
+/// Existing behavior this slice touches: the rows the Bibliografía publishes
+/// (work and pasaje vectors, page texts) are byte-identical whether or not the
+/// derived cache is present — the cache only adds rows beside them.
+#[test]
+fn the_published_rows_do_not_change_when_the_derived_cache_is_present() {
+    let without = profile_and_extract_products(false);
+    let with = profile_and_extract_products(true);
+    assert_eq!(
+        without, with,
+        "the cache must not touch what the Bibliografía publishes"
+    );
+}
+
+/// The product rows of one extract + profile run, ids and timestamps left out
+/// because they are generated per archive, not inputs.
+type PublishedProducts = (
+    Vec<(String, String, i64, Vec<u8>, String, i64)>,
+    Vec<(i64, i64, Vec<u8>, String, String, String)>,
+    Vec<(i64, String, String, String, i64, String)>,
+);
+
+fn profile_and_extract_products(cache: bool) -> PublishedProducts {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 2);
+    if cache {
+        enable_derived_cache(&conn, Some("account-a"));
+    }
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(
+        "Contenido reconocido de la pagina escaneada con longitud suficiente para ser rico",
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the extraction must succeed, got {outcome:?}"
+    );
+
+    let item_id: String = conn
+        .query_row(
+            "SELECT item_id FROM zotero_attachments WHERE id = ?1",
+            [&attachment_id],
+            |row| row.get(0),
+        )
+        .expect("attachment parent");
+    admit_profile_demand(&conn, &item_id);
+    let outcome = run_profile_task(&dir, &conn, FakeProfileEmbedder::ok(4));
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the profile task must succeed, got {outcome:?}"
+    );
+
+    let work: Vec<(String, String, i64, Vec<u8>, String, i64)> = conn
+        .prepare(
+            "SELECT embedding_contract, embedding_model, dimensions, embedding, input_hash,
+                    profile_revision
+               FROM bibliographic_item_embeddings ORDER BY item_id",
+        )
+        .expect("work vectors query")
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .expect("work vectors map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("work vectors collect");
+
+    let chunks: Vec<(i64, i64, Vec<u8>, String, String, String)> = conn
+        .prepare(
+            "SELECT c.ordinal, e.dimensions, e.embedding, e.input_hash, e.embedding_model,
+                    e.embedding_contract
+               FROM bibliographic_chunks c
+               JOIN bibliographic_chunk_embeddings e ON e.chunk_id = c.id
+              WHERE c.item_id = ?1 ORDER BY c.ordinal",
+        )
+        .expect("chunk vectors query")
+        .query_map([&item_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .expect("chunk vectors map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("chunk vectors collect");
+
+    let pages: Vec<(i64, String, String, String, i64, String)> = conn
+        .prepare(
+            "SELECT page_number, method, text_content, text_hash, text_chars, quality
+               FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+        )
+        .expect("page texts query")
+        .query_map([&attachment_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .expect("page texts map")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("page texts collect");
+
+    assert_eq!(work.len(), 1, "one work vector");
+    assert!(!chunks.is_empty(), "the extracted pages chunk");
+    assert_eq!(pages.len(), 2, "both pages are published");
+    (work, chunks, pages)
+}
+
+// ── T4: read the derived cache before paying (plan §2.4 / WU2) ─────────────
+//
+// The device that did not pay must publish exactly what paying would have
+// published, with no provider call, from the rows the account already owns
+// (§2.4, S3, S8). These tests drive the real claim → run → publish path with a
+// counting embedder and read back the published rows byte for byte.
+
+/// The profile key a ficha vector travels under: the hash the profile row
+/// stamps, and the canonical text whose vector a computation would produce.
+fn profile_keys(conn: &rusqlite::Connection, item_id: &str) -> (String, String) {
+    let input = entropia_desktop_lib::bibliography::profile::profile_input_for_item(conn, item_id)
+        .expect("profile input")
+        .expect("the work exists in the catalog");
+    let built = entropia_desktop_lib::bibliography::profile::build_profile(&input);
+    (built.input_hash, built.canonical_text)
+}
+
+/// The `(text, text_hash)` pairs a profile run segments for one work with a
+/// single attachment — the keys pasaje vectors are cached under (§2.4).
+fn item_chunk_keys(conn: &rusqlite::Connection, item_id: &str) -> Vec<(String, String)> {
+    let pages =
+        entropia_desktop_lib::bibliography::repository::chunkable_pages_for_item(conn, item_id)
+            .expect("chunkable pages");
+    let inputs: Vec<entropia_desktop_lib::bibliography::chunks::PageInput> = pages
+        .iter()
+        .map(
+            |page| entropia_desktop_lib::bibliography::chunks::PageInput {
+                page_number: page.page_number,
+                text: page.text_content.clone(),
+            },
+        )
+        .collect();
+    entropia_desktop_lib::bibliography::chunks::segment_pages(&inputs)
+        .into_iter()
+        .map(|chunk| (chunk.text, chunk.hash))
+        .collect()
+}
+
+/// Little-endian f32 bytes, the shape every published and cached vector has.
+fn vector_blob(vector: &[f32]) -> Vec<u8> {
+    vector
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// A vector no `RecordingEmbedder` would compute, so a published blob proves
+/// the cache answered instead of the provider.
+fn marker_blob(text: &str) -> Vec<u8> {
+    vector_blob(&[(text.len() % 89) as f32 + 0.375, -1.5, 3.25, 0.0625])
+}
+
+/// A vector another device of the account already paid for and pushed.
+#[allow(clippy::too_many_arguments)]
+fn seed_cached_vector(
+    conn: &rusqlite::Connection,
+    account: &str,
+    contract_hash: &str,
+    input_hash: &str,
+    dimensions: i64,
+    blob: &[u8],
+) {
+    conn.execute(
+        "INSERT INTO sync_derived_vectors
+           (account_id, contract_hash, input_hash, dimensions, embedding, origin, pushed, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'remote', 1, 1)",
+        rusqlite::params![account, contract_hash, input_hash, dimensions, blob],
+    )
+    .expect("seed cached vector");
+}
+
+/// `(generation, contract, model, dimensions, embedding, input_hash,
+/// profile_revision)` of the published ficha vector.
+type PublishedItemVector = (String, String, String, i64, Vec<u8>, String, i64);
+
+fn published_item_vector(conn: &rusqlite::Connection, item_id: &str) -> PublishedItemVector {
+    conn.query_row(
+        "SELECT generation_id, embedding_contract, embedding_model, dimensions, embedding,
+                input_hash, profile_revision
+           FROM bibliographic_item_embeddings WHERE item_id = ?1",
+        [item_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        },
+    )
+    .expect("published work vector")
+}
+
+const T4_PAGE_A: &str = "Contenido de la primera pagina con suficiente longitud para existir por si mismo en el indice. ";
+const T4_PAGE_B: &str =
+    "Contenido de la segunda pagina tambien extenso para forzar un segundo fragmento estructural. ";
+const T4_PAGE_C: &str =
+    "Tercera pagina distinta que ningun otro dispositivo de la cuenta habia pagado antes. ";
+
+fn t4_pages(texts: &[&str]) -> Vec<(i64, String)> {
+    texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| (index as i64 + 1, text.repeat(6)))
+        .collect()
+}
+
+fn seed_paged_work(
+    conn: &mut rusqlite::Connection,
+    key: &str,
+    title: &str,
+    attachment_key: &str,
+    texts: &[&str],
+) -> String {
+    let item_id = seed_catalog(conn, key, title, "Resumen.");
+    let pages = t4_pages(texts);
+    let borrowed: Vec<(i64, &str)> = pages
+        .iter()
+        .map(|(number, text)| (*number, text.as_str()))
+        .collect();
+    seed_attachment_with_pages(conn, &item_id, attachment_key, &borrowed);
+    item_id
+}
+
+/// WU2 / S3: a ficha vector another device of the account already paid for is
+/// published byte for byte — same generation contract, stamps and profile
+/// revision as a computed one — and the provider is never called for it.
+#[test]
+fn a_cached_profile_vector_publishes_byte_for_byte_without_a_provider_call() {
+    let (computed_dir, mut computed) = migrated_db();
+    seed_library(&computed, "lib-1", Some(7));
+    let computed_item = seed_catalog(
+        &mut computed,
+        "CACHEHIT1",
+        "Obra cacheada",
+        "Resumen cacheado.",
+    );
+
+    let (cached_dir, mut cached) = migrated_db();
+    seed_library(&cached, "lib-1", Some(7));
+    let cached_item = seed_catalog(
+        &mut cached,
+        "CACHEHIT1",
+        "Obra cacheada",
+        "Resumen cacheado.",
+    );
+    enable_derived_cache(&cached, Some("account-a"));
+    let effective = effective_contract(&cached);
+    let (input_hash, canonical_text) = profile_keys(&cached, &cached_item);
+    let computed_blob = vector_blob(&RecordingEmbedder::vector_for(&canonical_text));
+    seed_cached_vector(
+        &cached,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &computed_blob,
+    );
+
+    admit_profile_demand(&computed, &computed_item);
+    admit_profile_demand(&cached, &cached_item);
+    let computed_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&computed_dir, &computed, Arc::clone(&computed_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the baseline profile must succeed"
+    );
+    let cached_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&cached_dir, &cached, Arc::clone(&cached_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the cached profile must succeed"
+    );
+
+    assert_eq!(
+        computed_embedder.singles.lock().expect("singles").len(),
+        1,
+        "the baseline pays for its vector"
+    );
+    assert!(
+        cached_embedder.singles.lock().expect("singles").is_empty(),
+        "a cached ficha costs no provider call: {:?}",
+        cached_embedder.singles.lock().expect("singles")
+    );
+    assert!(
+        cached_embedder.batches.lock().expect("batches").is_empty(),
+        "a work without attachments has no pasaje to embed"
+    );
+
+    let computed_row = published_item_vector(&computed, &computed_item);
+    let cached_row = published_item_vector(&cached, &cached_item);
+    assert_eq!(
+        cached_row.4, computed_blob,
+        "the published bytes are the cached bytes, not a re-encoding"
+    );
+    assert_eq!(
+        cached_row.4, computed_row.4,
+        "a hit publishes what computing publishes"
+    );
+    assert_eq!(
+        (
+            cached_row.1.clone(),
+            cached_row.2.clone(),
+            cached_row.3,
+            cached_row.5.clone(),
+            cached_row.6
+        ),
+        (
+            computed_row.1.clone(),
+            computed_row.2.clone(),
+            computed_row.3,
+            computed_row.5.clone(),
+            computed_row.6
+        ),
+        "same contract, model, width, input hash and profile revision"
+    );
+    assert_eq!(
+        cached_row.6, 1,
+        "the first profile revision, exactly as a computed run"
+    );
+    for (conn, row) in [(&computed, &computed_row), (&cached, &cached_row)] {
+        let contract_hash: String = conn
+            .query_row(
+                "SELECT contract_hash FROM bibliographic_index_generations WHERE id = ?1",
+                [&row.0],
+                |row| row.get(0),
+            )
+            .expect("published generation");
+        assert_eq!(
+            contract_hash, effective.hash,
+            "the hit publishes into the shared contract's generation"
+        );
+    }
+    assert_eq!(
+        generation_statuses(&computed),
+        generation_statuses(&cached),
+        "the hit leaves the generation in the same state as a computed run"
+    );
+}
+
+/// WU2 / S3: a work whose ficha AND pasajes are all cached reaches its
+/// "fichas 1/1 · pasajes 2/2" with zero provider calls, and every published
+/// vector is the cached blob.
+#[test]
+fn a_fully_cached_work_publishes_profile_and_pasajes_without_a_provider_call() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEFULL1",
+        "Obra completa cacheada",
+        "CACHEFULLATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("cacheada");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2, "the two long pages chunk separately");
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "a fully cached work must still publish"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the cached ficha costs no provider call: {:?}",
+        embedder.singles.lock().expect("singles")
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no cached pasaje reaches embed_many: {:?}",
+        embedder.batches.lock().expect("batches")
+    );
+
+    let published = chunk_vectors(&conn, &item_id);
+    assert_eq!(published.len(), 2, "both pasajes are published");
+    for (text, blob) in &published {
+        assert!(
+            chunks.iter().any(|(chunk_text, _)| chunk_text == text),
+            "the seeded key names the published chunk text"
+        );
+        assert_eq!(
+            blob,
+            &marker_blob(text),
+            "the published pasaje vector is the cached blob"
+        );
+    }
+}
+
+/// WU2: with only part of the pasajes cached, exactly the misses reach the
+/// provider — never the cached ones — and both kinds publish their right vector.
+#[test]
+fn a_partial_pasaje_cache_sends_only_the_true_misses_to_the_provider() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEPART1",
+        "Obra parcialmente cacheada",
+        "CACHEPARTATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &marker_blob("ficha"),
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2);
+    let (cached_text, cached_hash) = chunks[0].clone();
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &cached_hash,
+        4,
+        &marker_blob(&cached_text),
+    );
+    let missing: Vec<String> = chunks
+        .iter()
+        .filter(|(_, hash)| *hash != cached_hash)
+        .map(|(text, _)| text.clone())
+        .collect();
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the partial cache still publishes the whole work"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the cached ficha costs no provider call"
+    );
+    let batches = embedder.batches.lock().expect("batches").clone();
+    assert_eq!(batches.len(), 1, "one wave of true misses: {batches:?}");
+    assert_eq!(batches[0], missing, "only the uncached pasaje is paid for");
+
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        if missing.contains(&text) {
+            assert_eq!(
+                blob,
+                vector_blob(&RecordingEmbedder::vector_for(&text)),
+                "a miss publishes its computed vector"
+            );
+        } else {
+            assert_eq!(
+                blob,
+                marker_blob(&text),
+                "a hit publishes exactly the cached vector"
+            );
+        }
+    }
+}
+
+/// WU2: another embedding contract is a different vector space; a row under a
+/// different contract hash is never served.
+#[test]
+fn a_cached_vector_under_another_contract_is_never_served() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CACHECTR01", "Obra de otro contrato", "Resumen.");
+    enable_derived_cache(&conn, Some("account-a"));
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        "another-contract-hash",
+        &input_hash,
+        4,
+        &marker_blob("otro"),
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "a different contract is a different key: the provider is called"
+    );
+    let published = published_item_vector(&conn, &item_id);
+    assert_eq!(
+        published.4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector is published, never the other contract's row"
+    );
+}
+
+/// A right-width blob whose f32 values are unusable. Rows travel through the
+/// server once transport lands (T8), so they are untrusted input (§2.4).
+fn non_finite_blob() -> Vec<u8> {
+    [f32::NAN, 0.5, f32::INFINITY, f32::NEG_INFINITY]
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+/// WU2 / §2.4: a cached row is untrusted input. A blob of the right width whose
+/// f32 values are not all finite is unusable — the same validation the computed
+/// path applies — so it is skipped and the provider computes the real vector.
+#[test]
+fn a_non_finite_cached_blob_is_ignored_and_the_provider_is_called() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "CACHENAN01", "Obra con NaN cacheado", "Resumen.");
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    let nan_blob = non_finite_blob();
+    assert_eq!(
+        nan_blob.len(),
+        16,
+        "right width: only the finiteness check can reject it"
+    );
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &nan_blob,
+    );
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "a non-finite cached vector is unusable: the provider is called"
+    );
+    let published = published_item_vector(&conn, &item_id);
+    assert_eq!(
+        published.4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector is published"
+    );
+    assert_ne!(published.4, nan_blob, "never the unusable blob");
+}
+
+/// WU2: the width rule of §2.4 holds on read. A cached blob whose byte width
+/// does not match the contract is skipped (and logged), so the provider pays
+/// for the real vector; a correctly sized ficha row still hits.
+#[test]
+fn a_wrong_width_cached_blob_is_skipped_and_the_provider_pays() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEWIDE1",
+        "Obra con blob torcido",
+        "CACHEWIDEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _canonical) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("ficha ancha");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    assert_eq!(chunks.len(), 2);
+    for (_, hash) in &chunks {
+        // dimensions says 4 (16 bytes) but the blob is 8 bytes: unusable.
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &[1.0_f32.to_le_bytes(), 2.0_f32.to_le_bytes()].concat(),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must succeed"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the correctly sized ficha row is still a hit"
+    );
+    let sent: Vec<String> = embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let mut expected: Vec<String> = chunks.iter().map(|(text, _)| text.clone()).collect();
+    expected.sort();
+    let mut observed = sent.clone();
+    observed.sort();
+    assert_eq!(
+        observed, expected,
+        "every wrong-width pasaje is re-embedded"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_id).4,
+        profile_marker,
+        "the ficha hit publishes the cached blob"
+    );
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        assert_eq!(
+            blob,
+            vector_blob(&RecordingEmbedder::vector_for(&text)),
+            "a skipped row publishes the computed vector"
+        );
+    }
+    // The unusable rows stay where they are: reading never rewrites the cache.
+    let rows = derived_vector_rows(&conn);
+    assert_eq!(rows.len(), 3, "two pasaje rows and one ficha row: {rows:?}");
+}
+
+/// WU2 / §2.9 (D6): only the effective account's rows are read. The very same
+/// cache keys exist under another account with different vectors; the session
+/// account gets its own bytes, and a key only the other account owns pays.
+/// A real read, not a vacuous one: account B's rows do answer.
+#[test]
+fn only_the_effective_accounts_cached_rows_answer_a_run() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_b = seed_paged_work(
+        &mut conn,
+        "CACHEACCB1",
+        "Obra de la cuenta B",
+        "CACHEACCATTB",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    let item_a_only = seed_paged_work(
+        &mut conn,
+        "CACHEACCA1",
+        "Obra solo de la cuenta A",
+        "CACHEACCATTA",
+        &[T4_PAGE_C],
+    );
+    enable_derived_cache(&conn, Some("account-b"));
+    let effective = effective_contract(&conn);
+
+    let (b_profile_hash, _) = profile_keys(&conn, &item_b);
+    for account in ["account-a", "account-b"] {
+        let blob = marker_blob(account);
+        seed_cached_vector(&conn, account, &effective.hash, &b_profile_hash, 4, &blob);
+        for (text, hash) in item_chunk_keys(&conn, &item_b) {
+            seed_cached_vector(
+                &conn,
+                account,
+                &effective.hash,
+                &hash,
+                4,
+                &marker_blob(&text),
+            );
+        }
+    }
+    let (a_only_profile_hash, a_only_canonical) = profile_keys(&conn, &item_a_only);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &a_only_profile_hash,
+        4,
+        &marker_blob("cuenta a"),
+    );
+    let a_only_chunks = item_chunk_keys(&conn, &item_a_only);
+    for (text, hash) in &a_only_chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_b);
+    let b_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&b_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "B's cached work must publish"
+    );
+    assert!(
+        b_embedder.singles.lock().expect("singles").is_empty(),
+        "B's own ficha row answers"
+    );
+    assert!(
+        b_embedder.batches.lock().expect("batches").is_empty(),
+        "B's own pasaje rows answer"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_b).4,
+        marker_blob("account-b"),
+        "the published ficha vector is B's row, never A's"
+    );
+    for (text, blob) in chunk_vectors(&conn, &item_b) {
+        assert_eq!(
+            blob,
+            marker_blob(&text),
+            "the published pasaje vectors are B's rows"
+        );
+    }
+
+    admit_profile_demand(&conn, &item_a_only);
+    let a_embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&a_embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the work only account A paid for still publishes"
+    );
+    assert_eq!(
+        a_embedder.singles.lock().expect("singles").len(),
+        1,
+        "rows that belong to another account are inert: the provider is called"
+    );
+    let sent: Vec<String> = a_embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .cloned()
+        .collect();
+    assert_eq!(
+        sent,
+        a_only_chunks
+            .iter()
+            .map(|(text, _)| text.clone())
+            .collect::<Vec<_>>(),
+        "another account's pasaje rows are never served"
+    );
+    assert_eq!(
+        published_item_vector(&conn, &item_a_only).4,
+        vector_blob(&RecordingEmbedder::vector_for(&a_only_canonical)),
+        "the computed vector is published, never account A's row"
+    );
+}
+
+/// S8: without a session, the archive's bound account still owns what it paid
+/// for, so reprocessing it makes no paid call.
+#[test]
+fn without_a_session_the_bound_accounts_cached_work_costs_nothing() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHESESS1",
+        "Obra sin sesion",
+        "CACHESESSATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, None);
+    // The archive was bound to this account before the logout; the mark
+    // survives it (§2.9), and reading is never paying twice for it.
+    entropia_desktop_lib::sync::session::meta_set(&conn, "derived_bound_account", "account-a")
+        .expect("bound account mark");
+    let effective = effective_contract(&conn);
+
+    let (profile_hash, _) = profile_keys(&conn, &item_id);
+    let profile_marker = marker_blob("sin sesion");
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &profile_marker,
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the offline profile must publish"
+    );
+
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "no session still means no ficha payment"
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no session still means no pasaje payment"
+    );
+    assert_eq!(published_item_vector(&conn, &item_id).4, profile_marker);
+    for (text, blob) in chunk_vectors(&conn, &item_id) {
+        assert_eq!(blob, marker_blob(&text));
+    }
+}
+
+/// S8's other half: with no session AND no bound account, the archive cannot
+/// name an owner, so nothing in the cache may answer — and the provider is
+/// called as before.
+#[test]
+fn without_a_session_or_a_bound_account_the_cache_answers_nothing() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHENONE1",
+        "Obra sin duenio",
+        "CACHENONEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_cache(&conn, None);
+    let effective = effective_contract(&conn);
+    let (profile_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &profile_hash,
+        4,
+        &marker_blob("ajena"),
+    );
+    let chunks = item_chunk_keys(&conn, &item_id);
+    for (text, hash) in &chunks {
+        seed_cached_vector(
+            &conn,
+            "account-a",
+            &effective.hash,
+            hash,
+            4,
+            &marker_blob(text),
+        );
+    }
+
+    admit_profile_demand(&conn, &item_id);
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&embedder), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the profile must publish"
+    );
+
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "an unnamed archive pays for its ficha"
+    );
+    let sent = embedder
+        .batches
+        .lock()
+        .expect("batches")
+        .iter()
+        .flatten()
+        .count();
+    assert_eq!(sent, chunks.len(), "and for every pasaje");
+    assert_eq!(
+        published_item_vector(&conn, &item_id).4,
+        vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+        "the computed vector wins: the cache never answers for an unnamed archive"
+    );
+}
+
+/// PRESERVE: the local reuse of `reusable_chunk_embeddings` is untouched — with
+/// the derived tables present but no row the archive may read, a re-profile
+/// still embeds none of the unchanged pasajes again.
+#[test]
+fn local_chunk_reuse_still_skips_the_provider_with_an_empty_derived_cache() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "CACHEREUSE1",
+        "Obra reusada localmente",
+        "CACHEREUSEATT1",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    // Tables present, no session and no binding: nothing in the cache can
+    // answer, so only the pre-existing local reuse can.
+    enable_derived_cache(&conn, None);
+
+    admit_profile_demand(&conn, &item_id);
+    let first = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&first), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the first profile pays"
+    );
+    assert_eq!(
+        first.batches.lock().expect("batches").len(),
+        1,
+        "the first run embeds its pasajes"
+    );
+    let before = chunk_vectors(&conn, &item_id);
+
+    admit_profile_demand(&conn, &item_id);
+    let second = RecordingEmbedder::new("fake/model", None);
+    assert!(
+        matches!(
+            run_profile_with(&dir, &conn, Arc::clone(&second), 8),
+            RunOneOutcome::Succeeded { .. }
+        ),
+        "the re-profile publishes"
+    );
+    assert!(
+        second.batches.lock().expect("batches").is_empty(),
+        "unchanged chunks are still reused from the published rows"
+    );
+    assert_eq!(
+        chunk_vectors(&conn, &item_id),
+        before,
+        "the re-profile republished the same vectors"
+    );
+}
+
+// ── T5: read the OCR cache before paying (plan §2.4 / WU2) ─────────────────
+//
+// The paying device cached every answer under `(sha256 of the original file,
+// page, OCR contract)` (T3). The reading device replays its OWN native page
+// through `settled_page_row` with the RAW cached answer (L6), so it publishes
+// what paying would have published — and it plans its provider requests from
+// the misses only: a cached page is physically cut out of every whole-PDF
+// window (§2.4), because dropping it from `needing` alone would still ship it
+// inside the window that covers a pending page.
+
+/// The contract a provider's answers are cached under (D3).
+fn provider_contract(provider: &dyn PageOcrProvider) -> String {
+    entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        provider.name(),
+        provider.model_id(),
+    )
+}
+
+/// One answer another device of the account already paid for and pushed.
+fn seed_cached_ocr_page(
+    conn: &rusqlite::Connection,
+    account: &str,
+    source_hash: &str,
+    page_number: i64,
+    ocr_contract: &str,
+    outcome: &str,
+    text: &str,
+) {
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'remote', 1, 1)",
+        rusqlite::params![
+            account,
+            source_hash,
+            page_number,
+            ocr_contract,
+            outcome,
+            text,
+            sha256_hex(text.as_bytes())
+        ],
+    )
+    .expect("seed cached OCR page");
+}
+
+fn fixture_hash(dir: &tempfile::TempDir, name: &str) -> String {
+    sha256_hex(&std::fs::read(dir.path().join(name)).expect("read the fixture file"))
+}
+
+/// `(page, method, text_content, text_hash, text_chars, quality)` of every
+/// published page row, in page order.
+type PublishedPage = (i64, String, String, String, i64, String);
+
+fn published_pages(conn: &rusqlite::Connection, attachment_id: &str) -> Vec<PublishedPage> {
+    conn.prepare(
+        "SELECT page_number, method, text_content, text_hash, text_chars, quality
+           FROM bibliographic_page_texts WHERE attachment_id = ?1 ORDER BY page_number",
+    )
+    .expect("published pages query")
+    .query_map([attachment_id], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+        ))
+    })
+    .expect("published pages map")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("published pages collect")
+}
+
+/// A provider that reads whole PDFs, logs every requested range, and can be
+/// tuned to the `pages_per_request` the window plan is asserted on.
+struct RangeRecordingProvider {
+    ranges: Mutex<Vec<(u32, u32)>>,
+    page_calls: Mutex<usize>,
+    pages_per_request: usize,
+}
+
+impl RangeRecordingProvider {
+    fn new(pages_per_request: usize) -> Arc<Self> {
+        Arc::new(Self {
+            ranges: Mutex::new(Vec::new()),
+            page_calls: Mutex::new(0),
+            pages_per_request,
+        })
+    }
+
+    fn answer(page: u32) -> String {
+        format!("Contenido reconocido de la pagina {page} del documento escaneado")
+    }
+}
+
+impl PageOcrProvider for RangeRecordingProvider {
+    fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+        *self.page_calls.lock().expect("page calls") += 1;
+        Ok("Texto reconocido por pagina de respaldo con longitud suficiente para ser rico".into())
+    }
+
+    fn pdf_pages_per_request(&self) -> Option<usize> {
+        Some(self.pages_per_request)
+    }
+
+    fn recognize_pdf_pages(
+        &self,
+        _pdf_bytes: &[u8],
+        first_page: u32,
+        last_page: u32,
+    ) -> Result<Vec<String>, String> {
+        self.ranges
+            .lock()
+            .expect("ranges")
+            .push((first_page, last_page));
+        Ok((first_page..=last_page).map(Self::answer).collect())
+    }
+
+    fn name(&self) -> &str {
+        "range-recorder"
+    }
+}
+
+/// WU2 / S3: the same page an owner paid for is published on this device from
+/// the cached answer — same method, text and stamps as the paid run — with
+/// ZERO provider calls and nothing rendered. The hit is not re-cached as a new
+/// local row: it stays the remote row it came from.
+#[test]
+fn a_cached_ocr_answer_publishes_like_a_paid_run_without_a_provider_call() {
+    let answer = "Respuesta reconocida de la unica pagina";
+
+    // The baseline device pays for the answer.
+    let (paid_dir, mut paid) = migrated_db();
+    let (_library, paid_attachment) = seed_scanned_pdf(&paid_dir, &mut paid, 1);
+    admit_extract_demand(&paid, &paid_attachment);
+    let paid_renderer = fresh_renderer();
+    let paid_provider = FakeOcrProvider::with_text(answer);
+    let paid_outcome =
+        run_extract_with_provider(&paid_dir, &paid, &paid_renderer, paid_provider.clone());
+    assert!(
+        matches!(paid_outcome, RunOneOutcome::Succeeded { .. }),
+        "{paid_outcome:?}"
+    );
+    assert_eq!(
+        paid_provider.calls.lock().expect("calls").len(),
+        1,
+        "the baseline pays for its page"
+    );
+    let paid_pages = published_pages(&paid, &paid_attachment);
+
+    // The reading device replays the owner's answer.
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("esta respuesta no debe usarse");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        answer,
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "a cached page costs no provider call: {:?}",
+        provider.calls.lock().expect("calls")
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "a cached page is settled before any render"
+    );
+    let cached_pages = published_pages(&conn, &attachment_id);
+    assert_eq!(
+        cached_pages, paid_pages,
+        "a cached answer publishes exactly what paying publishes"
+    );
+    assert_eq!(
+        cached_pages[0].1, "ocr",
+        "a text answer is method `ocr` on both devices"
+    );
+
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(rows.len(), 1, "the hit is not re-cached: {rows:?}");
+    assert_eq!(rows[0].origin, "remote", "the owner's row is left alone");
+    assert_eq!(rows[0].account, "account-a");
+}
+
+/// WU2: an EMPTY answer was paid for too. A hit replays through
+/// `settled_page_row` against the reading device's own native page, so the
+/// page keeps its native row — exactly what a paid empty answer leaves — and
+/// GLM-OCR is never asked again.
+#[test]
+fn a_cached_empty_ocr_answer_costs_nothing_and_keeps_the_native_page() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(
+        &mut conn,
+        "CACHEMPTY1",
+        "Obra con respuesta vacia",
+        "Resumen.",
+    );
+    let pdf = make_text_pdf_pages(&[&[(50.0, 750.0, "ok")]]);
+    let path = write_temp_pdf(&dir, "vacia.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "CACHEMPTYATT1",
+        "linked_file",
+        Some(&path),
+        "vacia.pdf",
+        "application/pdf",
+    );
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "vacia.pdf"),
+        1,
+        &contract,
+        "empty",
+        "",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "a cached empty answer is never re-sent to GLM-OCR"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "no page is rendered for a cached answer"
+    );
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(
+        method, "native",
+        "the native row is kept, as a paid empty answer"
+    );
+    assert!(text.contains("ok"), "native text survives: {text}");
+    assert_eq!(
+        derived_ocr_rows(&conn).len(),
+        1,
+        "the empty hit is not re-cached as a local row"
+    );
+}
+
+/// WU2 / D3: a page cached under another OCR contract is a different answer;
+/// it is never served and the provider answers under the current contract.
+#[test]
+fn a_cached_ocr_answer_under_another_contract_is_not_served() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta del contrato vigente");
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        "ocr-v1:other-provider:other-model:p1",
+        "text",
+        "Respuesta de otro contrato",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "another contract is a different key: the provider is called"
+    );
+    let (method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(method, "ocr");
+    assert_eq!(text, "Respuesta del contrato vigente");
+}
+
+/// WU2 / §2.9 (D6): only the effective account's rows answer. The very same
+/// cache key exists under another account, so this is a real read: those rows
+/// are present and inert, and this account pays.
+#[test]
+fn another_accounts_cached_ocr_page_never_answers() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-b"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta pagada por la cuenta B");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        "Respuesta privada de la cuenta A",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "another account's row is inert: the provider is called"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta pagada por la cuenta B");
+    let rows = derived_ocr_rows(&conn);
+    let a_rows: Vec<&CachedOcrPage> = rows
+        .iter()
+        .filter(|row| row.account == "account-a")
+        .collect();
+    assert_eq!(
+        a_rows.len(),
+        1,
+        "reading never rewrites the other account's row"
+    );
+    assert_eq!(a_rows[0].text_content, "Respuesta privada de la cuenta A");
+}
+
+/// WU2 / §2.4: cached rows are untrusted input (they travel through the
+/// server). A row whose `text_hash` does not match its own text is unusable:
+/// it is skipped, logged once, never deleted, and the provider answers.
+#[test]
+fn a_corrupted_cached_ocr_row_is_ignored_and_the_provider_is_called() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("Respuesta del proveedor vigente");
+    let contract = provider_contract(provider.as_ref());
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, 1, ?3, 'text', 'texto que no coincide con su hash',
+                 ?4, 'remote', 1, 1)",
+        rusqlite::params![
+            "account-a",
+            fixture_hash(&dir, "escaneado.pdf"),
+            contract,
+            sha256_hex(b"un hash de otro texto"),
+        ],
+    )
+    .expect("seed corrupted OCR row");
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "a corrupted row never answers: the provider is called"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta del proveedor vigente");
+    let rows = derived_ocr_rows(&conn);
+    assert_eq!(
+        rows.len(),
+        1,
+        "the corrupted row is never repaired, and first writer wins: {rows:?}"
+    );
+    assert_eq!(rows[0].text_content, "texto que no coincide con su hash");
+    assert_eq!(rows[0].text_hash, sha256_hex(b"un hash de otro texto"));
+}
+
+/// S8: without a session, the archive's bound account still owns what it paid
+/// for, so replaying its cached OCR costs nothing.
+#[test]
+fn without_a_session_the_bound_accounts_cached_ocr_costs_nothing() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, None);
+    // The archive was bound to this account before the logout; the mark
+    // survives it (§2.9), and reading is never paying twice for it.
+    entropia_desktop_lib::sync::session::meta_set(&conn, "derived_bound_account", "account-a")
+        .expect("bound account mark");
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("respuesta no usada");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "text",
+        "Respuesta pagada antes del logout",
+    );
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "no session still means no OCR payment for the bound account's pages"
+    );
+    let (_method, text) = published_page_text(&conn, &attachment_id, 1);
+    assert_eq!(text, "Respuesta pagada antes del logout");
+}
+
+/// What one ten-page scan run observed, for the window assertions.
+struct WindowScanRun {
+    ranges: Vec<(u32, u32)>,
+    page_calls: usize,
+    cached: Vec<(i64, String)>,
+    published: Vec<PublishedPage>,
+}
+
+/// A ten-page scanned PDF with `cached_pages` already paid for by the account
+/// and every other page missing, processed by a whole-document provider whose
+/// own limit (100) is wider than the document.
+fn run_ten_page_scan_with_cached_pages(cached_pages: &[i64]) -> WindowScanRun {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 10);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(100);
+    let contract = provider_contract(provider.as_ref());
+    let source_hash = fixture_hash(&dir, "escaneado.pdf");
+    let cached: Vec<(i64, String)> = cached_pages
+        .iter()
+        .map(|page| (*page, format!("Respuesta ya pagada de la pagina {page}")))
+        .collect();
+    for (page, answer) in &cached {
+        seed_cached_ocr_page(
+            &conn,
+            "account-a",
+            &source_hash,
+            *page,
+            &contract,
+            "text",
+            answer,
+        );
+    }
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "whole-document mode renders no page"
+    );
+    let ranges = provider.ranges.lock().expect("ranges").clone();
+    let page_calls = *provider.page_calls.lock().expect("page calls");
+    WindowScanRun {
+        ranges,
+        page_calls,
+        cached,
+        published: published_pages(&conn, &attachment_id),
+    }
+}
+
+/// WU2: no range sent to `recognize_pdf_pages` contains a cached page, the
+/// union of the ranges is exactly the miss set, and every page publishes what
+/// paying would have published.
+fn assert_ranges_cover_exactly_the_misses(run: &WindowScanRun, total_pages: i64) {
+    let cached: Vec<i64> = run.cached.iter().map(|(page, _)| *page).collect();
+    for (first, last) in &run.ranges {
+        for page in &cached {
+            assert!(
+                !(*page >= i64::from(*first) && *page <= i64::from(*last)),
+                "a whole-document range ({first}-{last}) contains cached page {page}"
+            );
+        }
+    }
+    let mut covered: Vec<i64> = run
+        .ranges
+        .iter()
+        .flat_map(|(first, last)| (*first..=*last).map(i64::from))
+        .collect();
+    covered.sort_unstable();
+    let mut misses: Vec<i64> = (1..=total_pages)
+        .filter(|page| !cached.contains(page))
+        .collect();
+    misses.sort_unstable();
+    assert_eq!(
+        covered, misses,
+        "the provider receives exactly the misses, each of them once"
+    );
+    assert_eq!(run.page_calls, 0, "window mode needs no per-page call");
+
+    assert_eq!(
+        run.published.len() as i64,
+        total_pages,
+        "every page is published"
+    );
+    for (page, method, text, _hash, _chars, _quality) in &run.published {
+        assert_eq!(method, "ocr", "page {page} publishes as OCR");
+        match run
+            .cached
+            .iter()
+            .find(|(cached_page, _)| cached_page == page)
+        {
+            Some((_, answer)) => assert_eq!(text, answer, "page {page} replays the cache"),
+            None => assert_eq!(
+                text,
+                &RangeRecordingProvider::answer(*page as u32),
+                "page {page} replays the provider answer"
+            ),
+        }
+    }
+}
+
+/// WU2: contiguous cached pages cut one clean window out of the document; the
+/// provider is asked only for the missing run, never for the whole file.
+#[test]
+fn contiguous_cached_pages_are_cut_out_of_the_whole_document_window() {
+    let cached = [1_i64, 2, 3, 4];
+    let run = run_ten_page_scan_with_cached_pages(&cached);
+    assert_eq!(
+        run.ranges,
+        vec![(5, 10)],
+        "the four cached pages are cut out of the single window"
+    );
+    assert_ranges_cover_exactly_the_misses(&run, 10);
+}
+
+/// WU2: alternating cached pages leave only the miss runs; a window never
+/// spans a cached page.
+#[test]
+fn alternating_cached_pages_leave_only_the_miss_runs_to_the_provider() {
+    let cached = [1_i64, 3, 5, 7];
+    let run = run_ten_page_scan_with_cached_pages(&cached);
+    assert_eq!(
+        run.ranges,
+        vec![(2, 2), (4, 4), (6, 6), (8, 10)],
+        "each miss run is its own request and none crosses a cached page"
+    );
+    assert_ranges_cover_exactly_the_misses(&run, 10);
+}
+
+/// PRESERVE: without a single cached page the window plan is exactly the one
+/// the executor produced before T5 — aligned from page 1 in
+/// `pages_per_request` windows, dropping windows with no pending page.
+#[test]
+fn an_empty_ocr_cache_keeps_the_same_whole_document_windows() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 5);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(2);
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        provider.ranges.lock().expect("ranges").as_slice(),
+        &[(1, 2), (3, 4), (5, 5)],
+        "an empty cache changes nothing about the window plan"
+    );
+    assert_eq!(*provider.page_calls.lock().expect("page calls"), 0);
+}
+
+/// The task receipt of one attachment's extraction.
+fn extract_receipt(conn: &rusqlite::Connection, task_id: &str) -> serde_json::Value {
+    let receipt: String = conn
+        .query_row(
+            "SELECT result_receipt_json FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("extract receipt");
+    serde_json::from_str(&receipt).expect("receipt JSON")
+}
+
+/// T5 review fix / §2.4: a replayed cached answer IS an OCR answer for that
+/// page — another device paid for it — so the receipt records
+/// `ocrAttempted: true` exactly like the run that paid. Without it a blank
+/// scan settled from the cache stays a reprocess candidate (with an estimated
+/// cost) even though every page was already answered.
+#[test]
+fn a_cached_empty_ocr_answer_marks_the_pass_as_ocr_attempted() {
+    // Baseline: the device that pays records the flag.
+    let (paid_dir, mut paid) = migrated_db();
+    let (_library, paid_attachment) = seed_scanned_pdf(&paid_dir, &mut paid, 1);
+    let paid_task = admit_extract_demand(&paid, &paid_attachment);
+    let paid_renderer = fresh_renderer();
+    let paid_provider = FakeOcrProvider::with_text("");
+    let paid_outcome =
+        run_extract_with_provider(&paid_dir, &paid, &paid_renderer, paid_provider.clone());
+    assert!(
+        matches!(paid_outcome, RunOneOutcome::Succeeded { .. }),
+        "{paid_outcome:?}"
+    );
+    assert_eq!(
+        paid_provider.calls.lock().expect("calls").len(),
+        1,
+        "the baseline pays for its blank page"
+    );
+    let paid_receipt = extract_receipt(&paid, &paid_task);
+    assert_eq!(
+        paid_receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "the paid run says OCR was attempted: {paid_receipt}"
+    );
+
+    // The reading device replays the paid empty answer.
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 1);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("");
+    let contract = provider_contract(provider.as_ref());
+    seed_cached_ocr_page(
+        &conn,
+        "account-a",
+        &fixture_hash(&dir, "escaneado.pdf"),
+        1,
+        &contract,
+        "empty",
+        "",
+    );
+    let task_id = admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "the cached empty answer costs no provider call"
+    );
+    let receipt = extract_receipt(&conn, &task_id);
+    assert_eq!(
+        receipt["ocrAttempted"], paid_receipt["ocrAttempted"],
+        "a cached answer counts exactly like a paid one: {receipt}"
+    );
+    assert_eq!(
+        receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "{receipt}"
+    );
+}
+
+/// WU2 / §2.4: `should_use_pdf_mode` is decided on the MISS count. Six of ten
+/// pages cached leaves four misses, under half the document, so no
+/// whole-document request is made and per-page recognition touches only the
+/// four missing pages.
+#[test]
+fn fewer_misses_than_half_switch_to_per_page_recognition_only_for_the_misses() {
+    let (dir, mut conn) = migrated_db();
+    let (_library, attachment_id) = seed_scanned_pdf(&dir, &mut conn, 10);
+    enable_derived_cache(&conn, Some("account-a"));
+    let renderer = fresh_renderer();
+    let provider = RangeRecordingProvider::new(100);
+    let contract = provider_contract(provider.as_ref());
+    let source_hash = fixture_hash(&dir, "escaneado.pdf");
+    for page in 1_i64..=6 {
+        seed_cached_ocr_page(
+            &conn,
+            "account-a",
+            &source_hash,
+            page,
+            &contract,
+            "text",
+            &format!("Respuesta ya pagada de la pagina {page}"),
+        );
+    }
+    admit_extract_demand(&conn, &attachment_id);
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+
+    assert!(
+        provider.ranges.lock().expect("ranges").is_empty(),
+        "four misses of ten pages is under half: no whole-document request"
+    );
+    assert_eq!(
+        renderer.rendered_pages.lock().expect("renders").as_slice(),
+        &[7, 8, 9, 10],
+        "per-page recognition touches only the four misses"
+    );
+    assert_eq!(
+        *provider.page_calls.lock().expect("page calls"),
+        4,
+        "one page call per miss"
+    );
+    for (page, method, text, _hash, _chars, _quality) in published_pages(&conn, &attachment_id) {
+        assert_eq!(method, "ocr", "page {page} publishes as OCR");
+        if page <= 6 {
+            assert_eq!(text, format!("Respuesta ya pagada de la pagina {page}"));
+        } else {
+            assert_eq!(
+                text,
+                "Texto reconocido por pagina de respaldo con longitud suficiente para ser rico"
+            );
+        }
+    }
+}
+
+// ── T9: pull before pay (§2.6, D5, S5) ─────────────────────────────────────
+//
+// The gate is asked after the cache read and only when misses remain, so the
+// free native pass is never blocked and a unit the cache fully answers never
+// waits. A parked unit keeps the native pass and re-runs by itself; once the
+// channel's answer exists (here: the server confirmed it has no channel, the
+// state in which the gate pays as before) the misses pay.
+
+/// A logged-in archive whose channel verdict is still unknown: the S5 first
+/// boot of B. The sync schema exists, the session account is stamped, and no
+/// ordinary response has recorded a capability yet.
+fn enable_derived_session(conn: &rusqlite::Connection, account: &str) {
+    entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
+    entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
+        .expect("session account");
+}
+
+fn native_basis_payload(conn: &rusqlite::Connection, task_id: &str) -> serde_json::Value {
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM processing_checkpoints
+              WHERE task_id = ?1 AND unit_key = 'native-basis'",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("the deferred attempt kept its native pass");
+    serde_json::from_str(&payload).expect("native basis payload")
+}
+
+/// Replaces one page of the preserved native pass and re-seals the checkpoint,
+/// so the next attempt can only publish the marker if it really reused it.
+fn rewrite_native_basis_page(
+    conn: &rusqlite::Connection,
+    task_id: &str,
+    page_number: i64,
+    text: &str,
+) {
+    let mut payload = native_basis_payload(conn, task_id);
+    let pages = payload["pages"].as_array_mut().expect("pages");
+    let page = pages
+        .iter_mut()
+        .find(|page| page["pageNumber"] == serde_json::json!(page_number))
+        .expect("page in the native pass");
+    page["textContent"] = serde_json::json!(text);
+    page["textHash"] = serde_json::json!(sha256_hex(text.as_bytes()));
+    page["textChars"] = serde_json::json!(text.chars().count() as i64);
+    page["quality"] = serde_json::json!("rich");
+    let payload = serde_json::to_string(&payload).expect("payload json");
+    conn.execute(
+        "UPDATE processing_checkpoints SET payload = ?1, payload_checksum = ?2
+          WHERE task_id = ?3 AND unit_key = 'native-basis'",
+        rusqlite::params![payload, sha256_hex(payload.as_bytes()), task_id],
+    )
+    .expect("re-seal the native pass");
+}
+
+const GATE_MARKER: &str = "Texto nativo preservado del primer intento con longitud de sobra para ser rico y no volver a pedirse";
+
+/// S5: with a session and an unknown capability the extraction parks before its
+/// FIRST paid call — and only there: the native pass already ran. The unit is
+/// parked in `retry_wait` under the gate's code, with nothing charged.
+#[test]
+fn a_session_with_an_unknown_channel_parks_the_ocr_after_the_native_pass() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0001", "Obra mixta", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con texto nativo rico y suficiente para no pedir OCR",
+        )],
+        &[],
+    ]);
+    let path = write_temp_pdf(&dir, "mixta.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT001",
+        "linked_file",
+        Some(&path),
+        "mixta.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido de la pagina escaneada con longitud suficiente para ser rico",
+    );
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    let task_id = match outcome {
+        RunOneOutcome::Deferred { task_id } => task_id,
+        other => panic!("the first paid call must wait, got {other:?}"),
+    };
+    assert!(
+        provider.calls.lock().expect("calls").is_empty(),
+        "nothing paid before the cache is as complete as it can get"
+    );
+    assert!(
+        renderer.rendered_pages.lock().expect("renders").is_empty(),
+        "no page was rendered for the provider either"
+    );
+    let (state, code, retry_count, attempt_count): (String, Option<String>, i64, i64) = conn
+        .query_row(
+            "SELECT state, last_error_code, retry_count, attempt_count
+               FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("parked task");
+    assert_eq!(state, "retry_wait");
+    assert_eq!(code.as_deref(), Some("derived_cache_wait"));
+    assert_eq!(retry_count, 0, "the wait costs no retry budget");
+    assert_eq!(attempt_count, 1, "only the claim that ran");
+    let payload = native_basis_payload(&conn, &task_id);
+    assert_eq!(
+        payload["pages"].as_array().expect("pages").len(),
+        2,
+        "the free native pass of the whole document survived the deferral"
+    );
+}
+
+/// S5 / D5: the resumed attempt does not redo the native extraction — the
+/// preserved pass answers it — and pays only the pages the cache did not have.
+#[test]
+fn the_attempt_that_pays_reuses_the_native_pass_of_the_deferred_one() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0002", "Obra mixta", "Resumen.");
+    let pdf = make_text_pdf_pages(&[
+        &[(
+            50.0,
+            750.0,
+            "Pagina primera con texto nativo rico y suficiente para no pedir OCR",
+        )],
+        &[],
+    ]);
+    let path = write_temp_pdf(&dir, "mixta.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT002",
+        "linked_file",
+        Some(&path),
+        "mixta.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text(
+        "Texto reconocido de la pagina escaneada con longitud suficiente para ser rico",
+    );
+    let task_id = match run_extract_with_provider(&dir, &conn, &renderer, provider.clone()) {
+        RunOneOutcome::Deferred { task_id } => task_id,
+        other => panic!("expected a deferral, got {other:?}"),
+    };
+    // The resumed attempt can only publish this marker if it reused the
+    // preserved native pass instead of reading the PDF again.
+    rewrite_native_basis_page(&conn, &task_id, 1, GATE_MARKER);
+    // The channel answered meanwhile: the server has no such channel, so the
+    // gate pays as before (§2.6).
+    record_legacy_channel(&conn);
+    let wake: i64 = conn
+        .query_row(
+            "SELECT next_retry_at FROM processing_tasks WHERE id = ?1",
+            [&task_id],
+            |row| row.get(0),
+        )
+        .expect("wake time");
+
+    let outcome = run_extract_with_provider_at(&dir, &conn, &renderer, provider.clone(), wake + 1);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the resumed attempt must finish, got {outcome:?}"
+    );
+    assert_eq!(
+        provider.calls.lock().expect("calls").len(),
+        1,
+        "only the page the cache did not have is paid"
+    );
+    let pages = published_pages(&conn, &attachment_id);
+    assert_eq!(pages.len(), 2);
+    assert_eq!(
+        pages[0].2, GATE_MARKER,
+        "page one was published from the preserved native pass, not re-extracted"
+    );
+    assert_eq!(pages[1].1, "ocr", "the miss is recognized and published");
+    assert_eq!(
+        checkpoint_rows(&conn, &task_id),
+        0,
+        "the success purge takes the native pass with the rest of the checkpoints"
+    );
+}
+
+/// §2.6: a document that needs no OCR never asks the gate, so it never waits
+/// for the channel either.
+#[test]
+fn a_document_that_needs_no_ocr_never_waits_for_the_channel() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0003", "Obra nativa", "Resumen.");
+    let pdf = make_text_pdf(&[
+        (
+            50.0,
+            750.0,
+            "Primera linea de texto nativo con contenido suficiente",
+        ),
+        (
+            50.0,
+            700.0,
+            "Segunda linea de texto nativo con contenido suficiente",
+        ),
+    ]);
+    let path = write_temp_pdf(&dir, "nativa.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "GATEATT003",
+        "linked_file",
+        Some(&path),
+        "nativa.pdf",
+        "application/pdf",
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_extract_demand(&conn, &attachment_id);
+    let renderer = fresh_renderer();
+    let provider = FakeOcrProvider::with_text("no deberia llamarse");
+
+    let outcome = run_extract_with_provider(&dir, &conn, &renderer, provider.clone());
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a unit with no misses pays nothing and waits nothing, got {outcome:?}"
+    );
+    assert!(provider.calls.lock().expect("calls").is_empty());
+    let kept_native_passes: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM processing_checkpoints WHERE unit_key = 'native-basis'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("checkpoint count");
+    assert_eq!(
+        kept_native_passes, 0,
+        "no native pass is kept when nothing was deferred"
+    );
+}
+
+/// §2.6: the profile executor asks the same gate before its first paid embed —
+/// its own ficha vector and then the pasaje waves — and only when a miss is
+/// left. A parked profile publishes nothing.
+#[test]
+fn a_session_with_an_unknown_channel_parks_the_profile_and_pasajes_before_paying() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_paged_work(
+        &mut conn,
+        "GATE0004",
+        "Obra con pasajes",
+        "GATEATT004",
+        &[T4_PAGE_A, T4_PAGE_B],
+    );
+    enable_derived_session(&conn, "account-a");
+    admit_profile_demand(&conn, &item_id);
+
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 8);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Deferred { .. }),
+        "the first paid embed must wait, got {outcome:?}"
+    );
+    assert!(
+        embedder.singles.lock().expect("singles").is_empty(),
+        "the ficha vector is a paid call and must not happen yet"
+    );
+    assert!(
+        embedder.batches.lock().expect("batches").is_empty(),
+        "no pasaje wave was embedded"
+    );
+
+    // The channel answers: a legacy server, so the work pays and finishes.
+    record_legacy_channel(&conn);
+    let wake: i64 = conn
+        .query_row(
+            "SELECT next_retry_at FROM processing_tasks
+              WHERE kind = 'bibliography_profile' AND subject_id = ?1 AND state = 'retry_wait'",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .expect("wake time");
+    let resumed: Arc<dyn ProfileEmbedder> = embedder.clone();
+    let mut registry = ExecutorRegistry::new();
+    registry.register(Arc::new(
+        BibliographyProfileExecutor::new(resumed).with_embed_wave(8),
+    ));
+    let outcome = run_one(
+        &conn,
+        &ctx_of(&dir),
+        &registry,
+        "profile-session",
+        wake + 1,
+        &|_, _| {},
+        &|_, _, _, _| {},
+    )
+    .expect("profile run");
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "the resumed profile must finish, got {outcome:?}"
+    );
+    assert_eq!(
+        embedder.singles.lock().expect("singles").len(),
+        1,
+        "the ficha vector is paid exactly once"
+    );
+    assert!(
+        !embedder.batches.lock().expect("batches").is_empty(),
+        "the pasaje waves are paid once the gate lets them"
+    );
+}
+
+/// §2.6: a unit whose misses the cache answered never consults the wait — the
+/// account's rows finish the work with zero provider calls, even with a session
+/// whose channel is still unknown.
+#[test]
+fn a_profile_fully_answered_by_the_cache_never_waits() {
+    let (dir, mut conn) = migrated_db();
+    seed_library(&conn, "lib-1", Some(7));
+    let item_id = seed_catalog(&mut conn, "GATE0005", "Obra cacheada", "Resumen cacheado.");
+    enable_derived_session(&conn, "account-a");
+    let effective = effective_contract(&conn);
+    let (input_hash, canonical_text) = profile_keys(&conn, &item_id);
+    seed_cached_vector(
+        &conn,
+        "account-a",
+        &effective.hash,
+        &input_hash,
+        4,
+        &vector_blob(&RecordingEmbedder::vector_for(&canonical_text)),
+    );
+    admit_profile_demand(&conn, &item_id);
+
+    let embedder = RecordingEmbedder::new("fake/model", None);
+    let outcome = run_profile_with(&dir, &conn, Arc::clone(&embedder), 8);
+
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "a fully cached unit publishes without waiting, got {outcome:?}"
+    );
+    assert!(embedder.singles.lock().expect("singles").is_empty());
+    assert!(embedder.batches.lock().expect("batches").is_empty());
 }

@@ -424,14 +424,14 @@ async fn engine_loop(
             continue;
         }
 
-        // A Tick only runs when auto-sync is enabled AND the interval elapsed; a
-        // manual SyncNow/FullResync always runs and cancels backoff.
-        if !batch.manual {
-            let interval = auto_interval(&conn);
-            let auto_on = auto_enabled(&conn);
-            if !auto_on || last_auto_run.elapsed() < interval {
-                continue;
-            }
+        // A Tick only runs when auto-sync is enabled AND the interval elapsed —
+        // or when the pull-before-pay gate is waiting for one incremental pull
+        // (plan §2.6); a manual SyncNow/FullResync always runs and cancels
+        // backoff. The ticker fires every 60 s, so a gate request is honoured
+        // within that delay plus the cycle itself, which is what its bounded
+        // wait is sized for.
+        if !batch.manual && !tick_should_run(&conn, last_auto_run.elapsed()) {
+            continue;
         }
 
         // A FullResync anywhere in the batch resets the reconciliation state
@@ -534,6 +534,26 @@ fn is_gated_open(conn: &Connection) -> bool {
     let captured = meta_get(conn, "triggers_version").ok().flatten().is_some();
     let session = meta_get(conn, "device_id").ok().flatten().is_some();
     captured && session
+}
+
+/// Whether a non-manual request (the 60 s interval ticker) may run a cycle now:
+/// auto-sync is enabled AND the configured interval elapsed, or the
+/// pull-before-pay gate asked for one incremental pull of the derived channel
+/// (plan §2.6). A pending request bypasses the auto-sync interval — the engine,
+/// not the processing scheduler, is the only one that can run that pull — but
+/// never a user who turned auto-sync off: a device with sync disabled waits out
+/// the gate's bounded wait and then pays, as D5 allows. The derived phase
+/// consumes the flag on every exit it cannot serve it from
+/// (`derived_transport::abandon_requested_pull`), so one request buys at most one
+/// bypass and a stuck flag can never turn the ticker into a 60 s spin.
+pub(crate) fn tick_should_run(conn: &Connection, elapsed: Duration) -> bool {
+    if !auto_enabled(conn) {
+        return false;
+    }
+    if elapsed >= auto_interval(conn) {
+        return true;
+    }
+    crate::sync::derived::pull_requested(conn).unwrap_or(false)
 }
 
 /// Auto-sync enabled flag (DESIGN §3.1: default ON when unset).
@@ -731,6 +751,22 @@ pub async fn run_cycle<A: SyncApi>(
         &research_state_path,
         &research_artifacts,
         &health,
+        warn,
+    )
+    .await;
+
+    // 8d. Derived Bibliography cache (`bibliography-derived-v1`, plan
+    // plan-sync-bibliografia-derivada §2.5 option (b)): a dedicated channel with
+    // its own outbox (`pushed`), cursor and since-zero catch-up per epoch. It
+    // only ever runs after an ordinary response advertised the token for the
+    // current epoch, so a legacy server never receives a derived call and the
+    // corpus cycle above is unaffected either way. The network runs outside
+    // every transaction and the request scope is frozen from the session (§2.9).
+    crate::sync::derived_transport::run_derived_cycle(
+        api,
+        token,
+        conn,
+        health.limits.max_push_bytes,
         warn,
     )
     .await;
@@ -1213,6 +1249,53 @@ mod research_pending_tests {
         .expect("research meta");
         let status = build_status(&conn, SyncState::Idle, None);
         assert_eq!(status.pending, 1, "research work surfaces in the payload");
+    }
+}
+
+// Wake-up of the pull-before-pay gate (plan-sync-bibliografia-derivada §2.6):
+// the processing scheduler parks a unit and asks for one incremental pull; the
+// engine's interval ticker is what actually runs it, so a pending request has to
+// open the auto-sync interval gate without a manual `sync_now`.
+#[cfg(test)]
+mod derived_wake_tests {
+    use super::*;
+    use crate::sync::session::meta_set;
+    use crate::sync::test_support::new_synced_test_db;
+
+    const INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+    #[test]
+    fn a_pending_gate_request_runs_the_next_tick_even_inside_the_interval() {
+        let conn = new_synced_test_db();
+        assert!(
+            !tick_should_run(&conn, Duration::from_secs(1)),
+            "a tick inside the interval does nothing by itself"
+        );
+        crate::sync::derived::request_incremental_pull(&conn).expect("gate request");
+        assert!(
+            tick_should_run(&conn, Duration::from_secs(1)),
+            "the gate's request is honoured within one ticker period"
+        );
+        assert!(tick_should_run(&conn, INTERVAL), "the interval still runs");
+    }
+
+    #[test]
+    fn auto_sync_off_still_wins_over_a_pending_request() {
+        let conn = new_synced_test_db();
+        crate::sync::derived::request_incremental_pull(&conn).expect("gate request");
+        meta_set(&conn, "auto_sync_enabled", "0").expect("auto-sync off");
+        assert!(
+            !tick_should_run(&conn, Duration::from_secs(1)),
+            "a user who turned sync off is never pulled behind their back; the gate waits out D5"
+        );
+    }
+
+    #[test]
+    fn a_consumed_request_leaves_the_interval_in_charge() {
+        let conn = new_synced_test_db();
+        crate::sync::derived::request_incremental_pull(&conn).expect("gate request");
+        crate::sync::derived::clear_pull_request(&conn).expect("consumed");
+        assert!(!tick_should_run(&conn, Duration::from_secs(1)));
     }
 }
 

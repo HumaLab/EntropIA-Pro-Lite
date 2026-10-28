@@ -2896,3 +2896,166 @@ fn confirm_rejects_a_malformed_plan_hash() {
         .expect("batch count");
     assert_eq!(batches, 0, "a refused confirm touches nothing");
 }
+
+// ── T5: cached OCR pages are cut out of the approved reprocess list ────────
+//
+// The preview still shows the whole approved plan — the cache never changes
+// the selection rules — but the executor skips the pages another device of
+// the account already paid for, so the approved list is not recomputed: only
+// the misses reach the provider.
+
+/// Adds the derived cache tables and a session, and records the verdict of a
+/// server that does not implement `bibliography-derived-v1` (a known epoch,
+/// `advertised: false`). These tests are about the cache answering a reprocess
+/// plan, not about the pull-before-pay gate of §2.6: a confirmed absence is the
+/// state in which the gate pays as before, exactly like the other suites.
+fn enable_derived_cache(conn: &rusqlite::Connection, account: &str) {
+    entropia_desktop_lib::sync::schema::ensure_sync_schema(conn).expect("sync schema");
+    entropia_desktop_lib::sync::session::meta_set(conn, "account_id", account)
+        .expect("session account");
+    let epoch = "epoch-legacy";
+    entropia_desktop_lib::sync::session::meta_set(conn, "server_epoch", epoch)
+        .expect("server epoch");
+    entropia_desktop_lib::sync::session::meta_set(
+        conn,
+        "derived_capability",
+        &format!("{{\"epoch\":\"{epoch}\",\"advertised\":false}}"),
+    )
+    .expect("legacy capability verdict");
+}
+
+#[test]
+fn a_cached_ocr_page_is_not_sent_again_in_reprocess_mode() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B4CACHE01", "P obra cacheada");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank, blank, blank]);
+    let path = write_pdf(&dir, "cacheada.pdf", &pdf);
+    let attachment_id = seed_attachment(
+        &mut conn,
+        &item_id,
+        "B4CACHEATT",
+        Some(&path),
+        "cacheada.pdf",
+    );
+    let attachment = attachment(&conn, &attachment_id);
+    let plan = plan_reprocess_for_attachment(&conn, &attachment, std::path::Path::new(&path), &pdf)
+        .expect("plan");
+    assert_eq!(
+        plan.ocr_pages,
+        vec![1, 2, 3],
+        "the approved plan is the whole spend"
+    );
+
+    enable_derived_cache(&conn, "account-a");
+    let contract = entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        "recording-ocr",
+        "unspecified",
+    );
+    let cached_answer = "Respuesta ya pagada de la pagina 2";
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, 2, ?3, 'text', ?4, ?5, 'remote', 1, 1)",
+        rusqlite::params![
+            "account-a",
+            hex::encode(Sha256::digest(&pdf)),
+            contract,
+            cached_answer,
+            hex::encode(Sha256::digest(cached_answer.as_bytes())),
+        ],
+    )
+    .expect("seed cached OCR page");
+
+    plant_linked_extract_task(
+        &conn,
+        "b4-cache-task",
+        &attachment_id,
+        &processing_repository::reprocess_contract_hash(&plan.plan_hash),
+    );
+    let renderer = Arc::new(RecordingRenderer::default());
+    let provider = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        renderer.pages.lock().expect("pages").as_slice(),
+        &[1, 3],
+        "the approved list is not recomputed: only the misses are sent"
+    );
+    assert_eq!(provider.calls(), 2, "the cached page costs no recognition");
+
+    let (method, text): (String, String) = conn
+        .query_row(
+            "SELECT method, text_content FROM bibliographic_page_texts
+              WHERE attachment_id = ?1 AND page_number = 2",
+            [&attachment_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("page 2 row");
+    assert_eq!(method, "ocr");
+    assert_eq!(
+        text, cached_answer,
+        "the cached answer is replayed, never the provider's"
+    );
+}
+
+/// T5 review fix / §2.4: a blank scan settled from another device's cached
+/// `empty` answer is not work to offer again. The replayed answer IS an OCR
+/// answer for the page (another device paid for it), so the receipt records
+/// `ocrAttempted: true` and rule (b) — `REASON_EMPTY_WITHOUT_OCR` — never
+/// fires; the dialog shows no estimate for pages that were already answered.
+#[test]
+fn a_blank_scan_settled_from_a_cached_empty_answer_is_not_a_reprocess_candidate() {
+    let (dir, mut conn) = migrated_db();
+    let item_id = seed_item(&mut conn, "B5CACHE01", "Q obra vacia cacheada");
+    let blank: &[(f32, f32, &str)] = &[];
+    let pdf = make_text_pdf_pages(&[blank]);
+    let path = write_pdf(&dir, "vacia.pdf", &pdf);
+    let attachment_id =
+        seed_attachment(&mut conn, &item_id, "B5CACHEATT", Some(&path), "vacia.pdf");
+
+    enable_derived_cache(&conn, "account-a");
+    let contract = entropia_desktop_lib::bibliography::ocr_contract::ocr_contract_for(
+        "recording-ocr",
+        "unspecified",
+    );
+    conn.execute(
+        "INSERT INTO sync_derived_ocr_pages
+           (account_id, source_hash, page_number, ocr_contract, outcome, text_content,
+            text_hash, origin, pushed, created_at)
+         VALUES (?1, ?2, 1, ?3, 'empty', '', ?4, 'remote', 1, 1)",
+        rusqlite::params![
+            "account-a",
+            hex::encode(Sha256::digest(&pdf)),
+            contract,
+            hex::encode(Sha256::digest(b"")),
+        ],
+    )
+    .expect("seed cached empty answer");
+
+    let task_id = admit_extract_task(&conn, &attachment_id);
+    let renderer = Arc::new(RecordingRenderer::default());
+    let provider = RecordingProvider::with_text(OCR_TEXT);
+    let outcome = run_one_extract(&dir, &conn, &renderer, &provider);
+    assert!(
+        matches!(outcome, RunOneOutcome::Succeeded { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(provider.calls(), 0, "the empty answer was already paid for");
+
+    let receipt = receipt_of(&conn, &task_id);
+    assert_eq!(
+        receipt["ocrAttempted"],
+        serde_json::json!(true),
+        "a cached answer counts as an OCR answer: {receipt}"
+    );
+    let candidates = reprocess_candidates(&conn).expect("candidates");
+    assert!(
+        candidate_for(&candidates, &attachment_id).is_none(),
+        "a blank scan already answered is not reprocess work: {candidates:?}"
+    );
+}

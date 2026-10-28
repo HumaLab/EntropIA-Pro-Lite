@@ -8,6 +8,11 @@ pub mod blobs;
 pub mod capture;
 pub mod cascade;
 pub mod commands;
+pub mod derived;
+pub mod derived_gate;
+pub(crate) mod derived_transport;
+#[cfg(test)]
+mod derived_transport_tests;
 pub mod engine;
 pub mod http;
 pub mod pull;

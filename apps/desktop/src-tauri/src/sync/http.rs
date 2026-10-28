@@ -46,6 +46,10 @@ pub const RESEARCH_ENVELOPE_V1_CAPABILITY: &str = "research-envelope-v1";
 /// Exact, case-sensitive capability token for saved web captures. Unlike the
 /// aggregates above, these are ordinary rows: every ordinary push/pull sends it.
 pub const WEB_CAPTURE_V1_CAPABILITY: &str = "web-capture-v1";
+/// Exact, case-sensitive capability token for the derived Bibliography cache
+/// (`bibliography-derived-v1`). A dedicated channel like the aggregates above:
+/// only its own push/pull methods send it (`sync/derived_protocol.md`).
+pub const BIBLIOGRAPHY_DERIVED_V1_CAPABILITY: &str = "bibliography-derived-v1";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -394,7 +398,7 @@ pub struct PushChange {
     pub payload: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PushRequest {
     pub changes: Vec<PushChange>,
 }
@@ -437,6 +441,11 @@ impl PushResponse {
     /// Whether the server advertised the exact research-envelope-v1 token.
     pub fn supports_research_envelope_v1(&self) -> bool {
         supports_research_envelope_v1(&self.capabilities)
+    }
+
+    /// Whether the server advertised the exact bibliography-derived-v1 token.
+    pub fn supports_bibliography_derived_v1(&self) -> bool {
+        supports_bibliography_derived_v1(&self.capabilities)
     }
 }
 
@@ -492,6 +501,11 @@ impl PullResponse {
     pub fn supports_research_envelope_v1(&self) -> bool {
         supports_research_envelope_v1(&self.capabilities)
     }
+
+    /// Whether the server advertised the exact bibliography-derived-v1 token.
+    pub fn supports_bibliography_derived_v1(&self) -> bool {
+        supports_bibliography_derived_v1(&self.capabilities)
+    }
 }
 
 /// One shared Escritura document (PROTOCOL "Documentos compartidos de Escritura").
@@ -532,6 +546,14 @@ pub fn supports_research_envelope_v1(capabilities: &[String]) -> bool {
     capabilities
         .iter()
         .any(|capability| capability == RESEARCH_ENVELOPE_V1_CAPABILITY)
+}
+
+/// Checks capability tokens exactly, case-sensitively. Schema tags and
+/// successful status codes do not imply bibliography-derived-v1 support.
+pub fn supports_bibliography_derived_v1(capabilities: &[String]) -> bool {
+    capabilities
+        .iter()
+        .any(|capability| capability == BIBLIOGRAPHY_DERIVED_V1_CAPABILITY)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -742,6 +764,36 @@ pub trait SyncApi {
     ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send {
         std::future::ready(Err(SyncError::Decode(
             "SyncApi implementation does not support research-envelope-v1 opt-in".to_string(),
+        )))
+    }
+
+    /// Pushes derived Bibliography rows with the exact bibliography-derived-v1
+    /// capability opt-in (`sync/derived_protocol.md`). The default fails closed
+    /// locally so a legacy or alternate implementation can never receive a
+    /// request the server does not understand.
+    fn push_with_bibliography_derived_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _req: PushRequest,
+    ) -> impl std::future::Future<Output = Result<PushResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support bibliography-derived-v1 opt-in".to_string(),
+        )))
+    }
+
+    /// Pulls derived Bibliography rows with the exact bibliography-derived-v1
+    /// capability opt-in. The default fails closed rather than delegating to
+    /// [`SyncApi::pull`] without a header.
+    fn pull_with_bibliography_derived_v1(
+        &self,
+        _token: &str,
+        _schema_tag: &str,
+        _since: i64,
+        _limit: i64,
+    ) -> impl std::future::Future<Output = Result<PullResponse, SyncError>> + Send {
+        std::future::ready(Err(SyncError::Decode(
+            "SyncApi implementation does not support bibliography-derived-v1 opt-in".to_string(),
         )))
     }
 
@@ -1225,6 +1277,38 @@ impl SyncApi for HttpSyncApi {
             since,
             limit,
             Some(RESEARCH_ENVELOPE_V1_CAPABILITY),
+        )
+        .await
+    }
+
+    async fn push_with_bibliography_derived_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        req: PushRequest,
+    ) -> Result<PushResponse, SyncError> {
+        self.push_request(
+            token,
+            schema_tag,
+            req,
+            Some(BIBLIOGRAPHY_DERIVED_V1_CAPABILITY),
+        )
+        .await
+    }
+
+    async fn pull_with_bibliography_derived_v1(
+        &self,
+        token: &str,
+        schema_tag: &str,
+        since: i64,
+        limit: i64,
+    ) -> Result<PullResponse, SyncError> {
+        self.pull_request(
+            token,
+            schema_tag,
+            since,
+            limit,
+            Some(BIBLIOGRAPHY_DERIVED_V1_CAPABILITY),
         )
         .await
     }
@@ -1914,6 +1998,182 @@ mod tests {
         .expect("parse pull");
         assert!(pull.supports_research_envelope_v1());
         assert!(!pull.supports_writing_envelope_v1());
+    }
+
+    #[tokio::test]
+    async fn derived_opted_in_push_sends_exactly_the_derived_capability() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"results":[],"max_server_seq":8,"server_epoch":"epoch","server_now_ms":43,"capabilities":["bibliography-derived-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .push_with_bibliography_derived_v1(
+                "test-token",
+                "0023_sync_ids",
+                sample_push_request("derived_vectors"),
+            )
+            .await
+            .expect("derived capability push");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_bibliography_derived_v1());
+        assert!(!response.supports_writing_envelope_v1());
+        assert!(!response.supports_research_envelope_v1());
+        assert_eq!(request.request_line, "POST /v1/sync/push HTTP/1.1");
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![BIBLIOGRAPHY_DERIVED_V1_CAPABILITY]
+        );
+        assert_push_body(&request, "derived_vectors");
+    }
+
+    #[tokio::test]
+    async fn derived_opted_in_pull_sends_exactly_the_derived_capability() {
+        let (server_url, request_rx, handle) = spawn_loopback_server(
+            200,
+            r#"{"rows":[],"next_since":0,"has_more":false,"schema_tag":"0023_sync_ids","server_epoch":"epoch","server_now_ms":43,"capabilities":["bibliography-derived-v1"]}"#,
+        );
+        let api = HttpSyncApi::new(&server_url).expect("HTTP client");
+
+        let response = api
+            .pull_with_bibliography_derived_v1("test-token", "0023_sync_ids", 0, 500)
+            .await
+            .expect("derived capability pull");
+        let request = finish_loopback_request(request_rx, handle);
+
+        assert!(response.supports_bibliography_derived_v1());
+        assert_eq!(
+            request.request_line,
+            "GET /v1/sync/pull?since=0&limit=500 HTTP/1.1"
+        );
+        assert_auth_and_schema_headers(&request);
+        assert_eq!(
+            header_values(&request, SYNC_CAPABILITIES_HEADER),
+            vec![BIBLIOGRAPHY_DERIVED_V1_CAPABILITY]
+        );
+        assert!(request.body.is_empty());
+    }
+
+    /// The `SyncApi` default must fail closed instead of issuing a legacy
+    /// (capability-free) request the server cannot scope to this channel.
+    #[tokio::test]
+    async fn derived_capability_defaults_fail_closed() {
+        struct Bare;
+        impl SyncApi for Bare {
+            async fn register(&self, _req: RegisterRequest) -> Result<RegisterResponse, SyncError> {
+                unreachable!()
+            }
+            async fn login(&self, _req: LoginRequest) -> Result<LoginResponse, SyncError> {
+                unreachable!()
+            }
+            async fn logout(&self, _token: &str) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn devices(&self, _token: &str) -> Result<DevicesResponse, SyncError> {
+                unreachable!()
+            }
+            async fn revoke(&self, _token: &str, _device_id: &str) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn delete_account(
+                &self,
+                _token: &str,
+                _req: DeleteAccountRequest,
+            ) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn usage(&self, _token: &str) -> Result<UsageResponse, SyncError> {
+                unreachable!()
+            }
+            async fn list_plans(&self, _token: &str) -> Result<Vec<PlanCatalogItem>, SyncError> {
+                unreachable!()
+            }
+            async fn request_plan_change(
+                &self,
+                _token: &str,
+                _requested_plan_id: &str,
+                _note: Option<&str>,
+            ) -> Result<PlanChangeRequestResponse, SyncError> {
+                unreachable!()
+            }
+            async fn list_notifications(
+                &self,
+                _token: &str,
+                _since: Option<&str>,
+                _limit: Option<i64>,
+            ) -> Result<Vec<NotificationItem>, SyncError> {
+                unreachable!()
+            }
+            async fn mark_notification_read(
+                &self,
+                _token: &str,
+                _id: &str,
+            ) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn delete_notification(&self, _token: &str, _id: &str) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn health(&self) -> Result<HealthResponse, SyncError> {
+                unreachable!()
+            }
+            async fn push(
+                &self,
+                _token: &str,
+                _schema_tag: &str,
+                _req: PushRequest,
+            ) -> Result<PushResponse, SyncError> {
+                unreachable!()
+            }
+            async fn pull(
+                &self,
+                _token: &str,
+                _schema_tag: &str,
+                _since: i64,
+                _limit: i64,
+            ) -> Result<PullResponse, SyncError> {
+                unreachable!()
+            }
+            async fn blob_head(
+                &self,
+                _token: &str,
+                _sha256: &str,
+            ) -> Result<BlobExists, SyncError> {
+                unreachable!()
+            }
+            async fn blob_put(
+                &self,
+                _token: &str,
+                _sha256: &str,
+                _bytes: Vec<u8>,
+            ) -> Result<(), SyncError> {
+                unreachable!()
+            }
+            async fn blob_get(
+                &self,
+                _token: &str,
+                _sha256: &str,
+            ) -> Result<reqwest::Response, SyncError> {
+                unreachable!()
+            }
+        }
+
+        let bare = Bare;
+        assert!(bare
+            .push_with_bibliography_derived_v1(
+                "t",
+                "0023_sync_ids",
+                sample_push_request("derived_vectors")
+            )
+            .await
+            .is_err());
+        assert!(bare
+            .pull_with_bibliography_derived_v1("t", "0023_sync_ids", 0, 500)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

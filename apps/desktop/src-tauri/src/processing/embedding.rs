@@ -13,7 +13,7 @@
 //! never re-invokes the provider for them.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::compact::CompactVec;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -37,6 +37,11 @@ pub struct StagedSource {
     pub text_hash: String,
     /// Base64 little-endian f32 blobs, one per planned chunk, in order.
     pub chunk_blobs: Vec<String>,
+    /// sha256 of each chunk's exact text (the string handed to the embedder),
+    /// in `chunk_blobs` order — the derived-cache key half (§2.8). Empty for a
+    /// payload staged before the cache existed.
+    #[serde(default)]
+    pub chunk_input_hashes: Vec<String>,
 }
 
 /// Whole-asset embedding result in plain data.
@@ -51,6 +56,15 @@ pub struct EmbeddingComputeOutput {
     pub model: String,
     pub contract: String,
     pub dimensions: i64,
+    /// Effective contract hash the run resolved (the task pin): the derived
+    /// cache keys this run's vectors under it (§2.8). Empty for a payload
+    /// staged before the cache existed.
+    #[serde(default)]
+    pub contract_hash: String,
+    /// sha256 of the asset's full source text — what the aggregate vector was
+    /// computed from (§2.8). Empty for a payload staged before the cache.
+    #[serde(default)]
+    pub aggregate_input_hash: String,
     pub sources: Vec<StagedSource>,
 }
 
@@ -113,7 +127,14 @@ pub fn publish_embedding_output(
         for blob_b64 in &staged.chunk_blobs {
             vectors.push(decode_blob(blob_b64)?);
         }
-        validated.push((source, vectors));
+        // The published text is what a cache row may claim to answer: hash it
+        // here so [`cache_collection_vectors`] can refuse a space that moved
+        // between the run and this commit.
+        let published_hashes = planned
+            .iter()
+            .map(|chunk| sha256_hex_label(chunk.text_content.as_bytes()))
+            .collect();
+        validated.push((source, vectors, published_hashes));
     }
     embeddings::upsert_vec_asset(
         conn,
@@ -129,7 +150,7 @@ pub fn publish_embedding_output(
         contract: output.contract.clone(),
         dimensions: output.dimensions as usize,
     };
-    for (source, vectors) in &validated {
+    for (source, vectors, _) in &validated {
         let mut replay = vectors.iter();
         embeddings::backfill_rag_chunks(conn, source, spec.clone(), |_chunk_text| {
             replay
@@ -138,6 +159,13 @@ pub fn publish_embedding_output(
                 .ok_or_else(|| "Staged embedding ran out of vectors mid-publish".to_string())
         })?;
     }
+    // §2.3/§2.8: the vectors this publish paid for — every fragment and the
+    // asset aggregate — reach the other devices of the account through the
+    // derived cache, recorded in this same transaction so a rollback leaves
+    // neither rows nor cache entries. The cache never costs the publish.
+    cache_paid_vectors(cache_collection_vectors(
+        conn, output, &aggregate, &validated,
+    ));
     // Sources deleted while the unit ran leave orphan chunk sets behind:
     // retire them in the same commit so search never sees mixed revisions.
     let staged_ids: std::collections::HashSet<(String, String)> = output
@@ -190,6 +218,132 @@ fn validate_vector(vector: &[f32]) -> Result<(), String> {
         return Err(format!(
             "Computed embedding does not satisfy {CANONICAL_EMBEDDING_DIMENSIONS} finite dimensions"
         ));
+    }
+    Ok(())
+}
+
+/// One source's staged vectors with the sha256 of the text each one answers.
+type ValidatedSource = (RagChunkSource, Vec<Vec<f32>>, Vec<String>);
+
+/// Derived-cache write policy (plan-sync-bibliografia-derivada §2.3, §2.8).
+///
+/// The device that pays also records the result for the other devices of the
+/// account, inside the same transaction that publishes it, so the cache can
+/// never hold a vector the Collection did not confirm. The cache is only an
+/// optimization for a FUTURE saving: a write that cannot land never costs the
+/// work that was already paid for. Every failure is logged and dropped instead
+/// of failing the commit — the same policy the Bibliography applies in
+/// `bibliography/processing.rs`.
+fn cache_paid_vectors(result: Result<(), String>) {
+    if let Err(error) = result {
+        log::warn!(
+            target: "processing",
+            "derived cache write skipped: {error}"
+        );
+    }
+}
+
+/// True when this connection carries the derived cache tables (§2.2).
+///
+/// A processing connection can reach a publish before `ensure_sync_schema`
+/// ran — a fresh archive whose first import overlaps startup, a repaired
+/// database, an archive that never synced — so every write asks first instead
+/// of failing on a missing table.
+fn derived_tables_present(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table'
+            AND name IN ('sync_derived_vectors', 'sync_derived_ocr_pages',
+                         'sync_derived_contracts')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count == 3)
+    .unwrap_or(false)
+}
+
+/// Mirrors the immutable contract row the Collections cache keys under
+/// (§2.2), from the effective contract this run resolved. The Bibliography
+/// mirror (`bibliography_embedding_contracts`) only knows the spaces it has
+/// published itself, so a Collection can be the first thing to pay in a space:
+/// without this row the reading device would find vectors it cannot name. First
+/// writer wins, exactly like the Bibliography's own mirror.
+fn mirror_collection_contract(
+    conn: &Connection,
+    output: &EmbeddingComputeOutput,
+    contract_hash: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_derived_contracts
+           (contract_hash, provider, model, dimensions, chunking_contract)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            contract_hash,
+            output.provider,
+            output.model,
+            output.dimensions,
+            embeddings::RAG_CHUNKING_CONTRACT_V1,
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("[processing] failed to mirror derived contract {contract_hash}: {e}"))
+}
+
+/// Records every vector this publish paid for — each fragment and the asset
+/// aggregate — under `(contract hash, sha256 of the exact text sent to the
+/// embedder)` (§2.8). A cache hit is written too and lands as a no-op
+/// (`INSERT OR IGNORE`): the row already names the same bytes under the same
+/// account, so the cache only ever keeps the bytes it served.
+///
+/// Every write is gated on the text being published still hashing to what the
+/// run keyed: a source that moved between compute and commit leaves the
+/// vector uncached rather than storing it under a key no reader could honour.
+fn cache_collection_vectors(
+    conn: &Connection,
+    output: &EmbeddingComputeOutput,
+    aggregate: &[f32],
+    validated: &[ValidatedSource],
+) -> Result<(), String> {
+    let contract_hash = output.contract_hash.trim();
+    if contract_hash.is_empty() {
+        // Payload staged before the cache existed: nothing names its space.
+        return Ok(());
+    }
+    if output.sources.len() != validated.len() {
+        return Ok(());
+    }
+    if !derived_tables_present(conn) {
+        return Ok(());
+    }
+    mirror_collection_contract(conn, output, contract_hash)?;
+    for (staged, (_, vectors, published_hashes)) in output.sources.iter().zip(validated) {
+        if staged.chunk_input_hashes != *published_hashes || vectors.len() != published_hashes.len()
+        {
+            continue;
+        }
+        for (input_hash, vector) in staged.chunk_input_hashes.iter().zip(vectors) {
+            let blob = embeddings::floats_to_blob(vector);
+            crate::sync::derived::cache_paid_vector(
+                conn,
+                contract_hash,
+                input_hash,
+                output.dimensions,
+                &blob,
+            )?;
+        }
+    }
+    let aggregate_text =
+        aggregate_request_text(validated.iter().map(|(source, _, _)| source.text.as_str()));
+    if !output.aggregate_input_hash.is_empty()
+        && sha256_hex_label(aggregate_text.as_bytes()) == output.aggregate_input_hash
+    {
+        crate::sync::derived::cache_paid_vector(
+            conn,
+            contract_hash,
+            &output.aggregate_input_hash,
+            output.dimensions,
+            &embeddings::floats_to_blob(aggregate),
+        )?;
     }
     Ok(())
 }
@@ -262,20 +416,33 @@ pub(crate) struct EngineCache {
     pub(crate) last_error: Option<String>,
 }
 
-/// Queue-owned embedding executor. The engine initializes lazily from the
-/// current settings and re-initializes when they change (same fingerprint
-/// rule as the retired worker); exactly one engine exists per process.
-pub struct EmbeddingExecutor {
-    #[allow(dead_code)]
-    app: AppHandle,
+/// Provider boundary of the embeddings executor (plan-sync-bibliografia-derivada
+/// §2.8). Production resolves the shared BGE-M3 engine; tests inject a counting
+/// fake so the derived-cache path is verifiable through the executor's public
+/// run without a network or model files.
+///
+/// `embed_text` receives the text exactly as the executor hashed it for the
+/// derived cache — no instruction, task prefix, or wrapper of any kind (plan
+/// assumption S-e). The engine's internal split-and-aggregate over
+/// `EMBEDDING_CHUNK_MAX_CHARS` is a pure function of that same text and is
+/// shared with `embed_batch` (the bibliography passage path), so the same
+/// `(contract, sha256(text))` names the same vector in both domains.
+pub trait CollectionEmbedder: Send + Sync {
+    fn embed_text(&self, text: &str) -> Result<Vec<f32>, String>;
+}
+
+/// Production embedder: the shared, lazily initialized engine behind
+/// `nlp::ensure_embed_engine_for_current_settings`. Exactly one engine exists
+/// per process, and it re-initializes when settings change (same fingerprint
+/// rule as the retired worker).
+struct EngineCollectionEmbedder {
     db_path: PathBuf,
     cache: Mutex<EngineCache>,
 }
 
-impl EmbeddingExecutor {
-    pub fn new(app: AppHandle, db_path: PathBuf) -> Self {
+impl EngineCollectionEmbedder {
+    fn new(db_path: PathBuf) -> Self {
         Self {
-            app,
             db_path,
             cache: Mutex::new(EngineCache {
                 cached: None,
@@ -284,12 +451,8 @@ impl EmbeddingExecutor {
         }
     }
 
-    fn settings_conn(&self) -> Result<Connection, String> {
-        open_archive_connection(&self.db_path)
-    }
-
     fn engine(&self) -> Result<std::sync::Arc<embeddings::EmbeddingEngine>, String> {
-        let conn = self.settings_conn()?;
+        let conn = open_archive_connection(&self.db_path)?;
         let mut guard = self
             .cache
             .lock()
@@ -298,6 +461,40 @@ impl EmbeddingExecutor {
         let engine =
             crate::nlp::ensure_embed_engine_for_current_settings(&conn, cached, last_error);
         engine.ok_or_else(|| embeddings::embedding_engine_unavailable_reason(last_error.as_deref()))
+    }
+}
+
+impl CollectionEmbedder for EngineCollectionEmbedder {
+    fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
+        self.engine()?.embed_text(text)
+    }
+}
+
+/// Queue-owned embedding executor. The engine initializes lazily from the
+/// current settings and re-initializes when they change (same fingerprint
+/// rule as the retired worker); exactly one engine exists per process.
+pub struct EmbeddingExecutor {
+    db_path: PathBuf,
+    embedder: Arc<dyn CollectionEmbedder>,
+}
+
+impl EmbeddingExecutor {
+    /// `app` is accepted for symmetry with the other engines' constructors;
+    /// every read and write of this executor goes through `db_path`.
+    pub fn new(_app: AppHandle, db_path: PathBuf) -> Self {
+        let embedder: Arc<dyn CollectionEmbedder> =
+            Arc::new(EngineCollectionEmbedder::new(db_path.clone()));
+        Self { db_path, embedder }
+    }
+
+    /// Executor over an explicit provider boundary: tests drive the real run
+    /// against a counting fake. Production always goes through [`Self::new`].
+    pub fn with_embedder(db_path: PathBuf, embedder: Arc<dyn CollectionEmbedder>) -> Self {
+        Self { db_path, embedder }
+    }
+
+    fn settings_conn(&self) -> Result<Connection, String> {
+        open_archive_connection(&self.db_path)
     }
 }
 fn sha256_hex_label(bytes: &[u8]) -> String {
@@ -368,22 +565,11 @@ impl Executor for EmbeddingExecutor {
                 })
             }
         };
-        drop(conn);
-        let total = sources
-            .iter()
-            .map(|(_, _, text)| {
-                super::eligibility::expected_chunk_count(text.chars().count()) as i64
-            })
-            .sum::<i64>()
-            + 1;
-        if let Err(error) = ctx.progress_total(task, total) {
-            return fatal("storage_unavailable", error);
-        }
-        let mut staged_all = Vec::with_capacity(sources.len());
+        // §2.8: plan every chunk and the aggregate text before the paid loop so
+        // the derived-cache read can name all of them in one query. Planning is
+        // a pure function of the source text; nothing is paid here.
+        let mut planned_all = Vec::with_capacity(sources.len());
         for (kind, source_id, text) in &sources {
-            if stop.stopped() {
-                return failed(ExecOutput::Stopped);
-            }
             let source = RagChunkSource {
                 asset_id: task.asset_id.clone(),
                 item_id: item_id.clone(),
@@ -399,61 +585,187 @@ impl Executor for EmbeddingExecutor {
                 Ok(planned) => planned,
                 Err(error) => return fatal("embedding_failed", error),
             };
+            planned_all.push((kind.clone(), source_id.clone(), text.clone(), planned));
+        }
+        let full_text =
+            aggregate_request_text(planned_all.iter().map(|(_, _, text, _)| text.as_str()));
+        // Key half that travels: `sha256` of the exact string handed to
+        // `embed_text` — the fragment's own `text_content`, or the asset's full
+        // source text for the aggregate (plan assumption S-e: the engine adds no
+        // instruction or task prefix, and its internal split-and-aggregate is a
+        // pure function shared with the Bibliography's `embed_batch`).
+        let mut asked_hashes = Vec::new();
+        for (_, _, _, planned) in &planned_all {
+            for chunk in planned {
+                asked_hashes.push(sha256_hex_label(chunk.text_content.as_bytes()));
+            }
+        }
+        let aggregate_input_hash = sha256_hex_label(full_text.as_bytes());
+        asked_hashes.push(aggregate_input_hash.clone());
+        // §2.4/§2.8: read before paying. One query for every fragment and the
+        // aggregate; only rows of the effective account under this contract
+        // answer, and the stored bytes publish exactly as a computation would.
+        let cached = crate::sync::derived::cached_vectors(
+            &conn,
+            &effective.hash,
+            effective.dimensions,
+            &asked_hashes,
+        );
+        let contract_hash = effective.hash.clone();
+        // The published `provider` names the space the settings resolved, not
+        // the engine object: a run that finishes entirely from the cache never
+        // builds an engine, and the two values coincide in production (`api` or
+        // `local`, resolved from the same settings).
+        let provider = effective.provider.clone();
+        // §2.6: every fragment and the aggregate that the cache did NOT answer
+        // is a paid `embed_text`. Before the first one, the pull-before-pay gate
+        // asks whether the account's cache can still grow; a fully cached asset
+        // has no miss and never waits. The gate reads its own connection, so the
+        // run keeps none open while it parks.
+        let misses = planned_all
+            .iter()
+            .flat_map(|(_, _, _, planned)| planned.iter())
+            .map(|chunk| sha256_hex_label(chunk.text_content.as_bytes()))
+            .chain(std::iter::once(aggregate_input_hash.clone()))
+            .any(|input_hash| !cached.contains_key(&input_hash));
+        drop(conn);
+        if misses {
+            let gate_conn = match open_archive_connection(&ctx.db_path) {
+                Ok(conn) => Some(conn),
+                Err(error) => {
+                    log::warn!(
+                        target: "processing",
+                        "derived gate read skipped, paying as before: {error}"
+                    );
+                    None
+                }
+            };
+            if let Some(gate_conn) = gate_conn {
+                match crate::sync::derived_gate::evaluate(
+                    &gate_conn,
+                    &task.task_id,
+                    super::repository::now_ms(),
+                ) {
+                    crate::sync::derived_gate::GateVerdict::Proceed(reason) => {
+                        log::info!(
+                            target: "processing",
+                            "derived gate lets {} pay ({}), cache misses only",
+                            task.task_id,
+                            reason.as_str()
+                        );
+                    }
+                    crate::sync::derived_gate::GateVerdict::Defer {
+                        resume_at_ms,
+                        reason,
+                    } => {
+                        log::info!(
+                            target: "processing",
+                            "derived gate parks {} until {resume_at_ms} ({})",
+                            task.task_id,
+                            reason.as_str()
+                        );
+                        return failed(ExecOutput::Deferred {
+                            code: crate::sync::derived_gate::DERIVED_WAIT_CODE.to_string(),
+                            reason: reason.as_str().to_string(),
+                            next_retry_at_ms: resume_at_ms,
+                        });
+                    }
+                }
+            }
+        }
+        let total = sources
+            .iter()
+            .map(|(_, _, text)| {
+                super::eligibility::expected_chunk_count(text.chars().count()) as i64
+            })
+            .sum::<i64>()
+            + 1;
+        if let Err(error) = ctx.progress_total(task, total) {
+            return fatal("storage_unavailable", error);
+        }
+        let mut staged_all = Vec::with_capacity(planned_all.len());
+        for (kind, source_id, text, planned) in &planned_all {
+            if stop.stopped() {
+                return failed(ExecOutput::Stopped);
+            }
             let mut blobs = Vec::with_capacity(planned.len());
+            let mut chunk_input_hashes = Vec::with_capacity(planned.len());
             for (index, chunk) in planned.iter().enumerate() {
                 if stop.stopped() {
                     return failed(ExecOutput::Stopped);
                 }
-                let key = format!("chunk:{kind}:{source_id}:{index}");
-                match ctx.unit(task, &key, || {
-                    let vector = self.engine()?.embed_text(&chunk.text_content)?;
-                    validate_vector(&vector)?;
-                    Ok(CompactVec(vector))
-                }) {
-                    Ok(CompactVec(vector)) => {
-                        if let Err(error) = validate_vector(&vector) {
-                            return fatal("embedding_failed", error);
+                let input_hash = sha256_hex_label(chunk.text_content.as_bytes());
+                match cached.get(&input_hash) {
+                    // A hit publishes the stored bytes verbatim: decoding and
+                    // re-encoding could only move bytes away from what the
+                    // paying device cached.
+                    Some(blob) => blobs.push(BASE64_STANDARD.encode(blob)),
+                    None => {
+                        let key = format!("chunk:{kind}:{source_id}:{index}");
+                        match ctx.unit(task, &key, || {
+                            let vector = self.embedder.embed_text(&chunk.text_content)?;
+                            validate_vector(&vector)?;
+                            Ok(CompactVec(vector))
+                        }) {
+                            // A restored checkpoint never ran the closure:
+                            // validate it too, as the historic resume path did.
+                            Ok(CompactVec(vector)) => {
+                                if let Err(error) = validate_vector(&vector) {
+                                    return fatal("embedding_failed", error);
+                                }
+                                blobs.push(encode_blob(&vector));
+                            }
+                            Err(error) => return failed(map_embedding_error(&error)),
                         }
-                        blobs.push(encode_blob(&vector));
                     }
-                    Err(error) => return failed(map_embedding_error(&error)),
                 }
+                chunk_input_hashes.push(input_hash);
             }
             let staged_source = StagedSource {
                 kind: kind.clone(),
                 source_id: source_id.clone(),
                 text_hash: sha256_hex_label(text.as_bytes()),
                 chunk_blobs: blobs,
+                chunk_input_hashes,
             };
             staged_all.push(staged_source);
         }
         if stop.stopped() {
             return failed(ExecOutput::Stopped);
         }
-        let full_text = sources
-            .iter()
-            .map(|(_, _, text)| text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let (aggregate, provider): (Vec<f32>, String) = match ctx.unit(task, "aggregate", || {
-            let engine = self.engine()?;
-            let vector = engine.embed_text(&full_text)?;
-            validate_vector(&vector)?;
-            Ok((CompactVec(vector), engine.provider_name().to_string()))
-        }) {
-            Ok((CompactVec(vector), provider)) => (vector, provider),
-            Err(error) => return failed(map_embedding_error(&error)),
+        // The aggregate is read from the cache by the same rule as a fragment;
+        // a hit publishes the stored bytes verbatim and never touches the
+        // engine (a device without credentials still finishes a cached asset).
+        // A checkpoint staged before the derived cache carried the provider
+        // name beside the vector, so it no longer decodes: `ExecCtx::unit`
+        // recomputes that one aggregate, which is the safe direction.
+        let aggregate_blob = match cached.get(&aggregate_input_hash) {
+            Some(blob) => BASE64_STANDARD.encode(blob),
+            None => match ctx.unit(task, "aggregate", || {
+                let vector = self.embedder.embed_text(&full_text)?;
+                validate_vector(&vector)?;
+                Ok(CompactVec(vector))
+            }) {
+                // A restored checkpoint never ran the closure: validate it too,
+                // exactly as the historic resume path did.
+                Ok(CompactVec(vector)) => {
+                    if let Err(error) = validate_vector(&vector) {
+                        return fatal("embedding_failed", error);
+                    }
+                    encode_blob(&vector)
+                }
+                Err(error) => return failed(map_embedding_error(&error)),
+            },
         };
-        if let Err(error) = validate_vector(&aggregate) {
-            return fatal("embedding_failed", error);
-        }
         let output = EmbeddingComputeOutput {
             item_id,
-            aggregate_blob: encode_blob(&aggregate),
+            aggregate_blob,
             provider,
             model: effective.model,
             contract: effective.contract,
             dimensions: effective.dimensions as i64,
+            contract_hash,
+            aggregate_input_hash,
             sources: staged_all,
         };
         ExecResult {
@@ -468,8 +780,20 @@ impl Executor for EmbeddingExecutor {
     }
 }
 
+/// The exact string one asset's aggregate vector answers (§2.8): every non-empty
+/// source text the run snapshotted, joined by a blank line, in the run's own
+/// order.
+///
+/// One construction for every writer and reader of that key — the executor's
+/// paid request, the publisher's cache write and the §2.3b backfill — so the
+/// `sha256` a later run looks up can never drift from the one a paying device
+/// stored.
+pub(crate) fn aggregate_request_text<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
+    texts.into_iter().collect::<Vec<_>>().join("\n\n")
+}
+
 /// (kind, source_id, text) snapshot, same ordering as the historic backfill.
-fn snapshot_sources(
+pub(crate) fn snapshot_sources(
     conn: &Connection,
     asset_id: &str,
     _item_id: &str,
@@ -543,6 +867,7 @@ mod tests {
             source_id: "e1".to_string(),
             text_hash: "hash".to_string(),
             chunk_blobs: blobs,
+            chunk_input_hashes: Vec::new(),
         }
     }
     #[test]
@@ -580,6 +905,8 @@ mod tests {
             model: CANONICAL_EMBEDDING_MODEL.to_string(),
             contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
             dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
+            contract_hash: String::new(),
+            aggregate_input_hash: String::new(),
             sources: vec![staged],
         };
         publish_embedding_output(&conn, "a1", &output).expect("publish");
@@ -652,6 +979,8 @@ mod tests {
             model: CANONICAL_EMBEDDING_MODEL.to_string(),
             contract: CANONICAL_EMBEDDING_CONTRACT_V1.to_string(),
             dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
+            contract_hash: String::new(),
+            aggregate_input_hash: String::new(),
             sources: vec![staged],
         };
         let error = publish_embedding_output(&conn, "a1", &output).expect_err("short set refused");
@@ -684,6 +1013,8 @@ mod tests {
             model: "custom/model".to_string(),
             contract: "custom-contract".to_string(),
             dimensions: CANONICAL_EMBEDDING_DIMENSIONS as i64,
+            contract_hash: String::new(),
+            aggregate_input_hash: String::new(),
             sources: vec![staged],
         };
         publish_embedding_output(&conn, "a1", &output).expect("publish");

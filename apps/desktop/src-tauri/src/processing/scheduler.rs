@@ -78,6 +78,19 @@ pub enum ExecOutput {
         code: String,
         message: String,
     },
+    /// The unit is waiting for something outside itself to arrive — today only
+    /// the pull-before-pay gate of plan-sync-bibliografia-derivada §2.6, whose
+    /// code is [`crate::sync::derived_gate::DERIVED_WAIT_CODE`]. Nothing failed
+    /// and nothing was paid: the supervisor parks the unit in `retry_wait`
+    /// until `next_retry_at_ms` under `code` (with `reason` as its message),
+    /// charges no retry budget, records no failure, and re-claims it
+    /// afterwards. Not a provider verdict, so it never reaches the failure or
+    /// blocked paths.
+    Deferred {
+        code: String,
+        reason: String,
+        next_retry_at_ms: i64,
+    },
     Stopped,
 }
 
@@ -110,24 +123,55 @@ impl ExecCtx {
         key: &str,
         compute: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
+        if let Some(value) = self.saved_unit(task, key)? {
+            return Ok(value);
+        }
+        let value = compute()?;
+        self.store_unit(task, key, &value)?;
+        Ok(value)
+    }
+
+    /// Reads one already-confirmed unit of this task, if any: same key space and
+    /// the same integrity rules `unit` applies before reusing it (own row, same
+    /// input fingerprint and contract, payload checksum). `None` when there is
+    /// nothing to reuse, so a caller that only wants to skip recomputation can
+    /// stay silent instead of staging a checkpoint of its own.
+    pub fn saved_unit<T: serde::de::DeserializeOwned>(
+        &self,
+        task: &ClaimedTask,
+        key: &str,
+    ) -> Result<Option<T>, String> {
         use rusqlite::OptionalExtension;
         use sha2::{Digest, Sha256};
         let conn = open_archive_connection(&self.db_path)?;
-        let saved: Option<(String, String)> = conn.query_row(
-            "SELECT payload,payload_checksum FROM processing_checkpoints WHERE task_id=?1 AND unit_key=?2 AND input_fingerprint=?3 AND contract_hash=?4",
-            rusqlite::params![task.task_id,key,task.input_fingerprint,task.contract_hash],
-            |row| Ok((row.get(0)?,row.get(1)?)),
-        ).optional().map_err(|e| e.to_string())?;
+        let saved: Option<(String, String)> = conn
+            .query_row(
+                "SELECT payload,payload_checksum FROM processing_checkpoints WHERE task_id=?1 AND unit_key=?2 AND input_fingerprint=?3 AND contract_hash=?4",
+                rusqlite::params![task.task_id, key, task.input_fingerprint, task.contract_hash],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
         drop(conn);
-        if let Some((payload, checksum)) = saved {
-            if hex::encode(Sha256::digest(payload.as_bytes())) == checksum {
-                if let Ok(value) = serde_json::from_str(&payload) {
-                    return Ok(value);
-                }
-            }
+        let Some((payload, checksum)) = saved else {
+            return Ok(None);
+        };
+        if hex::encode(Sha256::digest(payload.as_bytes())) != checksum {
+            return Ok(None);
         }
-        let value = compute()?;
-        let payload = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        Ok(serde_json::from_str(&payload).ok())
+    }
+
+    /// Stages one complete unit for a later attempt (or for this run's own
+    /// accounting) without returning it: the same fenced write `unit` performs.
+    pub fn store_unit<T: serde::Serialize>(
+        &self,
+        task: &ClaimedTask,
+        key: &str,
+        value: &T,
+    ) -> Result<(), String> {
+        use sha2::{Digest, Sha256};
+        let payload = serde_json::to_string(value).map_err(|e| e.to_string())?;
         let checkpoint = NewCheckpoint {
             unit_key: key.to_string(),
             input_fingerprint: task.input_fingerprint.clone(),
@@ -135,9 +179,9 @@ impl ExecCtx {
             payload_checksum: hex::encode(Sha256::digest(payload.as_bytes())),
             payload,
         };
-        self.checkpoint(task, &checkpoint)?;
-        Ok(value)
+        self.checkpoint(task, &checkpoint)
     }
+
     pub fn checkpoint(&self, task: &ClaimedTask, checkpoint: &NewCheckpoint) -> Result<(), String> {
         let conn = open_archive_connection(&self.db_path)?;
         repository::save_checkpoint(
@@ -214,12 +258,29 @@ impl ExecutorRegistry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunOneOutcome {
     Idle,
-    Succeeded { task_id: String },
-    Failed { task_id: String },
-    Waiting { task_id: String },
-    Stopped { task_id: String },
-    Requeued { task_id: String },
-    Blocked { task_id: String },
+    Succeeded {
+        task_id: String,
+    },
+    Failed {
+        task_id: String,
+    },
+    Waiting {
+        task_id: String,
+    },
+    Stopped {
+        task_id: String,
+    },
+    Requeued {
+        task_id: String,
+    },
+    Blocked {
+        task_id: String,
+    },
+    /// Parked on the pull-before-pay gate (§2.6): re-runs at its wake time,
+    /// with nothing charged to the retry budget.
+    Deferred {
+        task_id: String,
+    },
 }
 
 /// Claims one unit, executes it, and publishes the verdict — the whole
@@ -497,6 +558,27 @@ pub fn run_one(
             finalize_links(conn, &task_id)?;
             on_terminal(&task, "blocked", &code, &message);
             Ok(RunOneOutcome::Blocked { task_id })
+        }
+        ExecOutput::Deferred {
+            code,
+            reason,
+            next_retry_at_ms,
+        } => {
+            // §2.6, D5: the unit waits for the account's derived cache. Nothing
+            // was paid and nothing failed, so park it with its wake time and
+            // charge nothing; the batch stays live and the task re-runs by
+            // itself. `code` is the durable vocabulary the status bar counts.
+            repository::defer_task(
+                conn,
+                &task_id,
+                task.lease_epoch,
+                next_retry_at_ms,
+                &code,
+                &reason,
+                now_ms,
+            )?;
+            finalize_links(conn, &task_id)?;
+            Ok(RunOneOutcome::Deferred { task_id })
         }
         ExecOutput::Stopped => {
             repository::interrupt_task(conn, &task_id, task.lease_epoch)?;
@@ -1311,6 +1393,136 @@ mod tests {
         assert_eq!(state, "pending");
         assert_eq!(cycle, 1);
     }
+    /// §2.6, D5: a unit the pull-before-pay gate deferred parks with a wake time
+    /// and re-runs by itself. Nothing about it failed, so nothing is charged:
+    /// the retry budget, the attempt count and the batch stay as they were, and
+    /// the near-zero attempt is marked with the gate's durable code (which keeps
+    /// it out of the ETA average) instead of a failure code.
+    #[test]
+    fn a_deferred_unit_parks_with_its_wake_time_and_burns_no_retry_budget() {
+        let (dir, conn) = running_db();
+        let ctx = test_ctx(&dir);
+        // First run: the gate says wait; the second one pays and finishes.
+        let mut waiting = ExecutorRegistry::new();
+        waiting.register(Arc::new(ScriptExecutor {
+            script: std::sync::Mutex::new(vec![
+                ExecOutput::Success {
+                    outcome: "text".to_string(),
+                    receipt: "{}".to_string(),
+                },
+                ExecOutput::Deferred {
+                    code: crate::sync::derived_gate::DERIVED_WAIT_CODE.to_string(),
+                    reason: "capability unknown".to_string(),
+                    next_retry_at_ms: 61_000,
+                },
+            ]),
+            checkpoints_per_run: 0,
+        }));
+        assert!(matches!(
+            run_one(
+                &conn,
+                &ctx,
+                &waiting,
+                "s1",
+                1_000,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("run 1"),
+            RunOneOutcome::Deferred { .. }
+        ));
+        let (state, next_retry_at, retry_count, attempt_count, code): (
+            String,
+            Option<i64>,
+            i64,
+            i64,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT state, next_retry_at, retry_count, attempt_count, last_error_code
+                   FROM processing_tasks WHERE id = 'ocr-a1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("parked task");
+        assert_eq!(state, "retry_wait");
+        assert_eq!(
+            next_retry_at,
+            Some(61_000),
+            "wakes exactly at the instant the gate computed"
+        );
+        assert_eq!(retry_count, 0, "no retry budget consumed");
+        assert_eq!(
+            attempt_count, 1,
+            "only the claim that ran, no failed paid attempt was charged"
+        );
+        assert_eq!(code.as_deref(), Some("derived_cache_wait"));
+        let (outcome, attempt_code): (String, Option<String>) = conn
+            .query_row(
+                "SELECT outcome, error_code FROM processing_attempts
+                  WHERE task_id = 'ocr-a1' AND attempt_number = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("interrupted attempt");
+        assert_eq!(outcome, "interrupted", "deferral is not a failure");
+        assert_eq!(attempt_code.as_deref(), Some("derived_cache_wait"));
+        let batch_state: String = conn
+            .query_row(
+                "SELECT state FROM processing_batches WHERE id = 'b1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("batch state");
+        assert_eq!(batch_state, "running", "the batch is not finalized");
+
+        // Still parked: nothing claims it before its wake time.
+        let wake = 61_000;
+        assert!(matches!(
+            run_one(
+                &conn,
+                &ctx,
+                &waiting,
+                "s1",
+                wake - 1,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("too early"),
+            RunOneOutcome::Idle
+        ));
+        // At the wake time the same unit runs again and finishes normally.
+        assert!(matches!(
+            run_one(
+                &conn,
+                &ctx,
+                &waiting,
+                "s1",
+                wake,
+                &noop_commit,
+                &noop_terminal
+            )
+            .expect("wake"),
+            RunOneOutcome::Succeeded { .. }
+        ));
+        let retry_count: i64 = conn
+            .query_row(
+                "SELECT retry_count FROM processing_tasks WHERE id = 'ocr-a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("retry budget after the wake");
+        assert_eq!(retry_count, 0, "the wait never charged the retry budget");
+    }
+
     #[test]
     fn a_committed_unit_survives_later_failure_and_lease_reclaim() {
         let (dir, conn) = running_db();

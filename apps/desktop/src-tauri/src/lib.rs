@@ -1283,6 +1283,12 @@ pub fn run() {
                     )
                 }
             }
+            // Seed the derived sync cache with results this archive already
+            // paid for (plan §2.3b). It needs the derived tables and the owner
+            // mark that ensure_capture_on_path creates, so it runs after it.
+            // Background, local only, a no-op unless the session account owns
+            // the archive or once the pass is marked done.
+            bibliography::derived_backfill::request_backfill(db_path.clone());
 
             // Sync blob cleanup (DESIGN §7): remove orphaned `*.part` temp files
             // under assets/ left by a download interrupted before the atomic
