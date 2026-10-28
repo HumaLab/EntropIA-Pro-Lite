@@ -45,7 +45,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
 | T2 | Versioned OCR contract | S2 | D3, WU3 | worker | dde1d82a |
 | T3 | Write paid results to the cache in the same transaction (item, chunk, OCR outcomes incl. empty) | S3 | §2.3, WU1 | worker | ee754978 |
 | T4 | Read before paying: bibliography vectors (item + chunk), effective account, width validation | S3, S8 | §2.4, WU2 | worker | 75223749 |
-| T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | — |
+| T5 | Read before paying: OCR pages, cached pages cut out of PDF windows | S3 | §2.4, WU2 | worker | a54cd659 |
 | T6 | Collections: read/write the cache in `processing/embedding.rs` | S6 | §2.8, WU2b | worker | — |
 | T7 | Backfill of already-paid results (owner account only) | S4, S7 | §2.3b, WU1b | worker | — |
 | T8 | Transport `bibliography-derived-v1` (client, vs `SyncApi` mock), frozen request scope | S2, S3, S7 | §2.5, §2.9, WU4 | worker | — |
@@ -76,3 +76,7 @@ Every task: test-first, no real archive (tests use in-memory/temp DBs; manual ru
   replays `settled_page_row` on it. The first T3 draft double-converted and changed published text; fixed before
   commit with a RED/GREEN test. The reprocess reuse path the plan cites (`processing.rs:3382-3392`) relies on the
   same false assumption; pre-existing, outside this feature, not changed.
+- **L7** (T6): plan assumption S-e confirmed. `embed_text` adds no prefix or instruction
+  (`nlp/embeddings.rs:560-586`, same split/aggregate as `embed_batch`), so pasajes and Collection fragments share
+  the `(contract_hash, sha256(text))` key. Pre-existing, not changed: on Pro with `embedding_provider` unset the
+  engine defaults to local while the effective contract says `api` (verifier advisory A2).
