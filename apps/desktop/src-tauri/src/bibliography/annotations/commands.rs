@@ -100,7 +100,10 @@ fn is_personal(conn: &Connection, library_row_id: &str) -> Result<bool, String> 
 
 /// The scope of a personal library for the stored key, or the status that
 /// stops the caller.
-fn scope_for(conn: &Connection, library_row_id: &str) -> Result<Result<(Scope, ZoteroCredentials), &'static str>, String> {
+fn scope_for(
+    conn: &Connection,
+    library_row_id: &str,
+) -> Result<Result<(Scope, ZoteroCredentials), &'static str>, String> {
     if !is_personal(conn, library_row_id)? {
         return Ok(Err("not_personal"));
     }
@@ -108,7 +111,10 @@ fn scope_for(conn: &Connection, library_row_id: &str) -> Result<Result<(Scope, Z
         return Ok(Err("no_key"));
     };
     Ok(Ok((
-        Scope { library_row_id: library_row_id.to_string(), web_user_id: credentials.user_id.to_string() },
+        Scope {
+            library_row_id: library_row_id.to_string(),
+            web_user_id: credentials.user_id.to_string(),
+        },
         credentials,
     )))
 }
@@ -137,16 +143,24 @@ fn view(conn: &Connection, scope: &Scope, row: &AnnotationRow) -> AnnotationView
 }
 
 fn emit_changed(app: &AppHandle, library_row_id: &str) {
-    let _ = app.emit(CHANGED_EVENT, serde_json::json!({ "libraryRowId": library_row_id }));
+    let _ = app.emit(
+        CHANGED_EVENT,
+        serde_json::json!({ "libraryRowId": library_row_id }),
+    );
 }
 
 /// Checks a desired `data` object before it is queued.
 pub fn validate_data(data: &Data) -> Result<(), String> {
-    let kind = data.get("annotationType").and_then(Value::as_str).unwrap_or_default();
+    let kind = data
+        .get("annotationType")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if !CREATABLE_TYPES.contains(&kind) && kind != "ink" {
         return Err(format!("unsupported annotation type `{kind}`"));
     }
-    let position = data.get(wire::POSITION_FIELD).ok_or("the annotation has no position")?;
+    let position = data
+        .get(wire::POSITION_FIELD)
+        .ok_or("the annotation has no position")?;
     let position_len = match position {
         Value::String(text) => text.len(),
         other => other.to_string().len(),
@@ -157,7 +171,10 @@ pub fn validate_data(data: &Data) -> Result<(), String> {
     if wire::parse_position(data).is_none() {
         return Err("the annotation position is not valid JSON".into());
     }
-    let label = data.get("annotationPageLabel").and_then(Value::as_str).unwrap_or_default();
+    let label = data
+        .get("annotationPageLabel")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if label.chars().count() > MAX_PAGE_LABEL_CHARS {
         return Err("the page label is too long for Zotero".into());
     }
@@ -195,7 +212,8 @@ fn mutate(
         let mut row = repo::load(&conn, &scope, &key)?.ok_or("annotation not found")?;
         let action = change(&mut row)?;
         repo::apply(&conn, &scope, &key, &row, &action, now_ms())?;
-        tx.commit().map_err(|error| format!("annotation write failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("annotation write failed: {error}"))?;
         Ok((action != RowAction::Remove).then(|| view(&conn, &scope, &row)))
     }
 }
@@ -211,13 +229,21 @@ pub async fn bibliography_annotations_list(
         let conn = open_archive_connection(&db_path)?;
         let (scope, _) = match scope_for(&conn, &library_row_id)? {
             Ok(found) => found,
-            Err(status) => return Ok(AnnotationList { status, annotations: Vec::new() }),
+            Err(status) => {
+                return Ok(AnnotationList {
+                    status,
+                    annotations: Vec::new(),
+                })
+            }
         };
         let annotations = repo::by_parent(&conn, &scope, &parent_key)?
             .iter()
             .map(|row| view(&conn, &scope, row))
             .collect();
-        Ok(AnnotationList { status: "ready", annotations })
+        Ok(AnnotationList {
+            status: "ready",
+            annotations,
+        })
     })
     .await
 }
@@ -238,7 +264,10 @@ pub async fn bibliography_annotations_create(
             Ok(found) => found,
             Err(status) => return Err(status.to_string()),
         };
-        let kind = data.get("annotationType").and_then(Value::as_str).unwrap_or_default();
+        let kind = data
+            .get("annotationType")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !CREATABLE_TYPES.contains(&kind) {
             return Err(format!("unsupported annotation type `{kind}`"));
         }
@@ -266,16 +295,21 @@ pub async fn bibliography_annotations_update(
     db: State<'_, AppDbState>,
 ) -> Result<Option<AnnotationView>, String> {
     let library = library_row_id.clone();
-    let task = mutate(db.db_path.clone(), library_row_id, key.clone(), move |row| {
-        let mut desired = normalize(data);
-        // The type never changes on an existing key.
-        if let Some(kind) = row.desired().and_then(|d| d.get("annotationType")).cloned() {
-            desired.insert("annotationType".into(), kind);
-        }
-        desired.insert("key".into(), Value::String(row.annotation_key.clone()));
-        validate_data(&desired)?;
-        Ok(machine::local_edit(row, desired))
-    });
+    let task = mutate(
+        db.db_path.clone(),
+        library_row_id,
+        key.clone(),
+        move |row| {
+            let mut desired = normalize(data);
+            // The type never changes on an existing key.
+            if let Some(kind) = row.desired().and_then(|d| d.get("annotationType")).cloned() {
+                desired.insert("annotationType".into(), kind);
+            }
+            desired.insert("key".into(), Value::String(row.annotation_key.clone()));
+            validate_data(&desired)?;
+            Ok(machine::local_edit(row, desired))
+        },
+    );
     let updated = blocking(task).await?;
     emit_changed(&app, &library);
     Ok(updated)
@@ -382,7 +416,7 @@ pub fn after_catalog_sync(app: &AppHandle, db_path: std::path::PathBuf, library_
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_sync(&app, db_path, library_row_id, "catalog_sync").await {
-            eprintln!("[annotations] sync after the catalog sync failed: {error}");
+            log::warn!(target: "annotations", "sync after the catalog sync failed: {error}");
         }
     });
 }
@@ -395,8 +429,14 @@ async fn run_sync(
 ) -> Result<AnnotationSyncResult, String> {
     if reason == "open" {
         let times = last_sync_times().lock().unwrap_or_else(|e| e.into_inner());
-        if times.get(&library_row_id).is_some_and(|at| at.elapsed() < OPEN_DEBOUNCE) {
-            return Ok(AnnotationSyncResult { status: "skipped", report: None });
+        if times
+            .get(&library_row_id)
+            .is_some_and(|at| at.elapsed() < OPEN_DEBOUNCE)
+        {
+            return Ok(AnnotationSyncResult {
+                status: "skipped",
+                report: None,
+            });
         }
     }
     let scope_path = db_path.clone();
@@ -409,27 +449,63 @@ async fn run_sync(
     .await?;
     let (scope, credentials) = match scope {
         Ok(found) => found,
-        Err(status) => return Ok(AnnotationSyncResult { status, report: None }),
+        Err(status) => {
+            return Ok(AnnotationSyncResult {
+                status,
+                report: None,
+            })
+        }
     };
     match fetch_key_info(API_BASE, &credentials.key).await? {
         KeyCheck::Valid(info) if info.user_id == credentials.user_id && info.can_write_user() => {}
-        KeyCheck::Valid(_) => return Ok(AnnotationSyncResult { status: "no_write", report: None }),
-        KeyCheck::InvalidKey => return Ok(AnnotationSyncResult { status: "invalid_key", report: None }),
-        KeyCheck::Unreachable => return Ok(AnnotationSyncResult { status: "unreachable", report: None }),
+        KeyCheck::Valid(_) => {
+            return Ok(AnnotationSyncResult {
+                status: "no_write",
+                report: None,
+            })
+        }
+        KeyCheck::InvalidKey => {
+            return Ok(AnnotationSyncResult {
+                status: "invalid_key",
+                report: None,
+            })
+        }
+        KeyCheck::Unreachable => {
+            return Ok(AnnotationSyncResult {
+                status: "unreachable",
+                report: None,
+            })
+        }
     }
     let result = blocking(move || {
         // The personal library is whichever account the open Zotero is signed
         // in to; a key of another account would write someone else's library.
         match ConnectorPort::local().local_user_id() {
             Ok(Some(open)) if open == credentials.user_id => {}
-            Ok(Some(_)) => return Ok(AnnotationSyncResult { status: "other_account", report: None }),
-            Ok(None) | Err(_) => return Ok(AnnotationSyncResult { status: "account_unknown", report: None }),
+            Ok(Some(_)) => {
+                return Ok(AnnotationSyncResult {
+                    status: "other_account",
+                    report: None,
+                })
+            }
+            Ok(None) | Err(_) => {
+                return Ok(AnnotationSyncResult {
+                    status: "account_unknown",
+                    report: None,
+                })
+            }
         }
         let conn = open_archive_connection(&db_path)?;
         let api = WebAnnotationApi::new(API_BASE, &credentials.key, credentials.user_id)?;
-        let parents = CatalogParents { conn: &conn, library_row_id: &scope.library_row_id };
+        let parents = CatalogParents {
+            conn: &conn,
+            library_row_id: &scope.library_row_id,
+        };
         let report = sync_library(&conn, &scope, &api, &parents, now_ms())?;
-        Ok(AnnotationSyncResult { status: "synced", report: Some(report) })
+        Ok(AnnotationSyncResult {
+            status: "synced",
+            report: Some(report),
+        })
     })
     .await?;
     last_sync_times()
@@ -453,13 +529,18 @@ mod tests {
 
     #[test]
     fn validation_rejects_what_zotero_would_refuse() {
-        let good = data(json!({"annotationType": "highlight", "annotationPosition": "{\"pageIndex\":0,\"rects\":[]}"}));
+        let good = data(
+            json!({"annotationType": "highlight", "annotationPosition": "{\"pageIndex\":0,\"rects\":[]}"}),
+        );
         assert_eq!(validate_data(&good), Ok(()));
         let no_position = data(json!({"annotationType": "note"}));
         assert!(validate_data(&no_position).is_err());
-        let huge = data(json!({"annotationType": "image", "annotationPosition": "x".repeat(70_000)}));
+        let huge =
+            data(json!({"annotationType": "image", "annotationPosition": "x".repeat(70_000)}));
         assert!(validate_data(&huge).is_err());
-        let label = data(json!({"annotationType": "note", "annotationPosition": "{}", "annotationPageLabel": "x".repeat(51)}));
+        let label = data(
+            json!({"annotationType": "note", "annotationPosition": "{}", "annotationPageLabel": "x".repeat(51)}),
+        );
         assert!(validate_data(&label).is_err());
         let unknown = data(json!({"annotationType": "comment", "annotationPosition": "{}"}));
         assert!(validate_data(&unknown).is_err());
@@ -483,6 +564,9 @@ mod tests {
         assert_eq!(scope_for(&conn, "lib1").unwrap().err(), Some("no_key"));
         conn.execute("UPDATE zotero_libraries SET library_type = 'group', library_id = '7' WHERE id = 'lib1'", [])
             .unwrap();
-        assert_eq!(scope_for(&conn, "lib1").unwrap().err(), Some("not_personal"));
+        assert_eq!(
+            scope_for(&conn, "lib1").unwrap().err(),
+            Some("not_personal")
+        );
     }
 }
