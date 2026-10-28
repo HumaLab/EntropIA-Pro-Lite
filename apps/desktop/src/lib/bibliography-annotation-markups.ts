@@ -37,7 +37,9 @@ function asRect(value: unknown): PdfRect | null {
 }
 
 function asRects(value: unknown): PdfRect[] {
-  return Array.isArray(value) ? value.map(asRect).filter((rect): rect is PdfRect => rect !== null) : []
+  return Array.isArray(value)
+    ? value.map(asRect).filter((rect): rect is PdfRect => rect !== null)
+    : []
 }
 
 /** A stored annotation as a viewer markup; `null` when it cannot be drawn. */
@@ -63,7 +65,8 @@ export function viewToMarkup(view: AnnotationView): PdfMarkup | null {
   if (typeof position.width === 'number') markup.width = position.width
   if (typeof position.fontSize === 'number') markup.fontSize = position.fontSize
   if (typeof position.rotation === 'number') markup.rotation = position.rotation
-  if (typeof data.annotationText === 'string' && data.annotationText) markup.text = data.annotationText
+  if (typeof data.annotationText === 'string' && data.annotationText)
+    markup.text = data.annotationText
   if (typeof data.annotationComment === 'string' && data.annotationComment) {
     markup.comment = data.annotationComment
   }

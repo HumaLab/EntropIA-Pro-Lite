@@ -224,7 +224,11 @@
   function liveBox(shape: Shape, box: ViewportBox): ViewportBox {
     if (!drag || drag.id !== shape.markup.id) return box
     if (drag.mode === 'move') return { ...box, x: box.x + drag.dx, y: box.y + drag.dy }
-    return { ...box, width: Math.max(8, box.width + drag.dx), height: Math.max(8, box.height + drag.dy) }
+    return {
+      ...box,
+      width: Math.max(8, box.width + drag.dx),
+      height: Math.max(8, box.height + drag.dy),
+    }
   }
 
   function handleShapeKeyDown(event: KeyboardEvent, shape: Shape) {
@@ -263,7 +267,11 @@
     return { text, boxes }
   }
 
-  function createFromSelection(type: 'highlight' | 'underline', chosenColor: string, picked = popover) {
+  function createFromSelection(
+    type: 'highlight' | 'underline',
+    chosenColor: string,
+    picked = popover
+  ) {
     if (!picked) return
     const rects = selectionToPdfRects(viewport, picked.boxes)
     popover = null
@@ -417,7 +425,8 @@
               y={box.y + (markup.fontSize ?? TEXT_FONT_SIZE_PT) * viewport.scale}
               fill={markup.color}
               font-size={(markup.fontSize ?? TEXT_FONT_SIZE_PT) * viewport.scale}
-            >{markup.comment ?? ''}</text>
+              >{markup.comment ?? ''}</text
+            >
           {/if}
           {#if selected && isMovable(markup) && tool === 'select' && index === 0}
             <rect
@@ -615,7 +624,8 @@
     font-family: var(--font-ui);
   }
 
-  .pdf-markup--selected :is(.pdf-markup__highlight, .pdf-markup__note, .pdf-markup__area, .pdf-markup__text-box) {
+  .pdf-markup--selected
+    :is(.pdf-markup__highlight, .pdf-markup__note, .pdf-markup__area, .pdf-markup__text-box) {
     stroke: var(--color-accent);
     stroke-width: 2;
   }

@@ -10,7 +10,10 @@ import {
 } from './bibliography-annotation-markups'
 import type { AnnotationView } from './bibliography-annotations'
 
-function view(data: AnnotationView['data'], overrides: Partial<AnnotationView> = {}): AnnotationView {
+function view(
+  data: AnnotationView['data'],
+  overrides: Partial<AnnotationView> = {}
+): AnnotationView {
   return {
     key: 'ABCD2345',
     parentKey: 'PARENT22',
@@ -59,8 +62,16 @@ describe('bibliography-annotation-markups', () => {
   })
 
   it('keeps ink and conflicted annotations read-only', () => {
-    const ink = view({ annotationType: 'ink', annotationPosition: '{"pageIndex":0,"paths":[[1,2,3,4]],"width":2}' })
-    expect(viewToMarkup(ink)).toMatchObject({ type: 'ink', paths: [[1, 2, 3, 4]], width: 2, readOnly: true })
+    const ink = view({
+      annotationType: 'ink',
+      annotationPosition: '{"pageIndex":0,"paths":[[1,2,3,4]],"width":2}',
+    })
+    expect(viewToMarkup(ink)).toMatchObject({
+      type: 'ink',
+      paths: [[1, 2, 3, 4]],
+      width: 2,
+      readOnly: true,
+    })
     expect(viewToMarkup(view(highlight, { syncState: 'conflict' }))?.readOnly).toBe(true)
   })
 
@@ -84,14 +95,34 @@ describe('bibliography-annotation-markups', () => {
       annotationSortIndex: '00002|000003|00004',
       tags: [],
     })
-    const note = draftToData({ type: 'note', color: '#ffd400', pageIndex: 0, rects: [[0, 0, 22, 22]] })
+    const note = draftToData({
+      type: 'note',
+      color: '#ffd400',
+      pageIndex: 0,
+      rects: [[0, 0, 22, 22]],
+    })
     expect(note).not.toHaveProperty('annotationText')
-    const text = draftToData({ type: 'text', color: '#000000', pageIndex: 0, rects: [[0, 0, 1, 1]], fontSize: 12 })
-    expect(text.annotationPosition).toEqual({ pageIndex: 0, rects: [[0, 0, 1, 1]], fontSize: 12, rotation: 0 })
+    const text = draftToData({
+      type: 'text',
+      color: '#000000',
+      pageIndex: 0,
+      rects: [[0, 0, 1, 1]],
+      fontSize: 12,
+    })
+    expect(text.annotationPosition).toEqual({
+      pageIndex: 0,
+      rects: [[0, 0, 1, 1]],
+      fontSize: 12,
+      rotation: 0,
+    })
   })
 
   it('changes geometry without dropping unknown position fields', () => {
-    const moved = withGeometry(highlight, { id: 'ABCD2345', rects: [[10, 20, 30, 40]], sortIndex: '00001|000000|00050' })
+    const moved = withGeometry(highlight, {
+      id: 'ABCD2345',
+      rects: [[10, 20, 30, 40]],
+      sortIndex: '00001|000000|00050',
+    })
     expect(moved.annotationPosition).toEqual({
       pageIndex: 1,
       rects: [[10, 20, 30, 40]],
@@ -105,14 +136,25 @@ describe('bibliography-annotation-markups', () => {
   it('orders the list by page, then sort index', () => {
     const a = view({ ...highlight, annotationSortIndex: '00001|000020|00100' }, { key: 'AAAA2222' })
     const b = view({ ...highlight, annotationSortIndex: '00001|000010|00100' }, { key: 'BBBB3333' })
-    const c = view({ ...highlight, annotationPosition: '{"pageIndex":0,"rects":[]}' }, { key: 'CCCC4444' })
-    expect([a, b, c].sort(compareViews).map((entry) => entry.key)).toEqual(['CCCC4444', 'BBBB3333', 'AAAA2222'])
+    const c = view(
+      { ...highlight, annotationPosition: '{"pageIndex":0,"rects":[]}' },
+      { key: 'CCCC4444' }
+    )
+    expect([a, b, c].sort(compareViews).map((entry) => entry.key)).toEqual([
+      'CCCC4444',
+      'BBBB3333',
+      'AAAA2222',
+    ])
     expect(viewPage(c)).toBe(1)
   })
 
   it('asks previews for areas and ink only, keyed by revision', () => {
     const area = view(
-      { annotationType: 'image', annotationColor: '#2ea8e5', annotationPosition: '{"pageIndex":3,"rects":[[1,2,3,4]]}' },
+      {
+        annotationType: 'image',
+        annotationColor: '#2ea8e5',
+        annotationPosition: '{"pageIndex":3,"rects":[[1,2,3,4]]}',
+      },
       { updatedAt: 42 }
     )
     expect(thumbnailRequest(area)).toEqual({
@@ -123,9 +165,11 @@ describe('bibliography-annotation-markups', () => {
       color: '#2ea8e5',
       width: undefined,
     })
-    const ink = view({ annotationType: 'ink', annotationPosition: '{"pageIndex":0,"paths":[[1,2,3,4]],"width":3}' })
+    const ink = view({
+      annotationType: 'ink',
+      annotationPosition: '{"pageIndex":0,"paths":[[1,2,3,4]],"width":3}',
+    })
     expect(thumbnailRequest(ink)).toMatchObject({ paths: [[1, 2, 3, 4]], width: 3 })
     expect(thumbnailRequest(view(highlight))).toBeNull()
   })
 })
-

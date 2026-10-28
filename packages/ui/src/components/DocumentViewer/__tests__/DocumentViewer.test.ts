@@ -1597,7 +1597,9 @@ describe('DocumentViewer', () => {
       })
 
       const scrollContainer = screen.getByTestId('pdf-scroll-container')
-      expect(scrollContainer.classList.contains('document-viewer__canvas-container--centered')).toBe(true)
+      expect(
+        scrollContainer.classList.contains('document-viewer__canvas-container--centered')
+      ).toBe(true)
       await waitFor(() => expect(pdfMock.mockDocument.getPage).toHaveBeenCalled())
       // A short, wide pane: the page takes the width minus two 48 px gutters,
       // not the height, so it reads at a useful size and scrolls down.
@@ -1633,7 +1635,15 @@ describe('DocumentViewer', () => {
       // must clear it, not slide under it.
       const toolbar = screen.getByTestId('annotation-toolbar')
       toolbar.getBoundingClientRect = vi.fn(() => ({
-        x: 0, y: 0, top: 0, left: 0, right: 81, bottom: 350, width: 81, height: 350, toJSON: () => ({}),
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 81,
+        bottom: 350,
+        width: 81,
+        height: 350,
+        toJSON: () => ({}),
       }))
       await triggerResizeObservers(toolbar)
       pageRequest.resolve(pdfMock.createPage(800, 600))
@@ -1650,7 +1660,13 @@ describe('DocumentViewer', () => {
       const pageRequest = deferred<typeof pdfMock.mockPage>()
       pdfMock.mockDocument.getPage.mockImplementation(() => pageRequest.promise)
       render(DocumentViewer, {
-        props: { path: '/d.pdf', type: 'pdf', assetUrl: 'asset://localhost/d.pdf', readOnly: true, pdfFit: 'width' },
+        props: {
+          path: '/d.pdf',
+          type: 'pdf',
+          assetUrl: 'asset://localhost/d.pdf',
+          readOnly: true,
+          pdfFit: 'width',
+        },
       })
       const scrollContainer = screen.getByTestId('pdf-scroll-container')
       setupContainer(scrollContainer, 3000, 300)
@@ -1668,7 +1684,9 @@ describe('DocumentViewer', () => {
         props: { path: '/p.pdf', type: 'pdf', assetUrl: 'asset://localhost/p.pdf' },
       })
       expect(
-        screen.getByTestId('pdf-scroll-container').classList.contains('document-viewer__canvas-container--centered')
+        screen
+          .getByTestId('pdf-scroll-container')
+          .classList.contains('document-viewer__canvas-container--centered')
       ).toBe(false)
     })
 

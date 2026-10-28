@@ -659,7 +659,9 @@ describe('BibliographyWorkView', () => {
       expect(apply).toBeDisabled()
       await fireEvent.click(within(conflict).getByRole('button', { name: 'Usar Zotero' }))
       expect(apply).toBeDisabled()
-      await fireEvent.click(within(conflict).getByRole('button', { name: 'Conservar la anotación' }))
+      await fireEvent.click(
+        within(conflict).getByRole('button', { name: 'Conservar la anotación' })
+      )
       await fireEvent.click(apply)
       await waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('bibliography_annotations_resolve', {
@@ -734,4 +736,3 @@ describe('BibliographyWorkView', () => {
     })
   })
 })
-

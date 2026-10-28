@@ -151,9 +151,15 @@ describe('sort index (zotero/reader@0b16e731)', () => {
   })
 
   it('uses the bounds of ink strokes', () => {
-    expect(getSortIndexRect({ pageIndex: 0, paths: [[10, 20, 30, 40], [5, 50]] })).toEqual([
-      5, 20, 30, 50,
-    ])
+    expect(
+      getSortIndexRect({
+        pageIndex: 0,
+        paths: [
+          [10, 20, 30, 40],
+          [5, 50],
+        ],
+      })
+    ).toEqual([5, 20, 30, 50])
   })
 
   it('reads glyph boxes from a rendered text layer and gives up without layout', () => {
@@ -166,7 +172,17 @@ describe('sort index (zotero/reader@0b16e731)', () => {
     let call = 0
     spy.mockImplementation(() => {
       const left = 10 + 8 * call++
-      return { left, top: 100, width: 8, height: 12, right: left + 8, bottom: 112, x: left, y: 100, toJSON: () => ({}) } as DOMRect
+      return {
+        left,
+        top: 100,
+        width: 8,
+        height: 12,
+        right: left + 8,
+        bottom: 112,
+        x: left,
+        y: 100,
+        toJSON: () => ({}),
+      } as DOMRect
     })
     const glyphs = charsFromTextLayer(container, viewport)
     expect(glyphs).toHaveLength(2)

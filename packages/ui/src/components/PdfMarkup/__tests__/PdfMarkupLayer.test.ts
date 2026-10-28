@@ -85,10 +85,14 @@ describe('PdfMarkupLayer', () => {
 
   it('lets the overlay take the pointer only for note, area and text tools', () => {
     const view = render(PdfMarkupLayer, { props: props({ tool: 'highlight' }) })
-    expect(screen.getByTestId('pdf-markup-layer').classList.contains('pdf-markup-layer--capture')).toBe(false)
+    expect(
+      screen.getByTestId('pdf-markup-layer').classList.contains('pdf-markup-layer--capture')
+    ).toBe(false)
     view.unmount()
     render(PdfMarkupLayer, { props: props({ tool: 'image' }) })
-    expect(screen.getByTestId('pdf-markup-layer').classList.contains('pdf-markup-layer--capture')).toBe(true)
+    expect(
+      screen.getByTestId('pdf-markup-layer').classList.contains('pdf-markup-layer--capture')
+    ).toBe(true)
   })
 
   it('draws an area by dragging and ignores a click', async () => {
@@ -109,7 +113,13 @@ describe('PdfMarkupLayer', () => {
 
   it('moves a selected note and reports its new rect', async () => {
     const onGeometryChange = vi.fn()
-    const note: PdfMarkup = { id: 'NOTE2345', type: 'note', color: '#ffd400', pageIndex: 0, rects: [[100, 700, 122, 722]] }
+    const note: PdfMarkup = {
+      id: 'NOTE2345',
+      type: 'note',
+      color: '#ffd400',
+      pageIndex: 0,
+      rects: [[100, 700, 122, 722]],
+    }
     render(PdfMarkupLayer, {
       props: props({ markups: [note], selectedId: 'NOTE2345', onGeometryChange }),
     })
@@ -124,7 +134,13 @@ describe('PdfMarkupLayer', () => {
   it('never moves a highlight', async () => {
     const onGeometryChange = vi.fn()
     const onSelect = vi.fn()
-    const highlight: PdfMarkup = { id: 'HIGH2345', type: 'highlight', color: '#ffd400', pageIndex: 0, rects: [[100, 700, 200, 712]] }
+    const highlight: PdfMarkup = {
+      id: 'HIGH2345',
+      type: 'highlight',
+      color: '#ffd400',
+      pageIndex: 0,
+      rects: [[100, 700, 200, 712]],
+    }
     render(PdfMarkupLayer, {
       props: props({ markups: [highlight], selectedId: 'HIGH2345', onGeometryChange, onSelect }),
     })

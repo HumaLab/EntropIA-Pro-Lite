@@ -25,7 +25,11 @@ export function pageToPageIndex(page: number): number {
  * pdf.js's own viewport; this one exists for callers without a page proxy and
  * for tests.
  */
-export function createMarkupViewport(viewBox: number[], scale: number, rotation: number): MarkupViewport {
+export function createMarkupViewport(
+  viewBox: number[],
+  scale: number,
+  rotation: number
+): MarkupViewport {
   const [x0 = 0, y0 = 0, x1 = 0, y1 = 0] = viewBox
   const centerX = (x1 + x0) / 2
   const centerY = (y1 + y0) / 2
@@ -120,7 +124,12 @@ export function noteRectAt(viewport: MarkupViewport, x: number, y: number): PdfR
 }
 
 /** Moves a PDF rect by a viewport-pixel delta. */
-export function movePdfRect(viewport: MarkupViewport, rect: PdfRect, dx: number, dy: number): PdfRect {
+export function movePdfRect(
+  viewport: MarkupViewport,
+  rect: PdfRect,
+  dx: number,
+  dy: number
+): PdfRect {
   const box = toViewportBox(viewport, rect)
   return toPdfRect(viewport, { ...box, x: box.x + dx, y: box.y + dy })
 }

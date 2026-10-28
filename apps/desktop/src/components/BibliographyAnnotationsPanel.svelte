@@ -240,7 +240,8 @@
     <IconButton
       size="sm"
       variant="ghost"
-      label={$currentLocale && (syncing ? t('bibliographyAnnotations.syncing') : t('bibliographyAnnotations.syncNow'))}
+      label={$currentLocale &&
+        (syncing ? t('bibliographyAnnotations.syncing') : t('bibliographyAnnotations.syncNow'))}
       title={$currentLocale && t('bibliographyAnnotations.syncNow')}
       disabled={syncing || !canSync}
       onclick={() => onSync()}
@@ -291,7 +292,9 @@
                   class="annotation-entry__jump"
                   onclick={() => onSelect(view.key, viewPage(view))}
                 >
-                  <span class="annotation-entry__kind">{$currentLocale && kindLabel(view.data?.annotationType)}</span>
+                  <span class="annotation-entry__kind"
+                    >{$currentLocale && kindLabel(view.data?.annotationType)}</span
+                  >
                   {#if typeof view.data?.annotationText === 'string' && view.data.annotationText}
                     <q class="annotation-entry__quote">{view.data.annotationText}</q>
                   {/if}
@@ -299,8 +302,8 @@
                 {#if state}
                   <span
                     class="annotation-entry__badge annotation-entry__badge--{view.syncState}"
-                    data-testid="annotation-sync-badge"
-                  >{state}</span>
+                    data-testid="annotation-sync-badge">{state}</span
+                  >
                 {/if}
                 <IconButton
                   size="sm"
@@ -328,7 +331,8 @@
                 aria-label={$currentLocale && t('bibliographyAnnotations.commentLabel')}
                 placeholder={$currentLocale && t('bibliographyAnnotations.commentPlaceholder')}
                 value={commentOf(view)}
-                oninput={(event) => editComment(view.key, (event.currentTarget as HTMLTextAreaElement).value)}
+                oninput={(event) =>
+                  editComment(view.key, (event.currentTarget as HTMLTextAreaElement).value)}
                 onblur={() => flush(view.key)}
               ></textarea>
 
@@ -340,7 +344,8 @@
 
               {#if view.syncState === 'waiting_parent'}
                 <p class="annotation-entry__note">
-                  {$currentLocale && t('bibliographyAnnotations.waitingSince', { when: since(view) })}
+                  {$currentLocale &&
+                    t('bibliographyAnnotations.waitingSince', { when: since(view) })}
                 </p>
               {:else if view.syncState === 'error' && view.lastError}
                 <p class="annotation-entry__note annotation-entry__note--error">{view.lastError}</p>
@@ -348,49 +353,77 @@
 
               {#if view.syncState === 'conflict'}
                 <div class="annotation-conflict" data-testid="annotation-conflict">
-                  <p class="annotation-conflict__title">{$currentLocale && t('bibliographyAnnotations.conflictTitle')}</p>
+                  <p class="annotation-conflict__title">
+                    {$currentLocale && t('bibliographyAnnotations.conflictTitle')}
+                  </p>
                   {#each view.conflictFields as field (field)}
                     {@const chosen = decisions[view.key]?.[field]}
                     {#if field === EXISTENCE_FIELD}
-                      <p class="annotation-conflict__reason">{$currentLocale && existenceText(view)}</p>
-                      <div class="annotation-conflict__choices" role="radiogroup" aria-label={existenceText(view)}>
+                      <p class="annotation-conflict__reason">
+                        {$currentLocale && existenceText(view)}
+                      </p>
+                      <div
+                        class="annotation-conflict__choices"
+                        role="radiogroup"
+                        aria-label={existenceText(view)}
+                      >
                         {#if existenceReason(view) !== 'attachment_deleted'}
                           <Button
                             size="sm"
                             variant={chosen === 'keep' ? 'primary' : 'secondary'}
                             aria-pressed={chosen === 'keep'}
                             onclick={() => decide(view.key, field, 'keep')}
-                          >{$currentLocale && t('bibliographyAnnotations.conflictKeep')}</Button>
+                            >{$currentLocale && t('bibliographyAnnotations.conflictKeep')}</Button
+                          >
                         {/if}
                         <Button
                           size="sm"
                           variant={chosen === 'delete' ? 'primary' : 'secondary'}
                           aria-pressed={chosen === 'delete'}
                           onclick={() => decide(view.key, field, 'delete')}
-                        >{$currentLocale && t('bibliographyAnnotations.conflictDiscard')}</Button>
+                          >{$currentLocale && t('bibliographyAnnotations.conflictDiscard')}</Button
+                        >
                       </div>
                     {:else}
-                      <p class="annotation-conflict__field">{$currentLocale && fieldLabel(field)}</p>
-                      <div class="annotation-conflict__choices" role="radiogroup" aria-label={fieldLabel(field)}>
+                      <p class="annotation-conflict__field">
+                        {$currentLocale && fieldLabel(field)}
+                      </p>
+                      <div
+                        class="annotation-conflict__choices"
+                        role="radiogroup"
+                        aria-label={fieldLabel(field)}
+                      >
                         <Button
                           size="sm"
                           variant={chosen === 'local' ? 'primary' : 'secondary'}
                           aria-pressed={chosen === 'local'}
-                          title={t('bibliographyAnnotations.conflictLocalValue', { value: display(view.data?.[field]) })}
+                          title={t('bibliographyAnnotations.conflictLocalValue', {
+                            value: display(view.data?.[field]),
+                          })}
                           onclick={() => decide(view.key, field, 'local')}
-                        >{$currentLocale && t('bibliographyAnnotations.conflictLocal')}</Button>
+                          >{$currentLocale && t('bibliographyAnnotations.conflictLocal')}</Button
+                        >
                         <Button
                           size="sm"
                           variant={chosen === 'zotero' ? 'primary' : 'secondary'}
                           aria-pressed={chosen === 'zotero'}
-                          title={t('bibliographyAnnotations.conflictZoteroValue', { value: display(view.conflictRemote?.[field]) })}
+                          title={t('bibliographyAnnotations.conflictZoteroValue', {
+                            value: display(view.conflictRemote?.[field]),
+                          })}
                           onclick={() => decide(view.key, field, 'zotero')}
-                        >{$currentLocale && t('bibliographyAnnotations.conflictZotero')}</Button>
+                          >{$currentLocale && t('bibliographyAnnotations.conflictZotero')}</Button
+                        >
                       </div>
                       <p class="annotation-conflict__values">
-                        {$currentLocale && t('bibliographyAnnotations.conflictLocalValue', { value: display(view.data?.[field]) })}
+                        {$currentLocale &&
+                          t('bibliographyAnnotations.conflictLocalValue', {
+                            value: display(view.data?.[field]),
+                          })}
                         <br />
-                        {$currentLocale && t('bibliographyAnnotations.conflictZoteroValue', { value: display(view.conflictRemote?.[field]) })}
+                        {$currentLocale &&
+                          t('bibliographyAnnotations.conflictZoteroValue', {
+                            value: display(view.conflictRemote?.[field]),
+                          })}
                       </p>
                     {/if}
                   {/each}
@@ -399,7 +432,8 @@
                     variant="primary"
                     disabled={!complete(view)}
                     onclick={() => apply(view)}
-                  >{$currentLocale && t('bibliographyAnnotations.conflictApply')}</Button>
+                    >{$currentLocale && t('bibliographyAnnotations.conflictApply')}</Button
+                  >
                 </div>
               {/if}
             </div>
@@ -427,7 +461,9 @@
               <span class="annotation-entry__bar" aria-hidden="true"></span>
               <div class="annotation-entry__body">
                 <div class="annotation-entry__head">
-                  <span class="annotation-entry__kind">{$currentLocale && kindLabel(view.data?.annotationType)}</span>
+                  <span class="annotation-entry__kind"
+                    >{$currentLocale && kindLabel(view.data?.annotationType)}</span
+                  >
                   {#if typeof view.data?.annotationText === 'string' && view.data.annotationText}
                     <q class="annotation-entry__quote">{view.data.annotationText}</q>
                   {/if}

@@ -14,11 +14,12 @@ use serde::Serialize;
 use super::api::{AnnotationApi, ApiError, CreateResult, ServerItem, WriteResult};
 use super::machine::{
     apply_outcome, begin_send, mark_outstanding_uncertain, merge_remote, next_request, reconcile,
-    release_waiting_parent, Next, Observed, Outcome, ParentStatus, RemoteChange, Request, RowAction,
+    release_waiting_parent, Next, Observed, Outcome, ParentStatus, RemoteChange, Request,
+    RowAction,
 };
 use super::model::{AnnotationRow, SyncState};
-use super::wire::Data;
 use super::repo::{self, LibrarySyncState, Scope};
+use super::wire::Data;
 
 /// Zotero takes at most 50 objects per write and per `itemKey` read.
 pub const BATCH: usize = 50;
@@ -76,7 +77,10 @@ pub struct SyncReport {
 /// app, so the map is never pruned.
 fn library_lock(library_row_id: &str) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
-    let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     locks.entry(library_row_id.to_string()).or_default().clone()
 }
 
@@ -84,8 +88,14 @@ fn library_lock(library_row_id: &str) -> Arc<Mutex<()>> {
 /// process.
 fn first_run_in_process(scope: &Scope) -> bool {
     static RECOVERED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    let mut seen = RECOVERED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
-    seen.insert(format!("{}\u{1f}{}", scope.library_row_id, scope.web_user_id))
+    let mut seen = RECOVERED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    seen.insert(format!(
+        "{}\u{1f}{}",
+        scope.library_row_id, scope.web_user_id
+    ))
 }
 
 /// Runs one full sync of a library under its lock.
@@ -101,7 +111,14 @@ pub fn sync_library(
     if first_run_in_process(scope) {
         recover_after_start(conn, scope, now_ms)?;
     }
-    let mut run = Run { conn, scope, api, parents, now_ms, report: SyncReport::default() };
+    let mut run = Run {
+        conn,
+        scope,
+        api,
+        parents,
+        now_ms,
+        report: SyncReport::default(),
+    };
     run.go()?;
     Ok(run.report)
 }
@@ -138,7 +155,11 @@ impl Run<'_> {
         // the engine only after verifying it.
         let credentials_pause = state.pause_reason.as_deref() == Some("credentials");
         if !credentials_pause && state.paused_until.is_some_and(|until| until > self.now_ms) {
-            self.report.paused = state.pause_reason.as_deref().map(pause_kind).map(str::to_string);
+            self.report.paused = state
+                .pause_reason
+                .as_deref()
+                .map(pause_kind)
+                .map(str::to_string);
             return Ok(());
         }
         let stopped = self.reconcile_uncertain()?.is_err()
@@ -184,14 +205,25 @@ impl Run<'_> {
         let backoff_ms = (NETWORK_RETRY_MIN_MS << (attempt - 1).min(6)).min(NETWORK_RETRY_MAX_MS);
         let (until, reason) = match error {
             // Lifted by the next run after the key checks out again.
-            ApiError::Credentials => (self.now_ms + NETWORK_RETRY_MAX_MS, "credentials".to_string()),
-            ApiError::RetryAfter { seconds } => {
-                (self.now_ms + *seconds as i64 * 1000, "retry_after".to_string())
+            ApiError::Credentials => (
+                self.now_ms + NETWORK_RETRY_MAX_MS,
+                "credentials".to_string(),
+            ),
+            ApiError::RetryAfter { seconds } => (
+                self.now_ms + *seconds as i64 * 1000,
+                "retry_after".to_string(),
+            ),
+            ApiError::Server {
+                retry_after: Some(seconds),
+                ..
+            } => (
+                self.now_ms + *seconds as i64 * 1000,
+                "retry_after".to_string(),
+            ),
+            ApiError::Server {
+                retry_after: None, ..
             }
-            ApiError::Server { retry_after: Some(seconds), .. } => {
-                (self.now_ms + *seconds as i64 * 1000, "retry_after".to_string())
-            }
-            ApiError::Server { retry_after: None, .. } | ApiError::Unreachable { .. } => {
+            | ApiError::Unreachable { .. } => {
                 (self.now_ms + backoff_ms, format!("unreachable:{attempt}"))
             }
         };
@@ -230,7 +262,8 @@ impl Run<'_> {
             removed = action == RowAction::Remove;
             repo::apply(self.conn, self.scope, key, &row, &action, self.now_ms)?;
         }
-        tx.commit().map_err(|error| format!("annotation write failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("annotation write failed: {error}"))?;
         if removed {
             self.report.removed += 1;
         }
@@ -256,7 +289,8 @@ impl Run<'_> {
                 None => {}
             }
         }
-        tx.commit().map_err(|error| format!("annotation write failed: {error}"))?;
+        tx.commit()
+            .map_err(|error| format!("annotation write failed: {error}"))?;
         Ok(begun)
     }
 
@@ -268,7 +302,10 @@ impl Run<'_> {
                 continue;
             }
             let observed = match self.api.item(&row.annotation_key) {
-                Ok(Some(item)) => Observed::Found { version: item.version, data: item.data },
+                Ok(Some(item)) => Observed::Found {
+                    version: item.version,
+                    data: item.data,
+                },
                 Ok(None) => Observed::NotFound,
                 Err(error) => return Ok(Err(self.pause_for(&error)?)),
             };
@@ -316,20 +353,35 @@ impl Run<'_> {
         if deleted.library_version != library_version {
             return Ok(None);
         }
-        Ok(Some(PulledChanges { library_version, items, deleted: deleted.value }))
+        Ok(Some(PulledChanges {
+            library_version,
+            items,
+            deleted: deleted.value,
+        }))
     }
 
     /// Applies a complete pull in one transaction, cursor included.
     fn commit_pull(&mut self, changes: PulledChanges) -> Result<(), String> {
         let tx = immediate(self.conn)?;
         for item in changes.items {
-            let Some(key) = item.data.get("key").and_then(|key| key.as_str()).map(str::to_string) else {
+            let Some(key) = item
+                .data
+                .get("key")
+                .and_then(|key| key.as_str())
+                .map(str::to_string)
+            else {
                 continue;
             };
             if item.data.get("itemType").and_then(|kind| kind.as_str()) != Some("annotation") {
                 continue;
             }
-            self.merge_one(&key, RemoteChange::Item { version: item.version, data: item.data })?;
+            self.merge_one(
+                &key,
+                RemoteChange::Item {
+                    version: item.version,
+                    data: item.data,
+                },
+            )?;
         }
         for key in changes.deleted {
             self.merge_one(&key, RemoteChange::PermanentlyDeleted)?;
@@ -337,7 +389,8 @@ impl Run<'_> {
         let mut state: LibrarySyncState = repo::sync_state(self.conn, self.scope)?;
         state.web_library_version = changes.library_version;
         repo::set_sync_state(self.conn, self.scope, &state, self.now_ms)?;
-        tx.commit().map_err(|error| format!("annotation pull failed: {error}"))
+        tx.commit()
+            .map_err(|error| format!("annotation pull failed: {error}"))
     }
 
     fn merge_one(&mut self, key: &str, change: RemoteChange) -> Result<(), String> {
@@ -390,14 +443,19 @@ impl Run<'_> {
         Ok(Ok(()))
     }
 
-    fn send_creates(&mut self, batch: &[(AnnotationRow, Data)]) -> Result<Result<(), Stop>, String> {
+    fn send_creates(
+        &mut self,
+        batch: &[(AnnotationRow, Data)],
+    ) -> Result<Result<(), Stop>, String> {
         let bodies: Vec<Data> = batch.iter().map(|(_, data)| data.clone()).collect();
         let results = match self.api.create(&bodies) {
             Ok(results) => results,
             Err(error) => {
                 for (row, _) in batch {
                     let outcome = outcome_of_error(&error);
-                    self.settle(&row.annotation_key, |fresh| apply_outcome(fresh, outcome).into_action())?;
+                    self.settle(&row.annotation_key, |fresh| {
+                        apply_outcome(fresh, outcome).into_action()
+                    })?;
                 }
                 return Ok(Err(self.pause_for(&error)?));
             }
@@ -405,16 +463,25 @@ impl Run<'_> {
         let mut stop_with: Option<ApiError> = None;
         for (index, (row, _)) in batch.iter().enumerate() {
             let key = row.annotation_key.clone();
-            let outcome = match results.get(index).cloned().unwrap_or(CreateResult::NoAnswer) {
+            let outcome = match results
+                .get(index)
+                .cloned()
+                .unwrap_or(CreateResult::NoAnswer)
+            {
                 CreateResult::Created { version } => Outcome::Applied { version },
                 CreateResult::Exists => match self.api.item(&key) {
-                    Ok(Some(item)) => Outcome::CreateExists { version: item.version, data: item.data },
+                    Ok(Some(item)) => Outcome::CreateExists {
+                        version: item.version,
+                        data: item.data,
+                    },
                     Ok(None) | Err(_) => Outcome::Uncertain,
                 },
                 CreateResult::NoAnswer => Outcome::Uncertain,
                 // Refused for this object only, for a reason that is not the
                 // annotation's: it stays pending.
-                CreateResult::Failed { code: 401 | 403, .. } => {
+                CreateResult::Failed {
+                    code: 401 | 403, ..
+                } => {
                     stop_with = Some(ApiError::Credentials);
                     Outcome::Refused
                 }
@@ -422,15 +489,17 @@ impl Run<'_> {
                     stop_with.get_or_insert(ApiError::RetryAfter { seconds: 60 });
                     Outcome::Refused
                 }
-                CreateResult::Failed { message, parent_missing: true, .. } => {
-                    match self.parent_status(row) {
-                        Ok(parent) => Outcome::ParentMissing { parent, message },
-                        Err(error) => {
-                            stop_with = Some(error);
-                            Outcome::Refused
-                        }
+                CreateResult::Failed {
+                    message,
+                    parent_missing: true,
+                    ..
+                } => match self.parent_status(row) {
+                    Ok(parent) => Outcome::ParentMissing { parent, message },
+                    Err(error) => {
+                        stop_with = Some(error);
+                        Outcome::Refused
                     }
-                }
+                },
                 CreateResult::Failed { message, .. } => Outcome::Rejected { message },
             };
             self.report.sent += 1;
@@ -452,14 +521,22 @@ impl Run<'_> {
         })
     }
 
-    fn send_one(&mut self, row: AnnotationRow, request: Request) -> Result<Result<(), Stop>, String> {
+    fn send_one(
+        &mut self,
+        row: AnnotationRow,
+        request: Request,
+    ) -> Result<Result<(), Stop>, String> {
         let mut retries_left = 1;
         let mut sent = (row, request);
         loop {
             let key = sent.0.annotation_key.clone();
             let deleting = matches!(sent.1, Request::Delete { .. });
             let answer = match &sent.1 {
-                Request::Update { key, version, fields } => self.api.patch(key, *version, fields),
+                Request::Update {
+                    key,
+                    version,
+                    fields,
+                } => self.api.patch(key, *version, fields),
                 Request::Delete { key, version } => self.api.delete(key, *version),
                 Request::Create { .. } => unreachable!("creates go in batches"),
             };
@@ -467,15 +544,21 @@ impl Run<'_> {
                 Ok(WriteResult::Done { .. }) if deleting => Outcome::Gone,
                 Ok(WriteResult::Done { version }) => Outcome::Applied { version },
                 Ok(WriteResult::NotFound) if deleting => Outcome::Gone,
-                Ok(WriteResult::NotFound) => Outcome::Stale { remote: RemoteChange::PermanentlyDeleted },
+                Ok(WriteResult::NotFound) => Outcome::Stale {
+                    remote: RemoteChange::PermanentlyDeleted,
+                },
                 Ok(WriteResult::Stale) => match self.api.item(&key) {
-                    Ok(Some(ServerItem { version, data })) => {
-                        Outcome::Stale { remote: RemoteChange::Item { version, data } }
-                    }
-                    Ok(None) => Outcome::Stale { remote: RemoteChange::PermanentlyDeleted },
+                    Ok(Some(ServerItem { version, data })) => Outcome::Stale {
+                        remote: RemoteChange::Item { version, data },
+                    },
+                    Ok(None) => Outcome::Stale {
+                        remote: RemoteChange::PermanentlyDeleted,
+                    },
                     Err(error) => {
                         // The write was refused; only the follow-up read failed.
-                        self.settle(&key, |fresh| apply_outcome(fresh, Outcome::Refused).into_action())?;
+                        self.settle(&key, |fresh| {
+                            apply_outcome(fresh, Outcome::Refused).into_action()
+                        })?;
                         return Ok(Err(self.pause_for(&error)?));
                     }
                 },
@@ -519,9 +602,9 @@ pub(crate) fn immediate(conn: &Connection) -> Result<rusqlite::Transaction<'_>, 
 fn outcome_of_error(error: &ApiError) -> Outcome {
     match error {
         ApiError::Unreachable { after_send: true } | ApiError::Server { .. } => Outcome::Uncertain,
-        ApiError::Unreachable { after_send: false } | ApiError::Credentials | ApiError::RetryAfter { .. } => {
-            Outcome::Refused
-        }
+        ApiError::Unreachable { after_send: false }
+        | ApiError::Credentials
+        | ApiError::RetryAfter { .. } => Outcome::Refused,
     }
 }
 
@@ -532,6 +615,10 @@ struct PulledChanges {
 }
 
 /// Rows of one parent attachment for the panel, newest state first by page.
-pub fn rows_for_parent(conn: &Connection, scope: &Scope, parent_key: &str) -> Result<Vec<AnnotationRow>, String> {
+pub fn rows_for_parent(
+    conn: &Connection,
+    scope: &Scope,
+    parent_key: &str,
+) -> Result<Vec<AnnotationRow>, String> {
     repo::by_parent(conn, scope, parent_key)
 }

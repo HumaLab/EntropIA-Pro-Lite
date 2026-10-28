@@ -42,7 +42,10 @@ impl Raw {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("http");
-        Raw { client, key: key.to_string() }
+        Raw {
+            client,
+            key: key.to_string(),
+        }
     }
 
     fn url(path: &str) -> String {
@@ -122,7 +125,11 @@ impl Fixture {
             "tags": [{"tag": "zsb-probe"}],
         }));
         // Owned before the next request, so a failure below still cleans up.
-        let mut fixture = Fixture { raw, book, attachment: String::new() };
+        let mut fixture = Fixture {
+            raw,
+            book,
+            attachment: String::new(),
+        };
         // Group libraries take no linked files: a stored-file attachment whose
         // file is never uploaded is enough to annotate.
         fixture.attachment = fixture.raw.create(json!({
@@ -175,8 +182,14 @@ fn highlight(parent: &str, key: &str, comment: &str) -> Data {
 
 fn sync(conn: &rusqlite::Connection, scope: &Scope, api: &WebAnnotationApi) {
     // Each test is its own "first run in the process" for its scope.
-    let report = sync_library(conn, scope, api, &OnServer, crate::processing::repository::now_ms())
-        .expect("sync");
+    let report = sync_library(
+        conn,
+        scope,
+        api,
+        &OnServer,
+        crate::processing::repository::now_ms(),
+    )
+    .expect("sync");
     assert_eq!(report.paused, None, "the run went through: {report:?}");
 }
 
@@ -189,7 +202,10 @@ fn edit_comment(conn: &rusqlite::Connection, scope: &Scope, key: &str, comment: 
 }
 
 fn scope(name: &str) -> Scope {
-    Scope { library_row_id: name.into(), web_user_id: format!("group-{TEST_GROUP}") }
+    Scope {
+        library_row_id: name.into(),
+        web_user_id: format!("group-{TEST_GROUP}"),
+    }
 }
 
 #[test]
@@ -202,12 +218,24 @@ fn live_a_client_key_create_keeps_its_key_and_is_never_duplicated() {
     body.insert("version".into(), json!(0));
 
     let first = api.create(std::slice::from_ref(&body)).expect("first post");
-    assert!(matches!(first[0], CreateResult::Created { .. }), "{first:?}");
-    let stored = fixture.raw.get(&annotation_key).expect("created under the client key");
+    assert!(
+        matches!(first[0], CreateResult::Created { .. }),
+        "{first:?}"
+    );
+    let stored = fixture
+        .raw
+        .get(&annotation_key)
+        .expect("created under the client key");
     assert_eq!(stored["key"], json!(annotation_key));
 
-    let again = api.create(std::slice::from_ref(&body)).expect("second post");
-    assert_eq!(again[0], CreateResult::Exists, "version 0 means \"must not exist\"");
+    let again = api
+        .create(std::slice::from_ref(&body))
+        .expect("second post");
+    assert_eq!(
+        again[0],
+        CreateResult::Exists,
+        "version 0 means \"must not exist\""
+    );
 }
 
 #[test]
@@ -218,13 +246,25 @@ fn live_create_edit_and_delete_round_trip() {
     let scope = scope("live-roundtrip");
     let conn = archive_with_library(&scope.library_row_id);
     let annotation_key = wire::generate_key();
-    let row = AnnotationRow::new_local(&annotation_key, highlight(&fixture.attachment, &annotation_key, "made in EntropIA"));
+    let row = AnnotationRow::new_local(
+        &annotation_key,
+        highlight(&fixture.attachment, &annotation_key, "made in EntropIA"),
+    );
     repo::save(&conn, &scope, &row, 1).unwrap();
 
     sync(&conn, &scope, &api);
     let server = fixture.raw.get(&annotation_key).expect("created");
-    assert_eq!(server["data"]["annotationComment"], json!("made in EntropIA"));
-    assert_eq!(repo::load(&conn, &scope, &annotation_key).unwrap().unwrap().sync_state, SyncState::Synced);
+    assert_eq!(
+        server["data"]["annotationComment"],
+        json!("made in EntropIA")
+    );
+    assert_eq!(
+        repo::load(&conn, &scope, &annotation_key)
+            .unwrap()
+            .unwrap()
+            .sync_state,
+        SyncState::Synced
+    );
 
     edit_comment(&conn, &scope, &annotation_key, "edited in EntropIA");
     sync(&conn, &scope, &api);
@@ -233,17 +273,28 @@ fn live_create_edit_and_delete_round_trip() {
         json!("edited in EntropIA")
     );
 
-    fixture.raw.patch(&annotation_key, json!({"annotationComment": "edited in Zotero"}));
+    fixture.raw.patch(
+        &annotation_key,
+        json!({"annotationComment": "edited in Zotero"}),
+    );
     sync(&conn, &scope, &api);
     let pulled = repo::load(&conn, &scope, &annotation_key).unwrap().unwrap();
-    assert_eq!(pulled.desired().unwrap()["annotationComment"], json!("edited in Zotero"));
+    assert_eq!(
+        pulled.desired().unwrap()["annotationComment"],
+        json!("edited in Zotero")
+    );
 
     let mut doomed = repo::load(&conn, &scope, &annotation_key).unwrap().unwrap();
     local_delete(&mut doomed).unwrap();
     repo::save(&conn, &scope, &doomed, 1).unwrap();
     sync(&conn, &scope, &api);
-    assert!(fixture.raw.get(&annotation_key).is_none(), "deleted on the server");
-    assert!(repo::load(&conn, &scope, &annotation_key).unwrap().is_none());
+    assert!(
+        fixture.raw.get(&annotation_key).is_none(),
+        "deleted on the server"
+    );
+    assert!(repo::load(&conn, &scope, &annotation_key)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -257,7 +308,10 @@ fn live_trash_and_restore_round_trip() {
     repo::save(
         &conn,
         &scope,
-        &AnnotationRow::new_local(&annotation_key, highlight(&fixture.attachment, &annotation_key, "trash me")),
+        &AnnotationRow::new_local(
+            &annotation_key,
+            highlight(&fixture.attachment, &annotation_key, "trash me"),
+        ),
         1,
     )
     .unwrap();
@@ -266,14 +320,25 @@ fn live_trash_and_restore_round_trip() {
     fixture.raw.patch(&annotation_key, json!({"deleted": 1}));
     sync(&conn, &scope, &api);
     let mut trashed = repo::load(&conn, &scope, &annotation_key).unwrap().unwrap();
-    assert!(trashed.remote_trashed, "the pull saw the trash through includeTrashed=1");
+    assert!(
+        trashed.remote_trashed,
+        "the pull saw the trash through includeTrashed=1"
+    );
 
     local_restore(&mut trashed).unwrap();
     repo::save(&conn, &scope, &trashed, 1).unwrap();
     sync(&conn, &scope, &api);
     let server = fixture.raw.get(&annotation_key).unwrap();
-    assert!(!wire::is_trashed(server["data"].as_object().unwrap()), "restored in Zotero");
-    assert!(!repo::load(&conn, &scope, &annotation_key).unwrap().unwrap().remote_trashed);
+    assert!(
+        !wire::is_trashed(server["data"].as_object().unwrap()),
+        "restored in Zotero"
+    );
+    assert!(
+        !repo::load(&conn, &scope, &annotation_key)
+            .unwrap()
+            .unwrap()
+            .remote_trashed
+    );
 }
 
 #[test]
@@ -287,20 +352,31 @@ fn live_editing_the_same_comment_on_both_sides_is_a_conflict() {
     repo::save(
         &conn,
         &scope,
-        &AnnotationRow::new_local(&annotation_key, highlight(&fixture.attachment, &annotation_key, "A")),
+        &AnnotationRow::new_local(
+            &annotation_key,
+            highlight(&fixture.attachment, &annotation_key, "A"),
+        ),
         1,
     )
     .unwrap();
     sync(&conn, &scope, &api);
 
     edit_comment(&conn, &scope, &annotation_key, "B in EntropIA");
-    fixture.raw.patch(&annotation_key, json!({"annotationComment": "C in Zotero"}));
+    fixture
+        .raw
+        .patch(&annotation_key, json!({"annotationComment": "C in Zotero"}));
     sync(&conn, &scope, &api);
 
     let row = repo::load(&conn, &scope, &annotation_key).unwrap().unwrap();
     assert_eq!(row.sync_state, SyncState::Conflict);
-    assert_eq!(row.local_json.as_ref().unwrap()["annotationComment"], json!("B in EntropIA"));
-    assert_eq!(row.conflict_json.as_ref().unwrap()["annotationComment"], json!("C in Zotero"));
+    assert_eq!(
+        row.local_json.as_ref().unwrap()["annotationComment"],
+        json!("B in EntropIA")
+    );
+    assert_eq!(
+        row.conflict_json.as_ref().unwrap()["annotationComment"],
+        json!("C in Zotero")
+    );
     assert_eq!(
         fixture.raw.get(&annotation_key).unwrap()["data"]["annotationComment"],
         json!("C in Zotero"),

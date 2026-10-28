@@ -25,7 +25,10 @@ function view(overrides: Partial<AnnotationView> = {}): AnnotationView {
   return {
     key: 'ABCD2345',
     parentKey: 'PARENT22',
-    data: { annotationType: 'highlight', annotationPosition: '{"pageIndex":2,"rects":[[1,2,3,4]]}' },
+    data: {
+      annotationType: 'highlight',
+      annotationPosition: '{"pageIndex":2,"rects":[[1,2,3,4]]}',
+    },
     syncState: 'synced',
     conflictFields: [],
     conflictRemote: null,
@@ -67,7 +70,10 @@ describe('bibliography-annotations', () => {
       libraryRowId: 'lib-1',
       key: 'ABCD2345',
     })
-    await resolveAnnotationConflict('lib-1', 'ABCD2345', { __existence: 'keep', annotationComment: 'zotero' })
+    await resolveAnnotationConflict('lib-1', 'ABCD2345', {
+      __existence: 'keep',
+      annotationComment: 'zotero',
+    })
     expect(mockInvoke).toHaveBeenLastCalledWith('bibliography_annotations_resolve', {
       libraryRowId: 'lib-1',
       key: 'ABCD2345',

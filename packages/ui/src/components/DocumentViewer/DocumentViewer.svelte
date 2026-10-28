@@ -173,9 +173,7 @@
     // The rendered text layer gives one box per glyph; the text items, split
     // evenly, are the fallback when it is off or cannot be measured.
     const fromLayer =
-      textSelection && textLayerContainer
-        ? charsFromTextLayer(textLayerContainer, viewport)
-        : null
+      textSelection && textLayerContainer ? charsFromTextLayer(textLayerContainer, viewport) : null
     const chars = fromLayer ?? (await pageChars(markupPageProxy))
     return getSortIndex(chars, viewport.viewBox, { pageIndex, rects })
   }
@@ -315,10 +313,14 @@
   let toolbarAnchorEl: HTMLDivElement | undefined = $state()
   /** Width of the toolbar the anchor holds: one column or two. */
   let toolbarWidth = $state(0)
-  const pdfGutter = $derived(Math.max(PDF_TOOLBAR_GUTTER_PX, toolbarWidth + PDF_TOOLBAR_CLEARANCE_PX))
+  const pdfGutter = $derived(
+    Math.max(PDF_TOOLBAR_GUTTER_PX, toolbarWidth + PDF_TOOLBAR_CLEARANCE_PX)
+  )
 
   $effect(() => {
-    const toolbar = toolbarAnchorEl?.querySelector<HTMLElement>('[data-testid="annotation-toolbar"]')
+    const toolbar = toolbarAnchorEl?.querySelector<HTMLElement>(
+      '[data-testid="annotation-toolbar"]'
+    )
     if (pdfFit !== 'width' || !toolbar) return
     const measure = () => {
       toolbarWidth = toolbar.getBoundingClientRect().width

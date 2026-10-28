@@ -83,7 +83,10 @@ export async function renderThumbnail(
     for (const path of request.paths) {
       context.beginPath()
       for (let index = 0; index + 1 < path.length; index += 2) {
-        const [x = 0, y = 0] = viewport.convertToViewportPoint(path[index] ?? 0, path[index + 1] ?? 0)
+        const [x = 0, y = 0] = viewport.convertToViewportPoint(
+          path[index] ?? 0,
+          path[index + 1] ?? 0
+        )
         if (index === 0) context.moveTo(x - box.x, y - box.y)
         else context.lineTo(x - box.x, y - box.y)
       }

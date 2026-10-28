@@ -42,7 +42,10 @@ impl SyncState {
 
     /// `pending`, `waiting_parent` and `error` hold an unsent local intent.
     pub fn is_dirty_state(self) -> bool {
-        matches!(self, SyncState::Pending | SyncState::WaitingParent | SyncState::Error)
+        matches!(
+            self,
+            SyncState::Pending | SyncState::WaitingParent | SyncState::Error
+        )
     }
 }
 
@@ -175,7 +178,11 @@ impl AnnotationRow {
     }
 
     pub(crate) fn add_conflict(&mut self, field: &str, remote: Value) {
-        if !self.conflict_fields.iter().any(|existing| existing == field) {
+        if !self
+            .conflict_fields
+            .iter()
+            .any(|existing| existing == field)
+        {
             self.conflict_fields.push(field.to_string());
         }
         self.conflict_json
@@ -203,7 +210,11 @@ impl AnnotationRow {
             self.sync_state = SyncState::Conflict;
             return;
         }
-        if self.conflict_json.as_ref().is_some_and(|remote| remote.is_empty()) {
+        if self
+            .conflict_json
+            .as_ref()
+            .is_some_and(|remote| remote.is_empty())
+        {
             self.conflict_json = None;
         }
         if !self.local_deleted && self.sent_gen.is_none() {
@@ -238,10 +249,14 @@ pub fn check_invariants(row: &AnnotationRow) -> Result<(), String> {
     let conflict = row.in_conflict();
     let state = row.sync_state;
     if (state == SyncState::Synced) != (!conflict && !dirty) {
-        return Err(format!("synced <=> clean, got {state:?} dirty={dirty} conflict={conflict}"));
+        return Err(format!(
+            "synced <=> clean, got {state:?} dirty={dirty} conflict={conflict}"
+        ));
     }
     if state.is_dirty_state() != (!conflict && dirty) {
-        return Err(format!("dirty state <=> dirty, got {state:?} dirty={dirty} conflict={conflict}"));
+        return Err(format!(
+            "dirty state <=> dirty, got {state:?} dirty={dirty} conflict={conflict}"
+        ));
     }
     if (state == SyncState::Conflict) != conflict {
         return Err(format!("conflict <=> conflict_fields, got {state:?}"));
@@ -253,7 +268,11 @@ pub fn check_invariants(row: &AnnotationRow) -> Result<(), String> {
     // resolved; outside a conflict that edit would have collapsed.
     if row.sent_gen.is_none() && !conflict {
         if let Some(local) = &row.local_json {
-            if row.base_json.as_ref().is_some_and(|base| wire::content_eq(local, base)) {
+            if row
+                .base_json
+                .as_ref()
+                .is_some_and(|base| wire::content_eq(local, base))
+            {
                 return Err("local_json equals base_json with no request in flight".into());
             }
         }

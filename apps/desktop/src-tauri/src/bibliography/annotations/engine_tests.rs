@@ -43,7 +43,11 @@ struct FakeApi(RefCell<Zotero>);
 
 impl FakeApi {
     fn new() -> Self {
-        let zotero = Zotero { library_version: 10, parents: vec!["PARENT22".into()], ..Default::default() };
+        let zotero = Zotero {
+            library_version: 10,
+            parents: vec!["PARENT22".into()],
+            ..Default::default()
+        };
         FakeApi(RefCell::new(zotero))
     }
 
@@ -78,7 +82,11 @@ impl FakeApi {
     }
 
     fn comment(&self, key: &str) -> Option<Value> {
-        self.0.borrow().items.get(key).map(|item| item.data["annotationComment"].clone())
+        self.0
+            .borrow()
+            .items
+            .get(key)
+            .map(|item| item.data["annotationComment"].clone())
     }
 
     fn writes(&self) -> Vec<String> {
@@ -139,25 +147,45 @@ impl AnnotationApi for FakeApi {
             .filter(|(_, item)| item.version > since)
             .map(|(key, item)| (key.clone(), item.version))
             .collect();
-        Ok(Versioned { value, library_version: z.library_version })
+        Ok(Versioned {
+            value,
+            library_version: z.library_version,
+        })
     }
 
     fn items(&self, keys: &[String]) -> Result<Versioned<Vec<ServerItem>>, ApiError> {
         let z = self.0.borrow();
-        let value = keys.iter().filter_map(|key| z.items.get(key).cloned()).collect();
-        Ok(Versioned { value, library_version: z.library_version })
+        let value = keys
+            .iter()
+            .filter_map(|key| z.items.get(key).cloned())
+            .collect();
+        Ok(Versioned {
+            value,
+            library_version: z.library_version,
+        })
     }
 
     fn deleted_since(&self, since: i64) -> Result<Versioned<Vec<String>>, ApiError> {
         let z = self.0.borrow();
-        let value = z.deleted.iter().filter(|(_, v)| *v > since).map(|(k, _)| k.clone()).collect();
-        Ok(Versioned { value, library_version: z.library_version })
+        let value = z
+            .deleted
+            .iter()
+            .filter(|(_, v)| *v > since)
+            .map(|(k, _)| k.clone())
+            .collect();
+        Ok(Versioned {
+            value,
+            library_version: z.library_version,
+        })
     }
 
     fn item(&self, key: &str) -> Result<Option<ServerItem>, ApiError> {
         let z = self.0.borrow();
         if z.parents.iter().any(|parent| parent == key) {
-            return Ok(Some(ServerItem { version: 1, data: Data::new() }));
+            return Ok(Some(ServerItem {
+                version: 1,
+                data: Data::new(),
+            }));
         }
         Ok(z.items.get(key).cloned())
     }
@@ -171,7 +199,11 @@ impl AnnotationApi for FakeApi {
             z.writes.push(format!("POST {key}"));
             let parent = data["parentItem"].as_str().unwrap_or_default().to_string();
             if !z.parents.contains(&parent) {
-                results.push(CreateResult::Failed { code: 400, message: "Parent item not found".into(), parent_missing: true });
+                results.push(CreateResult::Failed {
+                    code: 400,
+                    message: "Parent item not found".into(),
+                    parent_missing: true,
+                });
                 continue;
             }
             if z.items.contains_key(&key) {
@@ -182,7 +214,13 @@ impl AnnotationApi for FakeApi {
             let version = z.library_version;
             let mut stored = data.clone();
             stored.insert("version".into(), json!(version));
-            z.items.insert(key, ServerItem { version, data: stored });
+            z.items.insert(
+                key,
+                ServerItem {
+                    version,
+                    data: stored,
+                },
+            );
             results.push(CreateResult::Created { version });
         }
         Self::finish(fault, results)
@@ -191,7 +229,8 @@ impl AnnotationApi for FakeApi {
     fn patch(&self, key: &str, version: i64, fields: &Data) -> Result<WriteResult, ApiError> {
         let fault = self.begin_write()?;
         let mut z = self.0.borrow_mut();
-        z.writes.push(format!("PATCH {key} {}", Value::Object(fields.clone())));
+        z.writes
+            .push(format!("PATCH {key} {}", Value::Object(fields.clone())));
         let current = z.items.get(key).map(|item| item.version);
         let result = match current {
             None => WriteResult::NotFound,
@@ -205,7 +244,9 @@ impl AnnotationApi for FakeApi {
                 }
                 item.version = new_version;
                 item.data.insert("version".into(), json!(new_version));
-                WriteResult::Done { version: new_version }
+                WriteResult::Done {
+                    version: new_version,
+                }
             }
         };
         drop(z);
@@ -250,11 +291,21 @@ impl ParentCatalog for Parents {
 /// Each test gets its own library id: the engine's per-process recovery
 /// bookkeeping is keyed by library.
 fn scope(name: &str) -> Scope {
-    Scope { library_row_id: name.into(), web_user_id: "4242".into() }
+    Scope {
+        library_row_id: name.into(),
+        web_user_id: "4242".into(),
+    }
 }
 
 fn run(conn: &rusqlite::Connection, scope: &Scope, api: &FakeApi) -> SyncReport {
-    sync_library(conn, scope, api, &Parents(vec!["PARENT22", "LOCALONL"]), 1_000).unwrap()
+    sync_library(
+        conn,
+        scope,
+        api,
+        &Parents(vec!["PARENT22", "LOCALONL"]),
+        1_000,
+    )
+    .unwrap()
 }
 
 fn unpause(conn: &rusqlite::Connection, scope: &Scope) {
@@ -285,8 +336,15 @@ fn a_first_pull_stores_every_annotation_and_moves_the_cursor() {
     let report = run(&conn, &scope, &api);
     assert_eq!(report.pulled, 2);
     assert_eq!(row(&conn, &scope, "AAAA2222").sync_state, SyncState::Synced);
-    assert_eq!(repo::sync_state(&conn, &scope).unwrap().web_library_version, 12);
-    assert_eq!(run(&conn, &scope, &api).pulled, 0, "nothing changed since the cursor");
+    assert_eq!(
+        repo::sync_state(&conn, &scope).unwrap().web_library_version,
+        12
+    );
+    assert_eq!(
+        run(&conn, &scope, &api).pulled,
+        0,
+        "nothing changed since the cursor"
+    );
 }
 
 #[test]
@@ -302,7 +360,10 @@ fn a_local_edit_round_trips_and_a_remote_edit_comes_back() {
     assert_eq!(row(&conn, &scope, "AAAA2222").sync_state, SyncState::Synced);
     api.edit_remote("AAAA2222", "annotationComment", json!("edited in Zotero"));
     run(&conn, &scope, &api);
-    assert_eq!(row(&conn, &scope, "AAAA2222").desired().unwrap()["annotationComment"], json!("edited in Zotero"));
+    assert_eq!(
+        row(&conn, &scope, "AAAA2222").desired().unwrap()["annotationComment"],
+        json!("edited in Zotero")
+    );
 }
 
 #[test]
@@ -317,7 +378,11 @@ fn a_local_create_is_posted_once_even_when_its_answer_is_lost() {
     assert_eq!(report.uncertain, 1);
     unpause(&conn, &scope);
     run(&conn, &scope, &api);
-    assert_eq!(api.writes(), vec!["POST NEWK2345"], "reconciled by reading, not by posting again");
+    assert_eq!(
+        api.writes(),
+        vec!["POST NEWK2345"],
+        "reconciled by reading, not by posting again"
+    );
     let stored = row(&conn, &scope, "NEWK2345");
     assert_eq!(stored.sync_state, SyncState::Synced);
     assert!(stored.base_version.is_some());
@@ -334,11 +399,20 @@ fn offline_edits_are_sent_once_after_reconnecting() {
     api.fault(Fault::Offline);
     let report = run(&conn, &scope, &api);
     assert_eq!(report.paused.as_deref(), Some("unreachable"));
-    assert_eq!(row(&conn, &scope, "AAAA2222").sync_state, SyncState::Pending);
+    assert_eq!(
+        row(&conn, &scope, "AAAA2222").sync_state,
+        SyncState::Pending
+    );
     unpause(&conn, &scope);
     run(&conn, &scope, &api);
     assert_eq!(api.comment("AAAA2222"), Some(json!("offline")));
-    assert_eq!(api.writes().iter().filter(|w| w.starts_with("PATCH")).count(), 1);
+    assert_eq!(
+        api.writes()
+            .iter()
+            .filter(|w| w.starts_with("PATCH"))
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -353,8 +427,14 @@ fn concurrent_edits_of_the_same_comment_become_a_conflict_and_nothing_is_lost() 
     run(&conn, &scope, &api);
     let conflicted = row(&conn, &scope, "AAAA2222");
     assert_eq!(conflicted.sync_state, SyncState::Conflict);
-    assert_eq!(conflicted.local_json.as_ref().unwrap()["annotationComment"], json!("mine"));
-    assert_eq!(conflicted.conflict_json.as_ref().unwrap()["annotationComment"], json!("theirs"));
+    assert_eq!(
+        conflicted.local_json.as_ref().unwrap()["annotationComment"],
+        json!("mine")
+    );
+    assert_eq!(
+        conflicted.conflict_json.as_ref().unwrap()["annotationComment"],
+        json!("theirs")
+    );
     assert_eq!(api.comment("AAAA2222"), Some(json!("theirs")));
 }
 
@@ -402,9 +482,18 @@ fn a_create_under_a_parent_still_in_zotero_desktop_waits_for_it() {
     let api = FakeApi::new();
     let mut data = annotation("WAIT2345", 0, "waiting");
     data.insert("parentItem".into(), json!("LOCALONL"));
-    repo::save(&conn, &scope, &AnnotationRow::new_local("WAIT2345", data), 1).unwrap();
+    repo::save(
+        &conn,
+        &scope,
+        &AnnotationRow::new_local("WAIT2345", data),
+        1,
+    )
+    .unwrap();
     run(&conn, &scope, &api);
-    assert_eq!(row(&conn, &scope, "WAIT2345").sync_state, SyncState::WaitingParent);
+    assert_eq!(
+        row(&conn, &scope, "WAIT2345").sync_state,
+        SyncState::WaitingParent
+    );
     api.0.borrow_mut().parents.push("LOCALONL".into());
     run(&conn, &scope, &api);
     assert_eq!(row(&conn, &scope, "WAIT2345").sync_state, SyncState::Synced);
@@ -417,9 +506,18 @@ fn a_create_under_a_deleted_parent_becomes_an_attachment_conflict() {
     let api = FakeApi::new();
     let mut data = annotation("ORPH2345", 0, "orphan");
     data.insert("parentItem".into(), json!("GONE2345"));
-    repo::save(&conn, &scope, &AnnotationRow::new_local("ORPH2345", data), 1).unwrap();
+    repo::save(
+        &conn,
+        &scope,
+        &AnnotationRow::new_local("ORPH2345", data),
+        1,
+    )
+    .unwrap();
     run(&conn, &scope, &api);
-    assert_eq!(row(&conn, &scope, "ORPH2345").existence_reason(), Some(ExistenceReason::AttachmentDeleted));
+    assert_eq!(
+        row(&conn, &scope, "ORPH2345").existence_reason(),
+        Some(ExistenceReason::AttachmentDeleted)
+    );
 }
 
 #[test]
@@ -433,7 +531,11 @@ fn a_backoff_header_pauses_the_library() {
     api.fault(Fault::Backoff);
     let report = run(&conn, &scope, &api);
     assert_eq!(report.paused.as_deref(), Some("backoff"));
-    assert_eq!(run(&conn, &scope, &api).paused.as_deref(), Some("backoff"), "still paused");
+    assert_eq!(
+        run(&conn, &scope, &api).paused.as_deref(),
+        Some("backoff"),
+        "still paused"
+    );
 }
 
 #[test]
@@ -457,7 +559,10 @@ fn a_restart_reconciles_a_request_whose_answer_was_never_recorded() {
     local_edit(&mut stuck, back);
     repo::save(&conn, &scope, &stuck, 1).unwrap();
     // A new process: a scope this process has not synced yet.
-    let restarted = Scope { library_row_id: scope.library_row_id.clone(), web_user_id: scope.web_user_id.clone() };
+    let restarted = Scope {
+        library_row_id: scope.library_row_id.clone(),
+        web_user_id: scope.web_user_id.clone(),
+    };
     assert_eq!(recover_after_start(&conn, &restarted, 1).unwrap(), 1);
     run(&conn, &restarted, &api);
     assert_eq!(api.comment("AAAA2222"), Some(json!("A")), "the revert wins");
@@ -471,7 +576,9 @@ fn file_archive(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
     let memory = archive_with_library(name);
-    memory.backup(rusqlite::DatabaseName::Main, &path, None).unwrap();
+    memory
+        .backup(rusqlite::DatabaseName::Main, &path, None)
+        .unwrap();
     drop(conn);
     (dir, path)
 }
@@ -492,9 +599,17 @@ fn an_edit_made_while_a_patch_is_in_flight_is_not_overwritten() {
         edit_comment(&other, &racing_scope, "AAAA2222", "C");
     }));
     run(&conn, &scope, &api);
-    assert_eq!(api.comment("AAAA2222"), Some(json!("B")), "B reached Zotero");
+    assert_eq!(
+        api.comment("AAAA2222"),
+        Some(json!("B")),
+        "B reached Zotero"
+    );
     let stored = row(&conn, &scope, "AAAA2222");
-    assert_eq!(stored.desired().unwrap()["annotationComment"], json!("C"), "the racing edit survives");
+    assert_eq!(
+        stored.desired().unwrap()["annotationComment"],
+        json!("C"),
+        "the racing edit survives"
+    );
     assert_eq!(stored.sync_state, SyncState::Pending);
     run(&conn, &scope, &api);
     assert_eq!(api.comment("AAAA2222"), Some(json!("C")));
@@ -515,18 +630,25 @@ fn an_undo_made_while_a_delete_is_in_flight_recreates_the_annotation() {
     let racing_scope = scope.clone();
     api.0.borrow_mut().during_write = Some(Box::new(move || {
         let other = rusqlite::Connection::open(&racing_path).unwrap();
-        let mut current = repo::load(&other, &racing_scope, "AAAA2222").unwrap().unwrap();
+        let mut current = repo::load(&other, &racing_scope, "AAAA2222")
+            .unwrap()
+            .unwrap();
         let desired = current.base_json.clone().unwrap();
         local_edit(&mut current, desired);
         repo::save(&other, &racing_scope, &current, 1).unwrap();
     }));
     run(&conn, &scope, &api);
-    assert!(repo::load(&conn, &scope, "AAAA2222").unwrap().is_none(), "the old key is gone");
+    assert!(
+        repo::load(&conn, &scope, "AAAA2222").unwrap().is_none(),
+        "the old key is gone"
+    );
     let rows = repo::by_parent(&conn, &scope, "PARENT22").unwrap();
     assert_eq!(rows.len(), 1, "the annotation lives on under a new key");
-    assert_eq!(rows[0].desired().unwrap()["annotationComment"], json!("keep me"));
+    assert_eq!(
+        rows[0].desired().unwrap()["annotationComment"],
+        json!("keep me")
+    );
 }
-
 
 #[test]
 fn network_failures_back_off_exponentially_until_a_run_goes_through() {
@@ -541,13 +663,23 @@ fn network_failures_back_off_exponentially_until_a_run_goes_through() {
         api.fault(Fault::Offline);
         let report = run(&conn, &scope, &api);
         assert_eq!(report.paused.as_deref(), Some("unreachable"));
-        delays.push(repo::sync_state(&conn, &scope).unwrap().paused_until.unwrap() - 1_000);
+        delays.push(
+            repo::sync_state(&conn, &scope)
+                .unwrap()
+                .paused_until
+                .unwrap()
+                - 1_000,
+        );
         unpause(&conn, &scope);
     }
     assert_eq!(delays, vec![60_000, 120_000, 240_000]);
     run(&conn, &scope, &api);
     let state = repo::sync_state(&conn, &scope).unwrap();
-    assert_eq!((state.paused_until, state.pause_reason), (None, None), "a clean run resets it");
+    assert_eq!(
+        (state.paused_until, state.pause_reason),
+        (None, None),
+        "a clean run resets it"
+    );
     assert_eq!(api.comment("AAAA2222"), Some(json!("x")));
 }
 

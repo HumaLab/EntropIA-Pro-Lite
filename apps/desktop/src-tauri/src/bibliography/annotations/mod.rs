@@ -10,10 +10,10 @@ pub mod commands;
 pub mod engine;
 pub mod http;
 pub mod machine;
+pub mod model;
 pub mod repo;
 #[cfg(test)]
 pub(crate) mod repo_test_support;
-pub mod model;
 pub mod wire;
 
 #[cfg(test)]

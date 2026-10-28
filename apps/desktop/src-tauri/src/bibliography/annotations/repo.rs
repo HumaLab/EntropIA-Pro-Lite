@@ -34,7 +34,8 @@ fn json_object(text: Option<String>) -> rusqlite::Result<Option<Data>> {
 }
 
 fn to_text(data: &Option<Data>) -> Option<String> {
-    data.as_ref().map(|object| Value::Object(object.clone()).to_string())
+    data.as_ref()
+        .map(|object| Value::Object(object.clone()).to_string())
 }
 
 fn read_row(row: &Row<'_>) -> rusqlite::Result<AnnotationRow> {
@@ -81,7 +82,12 @@ pub fn load(conn: &Connection, scope: &Scope, key: &str) -> Result<Option<Annota
     .map_err(|error| format!("annotation read failed: {error}"))
 }
 
-fn select(conn: &Connection, scope: &Scope, filter: &str, extra: &[&dyn rusqlite::ToSql]) -> Result<Vec<AnnotationRow>, String> {
+fn select(
+    conn: &Connection,
+    scope: &Scope,
+    filter: &str,
+    extra: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<AnnotationRow>, String> {
     let sql = format!(
         "SELECT {COLUMNS} FROM zotero_annotation_items \
          WHERE library_row_id = ?1 AND web_user_id = ?2 {filter} ORDER BY annotation_key"
@@ -99,7 +105,11 @@ fn select(conn: &Connection, scope: &Scope, filter: &str, extra: &[&dyn rusqlite
 }
 
 /// Every row of one parent attachment.
-pub fn by_parent(conn: &Connection, scope: &Scope, parent_key: &str) -> Result<Vec<AnnotationRow>, String> {
+pub fn by_parent(
+    conn: &Connection,
+    scope: &Scope,
+    parent_key: &str,
+) -> Result<Vec<AnnotationRow>, String> {
     select(conn, scope, "AND parent_key = ?3", &[&parent_key])
 }
 
@@ -108,12 +118,21 @@ pub fn outstanding(conn: &Connection, scope: &Scope) -> Result<Vec<AnnotationRow
     select(conn, scope, "AND sent_gen IS NOT NULL", &[])
 }
 
-pub fn in_state(conn: &Connection, scope: &Scope, state: SyncState) -> Result<Vec<AnnotationRow>, String> {
+pub fn in_state(
+    conn: &Connection,
+    scope: &Scope,
+    state: SyncState,
+) -> Result<Vec<AnnotationRow>, String> {
     select(conn, scope, "AND sync_state = ?3", &[&state.as_str()])
 }
 
 /// Writes a row after checking the section-3 invariants.
-pub fn save(conn: &Connection, scope: &Scope, row: &AnnotationRow, now_ms: i64) -> Result<(), String> {
+pub fn save(
+    conn: &Connection,
+    scope: &Scope,
+    row: &AnnotationRow,
+    now_ms: i64,
+) -> Result<(), String> {
     check_invariants(row).map_err(|message| format!("annotation invariant broken: {message}"))?;
     let sent = row
         .sent_json
@@ -213,7 +232,12 @@ pub fn sync_state(conn: &Connection, scope: &Scope) -> Result<LibrarySyncState, 
     .map_err(|error| format!("annotation sync state read failed: {error}"))
 }
 
-pub fn set_sync_state(conn: &Connection, scope: &Scope, state: &LibrarySyncState, now_ms: i64) -> Result<(), String> {
+pub fn set_sync_state(
+    conn: &Connection,
+    scope: &Scope,
+    state: &LibrarySyncState,
+    now_ms: i64,
+) -> Result<(), String> {
     conn.execute(
         "INSERT INTO zotero_annotation_sync_state \
             (library_row_id, web_user_id, web_library_version, paused_until, pause_reason, updated_at) \
@@ -241,7 +265,10 @@ mod tests {
     use serde_json::json;
 
     fn scope() -> Scope {
-        Scope { library_row_id: "lib1".into(), web_user_id: "4242".into() }
+        Scope {
+            library_row_id: "lib1".into(),
+            web_user_id: "4242".into(),
+        }
     }
 
     fn data(value: serde_json::Value) -> Data {
@@ -250,11 +277,14 @@ mod tests {
 
     #[test]
     fn a_row_round_trips_with_its_sent_request() {
-        let conn = crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
+        let conn =
+            crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
         let mut row = AnnotationRow::from_server(
             "ABCD2345",
             5,
-            data(json!({"key": "ABCD2345", "version": 5, "parentItem": "PARENT22", "annotationComment": "A"})),
+            data(
+                json!({"key": "ABCD2345", "version": 5, "parentItem": "PARENT22", "annotationComment": "A"}),
+            ),
         );
         let mut desired = row.base_json.clone().unwrap();
         desired.insert("annotationComment".into(), json!("B"));
@@ -262,8 +292,14 @@ mod tests {
         let request = next_request(&mut row).unwrap();
         begin_send(&mut row, &request);
         save(&conn, &scope(), &row, 1).unwrap();
-        assert_eq!(load(&conn, &scope(), "ABCD2345").unwrap(), Some(row.clone()));
-        assert_eq!(by_parent(&conn, &scope(), "PARENT22").unwrap(), vec![row.clone()]);
+        assert_eq!(
+            load(&conn, &scope(), "ABCD2345").unwrap(),
+            Some(row.clone())
+        );
+        assert_eq!(
+            by_parent(&conn, &scope(), "PARENT22").unwrap(),
+            vec![row.clone()]
+        );
         assert_eq!(outstanding(&conn, &scope()).unwrap().len(), 1);
         remove(&conn, &scope(), "ABCD2345").unwrap();
         assert_eq!(load(&conn, &scope(), "ABCD2345").unwrap(), None);
@@ -271,7 +307,8 @@ mod tests {
 
     #[test]
     fn a_row_breaking_an_invariant_is_never_written() {
-        let conn = crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
+        let conn =
+            crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
         let mut row = AnnotationRow::from_server("ABCD2345", 5, data(json!({"parentItem": "P"})));
         row.sync_state = SyncState::Pending;
         assert!(save(&conn, &scope(), &row, 1).is_err());
@@ -280,8 +317,12 @@ mod tests {
 
     #[test]
     fn the_sync_state_defaults_and_round_trips() {
-        let conn = crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
-        assert_eq!(sync_state(&conn, &scope()).unwrap(), LibrarySyncState::default());
+        let conn =
+            crate::bibliography::annotations::repo_test_support::archive_with_library("lib1");
+        assert_eq!(
+            sync_state(&conn, &scope()).unwrap(),
+            LibrarySyncState::default()
+        );
         let state = LibrarySyncState {
             web_library_version: 42,
             paused_until: Some(9),

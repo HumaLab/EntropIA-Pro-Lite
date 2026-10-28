@@ -23,14 +23,20 @@ pub struct ServerItem {
 /// `failed`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CreateResult {
-    Created { version: i64 },
+    Created {
+        version: i64,
+    },
     /// `failed` with code 412: the key already exists.
     Exists,
     /// The answer has no entry for this object: its outcome is unknown.
     NoAnswer,
     /// `failed` with another code; `parent` when Zotero says the parent item
     /// was not found.
-    Failed { code: u16, message: String, parent_missing: bool },
+    Failed {
+        code: u16,
+        message: String,
+        parent_missing: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

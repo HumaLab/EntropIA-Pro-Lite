@@ -107,14 +107,20 @@ pub fn local_restore(row: &mut AnnotationRow) -> Result<RowAction, MachineError>
 /// What the pull saw for one key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoteChange {
-    Item { version: i64, data: Data },
+    Item {
+        version: i64,
+        data: Data,
+    },
     /// Listed by `/deleted`.
     PermanentlyDeleted,
 }
 
 /// Merges a remote change into a row. Rows with an uncertain request must be
 /// reconciled first; rows with a request in flight are never merged.
-pub fn merge_remote(row: &mut AnnotationRow, change: RemoteChange) -> Result<RowAction, MachineError> {
+pub fn merge_remote(
+    row: &mut AnnotationRow,
+    change: RemoteChange,
+) -> Result<RowAction, MachineError> {
     if row.sent_uncertain {
         return Err(MachineError::NeedsReconcile);
     }
@@ -221,7 +227,8 @@ fn three_way(merge_base: &Data, local: &mut Data, remote: &Data) -> Vec<(String,
         if wire::field_eq(&field, local_value.as_ref(), remote_value) {
             continue;
         }
-        if wire::field_eq(&field, local_value.as_ref(), base_value) || wire::is_server_field(&field) {
+        if wire::field_eq(&field, local_value.as_ref(), base_value) || wire::is_server_field(&field)
+        {
             match remote_value {
                 Some(value) => {
                     local.insert(field.clone(), value.clone());
@@ -252,8 +259,7 @@ fn remerge_conflict(row: &mut AnnotationRow, old_base: &Data, remote: &Data) {
     // Moved to the trash in Zotero while the user keeps the annotation: that is
     // an existence decision (4.1), never a remote-only change merged into the
     // local intent.
-    let newly_trashed =
-        remote_trashed && !wire::is_trashed(old_base) && !wire::is_trashed(&local);
+    let newly_trashed = remote_trashed && !wire::is_trashed(old_base) && !wire::is_trashed(&local);
     if newly_trashed && row.existence_reason().is_none() {
         row.add_existence_conflict(ExistenceReason::Trashed);
     }
@@ -305,9 +311,19 @@ fn remerge_conflict(row: &mut AnnotationRow, old_base: &Data, remote: &Data) {
 /// The request a row needs, built only for `pending` rows with nothing out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    Create { key: String, data: Data },
-    Update { key: String, version: i64, fields: Data },
-    Delete { key: String, version: i64 },
+    Create {
+        key: String,
+        data: Data,
+    },
+    Update {
+        key: String,
+        version: i64,
+        fields: Data,
+    },
+    Delete {
+        key: String,
+        version: i64,
+    },
 }
 
 /// Builds the next request for a row, or `None` when it has nothing to send.
@@ -336,7 +352,11 @@ pub fn next_request(row: &mut AnnotationRow) -> Option<Request> {
                 row.recompute(false);
                 return None;
             }
-            Some(Request::Update { key, version, fields })
+            Some(Request::Update {
+                key,
+                version,
+                fields,
+            })
         }
     }
 }
@@ -348,7 +368,9 @@ pub fn begin_send(row: &mut AnnotationRow, request: &Request) {
     row.sent_uncertain = false;
     row.sent_json = Some(match request {
         Request::Create { data, .. } => Sent::Create { data: data.clone() },
-        Request::Update { fields, .. } => Sent::Update { fields: fields.clone() },
+        Request::Update { fields, .. } => Sent::Update {
+            fields: fields.clone(),
+        },
         Request::Delete { .. } => Sent::Delete,
     });
 }
@@ -378,7 +400,10 @@ pub enum Outcome {
     /// 400 or a `failed` entry that is not about the parent.
     Rejected { message: String },
     /// "parent item not found", already disambiguated.
-    ParentMissing { parent: ParentStatus, message: String },
+    ParentMissing {
+        parent: ParentStatus,
+        message: String,
+    },
     /// 401, 403, 409, 429 with `Retry-After`, or another definitive refusal
     /// that leaves the row as it was; the caller pauses the library.
     Refused,
@@ -435,7 +460,11 @@ pub fn apply_outcome(row: &mut AnnotationRow, outcome: Outcome) -> Next {
             match parent {
                 ParentStatus::OnServer => {
                     row.last_error = Some(message);
-                    row.sync_state = if newer_edit { SyncState::Pending } else { SyncState::Error };
+                    row.sync_state = if newer_edit {
+                        SyncState::Pending
+                    } else {
+                        SyncState::Error
+                    };
                 }
                 ParentStatus::PendingInZotero => {
                     row.last_error = Some(message);
@@ -575,7 +604,10 @@ pub fn release_waiting_parent(row: &mut AnnotationRow) -> bool {
 /// What `GET /items/{key}?includeTrashed=1` returned.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Observed {
-    Found { version: i64, data: Data },
+    Found {
+        version: i64,
+        data: Data,
+    },
     /// 404, or the key is listed by `/deleted`.
     NotFound,
 }
@@ -674,7 +706,10 @@ pub fn resolve(
             return Err(MachineError::Undecided(field.clone()));
         }
     }
-    if let Some(field) = decisions.keys().find(|field| !row.conflict_fields.contains(field)) {
+    if let Some(field) = decisions
+        .keys()
+        .find(|field| !row.conflict_fields.contains(field))
+    {
         return Err(MachineError::UnknownDecision(field.clone()));
     }
     let remote_values = row.conflict_json.clone().unwrap_or_default();
@@ -684,7 +719,9 @@ pub fn resolve(
         match decision {
             Decision::Delete | Decision::Zotero => {
                 row.clear_conflict();
-                if reason == Some(ExistenceReason::AttachmentDeleted) || reason == Some(ExistenceReason::Deleted) {
+                if reason == Some(ExistenceReason::AttachmentDeleted)
+                    || reason == Some(ExistenceReason::Deleted)
+                {
                     // Nothing left on the server to delete.
                     return Ok(RowAction::Remove);
                 }

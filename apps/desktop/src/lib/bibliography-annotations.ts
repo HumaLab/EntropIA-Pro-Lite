@@ -141,7 +141,10 @@ export function deleteAnnotation(
 }
 
 /** Restores an annotation that is in Zotero's trash. */
-export function restoreAnnotation(libraryRowId: string, key: string): Promise<AnnotationView | null> {
+export function restoreAnnotation(
+  libraryRowId: string,
+  key: string
+): Promise<AnnotationView | null> {
   return invoke<AnnotationView | null>('bibliography_annotations_restore', { libraryRowId, key })
 }
 
@@ -165,9 +168,7 @@ export function syncAnnotations(
   return invoke<AnnotationSyncResult>('bibliography_annotations_sync', { libraryRowId, reason })
 }
 
-export function onAnnotationsChanged(
-  handler: (libraryRowId: string) => void
-): Promise<UnlistenFn> {
+export function onAnnotationsChanged(handler: (libraryRowId: string) => void): Promise<UnlistenFn> {
   return listen<{ libraryRowId: string }>(ANNOTATIONS_CHANGED_EVENT, (event) =>
     handler(event.payload.libraryRowId)
   )
@@ -180,7 +181,11 @@ export function parsePosition(data: ZoteroAnnotationData | null): ZoteroAnnotati
   if (typeof raw === 'object') return raw
   try {
     const parsed: unknown = JSON.parse(raw)
-    if (parsed && typeof parsed === 'object' && typeof (parsed as { pageIndex?: unknown }).pageIndex === 'number') {
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { pageIndex?: unknown }).pageIndex === 'number'
+    ) {
       return parsed as ZoteroAnnotationPosition
     }
   } catch {
@@ -196,7 +201,11 @@ export function existenceReason(view: AnnotationView): ExistenceReason | null {
 
 /** `pending`, `waiting_parent` and `error` hold a local intent not yet sent. */
 function holdsLocalIntent(view: AnnotationView): boolean {
-  return view.syncState === 'pending' || view.syncState === 'waiting_parent' || view.syncState === 'error'
+  return (
+    view.syncState === 'pending' ||
+    view.syncState === 'waiting_parent' ||
+    view.syncState === 'error'
+  )
 }
 
 function markedDeleted(view: AnnotationView): boolean {

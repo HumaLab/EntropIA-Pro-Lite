@@ -76,7 +76,10 @@ fn patch_fields(request: Request) -> Data {
 }
 
 fn decisions(entries: &[(&str, Decision)]) -> BTreeMap<String, Decision> {
-    entries.iter().map(|(field, decision)| (field.to_string(), *decision)).collect()
+    entries
+        .iter()
+        .map(|(field, decision)| (field.to_string(), *decision))
+        .collect()
 }
 
 // --- Local mutations (section 3) ------------------------------------------
@@ -113,7 +116,10 @@ fn deleting_a_never_sent_create_removes_the_row_without_a_request() {
 #[test]
 fn a_delete_in_conflict_needs_confirmation() {
     let mut row = comment_conflict();
-    assert_eq!(local_delete(&mut row), Err(MachineError::DeleteNeedsConfirmation));
+    assert_eq!(
+        local_delete(&mut row),
+        Err(MachineError::DeleteNeedsConfirmation)
+    );
 }
 
 // --- Acknowledgement traces (section 5) -------------------------------------
@@ -124,12 +130,21 @@ fn a_revert_while_a_patch_is_in_flight_is_sent_after_the_acknowledgement() {
     edit(&mut row, "annotationComment", json!("B"));
     send(&mut row);
     edit(&mut row, "annotationComment", json!("A"));
-    assert!(row.local_json.is_some(), "kept while the base is about to change");
-    assert_eq!(apply_outcome(&mut row, Outcome::Applied { version: 6 }), Next::Done(RowAction::Save));
+    assert!(
+        row.local_json.is_some(),
+        "kept while the base is about to change"
+    );
+    assert_eq!(
+        apply_outcome(&mut row, Outcome::Applied { version: 6 }),
+        Next::Done(RowAction::Save)
+    );
     ok(&row);
     assert_eq!(base_comment(&row), json!("B"));
     assert_eq!(row.sync_state, SyncState::Pending);
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationComment": "A"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "A"}))
+    );
 }
 
 #[test]
@@ -143,7 +158,10 @@ fn a_newer_edit_during_a_patch_is_sent_against_the_new_base() {
     assert_eq!(base_comment(&row), json!("B"));
     let request = send(&mut row);
     assert!(matches!(&request, Request::Update { version: 6, .. }));
-    assert_eq!(patch_fields(request), data(json!({"annotationComment": "C"})));
+    assert_eq!(
+        patch_fields(request),
+        data(json!({"annotationComment": "C"}))
+    );
 }
 
 #[test]
@@ -175,14 +193,22 @@ fn undo_then_delete_again_during_an_in_flight_delete_removes_the_row() {
     local_edit(&mut row, desired);
     local_delete(&mut row).unwrap();
     ok(&row);
-    assert_eq!(apply_outcome(&mut row, Outcome::Gone), Next::Done(RowAction::Remove));
+    assert_eq!(
+        apply_outcome(&mut row, Outcome::Gone),
+        Next::Done(RowAction::Remove)
+    );
 }
 
 #[test]
 fn a_rejected_create_waits_for_an_edit_then_is_sent() {
     let mut row = AnnotationRow::new_local(KEY, server(0, "new", "#ffd400"));
     send(&mut row);
-    apply_outcome(&mut row, Outcome::Rejected { message: "bad position".into() });
+    apply_outcome(
+        &mut row,
+        Outcome::Rejected {
+            message: "bad position".into(),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Error);
     assert_eq!(next_request(&mut row), None);
@@ -197,7 +223,12 @@ fn a_400_with_a_newer_edit_stays_pending() {
     edit(&mut row, "annotationComment", json!("B"));
     send(&mut row);
     edit(&mut row, "annotationComment", json!("C"));
-    apply_outcome(&mut row, Outcome::Rejected { message: "bad".into() });
+    apply_outcome(
+        &mut row,
+        Outcome::Rejected {
+            message: "bad".into(),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Pending);
 }
@@ -208,7 +239,10 @@ fn parent_item_not_found_has_three_outcomes() {
     send(&mut pending_parent);
     apply_outcome(
         &mut pending_parent,
-        Outcome::ParentMissing { parent: ParentStatus::PendingInZotero, message: "parent".into() },
+        Outcome::ParentMissing {
+            parent: ParentStatus::PendingInZotero,
+            message: "parent".into(),
+        },
     );
     ok(&pending_parent);
     assert_eq!(pending_parent.sync_state, SyncState::WaitingParent);
@@ -218,20 +252,38 @@ fn parent_item_not_found_has_three_outcomes() {
 
     let mut on_server = AnnotationRow::new_local(KEY, server(0, "new", "#ffd400"));
     send(&mut on_server);
-    apply_outcome(&mut on_server, Outcome::ParentMissing { parent: ParentStatus::OnServer, message: "x".into() });
+    apply_outcome(
+        &mut on_server,
+        Outcome::ParentMissing {
+            parent: ParentStatus::OnServer,
+            message: "x".into(),
+        },
+    );
     ok(&on_server);
     assert_eq!(on_server.sync_state, SyncState::Error);
 
     let mut orphan = AnnotationRow::new_local(KEY, server(0, "new", "#ffd400"));
     send(&mut orphan);
-    apply_outcome(&mut orphan, Outcome::ParentMissing { parent: ParentStatus::Deleted, message: "x".into() });
+    apply_outcome(
+        &mut orphan,
+        Outcome::ParentMissing {
+            parent: ParentStatus::Deleted,
+            message: "x".into(),
+        },
+    );
     ok(&orphan);
-    assert_eq!(orphan.existence_reason(), Some(ExistenceReason::AttachmentDeleted));
+    assert_eq!(
+        orphan.existence_reason(),
+        Some(ExistenceReason::AttachmentDeleted)
+    );
     assert_eq!(
         resolve(&mut orphan, &decisions(&[(EXISTENCE, Decision::Keep)])),
         Err(MachineError::CannotKeepOrphan)
     );
-    assert_eq!(resolve(&mut orphan, &decisions(&[(EXISTENCE, Decision::Delete)])), Ok(RowAction::Remove));
+    assert_eq!(
+        resolve(&mut orphan, &decisions(&[(EXISTENCE, Decision::Delete)])),
+        Ok(RowAction::Remove)
+    );
 }
 
 #[test]
@@ -239,25 +291,43 @@ fn a_stale_patch_without_conflict_is_retried_once() {
     let mut row = synced_row("A");
     edit(&mut row, "annotationComment", json!("B"));
     send(&mut row);
-    let remote = RemoteChange::Item { version: 7, data: server(7, "A", "#ff6666") };
+    let remote = RemoteChange::Item {
+        version: 7,
+        data: server(7, "A", "#ff6666"),
+    };
     let next = apply_outcome(&mut row, Outcome::Stale { remote });
     ok(&row);
     assert_eq!(next, Next::RetryOnce(RowAction::Save));
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationComment": "B"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "B"}))
+    );
 }
 
 #[test]
 fn a_lost_create_acknowledgement_is_recovered_by_comparing_content_only() {
     let mut equal = AnnotationRow::new_local(KEY, server(0, "new", "#ffd400"));
     send(&mut equal);
-    apply_outcome(&mut equal, Outcome::CreateExists { version: 3, data: server(3, "new", "#ffd400") });
+    apply_outcome(
+        &mut equal,
+        Outcome::CreateExists {
+            version: 3,
+            data: server(3, "new", "#ffd400"),
+        },
+    );
     ok(&equal);
     assert_eq!(equal.sync_state, SyncState::Synced);
     assert_eq!(equal.base_version, Some(3));
 
     let mut edited = AnnotationRow::new_local(KEY, server(0, "new", "#ffd400"));
     send(&mut edited);
-    apply_outcome(&mut edited, Outcome::CreateExists { version: 4, data: server(4, "other", "#ffd400") });
+    apply_outcome(
+        &mut edited,
+        Outcome::CreateExists {
+            version: 4,
+            data: server(4, "other", "#ffd400"),
+        },
+    );
     ok(&edited);
     assert_eq!(edited.conflict_fields, vec!["annotationComment"]);
 }
@@ -280,24 +350,45 @@ fn uncertain_patch(local_after: Option<&str>) -> AnnotationRow {
 #[test]
 fn an_uncertain_row_is_never_merged_before_reconciliation() {
     let mut row = uncertain_patch(None);
-    let change = RemoteChange::Item { version: 6, data: server(6, "B", "#ffd400") };
-    assert_eq!(merge_remote(&mut row, change), Err(MachineError::NeedsReconcile));
+    let change = RemoteChange::Item {
+        version: 6,
+        data: server(6, "B", "#ffd400"),
+    };
+    assert_eq!(
+        merge_remote(&mut row, change),
+        Err(MachineError::NeedsReconcile)
+    );
 }
 
 #[test]
 fn a_lost_patch_that_was_applied_keeps_the_revert_made_meanwhile() {
     let mut row = uncertain_patch(Some("A"));
-    reconcile(&mut row, Observed::Found { version: 6, data: server(6, "B", "#ffd400") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 6,
+            data: server(6, "B", "#ffd400"),
+        },
+    );
     ok(&row);
     assert_eq!(base_comment(&row), json!("B"));
     assert_eq!(row.sync_state, SyncState::Pending);
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationComment": "A"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "A"}))
+    );
 }
 
 #[test]
 fn a_lost_patch_that_was_not_applied_ends_synced_after_a_revert() {
     let mut row = uncertain_patch(Some("A"));
-    reconcile(&mut row, Observed::Found { version: 5, data: server(5, "A", "#ffd400") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 5,
+            data: server(5, "A", "#ffd400"),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Synced);
 }
@@ -305,7 +396,13 @@ fn a_lost_patch_that_was_not_applied_ends_synced_after_a_revert() {
 #[test]
 fn a_lost_patch_applied_under_a_remote_color_change_is_not_a_conflict() {
     let mut row = uncertain_patch(None);
-    reconcile(&mut row, Observed::Found { version: 7, data: server(7, "B", "#ff6666") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 7,
+            data: server(7, "B", "#ff6666"),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Synced);
     assert_eq!(base_comment(&row), json!("B"));
@@ -314,12 +411,21 @@ fn a_lost_patch_applied_under_a_remote_color_change_is_not_a_conflict() {
 #[test]
 fn a_lost_patch_that_never_landed_under_a_remote_change_is_still_sent() {
     let mut row = uncertain_patch(None);
-    reconcile(&mut row, Observed::Found { version: 6, data: server(6, "A", "#ff6666") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 6,
+            data: server(6, "A", "#ff6666"),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Pending);
     assert_eq!(comment(&row), json!("B"));
     assert_eq!(row.desired().unwrap()["annotationColor"], json!("#ff6666"));
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationComment": "B"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "B"}))
+    );
 }
 
 #[test]
@@ -348,7 +454,13 @@ fn a_lost_delete_not_applied_after_an_undo_ends_synced() {
     local_edit(&mut row, desired);
     apply_outcome(&mut row, Outcome::Uncertain);
     ok(&row);
-    reconcile(&mut row, Observed::Found { version: 5, data: server(5, "A", "#ffd400") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 5,
+            data: server(5, "A", "#ffd400"),
+        },
+    );
     ok(&row);
     assert_eq!(row.sync_state, SyncState::Synced);
 }
@@ -362,9 +474,18 @@ fn a_restart_marks_an_outstanding_request_uncertain_and_keeps_the_revert() {
     // The app is killed here; at startup:
     assert!(mark_outstanding_uncertain(&mut row));
     ok(&row);
-    reconcile(&mut row, Observed::Found { version: 6, data: server(6, "B", "#ffd400") });
+    reconcile(
+        &mut row,
+        Observed::Found {
+            version: 6,
+            data: server(6, "B", "#ffd400"),
+        },
+    );
     ok(&row);
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationComment": "A"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationComment": "A"}))
+    );
 }
 
 #[test]
@@ -378,9 +499,18 @@ fn deleting_a_create_whose_post_is_uncertain_waits_for_its_outcome() {
         row
     };
     let mut landed = created();
-    reconcile(&mut landed, Observed::Found { version: 3, data: server(3, "new", "#ffd400") });
+    reconcile(
+        &mut landed,
+        Observed::Found {
+            version: 3,
+            data: server(3, "new", "#ffd400"),
+        },
+    );
     ok(&landed);
-    assert!(matches!(send(&mut landed), Request::Delete { version: 3, .. }));
+    assert!(matches!(
+        send(&mut landed),
+        Request::Delete { version: 3, .. }
+    ));
 
     let mut lost = created();
     assert_eq!(reconcile(&mut lost, Observed::NotFound), RowAction::Remove);
@@ -389,7 +519,10 @@ fn deleting_a_create_whose_post_is_uncertain_waits_for_its_outcome() {
 // --- Merge table (section 4.1) ----------------------------------------------
 
 fn item(version: i64, comment: &str, color: &str) -> RemoteChange {
-    RemoteChange::Item { version, data: server(version, comment, color) }
+    RemoteChange::Item {
+        version,
+        data: server(version, comment, color),
+    }
 }
 
 fn trashed(version: i64, comment: &str) -> RemoteChange {
@@ -427,7 +560,10 @@ fn merge_field_edit_pending_with_a_remote_modification_is_three_way() {
     merge_remote(&mut row, item(7, "C", "#ff6666")).unwrap();
     ok(&row);
     assert_eq!(row.conflict_fields, vec!["annotationComment"]);
-    assert_eq!(row.conflict_json.as_ref().unwrap()["annotationComment"], json!("C"));
+    assert_eq!(
+        row.conflict_json.as_ref().unwrap()["annotationComment"],
+        json!("C")
+    );
 }
 
 #[test]
@@ -455,16 +591,25 @@ fn merge_delete_pending_rows() {
     merge_remote(&mut both_gone, trashed(6, "A")).unwrap();
     ok(&both_gone);
     assert_eq!(both_gone.sync_state, SyncState::Pending);
-    assert!(matches!(send(&mut both_gone), Request::Delete { version: 6, .. }));
+    assert!(matches!(
+        send(&mut both_gone),
+        Request::Delete { version: 6, .. }
+    ));
 
     let mut gone = deleted();
-    assert_eq!(merge_remote(&mut gone, RemoteChange::PermanentlyDeleted), Ok(RowAction::Remove));
+    assert_eq!(
+        merge_remote(&mut gone, RemoteChange::PermanentlyDeleted),
+        Ok(RowAction::Remove)
+    );
 }
 
 #[test]
 fn merge_permanent_deletions() {
     let mut clean = synced_row("A");
-    assert_eq!(merge_remote(&mut clean, RemoteChange::PermanentlyDeleted), Ok(RowAction::Remove));
+    assert_eq!(
+        merge_remote(&mut clean, RemoteChange::PermanentlyDeleted),
+        Ok(RowAction::Remove)
+    );
 
     let mut edited = synced_row("A");
     edit(&mut edited, "annotationComment", json!("B"));
@@ -490,9 +635,16 @@ fn an_edit_during_a_conflict_stays_in_conflict_and_zotero_wins_the_comment() {
     edit(&mut row, "annotationColor", json!("#5fb236"));
     assert_eq!(row.sync_state, SyncState::Conflict);
     assert_eq!(next_request(&mut row), None);
-    resolve(&mut row, &decisions(&[("annotationComment", Decision::Zotero)])).unwrap();
+    resolve(
+        &mut row,
+        &decisions(&[("annotationComment", Decision::Zotero)]),
+    )
+    .unwrap();
     ok(&row);
-    assert_eq!(patch_fields(send(&mut row)), data(json!({"annotationColor": "#5fb236"})));
+    assert_eq!(
+        patch_fields(send(&mut row)),
+        data(json!({"annotationColor": "#5fb236"}))
+    );
     assert_eq!(comment(&row), json!("C"));
 }
 
@@ -546,7 +698,10 @@ fn keeping_a_permanently_deleted_annotation_recreates_it_with_zotero_s_comment()
     ok(&row);
     let action = resolve(
         &mut row,
-        &decisions(&[(EXISTENCE, Decision::Keep), ("annotationComment", Decision::Zotero)]),
+        &decisions(&[
+            (EXISTENCE, Decision::Keep),
+            ("annotationComment", Decision::Zotero),
+        ]),
     )
     .unwrap();
     ok(&row);
@@ -579,14 +734,20 @@ fn a_remote_trash_during_a_field_conflict_adds_an_existence_choice() {
     merge_remote(&mut row, trashed(7, "C")).unwrap();
     ok(&row);
     assert_eq!(row.existence_reason(), Some(ExistenceReason::Trashed));
-    assert!(row.conflict_fields.iter().any(|field| field == "annotationComment"));
+    assert!(row
+        .conflict_fields
+        .iter()
+        .any(|field| field == "annotationComment"));
     assert!(
         !super::wire::is_trashed(row.local_json.as_ref().unwrap()),
         "the trash is a decision, never merged into the local intent"
     );
     resolve(
         &mut row,
-        &decisions(&[(EXISTENCE, Decision::Keep), ("annotationComment", Decision::Local)]),
+        &decisions(&[
+            (EXISTENCE, Decision::Keep),
+            ("annotationComment", Decision::Local),
+        ]),
     )
     .unwrap();
     ok(&row);
@@ -608,7 +769,14 @@ fn a_pull_of_our_own_last_write_is_not_a_remote_change() {
     ok(&row);
     let own_write = row.base_json.clone().unwrap();
     local_delete(&mut row).unwrap();
-    merge_remote(&mut row, RemoteChange::Item { version: 6, data: own_write }).unwrap();
+    merge_remote(
+        &mut row,
+        RemoteChange::Item {
+            version: 6,
+            data: own_write,
+        },
+    )
+    .unwrap();
     ok(&row);
     assert!(row.conflict_fields.is_empty(), "{:?}", row.conflict_fields);
     assert!(matches!(send(&mut row), Request::Delete { version: 6, .. }));

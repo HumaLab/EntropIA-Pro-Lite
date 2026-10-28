@@ -109,7 +109,10 @@ pub fn is_trashed(data: &Data) -> bool {
 
 /// Sets or clears the trash flag the way Zotero expects in a write.
 pub fn set_trashed(data: &mut Data, trashed: bool) {
-    data.insert(DELETED_FIELD.into(), Value::from(if trashed { 1 } else { 0 }));
+    data.insert(
+        DELETED_FIELD.into(),
+        Value::from(if trashed { 1 } else { 0 }),
+    );
 }
 
 /// The PATCH body: only the content fields of `desired` that differ from
@@ -118,7 +121,10 @@ pub fn set_trashed(data: &mut Data, trashed: bool) {
 pub fn patch_body(base: &Data, desired: &Data) -> Data {
     let mut body = Data::new();
     for field in differing_content_fields(base, desired) {
-        let value = desired.get(&field).cloned().unwrap_or(Value::String(String::new()));
+        let value = desired
+            .get(&field)
+            .cloned()
+            .unwrap_or(Value::String(String::new()));
         body.insert(field, value);
     }
     body
@@ -178,14 +184,23 @@ mod tests {
             "annotationComment": "c", "annotationPosition": "{ \"rects\": [[1,2,3,4]], \"pageIndex\": 1 }"}));
         assert!(content_eq(&a, &b));
         let c = data(json!({"annotationComment": "other"}));
-        assert_eq!(differing_content_fields(&a, &c), vec!["annotationComment", "annotationPosition"]);
+        assert_eq!(
+            differing_content_fields(&a, &c),
+            vec!["annotationComment", "annotationPosition"]
+        );
     }
 
     #[test]
     fn patch_body_holds_only_changed_content_fields() {
-        let base = data(json!({"version": 3, "annotationComment": "a", "annotationColor": "#ffd400"}));
-        let desired = data(json!({"version": 3, "annotationComment": "b", "annotationColor": "#ffd400", "deleted": 0}));
-        assert_eq!(patch_body(&base, &desired), data(json!({"annotationComment": "b", "deleted": 0})));
+        let base =
+            data(json!({"version": 3, "annotationComment": "a", "annotationColor": "#ffd400"}));
+        let desired = data(
+            json!({"version": 3, "annotationComment": "b", "annotationColor": "#ffd400", "deleted": 0}),
+        );
+        assert_eq!(
+            patch_body(&base, &desired),
+            data(json!({"annotationComment": "b", "deleted": 0}))
+        );
     }
 
     #[test]
@@ -198,7 +213,9 @@ mod tests {
 
     #[test]
     fn position_round_trip_keeps_unknown_fields() {
-        let mut item = data(json!({"annotationPosition": "{\"pageIndex\":0,\"rects\":[[1,2,3,4]],\"future\":true}"}));
+        let mut item = data(
+            json!({"annotationPosition": "{\"pageIndex\":0,\"rects\":[[1,2,3,4]],\"future\":true}"}),
+        );
         let mut position = parse_position(&item).unwrap();
         position.insert("rects".into(), json!([[5, 6, 7, 8]]));
         write_position(&mut item, &position);

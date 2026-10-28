@@ -43,7 +43,11 @@ const pdf = vi.hoisted(() => {
       )
     }
   }
-  return { textLayers, TextLayer, viewportFactory: { current: null as null | ((scale: number) => unknown) } }
+  return {
+    textLayers,
+    TextLayer,
+    viewportFactory: { current: null as null | ((scale: number) => unknown) },
+  }
 })
 
 vi.mock('pdfjs-dist', () => {
@@ -93,7 +97,8 @@ describe('DocumentViewer markups', () => {
 
   beforeEach(() => {
     pdf.textLayers.length = 0
-    pdf.viewportFactory.current = (scale: number) => createMarkupViewport([0, 0, 800, 600], scale, 0)
+    pdf.viewportFactory.current = (scale: number) =>
+      createMarkupViewport([0, 0, 800, 600], scale, 0)
     getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
     getContext.mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D)
   })
@@ -117,7 +122,9 @@ describe('DocumentViewer markups', () => {
     // One toolbar, as in Collections: the markup tools live in the
     // annotation toolbar's column, never in a second bar beside it.
     await screen.findByTestId('pdf-markup-layer')
-    expect(screen.getAllByRole('toolbar').filter((bar) => bar.closest('.document-viewer'))).toHaveLength(1)
+    expect(
+      screen.getAllByRole('toolbar').filter((bar) => bar.closest('.document-viewer'))
+    ).toHaveLength(1)
     const toolbar = screen.getByTestId('annotation-toolbar')
     for (const tool of BIBLIOTECA_TOOLS) {
       expect(toolbar.querySelector(`[data-testid="markup-tool-${tool}"]`)).not.toBeNull()
@@ -128,7 +135,9 @@ describe('DocumentViewer markups', () => {
   })
 
   it('hides tools left out of allowedTools', async () => {
-    render(DocumentViewer, { props: baseProps({ markups: [], allowedTools: ['select', 'highlight'] }) })
+    render(DocumentViewer, {
+      props: baseProps({ markups: [], allowedTools: ['select', 'highlight'] }),
+    })
     await screen.findByTestId('pdf-markup-layer')
     const toolbar = screen.getByTestId('annotation-toolbar')
     expect(toolbar.querySelectorAll('[data-testid^="markup-tool-"]')).toHaveLength(2)
@@ -143,7 +152,9 @@ describe('DocumentViewer markups', () => {
 
     await view.rerender(baseProps({ markups, currentPage: 2 }))
     await waitFor(() => {
-      const ids = screen.getAllByTestId('pdf-markup').map((node) => node.getAttribute('data-markup-id'))
+      const ids = screen
+        .getAllByTestId('pdf-markup')
+        .map((node) => node.getAttribute('data-markup-id'))
       expect(ids.sort()).toEqual(['HIGH2345', 'NOTE2345'])
     })
     const continued = screen
@@ -218,7 +229,12 @@ describe('DocumentViewer markups', () => {
     const onMarkupDelete = vi.fn()
     const onMarkupColorChange = vi.fn()
     render(DocumentViewer, {
-      props: baseProps({ markups, selectedMarkupId: 'HIGH2345', onMarkupDelete, onMarkupColorChange }),
+      props: baseProps({
+        markups,
+        selectedMarkupId: 'HIGH2345',
+        onMarkupDelete,
+        onMarkupColorChange,
+      }),
     })
     await screen.findByTestId('pdf-markup-layer')
     const toolbar = screen.getByTestId('annotation-toolbar')
@@ -241,4 +257,3 @@ describe('DocumentViewer markups', () => {
     expect(layer.querySelectorAll('span')).toHaveLength(1)
   })
 })
-

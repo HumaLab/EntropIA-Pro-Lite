@@ -1488,10 +1488,7 @@ export const zoteroAnnotationItems = sqliteTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.libraryRowId, table.annotationKey] }),
-    parentIdx: index('idx_zotero_annotation_items_parent').on(
-      table.libraryRowId,
-      table.parentKey
-    ),
+    parentIdx: index('idx_zotero_annotation_items_parent').on(table.libraryRowId, table.parentKey),
     stateIdx: index('idx_zotero_annotation_items_state').on(table.libraryRowId, table.syncState),
   })
 )

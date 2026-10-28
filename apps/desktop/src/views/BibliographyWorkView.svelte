@@ -472,22 +472,22 @@
 </script>
 
 {#snippet annotationsPanel()}
-          <BibliographyAnnotationsPanel
-            annotations={annotationViews}
-            selectedKey={selectedMarkupId}
-            statusMessage={annotationStatusMessage}
-            {syncing}
-            canSync={annotationStatus === 'ready'}
-            {otherFormatCount}
-            onSelect={handlePanelSelect}
-            onCommentChange={handleCommentChange}
-            onDelete={requestDelete}
-            onRestore={handleRestore}
-            onResolve={handleResolve}
-            onSync={() => void runSync('edit')}
-            pdfAvailable={pdfOnDevice}
-            {renderThumbnail}
-          />
+  <BibliographyAnnotationsPanel
+    annotations={annotationViews}
+    selectedKey={selectedMarkupId}
+    statusMessage={annotationStatusMessage}
+    {syncing}
+    canSync={annotationStatus === 'ready'}
+    {otherFormatCount}
+    onSelect={handlePanelSelect}
+    onCommentChange={handleCommentChange}
+    onDelete={requestDelete}
+    onRestore={handleRestore}
+    onResolve={handleResolve}
+    onSync={() => void runSync('edit')}
+    pdfAvailable={pdfOnDevice}
+    {renderThumbnail}
+  />
 {/snippet}
 
 <div class="work-view" class:work-view--fill={showsPdf}>

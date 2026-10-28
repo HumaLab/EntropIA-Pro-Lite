@@ -362,12 +362,14 @@ const es = {
   'bibliographyWork.attachmentsEmpty': 'La obra no tiene adjuntos catalogados.',
   'bibliographyWork.attachmentOpen': 'Ver en Original',
   'bibliographyAnnotations.title': 'Anotaciones',
-  'bibliographyAnnotations.empty': 'Todavía no hay anotaciones. Seleccioná texto o elegí una herramienta.',
+  'bibliographyAnnotations.empty':
+    'Todavía no hay anotaciones. Seleccioná texto o elegí una herramienta.',
   'bibliographyAnnotations.page': 'Página {page}',
   'bibliographyAnnotations.commentLabel': 'Comentario de la anotación',
   'bibliographyAnnotations.commentPlaceholder': 'Agregar un comentario…',
   'bibliographyAnnotations.delete': 'Eliminar anotación',
-  'bibliographyAnnotations.deleteConflictConfirm': 'Zotero tiene cambios de esta anotación que no aceptaste ({fields}). ¿La eliminás igual?',
+  'bibliographyAnnotations.deleteConflictConfirm':
+    'Zotero tiene cambios de esta anotación que no aceptaste ({fields}). ¿La eliminás igual?',
   'bibliographyAnnotations.stateSynced': 'Sincronizada',
   'bibliographyAnnotations.statePending': 'Pendiente',
   'bibliographyAnnotations.stateConflict': 'En conflicto',
@@ -393,21 +395,28 @@ const es = {
   'bibliographyAnnotations.conflictDiscard': 'Eliminarla',
   'bibliographyAnnotations.conflictApply': 'Aplicar',
   'bibliographyAnnotations.existenceTrashed': 'Se movió a la papelera en Zotero.',
-  'bibliographyAnnotations.existenceModified': 'Se modificó en Zotero después de que la eliminaste.',
+  'bibliographyAnnotations.existenceModified':
+    'Se modificó en Zotero después de que la eliminaste.',
   'bibliographyAnnotations.existenceDeleted': 'Se eliminó en Zotero.',
-  'bibliographyAnnotations.existenceAttachmentDeleted': 'Su adjunto se eliminó en Zotero. Copiá el comentario si lo necesitás y descartala.',
+  'bibliographyAnnotations.existenceAttachmentDeleted':
+    'Su adjunto se eliminó en Zotero. Copiá el comentario si lo necesitás y descartala.',
   'bibliographyAnnotations.fieldComment': 'Comentario',
   'bibliographyAnnotations.fieldColor': 'Color',
   'bibliographyAnnotations.fieldText': 'Texto',
   'bibliographyAnnotations.fieldPosition': 'Posición',
   'bibliographyAnnotations.fieldOther': 'Campo {field}',
-  'bibliographyAnnotations.statusNoKey': 'Para sincronizar con Zotero, guardá en Ajustes una clave de la Web API con permiso de escritura.',
-  'bibliographyAnnotations.statusNotPersonal': 'Las anotaciones están disponibles solo en la biblioteca personal.',
-  'bibliographyAnnotations.statusOtherAccount': 'La clave de Zotero es de una cuenta distinta de la abierta en Zotero.',
+  'bibliographyAnnotations.statusNoKey':
+    'Para sincronizar con Zotero, guardá en Ajustes una clave de la Web API con permiso de escritura.',
+  'bibliographyAnnotations.statusNotPersonal':
+    'Las anotaciones están disponibles solo en la biblioteca personal.',
+  'bibliographyAnnotations.statusOtherAccount':
+    'La clave de Zotero es de una cuenta distinta de la abierta en Zotero.',
   'bibliographyAnnotations.statusAccountUnknown': 'Abrí Zotero para sincronizar las anotaciones.',
   'bibliographyAnnotations.statusInvalidKey': 'Zotero no reconoce la clave guardada.',
-  'bibliographyAnnotations.statusNoWrite': 'La clave de Zotero no tiene permiso de escritura en la biblioteca personal.',
-  'bibliographyAnnotations.statusUnreachable': 'Sin conexión con Zotero. Los cambios quedan pendientes.',
+  'bibliographyAnnotations.statusNoWrite':
+    'La clave de Zotero no tiene permiso de escritura en la biblioteca personal.',
+  'bibliographyAnnotations.statusUnreachable':
+    'Sin conexión con Zotero. Los cambios quedan pendientes.',
   'bibliographyAnnotations.statusPaused': 'Zotero pidió esperar. Los cambios se envían más tarde.',
   'bibliographyAnnotations.syncNow': 'Sincronizar con Zotero',
   'bibliographyAnnotations.syncing': 'Sincronizando…',
@@ -3751,13 +3760,15 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliographyAnnotations.commentLabel': 'Annotation comment',
   'bibliographyAnnotations.commentPlaceholder': 'Add a comment…',
   'bibliographyAnnotations.delete': 'Delete annotation',
-  'bibliographyAnnotations.deleteConflictConfirm': 'Zotero has changes to this annotation you have not accepted ({fields}). Delete it anyway?',
+  'bibliographyAnnotations.deleteConflictConfirm':
+    'Zotero has changes to this annotation you have not accepted ({fields}). Delete it anyway?',
   'bibliographyAnnotations.stateSynced': 'Synced',
   'bibliographyAnnotations.statePending': 'Pending',
   'bibliographyAnnotations.stateConflict': 'Conflict',
   'bibliographyAnnotations.stateError': 'Error',
   'bibliographyAnnotations.stateWaitingParent': 'Waiting for Zotero',
-  'bibliographyAnnotations.waitingSince': 'Waiting for the attachment to reach Zotero since {when}.',
+  'bibliographyAnnotations.waitingSince':
+    'Waiting for the attachment to reach Zotero since {when}.',
   'bibliographyAnnotations.trashGroup': "In Zotero's trash ({count})",
   'bibliographyAnnotations.restore': 'Restore',
   'bibliographyAnnotations.otherFormat': '{count} annotations in another format (Zotero only)',
@@ -3779,15 +3790,19 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'bibliographyAnnotations.existenceTrashed': 'It was moved to the trash in Zotero.',
   'bibliographyAnnotations.existenceModified': 'It was modified in Zotero after you deleted it.',
   'bibliographyAnnotations.existenceDeleted': 'It was deleted in Zotero.',
-  'bibliographyAnnotations.existenceAttachmentDeleted': 'Its attachment was deleted in Zotero. Copy the comment if you need it, then discard it.',
+  'bibliographyAnnotations.existenceAttachmentDeleted':
+    'Its attachment was deleted in Zotero. Copy the comment if you need it, then discard it.',
   'bibliographyAnnotations.fieldComment': 'Comment',
   'bibliographyAnnotations.fieldColor': 'Color',
   'bibliographyAnnotations.fieldText': 'Text',
   'bibliographyAnnotations.fieldPosition': 'Position',
   'bibliographyAnnotations.fieldOther': 'Field {field}',
-  'bibliographyAnnotations.statusNoKey': 'To sync with Zotero, save a Zotero Web API key with write access in Settings.',
-  'bibliographyAnnotations.statusNotPersonal': 'Annotations are available for the personal library only.',
-  'bibliographyAnnotations.statusOtherAccount': 'The Zotero key belongs to a different account than the one open in Zotero.',
+  'bibliographyAnnotations.statusNoKey':
+    'To sync with Zotero, save a Zotero Web API key with write access in Settings.',
+  'bibliographyAnnotations.statusNotPersonal':
+    'Annotations are available for the personal library only.',
+  'bibliographyAnnotations.statusOtherAccount':
+    'The Zotero key belongs to a different account than the one open in Zotero.',
   'bibliographyAnnotations.statusAccountUnknown': 'Open Zotero to sync annotations.',
   'bibliographyAnnotations.statusInvalidKey': 'Zotero does not recognize the saved key.',
   'bibliographyAnnotations.statusNoWrite': 'The Zotero key cannot write to the personal library.',
