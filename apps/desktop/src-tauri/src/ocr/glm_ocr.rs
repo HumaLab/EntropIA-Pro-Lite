@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 const GLM_OCR_API_URL: &str = "https://api.z.ai/api/paas/v4/layout_parsing";
 const GLM_OCR_TEST_IMAGE_URL: &str = "https://cdn.bigmodel.cn/static/logo/introduction.png";
 
+/// The model every page request bills against. It is half of the OCR contract
+/// (`bibliography/ocr_contract.rs`, plan D3): changing it invalidates cached
+/// pages, and [`crate::bibliography::ocr_contract::OCR_PAGE_CONTRACT_VERSION`]
+/// is what records that a change happened.
+pub const GLM_OCR_MODEL_ID: &str = "glm-ocr";
+
 #[derive(Deserialize)]
 struct GlmOcrApiErrorEnvelope {
     error: Option<GlmOcrApiError>,
@@ -122,7 +128,7 @@ impl GlmOcrClient {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&LayoutParsingRequest {
-                model: "glm-ocr",
+                model: GLM_OCR_MODEL_ID,
                 file: GLM_OCR_TEST_IMAGE_URL,
                 start_page_id: None,
                 end_page_id: None,
@@ -152,7 +158,7 @@ impl GlmOcrClient {
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
             .json(&LayoutParsingRequest {
-                model: "glm-ocr",
+                model: GLM_OCR_MODEL_ID,
                 file,
                 start_page_id: pages.map(|(first, _)| first),
                 end_page_id: pages.map(|(_, last)| last),
@@ -314,6 +320,15 @@ mod tests {
         let body = raw.split("\r\n\r\n").nth(1).expect("body");
         let json: serde_json::Value = serde_json::from_str(body).expect("json body");
         assert!(json.get("start_page_id").is_none() && json.get("end_page_id").is_none());
+    }
+
+    /// The page request still sends the model id it always did: the constant
+    /// that names it for the OCR contract moved the literal, it did not change
+    /// the wire value (the request tests above assert the same value on an
+    /// actual request).
+    #[test]
+    fn the_page_request_model_id_is_unchanged() {
+        assert_eq!(GLM_OCR_MODEL_ID, "glm-ocr");
     }
 
     #[test]

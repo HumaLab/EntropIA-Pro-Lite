@@ -3005,6 +3005,17 @@ impl BibliographyExtractExecutor {
         }
     }
 
+    /// The OCR contract (plan D3) of the provider this executor would use:
+    /// `ocr-v<version>:<provider>:<model>:p<version>`, or `None` when it runs
+    /// native-only. Cached pages are read and written under exactly this
+    /// string, so a change of provider, model or prompt/parser version misses
+    /// them.
+    pub fn ocr_contract(&self) -> Option<String> {
+        self.selective_ocr
+            .as_ref()
+            .map(|(_, provider)| provider.ocr_contract())
+    }
+
     fn stage(
         &self,
         ctx: &crate::processing::scheduler::ExecCtx,
@@ -3842,6 +3853,17 @@ impl crate::bibliography::selective_ocr::PageOcrProvider for ProductionSelective
             "glm"
         }
     }
+
+    fn model_id(&self) -> &str {
+        #[cfg(feature = "paddle-ocr")]
+        {
+            crate::bibliography::ocr_contract::PADDLE_PAGE_MODEL_ID
+        }
+        #[cfg(not(feature = "paddle-ocr"))]
+        {
+            crate::ocr::glm_ocr::GLM_OCR_MODEL_ID
+        }
+    }
 }
 impl Default for BibliographyExtractExecutor {
     fn default() -> Self {
@@ -4493,4 +4515,65 @@ pub fn publish_bibliography_extract_output(
         .map_err(|error| format!("{}: {}", error.code, error.message))?;
     }
     Ok(())
+}
+
+/// The OCR contract seam (plan-sync-bibliografia-derivada D3, WU3).
+///
+/// Kept below [`ProductionSelectiveOcr`] on purpose: `ocr::pdf`'s
+/// `the_bundled_resolver_never_calls_the_ml_runtime_bootstrap` reads the
+/// *first* `render_page(&self` body in this file and pins it to the
+/// runtime-free pdfium resolver, so the test double that renderer must come
+/// after the production one.
+#[cfg(test)]
+mod ocr_contract_tests {
+    use super::BibliographyExtractExecutor;
+
+    struct NoopRenderer;
+
+    impl crate::bibliography::selective_ocr::PageRenderer for NoopRenderer {
+        fn render_page(&self, _pdf_bytes: &[u8], _page_number: u32) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+
+        fn name(&self) -> &'static str {
+            "noop"
+        }
+    }
+
+    struct GlmLikeProvider;
+
+    impl crate::bibliography::selective_ocr::PageOcrProvider for GlmLikeProvider {
+        fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        fn name(&self) -> &str {
+            "glm"
+        }
+
+        fn model_id(&self) -> &str {
+            "glm-ocr"
+        }
+    }
+
+    /// T5/T3 need one place to ask "which contract is this work priced
+    /// under?": the executor answers for the provider it was built with.
+    #[test]
+    fn the_extractor_reports_the_contract_of_the_provider_it_would_use() {
+        let executor = BibliographyExtractExecutor::with_selective_ocr(
+            std::sync::Arc::new(NoopRenderer),
+            std::sync::Arc::new(GlmLikeProvider),
+        );
+        assert_eq!(
+            executor.ocr_contract().as_deref(),
+            Some("ocr-v1:glm:glm-ocr:p1")
+        );
+    }
+
+    /// Native-only extraction pays for no OCR, so it has no contract to key a
+    /// cache on.
+    #[test]
+    fn a_native_only_extractor_reports_no_ocr_contract() {
+        assert!(BibliographyExtractExecutor::new().ocr_contract().is_none());
+    }
 }

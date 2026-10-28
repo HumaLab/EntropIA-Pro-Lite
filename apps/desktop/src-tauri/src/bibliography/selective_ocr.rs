@@ -280,6 +280,22 @@ pub trait PageOcrProvider: Send + Sync {
     }
 
     fn name(&self) -> &str;
+
+    /// The model this provider bills against — the second half of the OCR
+    /// contract. Providers that run no model (test doubles) keep the
+    /// default.
+    fn model_id(&self) -> &str {
+        "unspecified"
+    }
+
+    /// The versioned contract that says which provider configuration
+    /// produced a page answer (plan D3):
+    /// `ocr-v<version>:<provider>:<model>:p<version>`. Cached pages are
+    /// stored under it and reused only when it matches, so a change of
+    /// provider, model or prompt/parser version misses them.
+    fn ocr_contract(&self) -> String {
+        crate::bibliography::ocr_contract::ocr_contract_for(self.name(), self.model_id())
+    }
 }
 
 /// Whole-document OCR pays off when most of the document needs it (a scan);
@@ -409,5 +425,56 @@ mod trait_tests {
             map_page_ocr_error("splines reticulated unexpectedly"),
             ExecOutput::Fatal { .. }
         ));
+    }
+}
+
+/// The contract seam between a provider and the derived cache (plan D3): a
+/// provider names itself and its model, and the contract derives from both.
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    struct GlmLikeProvider;
+
+    impl PageOcrProvider for GlmLikeProvider {
+        fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        fn name(&self) -> &str {
+            "glm"
+        }
+
+        fn model_id(&self) -> &str {
+            "glm-ocr"
+        }
+    }
+
+    /// A provider that runs no model (a test double, or a future local engine
+    /// without one) still gets one stable contract, never an empty field.
+    struct ModelLessProvider;
+
+    impl PageOcrProvider for ModelLessProvider {
+        fn recognize_page(&self, _image_bytes: &[u8]) -> Result<String, String> {
+            Ok(String::new())
+        }
+
+        fn name(&self) -> &str {
+            "fake"
+        }
+    }
+
+    #[test]
+    fn a_provider_contract_is_its_name_and_model_under_the_current_version() {
+        assert_eq!(GlmLikeProvider.ocr_contract(), "ocr-v1:glm:glm-ocr:p1");
+    }
+
+    #[test]
+    fn a_provider_without_a_model_still_gets_a_stable_contract() {
+        assert_eq!(ModelLessProvider.model_id(), "unspecified");
+        assert_eq!(
+            ModelLessProvider.ocr_contract(),
+            "ocr-v1:fake:unspecified:p1"
+        );
     }
 }
