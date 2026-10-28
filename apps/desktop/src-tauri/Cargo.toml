@@ -38,7 +38,7 @@ tauri-plugin-fs = "2.6.0"
 thiserror = "2"
 ocr-rs = { version = "2.2", optional = true, features = ["build-mnn-from-source"] }
 pdf-extract = "0.12"
-lopdf = "0.45"
+lopdf = "0.46"
 # Pinned to the Pdfium 7543 API: the committed binaries are chromium/7543,
 # and 0.9 defaults to a newer API whose symbols they do not export.
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_7543", "image_latest", "thread_safe"] }
