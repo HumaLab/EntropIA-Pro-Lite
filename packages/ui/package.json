@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",
-    "@sveltejs/vite-plugin-svelte": "^5",
+    "@sveltejs/vite-plugin-svelte": "^7",
     "@testing-library/jest-dom": "^6",
     "@testing-library/svelte": "^5",
     "@types/leaflet": "^1.9.22",
