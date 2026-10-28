@@ -194,19 +194,20 @@ function protectOcrRegionReferences(source: string): {
 
 interface MarkdownImageToken {
   content: string
-  attrGet(name: string): string | null
+  /** markdown-it 15 widens attribute values to `string | number | null`. */
+  attrGet(name: string): string | number | null
 }
 
 function renderNonOcrImage(tokens: MarkdownImageToken[], index: number): string {
   const token = tokens[index]
   const alt = token?.content ?? ''
-  const source = token?.attrGet('src') ?? ''
+  const source = String(token?.attrGet('src') ?? '')
   return escapeHtml(`![${alt}](${source})`)
 }
 
 markdown.renderer.rules.image = (tokens: MarkdownImageToken[], index: number) => {
   const token = tokens[index]
-  const source = token?.attrGet('src') ?? ''
+  const source = String(token?.attrGet('src') ?? '')
   if (source.startsWith(OCR_REGION_DESTINATION)) {
     const tokenValue = source.slice(OCR_REGION_DESTINATION.length)
     return `<span data-ocr-region-token="${escapeHtml(tokenValue)}" aria-hidden="true"></span>`
