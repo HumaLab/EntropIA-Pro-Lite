@@ -184,12 +184,20 @@ pub async fn pull_loop<A: SyncApi>(
         }
 
         // Ordinary responses advertise the server capabilities; remember the
-        // web capture token for this epoch (it gates the web rows' push).
+        // web capture token for this epoch (it gates the web rows' push) and the
+        // derived-cache token (it gates every `bibliography-derived-v1` call).
+        // Only an ordinary response is evidence: an opted-in one never records.
         if !page.server_epoch.is_empty() {
             crate::sync::web_capture::record_capability(
                 conn,
                 &page.server_epoch,
                 page.supports_web_capture_v1(),
+            )
+            .map_err(SyncError::Decode)?;
+            crate::sync::derived::record_capability(
+                conn,
+                &page.server_epoch,
+                page.supports_bibliography_derived_v1(),
             )
             .map_err(SyncError::Decode)?;
         }

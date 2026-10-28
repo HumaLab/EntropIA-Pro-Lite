@@ -3,9 +3,10 @@
 //! Client side of `odd/plans/plan-sync-bibliografia-derivada.md` §2.2 and §2.9:
 //! the local tables where a device records the results it already paid for
 //! (embeddings, OCR answers) so another device of the same account never pays
-//! for them twice. This module owns the account semantics only — the tables are
-//! created by [`crate::sync::schema::ensure_sync_schema`], and reads/writes/transport
-//! arrive in later slices.
+//! for them twice. This module owns the tables' account semantics and the
+//! channel's bookkeeping — the tables are created by
+//! [`crate::sync::schema::ensure_sync_schema`] and the wire transport lives in
+//! [`crate::sync::derived_transport`] (`src/sync/derived_protocol.md`).
 //!
 //! Account rules (§2.9), all of them durable across logout:
 //!
@@ -28,7 +29,7 @@ use std::collections::HashMap;
 use rusqlite::{params, params_from_iter, Connection};
 use sha2::{Digest, Sha256};
 
-use super::session::{meta_get, meta_set};
+use super::session::{meta_delete, meta_get, meta_set};
 
 /// Durable mark of the account bound to this archive (§2.9). Written in the same
 /// transaction as the session. Deliberately NOT in `SESSION_META_KEYS`: it
@@ -40,17 +41,19 @@ const OWNER_ACCOUNT_KEY: &str = "derived_owner_account";
 /// Literal prefix of the per-account backfill marks (§2.3b). They describe local
 /// rows, so logout keeps them.
 #[allow(dead_code)]
-const BACKFILL_PREFIX: &str = "derived_backfill:";
+pub(crate) const BACKFILL_PREFIX: &str = "derived_backfill:";
 
 /// Channel account metadata dropped on logout / account change (§2.9). Defined
 /// here from the start so the transport slice has one owner for them: the
 /// capability the server advertised, the catch-up epoch, the pull cursor, when
-/// the last pull started (the freshness barrier of §2.6) and the wait verdict.
+/// the last pull started (the freshness barrier of §2.6), the wait verdict and
+/// the on-demand pull request of the pull-before-pay gate.
 const CAPABILITY_KEY: &str = "derived_capability";
 const CATCHUP_EPOCH_KEY: &str = "derived_catchup_epoch";
-const PULL_CURSOR_KEY: &str = "derived_cursor";
-const LAST_PULL_STARTED_AT_KEY: &str = "derived_last_pull_started_at";
+pub(crate) const PULL_CURSOR_KEY: &str = "derived_cursor";
+pub(crate) const LAST_PULL_STARTED_AT_KEY: &str = "derived_last_pull_started_at";
 const WAIT_VERDICT_KEY: &str = "derived_wait_verdict";
+const PULL_REQUESTED_KEY: &str = "derived_pull_requested";
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -60,7 +63,7 @@ fn now_ms() -> i64 {
 }
 
 /// SHA-256 as lowercase hex.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
@@ -197,17 +200,146 @@ pub(crate) fn clear_account_metadata(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("[sync] failed to reset derived push flags: {e}"))?;
     conn.execute(
-        "DELETE FROM sync_meta WHERE key IN (?1, ?2, ?3, ?4, ?5)",
+        "DELETE FROM sync_meta WHERE key IN (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             CAPABILITY_KEY,
             CATCHUP_EPOCH_KEY,
             PULL_CURSOR_KEY,
             LAST_PULL_STARTED_AT_KEY,
-            WAIT_VERDICT_KEY
+            WAIT_VERDICT_KEY,
+            PULL_REQUESTED_KEY
         ],
     )
     .map(|_| ())
     .map_err(|e| format!("[sync] failed to clear derived channel metadata: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Channel capability, catch-up and pull request (§2.5, §2.6)
+// ---------------------------------------------------------------------------
+
+/// What this archive knows about `bibliography-derived-v1` for the CURRENT
+/// server epoch (§2.6). Three states, not a boolean: the pull-before-pay gate
+/// has to tell "nobody asked yet" (wait, bounded) from "the server confirmed it
+/// does not implement the channel" (pay as usual), and a `false` from
+/// "supported" would conflate them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivedCapability {
+    /// No `server_epoch` yet, or no ordinary response recorded a verdict for the
+    /// current one. The channel sends nothing and the gate waits (bounded).
+    Unknown,
+    /// An ordinary response for the current epoch advertised the exact token.
+    Supported,
+    /// An ordinary response for the current epoch did not advertise it: a legacy
+    /// server, confirmed. The channel never calls it and the gate pays as before.
+    Unsupported,
+}
+
+/// The current `server_epoch`, if the archive already synced.
+pub(crate) fn current_epoch(conn: &Connection) -> Result<Option<String>, String> {
+    Ok(meta_get(conn, "server_epoch")?.filter(|epoch| !epoch.is_empty()))
+}
+
+/// Reads the recorded verdict for the current epoch. A malformed record, an
+/// unreadable database or a verdict from another epoch is [`Unknown`]: nothing
+/// is ever called on a guess.
+pub fn capability_state(conn: &Connection) -> DerivedCapability {
+    let Ok(Some(epoch)) = current_epoch(conn) else {
+        return DerivedCapability::Unknown;
+    };
+    let Ok(Some(raw)) = meta_get(conn, CAPABILITY_KEY) else {
+        return DerivedCapability::Unknown;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return DerivedCapability::Unknown;
+    };
+    if parsed.get("epoch").and_then(serde_json::Value::as_str) != Some(epoch.as_str()) {
+        return DerivedCapability::Unknown;
+    }
+    match parsed
+        .get("advertised")
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => DerivedCapability::Supported,
+        Some(false) => DerivedCapability::Unsupported,
+        None => DerivedCapability::Unknown,
+    }
+}
+
+/// Records what an ORDINARY push/pull response advertised for `server_epoch`
+/// (§2.5). A later ordinary response that omits the token overwrites an earlier
+/// verdict: a server that rolled the capability back must stop receiving derived
+/// rows. Opted-in responses never record anything.
+pub(crate) fn record_capability(
+    conn: &Connection,
+    server_epoch: &str,
+    advertised: bool,
+) -> Result<(), String> {
+    let value = serde_json::json!({ "epoch": server_epoch, "advertised": advertised }).to_string();
+    conn.execute(
+        "INSERT INTO sync_meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![CAPABILITY_KEY, value],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("[sync] failed to record derived capability: {e}"))
+}
+
+/// True until this epoch's one-time since-zero catch-up completed (§2.5).
+pub(crate) fn catchup_needed(conn: &Connection, server_epoch: &str) -> Result<bool, String> {
+    Ok(meta_get(conn, CATCHUP_EPOCH_KEY)?.as_deref() != Some(server_epoch))
+}
+
+/// Marks this epoch's catch-up complete.
+pub(crate) fn record_catchup_done(conn: &Connection, server_epoch: &str) -> Result<(), String> {
+    meta_set(conn, CATCHUP_EPOCH_KEY, server_epoch)
+}
+
+/// Millisecond clock of the last successful incremental pull of the channel in
+/// the CURRENT epoch, or `None` when none ran (§2.6 freshness barrier).
+///
+/// The value is stored with the epoch it belongs to: after an epoch rotation the
+/// previous epoch's timestamp is stale evidence and reads as `None`, so the gate
+/// can never mistake a pre-reconciliation pull for a fresh cache.
+pub fn last_pull_started_at(conn: &Connection) -> Option<i64> {
+    let epoch = current_epoch(conn).ok().flatten()?;
+    let raw = meta_get(conn, LAST_PULL_STARTED_AT_KEY).ok().flatten()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if value.get("epoch").and_then(serde_json::Value::as_str) != Some(epoch.as_str()) {
+        return None;
+    }
+    value
+        .get("started_at_ms")
+        .and_then(serde_json::Value::as_i64)
+}
+
+/// Records the start of a successful incremental pull for `server_epoch`.
+pub(crate) fn record_pull_started_at(
+    conn: &Connection,
+    server_epoch: &str,
+    started_at_ms: i64,
+) -> Result<(), String> {
+    let value = serde_json::json!({ "epoch": server_epoch, "started_at_ms": started_at_ms });
+    meta_set(conn, LAST_PULL_STARTED_AT_KEY, &value.to_string())
+}
+
+/// The pull-before-pay gate's request for one incremental pull of the channel
+/// (§2.6). Sets `sync_meta['derived_pull_requested']`; the derived phase of the
+/// sync engine performs at most one incremental pull per cycle and always
+/// performs it when the flag is set, then consumes the flag with a successful
+/// install. Requests coalesce: many callers, one flag, one pull.
+pub fn request_incremental_pull(conn: &Connection) -> Result<(), String> {
+    meta_set(conn, PULL_REQUESTED_KEY, "1")
+}
+
+/// True while a pull request is waiting for the engine.
+pub(crate) fn pull_requested(conn: &Connection) -> Result<bool, String> {
+    Ok(meta_get(conn, PULL_REQUESTED_KEY)?.as_deref() == Some("1"))
+}
+
+/// Consumes a pull request after a successful incremental install.
+pub(crate) fn clear_pull_request(conn: &Connection) -> Result<(), String> {
+    meta_delete(conn, PULL_REQUESTED_KEY)
 }
 
 /// Records one paid embedding. First writer wins (`INSERT OR IGNORE`): the same
@@ -385,7 +517,7 @@ const READ_BATCH: usize = 400;
 /// row. A missing derived table, an unreadable row or an archive that cannot
 /// name an account yields no hits: the caller then pays as it did before, and
 /// the cache can never become a source of unknown or foreign vectors.
-pub(crate) fn cached_vectors(
+pub fn cached_vectors(
     conn: &Connection,
     contract_hash: &str,
     dimensions: usize,
@@ -473,7 +605,7 @@ pub(crate) fn cached_vectors(
 /// `settled_page_row` against its own native page; a converted answer stored
 /// here would be converted a second time and publish different text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CachedOcrAnswer {
+pub struct CachedOcrAnswer {
     /// `text` or `empty` (`sync_derived_ocr_pages.outcome`).
     pub outcome: String,
     /// The provider's raw answer, `''` when `outcome = 'empty'`.
@@ -498,7 +630,7 @@ pub(crate) struct CachedOcrAnswer {
 /// an unreadable row or an archive that cannot name an account yields no hits:
 /// the caller then pays as it did before, and the cache can never become a
 /// source of unknown or foreign OCR text.
-pub(crate) fn cached_ocr_pages(
+pub fn cached_ocr_pages(
     conn: &Connection,
     source_hash: &str,
     ocr_contract: &str,
