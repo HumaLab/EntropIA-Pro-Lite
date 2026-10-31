@@ -26,8 +26,9 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   relay, so it needs no SDK.
 - D2 — No migration: access state (enabled flag, client records with token SHA-256)
   lives in a local, unsynced `agent-access.json` in the data dir. Tokens live in the
-  OS keyring (service `com.entropia.agent-connector`, account = client id, prefixed
-  by the dev profile when one is active).
+  OS keyring (service `com.entropia.agent-connector`, account = client id; with a dev
+  profile the service becomes `com.entropia.agent-connector (dev profile)` and the
+  account `<id>@dev-profile:<name>`).
 - D3 — Discovery: while enabled the app writes `agent-endpoint.json` (protocol
   version, port, pid, app version, variant) next to the archive; the connector reads
   it. Port is ephemeral on 127.0.0.1.
@@ -66,6 +67,19 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   call in `<cache>/logs/agent-audit.jsonl` with time, client id and name, tool,
   status, error code and object ids; never queries or other free text (query length
   only), never tokens; rotated past 5 MiB keeping one previous file.
+- D11 — App surface (T4). Tauri commands `agent_access_status` → `{enabled, running,
+  port, clients}`, `agent_access_set_enabled {enabled}` → status (persists, then starts
+  or stops the endpoint), `agent_client_create {name}` → `{client, status}`,
+  `agent_client_revoke {clientId}` → status. Each registered in `generate_handler!`,
+  `build.rs` `APP_COMMANDS` and `capabilities/default.json` (`acl_manifest_guard`).
+  Settings gets an "Asistentes" section, Spanish copy, same in Pro and Lite: a toggle to
+  allow external assistants (read-only in this version, this computer only), the
+  endpoint state, the paired clients (name, created, last used) each with "Revocar"
+  behind a confirmation, and "Conectar un asistente" (name → create) which then shows
+  the client id and the connector command `entropia-agent-connector --client <id>`
+  with one ready-to-copy line per client (Claude Code, Codex, OpenCode, Pi). No token
+  is ever shown or copied. Bundling the connector binary is stage 6, so the panel
+  says the connector must be installed.
 - D9 — Connector (`crates/entropia-agent-connector`, standalone crate with its own
   committed `Cargo.lock`, binary `entropia-agent-connector`):
   - CLI: `entropia-agent-connector --client <id> [--profile <name>]`, `--version`.
@@ -96,8 +110,8 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 
 - [x] T1 — Access store: client records, token mint/verify/revoke, keyring seam. S4, S8. Route: inline, TDD. Risk: item 2. Commit: cf3836cc
 - [x] T2 — MCP endpoint: rmcp Streamable HTTP on loopback, Host/Origin/bearer guard, discovery file, start/stop. S2, S3, S11. Route: delegated worker, TDD (RED 10 failing → GREEN 23). Risk: items 2, 5. Commit: c949ce52
-- [x] T3 — Read-only tools: `entropia_status`, `collections_list`, `items_list`, `items_get`, `search_items`; pagination, scope check, audit log. S6, S7, S9. Route: delegated worker, TDD (RED 13 failing → GREEN 43). Deviations: limit > 200 refused (`invalid_argument`); extra codes `unavailable`, `internal_error`; `search_items` returns `matches` instead of a cursor; timestamps are unix millis. Commit: (T3 commit)
-- [ ] T4 — App surface: Tauri commands + Settings "Asistentes" panel (enable, add client, revoke, status). S1, S4. Route: inline, TDD. Commit: —
+- [x] T3 — Read-only tools: `entropia_status`, `collections_list`, `items_list`, `items_get`, `search_items`; pagination, scope check, audit log. S6, S7, S9. Route: delegated worker, TDD (RED 13 failing → GREEN 43). Deviations: limit > 200 refused (`invalid_argument`); extra codes `unavailable`, `internal_error`; `search_items` returns `matches` instead of a cursor; timestamps are unix millis. Commit: 89c2e36b
+- [x] T4 — App surface: Tauri commands + Settings "Asistentes" panel (enable, add client, revoke, status). S1, S4. Route: delegated worker, TDD (RED 6 Rust + missing component → GREEN 6 Rust, 7 Vitest Pro and Lite). Commit: (T4 commit)
 - [x] T5 — Connector crate `crates/entropia-agent-connector`: discovery, keyring token, stdio relay, actionable errors. S1, S5, S7. Route: delegated worker, TDD (RED 0/32 → GREEN 32). Commit: 1432f913
 - [ ] T6 — Contract and inventory docs under `integrations/agents/`: protocol version, compatibility policy, scopes, error codes, domain inventory. S10. Route: inline. Commit: —
 - [ ] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + verify. Commit: —

@@ -1672,6 +1672,10 @@ pub fn run() {
             internet_archive::import::ia_fail_file_import,
             internet_archive::import::ia_list_reconcile,
             internet_archive::import::ia_finish_reconcile,
+            automation::commands::agent_access_status,
+            automation::commands::agent_access_set_enabled,
+            automation::commands::agent_client_create,
+            automation::commands::agent_client_revoke,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
