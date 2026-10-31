@@ -1033,11 +1033,13 @@ pub fn run() {
             // lazily on first write, never here.
             app.manage(internet_archive::IaState::new(&app_dir));
 
-            // The assistant endpoint (S2, S3, D6-D8). Paired clients live in
-            // `agent-access.json` next to the archive (never in SQLite: see
+            // The assistant endpoint (S2, S3, D6-D8, D10). Paired clients live
+            // in `agent-access.json` next to the archive (never in SQLite: see
             // `automation::access`), and the loopback MCP endpoint starts only
-            // when access is enabled. Neither loading nor starting it is fatal:
-            // a failed start is logged and the app opens exactly as without it.
+            // when access is enabled. Its tools read the archive through their
+            // own query-only connection (from `db_path`) and audit under the
+            // cache. Neither loading nor starting it is fatal: a failed start is
+            // logged and the app opens exactly as without it.
             {
                 let agent_access = std::sync::Arc::new(
                     automation::access::AgentAccess::load(
@@ -1048,7 +1050,11 @@ pub fn run() {
                     ),
                 );
                 let agent_endpoint = std::sync::Arc::new(
-                    automation::server::AgentEndpointState::new(app_dir.clone()),
+                    automation::server::AgentEndpointState::new(
+                        app_dir.clone(),
+                        db_path.clone(),
+                        cache_dir.clone(),
+                    ),
                 );
                 app.manage(agent_access.clone());
                 app.manage(agent_endpoint.clone());

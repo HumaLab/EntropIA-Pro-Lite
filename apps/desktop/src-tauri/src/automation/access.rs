@@ -361,6 +361,24 @@ impl AgentAccess {
             .map_err(|e| format!("revoked, but the token copy could not be removed: {e}"))
     }
 
+    /// Replace a client's scopes. `create_client` always grants [`Scope::Read`],
+    /// so this is how a test builds the "paired but not allowed to read" case the
+    /// tool contract has to refuse.
+    #[cfg(test)]
+    pub(crate) fn set_scopes(&self, client_id: &str, scopes: Vec<Scope>) -> Result<(), String> {
+        let mut state = self.lock()?;
+        let mut next = state.clone();
+        let record = next
+            .clients
+            .iter_mut()
+            .find(|client| client.id == client_id)
+            .ok_or_else(|| format!("no client {client_id}"))?;
+        record.scopes = scopes;
+        self.persist(&next)?;
+        *state = next;
+        Ok(())
+    }
+
     /// The client a bearer token belongs to, if the endpoint is enabled and the
     /// token matches a live record.
     pub fn authenticate(&self, token: &str) -> Option<Principal> {
