@@ -7,9 +7,9 @@ local-only and off by default**, and it is the same code in Pro and Lite.
 
 Status: the endpoint and the connector exist and were exercised end to end
 against a real Lite debug build (isolated dev profile, one seeded client):
-OpenCode, Claude Code and Pi connected and listed the five tools; the Codex
-recipe registers the server, but its connection was not exercised because that
-needs a model session. The connector now ships **with every installer** — Pro and
+OpenCode, Claude Code and Pi connected and listed the five tools, and a
+non-interactive Codex session (`codex exec`) called `entropia_status` through the
+connector. The connector now ships **with every installer** — Pro and
 Lite, Windows NSIS/MSI and MSIX, Linux `.deb`, macOS `.app`/`.dmg` — and Settings ›
 Asistentes names its absolute path. See the **Verified** column under “Pair a
 client” for what exactly was and was not proven, and “Where the connector is
@@ -82,7 +82,7 @@ describes the Lite debug run, where `<connector>` was
 | Client | Line | Verified |
 |---|---|---|
 | Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
-| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Registering only — `codex mcp add` accepted the recipe; its connection was not exercised (it needs a model session) |
+| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Yes — `codex exec` called `entropia_status` and got the archive counts (Codex starts MCP servers with a reduced environment; the connector finds the session keyring itself on Linux) |
 | OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
 | Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
 
@@ -165,7 +165,10 @@ instance key; `unauthorized` means the client was revoked or was never paired;
 has no instance key (update app and connector); `credential_missing` means there is
 no token for that client id (not paired, or revoked); `credential_insecure` means
 the fallback token file is readable by other users, so fix its permissions
-(`chmod 600`) or pair the assistant again.
+(`chmod 600`) or pair the assistant again; `credential_store_unavailable` means the
+connector could not reach the OS keyring from the process the agent started (log
+in to the desktop session with the keyring unlocked, or pass the agent
+`DBUS_SESSION_BUS_ADDRESS`).
 
 ## Read next
 

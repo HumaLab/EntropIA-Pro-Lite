@@ -324,7 +324,8 @@ fn tool_error(code: &str, message: String) -> CallToolResult {
 impl AgentServer {
     #[tool(
         name = "entropia_status",
-        description = "Estado de esta instancia de EntropIA: versión, variante, perfil, cliente conectado, cuántas colecciones e ítems tiene el archivo y qué herramientas ofrece."
+        description = "Estado de esta instancia de EntropIA: versión, variante, perfil, cliente conectado, cuántas colecciones e ítems tiene el archivo y qué herramientas ofrece.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn entropia_status(
         &self,
@@ -363,7 +364,8 @@ impl AgentServer {
 
     #[tool(
         name = "collections_list",
-        description = "Colecciones del archivo, ordenadas por nombre, con cuántos ítems tiene cada una. Pagina con `cursor` (el `nextCursor` anterior) y `limit` (1 a 200, por defecto 50); `nextCursor` es null en la última página."
+        description = "Colecciones del archivo, ordenadas por nombre, con cuántos ítems tiene cada una. Pagina con `cursor` (el `nextCursor` anterior) y `limit` (1 a 200, por defecto 50); `nextCursor` es null en la última página.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn collections_list(
         &self,
@@ -393,7 +395,8 @@ impl AgentServer {
 
     #[tool(
         name = "items_list",
-        description = "Ítems del archivo, ordenados por título, con su colección y su revisión (`updatedAt`). Filtra por `collectionId`. Pagina con `cursor` (el `nextCursor` anterior) y `limit` (1 a 200, por defecto 50); `nextCursor` es null en la última página."
+        description = "Ítems del archivo, ordenados por título, con su colección y su revisión (`updatedAt`). Filtra por `collectionId`. Pagina con `cursor` (el `nextCursor` anterior) y `limit` (1 a 200, por defecto 50); `nextCursor` es null en la última página.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn items_list(
         &self,
@@ -426,7 +429,8 @@ impl AgentServer {
 
     #[tool(
         name = "items_get",
-        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto completo: para eso está `search_items`."
+        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto completo: para eso está `search_items`.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn items_get(
         &self,
@@ -446,7 +450,8 @@ impl AgentServer {
 
     #[tool(
         name = "search_items",
-        description = "Busca en el texto indexado del archivo y devuelve los ítems que coinciden, del más al menos relevante. Filtra por `collectionId` y limita con `limit` (1 a 200, por defecto 50); `matches` dice cuántas coincidencias hay en total."
+        description = "Busca en el texto indexado del archivo y devuelve los ítems que coinciden, del más al menos relevante. Filtra por `collectionId` y limita con `limit` (1 a 200, por defecto 50); `matches` dice cuántas coincidencias hay en total.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn search_items(
         &self,

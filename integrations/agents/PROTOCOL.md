@@ -284,6 +284,11 @@ exposed in the app in this tranche.
 
 ## Tool catalogue
 
+Every tool is published with the annotations `readOnlyHint: true` and
+`openWorldHint: false`: it only reads the archive and reaches nothing outside this
+machine. Clients rely on this; Codex cancels a non-interactive call to a tool that
+does not declare itself read-only.
+
 Five tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
 
 | Tool | Arguments | Result |
@@ -345,6 +350,7 @@ person and a stable `data.code` for the agent
 | `-32004` | `protocol_incompatible` | Discovery `protocol` is not `entropia-agent/1`, or it has no usable `instanceKey` | Update the app and the connector |
 | `-32005` | `credential_missing` | No token anywhere for the client id: no keyring entry (and no fallback file), or a credential-store error that is not "unavailable" | Pair the assistant; if it persists, check the OS credential store |
 | `-32006` | `credential_insecure` | The fallback token file is readable by group or others (Unix), so it is refused and no request is sent | Fix the file's permissions (`chmod 600 <data dir>/agent-tokens/<client id>.token`) or pair the assistant again |
+| `-32007` | `credential_store_unavailable` | The OS credential store cannot be reached from the connector's process (no Secret Service or session bus) and there is no fallback file, so whether the client is paired is unknown. On Linux the connector first points `DBUS_SESSION_BUS_ADDRESS` at the user's own bus socket when the agent started it without one | Run the agent inside the desktop session with the keyring unlocked, or pass it `DBUS_SESSION_BUS_ADDRESS` |
 | `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …), or a `2xx` answer that carried no JSON where a result was expected (empty body, non-JSON body, or an event stream without a JSON event) | Treat as an app-side fault; report it with the app's logs |
 | `-32700` | `parse_error` | The stdin line was not JSON-RPC | Fix the client's framing |
 
