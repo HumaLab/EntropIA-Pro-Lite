@@ -13,6 +13,7 @@
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -104,6 +105,12 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Serializes every append in the process. Each tool call builds its own
+/// [`AuditLog`], so the lock cannot live in the value: two calls crossing the cap
+/// together would otherwise both rotate, and the second rotation would throw
+/// away (or fail to find) the file the first one kept.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
 /// The append-only trail of one machine.
 #[derive(Debug, Clone)]
 pub struct AuditLog {
@@ -149,6 +156,11 @@ impl AuditLog {
     }
 
     fn write(&self, line: &AuditLine) -> Result<(), String> {
+        // A poisoned lock only means another append panicked; the file is still
+        // usable, and the trail is best effort anyway.
+        let _guard = WRITE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut bytes = serde_json::to_vec(line)
             .map_err(|error| format!("could not serialize the audit line: {error}"))?;
         bytes.push(b'\n');
@@ -219,6 +231,36 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).expect("each audit line is JSON"))
             .collect()
+    }
+
+    /// Concurrent appends across the cap must rotate once, not once per
+    /// caller: before the shared lock two callers could both see the file over
+    /// the cap and the second rotation threw away the lines the first kept.
+    #[test]
+    fn concurrent_appends_across_the_cap_rotate_once_and_lose_nothing() {
+        const WRITERS: usize = 48;
+        for _round in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let one = serde_json::to_vec(&line("search_items", 8)).unwrap().len() as u64 + 1;
+            // Room for just over half the lines: exactly one rotation keeps all.
+            let log = AuditLog::with_max_bytes(dir.path(), one * (WRITERS as u64 / 2 + 1));
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+            let handles: Vec<_> = (0..WRITERS)
+                .map(|_| {
+                    let log = log.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        log.write(&line("search_items", 8)).unwrap();
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+            let kept = read_lines(&log.path()).len() + read_lines(&log.rotated_path()).len();
+            assert_eq!(kept, WRITERS, "every line survives a single rotation");
+        }
     }
 
     #[test]
