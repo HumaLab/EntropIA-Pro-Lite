@@ -5,9 +5,14 @@ installed EntropIA archive through a loopback MCP endpoint, once you pair it in
 **Configuración › Asistentes**. In this version the endpoint is **read-only,
 local-only and off by default**, and it is the same code in Pro and Lite.
 
-Status: the endpoint and the connector exist today; the connection lines the app
-copies are **not yet verified against the real clients**, and the connector is
-**not bundled in the installers yet** (stage 6 of `PLAN-AGENTES-ENTROPIA.md`).
+Status: the endpoint and the connector exist and were exercised end to end
+against a real Lite debug build (isolated dev profile, one seeded client):
+OpenCode, Claude Code and Pi connected and listed the five tools; the Codex
+recipe registers the server, but its connection was not exercised because that
+needs a model session. The connector is **not bundled in the installers yet**
+(stage 6 of `PLAN-AGENTES-ENTROPIA.md`), so it must be installed or run from
+source. See the **Verified** column under “Pair a client” for what exactly was
+and was not proven.
 
 ## Pieces
 
@@ -30,14 +35,16 @@ may be minimized while they work. If the endpoint is off, nothing listens.
    client id, never a token — the credential stays in the OS keyring.
 
 The lines the app generates (`apps/desktop/src/lib/agent-access.ts`), with the
-client id abbreviated; **treat them as unverified until a real client is tested**:
+client id abbreviated:
 
-| Client | Line |
-|---|---|
-| Claude Code | `claude mcp add entropia -- entropia-agent-connector --client cl_…` |
-| Codex | `codex mcp add entropia -- entropia-agent-connector --client cl_…` |
-| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["entropia-agent-connector","--client","cl_…"]}}}` |
-| Pi | `{"mcpServers":{"entropia":{"command":"entropia-agent-connector","args":["--client","cl_…"]}}}` |
+| Client | Line | Verified |
+|---|---|---|
+| Claude Code | `claude mcp add entropia -- entropia-agent-connector --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
+| Codex | `codex mcp add entropia -- entropia-agent-connector --client cl_…` | Registering only — `codex mcp add` accepted the recipe; its connection was not exercised (it needs a model session) |
+| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["entropia-agent-connector","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
+| Pi | `{"mcpServers":{"entropia":{"command":"entropia-agent-connector","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
+
+"No token in the config" held for all four: each config names only the client id.
 
 The same panel lists every paired client with its creation date and last use, and
 **"Revocar"** (behind a confirmation) makes that credential useless on the next
@@ -77,9 +84,13 @@ and speaks newline-delimited JSON-RPC on stdin/stdout, so you can drive it by ha
 profile (useful in tests). Diagnostics go to stderr; stdout carries only protocol
 lines.
 
-A failure you will recognize: `app_absent` means the app is not running or the
-switch is off; `unauthorized` means the client was revoked or the endpoint is
-disabled; `credential_missing` means no keyring entry exists for that client id.
+A failure you will recognize: `app_absent` means the app is not running, the
+switch is off (a disabled endpoint is stopped and its discovery file removed), or
+the process holding the advertised port could not prove the discovery file's
+instance key; `unauthorized` means the client was revoked or was never paired;
+`protocol_incompatible` means the discovery file names another protocol version or
+has no instance key (update app and connector); `credential_missing` means no
+keyring entry exists for that client id.
 
 ## Read next
 

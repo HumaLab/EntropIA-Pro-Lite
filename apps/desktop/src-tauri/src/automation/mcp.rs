@@ -296,9 +296,15 @@ impl AgentServer {
     {
         match tokio::task::spawn_blocking(work).await {
             Ok(result) => result,
-            Err(error) => Err(ReadError::Unavailable(format!(
-                "La lectura del archivo no llegó a completarse: {error}"
-            ))),
+            Err(error) => {
+                // A panic message can name the archive path; it stays in the log
+                // for the same reason `read::unavailable` keeps its detail there.
+                log::warn!(target: "automation", "the archive read task did not finish: {error}");
+                Err(ReadError::Unavailable(
+                    "No se pudo leer el archivo en este momento. Reintentá en unos segundos; si el problema sigue, revisá el archivo desde EntropIA."
+                        .to_string(),
+                ))
+            }
         }
     }
 }

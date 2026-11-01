@@ -176,13 +176,9 @@ impl ArchiveReader {
     /// settings, then `query_only`, so every write statement fails.
     pub fn connection(&self) -> Result<Connection, ReadError> {
         let conn = crate::db::open::open_archive_connection(&self.db_path)
-            .map_err(|error| unavailable(format!("No se pudo abrir el archivo: {error}")))?;
+            .map_err(|error| unavailable("abrir el archivo", error))?;
         conn.execute_batch("PRAGMA query_only = ON;")
-            .map_err(|error| {
-                unavailable(format!(
-                    "No se pudo abrir el archivo en solo lectura: {error}"
-                ))
-            })?;
+            .map_err(|error| unavailable("abrir el archivo en solo lectura", error))?;
         Ok(conn)
     }
 
@@ -199,7 +195,7 @@ impl ArchiveReader {
                 })
             },
         )
-        .map_err(|error| unavailable(format!("No se pudo contar el archivo: {error}")))
+        .map_err(|error| unavailable("contar el archivo", error))
     }
 
     /// One page of collections, ordered by name (case-insensitive) and id.
@@ -220,7 +216,7 @@ impl ArchiveReader {
                  ORDER BY c.name COLLATE NOCASE, c.id
                  LIMIT ?3",
             )
-            .map_err(|error| unavailable(format!("No se pudo leer las colecciones: {error}")))?;
+            .map_err(|error| unavailable("leer las colecciones", error))?;
         let rows = statement
             .query_map(
                 params![cursor_key(&cursor), cursor_id(&cursor), page_len(limit)],
@@ -235,7 +231,7 @@ impl ArchiveReader {
                     })
                 },
             )
-            .map_err(|error| unavailable(format!("No se pudo leer las colecciones: {error}")))?;
+            .map_err(|error| unavailable("leer las colecciones", error))?;
         let mut records = collect(rows, "las colecciones")?;
         let next_cursor = finish_page(&mut records, limit, |record: &CollectionRecord| {
             (record.name.as_str(), record.id.as_str())
@@ -266,7 +262,7 @@ impl ArchiveReader {
                  ORDER BY i.title COLLATE NOCASE, i.id
                  LIMIT ?4",
             )
-            .map_err(|error| unavailable(format!("No se pudo leer los ítems: {error}")))?;
+            .map_err(|error| unavailable("leer los ítems", error))?;
         let rows = statement
             .query_map(
                 params![
@@ -284,7 +280,7 @@ impl ArchiveReader {
                     })
                 },
             )
-            .map_err(|error| unavailable(format!("No se pudo leer los ítems: {error}")))?;
+            .map_err(|error| unavailable("leer los ítems", error))?;
         let mut records = collect(rows, "los ítems")?;
         let next_cursor = finish_page(&mut records, limit, |record: &ItemRecord| {
             (record.title.as_str(), record.id.as_str())
@@ -315,7 +311,7 @@ impl ArchiveReader {
                 },
             )
             .optional()
-            .map_err(|error| unavailable(format!("No se pudo leer el ítem: {error}")))?;
+            .map_err(|error| unavailable("leer el ítem", error))?;
         let Some((id, title, collection_id, metadata, created_at, updated_at)) = row else {
             return Err(ReadError::NotFound(format!(
                 "No existe ningún ítem con el id «{item_id}» en este archivo."
@@ -327,7 +323,7 @@ impl ArchiveReader {
                  FROM assets WHERE item_id = ?1
                  ORDER BY sort_index, page_number, id",
             )
-            .map_err(|error| unavailable(format!("No se pudieron leer los archivos: {error}")))?;
+            .map_err(|error| unavailable("leer los archivos del ítem", error))?;
         let rows = statement
             .query_map(params![id], |row| {
                 Ok(AssetRecord {
@@ -340,7 +336,7 @@ impl ArchiveReader {
                     created_at: row.get(6)?,
                 })
             })
-            .map_err(|error| unavailable(format!("No se pudieron leer los archivos: {error}")))?;
+            .map_err(|error| unavailable("leer los archivos del ítem", error))?;
         let assets = collect(rows, "los archivos del ítem")?;
         Ok(ItemDetail {
             id,
@@ -375,7 +371,7 @@ impl ArchiveReader {
             collection_id,
             crate::nlp::fts::FtsMatchMode::Any,
         )
-        .map_err(|error| unavailable(format!("No se pudo buscar en el archivo: {error}")))?;
+        .map_err(|error| unavailable("buscar en el archivo", error))?;
         let matches = hits.len();
         let mut records = Vec::new();
         for hit in hits.into_iter().take(limit) {
@@ -408,7 +404,7 @@ fn lookup_item(
         },
     )
     .optional()
-    .map_err(|error| unavailable(format!("No se pudo leer un resultado: {error}")))
+    .map_err(|error| unavailable("leer un resultado de la búsqueda", error))
 }
 
 /// `metadata` is a JSON blob column. Parse it when it is JSON and hand the raw
@@ -451,7 +447,7 @@ fn collect<T>(
     what: &str,
 ) -> Result<Vec<T>, ReadError> {
     rows.collect::<Result<Vec<T>, _>>()
-        .map_err(|error| unavailable(format!("No se pudo leer {what}: {error}")))
+        .map_err(|error| unavailable(&format!("leer {what}"), error))
 }
 
 /// Take the extra row off the page and turn the last kept record into the cursor
@@ -491,8 +487,17 @@ fn invalid_cursor() -> ReadError {
     )
 }
 
-fn unavailable(message: String) -> ReadError {
-    ReadError::Unavailable(message)
+/// Turn one failed archive read into the sentence the assistant shows.
+///
+/// The detail stays in the app's log: a `rusqlite` (or `open_archive_connection`)
+/// error names the archive's absolute path, and the answer travels to the
+/// assistant and its provider (S7). The message therefore says what could not be
+/// done and what the person can do about it, and nothing about where the file is.
+fn unavailable(action: &str, error: impl std::fmt::Display) -> ReadError {
+    log::warn!(target: "automation", "the archive read failed while trying to {action}: {error}");
+    ReadError::Unavailable(format!(
+        "No se pudo {action} en este momento. Reintentá en unos segundos; si el problema sigue, revisá el archivo desde EntropIA."
+    ))
 }
 
 #[cfg(test)]
@@ -528,6 +533,38 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM collections", [], |row| row.get(0))
             .expect("count collections");
         assert_eq!(stored, 2, "the refused write changed nothing");
+    }
+
+    #[test]
+    fn an_unavailable_archive_is_reported_without_naming_its_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A directory that does not exist: opening fails with the detail that
+        // names the absolute path, which must stay in the app's log (S7).
+        let reader = ArchiveReader::new(dir.path().join("no-existe").join("entropia.sqlite"));
+
+        let error = reader
+            .counts()
+            .expect_err("a missing directory cannot be opened");
+
+        assert_eq!(error.code(), "unavailable");
+        let message = error.message();
+        let path = dir.path().to_string_lossy();
+        assert!(
+            !message.contains(path.as_ref()),
+            "the answer must not carry the archive path: {message:?}"
+        );
+        assert!(
+            !message.contains('/') && !message.contains('\\'),
+            "the answer must not look like a path: {message:?}"
+        );
+        assert!(
+            !message.to_lowercase().contains("failed to open"),
+            "the rusqlite detail stays in the log: {message:?}"
+        );
+        assert!(
+            message.contains("EntropIA"),
+            "the sentence still says what to do: {message:?}"
+        );
     }
 
     #[test]
