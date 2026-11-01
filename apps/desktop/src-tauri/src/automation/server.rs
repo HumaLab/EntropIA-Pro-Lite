@@ -124,13 +124,24 @@ impl Running {
 /// not panicked on: the caller logs it and the app keeps running.
 pub struct AgentEndpointState {
     dir: PathBuf,
+    /// The archive the tools read (D10): a tool call opens its own read-only
+    /// connection from here, never the UI connection.
+    db_path: PathBuf,
+    /// The cache directory; the audit trail lives under its `logs/` (S9).
+    cache_dir: PathBuf,
     running: Mutex<Option<Running>>,
 }
 
 impl AgentEndpointState {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        dir: impl Into<PathBuf>,
+        db_path: impl Into<PathBuf>,
+        cache_dir: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             dir: dir.into(),
+            db_path: db_path.into(),
+            cache_dir: cache_dir.into(),
             running: Mutex::new(None),
         }
     }
@@ -149,7 +160,12 @@ impl AgentEndpointState {
         match (running.is_some(), access.is_enabled()) {
             (true, true) | (false, false) => Ok(()),
             (false, true) => {
-                *running = Some(start(&self.dir, access.clone())?);
+                *running = Some(start(
+                    &self.dir,
+                    access.clone(),
+                    self.db_path.clone(),
+                    self.cache_dir.clone(),
+                )?);
                 Ok(())
             }
             (true, false) => {
@@ -184,7 +200,12 @@ impl AgentEndpointState {
 /// Bind, advertise and spawn. The listener is bound before the discovery file
 /// is written, so the file never names a port nobody listens on; if either
 /// step fails nothing keeps running.
-fn start(dir: &Path, access: Arc<AgentAccess>) -> Result<Running, String> {
+fn start(
+    dir: &Path,
+    access: Arc<AgentAccess>,
+    db_path: PathBuf,
+    cache_dir: PathBuf,
+) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .map_err(|e| format!("could not bind the assistant endpoint on {LOOPBACK}: {e}"))?;
     let port = listener
@@ -201,7 +222,7 @@ fn start(dir: &Path, access: Arc<AgentAccess>) -> Result<Running, String> {
     access::write_atomic(&discovery_path, &bytes)?;
 
     let cancel = CancellationToken::new();
-    let service = GuardedEndpoint::new(access, port, cancel.clone());
+    let service = GuardedEndpoint::new(access, port, cancel.clone(), db_path, cache_dir);
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
         port,
@@ -276,7 +297,13 @@ struct GuardedEndpoint {
 }
 
 impl GuardedEndpoint {
-    fn new(access: Arc<AgentAccess>, port: u16, cancel: CancellationToken) -> Self {
+    fn new(
+        access: Arc<AgentAccess>,
+        port: u16,
+        cancel: CancellationToken,
+        db_path: PathBuf,
+        cache_dir: PathBuf,
+    ) -> Self {
         let hosts = vec![format!("{LOOPBACK}:{port}"), format!("localhost:{port}")];
         let config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
@@ -289,7 +316,9 @@ impl GuardedEndpoint {
         Self {
             access,
             inner: StreamableHttpService::new(
-                || Ok(AgentServer::new()),
+                // One server per request: the tools read the archive from the
+                // path it was built with and never touch the UI connection.
+                move || Ok(AgentServer::new(db_path.clone(), cache_dir.clone())),
                 Arc::new(NeverSessionManager::default()),
                 config,
             ),
@@ -463,7 +492,12 @@ mod tests {
         let secrets = Arc::new(MemorySecrets::default());
         let access = Arc::new(AgentAccess::load(dir.path(), secrets.clone()));
         access.set_enabled(true).unwrap();
-        let endpoint = Arc::new(AgentEndpointState::new(dir.path().to_path_buf()));
+        let db_path = crate::automation::test_archive::seeded_archive(dir.path());
+        let endpoint = Arc::new(AgentEndpointState::new(
+            dir.path().to_path_buf(),
+            db_path,
+            dir.path().join("cache"),
+        ));
         endpoint.sync(&access).await.unwrap();
         let port = endpoint.port().expect("the endpoint is running");
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -629,7 +663,16 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        assert_eq!(names, vec!["entropia_status"]);
+        assert_eq!(
+            names,
+            vec![
+                "collections_list",
+                "entropia_status",
+                "items_get",
+                "items_list",
+                "search_items"
+            ]
+        );
 
         let call = harness
             .rpc(
