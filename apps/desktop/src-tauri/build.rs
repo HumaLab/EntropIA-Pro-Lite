@@ -272,6 +272,8 @@ const APP_COMMANDS: &[&str] = &[
     "agent_access_set_enabled",
     "agent_client_create",
     "agent_client_revoke",
+    // Where the bundled connector is, for the recipes the panel copies (D15).
+    "agent_connector_location",
 ];
 
 fn main() {

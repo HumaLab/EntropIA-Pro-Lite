@@ -110,6 +110,29 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   no entry or an unavailable store, the file in the same (profile-aware) data dir; on
   Unix it refuses a file readable by group or others (`credential_insecure`, -32006).
   The token directory must never enter backups, sync, or the asset sweep.
+- D15 — Bundling (T11). `tauri-build` copies every `bundle.externalBin` during any
+  `cargo build/test/clippy` and fails when the file is missing
+  (tauri-build 2.7.4 `src/lib.rs:735`), so the connector lives only in an explicit
+  overlay `src-tauri/tauri.connector.conf.json` (`bundle.externalBin:
+  ["binaries/entropia-agent-connector"]`), never in `tauri.conf.json` or an
+  auto-merged `tauri.<platform>.conf.json`. A script builds it first
+  (`cargo build --release --locked`, per target triple; universal macOS = both
+  arches + `lipo`) into the gitignored `src-tauri/binaries/` as
+  `entropia-agent-connector-<triple>[.exe]`. Every installer build adds the overlay:
+  release.yml Pro matrix and build-lite, lite-preview.yml macOS and Linux,
+  windows-pro-validation.yml. MSIX (repacked, not a Tauri bundle) adds the exe and a
+  `uap3:AppExecutionAlias` `entropia-agent-connector.exe`, so agents launch it inside
+  the package context (which also applies MSIX data-dir redirection); asserted in the
+  script. Settings › Asistentes shows the installed absolute path (next to the main
+  executable; the alias name under MSIX), quoted/escaped correctly for spaces and
+  non-ASCII in every recipe; without an installed connector it keeps the bare
+  command and says it is not installed. smoke-linux checks the installed connector.
+- D16 — Pro installs its connector as `entropia-pro-agent-connector`; Lite keeps
+  `entropia-agent-connector` (and the MSIX alias). Found by inspecting the locally built
+  Lite `.deb` (L8): both `.deb` packages install into `/usr/bin`, Lite and Pro may be
+  installed together (shared archive, no `Conflicts`), so one shared name would make
+  dpkg refuse the second. Pro builds pass `--variant pro` and
+  `tauri.connector.pro.conf.json`; the app picks the stem by `cfg!(feature = "local-ml")`.
 - D9 — Connector (`crates/entropia-agent-connector`, standalone crate with its own
   committed `Cargo.lock`, binary `entropia-agent-connector`):
   - CLI: `entropia-agent-connector --client <id> [--profile <name>]`, `--version`.
@@ -147,15 +170,28 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 - [x] T8 — Verify follow-ups: D12 instance proof (W1); JSON-RPC error for an id'd request answered with empty 2xx or non-JSON (W2, S7); tests pinning GET/DELETE → 405 and `/mcp/` → 404; archive-unavailable messages without absolute paths; doc fixes (README client verification status per L4, PROTOCOL `unauthorized` vs disabled endpoint, `/mcp` query wording, D12). S3, S4, S7. Route: delegated worker, TDD (RED compile errors + failing preflight/notification tests → GREEN app 59, connector 45). Commit: e133b5e1
 - [x] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + independent verify (gentle-ai-verify: no CRITICAL; W1/W2 fixed in T8). Evidence: L4, L5. Commit: (doc only)
 - [x] T9 — Token file fallback when no OS keyring exists (S4 second clause), app and connector. S4. Route: delegated worker, TDD (RED compile + failing backup/UI tests → GREEN app 62 + backup 6, connector 51, Vitest 8 Pro/Lite). Found and fixed: `backup.rs` copied `agent-access.json`/`agent-endpoint.json` into backups. Commit: 5e3ec833
-- [x] T10 — CI job that builds, tests and lints `crates/entropia-agent-connector` on Linux, Windows and macOS. Route: inline (YAML parsed; runs on first push). Risk: item 5. Commit: (T10 commit)
-- [ ] T11 — Bundle the connector with the app installers (Pro and Lite, every platform) and show its installed absolute path in Settings › Asistentes. Route: delegated worker. Risk: item 5. Commit: —
+- [x] T10 — CI job that builds, tests and lints `crates/entropia-agent-connector` on Linux, Windows and macOS. Route: inline (YAML parsed; runs on first push). Risk: item 5. Commit: 84843876
+- [x] T11 — Bundle the connector with the app installers (Pro and Lite, every platform) and show its installed absolute path in Settings › Asistentes. Route: delegated worker + inline D16 fix, TDD (RED compile/Vitest/node:test → GREEN Rust 70, Vitest 14 Pro/Lite, node:test 10). Evidence: L8. Unverified locally: MSIX repack/alias, macOS universal, Windows, Pro naming under `local-ml` (CI). Risk: item 5. Commit: fbb9eac8
 - [x] T12 — Owner decisions on INVENTORY.md "Unmapped / needs decision" (7 items), recorded in INVENTORY.md and here. Route: ask (two questionnaires). Commit: bc0200e1
-- [ ] T13 — Publish: push the branch, open chained PRs (one per work unit), native review per slice. Route: inline. Commit: —
+- [x] T14 — Follow-up from native review of slice 02 (informational, non-blocking): `automation/server.rs` `serve()` returns on a `TcpListener::from_std` failure or any non-aborted `accept` error (e.g. EMFILE), leaving `AgentEndpointState` reporting running and the discovery file advertising a dead port until access is toggled; also review R3-001/R3-002 (constants and start path, `server.rs:47-51`, `:225-235` at c949ce52). Route: inline, TDD (RED: `accept_loop`/`accept_backoff` missing → GREEN automation 73, clippy clean). Done: the runtime conversion moved into `start()` before the discovery file is written; `accept_loop` never ends on a failed accept (50 ms → 1 s backoff, first failure of a run logged, cancel ends it at once). Open: R3-001 and R3-002 — the review closure exposed only id, location and severity, not their text, so they are not verified as addressed. Commit: (T14 commit)
+- [ ] T13 — Publish: push the branch, open chained PRs (one per work unit), native review per slice. Route: inline. Done: branches pushed, tracker draft #187, children #188-#198, full-chain CI dispatch run 41307476931 on fbb9eac8. Native review: #188 and #189 approved (L9) and merged into the tracker (L10); #190-#198 not run (tooling limit, L9). CI fix: `lite-unix-bundle-config.test.ts` (L9). Open: rest of CI, human review and merges. Commit: —
 
 ## Delivery
 
 - Slices exceed ~400 lines per commit (T5 alone is ~2.1k with tests). Each task is one
   commit so the branch can be split into chained PRs per commit (T1, T2, T5, ...).
+- Strategy: `feature-branch-chain` (owner, L8). Tracker `feat/agent-mcp-connector` =
+  main + one empty commit, draft PR #187 to main (do not merge until the chain is
+  done). Children, each based on the previous branch, changed lines without lock files:
+  #188 01-access-store (674), #189 02-loopback-endpoint (963), #190 03-stdio-connector
+  (2154), #191 04-read-tools (2330), #192 05-settings-tab (1142), #193 06-contract-docs
+  (644), #194 07-instance-proof (1290, two commits), #195 08-owner-decisions (82),
+  #196 09-token-file-fallback (963), #197 10-connector-ci (52), #198
+  11-installer-bundling (1522 + this bookkeeping). Slices over 400 lines keep code and
+  its tests together; no cohesive split shrinks them further.
+- `ci.yml` runs only on PRs to `main`, so children get no CI; the full chain is covered
+  by a `workflow_dispatch` run on the last branch (its filter reads `HEAD~1...HEAD`, so
+  dispatch only at a commit that touches Rust).
 
 ## Log
 
@@ -167,3 +203,8 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 
 - L6 (2026-11-01, owner): "continuar con todo lo pendiente punto 2 3 y 4" — read as items 2 (chained PRs for review), 3 (delete the e2e leftovers; done: `dev-profiles/agents-e2e`, `/tmp/e2e-agents`, `/tmp/rmcp-src` removed) and 4 (token file fallback, connector CI job, bundling, the seven INVENTORY decisions) of the previous close report.
 - L7 (2026-11-01, owner answers): approvals "Diálogo en la app, un uso (recomendado)"; keys "Nunca (recomendado)"; backups "Solo la persona, en la app (recomendado)"; models/runtime "Plan + aprobación + job (recomendado)"; Navegador "Alcance propio «web» (recomendado)"; llm_run "No exponer (recomendado)"; Writing actions "Solo como propuestas (recomendado)".
+- L8 (2026-11-01, T11 evidence): local Lite `.deb` built with `VITE_LOCAL_ML=0 pnpm exec tauri build --config src-tauri/tauri.lite.conf.json --config src-tauri/tauri.lite.linux.conf.json --config src-tauri/tauri.connector.conf.json --bundles deb` (exit 0, 8m52s, 28.52 MiB). `dpkg -c`: `usr/bin/entropia-agent-connector` (6.5 MB) beside `usr/bin/entropia-lite`; extracted copy `--version` → `entropia-agent-connector 0.1.0`, exit 0. Plain `cargo test/clippy` without the overlay unaffected. Inspection revealed the Lite/Pro `/usr/bin` collision → D16. Owner chose `feature-branch-chain` for delivery.
+- L9 (2026-11-01, T13 evidence): native review (RDD) per slice. Slice 01 (#188, lenses risk + reliability, 674 lines) approved, one SUGGESTION R1-001 `access.rs:377`; slice 02 (#189, risk + resilience + reliability, 1127 lines with lockfile) approved, WARNINGs R3-001 `server.rs:47-51`, R3-002 `server.rs:225-235`, R4-accept-loop-stale-state `server.rs:233-236`, R4-from-std-stale-file `server.rs:222-225` → T14. Both acknowledged (authority burned). Slices 03-11 not reviewed natively: `inspect` keeps offering base `cf3836cc` (slice 01) instead of the last reviewed slice, a START with an explicit `baseRef` is refused (`native-start-retained-selection-candidate-mismatch`), and `inspect` cannot take a base (its input must be a serialized string the harness always parses). Reviewing what it offers would re-include every earlier slice. Full-chain CI run 41307476931 on fbb9eac8: Lint & Typecheck, Rust Lite (Linux), Rust Pro (Linux) clippy, Agent Connector on Linux/Windows/macOS, Build and Dependency audit passed; Test failed on one T11 regression: `src/lib/lite-unix-bundle-config.test.ts` pins the Windows Lite release args and T11 added the connector overlay. Fixed by pinning the new line and adding D15/D16 guards (no externalBin in auto-merged configs; one sidecar per variant; Pro installers use `--variant pro` and the Pro overlay; Lite installers never do). Mutation check: dropping `--variant pro` from release.yml fails the new test. Lesson: run the full desktop suite, not only the touched test files, before closing a task that edits workflows. Full desktop suite after the fix, on Node 24: Pro 269 files / 3785 passed, Lite 269 / 3749 passed, lint clean. Locally on Node 26 the suite shows 286 failures (`AppShell.test.ts` and others: `localStorage` is `undefined`), all of which pass on Node 24; Node 25+ ships its own global `localStorage`, and CI pins Node 22, so this is the local runtime, not the branch.
+- L10 (2026-11-01, owner): "lo que ya puedas mergear mergealo". Merged (merge commits, repo convention) only the slices with an approved native review and the independent verification: #188 → `feat/agent-mcp-connector` (6f075f20), then #189 (fe22f0ce); GitHub deleted both head branches and retargeted #190 to the tracker with an unchanged diff. Not merged: #190-#198 (no approved review; the native tool cannot review them one by one, L9) and the tracker #187 to `main` (by the chain strategy it waits for the whole chain). The merge into the tracker started `pull_request` CI on #187: run 41317145415 (6f075f20), 41317165738 (fe22f0ce).
+- L11 (2026-11-01, CI): full-chain dispatch run 41315944935 on 214ed0f8 (all slices + T14): 12/12 jobs green, including Windows Rust Feature Contract, Rust Pro (Linux), Agent Connector on Linux/Windows/macOS, Test and Build. Tracker #187 `pull_request` run 41317165738 on fe22f0ce (#188 + #189 merged): 9/9 green, Windows included.
+

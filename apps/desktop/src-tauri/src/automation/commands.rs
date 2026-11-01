@@ -17,6 +17,7 @@ use serde::Serialize;
 use tauri::State;
 
 use super::access::{AgentAccess, ClientView};
+use super::connector::{current_location, ConnectorLocation};
 use super::server::AgentEndpointState;
 
 /// `agent_access_status`'s payload (D11): the persisted switch, what the
@@ -129,6 +130,15 @@ pub fn agent_client_revoke(
     client_id: String,
 ) -> Result<AgentStatusView, String> {
     revoke_client(access.inner(), endpoint.inner(), &client_id)
+}
+
+/// Where the bundled connector is, so the panel can name an absolute path in
+/// every recipe (D15). The decision lives in [`super::connector`]; this only
+/// exposes it, and it takes no state: the answer describes the installation, not
+/// a session.
+#[tauri::command]
+pub fn agent_connector_location() -> ConnectorLocation {
+    current_location()
 }
 
 #[cfg(test)]

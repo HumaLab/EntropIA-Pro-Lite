@@ -9,7 +9,8 @@ import { invoke } from '@tauri-apps/api/core'
  */
 
 /** What a paired client may do. Only `read` is granted in this release. */
-export type AgentScope = 'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
+export type AgentScope =
+  'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
 
 /**
  * Where the client's token is stored (D14): the OS credential store, or the
@@ -49,6 +50,33 @@ export interface CreatedAgentClient {
 /** The connector binary every assistant config names. */
 export const CONNECTOR_COMMAND = 'entropia-agent-connector'
 
+/**
+ * Where the app found the connector this build installed (D15).
+ *
+ * `bundled` is a file next to the app executable (NSIS/MSI, .deb, macOS
+ * `.app`); `msix_alias` is the Store package's execution alias, because the
+ * packaged path inside WindowsApps cannot be launched from a normal command
+ * line; `missing` means this build carried none.
+ */
+export interface ConnectorLocation {
+  installed: boolean
+  /** An absolute path, the alias name, or `null` when nothing was found. */
+  path: string | null
+  kind: 'bundled' | 'msix_alias' | 'missing'
+}
+
+/** The answer for a build without the connector: recipes keep the bare command. */
+export const NO_CONNECTOR: ConnectorLocation = {
+  installed: false,
+  path: null,
+  kind: 'missing',
+}
+
+/** What the panel shows for `agent_connector_location`. */
+export function agentConnectorLocation(): Promise<ConnectorLocation> {
+  return invoke<ConnectorLocation>('agent_connector_location')
+}
+
 /** What the panel shows for `agent_access_status`. */
 export function agentAccessStatus(): Promise<AgentAccessStatus> {
   return invoke<AgentAccessStatus>('agent_access_status')
@@ -70,11 +98,34 @@ export function agentClientRevoke(clientId: string): Promise<AgentAccessStatus> 
 }
 
 /**
+ * The program a config names, before any shell quoting: the installed path when
+ * there is one, the bare command otherwise.
+ */
+export function connectorProgram(location?: ConnectorLocation | null): string {
+  return location?.installed && location.path ? location.path : CONNECTOR_COMMAND
+}
+
+/**
+ * Quote a program for the shell the person will paste it into.
+ *
+ * The location carries the platform implicitly: a Windows path starts with a
+ * drive letter, and Windows file names cannot contain `"`, so wrapping is the
+ * whole job there. Anything with spaces, accents or quotes in a POSIX path goes
+ * in single quotes, where only `'` itself needs escaping. A bare command and a
+ * plain path stay untouched, so the common line is exactly what it always was.
+ */
+export function shellQuote(program: string): string {
+  if (/^[A-Za-z]:[\\/]/.test(program)) return `"${program}"`
+  if (/^[\w./-]+$/.test(program)) return program
+  return `'${program.replace(/'/g, `'\\''`)}'`
+}
+
+/**
  * The connector invocation: the client id is the only credential-ish value a
  * config carries, and it is useless without the keyring entry the app wrote.
  */
-export function connectorInvocation(clientId: string): string {
-  return `${CONNECTOR_COMMAND} --client ${clientId}`
+export function connectorInvocation(clientId: string, location?: ConnectorLocation | null): string {
+  return `${shellQuote(connectorProgram(location))} --client ${clientId}`
 }
 
 /**
@@ -93,9 +144,15 @@ export interface ConnectorRecipe {
 }
 
 /** One ready-to-copy line per supported client, in a stable order. */
-export function connectorRecipes(clientId: string): ConnectorRecipe[] {
-  const command = connectorInvocation(clientId)
-  const args = JSON.stringify([CONNECTOR_COMMAND, '--client', clientId])
+export function connectorRecipes(
+  clientId: string,
+  location?: ConnectorLocation | null
+): ConnectorRecipe[] {
+  const program = connectorProgram(location)
+  const command = connectorInvocation(clientId, location)
+  // JSON strings are escaped by the serializer, never by hand: a Windows path
+  // arrives at the client with its backslashes and non-ASCII intact.
+  const args = JSON.stringify([program, '--client', clientId])
   return [
     {
       id: 'claude',
@@ -121,7 +178,7 @@ export function connectorRecipes(clientId: string): ConnectorRecipe[] {
       label: 'Pi',
       kind: 'config',
       // Pi follows the common MCP shape: program in `command`, arguments apart.
-      line: `{"mcpServers":{"entropia":{"command":"${CONNECTOR_COMMAND}","args":${JSON.stringify(['--client', clientId])}}}}`,
+      line: `{"mcpServers":{"entropia":{"command":${JSON.stringify(program)},"args":${JSON.stringify(['--client', clientId])}}}}`,
     },
   ]
 }

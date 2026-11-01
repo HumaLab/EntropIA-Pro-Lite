@@ -36,6 +36,14 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
    `scripts/store-msix-payload.ps1`). The capture never had it, so up to 1.0.15
    the Store build could not open, split or crop a PDF; the app looks for it
    beside the exe, where the NSIS/MSI installers also put it.
+
+   The assistant connector (`-ConnectorPath`, built by
+   `apps/desktop/scripts/build-agent-connector.mjs`) is added the same way, beside
+   the app exe, and the manifest declares a `uap3:AppExecutionAlias`
+   `entropia-agent-connector.exe` for it (D15). The alias is required: the
+   packaged exe sits under the versioned `WindowsApps` directory, which Windows
+   refuses to launch from an ordinary command line. The repack asserts both the
+   alias and the packaged bytes.
 5. Strips `AppxBlockMap.xml` / `AppxSignature.p7x` / `[Content_Types].xml`
    (regenerated on pack) — the MSIX ships **unsigned**; the Microsoft Store
    applies its own signature.
@@ -44,7 +52,8 @@ the `lite` leg of `.github/workflows/release.yml`. The repack:
    `Executable`, `EntryPoint`) before packing.
 8. Repacks with `makeappx`, reports identity, compares every packaged icon
    byte-for-byte with the generated payload, re-verifies that no shortcut
-   survived into the packed archive, and checks that the packed Pdfium is
+   survived into the packed archive, checks that the packed Pdfium is
+   byte-identical to the one given, and checks that the packed connector is
    byte-identical to the one given.
 
 ## Shortcuts: why the Store package has none
