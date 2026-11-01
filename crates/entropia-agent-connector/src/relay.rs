@@ -50,6 +50,60 @@ pub enum TokenError {
     StoreUnavailable(String),
 }
 
+/// The MCP Streamable HTTP routing headers (SEP-2243) of one message:
+/// `Mcp-Method` always, and `Mcp-Name` for the methods that name a target. The
+/// endpoint refuses a 2026-07-28 request whose headers do not repeat its body;
+/// older protocol versions ignore them.
+pub fn routing_headers(body: &str) -> Vec<(&'static str, String)> {
+    let Ok(message) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    if is_header_token(method) {
+        headers.push(("Mcp-Method", method.to_string()));
+    }
+    let key = match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" | "resources/subscribe" | "resources/unsubscribe" => Some("uri"),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => Some("taskId"),
+        _ => None,
+    };
+    let name = key.and_then(|key| message.get("params")?.get(key)?.as_str());
+    if let Some(name) = name {
+        headers.push(("Mcp-Name", encode_header_value(name)));
+    }
+    headers
+}
+
+/// A value as it may travel in an `Mcp-*` header: itself when it is visible
+/// ASCII without edge whitespace, else wrapped as `=?base64?...?=` (the same
+/// rule as the endpoint's rmcp).
+fn encode_header_value(value: &str) -> String {
+    use base64::Engine as _;
+    let edge_space = value.starts_with([' ', '\t']) || value.ends_with([' ', '\t']);
+    let invisible = value
+        .chars()
+        .any(|c| (c as u32) < 0x20 || (c as u32) > 0x7E);
+    let looks_encoded = value.starts_with("=?base64?") && value.ends_with("?=");
+    if !value.is_empty() && (edge_space || invisible || looks_encoded) {
+        format!(
+            "=?base64?{}?=",
+            base64::engine::general_purpose::STANDARD.encode(value)
+        )
+    } else {
+        value.to_string()
+    }
+}
+
+/// Whether a method name can be a header value as is (it always is for MCP's
+/// own methods; a malformed one is simply not promoted to a header).
+fn is_header_token(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_graphic())
+}
+
 /// The protocol version an MCP 2026-07-28 request carries in
 /// `params._meta["io.modelcontextprotocol/protocolVersion"]`, if any.
 fn request_protocol_version(body: &str) -> Option<String> {
@@ -312,6 +366,9 @@ impl Connector {
         });
         if let Some(version) = version {
             request = request.header("MCP-Protocol-Version", version);
+        }
+        for (name, value) in routing_headers(body) {
+            request = request.header(name, value);
         }
 
         let response = request.send().await.map_err(|error| {

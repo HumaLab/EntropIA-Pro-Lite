@@ -368,6 +368,46 @@ async fn a_request_carrying_its_protocol_version_sends_it_as_the_header() {
     );
 }
 
+/// MCP 2026-07-28 Streamable HTTP routing headers (SEP-2243): the endpoint
+/// refuses a request whose `Mcp-Method` (and, for named methods, `Mcp-Name`)
+/// does not repeat the body. Names that are not plain header tokens travel as
+/// `=?base64?...?=`.
+#[tokio::test]
+async fn every_request_carries_its_routing_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|_| {
+        Reply::json(json!({ "jsonrpc": "2.0", "id": 1, "result": {} }).to_string())
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": "entropia_status", "arguments": {} } })
+    .to_string();
+    let read = json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+        "params": { "uri": "entropia://colección/1" } })
+    .to_string();
+    let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+
+    let mut harness = Harness::start(discovery_file(dir.path()), Some(TOKEN));
+    for message in [&call, &read, &list] {
+        harness.send(message).await;
+        harness.next_line().await;
+    }
+    harness.finish().await;
+
+    let requests = app.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].header("mcp-method"), Some("tools/call"));
+    assert_eq!(requests[0].header("mcp-name"), Some("entropia_status"));
+    assert_eq!(requests[1].header("mcp-method"), Some("resources/read"));
+    assert_eq!(
+        requests[1].header("mcp-name"),
+        Some("=?base64?ZW50cm9waWE6Ly9jb2xlY2Npw7NuLzE=?=")
+    );
+    assert_eq!(requests[2].header("mcp-method"), Some("tools/list"));
+    assert_eq!(requests[2].header("mcp-name"), None);
+}
+
 #[tokio::test]
 async fn the_negotiated_protocol_version_is_sent_after_initialize_but_not_on_it() {
     let dir = tempfile::tempdir().unwrap();
