@@ -171,14 +171,26 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 - [x] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + independent verify (gentle-ai-verify: no CRITICAL; W1/W2 fixed in T8). Evidence: L4, L5. Commit: (doc only)
 - [x] T9 — Token file fallback when no OS keyring exists (S4 second clause), app and connector. S4. Route: delegated worker, TDD (RED compile + failing backup/UI tests → GREEN app 62 + backup 6, connector 51, Vitest 8 Pro/Lite). Found and fixed: `backup.rs` copied `agent-access.json`/`agent-endpoint.json` into backups. Commit: 5e3ec833
 - [x] T10 — CI job that builds, tests and lints `crates/entropia-agent-connector` on Linux, Windows and macOS. Route: inline (YAML parsed; runs on first push). Risk: item 5. Commit: 84843876
-- [x] T11 — Bundle the connector with the app installers (Pro and Lite, every platform) and show its installed absolute path in Settings › Asistentes. Route: delegated worker + inline D16 fix, TDD (RED compile/Vitest/node:test → GREEN Rust 70, Vitest 14 Pro/Lite, node:test 10). Evidence: L8. Unverified locally: MSIX repack/alias, macOS universal, Windows, Pro naming under `local-ml` (CI). Risk: item 5. Commit: 01000535
+- [x] T11 — Bundle the connector with the app installers (Pro and Lite, every platform) and show its installed absolute path in Settings › Asistentes. Route: delegated worker + inline D16 fix, TDD (RED compile/Vitest/node:test → GREEN Rust 70, Vitest 14 Pro/Lite, node:test 10). Evidence: L8. Unverified locally: MSIX repack/alias, macOS universal, Windows, Pro naming under `local-ml` (CI). Risk: item 5. Commit: fbb9eac8
 - [x] T12 — Owner decisions on INVENTORY.md "Unmapped / needs decision" (7 items), recorded in INVENTORY.md and here. Route: ask (two questionnaires). Commit: bc0200e1
-- [ ] T13 — Publish: push the branch, open chained PRs (one per work unit), native review per slice. Route: inline. Commit: —
+- [ ] T13 — Publish: push the branch, open chained PRs (one per work unit), native review per slice. Route: inline. Done: branches pushed, tracker draft #187, children #188-#198, full-chain CI dispatch run 41307476931 on fbb9eac8. Open: CI result, native review per slice, human review and merges. Commit: —
 
 ## Delivery
 
 - Slices exceed ~400 lines per commit (T5 alone is ~2.1k with tests). Each task is one
   commit so the branch can be split into chained PRs per commit (T1, T2, T5, ...).
+- Strategy: `feature-branch-chain` (owner, L8). Tracker `feat/agent-mcp-connector` =
+  main + one empty commit, draft PR #187 to main (do not merge until the chain is
+  done). Children, each based on the previous branch, changed lines without lock files:
+  #188 01-access-store (674), #189 02-loopback-endpoint (963), #190 03-stdio-connector
+  (2154), #191 04-read-tools (2330), #192 05-settings-tab (1142), #193 06-contract-docs
+  (644), #194 07-instance-proof (1290, two commits), #195 08-owner-decisions (82),
+  #196 09-token-file-fallback (963), #197 10-connector-ci (52), #198
+  11-installer-bundling (1522 + this bookkeeping). Slices over 400 lines keep code and
+  its tests together; no cohesive split shrinks them further.
+- `ci.yml` runs only on PRs to `main`, so children get no CI; the full chain is covered
+  by a `workflow_dispatch` run on the last branch (its filter reads `HEAD~1...HEAD`, so
+  dispatch only at a commit that touches Rust).
 
 ## Log
 
