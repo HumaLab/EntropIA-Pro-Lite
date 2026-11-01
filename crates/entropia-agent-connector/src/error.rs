@@ -17,6 +17,9 @@ pub const PROTOCOL_INCOMPATIBLE: i32 = -32004;
 pub const CREDENTIAL_MISSING: i32 = -32005;
 /// The fallback token file is readable by group or others (D14).
 pub const CREDENTIAL_INSECURE: i32 = -32006;
+/// The credential store cannot be reached from this process (`data.code`
+/// `credential_store_unavailable`).
+pub const CREDENTIAL_STORE_UNAVAILABLE: i32 = -32007;
 /// A sentence for a failure with no dedicated rule: an HTTP status the
 /// connector does not know, or a `2xx` that carried no usable answer (W2).
 pub const UNEXPECTED_STATUS: i32 = -32000;
@@ -134,6 +137,15 @@ impl ConnectorError {
                 "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
                  Asistentes.",
                 None,
+            ),
+            TokenError::StoreUnavailable(detail) => Self::new(
+                CREDENTIAL_STORE_UNAVAILABLE,
+                "credential_store_unavailable",
+                "No pude acceder al llavero del sistema desde este proceso, así que no puedo leer \
+                 la credencial del asistente: abrí la sesión del escritorio (el llavero tiene que \
+                 estar desbloqueado) o, si el agente lanza el conector con un entorno reducido, \
+                 pasale DBUS_SESSION_BUS_ADDRESS.",
+                Some(detail),
             ),
             TokenError::Failed(reason) => Self::new(
                 CREDENTIAL_MISSING,

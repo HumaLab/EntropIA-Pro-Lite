@@ -46,9 +46,12 @@ pub fn token_path(data_dir: &Path, client_id: &str) -> PathBuf {
 pub enum KeyringOutcome {
     /// The store holds this client's token.
     Token(String),
-    /// No entry for this client, or this machine has no usable store: the file
-    /// is the fallback (D14).
-    Fallback,
+    /// The store has no entry for this client: the file is the fallback (D14).
+    NoEntry,
+    /// The store cannot be reached from this process (no Secret Service, no
+    /// session bus): the file is still the fallback, and without one the error
+    /// says the store was unreachable rather than "not paired".
+    Unavailable(String),
     /// A store error that is not "unavailable": report it and never fall back,
     /// so a broken store does not silently read from disk.
     Failed(String),
@@ -87,7 +90,9 @@ impl CredentialStore for OsCredentialStore {
         let (service, account) = keyring_target(self.profile.as_deref(), client_id);
         let entry = match keyring::Entry::new(&service, &account) {
             Ok(entry) => entry,
-            Err(error) if is_store_unavailable(&error) => return KeyringOutcome::Fallback,
+            Err(error) if is_store_unavailable(&error) => {
+                return KeyringOutcome::Unavailable(error.to_string())
+            }
             Err(error) => {
                 return KeyringOutcome::Failed(format!(
                     "no pude abrir el llavero del sistema ({service} / {account}): {error}"
@@ -96,8 +101,10 @@ impl CredentialStore for OsCredentialStore {
         };
         match entry.get_password() {
             Ok(token) => KeyringOutcome::Token(token),
-            Err(keyring::Error::NoEntry) => KeyringOutcome::Fallback,
-            Err(error) if is_store_unavailable(&error) => KeyringOutcome::Fallback,
+            Err(keyring::Error::NoEntry) => KeyringOutcome::NoEntry,
+            Err(error) if is_store_unavailable(&error) => {
+                KeyringOutcome::Unavailable(error.to_string())
+            }
             Err(error) => KeyringOutcome::Failed(format!(
                 "no pude leer la credencial del llavero del sistema ({service} / {account}): {error}"
             )),
@@ -150,7 +157,12 @@ impl ConnectorSource for KeyringSource {
         match self.store.read(client_id) {
             KeyringOutcome::Token(token) => Ok(token),
             KeyringOutcome::Failed(reason) => Err(TokenError::Failed(reason)),
-            KeyringOutcome::Fallback => read_token_file(&self.data_dir, client_id),
+            KeyringOutcome::NoEntry => read_token_file(&self.data_dir, client_id),
+            KeyringOutcome::Unavailable(reason) => match read_token_file(&self.data_dir, client_id)
+            {
+                Err(TokenError::Missing) => Err(TokenError::StoreUnavailable(reason)),
+                other => other,
+            },
         }
     }
 }

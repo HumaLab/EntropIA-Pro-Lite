@@ -45,6 +45,9 @@ pub enum TokenError {
     Insecure(String),
     /// The credential store itself failed in a way that is not "unavailable".
     Failed(String),
+    /// The credential store cannot be reached from this process and there is
+    /// no fallback file, so whether the client is paired is unknown.
+    StoreUnavailable(String),
 }
 
 /// Where diagnostics go. Never stdout: that channel belongs to the protocol.
