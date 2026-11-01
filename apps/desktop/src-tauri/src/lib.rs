@@ -4,6 +4,7 @@ mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
+mod automation;
 mod backup;
 pub mod bibliography;
 mod db;
