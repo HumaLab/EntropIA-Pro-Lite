@@ -3,12 +3,14 @@
 //!
 //! - [`access`] — paired clients, their tokens and scopes.
 //! - [`audit`] — the local trail of what an assistant did (S9).
+//! - [`commands`] — the Tauri commands the Asistentes panel calls (D11).
 //! - [`mcp`] — what the endpoint offers over MCP (one tool per intent).
 //! - [`read`] — the read-only archive connection and the queries behind the tools.
 //! - [`server`] — the loopback HTTP endpoint, its request guard and lifecycle.
 
 pub mod access;
 pub mod audit;
+pub mod commands;
 pub mod mcp;
 pub mod read;
 pub mod server;
