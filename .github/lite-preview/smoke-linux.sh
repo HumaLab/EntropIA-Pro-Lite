@@ -42,9 +42,11 @@ apt-get install -y "$DEB" 2>&1 | tee "$OUT_DIR/apt-install.log" \
 PKG="$(dpkg-deb -f "$DEB" Package)"
 dpkg-deb -f "$DEB" > "$OUT_DIR/deb-control.txt"
 dpkg -L "$PKG" > "$OUT_DIR/deb-files.txt"
-BIN="$(grep -E '^/usr/bin/[^/]+$' "$OUT_DIR/deb-files.txt" | head -n 1)"
+# By exact name: the .deb also lists /usr/bin/entropia-agent-connector, and dpkg
+# does not promise the main binary comes first.
+BIN="$(grep -Fx '/usr/bin/entropia-lite' "$OUT_DIR/deb-files.txt" | head -n 1)"
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  echo "::error::no executable under /usr/bin in package $PKG"
+  echo "::error::no executable /usr/bin/entropia-lite in package $PKG"
   exit 1
 fi
 echo "package=$PKG bin=$BIN" | tee -a "$OUT_DIR/host.txt"
