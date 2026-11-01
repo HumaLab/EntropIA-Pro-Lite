@@ -6,22 +6,30 @@
 //! software adds entries there (Codex's Windows sandbox, for one, grants its
 //! sandbox users modify rights on the whole roaming folder), and every
 //! token, token hash and instance key would inherit them. So each of these
-//! files gets a protected access list (no inheritance) naming only the user
-//! running the app and SYSTEM, set on the open, still empty file, before any
-//! secret is written to it. A rename keeps it.
+//! files is created with a protected access list (no inheritance) naming only
+//! the user running the app and SYSTEM: given to `CreateFileW` itself, so the
+//! file never exists under the inherited list, and opened exclusively, so no
+//! other process holds a handle to it before the secret is written. A rename
+//! keeps the list.
 
-use std::os::windows::io::AsRawHandle;
+use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 
 use windows::core::{HSTRING, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
+use windows::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE, HLOCAL,
+};
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    SetNamedSecurityInfoW, SetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
+    SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows::Win32::Security::{
     GetSecurityDescriptorDacl, GetTokenInformation, TokenUser, ACL, DACL_SECURITY_INFORMATION,
-    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+    TOKEN_USER,
+};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -35,25 +43,69 @@ fn dir_sddl(user: &str) -> String {
     format!("D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)")
 }
 
-/// Restrict an open file, as soon as it exists and before it holds anything.
-pub fn restrict_file(file: &std::fs::File) -> Result<(), String> {
+/// Create `path`, which must not exist yet, readable by the user and SYSTEM
+/// only from its first instant, and opened exclusively for this process.
+pub fn create_private_file(path: &Path) -> Result<std::fs::File, String> {
     let sddl = file_sddl(&current_user_sid()?);
-    with_dacl(&sddl, |dacl| {
-        let handle = HANDLE(file.as_raw_handle());
-        // SAFETY: `handle` is a live file handle borrowed from `file`, and
-        // `dacl` points into a descriptor `with_dacl` keeps alive meanwhile.
-        unsafe {
-            SetSecurityInfo(
-                handle,
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                None,
-                None,
-                Some(dacl),
-                None,
-            )
-        }
-    })
+    let mut descriptor = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+    // SAFETY: plain out-parameter call; the descriptor is freed below.
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            &HSTRING::from(sddl.as_str()),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+    }
+    .map_err(|e| format!("could not build the access list {sddl}: {e}"))?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: false.into(),
+    };
+    let name = HSTRING::from(path.as_os_str());
+    // SAFETY: `name` and `attributes` (and the descriptor it points to) outlive
+    // the call.
+    let created = unsafe {
+        CreateFileW(
+            &name,
+            GENERIC_READ.0 | GENERIC_WRITE.0,
+            FILE_SHARE_NONE,
+            Some(&attributes),
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    };
+    // SAFETY: the descriptor was allocated by the conversion with LocalAlloc.
+    let _ = unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+    let handle = created.map_err(|e| format!("could not create {}: {e}", path.display()))?;
+    // SAFETY: `handle` is a fresh, owned file handle nobody else holds.
+    Ok(unsafe { std::fs::File::from_raw_handle(handle.0) })
+}
+
+/// Write `bytes` to `path` through a private sibling named `<prefix><random>`
+/// and a rename, so a crash never leaves half a file and the target is
+/// owner-only. The sibling is removed if any step fails.
+pub fn write_atomic(path: &Path, bytes: &[u8], prefix: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    let staged = dir.join(format!("{prefix}{}", uuid::Uuid::new_v4().simple()));
+    let written = create_private_file(&staged).and_then(|mut file| {
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))
+    });
+    let renamed = written.and_then(|()| {
+        std::fs::rename(&staged, path)
+            .map_err(|e| format!("Could not replace {}: {e}", path.display()))
+    });
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    renamed
 }
 
 /// Restrict a folder by path (it is created first by the caller).
@@ -216,16 +268,38 @@ mod tests {
         sddl
     }
 
+    /// Split a DACL's SDDL into its control flags and its entries.
+    fn split(sddl: &str) -> (&str, &str) {
+        let body = sddl.strip_prefix("D:").expect("a DACL");
+        let at = body.find('(').unwrap_or(body.len());
+        body.split_at(at)
+    }
+
+    /// Protected (no inheritance from the folder) and exactly these entries.
+    fn assert_owner_only(path: &Path, entries: &str) {
+        let sddl = dacl_sddl(path);
+        let (flags, aces) = split(&sddl);
+        assert!(flags.contains('P'), "not protected: {sddl}");
+        assert_eq!(aces, entries, "{}", path.display());
+    }
+
     #[test]
-    fn a_restricted_file_names_only_the_user_and_system_and_inherits_nothing() {
+    fn a_private_file_names_only_the_user_and_system_and_inherits_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secret.txt");
-        let file = std::fs::File::create(&path).unwrap();
-        restrict_file(&file).unwrap();
-        drop(file);
+        drop(create_private_file(&path).unwrap());
         let user = current_user_sid().unwrap();
         assert!(user.starts_with("S-1-"), "{user}");
-        assert_eq!(dacl_sddl(&path), file_sddl(&user));
+        assert_owner_only(&path, &format!("(A;;FA;;;{user})(A;;FA;;;SY)"));
+    }
+
+    #[test]
+    fn a_private_file_is_never_created_over_an_existing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("taken.txt");
+        std::fs::write(&path, b"x").unwrap();
+        assert!(create_private_file(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"x");
     }
 
     /// What the Codex sandbox does to `%APPDATA%`: an extra inheritable entry
@@ -259,7 +333,21 @@ mod tests {
 
         let target = dir.path().join("agent-endpoint.json");
         crate::automation::access::write_atomic(&target, b"{}").unwrap();
-        assert_eq!(dacl_sddl(&target), file_sddl(&user));
+        assert_owner_only(&target, &format!("(A;;FA;;;{user})(A;;FA;;;SY)"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"{}");
+        // Replacing it keeps the private list and leaves no staged sibling.
+        crate::automation::access::write_atomic(&target, b"{\"v\":2}").unwrap();
+        assert_owner_only(&target, &format!("(A;;FA;;;{user})(A;;FA;;;SY)"));
+        let staged = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(crate::automation::access::TEMP_PREFIX)
+            })
+            .count();
+        assert_eq!(staged, 0);
     }
 
     #[test]
@@ -269,12 +357,13 @@ mod tests {
         std::fs::create_dir(&folder).unwrap();
         restrict_dir(&folder).unwrap();
         let user = current_user_sid().unwrap();
-        assert_eq!(dacl_sddl(&folder), dir_sddl(&user));
+        assert_owner_only(&folder, &format!("(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)"));
         let child = folder.join("plain.txt");
         std::fs::write(&child, b"x").unwrap();
+        let sddl = dacl_sddl(&child);
         assert_eq!(
-            dacl_sddl(&child),
-            format!("D:AI(A;ID;FA;;;{user})(A;ID;FA;;;SY)"),
+            split(&sddl).1,
+            format!("(A;ID;FA;;;{user})(A;ID;FA;;;SY)"),
             "a file created inside inherits only the two entries"
         );
     }

@@ -296,6 +296,7 @@ pub const TEMP_PREFIX: &str = ".agent-write-";
 
 /// The temporary sibling of an atomic write in `dir`, named under
 /// [`TEMP_PREFIX`].
+#[cfg(not(windows))]
 fn temp_file_in(dir: &Path) -> std::io::Result<tempfile::NamedTempFile> {
     tempfile::Builder::new()
         .prefix(TEMP_PREFIX)
@@ -307,34 +308,36 @@ fn temp_file_in(dir: &Path) -> std::io::Result<tempfile::NamedTempFile> {
 /// owner-and-SYSTEM access list on Windows (`private_acl.rs`). Shared with
 /// [`super::server`], which writes the discovery file the same way.
 pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    let mut tmp = temp_file_in(dir).map_err(|e| {
-        format!(
-            "Could not create a temporary file in {}: {e}",
-            dir.display()
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tmp.as_file()
-            .set_permissions(std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("Could not restrict {}: {e}", tmp.path().display()))?;
-    }
-    // Before any byte is written: the temp file must never hold the secret
-    // under the folder's inherited access list.
     #[cfg(windows)]
-    super::private_acl::restrict_file(tmp.as_file())
-        .map_err(|e| format!("Could not restrict {}: {e}", tmp.path().display()))?;
-    use std::io::Write;
-    tmp.write_all(bytes)
-        .and_then(|_| tmp.as_file().sync_all())
-        .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
-    tmp.persist(path)
-        .map_err(|e| format!("Could not replace {}: {}", path.display(), e.error))?;
-    Ok(())
+    {
+        super::private_acl::write_atomic(path, bytes, TEMP_PREFIX)
+    }
+    #[cfg(not(windows))]
+    {
+        let dir = path
+            .parent()
+            .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+        let mut tmp = temp_file_in(dir).map_err(|e| {
+            format!(
+                "Could not create a temporary file in {}: {e}",
+                dir.display()
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tmp.as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| format!("Could not restrict {}: {e}", tmp.path().display()))?;
+        }
+        use std::io::Write;
+        tmp.write_all(bytes)
+            .and_then(|_| tmp.as_file().sync_all())
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        tmp.persist(path)
+            .map_err(|e| format!("Could not replace {}: {}", path.display(), e.error))?;
+        Ok(())
+    }
 }
 
 impl AgentAccess {
@@ -611,6 +614,7 @@ pub(crate) mod tests {
         std::fs::read_to_string(dir.path().join(ACCESS_FILE)).unwrap_or_default()
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn atomic_writes_stage_under_the_prefix_backups_skip() {
         let dir = tempfile::tempdir().unwrap();
