@@ -23,7 +23,7 @@ Source of truth, by concern:
 | Piece | State |
 |---|---|
 | App endpoint (`automation/server.rs`) | Implemented. Loopback, stateless, read-only tools. Same code in Pro and Lite. |
-| Connector crate (`crates/entropia-agent-connector`) | Implemented as a standalone crate. **Not bundled in installers yet** (stage 6). |
+| Connector crate (`crates/entropia-agent-connector`) | Implemented. **Bundled with every installer** (Pro and Lite; NSIS/MSI, MSIX through the `entropia-agent-connector.exe` execution alias, `.deb`, macOS `.app`/`.dmg`) through the `tauri.connector.conf.json` / `tauri.connector.pro.conf.json` overlays. Code signing of the extra executable is not integrated for any binary. |
 | Skill (`integrations/agents/skill/`) | **Planned** (stage 6). No code, no contract, no version declared yet. |
 | Write, processing, research, library, writing tools | **Planned** (stages 3-5). See `INVENTORY.md`. |
 
@@ -159,9 +159,9 @@ request.
 
 - At each start the app mints a new `instanceKey` (`automation/proof.rs`) and
   writes it into the `0600` discovery file. It is never sent over HTTP.
-- Before the first token goes to a `(port, instanceKey)` pair it has not verified
-  in this process, the connector sends `POST <mcpPath>` with
-  `X-Entropia-Challenge: <32 random bytes, hex>` and **no** `Authorization`.
+- Before **every** request that carries `Authorization`, the connector sends
+  `POST <mcpPath>` with `X-Entropia-Challenge: <32 random bytes, hex>` and
+  **no** `Authorization`.
 - The guard answers that request as row 4/5 of the table: `401 unauthorized`
   plus `X-Entropia-Proof: hex(HMAC-SHA256(instanceKey, challenge))`, where both
   the key and the challenge enter the HMAC as their ASCII text. A malformed
@@ -170,10 +170,16 @@ request.
   constant time. A missing or wrong proof — or a non-401 answer — is
   `app_absent` with a detail saying the instance could not be verified, and the
   token is **never** sent.
-- The verified pair is cached for the life of the connector process. A new port
-  or a new key is verified again. The token is read from the keyring (or the
-  fallback file) for every message, as before, so revocation still applies to
-  the next request.
+- Nothing is cached: no earlier verification of a `(port, instanceKey)` pair
+  vouches for a later request, so a process that takes over the port after the
+  app died never receives the token. The discovery file and the token (keyring
+  or fallback file) are also read again for every message, so a restart on a new
+  port is followed and revocation applies to the next request.
+- Residual window: the challenge and the request it protects are two separate
+  connections. The token can still reach another process only if the app dies
+  and that process binds the same port in the short interval between the
+  challenge and the request of the same message. A local attacker able to win
+  that race on a loopback port is outside what this check promises to stop.
 - HMAC is built on the `sha2` crate already in both trees (no HMAC crate), and
   RFC 4231 test case 2 pins the same vector on both sides, so the two
   implementations cannot drift apart.
@@ -187,12 +193,13 @@ request.
   token recognisable to a secret scanner.
 - `agent-access.json` (next to the archive, **not** in SQLite, never synced)
   stores only the SHA-256 hex of each token, plus `version`, `enabled` and the
-  client records `{id, name, scopes, tokenSha256, tokenStore, createdAt,
-  lastUsedAt}`. Timestamps there are Unix **seconds**. The file is `0600`,
+  client records `{id, name, scopes, token_sha256, token_store, created_at,
+  last_used_at}` (snake_case on disk; the Tauri commands and the panel use the
+  camelCase view of the same fields). Timestamps there are Unix **seconds**. The file is `0600`,
   written atomically, and an unreadable one is renamed to
   `agent-access.json.corrupt-<seconds>` and replaced by "disabled, no clients".
-  `tokenStore` is `"keyring"` or `"file"` and is non-secret; a file written
-  before the fallback existed has no `tokenStore` and loads as `"keyring"`.
+  `token_store` is `"keyring"` or `"file"` and is non-secret; a file written
+  before the fallback existed has no `token_store` and loads as `"keyring"`.
 - Revoking removes the record first, so a stored token is useless from that
   moment whatever copies exist; the keyring entry and the file are deleted after.
 - The token itself lives in the OS keyring, or in the owner-only file described
@@ -225,7 +232,7 @@ Only when the OS credential store is **unavailable** — keyring
 | Path | `<data dir>/agent-tokens/<client id>.token` (so a dev profile keeps its own) |
 | Permissions | directory `0700`, file `0600` on Unix; the per-user profile ACL on Windows |
 | Write | atomic, like `agent-access.json` |
-| Record | `tokenStore: "file"` in `agent-access.json`; the panel shows **Archivo protegido** |
+| Record | `token_store: "file"` in `agent-access.json`; the panel shows **Archivo protegido** |
 
 Any other keyring error still fails the pairing: no record, no file, no token.
 The connector reads the keyring first and falls back to this file only on no
@@ -244,8 +251,8 @@ table list and only blob paths under `assets/`).
   the keyring (or the owner-only file when this machine has no credential store,
   see above) first and records the hash second; a persistence failure deletes
   the orphan token. The panel then shows the client id and
-  `entropia-agent-connector --client <id>` plus one ready-to-copy line per
-  client.
+  `<connector> --client <id>` (the connector installed for that build, by
+  absolute path or MSIX alias) plus one ready-to-copy line per client.
 - Client ids look like `cl_` + 12 hex characters.
 - Revocation removes and persists the record **first**, then deletes the stored
   token: the keyring entry for a keyring client, the file for a file client. A
@@ -254,7 +261,7 @@ table list and only blob paths under `assets/`).
   client is a no-op.
 - Disabling the switch also makes every token fail: `authenticate` refuses when
   `enabled` is false.
-- `lastUsedAt` is written to disk at most once per 60 seconds per client.
+- `last_used_at` is written to disk at most once per 60 seconds per client.
 
 ## Scopes
 
@@ -338,7 +345,7 @@ person and a stable `data.code` for the agent
 | `-32004` | `protocol_incompatible` | Discovery `protocol` is not `entropia-agent/1`, or it has no usable `instanceKey` | Update the app and the connector |
 | `-32005` | `credential_missing` | No token anywhere for the client id: no keyring entry (and no fallback file), or a credential-store error that is not "unavailable" | Pair the assistant; if it persists, check the OS credential store |
 | `-32006` | `credential_insecure` | The fallback token file is readable by group or others (Unix), so it is refused and no request is sent | Fix the file's permissions (`chmod 600 <data dir>/agent-tokens/<client id>.token`) or pair the assistant again |
-| `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …), or a `2xx` answer that carried no JSON where a result was expected | Treat as an app-side fault; report it with the app's logs |
+| `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …), or a `2xx` answer that carried no JSON where a result was expected (empty body, non-JSON body, or an event stream without a JSON event) | Treat as an app-side fault; report it with the app's logs |
 | `-32700` | `parse_error` | The stdin line was not JSON-RPC | Fix the client's framing |
 
 `data.detail` carries technical context (the discovery path, the HTTP status, the
@@ -348,8 +355,9 @@ Rules around the relay (`src/relay.rs`):
 
 - A **notification** (no `id`) that fails never produces a response; the failure
   is logged to stderr. That includes a `2xx` whose body is empty or is not JSON.
-- A **request** (with an `id`) answered with an empty `2xx` or a non-JSON body
-  becomes a JSON-RPC error on stdout — `-32000` / `data.code: "endpoint_error"` —
+- A **request** (with an `id`) answered with an empty `2xx`, a non-JSON body,
+  or a `text/event-stream` body with no JSON `data:` event (none at all, or only
+  non-JSON ones) becomes a JSON-RPC error on stdout — `-32000` / `data.code: "endpoint_error"` —
   because an agent waiting for that result would otherwise wait forever. Stdout
   carries protocol messages only.
 - Responses may overlap, but every stdout line is written whole by one writer.
@@ -384,8 +392,9 @@ assistant do", not "who knocked on the port".
 
 ## Planned, not implemented
 
-- Bundling the connector into installers, and therefore any installer-driven
-  pairing (stage 6).
+- Installer-driven pairing (stage 6). The connector itself already ships with
+  every installer (see Status); code signing of that extra executable is not
+  integrated for any binary.
 - The skill artifact and its declared protocol version (stage 6).
 - Write tools, jobs/approvals tools, progress notifications and any session
   state (stages 3-5). `approvals_status`, `collections_create`,

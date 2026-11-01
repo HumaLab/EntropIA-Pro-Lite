@@ -36,7 +36,7 @@ every recipe uses it, quoted for the platform.
 
 | Build | Installed location | What the lines name |
 |---|---|---|
-| Windows NSIS/MSI (Pro, Lite) | `entropia-agent-connector.exe` (Lite) or `entropia-pro-agent-connector.exe` (Pro) in the install directory, beside the app exe | that absolute path, in double quotes |
+| Windows NSIS/MSI (Pro, Lite) | `entropia-agent-connector.exe` (Lite) or `entropia-pro-agent-connector.exe` (Pro) in the install directory, beside the app exe | that absolute path, in PowerShell single quotes (a literal string; a `'` inside is doubled), with the call operator `&` in front on the standalone command line |
 | Microsoft Store MSIX (Lite) | packaged beside the app exe, reached through the execution alias `entropia-agent-connector.exe` | the alias name |
 | Linux `.deb` (Pro, Lite) | `/usr/bin/entropia-agent-connector` (Lite) or `/usr/bin/entropia-pro-agent-connector` (Pro) | the absolute path, single-quoted when it contains spaces |
 | macOS `.app`/`.dmg` (Pro, Lite) | `EntropIA ….app/Contents/MacOS/entropia-agent-connector` (Pro: `entropia-pro-agent-connector`) | the absolute path, single-quoted when it contains spaces |
@@ -69,15 +69,22 @@ falls back to the bare `entropia-agent-connector`, which only works if it is on
    says which of the two it is (**Llavero del sistema** or **Archivo
    protegido**).
 
-The lines the app generates (`apps/desktop/src/lib/agent-access.ts`), with the
-client id abbreviated:
+The lines the app generates (`apps/desktop/src/lib/agent-access.ts`) name the
+connector installed for **that build**, never a name you must have on `PATH`:
+the path from `agent_connector_location` (quoted for the platform), or the MSIX
+alias. Below, `<connector>` stands for that program — `entropia-agent-connector`
+in Lite, `entropia-pro-agent-connector` in Pro — and the client id is
+abbreviated. A Pro-only machine has no `entropia-agent-connector` anywhere, so
+copy the panel's line instead of typing the Lite name. The **Verified** column
+describes the Lite debug run, where `<connector>` was
+`entropia-agent-connector`.
 
 | Client | Line | Verified |
 |---|---|---|
-| Claude Code | `claude mcp add entropia -- entropia-agent-connector --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
-| Codex | `codex mcp add entropia -- entropia-agent-connector --client cl_…` | Registering only — `codex mcp add` accepted the recipe; its connection was not exercised (it needs a model session) |
-| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["entropia-agent-connector","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
-| Pi | `{"mcpServers":{"entropia":{"command":"entropia-agent-connector","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
+| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
+| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Registering only — `codex mcp add` accepted the recipe; its connection was not exercised (it needs a model session) |
+| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
+| Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
 
 "No token in the config" held for all four: each config names only the client id.
 
@@ -93,13 +100,12 @@ connector its own keyring entries, so the installed app's token is neither read
 nor replaced.
 
 ```bash
-cd apps/desktop
-ENTROPIA_DEV_PROFILE=agents pnpm exec tauri dev
+(cd apps/desktop && ENTROPIA_DEV_PROFILE=agents pnpm exec tauri dev)
 # check the startup line: [setup] profile=dev:agents data_dir=… sync=disabled
 ```
 
-Pair a client inside that window, then run the connector against the same
-profile:
+Pair a client inside that window, then, from the repository root, run the
+connector against the same profile:
 
 ```bash
 cargo run --manifest-path crates/entropia-agent-connector/Cargo.toml -- \
@@ -115,8 +121,11 @@ and speaks newline-delimited JSON-RPC on stdin/stdout, so you can drive it by ha
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"entropia_status","arguments":{}}}
 ```
 
-`ENTROPIA_DATA_DIR=<path>` replaces the whole data directory instead of using the
-profile (useful in tests). Diagnostics go to stderr; stdout carries only protocol
+`ENTROPIA_DATA_DIR=<path>` replaces only the shared directory
+(`<data>/com.entropia.shared`); it does not stand in for the profile. With
+`--profile agents` the connector still reads
+`<path>/dev-profiles/agents/agent-endpoint.json`, and without `--profile` it reads
+`<path>/agent-endpoint.json` (useful in tests). Diagnostics go to stderr; stdout carries only protocol
 lines.
 
 ### Build the bundled sidecar locally
