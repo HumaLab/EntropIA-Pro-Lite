@@ -39,7 +39,7 @@ jobs:
         # platform, and fail-fast is off so a missing Linux runtime never blocks
         # Windows. Default manual dispatch stays Windows-only; `all` adds macOS
         # (no runtime-pack, so the gate is skipped for it) and Linux.
-        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"macos-14 (arm64)","platform":"macos-14","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin","runtime_platform":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') }}
+        include: ${{ fromJSON((github.event_name == 'push' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') || (inputs.release_platform != 'all' && '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"}]') || '[{"name":"windows-latest","platform":"windows-latest","build_args":"--features local-ml --bundles nsis,msi","rust_target":"","runtime_platform":"windows-x86_64"},{"name":"macos-15 (arm64)","platform":"macos-15","build_args":"--features local-ml --target aarch64-apple-darwin","rust_target":"aarch64-apple-darwin","runtime_platform":""},{"name":"ubuntu-22.04","platform":"ubuntu-22.04","build_args":"--config apps/desktop/src-tauri/tauri.pro.linux.conf.json --features local-ml --bundles deb","rust_target":"","runtime_platform":"linux-x86_64"}]') }}
     runs-on: ${{ matrix.platform }}
     # LEAN INSTALLER: the ~2.2GB ML runtime is NOT bundled (it overruns the NSIS/WiX
     # 2 GiB bundler limits). The app ships the tiny runtime-pack fixture and downloads
@@ -150,7 +150,7 @@ jobs:
           case "$PLATFORM" in
             windows-latest) triple=x86_64-pc-windows-msvc ;;
             ubuntu-22.04) triple=x86_64-unknown-linux-gnu ;;
-            macos-14) triple=aarch64-apple-darwin ;;
+            macos-15) triple=aarch64-apple-darwin ;;
             *) echo "::error::no connector triple for $PLATFORM"; exit 1 ;;
           esac
           node apps/desktop/scripts/build-agent-connector.mjs --target "$triple" --variant pro
