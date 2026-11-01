@@ -50,6 +50,19 @@ pub enum TokenError {
     StoreUnavailable(String),
 }
 
+/// The protocol version an MCP 2026-07-28 request carries in
+/// `params._meta["io.modelcontextprotocol/protocolVersion"]`, if any.
+fn request_protocol_version(body: &str) -> Option<String> {
+    let message: Value = serde_json::from_str(body).ok()?;
+    message
+        .get("params")?
+        .get("_meta")?
+        .get("io.modelcontextprotocol/protocolVersion")?
+        .as_str()
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
+}
+
 /// Where diagnostics go. Never stdout: that channel belongs to the protocol.
 pub trait Diagnostics: Send + Sync {
     fn warn(&self, message: &str);
@@ -284,17 +297,21 @@ impl Connector {
             .header("accept", "application/json, text/event-stream")
             .header("authorization", format!("Bearer {token}"))
             .body(body.to_string());
-        // The header describes a negotiated session, so it cannot be on the
-        // request that negotiates it.
-        if method != "initialize" {
-            if let Some(version) = self
-                .negotiated
+        // An MCP 2026-07-28 request names its own version in `_meta`, and the
+        // endpoint refuses it unless the header agrees, so that version wins.
+        // Otherwise the header describes the negotiated session, which cannot
+        // be on the request that negotiates it.
+        let version = request_protocol_version(body).or_else(|| {
+            if method == "initialize" {
+                return None;
+            }
+            self.negotiated
                 .lock()
                 .ok()
                 .and_then(|negotiated| negotiated.clone())
-            {
-                request = request.header("MCP-Protocol-Version", version);
-            }
+        });
+        if let Some(version) = version {
+            request = request.header("MCP-Protocol-Version", version);
         }
 
         let response = request.send().await.map_err(|error| {

@@ -316,6 +316,58 @@ async fn an_sse_response_becomes_one_line_per_data_event() {
     assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
 }
 
+/// MCP 2026-07-28 clients carry their protocol version in each request's
+/// `_meta`, and the endpoint (rmcp) refuses such a request with HTTP 400 unless
+/// the `MCP-Protocol-Version` header says the same. Claude Code probes with
+/// `server/discover` before any `initialize`, so the header comes from the
+/// message itself, and it wins over a version negotiated earlier.
+#[tokio::test]
+async fn a_request_carrying_its_protocol_version_sends_it_as_the_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|request| match request.rpc_method().as_str() {
+        "initialize" => initialize_reply(1),
+        _ => Reply::json(json!({ "jsonrpc": "2.0", "id": 3, "result": {} }).to_string()),
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+    let discover = json!({
+        "jsonrpc": "2.0", "id": "probe", "method": "server/discover",
+        "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
+    })
+    .to_string();
+    let modern_call = json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+        "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
+    })
+    .to_string();
+
+    let mut harness = Harness::start(discovery_file(dir.path()), Some(TOKEN));
+    harness.send(&discover).await;
+    harness.next_line().await;
+    harness.send(&initialize(1)).await;
+    harness.next_line().await;
+    harness.send(&modern_call).await;
+    harness.next_line().await;
+    harness.finish().await;
+
+    let requests = app.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].rpc_method(), "server/discover");
+    assert_eq!(
+        requests[0].header("mcp-protocol-version"),
+        Some("2026-07-28")
+    );
+    assert_eq!(
+        requests[1].header("mcp-protocol-version"),
+        None,
+        "initialize"
+    );
+    assert_eq!(
+        requests[2].header("mcp-protocol-version"),
+        Some("2026-07-28")
+    );
+}
+
 #[tokio::test]
 async fn the_negotiated_protocol_version_is_sent_after_initialize_but_not_on_it() {
     let dir = tempfile::tempdir().unwrap();
