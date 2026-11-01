@@ -35,7 +35,7 @@ const LAST_USED_PERSIST_SECS: i64 = 60;
 
 /// What a client may do. Only `Read` is granted in this release; the rest are
 /// declared so the file format and the tool contract already name them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
     Read,
@@ -207,8 +207,9 @@ fn view(record: &ClientRecord) -> ClientView {
 }
 
 /// Write `bytes` to `path` through a sibling temp file and a rename, so a crash
-/// never leaves half a file. Readable by the owner only on Unix.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+/// never leaves half a file. Readable by the owner only on Unix. Shared with
+/// [`super::server`], which writes the discovery file the same way.
+pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
