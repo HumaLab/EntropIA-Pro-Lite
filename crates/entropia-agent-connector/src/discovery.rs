@@ -18,9 +18,10 @@ pub const MCP_PATH: &str = "/mcp";
 
 /// What the app advertises, field for field.
 ///
-/// The fields are all read but only the protocol, the port and the path are
-/// used; the rest (`pid`, app version, variant, profile) is what makes the file
-/// diagnosable by hand and is kept so a malformed one is noticed here.
+/// The fields are all read but only the protocol, the port, the path and the
+/// instance key are used; the rest (`pid`, app version, variant, profile) is what
+/// makes the file diagnosable by hand and is kept so a malformed one is noticed
+/// here.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Discovery {
@@ -36,6 +37,11 @@ pub struct Discovery {
     pub variant: Option<String>,
     #[serde(default)]
     pub profile: Option<String>,
+    /// The proof key this start minted (D12). Read only to verify the instance;
+    /// it is never sent over HTTP. Missing on an app that predates D12, which is
+    /// why it is optional here and refused in [`parse`].
+    #[serde(default)]
+    pub instance_key: String,
 }
 
 fn default_mcp_path() -> String {
@@ -59,6 +65,12 @@ pub fn parse(bytes: &[u8], source: &Path) -> Result<Discovery, ConnectorError> {
     })?;
     if discovery.protocol != PROTOCOL {
         return Err(ConnectorError::protocol_incompatible(&discovery.protocol));
+    }
+    // Without a usable instance key the connector cannot tell this app from
+    // whatever holds the port of a stale file, so it refuses to go further
+    // (D12) instead of sending a token it cannot justify sending.
+    if !crate::proof::is_hex_64(&discovery.instance_key) {
+        return Err(ConnectorError::instance_key_missing());
     }
     if discovery.port == 0 || !is_plain_path(&discovery.mcp_path) {
         return Err(ConnectorError::app_absent(format!(

@@ -49,7 +49,8 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   1 MiB body cap. Bind `127.0.0.1:0` only.
 - D7 — Discovery file `agent-endpoint.json` (0600, atomic write) in the data dir:
   `{"protocol":"entropia-agent/1","mcpPath":"/mcp","port":N,"pid":N,
-  "appVersion":"x.y.z","variant":"pro"|"lite","profile":null|"name"}`. Written when
+  "appVersion":"x.y.z","variant":"pro"|"lite","profile":null|"name","instanceKey":"<64 hex>"}`
+  (`instanceKey` added by D12). Written when
   the endpoint starts, removed when it stops. Variant is `cfg!(feature = "local-ml")`.
 - D8 — Lifecycle: the app loads `AgentAccess` at setup (data dir, `KeyringSecretStore`
   with `dev_profile::active()`), manages it, and starts the endpoint when enabled.
@@ -80,6 +81,19 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   with one ready-to-copy line per client (Claude Code, Codex, OpenCode, Pi). No token
   is ever shown or copied. Bundling the connector binary is stage 6, so the panel
   says the connector must be installed.
+- D12 — Instance proof before any token leaves the connector (fixes verify W1: a
+  stale `agent-endpoint.json` after a crash could point the connector at another
+  process, possibly another OS user, holding the port). At each start the app mints a
+  random 32-byte `instanceKey` and writes it into the discovery file (0600; never
+  sent over HTTP). Before sending a token to a port it has not verified in this
+  process, the connector sends `POST /mcp` with header
+  `X-Entropia-Challenge: <32 random bytes hex>` and no `Authorization`; the guard
+  answers that request (after the path and Host checks, before the Origin and bearer
+  checks are relevant) with 401 plus `X-Entropia-Proof: hex(HMAC-SHA256(instanceKey,
+  challenge))`. The connector compares in constant time; mismatch or absence →
+  `app_absent` (detail: instance not verified) and the token is never sent. The
+  verified `(port, instanceKey)` pair is cached until either changes. HMAC is built
+  on `sha2` (no new HMAC crate) and pinned by an RFC 4231 test vector on both sides.
 - D9 — Connector (`crates/entropia-agent-connector`, standalone crate with its own
   committed `Cargo.lock`, binary `entropia-agent-connector`):
   - CLI: `entropia-agent-connector --client <id> [--profile <name>]`, `--version`.
@@ -113,8 +127,9 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 - [x] T3 — Read-only tools: `entropia_status`, `collections_list`, `items_list`, `items_get`, `search_items`; pagination, scope check, audit log. S6, S7, S9. Route: delegated worker, TDD (RED 13 failing → GREEN 43). Deviations: limit > 200 refused (`invalid_argument`); extra codes `unavailable`, `internal_error`; `search_items` returns `matches` instead of a cursor; timestamps are unix millis. Commit: 89c2e36b
 - [x] T4 — App surface: Tauri commands + Settings "Asistentes" panel (enable, add client, revoke, status). S1, S4. Route: delegated worker, TDD (RED 6 Rust + missing component → GREEN 6 Rust, 7 Vitest Pro and Lite). Commit: 92c92f9c
 - [x] T5 — Connector crate `crates/entropia-agent-connector`: discovery, keyring token, stdio relay, actionable errors. S1, S5, S7. Route: delegated worker, TDD (RED 0/32 → GREEN 32). Commit: 1432f913
-- [x] T6 — Contract and inventory docs under `integrations/agents/`: protocol version, compatibility policy, scopes, error codes, domain inventory. S10. Route: delegated worker (passive docs: structural checks, every tool and error code grepped in source). Commit: (T6 commit)
-- [ ] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + verify. Commit: —
+- [x] T6 — Contract and inventory docs under `integrations/agents/`: protocol version, compatibility policy, scopes, error codes, domain inventory. S10. Route: delegated worker (passive docs: structural checks, every tool and error code grepped in source). Commit: d3cf1e08
+- [x] T8 — Verify follow-ups: D12 instance proof (W1); JSON-RPC error for an id'd request answered with empty 2xx or non-JSON (W2, S7); tests pinning GET/DELETE → 405 and `/mcp/` → 404; archive-unavailable messages without absolute paths; doc fixes (README client verification status per L4, PROTOCOL `unauthorized` vs disabled endpoint, `/mcp` query wording, D12). S3, S4, S7. Route: delegated worker, TDD (RED compile errors + failing preflight/notification tests → GREEN app 59, connector 45). Commit: (T8 commit)
+- [ ] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + verify. Evidence: L4. Commit: —
 
 ## Delivery
 
@@ -126,3 +141,5 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 - L1 (2026-10-31, owner): "está bien no es necesario el commit arrancá con la implementación del plan"
 - L2 (2026-10-31, owner): chose "SDK oficial rmcp (recomendado)" over a hand-rolled JSON-RPC subset.
 - L3 (2026-10-31): rmcp 3.8.0 declares rust-version 1.88; repo toolchain is 1.90.0. hyper 1.9, hyper-util, tower 0.5 and schemars 1.x are already in `Cargo.lock`.
+- L4 (2026-10-31, T7 evidence): real Lite debug app via `ENTROPIA_DEV_PROFILE=agents-e2e VITE_LOCAL_ML=0 pnpm exec tauri dev` (startup line `profile=dev:agents-e2e ... sync=disabled`), one client seeded only under the dev-profile keyring service. Discovery file written 0600 with `variant: lite`, `profile: agents-e2e`; listener `127.0.0.1:38661` only. Real connector over stdio: initialize, tools/list (5 tools), `entropia_status` → archive 3 collections / 13 items, client `cl_e2e0000001` scope read; `collections_list` records; unknown item → `not_found`; extra `sql` argument → `invalid_argument`. Raw HTTP: no token 401, fake token 401, `Origin` 403 `forbidden_origin`, rebinding `Host` 403 `forbidden_host`. Unknown client → -32005 `credential_missing`. Real clients with temporary configs (user configs untouched): OpenCode `opencode mcp list` → connected; Claude Code `claude mcp list` → ✔ Connected; Pi `pi mcp list` → connected, 5 tools; Codex `codex mcp add` recipe registers the server (connection not exercised: needs a model session). No client config contains a token. Audit lines carried ids only. After killing the app: stale discovery file remains (SIGKILL skips `RunEvent::Exit`), connector answers -32001 `app_absent`. Keyring test entry removed afterwards.
+

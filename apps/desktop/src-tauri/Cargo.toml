@@ -93,6 +93,10 @@ bytes = "1"
 # Tool JSON Schemas for `tools/list` (rmcp resolves the same 1.x line).
 schemars = "1"
 sha2 = "0.11"
+# The agent endpoint's per-start instance key (D12) comes from the OS generator.
+# Already in the lockfile (0.3.4, through tauri's dependencies); declared directly
+# so `automation/proof.rs` can call `getrandom::fill`. No new crate enters the build.
+getrandom = "0.3"
 md-5 = "0.11"
 base64 = "0.23"
 hex = "0.4"

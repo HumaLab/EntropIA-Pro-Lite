@@ -9,7 +9,8 @@
 //! The discovery file is read again for every message, so an app restart on a
 //! new port is followed without restarting the agent; the credential is read
 //! from the keyring for every message too, so revocation applies to the next
-//! request and nothing is cached in the process.
+//! request and nothing is cached in the process — except the D12 instance proof,
+//! which is cached only for the `(port, instanceKey)` pair it verified.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -20,6 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::discovery::{self, Discovery};
 use crate::error::ConnectorError;
+use crate::proof;
 
 /// Where the relay gets its credential and its endpoint from. Production reads
 /// the OS keyring and the app's data directory; tests implement it directly, so
@@ -79,7 +81,7 @@ impl RelayConfig {
 
 /// What the endpoint answered to one message.
 enum Reply {
-    /// 202 (or an empty 2xx body): nothing goes to stdout.
+    /// 202 (or an empty 2xx body): nothing goes to stdout for a notification.
     Empty,
     /// One JSON document.
     Json(String),
@@ -93,6 +95,8 @@ struct Connector {
     http: reqwest::Client,
     /// The version `initialize` negotiated, sent on every later request.
     negotiated: Mutex<Option<String>>,
+    /// The `(port, instanceKey)` pair this process already proved (D12).
+    verified: Mutex<Option<(u16, String)>>,
     diagnostics: Arc<dyn Diagnostics>,
     /// The one channel every stdout line goes through.
     lines: mpsc::Sender<String>,
@@ -127,6 +131,7 @@ where
         source,
         http,
         negotiated: Mutex::new(None),
+        verified: Mutex::new(None),
         diagnostics: config.diagnostics,
         lines,
     });
@@ -206,20 +211,26 @@ impl Connector {
 
         // A notification never gets a response: its failure is a diagnostic.
         let Some(id) = id else {
-            if let Err(error) = outcome {
-                self.diagnostics.warn(&error.describe());
+            match outcome {
+                Err(error) => self.diagnostics.warn(&error.describe()),
+                Ok(Reply::Json(body)) => {
+                    if let Err(error) = Self::check_body(&body) {
+                        self.diagnostics
+                            .warn(&ConnectorError::invalid_reply(error).describe());
+                    }
+                }
+                Ok(Reply::Empty) | Ok(Reply::Sse(_)) => {}
             }
             return;
         };
 
         match outcome {
-            Ok(Reply::Empty) => self.diagnostics.warn(&format!(
-                "EntropIA aceptó la petición pero no devolvió respuesta (id {id}); el asistente \
-                 esperaba un resultado"
-            )),
+            Ok(Reply::Empty) => self.emit(id, &ConnectorError::empty_reply()).await,
             Ok(Reply::Json(body)) => {
                 self.remember_version(&method, &body);
-                self.send_body(&body).await;
+                if let Err(error) = self.send_body(&body).await {
+                    self.emit(id, &ConnectorError::invalid_reply(error)).await;
+                }
             }
             Ok(Reply::Sse(body)) => {
                 for event in parse_sse(&body) {
@@ -238,9 +249,12 @@ impl Connector {
         }
     }
 
-    /// Read the endpoint, read the credential, and POST one message.
+    /// Read the endpoint, prove the instance, read the credential, and POST one
+    /// message. The order matters: no token leaves the connector towards a
+    /// process that has not proved it holds this discovery file (D12).
     async fn forward(&self, method: &str, body: &str) -> Result<Reply, ConnectorError> {
         let discovery = self.discovery().await?;
+        self.verify_instance(&discovery).await?;
         let token = self
             .source
             .token(&self.client_id)
@@ -287,6 +301,62 @@ impl Connector {
         discovery::parse(&bytes, &path)
     }
 
+    /// Whether this process already proved this exact `(port, instanceKey)` pair.
+    fn is_verified(&self, discovery: &Discovery) -> bool {
+        self.verified
+            .lock()
+            .ok()
+            .and_then(|verified| verified.clone())
+            .is_some_and(|(port, key)| port == discovery.port && key == discovery.instance_key)
+    }
+
+    /// Prove, before the first token goes to this pair, that the process holding
+    /// the advertised port read the same discovery file (D12).
+    ///
+    /// The challenge is a POST to `/mcp` with no `Authorization`: the guard
+    /// answers it with the usual 401 plus the HMAC of the challenge under the
+    /// instance key. A missing or wrong proof is `app_absent` and the token is
+    /// never sent.
+    async fn verify_instance(&self, discovery: &Discovery) -> Result<(), ConnectorError> {
+        if self.is_verified(discovery) {
+            return Ok(());
+        }
+        let url = discovery.endpoint();
+        let challenge = proof::challenge().map_err(|error| {
+            ConnectorError::instance_unverified(format!("no pude generar el desafío: {error}"))
+        })?;
+        let response = self
+            .http
+            .post(&url)
+            .header(proof::CHALLENGE_HEADER, &challenge)
+            .send()
+            .await
+            .map_err(|error| {
+                ConnectorError::app_absent(format!("no pude conectar con {url}: {error}"))
+            })?;
+        let status = response.status().as_u16();
+        let answer = response
+            .headers()
+            .get(proof::PROOF_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.trim().to_string());
+        let expected = proof::proof_for(&discovery.instance_key, &challenge);
+        let proven = status == 401
+            && answer.is_some_and(|answer| {
+                proof::constant_time_eq(answer.as_bytes(), expected.as_bytes())
+            });
+        if !proven {
+            return Err(ConnectorError::instance_unverified(format!(
+                "no pude verificar que {url} sea la instancia anunciada por {} (HTTP {status})",
+                self.source.discovery_path().display()
+            )));
+        }
+        if let Ok(mut verified) = self.verified.lock() {
+            *verified = Some((discovery.port, discovery.instance_key.clone()));
+        }
+        Ok(())
+    }
+
     async fn read_reply(
         &self,
         mut response: reqwest::Response,
@@ -321,15 +391,23 @@ impl Connector {
     }
 
     /// Write one JSON document as exactly one line, whatever its formatting.
-    async fn send_body(&self, body: &str) {
+    /// The parse error comes back so a request can be answered instead of
+    /// leaving the agent waiting (W2).
+    async fn send_body(&self, body: &str) -> Result<(), serde_json::Error> {
         match serde_json::from_str::<Value>(body) {
             Ok(value) => {
                 let _ = self.lines.send(value.to_string()).await;
+                Ok(())
             }
-            Err(error) => self.diagnostics.warn(&format!(
-                "EntropIA respondió con un cuerpo que no es JSON ({error}): {body}"
-            )),
+            Err(error) => Err(error),
         }
+    }
+
+    /// Whether a body the endpoint sent is JSON at all, without writing it: a
+    /// notification's body is never forwarded, but an unusable one is still a
+    /// diagnostic.
+    fn check_body(body: &str) -> Result<(), serde_json::Error> {
+        serde_json::from_str::<Value>(body).map(|_| ())
     }
 
     /// A JSON-RPC error response for a request that could not be answered.

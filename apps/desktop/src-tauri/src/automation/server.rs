@@ -8,7 +8,11 @@
 //! order [D6](../../../../../odd/tasks/agent-mcp-connector.md) fixes: path,
 //! `Host`, `Origin`, bearer token. Only then does the authenticated
 //! [`access::Principal`] reach the tool, through the request extensions the
-//! transport copies into the tool context.
+//! transport copies into the tool context. A request that carries an instance
+//! challenge and no credential is answered by the proof path of
+//! [D12](../../../../../odd/tasks/agent-mcp-connector.md) instead: same refusal,
+//! plus the HMAC that lets the connector trust this process before it sends a
+//! token.
 //!
 //! While the endpoint runs, [`DISCOVERY_FILE`] (D7) tells the connector which
 //! port to call; stopping removes it. The app owns that file and the endpoint
@@ -36,6 +40,7 @@ use tower_service::Service;
 
 use crate::automation::access::{self, AgentAccess};
 use crate::automation::mcp::AgentServer;
+use crate::automation::proof;
 
 /// Discovery file the connector reads while the endpoint is up.
 pub const DISCOVERY_FILE: &str = "agent-endpoint.json";
@@ -72,7 +77,7 @@ pub fn profile_name() -> Option<String> {
     crate::dev_profile::active().map(str::to_string)
 }
 
-/// What the connector reads to find the endpoint (D7).
+/// What the connector reads to find the endpoint (D7, D12).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Discovery {
@@ -83,10 +88,13 @@ pub struct Discovery {
     pub app_version: String,
     pub variant: String,
     pub profile: Option<String>,
+    /// This start's proof key (D12). Readable only by the user: the file is
+    /// `0600`, and the key is never sent over HTTP.
+    pub instance_key: String,
 }
 
 impl Discovery {
-    fn at(port: u16) -> Self {
+    fn at(port: u16, instance_key: String) -> Self {
         Self {
             protocol: PROTOCOL.to_string(),
             mcp_path: MCP_PATH.to_string(),
@@ -95,6 +103,7 @@ impl Discovery {
             app_version: app_version().to_string(),
             variant: variant_name().to_string(),
             profile: profile_name(),
+            instance_key,
         }
     }
 }
@@ -217,12 +226,20 @@ fn start(
         .map_err(|e| format!("could not make the assistant endpoint non-blocking: {e}"))?;
 
     let discovery_path = dir.join(DISCOVERY_FILE);
-    let bytes = serde_json::to_vec_pretty(&Discovery::at(port))
+    let instance_key = proof::mint_instance_key()?;
+    let bytes = serde_json::to_vec_pretty(&Discovery::at(port, instance_key.clone()))
         .map_err(|e| format!("could not serialize {}: {e}", discovery_path.display()))?;
     access::write_atomic(&discovery_path, &bytes)?;
 
     let cancel = CancellationToken::new();
-    let service = GuardedEndpoint::new(access, port, cancel.clone(), db_path, cache_dir);
+    let service = GuardedEndpoint::new(
+        access,
+        port,
+        instance_key,
+        cancel.clone(),
+        db_path,
+        cache_dir,
+    );
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
         port,
@@ -294,12 +311,15 @@ struct GuardedEndpoint {
     inner: StreamableHttpService<AgentServer, NeverSessionManager>,
     /// The exact `Host` values the endpoint answers to (D6).
     hosts: Vec<String>,
+    /// This start's proof key (D12); never leaves the process except as an HMAC.
+    instance_key: String,
 }
 
 impl GuardedEndpoint {
     fn new(
         access: Arc<AgentAccess>,
         port: u16,
+        instance_key: String,
         cancel: CancellationToken,
         db_path: PathBuf,
         cache_dir: PathBuf,
@@ -323,6 +343,7 @@ impl GuardedEndpoint {
                 config,
             ),
             hosts,
+            instance_key,
         }
     }
 
@@ -350,6 +371,22 @@ impl GuardedEndpoint {
                 "forbidden_origin",
                 "Un navegador no puede usar el endpoint del asistente: conectalo con el conector de EntropIA.",
             );
+        }
+        // D12: a caller that read the discovery file proves it before spending a
+        // credential. It is a refusal like any other (401), plus the proof; a
+        // malformed challenge earns no proof at all. The Origin check above runs
+        // first on purpose: a browser must not be able to obtain a proof.
+        if let Some(challenge) = request.headers().get(proof::CHALLENGE_HEADER) {
+            if !request.headers().contains_key(header::AUTHORIZATION) {
+                return match challenge
+                    .to_str()
+                    .ok()
+                    .filter(|challenge| proof::is_hex_64(challenge))
+                {
+                    Some(challenge) => challenge_response(&self.instance_key, challenge),
+                    None => unauthorized(),
+                };
+            }
         }
         let Some(principal) =
             bearer_token(request.headers()).and_then(|token| self.access.authenticate(token))
@@ -419,6 +456,18 @@ fn unauthorized() -> Response<BoxBody> {
     response
 }
 
+/// The D12 answer: the same refusal as [`unauthorized`], carrying the proof
+/// that lets a caller confirm it is this app and not whatever holds the port of
+/// a stale discovery file.
+fn challenge_response(instance_key: &str, challenge: &str) -> Response<BoxBody> {
+    let mut response = unauthorized();
+    let proof = proof::proof_for(instance_key, challenge);
+    if let Ok(value) = HeaderValue::from_str(&proof) {
+        response.headers_mut().insert(proof::PROOF_HEADER, value);
+    }
+    response
+}
+
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::convert::Infallible>;
 
 impl Service<Request<Incoming>> for GuardedEndpoint {
@@ -484,6 +533,13 @@ mod tests {
 
         async fn rpc(&self, token: Option<&str>, body: Value) -> reqwest::Response {
             self.mcp_request(token).json(&body).send().await.unwrap()
+        }
+
+        /// The discovery file as the connector reads it.
+        fn discovery(&self) -> Discovery {
+            let bytes = std::fs::read(self.dir.path().join(DISCOVERY_FILE))
+                .expect("the endpoint advertises itself while it runs");
+            serde_json::from_slice(&bytes).expect("the discovery file is D7's shape")
         }
     }
 
@@ -717,10 +773,11 @@ mod tests {
             "appVersion",
             "variant",
             "profile",
+            "instanceKey",
         ] {
             assert!(keys.contains(&key), "the connector reads {key}: {keys:?}");
         }
-        assert_eq!(keys.len(), 7, "no field beyond D7's: {keys:?}");
+        assert_eq!(keys.len(), 8, "no field beyond D7's and D12's: {keys:?}");
         let discovery: Discovery = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(discovery.protocol, PROTOCOL);
         assert_eq!(discovery.mcp_path, MCP_PATH);
@@ -729,6 +786,19 @@ mod tests {
         assert_eq!(discovery.app_version, app_version());
         assert_eq!(discovery.variant, variant_name());
         assert_eq!(discovery.profile, profile_name());
+        assert_eq!(
+            discovery.instance_key.len(),
+            2 * proof::INSTANCE_KEY_BYTES,
+            "D12: 32 random bytes, hex-encoded"
+        );
+        assert!(
+            discovery
+                .instance_key
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()),
+            "the key is hex: {:?}",
+            discovery.instance_key
+        );
 
         #[cfg(unix)]
         {
@@ -740,6 +810,146 @@ mod tests {
         harness.endpoint.stop();
         assert_eq!(harness.endpoint.port(), None);
         assert!(!path.exists(), "a stopped endpoint advertises nothing");
+    }
+
+    #[tokio::test]
+    async fn each_start_mints_a_new_instance_key() {
+        let harness = harness().await;
+        let first = harness.discovery().instance_key;
+        harness.endpoint.stop();
+        harness.endpoint.sync(&harness.access).await.unwrap();
+        let second = harness.discovery().instance_key;
+        assert_ne!(
+            first, second,
+            "D12: a restart must not reuse the key a stale file could name"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_challenge_is_answered_with_the_hmac_of_the_key_in_the_discovery_file() {
+        let harness = harness().await;
+        let discovery = harness.discovery();
+        let challenge = "ab".repeat(proof::INSTANCE_KEY_BYTES);
+        let response = harness
+            .client
+            .post(harness.url(MCP_PATH))
+            .header(proof::CHALLENGE_HEADER, &challenge)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer"),
+            "a challenge is refused like any unauthenticated request"
+        );
+        let proof_header = response
+            .headers()
+            .get(proof::PROOF_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = error_body(response).await;
+        assert_eq!(body["error"], "unauthorized");
+        assert_eq!(
+            proof_header.as_deref(),
+            Some(proof::proof_for(&discovery.instance_key, &challenge).as_str()),
+            "the connector verifies the instance with this HMAC"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_challenge_is_refused_without_a_proof() {
+        let harness = harness().await;
+        for challenge in ["zz".repeat(proof::INSTANCE_KEY_BYTES), "abcd".to_string()] {
+            let response = harness
+                .client
+                .post(harness.url(MCP_PATH))
+                .header(proof::CHALLENGE_HEADER, &challenge)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{challenge}");
+            assert!(
+                response.headers().get(proof::PROOF_HEADER).is_none(),
+                "a malformed challenge must not earn a proof: {challenge}"
+            );
+            assert_eq!(error_body(response).await["error"], "unauthorized");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_browser_cannot_obtain_a_proof() {
+        let harness = harness().await;
+        let challenge = "cd".repeat(proof::INSTANCE_KEY_BYTES);
+        let response = harness
+            .client
+            .post(harness.url(MCP_PATH))
+            .header(proof::CHALLENGE_HEADER, &challenge)
+            .header("origin", "https://evil.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(
+            response.headers().get(proof::PROOF_HEADER).is_none(),
+            "the Origin refusal must apply to challenge requests"
+        );
+        assert_eq!(error_body(response).await["error"], "forbidden_origin");
+    }
+
+    #[tokio::test]
+    async fn a_get_or_a_delete_on_the_endpoint_is_not_allowed() {
+        let harness = harness().await;
+        let (_id, token) = harness.pair("Claude Code");
+        for method in [reqwest::Method::GET, reqwest::Method::DELETE] {
+            let response = harness
+                .client
+                .request(method.clone(), harness.url(MCP_PATH))
+                .header("accept", "application/json, text/event-stream")
+                .header("authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::METHOD_NOT_ALLOWED,
+                "{method}: only POST carries MCP messages"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ALLOW)
+                    .and_then(|value| value.to_str().ok()),
+                Some("POST")
+            );
+            let body = response.text().await.unwrap();
+            assert!(
+                serde_json::from_str::<Value>(&body).is_err(),
+                "{method} returned MCP data: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_path_with_a_trailing_slash_is_not_the_endpoint() {
+        let harness = harness().await;
+        let (_id, token) = harness.pair("Codex");
+        let response = harness
+            .client
+            .post(harness.url("/mcp/"))
+            .header("accept", "application/json, text/event-stream")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .json(&initialize_body())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(error_body(response).await["error"], "not_found");
     }
 
     #[tokio::test]

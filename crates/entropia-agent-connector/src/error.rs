@@ -15,7 +15,8 @@ pub const FORBIDDEN: i32 = -32003;
 pub const PROTOCOL_INCOMPATIBLE: i32 = -32004;
 /// No keyring entry for this client id.
 pub const CREDENTIAL_MISSING: i32 = -32005;
-/// A sentence for an HTTP status the connector has no rule for.
+/// A sentence for a failure with no dedicated rule: an HTTP status the
+/// connector does not know, or a `2xx` that carried no usable answer (W2).
 pub const UNEXPECTED_STATUS: i32 = -32000;
 /// The line on stdin was not JSON.
 pub const PARSE_ERROR: i32 = -32700;
@@ -76,7 +77,8 @@ impl ConnectorError {
         )
     }
 
-    /// The discovery file announces another protocol version.
+    /// The discovery file announces another protocol version, or does not carry
+    /// the instance key that version includes (D12).
     pub fn protocol_incompatible(found: &str) -> Self {
         Self::new(
             PROTOCOL_INCOMPATIBLE,
@@ -84,6 +86,31 @@ impl ConnectorError {
             "La versión de este conector no coincide con la de EntropIA: actualizá la aplicación y \
              el conector.",
             Some(format!("discovery protocol {found:?}")),
+        )
+    }
+
+    /// The discovery file has no usable instance key (D12): an app old enough to
+    /// predate the proof cannot be verified, so the connector refuses it as a
+    /// version mismatch instead of trusting the port.
+    pub fn instance_key_missing() -> Self {
+        Self::new(
+            PROTOCOL_INCOMPATIBLE,
+            "protocol_incompatible",
+            "La versión de este conector no coincide con la de EntropIA: actualizá la aplicación y \
+             el conector.",
+            Some("discovery has no usable instanceKey".to_string()),
+        )
+    }
+
+    /// The endpoint could not prove it holds the discovery file's instance key
+    /// (D12): the credential is never sent to it.
+    pub fn instance_unverified(detail: impl Display) -> Self {
+        Self::new(
+            APP_ABSENT,
+            "app_absent",
+            "No pude verificar que EntropIA sea la aplicación detrás de esa conexión: abrí la \
+             aplicación y volvé a intentarlo.",
+            Some(detail.to_string()),
         )
     }
 
@@ -119,6 +146,30 @@ impl ConnectorError {
             "endpoint_error",
             "EntropIA respondió con un error inesperado.",
             Some(format!("HTTP {status}")),
+        )
+    }
+
+    /// A request the endpoint accepted but answered with nothing (W2). An agent
+    /// waiting for that result would wait forever, so the silence becomes a
+    /// JSON-RPC error like any other failure.
+    pub fn empty_reply() -> Self {
+        Self::new(
+            UNEXPECTED_STATUS,
+            "endpoint_error",
+            "EntropIA aceptó la petición pero no devolvió ninguna respuesta: volvé a intentarlo; \
+             si el problema sigue, revisá que la aplicación siga abierta.",
+            Some("HTTP 2xx with an empty body".to_string()),
+        )
+    }
+
+    /// A 2xx body that is not JSON where a result was expected (W2).
+    pub fn invalid_reply(error: impl Display) -> Self {
+        Self::new(
+            UNEXPECTED_STATUS,
+            "endpoint_error",
+            "EntropIA devolvió una respuesta que el conector no pudo leer: volvé a intentarlo; si \
+             el problema sigue, actualizá la aplicación y el conector.",
+            Some(format!("the response body is not JSON: {error}")),
         )
     }
 

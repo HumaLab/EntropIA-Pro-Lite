@@ -9,6 +9,7 @@ Source of truth, by concern:
 | Concern | Code |
 |---|---|
 | Endpoint, request guard, discovery file, protocol string | `apps/desktop/src-tauri/src/automation/server.rs` |
+| Instance key, HMAC and constant-time compare (D12) | `apps/desktop/src-tauri/src/automation/proof.rs`, `crates/entropia-agent-connector/src/proof.rs` |
 | Tools, arguments, results, tool error codes | `apps/desktop/src-tauri/src/automation/mcp.rs` |
 | Read connection, pagination, read errors | `apps/desktop/src-tauri/src/automation/read.rs` |
 | Clients, tokens, keyring target, scopes, revocation | `apps/desktop/src-tauri/src/automation/access.rs` |
@@ -57,6 +58,15 @@ tells the person to update both the app and the connector, and whose
 (`crates/entropia-agent-connector/src/error.rs`). The endpoint is never called,
 so the app cannot observe this case.
 
+**The instance proof (D12) is a required field inside `entropia-agent/1`.** The
+discovery file gained `instanceKey` without a version bump, because a connector
+that predates it simply ignores an unknown field: the string stays `entropia-agent/1`
+and an older connector keeps working. The reverse is refused: a discovery file
+with no usable `instanceKey` cannot be verified, so this connector answers
+`-32004` / `protocol_incompatible` instead of trusting the port. The guard also
+gained one step and two headers, which no conforming v1 caller notices because a
+caller without a challenge header is authenticated exactly as before.
+
 There is no other version channel between app and connector. The MCP
 `initialize` handshake negotiates the *MCP* protocol version (handled by `rmcp`,
 3.8), not `entropia-agent/1`; the connector remembers the negotiated MCP version
@@ -76,7 +86,7 @@ MCP Streamable HTTP served by `rmcp` 3.8 over hyper/tower, inside the app
 | Property | Value |
 |---|---|
 | Bind address | `127.0.0.1:0` — loopback only, ephemeral port, never `0.0.0.0` |
-| Path | `/mcp`, and nothing else |
+| Path | The path component must be exactly `/mcp`. The guard compares `request.uri().path()`, so a query string is ignored by that comparison: `/mcp?x=1` reaches `rmcp`, `/mcp/` and `/mcp/anything` are `404 not_found` |
 | Session mode | Stateless (`legacy_session_mode: false`). No `Mcp-Session-Id` is trusted; nothing caches identity between requests |
 | Response encoding | JSON (`json_response: true`); SSE keep-alive disabled |
 | Request body cap | 1 MiB (`MAX_REQUEST_BODY_BYTES`) |
@@ -92,11 +102,16 @@ is a JSON body `{"error": "<code>", "message": "<one Spanish sentence>"}` with
 
 | # | Condition | Status | `error` |
 |---|---|---|---|
-| 1 | Path is not exactly `/mcp` | 404 | `not_found` |
+| 1 | Path component is not exactly `/mcp` (`/mcp/`, `/elsewhere`) | 404 | `not_found` |
 | 2 | `Host` is not exactly `127.0.0.1:<port>` or `localhost:<port>` (case-insensitive, port included) | 403 | `forbidden_host` |
 | 3 | Any `Origin` header is present, whatever its value | 403 | `forbidden_origin` |
-| 4 | No `Authorization: Bearer` token, or it authenticates to no live client | 401 + `WWW-Authenticate: Bearer` | `unauthorized` |
-| 5 | Passed | — | `rmcp` handles the MCP message |
+| 4 | `X-Entropia-Challenge` is present, no `Authorization`, and the value is 64 hex characters | 401 + `WWW-Authenticate: Bearer` + `X-Entropia-Proof` | `unauthorized` |
+| 5 | `X-Entropia-Challenge` is present, no `Authorization`, and the value is malformed | 401 + `WWW-Authenticate: Bearer`, **no** proof | `unauthorized` |
+| 6 | No `Authorization: Bearer` token, or it authenticates to no live client | 401 + `WWW-Authenticate: Bearer` | `unauthorized` |
+| 7 | Passed | — | `rmcp` handles the MCP message |
+
+A challenge request that also carries an `Authorization` header is not treated as
+a challenge: it takes the ordinary bearer path (row 6).
 
 Notes that are part of the contract:
 
@@ -104,8 +119,13 @@ Notes that are part of the contract:
   the switch off takes effect on the next request, even for a token copied out
   of the keyring beforehand.
 - No browser page is a legitimate caller; that is why any `Origin` is refused
-  rather than filtered by value.
+  rather than filtered by value. The `Origin` refusal runs **before** the
+  challenge, so a browser page cannot even obtain a proof.
 - Session ids are never treated as credentials.
+- `GET` and `DELETE` on `/mcp` are answered by `rmcp` with `405 Method Not
+  Allowed` and `Allow: POST` (a GET with an `Accept` that omits
+  `text/event-stream` is `406 Not Acceptable` before that); neither returns MCP
+  data. Only `POST` carries messages.
 
 ### Discovery file
 
@@ -123,11 +143,40 @@ port) and removed when the endpoint stops or the app exits.
 | `appVersion` | string | `CARGO_PKG_VERSION` of the app |
 | `variant` | string | `pro` with the `local-ml` feature, `lite` without |
 | `profile` | string or `null` | Active dev profile name; `null` in a release build |
+| `instanceKey` | string | 64 hex characters (32 bytes) minted per start from the OS generator; the D12 proof key, never sent over HTTP |
 
 The connector re-reads this file for **every** message, so an app restart on a
 new port is followed without restarting the agent. A file that cannot be parsed,
-or that names port 0 or a path that is not a plain absolute path, is reported as
-`app_absent` (`src/discovery.rs`).
+that names port 0 or a path that is not a plain absolute path, or that has no
+usable `instanceKey`, is reported as `app_absent` (the first three) or
+`protocol_incompatible` (the missing key) (`src/discovery.rs`).
+
+### Instance proof (D12)
+
+After a crash the app cannot remove the file, so a stale `agent-endpoint.json`
+can name a port another process — possibly another OS user — later holds. Without
+this step that process would receive a valid token on the connector's first
+request.
+
+- At each start the app mints a new `instanceKey` (`automation/proof.rs`) and
+  writes it into the `0600` discovery file. It is never sent over HTTP.
+- Before the first token goes to a `(port, instanceKey)` pair it has not verified
+  in this process, the connector sends `POST <mcpPath>` with
+  `X-Entropia-Challenge: <32 random bytes, hex>` and **no** `Authorization`.
+- The guard answers that request as row 4/5 of the table: `401 unauthorized`
+  plus `X-Entropia-Proof: hex(HMAC-SHA256(instanceKey, challenge))`, where both
+  the key and the challenge enter the HMAC as their ASCII text. A malformed
+  challenge earns no proof.
+- The connector computes the same HMAC from the key it read and compares in
+  constant time. A missing or wrong proof — or a non-401 answer — is
+  `app_absent` with a detail saying the instance could not be verified, and the
+  token is **never** sent.
+- The verified pair is cached for the life of the connector process. A new port
+  or a new key is verified again. The token is read from the keyring for every
+  message, as before, so revocation still applies to the next request.
+- HMAC is built on the `sha2` crate already in both trees (no HMAC crate), and
+  RFC 4231 test case 2 pins the same vector on both sides, so the two
+  implementations cannot drift apart.
 
 ## Credentials
 
@@ -251,12 +300,12 @@ person and a stable `data.code` for the agent
 
 | JSON-RPC code | `data.code` | Meaning | What the person should do |
 |---|---|---|---|
-| `-32001` | `app_absent` | No discovery file, an unreadable one, or nothing listening on its port | Open EntropIA and turn on Settings › Asistentes |
-| `-32002` | `unauthorized` | HTTP 401: not paired, revoked, or the endpoint is off | Pair the assistant again in Settings › Asistentes |
+| `-32001` | `app_absent` | No discovery file, an unreadable one, nothing listening on its port, or an endpoint that could not prove the discovery file's `instanceKey` | Open EntropIA and turn on Settings › Asistentes; if it persists, the file may be stale after a crash — the running app rewrites it on the next start |
+| `-32002` | `unauthorized` | HTTP 401 for a token: not paired, or revoked. A disabled endpoint is not this error — turning the switch off stops the listener and removes the discovery file, so the connector reports `app_absent` | Pair the assistant again in Settings › Asistentes |
 | `-32003` | `forbidden` | HTTP 403 from the loopback guard (`forbidden_host`, `forbidden_origin`) | Use the connector; do not call the endpoint from a browser or another host name |
-| `-32004` | `protocol_incompatible` | Discovery `protocol` is not `entropia-agent/1` | Update the app and the connector |
+| `-32004` | `protocol_incompatible` | Discovery `protocol` is not `entropia-agent/1`, or it has no usable `instanceKey` | Update the app and the connector |
 | `-32005` | `credential_missing` | No keyring entry for the client id, or the keyring cannot be read | Pair the assistant; if it persists, check the OS credential store |
-| `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …) | Treat as an app-side fault; report it with the app's logs |
+| `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …), or a `2xx` answer that carried no JSON where a result was expected | Treat as an app-side fault; report it with the app's logs |
 | `-32700` | `parse_error` | The stdin line was not JSON-RPC | Fix the client's framing |
 
 `data.detail` carries technical context (the discovery path, the HTTP status, the
@@ -265,9 +314,11 @@ keyring error) and never a secret.
 Rules around the relay (`src/relay.rs`):
 
 - A **notification** (no `id`) that fails never produces a response; the failure
-  is logged to stderr.
-- A `2xx` with an empty body where a result was expected produces a stderr
-  warning, not a stdout line: stdout carries protocol messages only.
+  is logged to stderr. That includes a `2xx` whose body is empty or is not JSON.
+- A **request** (with an `id`) answered with an empty `2xx` or a non-JSON body
+  becomes a JSON-RPC error on stdout — `-32000` / `data.code: "endpoint_error"` —
+  because an agent waiting for that result would otherwise wait forever. Stdout
+  carries protocol messages only.
 - Responses may overlap, but every stdout line is written whole by one writer.
 
 ## Audit trail
