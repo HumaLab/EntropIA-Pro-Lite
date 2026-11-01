@@ -81,10 +81,10 @@ describes the Lite debug run, where `<connector>` was
 
 | Client | Line | Verified |
 |---|---|---|
-| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
-| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Yes — `codex exec` called `entropia_status` and got the archive counts (Codex starts MCP servers with a reduced environment; the connector finds the session keyring itself on Linux) |
-| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
-| Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
+| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Linux and Windows — `claude mcp list` reported **Connected**; Claude Code 2.1 speaks MCP `2026-07-28` (`server/discover`, then `tools/list`) |
+| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Linux — `codex exec` called `entropia_status`. Windows — handshake and `tools/list` completed (the model call itself failed on that machine's account). Codex starts MCP servers with a reduced environment; the connector copes on both |
+| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Linux and Windows — `opencode mcp list` reported **connected** |
+| Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Linux and Windows — `pi mcp list` reported **connected** with 5 tools |
 
 "No token in the config" held for all four: each config names only the client id.
 
@@ -169,6 +169,23 @@ the fallback token file is readable by other users, so fix its permissions
 connector could not reach the OS keyring from the process the agent started (log
 in to the desktop session with the keyring unlocked, or pass the agent
 `DBUS_SESSION_BUS_ADDRESS`).
+
+### Known issues on Windows
+
+- **Antivirus sandboxing delays every start.** Avast's Autosandbox (and similar
+  "unknown program" sandboxes) holds an unsigned program that keeps running until
+  its emulation times out: on a test machine the connector took about **26 s** to
+  start, on every launch, and back to ~0 s with the antivirus paused. The
+  installers do not sign the connector yet (see `CODE_SIGNING.md`). Clients with a
+  short MCP startup limit give up first: Codex defaults to 10 s, so set
+  `startup_timeout_sec = 60` under `[mcp_servers.entropia]` in `config.toml`, or
+  exclude the EntropIA install folder in the antivirus. The Store (MSIX) build is
+  signed by the Store on publication; whether that avoids the sandbox was not
+  measured.
+- **SSH sessions have no keyring.** Windows denies the Credential Manager to a
+  key-authenticated SSH logon (`ERROR_NO_SUCH_LOGON_SESSION`); run the agent in the
+  desktop session, or the connector answers `credential_store_unavailable` unless
+  the fallback token file exists.
 
 ## Read next
 
