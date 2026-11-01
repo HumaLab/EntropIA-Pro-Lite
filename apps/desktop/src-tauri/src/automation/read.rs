@@ -364,24 +364,77 @@ impl ArchiveReader {
                 "La búsqueda necesita un texto: escribí qué querés encontrar.".to_string(),
             ));
         }
-        let conn = self.connection()?;
-        let hits = crate::nlp::fts::fts_search_with_mode(
-            &conn,
+        // Same tokenization as the app's own keyword search; an expression with
+        // nothing left after sanitizing matches nothing.
+        let expression = crate::nlp::fts::sanitize_fts5_query_with_mode(
             query,
-            collection_id,
             crate::nlp::fts::FtsMatchMode::Any,
-        )
-        .map_err(|error| unavailable("buscar en el archivo", error))?;
-        let matches = hits.len();
+        );
+        if expression.is_empty() {
+            return Ok(SearchResults {
+                records: Vec::new(),
+                matches: 0,
+            });
+        }
+        let conn = self.connection()?;
+        let (hits, matches) = ranked_hits(&conn, &expression, collection_id, limit)?;
         let mut records = Vec::new();
-        for hit in hits.into_iter().take(limit) {
-            let Some(record) = lookup_item(&conn, &hit.item_id, hit.rank)? else {
+        for (item_id, rank) in hits {
+            let Some(record) = lookup_item(&conn, &item_id, rank)? else {
                 continue; // the index outlived a deleted item; skip it
             };
             records.push(record);
         }
         Ok(SearchResults { records, matches })
     }
+}
+
+/// The best `limit` hits of an FTS5 `expression`, by BM25, and how many items
+/// match in all. The limit is applied in SQL and the total is a count, so one
+/// common term never makes a call buffer and rank every matching row.
+fn ranked_hits(
+    conn: &Connection,
+    expression: &str,
+    collection_id: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<(String, f64)>, usize), ReadError> {
+    let scope = if collection_id.is_some() {
+        " AND i.collection_id = ?2"
+    } else {
+        ""
+    };
+    let from = format!(
+        "FROM fts_items f JOIN items i ON i.rowid = f.rowid WHERE fts_items MATCH ?1{scope}"
+    );
+    let search = |error: rusqlite::Error| unavailable("buscar en el archivo", error);
+    let count_sql = format!("SELECT count(*) {from}");
+    let page_sql =
+        format!("SELECT i.id, bm25(fts_items) AS rank {from} ORDER BY rank LIMIT {limit}");
+    let (matches, hits): (i64, Vec<(String, f64)>) = match collection_id {
+        Some(cid) => (
+            conn.query_row(&count_sql, params![expression, cid], |row| row.get(0))
+                .map_err(search)?,
+            conn.prepare(&page_sql)
+                .and_then(|mut stmt| {
+                    stmt.query_map(params![expression, cid], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
+                    .collect()
+                })
+                .map_err(search)?,
+        ),
+        None => (
+            conn.query_row(&count_sql, params![expression], |row| row.get(0))
+                .map_err(search)?,
+            conn.prepare(&page_sql)
+                .and_then(|mut stmt| {
+                    stmt.query_map(params![expression], |row| Ok((row.get(0)?, row.get(1)?)))?
+                        .collect()
+                })
+                .map_err(search)?,
+        ),
+    };
+    Ok((hits, matches.max(0) as usize))
 }
 
 /// The item behind one search hit, or `None` when it no longer exists.
