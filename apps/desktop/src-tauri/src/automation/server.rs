@@ -224,6 +224,11 @@ fn start(
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("could not make the assistant endpoint non-blocking: {e}"))?;
+    // Handed to the runtime here, before anything is advertised: a listener the
+    // runtime refuses must fail the start, not die later inside `serve` while
+    // the discovery file names its port.
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .map_err(|e| format!("could not hand the assistant endpoint to the runtime: {e}"))?;
 
     let discovery_path = dir.join(DISCOVERY_FILE);
     let instance_key = proof::mint_instance_key()?;
@@ -251,37 +256,70 @@ fn start(
 /// Accept connections until cancelled. Each connection gets its own task so one
 /// slow client cannot hold up the endpoint.
 async fn serve(
-    listener: std::net::TcpListener,
+    listener: tokio::net::TcpListener,
     service: GuardedEndpoint,
     cancel: CancellationToken,
 ) {
-    let listener = match tokio::net::TcpListener::from_std(listener) {
-        Ok(listener) => listener,
-        Err(error) => {
-            log::warn!(target: "automation", "the assistant endpoint listener is unusable: {error}");
-            return;
-        }
-    };
+    let connections = cancel.clone();
+    accept_loop(
+        || listener.accept(),
+        move |(stream, _peer)| {
+            tokio::spawn(serve_connection(
+                TokioIo::new(stream),
+                service.clone(),
+                connections.clone(),
+            ));
+        },
+        cancel,
+    )
+    .await;
+}
+
+/// Keep accepting until cancelled. A failed accept never ends the endpoint:
+/// the usual causes pass (a client that hung up, file descriptors running out),
+/// and returning would leave the state reporting a running endpoint and the
+/// discovery file advertising a port nobody serves. Failures back off (see
+/// [`accept_backoff`]) and only the first of a run is logged.
+async fn accept_loop<T, F, Fut>(
+    mut accept: F,
+    mut on_connection: impl FnMut(T),
+    cancel: CancellationToken,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::io::Result<T>>,
+{
+    let mut failures: u32 = 0;
     loop {
-        let (stream, _peer) = tokio::select! {
+        let accepted = tokio::select! {
             _ = cancel.cancelled() => return,
-            accepted = listener.accept() => match accepted {
-                Ok(accepted) => accepted,
-                Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => continue,
-                Err(error) => {
-                    log::warn!(target: "automation", "the assistant endpoint stopped accepting connections: {error}");
-                    return;
-                }
-            },
+            accepted = accept() => accepted,
         };
-        let service = service.clone();
-        let connection_cancel = cancel.clone();
-        tokio::spawn(serve_connection(
-            TokioIo::new(stream),
-            service,
-            connection_cancel,
-        ));
+        match accepted {
+            Ok(connection) => {
+                failures = 0;
+                on_connection(connection);
+            }
+            // The client gave up between the handshake and the accept.
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => {}
+            Err(error) => {
+                if failures == 0 {
+                    log::warn!(target: "automation", "the assistant endpoint could not accept a connection, retrying: {error}");
+                }
+                failures = failures.saturating_add(1);
+                tokio::select! {
+                    _ = cancel.cancelled() => return,
+                    _ = tokio::time::sleep(accept_backoff(failures)) => {}
+                }
+            }
+        }
     }
+}
+
+/// The wait after the `failures`-th consecutive failed accept: 50 ms doubling up
+/// to one second.
+fn accept_backoff(failures: u32) -> std::time::Duration {
+    let doublings = failures.saturating_sub(1).min(5);
+    std::time::Duration::from_millis((50_u64 << doublings).min(1000))
 }
 
 async fn serve_connection<I>(io: I, service: GuardedEndpoint, cancel: CancellationToken)
@@ -488,6 +526,80 @@ impl Service<Request<Incoming>> for GuardedEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accept_backoff_grows_from_50_ms_and_caps_at_one_second() {
+        let waits: Vec<u64> = (1..=8)
+            .map(|failures| accept_backoff(failures).as_millis() as u64)
+            .collect();
+        assert_eq!(waits, vec![50, 100, 200, 400, 800, 1000, 1000, 1000]);
+        assert_eq!(
+            accept_backoff(u32::MAX),
+            std::time::Duration::from_millis(1000)
+        );
+    }
+
+    /// A failed accept (EMFILE, a reset) must not end the endpoint: before this,
+    /// `serve` returned and left the state reporting a running endpoint and the
+    /// discovery file advertising a port nobody served.
+    #[tokio::test]
+    async fn the_accept_loop_survives_failed_accepts_and_keeps_serving() {
+        let outcomes = Arc::new(Mutex::new(std::collections::VecDeque::from(vec![
+            Err(std::io::Error::other("too many open files")),
+            Err(std::io::Error::other("too many open files")),
+            Ok(7_u32),
+            Err(std::io::Error::from(std::io::ErrorKind::ConnectionAborted)),
+            Ok(8_u32),
+        ])));
+        let served = Arc::new(Mutex::new(Vec::new()));
+        let cancel = CancellationToken::new();
+
+        let next = outcomes.clone();
+        let accept = move || {
+            let next = next.lock().unwrap().pop_front();
+            async move {
+                match next {
+                    Some(outcome) => outcome,
+                    None => std::future::pending().await,
+                }
+            }
+        };
+        let seen = served.clone();
+        let stop = cancel.clone();
+        let on_connection = move |connection: u32| {
+            let mut seen = seen.lock().unwrap();
+            seen.push(connection);
+            if seen.len() == 2 {
+                stop.cancel();
+            }
+        };
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            accept_loop(accept, on_connection, cancel),
+        )
+        .await
+        .expect("the loop returns once cancelled");
+        assert_eq!(*served.lock().unwrap(), vec![7, 8]);
+    }
+
+    #[tokio::test]
+    async fn cancelling_during_a_backoff_ends_the_accept_loop_at_once() {
+        let cancel = CancellationToken::new();
+        let stop = cancel.clone();
+        let accept = move || {
+            stop.cancel();
+            async { Err::<u32, _>(std::io::Error::other("refused")) }
+        };
+        let started = std::time::Instant::now();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            accept_loop(accept, |_: u32| {}, cancel),
+        )
+        .await
+        .expect("cancellation ends the loop");
+        assert!(started.elapsed() < std::time::Duration::from_millis(40));
+    }
     use crate::automation::access::tests::MemorySecrets;
     use serde_json::{json, Value};
 
