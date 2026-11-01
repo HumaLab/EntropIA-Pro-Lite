@@ -130,6 +130,11 @@
     return new Date(seconds * 1000).toISOString().slice(0, 10)
   }
 
+  /** Where the backend keeps this client's token (D14). */
+  function storageLabel(store: AgentClient['tokenStore']): string {
+    return store === 'file' ? 'Archivo protegido' : 'Llavero del sistema'
+  }
+
   function copyActionLabel(recipe: (typeof recipes)[number]): string {
     return recipe.kind === 'command'
       ? `Copiar comando para ${recipe.label}`
@@ -192,6 +197,21 @@
                     ? 'Sin uso todavía'
                     : `Último uso: ${formatDate(client.lastUsedAt)}`}
                 </span>
+                <span
+                  class="assistants-tab__meta"
+                  data-testid="assistants-client-storage-{client.id}"
+                >
+                  {storageLabel(client.tokenStore)}
+                </span>
+                {#if client.tokenStore === 'file'}
+                  <span
+                    class="assistants-tab__meta"
+                    data-testid="assistants-client-storage-hint-{client.id}"
+                  >
+                    Este equipo no tiene llavero del sistema: el token está en un archivo que solo
+                    puede leer tu usuario.
+                  </span>
+                {/if}
               </div>
               <Button
                 variant="danger"

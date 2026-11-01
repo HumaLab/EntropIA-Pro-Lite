@@ -7,9 +7,19 @@
 //! OS keyring under [`KEYRING_SERVICE`], where the connector reads it; no agent
 //! configuration ever contains it.
 //!
-//! Revocation drops the record first and the keyring entry second, so a token
-//! copied out of the keyring before revocation stops working the moment the
-//! record is gone, whether or not the keyring delete succeeds.
+//! A machine with no usable credential store falls back to one file per client
+//! under [`TOKENS_DIR`] (D14): the directory is `0700` and the file `0600` on
+//! Unix, and the record names which of the two places holds the token. Any other
+//! keyring error still fails the pairing, so a broken store never silently
+//! downgrades to disk.
+//!
+//! Revocation drops the record first and the stored token second, so a token
+//! copied out of the keyring or the file before revocation stops working the
+//! moment the record is gone, whether or not the delete succeeds.
+//!
+//! Neither the access file, nor the discovery file, nor the token directory may
+//! ever enter a backup or the asset sweep: they hold token hashes and secrets,
+//! not archive content (`backup.rs`, `asset_sweep.rs`).
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,6 +29,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// File name of the access state, in the data directory.
 pub const ACCESS_FILE: &str = "agent-access.json";
+
+/// Directory, under the data directory, that holds the token files of clients
+/// whose machine has no usable credential store (D14). The connector computes
+/// the same path (`crates/entropia-agent-connector/src/keyring_source.rs`).
+pub const TOKENS_DIR: &str = "agent-tokens";
 
 /// Keyring service of the connector tokens. The connector computes the same
 /// `(service, account)` pair (`crates/entropia-agent-connector`); change both or
@@ -47,12 +62,25 @@ pub enum Scope {
     Web,
 }
 
+/// Where a client's token is stored. Non-secret: it is part of the record and
+/// of what Settings › Asistentes shows (D14). `serde(default)` is what lets an
+/// access file written before the file fallback load unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenStore {
+    #[default]
+    Keyring,
+    File,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClientRecord {
     id: String,
     name: String,
     scopes: Vec<Scope>,
     token_sha256: String,
+    #[serde(default)]
+    token_store: TokenStore,
     created_at: i64,
     #[serde(default)]
     last_used_at: Option<i64>,
@@ -82,6 +110,8 @@ pub struct ClientView {
     pub id: String,
     pub name: String,
     pub scopes: Vec<Scope>,
+    /// Whether the token lives in the keyring or in the owner-only file.
+    pub token_store: TokenStore,
     pub created_at: i64,
     pub last_used_at: Option<i64>,
 }
@@ -139,8 +169,9 @@ impl KeyringSecretStore {
 
     fn entry(&self, client_id: &str) -> Result<keyring::Entry, String> {
         let (service, account) = keyring_target(self.profile.as_deref(), client_id);
-        keyring::Entry::new(&service, &account)
-            .map_err(|e| format!("Could not open the system credential store: {e}"))
+        // The entry can itself report an unavailable store, and that error has
+        // to carry the marker the fallback looks for (D14).
+        keyring::Entry::new(&service, &account).map_err(|e| describe_keyring_error("open", &e))
     }
 }
 
@@ -172,8 +203,54 @@ impl SecretStore for KeyringSecretStore {
     }
 }
 
+/// The file that holds a client's token when this machine has no credential
+/// store (D14). Named after the client id, so a leftover file for a record that
+/// no longer exists authenticates nothing.
+pub fn token_path(dir: &Path, client_id: &str) -> PathBuf {
+    dir.join(TOKENS_DIR).join(format!("{client_id}.token"))
+}
+
+/// Whether a store error means this machine has no usable credential store
+/// (D14). Only then may a token fall back to a file; a store that refuses one
+/// entry must refuse the pairing instead.
+fn is_store_unavailable(error: &str) -> bool {
+    error.starts_with(crate::settings::CREDENTIAL_STORE_UNAVAILABLE)
+}
+
+/// Create `dir` (or repair an existing one) readable by its owner only.
+fn create_private_dir(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Could not restrict {}: {e}", dir.display()))?;
+    }
+    Ok(())
+}
+
+fn write_token_file(dir: &Path, client_id: &str, token: &str) -> Result<(), String> {
+    create_private_dir(&dir.join(TOKENS_DIR))?;
+    write_atomic(&token_path(dir, client_id), token.as_bytes())
+}
+
+fn delete_token_file(dir: &Path, client_id: &str) -> Result<(), String> {
+    let path = token_path(dir, client_id);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Could not delete the assistant token file {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 pub struct AgentAccess {
     path: PathBuf,
+    /// The data directory: the fallback token files live under it, so a dev
+    /// profile keeps its own (its data directory is the profile's).
+    dir: PathBuf,
     state: Mutex<AccessState>,
     secrets: Arc<dyn SecretStore>,
 }
@@ -203,6 +280,7 @@ fn view(record: &ClientRecord) -> ClientView {
         id: record.id.clone(),
         name: record.name.clone(),
         scopes: record.scopes.clone(),
+        token_store: record.token_store,
         created_at: record.created_at,
         last_used_at: record.last_used_at,
     }
@@ -267,6 +345,7 @@ impl AgentAccess {
         };
         Self {
             path,
+            dir: dir.to_path_buf(),
             state: Mutex::new(state),
             secrets,
         }
@@ -290,6 +369,40 @@ impl AgentAccess {
             enabled: state.enabled,
             clients: state.clients.iter().map(view).collect(),
         })
+    }
+
+    /// Store a new token in the keyring, and only when this machine has no
+    /// usable credential store, in the owner-only file (D14).
+    fn store_token(&self, client_id: &str, token: &str) -> Result<TokenStore, String> {
+        match self.secrets.set(client_id, token) {
+            Ok(()) => Ok(TokenStore::Keyring),
+            Err(error) if is_store_unavailable(&error) => {
+                write_token_file(&self.dir, client_id, token)?;
+                Ok(TokenStore::File)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Remove the stored token of a client whose record is already gone. A file
+    /// copy is always removed: a fallback may have happened in an earlier run.
+    /// A keyring entry is only deleted when it could exist, so a machine without
+    /// a store does not turn a complete revocation into an error.
+    fn delete_token(&self, client_id: &str, store: TokenStore) -> Result<(), String> {
+        let mut failures: Vec<String> = Vec::new();
+        if store == TokenStore::Keyring {
+            if let Err(error) = self.secrets.delete(client_id) {
+                failures.push(error);
+            }
+        }
+        if let Err(error) = delete_token_file(&self.dir, client_id) {
+            failures.push(error);
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -324,20 +437,22 @@ impl AgentAccess {
             name: name.to_string(),
             scopes: vec![Scope::Read],
             token_sha256: String::new(),
+            token_store: TokenStore::Keyring,
             created_at: now_secs(),
             last_used_at: None,
         };
         let token = mint_token();
-        self.secrets.set(&record.id, &token)?;
+        let token_store = self.store_token(&record.id, &token)?;
         let record = ClientRecord {
             token_sha256: sha256_hex(&token),
+            token_store,
             ..record
         };
         let mut next = state.clone();
         next.clients.push(record.clone());
         if let Err(error) = self.persist(&next) {
             // Leave no orphan token behind a client that was never recorded.
-            let _ = self.secrets.delete(&record.id);
+            let _ = self.delete_token(&record.id, record.token_store);
             return Err(error);
         }
         *state = next;
@@ -346,19 +461,18 @@ impl AgentAccess {
 
     /// Revoke a client. `Ok(false)` when there was no such client. The record
     /// goes first: from that moment its token, wherever a copy of it lives, is
-    /// refused. A keyring delete failure is reported after that.
+    /// refused. A failed store delete is reported after that.
     pub fn revoke_client(&self, client_id: &str) -> Result<bool, String> {
         let mut state = self.lock()?;
-        if !state.clients.iter().any(|c| c.id == client_id) {
+        let Some(record) = state.clients.iter().find(|c| c.id == client_id).cloned() else {
             return Ok(false);
-        }
+        };
         let mut next = state.clone();
         next.clients.retain(|c| c.id != client_id);
         self.persist(&next)?;
         *state = next;
         drop(state);
-        self.secrets
-            .delete(client_id)
+        self.delete_token(&record.id, record.token_store)
             .map(|()| true)
             .map_err(|e| format!("revoked, but the token copy could not be removed: {e}"))
     }
@@ -422,10 +536,15 @@ pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// In-memory secret store that can be told to fail.
+    /// In-memory secret store that can be told to fail: either the way a machine
+    /// with no credential store fails (D14, which allows the file fallback) or
+    /// any other way (which must refuse the pairing).
     #[derive(Default)]
     pub(crate) struct MemorySecrets {
         pub(crate) tokens: Mutex<HashMap<String, String>>,
+        /// This machine has no usable credential store.
+        pub(crate) unavailable: bool,
+        /// A keyring error that is not `credential_store_unavailable`.
         pub(crate) fail_set: bool,
         pub(crate) fail_delete: bool,
     }
@@ -438,8 +557,14 @@ pub(crate) mod tests {
 
     impl SecretStore for MemorySecrets {
         fn set(&self, id: &str, token: &str) -> Result<(), String> {
+            if self.unavailable {
+                return Err(format!(
+                    "{}: no hay llavero del sistema",
+                    crate::settings::CREDENTIAL_STORE_UNAVAILABLE
+                ));
+            }
             if self.fail_set {
-                return Err("credential_store_unavailable: test".into());
+                return Err("Could not store the assistant token: access denied".into());
             }
             self.tokens.lock().unwrap().insert(id.into(), token.into());
             Ok(())
@@ -500,7 +625,14 @@ pub(crate) mod tests {
         let json = serde_json::to_string(&access.view().unwrap()).unwrap();
         assert!(!json.contains(&token));
         assert!(!json.contains(&sha256_hex(&token)));
-        assert!(!json.contains("token"));
+        assert!(
+            !json.contains("tokenSha256"),
+            "the hash is not for the UI either: {json}"
+        );
+        assert!(
+            json.contains("\"tokenStore\":\"keyring\""),
+            "the storage kind is the only token field the panel reads: {json}"
+        );
     }
 
     #[test]
@@ -516,7 +648,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_store_failure_creates_no_client() {
+    fn a_store_failure_that_is_not_unavailable_creates_no_client_and_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let secrets = Arc::new(MemorySecrets {
             fail_set: true,
@@ -524,9 +656,115 @@ pub(crate) mod tests {
         });
         let access = AgentAccess::load(dir.path(), secrets);
         let error = access.create_client("Pi").unwrap_err();
-        assert!(error.starts_with("credential_store_unavailable"), "{error}");
+        assert!(
+            !error.starts_with(crate::settings::CREDENTIAL_STORE_UNAVAILABLE),
+            "only an unavailable store falls back: {error}"
+        );
         assert!(access.view().unwrap().clients.is_empty());
         assert!(!dir.path().join(ACCESS_FILE).exists());
+        assert!(
+            !dir.path().join(TOKENS_DIR).exists(),
+            "a refused pairing writes no token file (D14)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn without_a_credential_store_the_token_goes_to_an_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(MemorySecrets {
+            unavailable: true,
+            ..Default::default()
+        });
+        let access = AgentAccess::load(dir.path(), secrets.clone());
+        let client = access.create_client("Claude Code").unwrap();
+        assert_eq!(client.token_store, TokenStore::File);
+
+        let path = token_path(dir.path(), &client.id);
+        let token = std::fs::read_to_string(&path).expect("the token file exists");
+        assert!(token.starts_with(TOKEN_PREFIX));
+        assert_eq!(token.len(), TOKEN_PREFIX.len() + 64);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        // The record keeps only the hash and the store it used.
+        let on_disk = file(&dir);
+        assert!(
+            !on_disk.contains(&token),
+            "the token never reaches the file"
+        );
+        assert!(on_disk.contains(&sha256_hex(&token)));
+        assert!(on_disk.contains("\"token_store\": \"file\""), "{on_disk}");
+        assert_eq!(
+            secrets.token(&client.id),
+            None,
+            "nothing went to the keyring"
+        );
+
+        // The endpoint and the panel see the same state as with a keyring.
+        access.set_enabled(true).unwrap();
+        assert_eq!(access.authenticate(&token).unwrap().client_id, client.id);
+        let json = serde_json::to_string(&access.view().unwrap()).unwrap();
+        assert!(!json.contains(&token));
+        assert!(json.contains("\"tokenStore\":\"file\""), "{json}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn revoking_a_file_client_removes_the_token_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(MemorySecrets {
+            unavailable: true,
+            // A store that has no entry to delete must not fail the revocation.
+            fail_delete: true,
+            ..Default::default()
+        });
+        let access = AgentAccess::load(dir.path(), secrets);
+        access.set_enabled(true).unwrap();
+        let client = access.create_client("Codex").unwrap();
+        let path = token_path(dir.path(), &client.id);
+        let token = std::fs::read_to_string(&path).unwrap();
+
+        assert!(access.revoke_client(&client.id).unwrap());
+        assert!(!path.exists(), "the live token copy is gone");
+        assert_eq!(access.authenticate(&token), None);
+        assert!(access.view().unwrap().clients.is_empty());
+    }
+
+    #[test]
+    fn an_access_file_from_before_the_fallback_loads_as_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(MemorySecrets::default());
+        let access = AgentAccess::load(dir.path(), secrets.clone());
+        let client = access.create_client("OpenCode").unwrap();
+        let token = secrets.token(&client.id).unwrap();
+
+        // Rewrite the file the way the previous version wrote it: no tokenStore.
+        let path = dir.path().join(ACCESS_FILE);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value["clients"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("token_store");
+        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        access.set_enabled(true).unwrap();
+        let reloaded = AgentAccess::load(dir.path(), secrets);
+        let view = reloaded.view().unwrap();
+        assert_eq!(view.clients[0].token_store, TokenStore::Keyring);
+        assert_eq!(reloaded.authenticate(&token).unwrap().client_id, client.id);
     }
 
     #[test]

@@ -12,10 +12,10 @@ Source of truth, by concern:
 | Instance key, HMAC and constant-time compare (D12) | `apps/desktop/src-tauri/src/automation/proof.rs`, `crates/entropia-agent-connector/src/proof.rs` |
 | Tools, arguments, results, tool error codes | `apps/desktop/src-tauri/src/automation/mcp.rs` |
 | Read connection, pagination, read errors | `apps/desktop/src-tauri/src/automation/read.rs` |
-| Clients, tokens, keyring target, scopes, revocation | `apps/desktop/src-tauri/src/automation/access.rs` |
+| Clients, tokens, keyring target, token file fallback, scopes, revocation | `apps/desktop/src-tauri/src/automation/access.rs` |
 | Audit trail | `apps/desktop/src-tauri/src/automation/audit.rs` |
 | App surface (Tauri commands) | `apps/desktop/src-tauri/src/automation/commands.rs` |
-| Connector CLI, data dir, keyring read | `crates/entropia-agent-connector/src/{cli,discovery,keyring_source}.rs` |
+| Connector CLI, data dir, credential read (keyring, then file) | `crates/entropia-agent-connector/src/{cli,discovery,keyring_source}.rs` |
 | Connector relay and error mapping | `crates/entropia-agent-connector/src/{relay,error}.rs` |
 
 ## Status
@@ -26,7 +26,6 @@ Source of truth, by concern:
 | Connector crate (`crates/entropia-agent-connector`) | Implemented as a standalone crate. **Not bundled in installers yet** (stage 6). |
 | Skill (`integrations/agents/skill/`) | **Planned** (stage 6). No code, no contract, no version declared yet. |
 | Write, processing, research, library, writing tools | **Planned** (stages 3-5). See `INVENTORY.md`. |
-| File fallback for machines without a keyring | **Planned**. Both sides answer `credential_missing` today. |
 
 ## Compatibility policy
 
@@ -117,7 +116,7 @@ Notes that are part of the contract:
 
 - Authenticating happens on **every** request, so revoking a client or turning
   the switch off takes effect on the next request, even for a token copied out
-  of the keyring beforehand.
+  of the keyring or the fallback file beforehand.
 - No browser page is a legitimate caller; that is why any `Origin` is refused
   rather than filtered by value. The `Origin` refusal runs **before** the
   challenge, so a browser page cannot even obtain a proof.
@@ -172,8 +171,9 @@ request.
   `app_absent` with a detail saying the instance could not be verified, and the
   token is **never** sent.
 - The verified pair is cached for the life of the connector process. A new port
-  or a new key is verified again. The token is read from the keyring for every
-  message, as before, so revocation still applies to the next request.
+  or a new key is verified again. The token is read from the keyring (or the
+  fallback file) for every message, as before, so revocation still applies to
+  the next request.
 - HMAC is built on the `sha2` crate already in both trees (no HMAC crate), and
   RFC 4231 test case 2 pins the same vector on both sides, so the two
   implementations cannot drift apart.
@@ -187,12 +187,18 @@ request.
   token recognisable to a secret scanner.
 - `agent-access.json` (next to the archive, **not** in SQLite, never synced)
   stores only the SHA-256 hex of each token, plus `version`, `enabled` and the
-  client records `{id, name, scopes, tokenSha256, createdAt, lastUsedAt}`.
-  Timestamps there are Unix **seconds**. The file is `0600`, written atomically,
-  and an unreadable one is renamed to `agent-access.json.corrupt-<seconds>` and
-  replaced by "disabled, no clients".
-- The token itself lives in the OS keyring. No Tauri command and no MCP result
-  ever carries a token or its hash (`commands.rs`, `mcp.rs`).
+  client records `{id, name, scopes, tokenSha256, tokenStore, createdAt,
+  lastUsedAt}`. Timestamps there are Unix **seconds**. The file is `0600`,
+  written atomically, and an unreadable one is renamed to
+  `agent-access.json.corrupt-<seconds>` and replaced by "disabled, no clients".
+  `tokenStore` is `"keyring"` or `"file"` and is non-secret; a file written
+  before the fallback existed has no `tokenStore` and loads as `"keyring"`.
+- Revoking removes the record first, so a stored token is useless from that
+  moment whatever copies exist; the keyring entry and the file are deleted after.
+- The token itself lives in the OS keyring, or in the owner-only file described
+  below when the machine has none. No Tauri command and no MCP result ever
+  carries a token or its hash (`commands.rs`, `mcp.rs`); the panel shows only the
+  storage kind.
 
 ### Keyring target
 
@@ -208,18 +214,43 @@ Computed identically on both sides
 Both the service **and** the account change in a profile, so a profile can
 neither read nor replace a real client's token.
 
+### Token file fallback (D14)
+
+Only when the OS credential store is **unavailable** — keyring
+`PlatformFailure` / `NoStorageAccess`, which the app reports as
+`credential_store_unavailable` — the app writes the token to a file instead:
+
+| Piece | Value |
+|---|---|
+| Path | `<data dir>/agent-tokens/<client id>.token` (so a dev profile keeps its own) |
+| Permissions | directory `0700`, file `0600` on Unix; the per-user profile ACL on Windows |
+| Write | atomic, like `agent-access.json` |
+| Record | `tokenStore: "file"` in `agent-access.json`; the panel shows **Archivo protegido** |
+
+Any other keyring error still fails the pairing: no record, no file, no token.
+The connector reads the keyring first and falls back to this file only on no
+entry or an unavailable store; on Unix it refuses a file whose mode grants group
+or other access (`credential_insecure`, `-32006`) and sends no request.
+
+Neither the token directory nor `agent-access.json` nor `agent-endpoint.json`
+(tokens, token hashes, instance key) ever enters a backup (`backup.rs` skips all
+there), the asset sweep (which only walks `assets/`) or sync (which moves a fixed
+table list and only blob paths under `assets/`).
+
 ### Pairing and revocation
 
 - Pairing: Settings › Asistentes → "Conectar un asistente" → name (1-64
   characters, no control characters) → "Conectar". The app mints the token into
-  the keyring first and records the hash second; a persistence failure deletes
+  the keyring (or the owner-only file when this machine has no credential store,
+  see above) first and records the hash second; a persistence failure deletes
   the orphan token. The panel then shows the client id and
   `entropia-agent-connector --client <id>` plus one ready-to-copy line per
   client.
 - Client ids look like `cl_` + 12 hex characters.
-- Revocation removes and persists the record **first**, then deletes the keyring
-  entry. A failed keyring delete still leaves the client revoked and is reported
-  as `revoked, but the token copy could not be removed: …`. Revoking an unknown
+- Revocation removes and persists the record **first**, then deletes the stored
+  token: the keyring entry for a keyring client, the file for a file client. A
+  failed delete still leaves the client revoked and is reported as
+  `revoked, but the token copy could not be removed: …`. Revoking an unknown
   client is a no-op.
 - Disabling the switch also makes every token fail: `authenticate` refuses when
   `enabled` is false.
@@ -305,7 +336,8 @@ person and a stable `data.code` for the agent
 | `-32002` | `unauthorized` | HTTP 401 for a token: not paired, or revoked. A disabled endpoint is not this error — turning the switch off stops the listener and removes the discovery file, so the connector reports `app_absent` | Pair the assistant again in Settings › Asistentes |
 | `-32003` | `forbidden` | HTTP 403 from the loopback guard (`forbidden_host`, `forbidden_origin`) | Use the connector; do not call the endpoint from a browser or another host name |
 | `-32004` | `protocol_incompatible` | Discovery `protocol` is not `entropia-agent/1`, or it has no usable `instanceKey` | Update the app and the connector |
-| `-32005` | `credential_missing` | No keyring entry for the client id, or the keyring cannot be read | Pair the assistant; if it persists, check the OS credential store |
+| `-32005` | `credential_missing` | No token anywhere for the client id: no keyring entry (and no fallback file), or a credential-store error that is not "unavailable" | Pair the assistant; if it persists, check the OS credential store |
+| `-32006` | `credential_insecure` | The fallback token file is readable by group or others (Unix), so it is refused and no request is sent | Fix the file's permissions (`chmod 600 <data dir>/agent-tokens/<client id>.token`) or pair the assistant again |
 | `-32000` | `endpoint_error` | Any HTTP status no rule covers (404, 500, …), or a `2xx` answer that carried no JSON where a result was expected | Treat as an app-side fault; report it with the app's logs |
 | `-32700` | `parse_error` | The stdin line was not JSON-RPC | Fix the client's framing |
 
@@ -352,8 +384,6 @@ assistant do", not "who knocked on the port".
 
 ## Planned, not implemented
 
-- A file fallback for machines with no OS keyring (both sides) — today
-  `credential_missing`.
 - Bundling the connector into installers, and therefore any installer-driven
   pairing (stage 6).
 - The skill artifact and its declared protocol version (stage 6).

@@ -99,6 +99,17 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   agents; backup restore human-only in the app; local models/runtime by plan →
   approval → job; Navegador gets its own `web` scope (added to `Scope`, not granted);
   no generic `llm_run`; Writing agent actions only as reviewable proposals.
+- D14 — Token file fallback (T9, S4 second clause). Only when the OS credential store
+  is unavailable (`credential_store_unavailable`, i.e. keyring `PlatformFailure` /
+  `NoStorageAccess`), the app writes the token to
+  `<data dir>/agent-tokens/<client id>.token` (directory 0700, file 0600 on Unix,
+  atomic write; on Windows the per-user profile ACL applies). Any other keyring error
+  still fails pairing. The client record gains a non-secret `tokenStore:
+  "keyring"|"file"` shown in Settings › Asistentes. Revocation removes the record first,
+  then the keyring entry and the file. The connector reads the keyring first and, on
+  no entry or an unavailable store, the file in the same (profile-aware) data dir; on
+  Unix it refuses a file readable by group or others (`credential_insecure`, -32006).
+  The token directory must never enter backups, sync, or the asset sweep.
 - D9 — Connector (`crates/entropia-agent-connector`, standalone crate with its own
   committed `Cargo.lock`, binary `entropia-agent-connector`):
   - CLI: `entropia-agent-connector --client <id> [--profile <name>]`, `--version`.
@@ -135,10 +146,10 @@ permissions, read-only tools). Stages 3-6 are later tranches.
 - [x] T6 — Contract and inventory docs under `integrations/agents/`: protocol version, compatibility policy, scopes, error codes, domain inventory. S10. Route: delegated worker (passive docs: structural checks, every tool and error code grepped in source). Commit: d3cf1e08
 - [x] T8 — Verify follow-ups: D12 instance proof (W1); JSON-RPC error for an id'd request answered with empty 2xx or non-JSON (W2, S7); tests pinning GET/DELETE → 405 and `/mcp/` → 404; archive-unavailable messages without absolute paths; doc fixes (README client verification status per L4, PROTOCOL `unauthorized` vs disabled endpoint, `/mcp` query wording, D12). S3, S4, S7. Route: delegated worker, TDD (RED compile errors + failing preflight/notification tests → GREEN app 59, connector 45). Commit: e133b5e1
 - [x] T7 — End-to-end proof: connector → app endpoint against an isolated archive; record what remains unproven (four real clients). S1, S12. Route: inline + independent verify (gentle-ai-verify: no CRITICAL; W1/W2 fixed in T8). Evidence: L4, L5. Commit: (doc only)
-- [ ] T9 — Token file fallback when no OS keyring exists (S4 second clause), app and connector. S4. Route: delegated worker, TDD. Commit: —
+- [x] T9 — Token file fallback when no OS keyring exists (S4 second clause), app and connector. S4. Route: delegated worker, TDD (RED compile + failing backup/UI tests → GREEN app 62 + backup 6, connector 51, Vitest 8 Pro/Lite). Found and fixed: `backup.rs` copied `agent-access.json`/`agent-endpoint.json` into backups. Commit: (T9 commit)
 - [ ] T10 — CI job that builds, tests and lints `crates/entropia-agent-connector` on Linux, Windows and macOS. Route: inline. Risk: item 5. Commit: —
 - [ ] T11 — Bundle the connector with the app installers (Pro and Lite, every platform) and show its installed absolute path in Settings › Asistentes. Route: delegated worker. Risk: item 5. Commit: —
-- [x] T12 — Owner decisions on INVENTORY.md "Unmapped / needs decision" (7 items), recorded in INVENTORY.md and here. Route: ask (two questionnaires). Commit: (T12 commit)
+- [x] T12 — Owner decisions on INVENTORY.md "Unmapped / needs decision" (7 items), recorded in INVENTORY.md and here. Route: ask (two questionnaires). Commit: bc0200e1
 - [ ] T13 — Publish: push the branch, open chained PRs (one per work unit), native review per slice. Route: inline. Commit: —
 
 ## Delivery
