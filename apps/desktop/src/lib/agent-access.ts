@@ -105,17 +105,26 @@ export function connectorProgram(location?: ConnectorLocation | null): string {
   return location?.installed && location.path ? location.path : CONNECTOR_COMMAND
 }
 
+/** A Windows install path: a drive letter, then a separator. */
+export function isWindowsProgram(program: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(program)
+}
+
 /**
  * Quote a program for the shell the person will paste it into.
  *
  * The location carries the platform implicitly: a Windows path starts with a
- * drive letter, and Windows file names cannot contain `"`, so wrapping is the
- * whole job there. Anything with spaces, accents or quotes in a POSIX path goes
- * in single quotes, where only `'` itself needs escaping. A bare command and a
- * plain path stay untouched, so the common line is exactly what it always was.
+ * drive letter, and the lines target PowerShell, the default Windows shell. A
+ * double-quoted string there still expands `$name` and `$(...)`, so the path goes
+ * in single quotes, which are literal; an embedded single quote (PowerShell also
+ * counts the typographic ones) is doubled. Anything with spaces, accents or
+ * quotes in a POSIX path goes in single quotes too, where only `'` itself needs
+ * escaping. A bare command and a plain path stay untouched, so the common line
+ * is exactly what it always was.
  */
 export function shellQuote(program: string): string {
-  if (/^[A-Za-z]:[\\/]/.test(program)) return `"${program}"`
+  if (isWindowsProgram(program))
+    return `'${program.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&')}'`
   if (/^[\w./-]+$/.test(program)) return program
   return `'${program.replace(/'/g, `'\\''`)}'`
 }
@@ -123,9 +132,14 @@ export function shellQuote(program: string): string {
 /**
  * The connector invocation: the client id is the only credential-ish value a
  * config carries, and it is useless without the keyring entry the app wrote.
+ * PowerShell parses a quoted path followed by arguments as an expression, so a
+ * Windows path takes the call operator; the `claude mcp add … --` lines pass the
+ * quoted path as a plain argument and must not.
  */
 export function connectorInvocation(clientId: string, location?: ConnectorLocation | null): string {
-  return `${shellQuote(connectorProgram(location))} --client ${clientId}`
+  const program = connectorProgram(location)
+  const call = isWindowsProgram(program) ? '& ' : ''
+  return `${call}${shellQuote(program)} --client ${clientId}`
 }
 
 /**
@@ -149,7 +163,7 @@ export function connectorRecipes(
   location?: ConnectorLocation | null
 ): ConnectorRecipe[] {
   const program = connectorProgram(location)
-  const command = connectorInvocation(clientId, location)
+  const command = `${shellQuote(program)} --client ${clientId}`
   // JSON strings are escaped by the serializer, never by hand: a Windows path
   // arrives at the client with its backslashes and non-ASCII intact.
   const args = JSON.stringify([program, '--client', clientId])

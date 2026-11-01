@@ -18,6 +18,7 @@
     agentClientRevoke,
     agentConnectorLocation,
     connectorInvocation,
+    isWindowsProgram,
     connectorRecipes,
     type AgentAccessStatus,
     type AgentClient,
@@ -287,6 +288,11 @@
           <p class="assistants-tab__meta" data-testid="assistants-connector-path">
             Conector instalado en <code>{connector.path}</code>
           </p>
+          {#if isWindowsProgram(connector.path)}
+            <p class="assistants-tab__meta" data-testid="assistants-connector-powershell">
+              Las líneas de Windows son para PowerShell.
+            </p>
+          {/if}
         {:else}
           <p class="assistants-tab__meta" data-testid="assistants-connector-missing">
             El conector no está instalado en esta compilación: las líneas usan el comando sin ruta.

@@ -281,6 +281,40 @@ describe('AssistantsTab', () => {
     expect(screen.queryByTestId('assistants-connector-missing')).not.toBeInTheDocument()
   })
 
+  it('tells a Windows install the lines are for PowerShell', async () => {
+    respond({
+      ...reconnectRoutes(),
+      agent_connector_location: WINDOWS_CONNECTOR,
+    })
+    render(AssistantsTab)
+
+    const input = await screen.findByLabelText('Nombre del asistente')
+    await fireEvent.input(input, { target: { value: 'Claude Code' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+
+    expect(await screen.findByTestId('assistants-connector-powershell')).toHaveTextContent(
+      'PowerShell'
+    )
+    expect(screen.getByTestId('assistants-connector-command')).toHaveTextContent(
+      `& '${WINDOWS_CONNECTOR.path}' --client cl_new123`
+    )
+  })
+
+  it('does not mention PowerShell for a POSIX install', async () => {
+    respond({
+      ...reconnectRoutes(),
+      agent_connector_location: POSIX_CONNECTOR,
+    })
+    render(AssistantsTab)
+
+    const input = await screen.findByLabelText('Nombre del asistente')
+    await fireEvent.input(input, { target: { value: 'Claude Code' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+
+    await screen.findByTestId('assistants-connector-path')
+    expect(screen.queryByTestId('assistants-connector-powershell')).not.toBeInTheDocument()
+  })
+
   it('says the connector is not installed and keeps the bare command', async () => {
     respond(reconnectRoutes())
     render(AssistantsTab)
@@ -356,21 +390,21 @@ describe('connector recipes', () => {
     return JSON.parse(line).mcpServers.entropia
   }
 
-  it('quotes a Windows path with spaces and non-ASCII in every command line', () => {
+  it('single-quotes a Windows path with spaces and non-ASCII for PowerShell', () => {
     const program = WINDOWS_CONNECTOR.path
-    expect(connectorInvocation(CLIENT, WINDOWS_CONNECTOR)).toBe(`"${program}" --client ${CLIENT}`)
+    expect(connectorInvocation(CLIENT, WINDOWS_CONNECTOR)).toBe(`& '${program}' --client ${CLIENT}`)
     expect(connectorRecipes(CLIENT, WINDOWS_CONNECTOR)).toEqual([
       {
         id: 'claude',
         label: 'Claude Code',
         kind: 'command',
-        line: `claude mcp add entropia -- "${program}" --client ${CLIENT}`,
+        line: `claude mcp add entropia -- '${program}' --client ${CLIENT}`,
       },
       {
         id: 'codex',
         label: 'Codex',
         kind: 'command',
-        line: `codex mcp add entropia -- "${program}" --client ${CLIENT}`,
+        line: `codex mcp add entropia -- '${program}' --client ${CLIENT}`,
       },
       {
         id: 'opencode',
@@ -385,6 +419,34 @@ describe('connector recipes', () => {
         line: `{"mcpServers":{"entropia":{"command":${JSON.stringify(program)},"args":${JSON.stringify(['--client', CLIENT])}}}}`,
       },
     ])
+  })
+
+  it('keeps $ and $( literal in a Windows path: single quotes never expand', () => {
+    const path = 'C:\\Users\\$HOME\\$(x)\\entropia-agent-connector.exe'
+    const location: ConnectorLocation = { installed: true, path, kind: 'bundled' }
+    expect(connectorInvocation(CLIENT, location)).toBe(`& '${path}' --client ${CLIENT}`)
+    const claude = connectorRecipes(CLIENT, location).find((r) => r.id === 'claude')!
+    expect(claude.line).toBe(`claude mcp add entropia -- '${path}' --client ${CLIENT}`)
+    expect(opencodeProgram(location)).toEqual([path, '--client', CLIENT])
+    expect(piConfig(location)).toEqual({ command: path, args: ['--client', CLIENT] })
+  })
+
+  it('doubles a single quote inside a Windows path', () => {
+    const path = "C:\\Users\\O'Brien\\entropia-agent-connector.exe"
+    const location: ConnectorLocation = { installed: true, path, kind: 'bundled' }
+    const quoted = "'C:\\Users\\O''Brien\\entropia-agent-connector.exe'"
+    expect(connectorInvocation(CLIENT, location)).toBe(`& ${quoted} --client ${CLIENT}`)
+    const codex = connectorRecipes(CLIENT, location).find((r) => r.id === 'codex')!
+    expect(codex.line).toBe(`codex mcp add entropia -- ${quoted} --client ${CLIENT}`)
+    expect(opencodeProgram(location)).toEqual([path, '--client', CLIENT])
+  })
+
+  it('doubles the typographic single quotes PowerShell also treats as quotes', () => {
+    const path = 'C:\\Users\\O\u2019Brien\\entropia-agent-connector.exe'
+    const location: ConnectorLocation = { installed: true, path, kind: 'bundled' }
+    expect(connectorInvocation(CLIENT, location)).toBe(
+      `& 'C:\\Users\\O\u2019\u2019Brien\\entropia-agent-connector.exe' --client ${CLIENT}`
+    )
   })
 
   it('single-quotes a POSIX path with spaces and keeps the JSON escaped', () => {
