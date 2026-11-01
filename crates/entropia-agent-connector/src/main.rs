@@ -83,7 +83,7 @@ async fn run(options: cli::Options) -> ExitCode {
     let platform_data = match &override_dir {
         // Ignored: the override replaces the whole shared directory.
         Some(_) => PathBuf::new(),
-        None => match dirs::data_dir() {
+        None => match cli::platform_data_dir(dirs::data_dir(), std::env::var_os("APPDATA")) {
             Some(dir) => dir,
             None => {
                 eprintln!(

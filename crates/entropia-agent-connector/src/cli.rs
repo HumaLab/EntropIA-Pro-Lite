@@ -162,6 +162,18 @@ fn validate_client_id(raw: &str) -> Result<String, CliError> {
     }
 }
 
+/// The platform data directory: the OS answer (`dirs::data_dir()`), else
+/// `APPDATA`. On Windows the known-folder lookup expands `%USERPROFILE%`, so a
+/// process whose profile path was redirected (a sandbox, a test harness) gets no
+/// answer even though `APPDATA` still names the real roaming folder. An empty
+/// variable is no answer.
+pub fn platform_data_dir(
+    os_answer: Option<PathBuf>,
+    appdata: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    os_answer.or_else(|| appdata.filter(|value| !value.is_empty()).map(PathBuf::from))
+}
+
 /// Where the app keeps its archive, and where the connector must look.
 ///
 /// The platform directory holds every EntropIA variant's shared directory; the

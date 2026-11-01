@@ -148,7 +148,12 @@ where
         if reader.read_line(&mut input).await? == 0 {
             break;
         }
-        let message = input.trim_end_matches(['\n', '\r']).to_string();
+        // A byte order mark is encoding noise, not message: Windows PowerShell
+        // 5.1 adds one to what it pipes once `$OutputEncoding` is UTF-8.
+        let message = input
+            .trim_end_matches(['\n', '\r'])
+            .trim_start_matches('\u{feff}')
+            .to_string();
         if message.trim().is_empty() {
             continue;
         }

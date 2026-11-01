@@ -470,6 +470,34 @@ async fn a_client_without_a_stored_credential_is_told_to_pair_again() {
     assert!(app.requests().is_empty());
 }
 
+/// Windows PowerShell 5.1 prefixes what it pipes to a native program with a
+/// UTF-8 byte order mark once `$OutputEncoding` is UTF-8, a common setting for
+/// accented text. The mark is not part of the message, so the relay drops it
+/// instead of answering a parse error.
+#[tokio::test]
+async fn a_byte_order_mark_before_a_message_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|request| match request.rpc_method().as_str() {
+        "initialize" => initialize_reply(1),
+        _ => Reply::json(json!({ "jsonrpc": "2.0", "id": 6, "result": {} }).to_string()),
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+    let outcome = relay_once(
+        discovery_file(dir.path()),
+        Some(TOKEN),
+        &[format!("\u{feff}{}", tools_list(6))],
+    )
+    .await;
+
+    assert_eq!(outcome.lines.len(), 1, "{:?}", outcome.lines);
+    let response = parse(&outcome.lines[0]);
+    assert_eq!(response["id"], 6, "{response}");
+    assert_eq!(response["result"], json!({}));
+    assert_eq!(app.requests().len(), 1);
+}
+
 #[tokio::test]
 async fn a_malformed_line_is_a_parse_error_and_the_relay_keeps_going() {
     let dir = tempfile::tempdir().unwrap();
