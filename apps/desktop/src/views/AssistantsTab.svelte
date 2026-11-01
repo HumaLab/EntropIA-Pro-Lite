@@ -16,14 +16,18 @@
     agentAccessStatus,
     agentClientCreate,
     agentClientRevoke,
+    agentConnectorLocation,
     connectorInvocation,
     connectorRecipes,
     type AgentAccessStatus,
     type AgentClient,
+    type ConnectorLocation,
     type CreatedAgentClient,
   } from '$lib/agent-access'
 
   let status = $state<AgentAccessStatus | null>(null)
+  /** Where this build installed the connector; `null` until the backend answers. */
+  let connector = $state<ConnectorLocation | null>(null)
   /** The client created in this visit; its connection lines stay until revoked. */
   let created = $state<CreatedAgentClient | null>(null)
   let name = $state('')
@@ -33,8 +37,8 @@
   let copiedLabel = $state<string | null>(null)
   let destroyed = false
 
-  const recipes = $derived(created ? connectorRecipes(created.client.id) : [])
-  const invocation = $derived(created ? connectorInvocation(created.client.id) : '')
+  const recipes = $derived(created ? connectorRecipes(created.client.id, connector) : [])
+  const invocation = $derived(created ? connectorInvocation(created.client.id, connector) : '')
 
   const endpointLabel = $derived.by(() => {
     if (!status) return 'Verificando…'
@@ -45,6 +49,7 @@
 
   onMount(() => {
     void refresh()
+    void refreshConnector()
     return () => {
       destroyed = true
     }
@@ -54,6 +59,16 @@
     try {
       const next = await agentAccessStatus()
       if (!destroyed) status = next
+    } catch (error) {
+      if (!destroyed) errorMessage = String(error)
+    }
+  }
+
+  /** Where the connector lives, once: it cannot change while the app runs. */
+  async function refreshConnector() {
+    try {
+      const next = await agentConnectorLocation()
+      if (!destroyed) connector = next
     } catch (error) {
       if (!destroyed) errorMessage = String(error)
     }
@@ -151,7 +166,9 @@
     </p>
 
     {#if errorMessage}
-      <p class="assistants-tab__error" role="alert" data-testid="assistants-error">{errorMessage}</p>
+      <p class="assistants-tab__error" role="alert" data-testid="assistants-error">
+        {errorMessage}
+      </p>
     {/if}
 
     <div class="assistants-tab__row">
@@ -263,10 +280,18 @@
           >
         </p>
         <p class="assistants-tab__hint">
-          El conector de EntropIA tiene que estar instalado: esta versión todavía no lo incluye. La
-          credencial queda en el llavero del sistema y estas líneas no la contienen, así que se
-          pueden pegar en la configuración del asistente.
+          El conector de EntropIA lee la credencial del llavero del sistema y estas líneas no la
+          contienen, así que se pueden pegar en la configuración del asistente.
         </p>
+        {#if connector?.installed && connector.path}
+          <p class="assistants-tab__meta" data-testid="assistants-connector-path">
+            Conector instalado en <code>{connector.path}</code>
+          </p>
+        {:else}
+          <p class="assistants-tab__meta" data-testid="assistants-connector-missing">
+            El conector no está instalado en esta compilación: las líneas usan el comando sin ruta.
+          </p>
+        {/if}
         <ul class="assistants-tab__lines">
           <li class="assistants-tab__line">
             <span class="assistants-tab__line-name">Comando del conector</span>

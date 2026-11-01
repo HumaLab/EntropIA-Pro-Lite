@@ -2,6 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AssistantsTab from './AssistantsTab.svelte'
 import type { AgentAccessStatus, AgentClient, AgentScope } from '$lib/agent-access'
+import {
+  connectorInvocation,
+  connectorRecipes,
+  NO_CONNECTOR,
+  type ConnectorLocation,
+} from '$lib/agent-access'
 
 /**
  * Configuración → Asistentes (D11): the switch, the endpoint state, the paired
@@ -38,6 +44,33 @@ const FILE_STORED: AgentClient = {
   lastUsedAt: null,
 }
 
+/**
+ * The connector bundled next to the app executable on Windows (D15): the
+ * awkward case for every recipe — spaces and a non-ASCII user name.
+ */
+const WINDOWS_CONNECTOR: ConnectorLocation = {
+  installed: true,
+  path: 'C:\\Users\\José Pérez\\AppData\\Local\\EntropIA Lite\\entropia-agent-connector.exe',
+  kind: 'bundled',
+}
+
+/** The same on Linux/macOS: the installer puts it beside the main binary. */
+const POSIX_CONNECTOR: ConnectorLocation = {
+  installed: true,
+  path: '/opt/EntropIA Lite/entropia-agent-connector',
+  kind: 'bundled',
+}
+
+/** Under MSIX the app can only point at the execution alias (D15). */
+const MSIX_CONNECTOR: ConnectorLocation = {
+  installed: true,
+  path: 'entropia-agent-connector.exe',
+  kind: 'msix_alias',
+}
+
+/** No installer carried it (a dev run, or a build made without the overlay). */
+const MISSING_CONNECTOR: ConnectorLocation = NO_CONNECTOR
+
 const ACTIVE_STATUS: AgentAccessStatus = {
   enabled: true,
   running: true,
@@ -52,10 +85,17 @@ const STOPPED_STATUS: AgentAccessStatus = {
   clients: [CLAUDE],
 }
 
-/** Answer each command the tab may call, and fail loudly on anything else. */
+/**
+ * Answer each command the tab may call, and fail loudly on anything else. The
+ * connector location defaults to "missing" (a build without the D15 overlay),
+ * which is what the tests that predate bundling expect.
+ */
 function respond(routes: Record<string, unknown>): void {
   invokeMock.mockImplementation((command: string) => {
     if (!(command in routes)) {
+      if (command === 'agent_connector_location') {
+        return Promise.resolve(MISSING_CONNECTOR)
+      }
       return Promise.reject(new Error(`unexpected command ${command}`))
     }
     return Promise.resolve(routes[command])
@@ -73,7 +113,10 @@ function reconnectRoutes(): Record<string, unknown> {
   }
   return {
     agent_access_status: { ...ACTIVE_STATUS, clients: [CLAUDE] },
-    agent_client_create: { client: created, status: { ...ACTIVE_STATUS, clients: [CLAUDE, created] } },
+    agent_client_create: {
+      client: created,
+      status: { ...ACTIVE_STATUS, clients: [CLAUDE, created] },
+    },
   }
 }
 
@@ -98,7 +141,9 @@ describe('AssistantsTab', () => {
     expect(invokeMock).toHaveBeenCalledWith('agent_access_status')
     expect(enabledSwitch()).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Claude Code')).toBeInTheDocument()
-    expect(screen.getByTestId('assistants-client-created-cl_abc123')).toHaveTextContent('2026-01-01')
+    expect(screen.getByTestId('assistants-client-created-cl_abc123')).toHaveTextContent(
+      '2026-01-01'
+    )
     expect(screen.getByTestId('assistants-client-last-used-cl_abc123')).toHaveTextContent(
       '2026-01-02'
     )
@@ -177,7 +222,9 @@ describe('AssistantsTab', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_revoke', expect.anything())
 
-    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }))
+    await fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' })
+    )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_revoke', expect.anything())
 
@@ -205,11 +252,49 @@ describe('AssistantsTab', () => {
       'Archivo protegido'
     )
     // Only the file case needs the hint: it is the one the person may wonder about.
-    expect(
-      screen.queryByTestId('assistants-client-storage-hint-cl_abc123')
-    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId('assistants-client-storage-hint-cl_abc123')).not.toBeInTheDocument()
     expect(screen.getByTestId('assistants-client-storage-hint-cl_file123')).toHaveTextContent(
       'solo puede leer tu usuario'
+    )
+  })
+
+  it('shows the installed connector path and builds the lines from it', async () => {
+    respond({
+      ...reconnectRoutes(),
+      agent_connector_location: POSIX_CONNECTOR,
+    })
+    render(AssistantsTab)
+
+    const input = await screen.findByLabelText('Nombre del asistente')
+    await fireEvent.input(input, { target: { value: 'Claude Code' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+
+    expect(await screen.findByTestId('assistants-connector-path')).toHaveTextContent(
+      '/opt/EntropIA Lite/entropia-agent-connector'
+    )
+    expect(screen.getByTestId('assistants-connector-command')).toHaveTextContent(
+      "'/opt/EntropIA Lite/entropia-agent-connector' --client cl_new123"
+    )
+    expect(screen.getByTestId('assistants-line-claude')).toHaveTextContent(
+      "claude mcp add entropia -- '/opt/EntropIA Lite/entropia-agent-connector' --client cl_new123"
+    )
+    expect(screen.queryByTestId('assistants-connector-missing')).not.toBeInTheDocument()
+  })
+
+  it('says the connector is not installed and keeps the bare command', async () => {
+    respond(reconnectRoutes())
+    render(AssistantsTab)
+
+    const input = await screen.findByLabelText('Nombre del asistente')
+    await fireEvent.input(input, { target: { value: 'Claude Code' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Conectar' }))
+
+    expect(await screen.findByTestId('assistants-connector-missing')).toHaveTextContent(
+      'no está instalado en esta compilación'
+    )
+    expect(screen.queryByTestId('assistants-connector-path')).not.toBeInTheDocument()
+    expect(screen.getByTestId('assistants-connector-command')).toHaveTextContent(
+      'entropia-agent-connector --client cl_new123'
     )
   })
 
@@ -248,5 +333,114 @@ describe('AssistantsTab', () => {
     for (const button of screen.getAllByRole('button')) {
       expect(button.getAttribute('aria-label') ?? '').not.toContain('eat_')
     }
+  })
+})
+
+/**
+ * The recipes `$lib/agent-access` hands to the panel (D15). They live in that
+ * module, but this is the only test file the change owns, so the exact strings
+ * every supported client receives are pinned here: one quote or escape mistake
+ * and the line pastes into the agent's config as a different program.
+ */
+describe('connector recipes', () => {
+  const CLIENT = 'cl_new123'
+
+  /** The program a config names, read back out of the JSON a client receives. */
+  function opencodeProgram(location: ConnectorLocation): string[] {
+    const line = connectorRecipes(CLIENT, location).find((r) => r.id === 'opencode')!.line
+    return JSON.parse(line).mcp.entropia.command
+  }
+
+  function piConfig(location: ConnectorLocation): { command: string; args: string[] } {
+    const line = connectorRecipes(CLIENT, location).find((r) => r.id === 'pi')!.line
+    return JSON.parse(line).mcpServers.entropia
+  }
+
+  it('quotes a Windows path with spaces and non-ASCII in every command line', () => {
+    const program = WINDOWS_CONNECTOR.path
+    expect(connectorInvocation(CLIENT, WINDOWS_CONNECTOR)).toBe(`"${program}" --client ${CLIENT}`)
+    expect(connectorRecipes(CLIENT, WINDOWS_CONNECTOR)).toEqual([
+      {
+        id: 'claude',
+        label: 'Claude Code',
+        kind: 'command',
+        line: `claude mcp add entropia -- "${program}" --client ${CLIENT}`,
+      },
+      {
+        id: 'codex',
+        label: 'Codex',
+        kind: 'command',
+        line: `codex mcp add entropia -- "${program}" --client ${CLIENT}`,
+      },
+      {
+        id: 'opencode',
+        label: 'OpenCode',
+        kind: 'config',
+        line: `{"mcp":{"entropia":{"type":"local","command":${JSON.stringify([program, '--client', CLIENT])}}}}`,
+      },
+      {
+        id: 'pi',
+        label: 'Pi',
+        kind: 'config',
+        line: `{"mcpServers":{"entropia":{"command":${JSON.stringify(program)},"args":${JSON.stringify(['--client', CLIENT])}}}}`,
+      },
+    ])
+  })
+
+  it('single-quotes a POSIX path with spaces and keeps the JSON escaped', () => {
+    const program = POSIX_CONNECTOR.path
+    expect(connectorInvocation(CLIENT, POSIX_CONNECTOR)).toBe(`'${program}' --client ${CLIENT}`)
+    const lines = connectorRecipes(CLIENT, POSIX_CONNECTOR)
+    expect(lines.find((r) => r.id === 'claude')!.line).toBe(
+      `claude mcp add entropia -- '${program}' --client ${CLIENT}`
+    )
+    expect(lines.find((r) => r.id === 'codex')!.line).toBe(
+      `codex mcp add entropia -- '${program}' --client ${CLIENT}`
+    )
+    expect(opencodeProgram(POSIX_CONNECTOR)).toEqual([program, '--client', CLIENT])
+    expect(piConfig(POSIX_CONNECTOR)).toEqual({ command: program, args: ['--client', CLIENT] })
+  })
+
+  it('uses the MSIX alias name unchanged', () => {
+    const program = MSIX_CONNECTOR.path
+    expect(connectorInvocation(CLIENT, MSIX_CONNECTOR)).toBe(`${program} --client ${CLIENT}`)
+    expect(connectorRecipes(CLIENT, MSIX_CONNECTOR).find((r) => r.id === 'claude')!.line).toBe(
+      `claude mcp add entropia -- ${program} --client ${CLIENT}`
+    )
+    expect(opencodeProgram(MSIX_CONNECTOR)).toEqual([program, '--client', CLIENT])
+    expect(piConfig(MSIX_CONNECTOR)).toEqual({ command: program, args: ['--client', CLIENT] })
+  })
+
+  it('keeps the bare command when no connector is installed', () => {
+    expect(connectorInvocation(CLIENT, MISSING_CONNECTOR)).toBe(
+      `entropia-agent-connector --client ${CLIENT}`
+    )
+    expect(connectorInvocation(CLIENT)).toBe(`entropia-agent-connector --client ${CLIENT}`)
+    expect(connectorRecipes(CLIENT, MISSING_CONNECTOR)).toEqual([
+      {
+        id: 'claude',
+        label: 'Claude Code',
+        kind: 'command',
+        line: `claude mcp add entropia -- entropia-agent-connector --client ${CLIENT}`,
+      },
+      {
+        id: 'codex',
+        label: 'Codex',
+        kind: 'command',
+        line: `codex mcp add entropia -- entropia-agent-connector --client ${CLIENT}`,
+      },
+      {
+        id: 'opencode',
+        label: 'OpenCode',
+        kind: 'config',
+        line: `{"mcp":{"entropia":{"type":"local","command":["entropia-agent-connector","--client","${CLIENT}"]}}}`,
+      },
+      {
+        id: 'pi',
+        label: 'Pi',
+        kind: 'config',
+        line: `{"mcpServers":{"entropia":{"command":"entropia-agent-connector","args":["--client","${CLIENT}"]}}}`,
+      },
+    ])
   })
 })

@@ -96,6 +96,29 @@ if grep -q 'not found' "$OUT_DIR/ldd.txt"; then
   exit 1
 fi
 
+# Assistant connector (D15): the installer must carry it beside the main binary,
+# because the Settings › Asistentes lines name that absolute path and nothing
+# else puts it on PATH.
+CONNECTOR="$(grep -E '/entropia-agent-connector$' "$OUT_DIR/deb-files.txt" | head -n 1)"
+if [ -z "$CONNECTOR" ]; then
+  echo "::error::the .deb ships no entropia-agent-connector"
+  exit 1
+fi
+if [ ! -x "$CONNECTOR" ]; then
+  echo "::error::$CONNECTOR is not installed as an executable"
+  exit 1
+fi
+if [ "$(dirname "$CONNECTOR")" != "$(dirname "$BIN")" ]; then
+  echo "::error::the connector ($CONNECTOR) is not next to the main binary ($BIN)"
+  exit 1
+fi
+if ! "$CONNECTOR" --version > "$OUT_DIR/connector-version.txt" 2>&1; then
+  cat "$OUT_DIR/connector-version.txt"
+  echo "::error::$CONNECTOR --version failed"
+  exit 1
+fi
+cat "$OUT_DIR/connector-version.txt"
+
 # Containers do not allow the user namespaces WebKitGTK's bubblewrap sandbox
 # needs, and Xvfb has no GPU; both are properties of this harness, not of a
 # user's desktop.

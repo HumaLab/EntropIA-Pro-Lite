@@ -7,7 +7,8 @@
   Unpacks the vendored base MSIX, force-sets the exact Partner Center identity,
   strips every shortcut inherited from the Win32 MSI capture, regenerates every
   packaged visual PNG from the canonical app icon, swaps in the freshly built
-  lean exe, adds the Pdfium library the base capture never had, strips the signature/blockmap (the Store signs), repacks, reports
+  lean exe, adds the Pdfium library the base capture never had, adds the
+  assistant connector and its `uap3:AppExecutionAlias`, strips the signature/blockmap (the Store signs), repacks, reports
   manifest identity, and verifies packaged icon bytes.
 
   Shortcuts: the Store package registers Start, taskbar and Windows Search
@@ -33,6 +34,12 @@
   (apps/desktop/src-tauri/resources/lib/pdfium.dll). Without it the Store build
   cannot open, split or crop a PDF.
 
+.PARAMETER ConnectorPath
+  Path to the entropia-agent-connector.exe built by
+  apps/desktop/scripts/build-agent-connector.mjs (D15). It is packaged beside the
+  app exe and declared as the `entropia-agent-connector.exe` execution alias, so
+  an assistant can launch it inside the package context.
+
 .PARAMETER OutDir
   Directory where the repacked MSIX (and its work dir) are written.
 
@@ -49,6 +56,9 @@ param(
 
   [Parameter(Mandatory = $true)]
   [string]$PdfiumPath,
+
+  [Parameter(Mandatory = $true)]
+  [string]$ConnectorPath,
 
   [Parameter(Mandatory = $true)]
   [string]$OutDir,
@@ -69,6 +79,7 @@ $PublisherDisplay = "HLab"
 
 $source = (Resolve-Path -LiteralPath $BaseMsix).Path
 $latestExe = (Resolve-Path -LiteralPath $ExePath).Path
+$connector = (Resolve-Path -LiteralPath $ConnectorPath).Path
 $canonicalStoreIcon = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "../icons/icon.png")).Path
 
 if (-not (Test-Path -LiteralPath $OutDir)) {
@@ -141,6 +152,12 @@ $publisherDisplayName.InnerText = $PublisherDisplay
 # WindowsApps directory — the desktop one is what Windows refuses to launch.
 $removedShortcutExtensions = @(Remove-StoreMsixShortcutExtensions -Manifest $manifest)
 
+# The Store build reaches the connector through an execution alias (D15): inside
+# the package the exe lives under the versioned WindowsApps directory, which
+# Windows blocks from an ordinary command line. Declared here, before the
+# manifest is saved.
+Add-StoreMsixConnectorAlias -Manifest $manifest | Out-Null
+
 $settings = New-Object System.Xml.XmlWriterSettings
 $settings.Encoding = New-Object System.Text.UTF8Encoding($false)
 $settings.Indent = $true
@@ -180,6 +197,9 @@ Copy-Item -LiteralPath $latestExe -Destination (Join-Path $workDir "entropia-lit
 # The base capture has no Pdfium; the app loads it from resources\lib beside the exe.
 Add-StoreMsixPdfium -PdfiumPath $PdfiumPath -PayloadDirectory $workDir | Out-Null
 
+# The assistant connector ships beside the exe, under the name the alias declares.
+Add-StoreMsixConnector -ConnectorPath $connector -PayloadDirectory $workDir | Out-Null
+
 [xml]$stagedManifest = Get-Content -LiteralPath $manifestPath
 $registration = Assert-StoreMsixAppRegistration `
   -Manifest $stagedManifest `
@@ -187,6 +207,7 @@ $registration = Assert-StoreMsixAppRegistration `
   -ExpectedIdentityName $IdentityName `
   -ExpectedPublisher $IdentityPublisher `
   -ExpectedVersion $StoreVersion
+Assert-StoreMsixConnectorAlias -Manifest $stagedManifest -PayloadDirectory $workDir
 
 & $makeappx pack /d $workDir /p $output /o
 if ($LASTEXITCODE -ne 0) {
@@ -196,6 +217,7 @@ if ($LASTEXITCODE -ne 0) {
 Assert-StoreMsixIconAssetsInArchive -ArchivePath $output -AssetsDirectory $storeAssetsDirectory
 Assert-StoreMsixShortcutHygieneInArchive -ArchivePath $output
 Assert-StoreMsixPdfiumInArchive -ArchivePath $output -PdfiumPath $PdfiumPath
+Assert-StoreMsixConnectorInArchive -ArchivePath $output -ConnectorPath $connector
 
 Copy-Item -LiteralPath $output -Destination $outputAlias -Force
 
@@ -238,6 +260,8 @@ $apps = @($xml.SelectNodes("//*[local-name()='Applications']/*[local-name()='App
   Aumid = $registration.Aumid
   RemovedShortcutExtensions = $removedShortcutExtensions
   RemovedShortcutFiles = $removedShortcutFiles
+  Connector = $connector
+  ConnectorAlias = $script:StoreMsixConnectorFileName
   ExeCount = $exeEntries.Count
   Size = (Get-Item -LiteralPath $output).Length
 }

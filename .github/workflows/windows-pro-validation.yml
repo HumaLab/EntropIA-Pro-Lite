@@ -61,11 +61,18 @@ jobs:
         shell: pwsh
         run: npm exec --package=pnpm@${{ env.PNPM_VERSION }} -- pnpm install --frozen-lockfile
 
+      # The assistant connector (D15): built for the Windows triple under the Pro
+      # sidecar name (D16) and bundled by tauri.connector.pro.conf.json, passed below.
+      - name: Build agent connector
+        shell: bash
+        run: node apps/desktop/scripts/build-agent-connector.mjs --target x86_64-pc-windows-msvc --variant pro
+
       # Plain `pnpm exec tauri build` from apps/desktop: the release-creating
       # Tauri GitHub Action is deliberately avoided so no token, tag, or
       # release parameter can ever attach this run to a release.
       # The Windows resource overlay (hooks.nsh, WebView2 repair hook, VC
-      # runtime staging, Pro resources) applies via tauri.windows.conf.json.
+      # runtime staging, Pro resources) applies via tauri.windows.conf.json, and
+      # tauri.connector.pro.conf.json adds the assistant connector (externalBin).
       # bash, not the default pwsh: the WebView2 repair hook runs under Windows
       # PowerShell 5.1, and a pwsh parent leaks PowerShell 7 module paths into
       # PSModulePath, which breaks loading Get-AuthenticodeSignature.
@@ -77,7 +84,7 @@ jobs:
           ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_MANIFEST_URL }}
           ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_ID }}
           ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64: ${{ env.ENTROPIA_RUNTIME_BOOTSTRAP_PUBLIC_KEY_BASE64 }}
-        run: pnpm exec tauri build --features local-ml --bundles nsis,msi --config src-tauri/tauri.windows.conf.json
+        run: pnpm exec tauri build --features local-ml --bundles nsis,msi --config src-tauri/tauri.windows.conf.json --config src-tauri/tauri.connector.pro.conf.json
 
       # Explicit presence guard for BOTH installer types: the upload step
       # below must never succeed with only one of them.

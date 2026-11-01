@@ -134,6 +134,27 @@ jobs:
 
       # No runtime-pack injection: the committed fixture ships as-is so the app
       # detects "runtime not ready" and bootstraps it from the baked signed source.
+      #
+      # The assistant connector (D15) is built for this job's own triple first: it
+      # is not in tauri.conf.json (tauri-build copies every bundle.externalBin
+      # during any cargo build and fails when it is missing), so the installer
+      # passes the tauri.connector.pro.conf.json overlay, which needs the sidecar to
+      # exist under binaries/. Pro uses its own sidecar name (D16) so its .deb
+      # and the Lite one can be installed together. tauri-action runs from the
+      # repo root, so the --config path is root-relative.
+      - name: Build agent connector
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          case "$PLATFORM" in
+            windows-latest) triple=x86_64-pc-windows-msvc ;;
+            ubuntu-22.04) triple=x86_64-unknown-linux-gnu ;;
+            macos-14) triple=aarch64-apple-darwin ;;
+            *) echo "::error::no connector triple for $PLATFORM"; exit 1 ;;
+          esac
+          node apps/desktop/scripts/build-agent-connector.mjs --target "$triple" --variant pro
+
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -150,7 +171,7 @@ jobs:
           releaseBody: 'See the assets below to download the EntropIA Pro and EntropIA Lite installers for your platform. EntropIA Pro downloads its local ML runtime automatically on first launch.'
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.build_args }}
+          args: ${{ matrix.build_args }} --config apps/desktop/src-tauri/tauri.connector.pro.conf.json
 
   # EntropIA-Lite MS-Store MSIX leg. Builds the LEAN app (no local-ml) into an MSI,
   # then repacks the vendored base MSIX (apps/desktop/src-tauri/msix/EntropIALite-base.msix)
@@ -207,6 +228,14 @@ jobs:
       # Build the lean MSI (local-ml compiled out by the default lean feature set).
       # Lite builds without `local-ml`, so build.rs skips guard_lean_bootstrap_source()
       # entirely and no runtime download source is baked into the installer.
+      #
+      # The assistant connector (D15) is built first and bundled as an external
+      # binary by the tauri.connector.conf.json overlay; the MSIX repack below adds
+      # the same exe to the package payload and declares its execution alias.
+      - name: Build agent connector
+        shell: bash
+        run: node apps/desktop/scripts/build-agent-connector.mjs --target x86_64-pc-windows-msvc
+
       - name: Build lean Tauri installers (NSIS + MSI)
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -220,7 +249,8 @@ jobs:
           # (unlike the local `apps/desktop`-relative `src-tauri/...`).
           # tauri.lite.windows.conf.json replaces the shared Windows resource list,
           # dropping what only local-ml reads (uv, models, runtime pack, scripts).
-          args: --config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi
+          # tauri.connector.conf.json only adds bundle.externalBin (D15).
+          args: --config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --config apps/desktop/src-tauri/tauri.connector.conf.json --bundles nsis,msi
 
       # Locate the built lean app exe (input to the MSIX repack) and the distributable
       # installers (NSIS .exe + WiX .msi) for the GitHub release. The Pro crate name is
@@ -278,6 +308,7 @@ jobs:
             -BaseMsix "apps/desktop/src-tauri/msix/EntropIALite-base.msix" `
             -ExePath "${{ steps.artifacts.outputs.exe_path }}" `
             -PdfiumPath "apps/desktop/src-tauri/resources/lib/pdfium.dll" `
+            -ConnectorPath "apps/desktop/src-tauri/binaries/entropia-agent-connector-x86_64-pc-windows-msvc.exe" `
             -OutDir "${{ runner.temp }}/msix-out" `
             -StoreVersion "${{ steps.version.outputs.store_version }}"
 

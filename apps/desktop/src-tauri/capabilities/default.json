@@ -232,6 +232,7 @@
     "allow-agent-access-set-enabled",
     "allow-agent-client-create",
     "allow-agent-client-revoke",
+    "allow-agent-connector-location",
     "allow-navegador-open",
     "allow-navegador-navigate",
     "allow-navegador-back",

@@ -9,22 +9,54 @@ Status: the endpoint and the connector exist and were exercised end to end
 against a real Lite debug build (isolated dev profile, one seeded client):
 OpenCode, Claude Code and Pi connected and listed the five tools; the Codex
 recipe registers the server, but its connection was not exercised because that
-needs a model session. The connector is **not bundled in the installers yet**
-(stage 6 of `PLAN-AGENTES-ENTROPIA.md`), so it must be installed or run from
-source. See the **Verified** column under “Pair a client” for what exactly was
-and was not proven.
+needs a model session. The connector now ships **with every installer** — Pro and
+Lite, Windows NSIS/MSI and MSIX, Linux `.deb`, macOS `.app`/`.dmg` — and Settings ›
+Asistentes names its absolute path. See the **Verified** column under “Pair a
+client” for what exactly was and was not proven, and “Where the connector is
+installed” for the per-platform location.
 
 ## Pieces
 
 | Piece | What it does | State |
 |---|---|---|
 | App endpoint (`apps/desktop/src-tauri/src/automation/`) | Serves MCP Streamable HTTP on `127.0.0.1` at `/mcp`, authenticates each client by bearer token, offers the read tools and writes the local audit trail | Implemented |
-| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay. Reads the app's discovery file, reads the client token from the OS keyring (or the owner-only file when the machine has no keyring), forwards JSON-RPC. Stdout carries protocol messages only | Implemented, standalone crate |
+| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay. Reads the app's discovery file, reads the client token from the OS keyring (or the owner-only file when the machine has no keyring), forwards JSON-RPC. Stdout carries protocol messages only | Implemented, bundled with the installers |
 | Skill (`integrations/agents/skill/`) | Teaches an agent how to investigate with the tools | Planned (stage 6) |
 
 The app owns the archive and is the only writer. Several clients can connect to
 the same running app; the app never starts a second instance for an agent, and it
 may be minimized while they work. If the endpoint is off, nothing listens.
+
+## Where the connector is installed
+
+Every installer bundles the connector beside the app executable, so the panel can
+name an absolute path instead of hoping the binary is on `PATH`. Settings ›
+Asistentes shows that path (or says it is missing) above the lines it copies, and
+every recipe uses it, quoted for the platform.
+
+| Build | Installed location | What the lines name |
+|---|---|---|
+| Windows NSIS/MSI (Pro, Lite) | `entropia-agent-connector.exe` (Lite) or `entropia-pro-agent-connector.exe` (Pro) in the install directory, beside the app exe | that absolute path, in double quotes |
+| Microsoft Store MSIX (Lite) | packaged beside the app exe, reached through the execution alias `entropia-agent-connector.exe` | the alias name |
+| Linux `.deb` (Pro, Lite) | `/usr/bin/entropia-agent-connector` (Lite) or `/usr/bin/entropia-pro-agent-connector` (Pro) | the absolute path, single-quoted when it contains spaces |
+| macOS `.app`/`.dmg` (Pro, Lite) | `EntropIA ….app/Contents/MacOS/entropia-agent-connector` (Pro: `entropia-pro-agent-connector`) | the absolute path, single-quoted when it contains spaces |
+
+Pro has its own file name because the Lite and Pro `.deb` packages both install
+into `/usr/bin` and can be installed together: one shared name would make `dpkg`
+refuse the second package. Both names are the same binary; either one talks to
+whichever EntropIA is running.
+
+The MSIX alias is not a convenience. The packaged copy lives under the versioned
+`WindowsApps` directory, which Windows refuses to launch from an ordinary command
+line, so the repacked manifest declares `uap3:AppExecutionAlias`
+`entropia-agent-connector.exe`. Launching through the alias also starts the
+connector in package context, which is what applies the Store package's
+data-directory redirection.
+
+A build that carried no connector (`pnpm exec tauri dev`, or an installer built
+without the overlay below) reports “no está instalado en esta compilación” and
+falls back to the bare `entropia-agent-connector`, which only works if it is on
+`PATH`.
 
 ## Pair a client
 
@@ -86,6 +118,35 @@ and speaks newline-delimited JSON-RPC on stdin/stdout, so you can drive it by ha
 `ENTROPIA_DATA_DIR=<path>` replaces the whole data directory instead of using the
 profile (useful in tests). Diagnostics go to stderr; stdout carries only protocol
 lines.
+
+### Build the bundled sidecar locally
+
+The installers carry the connector through an explicit config overlay
+(`apps/desktop/src-tauri/tauri.connector.conf.json` for Lite,
+`tauri.connector.pro.conf.json` for Pro; `bundle.externalBin` only),
+never through `tauri.conf.json`: `tauri-build` copies every `externalBin` during
+any `cargo build`, `cargo test` or `cargo clippy` of the app crate and fails when
+the file is missing, so a plain developer build must not depend on a compiled
+connector. Build the file the overlay names, then pass the overlay to the
+bundler:
+
+```bash
+pnpm connector:build                      # host triple from `rustc -vV`
+pnpm connector:build -- --target aarch64-apple-darwin   # cross build
+pnpm connector:build -- --target universal-apple-darwin # both Apple arches + lipo
+pnpm connector:build -- --variant pro     # Pro sidecar name; pair with tauri.connector.pro.conf.json
+
+cd apps/desktop
+pnpm exec tauri build --config src-tauri/tauri.connector.conf.json \
+  --config src-tauri/tauri.lite.conf.json   # plus the variant/platform overlays you need
+```
+
+`pnpm connector:build` writes
+`apps/desktop/src-tauri/binaries/entropia-agent-connector-<triple>[.exe]`
+(`entropia-pro-agent-connector-…` with `--variant pro`; gitignored);
+the installer workflows run it before every Tauri build, `smoke-linux.sh` asserts
+the `.deb` really installed it, and the MSIX repack asserts the packaged bytes and
+the alias.
 
 A failure you will recognize: `app_absent` means the app is not running, the
 switch is off (a disabled endpoint is stopped and its discovery file removed), or
