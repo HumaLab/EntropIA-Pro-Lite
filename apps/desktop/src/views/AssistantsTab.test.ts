@@ -23,8 +23,19 @@ const CLAUDE: AgentClient = {
   id: 'cl_abc123',
   name: 'Claude Code',
   scopes: SCOPES,
+  tokenStore: 'keyring',
   createdAt: 1767225600,
   lastUsedAt: 1767312000,
+}
+
+/** A client paired on a machine with no OS keyring: its token is in a file. */
+const FILE_STORED: AgentClient = {
+  id: 'cl_file123',
+  name: 'Codex',
+  scopes: SCOPES,
+  tokenStore: 'file',
+  createdAt: 1767225600,
+  lastUsedAt: null,
 }
 
 const ACTIVE_STATUS: AgentAccessStatus = {
@@ -56,6 +67,7 @@ function reconnectRoutes(): Record<string, unknown> {
     id: 'cl_new123',
     name: 'Claude Code',
     scopes: SCOPES,
+    tokenStore: 'keyring',
     createdAt: 1767398400,
     lastUsedAt: null,
   }
@@ -178,6 +190,27 @@ describe('AssistantsTab', () => {
       expect(invokeMock).toHaveBeenCalledWith('agent_client_revoke', { clientId: 'cl_abc123' })
     )
     await waitFor(() => expect(screen.queryByText('Claude Code')).not.toBeInTheDocument())
+  })
+
+  it('shows where each client token is stored', async () => {
+    respond({ agent_access_status: { ...ACTIVE_STATUS, clients: [CLAUDE, FILE_STORED] } })
+    render(AssistantsTab)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('assistants-client-storage-cl_abc123')).toHaveTextContent(
+        'Llavero del sistema'
+      )
+    )
+    expect(screen.getByTestId('assistants-client-storage-cl_file123')).toHaveTextContent(
+      'Archivo protegido'
+    )
+    // Only the file case needs the hint: it is the one the person may wonder about.
+    expect(
+      screen.queryByTestId('assistants-client-storage-hint-cl_abc123')
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId('assistants-client-storage-hint-cl_file123')).toHaveTextContent(
+      'solo puede leer tu usuario'
+    )
   })
 
   it('shows a backend error as a message', async () => {

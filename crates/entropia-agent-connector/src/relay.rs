@@ -36,10 +36,13 @@ pub trait ConnectorSource: Send + Sync {
 /// Why a token could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenError {
-    /// The credential store has no entry for this client: it was never paired,
-    /// or it was revoked.
+    /// No token anywhere: the store has no entry for this client (it was never
+    /// paired, or it was revoked) and no fallback file exists.
     Missing,
-    /// The credential store itself is unavailable.
+    /// The fallback token file is readable by group or others, so it cannot be
+    /// trusted as a credential (D14).
+    Insecure(String),
+    /// The credential store itself failed in a way that is not "unavailable".
     Failed(String),
 }
 

@@ -6,6 +6,10 @@
 //! It also answers the D12 instance challenge the way the real app does, with a
 //! proof derived from the instance key it advertises — or with the wrong proof,
 //! or none, when a test needs to see the connector refuse.
+//!
+//! Each integration-test binary includes this module on its own, so a helper only
+//! one of them needs would otherwise be dead code there.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

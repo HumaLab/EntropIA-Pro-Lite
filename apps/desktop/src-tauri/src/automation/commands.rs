@@ -241,7 +241,11 @@ mod tests {
             .expect("stored token");
         let json = serde_json::to_string(&created).unwrap();
         assert!(!json.contains(&token), "a status must never carry a token");
-        assert!(!json.contains("token"));
+        assert!(!json.contains("tokenSha256"), "nor its hash");
+        assert!(
+            json.contains("\"tokenStore\":\"keyring\""),
+            "the panel shows where the token is stored: {json}"
+        );
     }
 
     #[test]

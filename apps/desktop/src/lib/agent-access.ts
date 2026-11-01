@@ -11,11 +11,20 @@ import { invoke } from '@tauri-apps/api/core'
 /** What a paired client may do. Only `read` is granted in this release. */
 export type AgentScope = 'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
 
+/**
+ * Where the client's token is stored (D14): the OS credential store, or the
+ * owner-only file the app falls back to on a machine without one. Non-secret, so
+ * the panel can say which it is.
+ */
+export type AgentTokenStore = 'keyring' | 'file'
+
 /** One paired assistant, as the panel lists it. */
 export interface AgentClient {
   id: string
   name: string
   scopes: AgentScope[]
+  /** The keyring, or the protected file when this machine has no keyring. */
+  tokenStore: AgentTokenStore
   /** Unix seconds. */
   createdAt: number
   /** Unix seconds; `null` while the client never connected. */

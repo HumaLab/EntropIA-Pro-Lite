@@ -55,7 +55,8 @@ Uso:
 
 Habla JSON-RPC por stdin/stdout y lo retransmite al endpoint local de EntropIA.
 El id del cliente se empareja en EntropIA (Ajustes → Asistentes); el token se
-lee del llavero del sistema, nunca de la configuración del agente.
+lee del llavero del sistema y, si la máquina no tiene llavero, del archivo que
+EntropIA guarda junto a sus datos. Nunca de la configuración del agente.
 
   --client <id>        id del cliente emparejado en EntropIA
   --profile <nombre>   perfil de desarrollo: 1 a 32 caracteres de A-Z, a-z, 0-9,

@@ -19,7 +19,7 @@ and was not proven.
 | Piece | What it does | State |
 |---|---|---|
 | App endpoint (`apps/desktop/src-tauri/src/automation/`) | Serves MCP Streamable HTTP on `127.0.0.1` at `/mcp`, authenticates each client by bearer token, offers the read tools and writes the local audit trail | Implemented |
-| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay. Reads the app's discovery file, reads the client token from the OS keyring, forwards JSON-RPC. Stdout carries protocol messages only | Implemented, standalone crate |
+| Connector (`crates/entropia-agent-connector`) | Small stdio↔loopback relay. Reads the app's discovery file, reads the client token from the OS keyring (or the owner-only file when the machine has no keyring), forwards JSON-RPC. Stdout carries protocol messages only | Implemented, standalone crate |
 | Skill (`integrations/agents/skill/`) | Teaches an agent how to investigate with the tools | Planned (stage 6) |
 
 The app owns the archive and is the only writer. Several clients can connect to
@@ -32,7 +32,10 @@ may be minimized while they work. If the endpoint is off, nothing listens.
    panel shows where the endpoint is listening.
 2. Under **"Conectar un asistente"**, type a name and press **"Conectar"**.
 3. Copy one of the lines the panel shows for that client. Each line names the
-   client id, never a token — the credential stays in the OS keyring.
+   client id, never a token — the credential stays in the OS keyring or, on a
+   machine with no keyring, in a file only your user can read. The client list
+   says which of the two it is (**Llavero del sistema** or **Archivo
+   protegido**).
 
 The lines the app generates (`apps/desktop/src/lib/agent-access.ts`), with the
 client id abbreviated:
@@ -89,8 +92,10 @@ switch is off (a disabled endpoint is stopped and its discovery file removed), o
 the process holding the advertised port could not prove the discovery file's
 instance key; `unauthorized` means the client was revoked or was never paired;
 `protocol_incompatible` means the discovery file names another protocol version or
-has no instance key (update app and connector); `credential_missing` means no
-keyring entry exists for that client id.
+has no instance key (update app and connector); `credential_missing` means there is
+no token for that client id (not paired, or revoked); `credential_insecure` means
+the fallback token file is readable by other users, so fix its permissions
+(`chmod 600`) or pair the assistant again.
 
 ## Read next
 

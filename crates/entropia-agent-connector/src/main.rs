@@ -59,9 +59,12 @@ async fn run(options: cli::Options) -> ExitCode {
         &platform_data,
     );
 
-    let source: std::sync::Arc<dyn relay::ConnectorSource> = std::sync::Arc::new(
-        KeyringSource::new(data_dir.join(DISCOVERY_FILE), options.profile.as_deref()),
-    );
+    let source: std::sync::Arc<dyn relay::ConnectorSource> =
+        std::sync::Arc::new(KeyringSource::new(
+            data_dir.join(DISCOVERY_FILE),
+            &data_dir,
+            options.profile.as_deref(),
+        ));
     let config = RelayConfig::new(options.client_id);
     match relay::run(tokio::io::stdin(), tokio::io::stdout(), config, source).await {
         Ok(()) => ExitCode::SUCCESS,

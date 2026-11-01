@@ -15,6 +15,8 @@ pub const FORBIDDEN: i32 = -32003;
 pub const PROTOCOL_INCOMPATIBLE: i32 = -32004;
 /// No keyring entry for this client id.
 pub const CREDENTIAL_MISSING: i32 = -32005;
+/// The fallback token file is readable by group or others (D14).
+pub const CREDENTIAL_INSECURE: i32 = -32006;
 /// A sentence for a failure with no dedicated rule: an HTTP status the
 /// connector does not know, or a `2xx` that carried no usable answer (W2).
 pub const UNEXPECTED_STATUS: i32 = -32000;
@@ -114,19 +116,33 @@ impl ConnectorError {
         )
     }
 
-    /// No keyring entry (or an unreadable keyring) for this client id.
+    /// No token anywhere for this client id, or a credential store that failed
+    /// in a way that is not "unavailable" (D14).
     pub fn credential(error: TokenError) -> Self {
-        let detail = match error {
-            TokenError::Missing => None,
-            TokenError::Failed(reason) => Some(reason),
-        };
-        Self::new(
-            CREDENTIAL_MISSING,
-            "credential_missing",
-            "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
-             Asistentes.",
-            detail,
-        )
+        match error {
+            TokenError::Insecure(detail) => Self::new(
+                CREDENTIAL_INSECURE,
+                "credential_insecure",
+                "La credencial guardada en este equipo la puede leer cualquier usuario: corregí los \
+                 permisos del archivo de credenciales o volvé a emparejar el asistente en \
+                 EntropIA, Ajustes → Asistentes.",
+                Some(detail),
+            ),
+            TokenError::Missing => Self::new(
+                CREDENTIAL_MISSING,
+                "credential_missing",
+                "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
+                 Asistentes.",
+                None,
+            ),
+            TokenError::Failed(reason) => Self::new(
+                CREDENTIAL_MISSING,
+                "credential_missing",
+                "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
+                 Asistentes.",
+                Some(reason),
+            ),
+        }
     }
 
     /// A stdin line that is not JSON.
