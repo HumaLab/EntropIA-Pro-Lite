@@ -34,7 +34,8 @@ const NAME_MAX_CHARS: usize = 64;
 const LAST_USED_PERSIST_SECS: i64 = 60;
 
 /// What a client may do. Only `Read` is granted in this release; the rest are
-/// declared so the file format and the tool contract already name them.
+/// declared so the file format and the tool contract already name them. `Web`
+/// (Navegador browsing, network egress) is apart from `Read` by owner decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
@@ -43,6 +44,7 @@ pub enum Scope {
     RemoteSpend,
     ExternalWrite,
     Admin,
+    Web,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -227,7 +227,7 @@ neither read nor replace a real client's token.
 
 ## Scopes
 
-Five scopes exist in the access file and in the tools' contract; the wire values
+Six scopes exist in the access file and in the tools' contract; the wire values
 are the `snake_case` names (`automation/access.rs`).
 
 | Scope | Meaning | Granted today |
@@ -237,6 +237,7 @@ are the `snake_case` names (`automation/access.rs`).
 | `remote_spend` | Call a paid provider on the person's behalf | No |
 | `external_write` | Write outside EntropIA (Zotero, publication) | No |
 | `admin` | Change access, keys, maintenance | No |
+| `web` | Browse external sites with the Navegador (network egress) | No |
 
 `create_client` always grants exactly `["read"]`. A tool a client may not use
 answers the tool error `forbidden_scope` **before** any archive is touched, so a

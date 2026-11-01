@@ -51,10 +51,10 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Instance identity, variant, active profile | `entropia_status` (`automation/mcp.rs`) | `entropia_status` | read | Both | implemented |
 | How much the archive holds | `automation/read.rs` (`counts`) | `entropia_status.archive` | read | Both | implemented |
 | Dependency and runtime diagnosis | `deps/*` (`deps_check_all`, `deps_get_cached_statuses`, `deps_install_all`, `deps_install_one`, `deps_get_uv_status`, `deps_reset`), `runtime/*` (`runtime_get_status`, `runtime_get_bootstrap_plan`, `runtime_repair`, `runtime_bootstrap_start`, `runtime_cancel_download`) | `runtime_status` | read | Both (Pro runtime pack only in Pro) | planned (stage 5) |
-| Guided repair | `runtime::runtime_repair` | `runtime_repair` | admin | Both | planned (stage 5) |
+| Guided repair | `runtime::runtime_repair` | `runtime_repair_prepare` → approval → job | admin | Both | planned (stage 5), approval per D13 |
 | Providers configured / verified / failing | `settings.rs` (`settings_get`, `settings_get_all`, `settings_set`, `settings_delete`), `llm::test_openrouter_connection`, `llm::test_vercel_connection`, `transcription::test_assemblyai_connection`, `ocr::test_glm_ocr_connection`, `zotero_web::zotero_verify_key`, `llm_is_available`, `llm_ocr_correction_is_available` | `providers_status` (never a key, only configured/verified/error) | read | Both | planned (stage 4) |
-| Storing or removing a provider key | same `settings` commands, keyring-backed | `providers_set_key` | admin | Both | planned (stage 6, unconfirmed) |
-| Local models and runtime (download, open folder, info) | `llm_local_model_info`, `llm_download_model`, `llm_open_models_dir`, `embedding_local_model_info`, `embedding_download_model`, `embedding_open_models_dir`, `rag_reranker_model_info`, `rag_reranker_download_model`, `rag_reranker_open_models_dir` | not exposed | — | Pro only | not exposed: multi-GB downloads and runtime mutation belong to the app's own installer |
+| Storing or removing a provider key | same `settings` commands, keyring-backed | not exposed | — | Both | not exposed (owner decision D13): key entry stays a human step in Settings; agents see `providers_status` only |
+| Local models and runtime (download, open folder, info) | `llm_local_model_info`, `llm_download_model`, `llm_open_models_dir`, `embedding_local_model_info`, `embedding_download_model`, `embedding_open_models_dir`, `rag_reranker_model_info`, `rag_reranker_download_model`, `rag_reranker_open_models_dir` | `models_download_prepare` → approval → job | admin | Pro only | planned (stage 5): plan with size and free space, human approval in the app, then a queryable job (D13) |
 | Appearance, zoom, typography, interface language | `apps/desktop/src/lib/appearance.ts`, `i18n.ts` | not exposed | — | Both | not exposed: presentation only, no domain effect |
 | Recent activity shown on Inicio | `apps/desktop/src/views/HomeView.svelte` (recent items through `ItemRepo`) | `activity_recent` | read | Both | planned (stage 5) |
 | App update (Microsoft Store) | `store_updates::check_microsoft_store_update` | not exposed | — | Both | not exposed: the platform updater owns it |
@@ -131,7 +131,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Staged research with plan, sources and report | `research::research_request`, `apps/desktop/src/lib/research.ts` | `research_start`, `research_get` | remote_spend | Both | planned (stage 4) |
 | Citable passages | `bibliography::bibliography_search_passages`, `bibliography_passage_context`, `bibliography_open_passage`, `writing::writing_corpus_retrieve` | `search_passages` | read | Both | planned (stage 4) |
 | Report export (Markdown, HTML, DOCX) | `research::research_request` output, `apps/desktop/src/lib/export.ts` | `research_export` | read | Both | planned (stage 5) |
-| Generic LLM actions (ask, summarize, classify) | `llm::commands::llm_ask`, `llm_summarize`, `llm_classify`, `llm_get_results` | `llm_run` | remote_spend | Both | planned (stage 5) |
+| Generic LLM actions (ask, summarize, classify) | `llm::commands::llm_ask`, `llm_summarize`, `llm_classify`, `llm_get_results` | not exposed | — | Both | not exposed (owner decision D13): the agent uses its own model; EntropIA spends provider credit only through named business operations |
 | Chunk coverage diagnostics | `rag::commands::rag_chunk_coverage` | not exposed | — | Both | not exposed: diagnostic, not a product intent |
 
 ## Biblioteca
@@ -149,7 +149,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
-| Navigate: open, tabs, back, forward, reload | `navegador::commands::navegador_open`, `navigate`, `back`, `forward`, `reload`, `new_tab`, `activate_tab`, `close_tab`, `close`, `state` | `browser_navigate`, `browser_state` | read (page content is untrusted data) | Both | planned (stage 4) |
+| Navigate: open, tabs, back, forward, reload | `navegador::commands::navegador_open`, `navigate`, `back`, `forward`, `reload`, `new_tab`, `activate_tab`, `close_tab`, `close`, `state` | `browser_navigate`, `browser_state` | web (page content is untrusted data; D13) | Both | planned (stage 4) |
 | Capture a page or a selection | `navegador_capture_page`, `navegador_capture_selection`, `navegador_save_capture`, `navegador_pdf_file` | `browser_capture` | local_write | Both | planned (stage 4) |
 | Downloads | `navegador_save_download`, `navegador_download_dir`, `navegador_set_download_dir`, `navegador_discard_draft` | `browser_download` | local_write | Both | planned (stage 4) |
 | Saved sources | `navegador_list_sources`, `navegador_source_detail`, `navegador_delete_source` | `browser_sources_list`, `browser_sources_delete` | read / local_write | Both | planned (stage 4) |
@@ -169,7 +169,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Recovery journal and sync notices | `writing_recovery_plan`, `writing_prune_journal`, `writing_discard_journal`, `writing_sync_notices` | `writing_recovery_status` | local_write | Both | planned (stage 5) |
 | Citations and CSL rendering | `writing_citations_for_asset`, `writing_csl_render`, `writing_csl_render_document`, `writing_csl_bibliography`, `writing_csl_validate_style`, `apps/desktop/src/lib/citation-clusters.ts`, `citation-target.ts` | `writing_citations_get` | read | Both | planned (stage 5) |
 | Zotero inside Writing: probe, cache, sync, search, libraries, item detail, open | `writing_zotero_probe`, `writing_zotero_cached`, `writing_zotero_sync`, `writing_zotero_search`, `writing_zotero_known_libraries`, `writing_zotero_check_library`, `writing_zotero_item_detail`, `writing_zotero_open_item` | `writing_zotero_search`, `writing_zotero_cite` | external_write | Both | planned (stage 5) |
-| Writing agent: 14 actions and reviewable proposals | `writing_agent_actions`, `writing_agent_record_suggestion`, `writing_agent_ask`, `writing_agent_pending`, `writing_agent_resolve`, `writing/agent_actions.rs` (the action matrix) | `writing_agent_propose`, `approvals_status`, `approvals_resolve` | remote_spend + local_write | Both | planned (stage 5) |
+| Writing agent: 14 actions and reviewable proposals | `writing_agent_actions`, `writing_agent_record_suggestion`, `writing_agent_ask`, `writing_agent_pending`, `writing_agent_resolve`, `writing/agent_actions.rs` (the action matrix) | `writing_agent_propose` (proposals only), `approvals_status` | remote_spend + local_write | Both | planned (stage 5): reviewable proposals the person accepts or discards in the editor; never applied by the agent (D13) |
 | Corpus retrieval inside Writing | `writing_corpus_retrieve` | `search_passages` | read | Both | planned (stage 4) |
 | Export to Markdown, HTML, DOCX with citations | `apps/desktop/src/lib/writing-export.ts` | `writing_export` | local_write | Both | planned (stage 5) |
 | Publish to hlab.com.ar | `writing::publish::writing_publish_hlab` | `writing_publish` (separate, explicit approval) | external_write | Both | planned (stage 5) |
@@ -191,7 +191,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
 | Backup: folder, schedule, run now | `backup::backup_dir_grant`, `backup::backup_run_now` | `backup_configure`, `backup_run` | admin | Both | planned (stage 5) |
-| Restore a backup | no code (the manual documents copying the folder back with the app closed) | `backup_restore_plan` | admin | Both | planned (stage 5); needs a designed, tested restore first |
+| Restore a backup | no code (the manual documents copying the folder back with the app closed) | not exposed | — | Both | not exposed (owner decision D13): the person restores in the app; agents may create and list backups and explain the steps |
 | Logs | `app_logs.rs` | see Inicio / configuración | admin | Both | planned (stage 5) |
 | Database browser (Query DB) | `db::commands::db_select`, `db_select_rows`, `db_browser_list_tables`, `db_browser_describe_table`, `db_browser_query_rows`, `apps/desktop/src/lib/db-browser.ts` | not exposed | — | Both | not exposed: a generic query surface is exactly the `execute_sql` the plan forbids |
 | Asset integrity check | `asset_integrity::assets_check_integrity` | see Corpus | admin | Both | planned (stage 5) |
@@ -210,29 +210,24 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Splash / close handshake | `splash::splash_finish`, `app_close_flushed` | not exposed | — | Both | not exposed: app lifecycle |
 | Browser window geometry | `navegador_set_bounds`, `navegador_set_visible` | not exposed | — | Both | not exposed: viewer arrangement |
 
-## Unmapped / needs decision
+## Owner decisions (2026-11-01)
 
-- **Restore a backup.** No command exists; the manual documents a manual folder
-  copy. The plan requires a designed, tested restore before it can be a tool
-  (`backup_restore_plan` above is a placeholder), and it is irreversible enough
-  to need its own approval model.
-- **Provider keys.** Reading or writing keys from an agent is `admin` and the
-  plan wants the agent to see *configured / verified / error* only. Whether
-  `providers_set_key` should ever exist, or whether key entry stays a human-only
-  step in the app, is a product decision.
-- **Local model and runtime management.** Downloads of several GB and runtime
-  repair mutate the machine outside the archive. Coverage is required by the
-  plan, but the safe shape (plan → approval → job) is undecided.
-- **Navegador scope.** Web navigation is a read of untrusted data that also
-  performs network egress; the five scopes have no dedicated name for it. Decide
-  whether it is `read` (as written above) or a sixth scope.
-- **`approvals_status` and the approval model.** Every `external_write` and
-  `remote_spend` row above assumes a preparation/approval contract that does not
-  exist yet. Its shape — idempotency keys, expiry, one-use plans — is stage 3
-  work and blocks the mutation rows.
-- **Generic LLM actions (`llm_run`).** Exposing "ask the configured provider
-  anything" as a product operation is close to a generic escape hatch; decide
-  whether it belongs in the catalogue at all.
-- **The 14 Writing agent actions.** They are a fixed vocabulary today
-  (`writing/agent_actions.rs`). Whether an external agent should trigger them
-  by own instruction or only by explicit proposal needs an owner decision.
+These were open at stage 1 and are now settled (feature document D13):
+
+- **Approval model.** Every action that spends, writes outside EntropIA or
+  deletes is prepared first (impact, cost, destinations) and approved by the
+  person in an app dialog. The approval is bound to that plan and that client,
+  is single-use and expires after 10 minutes. A model-produced
+  `approved: true` is never consent. Design and implementation: stage 3.
+- **Provider keys.** Never through an agent. Agents see configured / verified /
+  error only and guide the person to Settings.
+- **Backup restore.** The person restores in the app. Agents may create and
+  list backups and explain how to restore.
+- **Local models and runtime.** Plan with size and free space → approval in the
+  app → queryable job.
+- **Navegador.** A sixth scope, `web`, separate from `read`: a read-only client
+  cannot browse or send requests to external sites. Internet Archive search
+  stays `read` (one fixed API host, no arbitrary navigation).
+- **Generic LLM actions (`llm_run`).** Not exposed.
+- **Writing agent actions.** Only as reviewable proposals the person accepts or
+  discards in the editor.
