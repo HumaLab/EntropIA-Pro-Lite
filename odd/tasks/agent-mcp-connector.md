@@ -92,7 +92,8 @@ permissions, read-only tools). Stages 3-6 are later tranches.
   checks are relevant) with 401 plus `X-Entropia-Proof: hex(HMAC-SHA256(instanceKey,
   challenge))`. The connector compares in constant time; mismatch or absence →
   `app_absent` (detail: instance not verified) and the token is never sent. The
-  verified `(port, instanceKey)` pair is cached until either changes. HMAC is built
+  challenge runs before every request that carries a token; nothing is cached
+  (Judgment Day JD-G1-001 removed the original per-pair cache). HMAC is built
   on `sha2` (no new HMAC crate) and pinned by an RFC 4231 test vector on both sides.
 - D13 — Owner decisions on the stage 1 open items (L7): approvals by app dialog,
   bound to plan and client, single-use, 10-minute expiry; provider keys never via

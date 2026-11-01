@@ -155,6 +155,7 @@ fn challenge_reply(mode: Proof, instance_key: &str, challenge: &str) -> Reply {
 pub struct FakeApp {
     pub port: u16,
     instance_key: String,
+    proof: Arc<Mutex<Proof>>,
     requests: Arc<Mutex<Vec<Request>>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -178,6 +179,8 @@ impl FakeApp {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
         let key = instance_key.clone();
+        let proof_mode = Arc::new(Mutex::new(mode));
+        let current_mode = proof_mode.clone();
         let task = tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
@@ -186,11 +189,13 @@ impl FakeApp {
                 let handler = handler.clone();
                 let recorded = recorded.clone();
                 let key = key.clone();
+                let current_mode = current_mode.clone();
                 tokio::spawn(async move {
                     let Some((mut stream, request)) = read_request(stream).await else {
                         return;
                     };
                     let reply = if request.challenge {
+                        let mode = *current_mode.lock().unwrap();
                         challenge_reply(
                             mode,
                             &key,
@@ -210,9 +215,16 @@ impl FakeApp {
         Self {
             port,
             instance_key,
+            proof: proof_mode,
             requests,
             task,
         }
+    }
+
+    /// Change how the app answers the challenge from now on: the same port and
+    /// the same discovery file, but a process that no longer holds the key.
+    pub fn set_proof(&self, mode: Proof) {
+        *self.proof.lock().unwrap() = mode;
     }
 
     /// The key this fake app advertises, and signs challenges with.

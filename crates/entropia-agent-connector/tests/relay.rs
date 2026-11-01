@@ -623,6 +623,74 @@ async fn a_notification_answered_with_an_unusable_2xx_stays_on_diagnostics() {
     assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
 }
 
+#[tokio::test]
+async fn an_sse_reply_without_a_json_event_answers_a_request_with_an_error() {
+    let bodies = [
+        ("", "no events"),
+        (": keep-alive\n\n", "only a comment"),
+        ("data: not json\n\n", "only a non-JSON event"),
+        ("event: ping\n\nid: 4\n\n", "no data lines"),
+    ];
+    for (body, label) in bodies {
+        let dir = tempfile::tempdir().unwrap();
+        let app = FakeApp::start(move |_| Reply::sse(body)).await;
+        write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+        let outcome = relay_once(discovery_file(dir.path()), Some(TOKEN), &[tools_list(32)]).await;
+
+        assert_eq!(outcome.lines.len(), 1, "{label}: {:?}", outcome.lines);
+        let response = parse(&outcome.lines[0]);
+        assert_eq!(response["jsonrpc"], "2.0", "{label}");
+        assert_eq!(response["id"], 32, "{label}");
+        assert_eq!(error_code(&response), "endpoint_error", "{label}");
+        assert_eq!(rpc_error_code(&response), -32000, "{label}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("EntropIA")),
+            "{label}: the message must be actionable: {response}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_sse_reply_with_one_json_event_and_noise_is_not_also_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|_| {
+        Reply::sse(format!(
+            "data: not json\n\ndata: {}\n\n",
+            json!({ "jsonrpc": "2.0", "id": 33, "result": {} })
+        ))
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+    let outcome = relay_once(discovery_file(dir.path()), Some(TOKEN), &[tools_list(33)]).await;
+
+    assert_eq!(outcome.lines.len(), 1, "{:?}", outcome.lines);
+    let response = parse(&outcome.lines[0]);
+    assert_eq!(response["id"], 33);
+    assert!(response.get("error").is_none(), "{response}");
+}
+
+#[tokio::test]
+async fn a_notification_answered_with_an_sse_reply_without_json_writes_nothing() {
+    for body in ["", ": keep-alive\n\n", "data: not json\n\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let app = FakeApp::start(move |_| Reply::sse(body)).await;
+        write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+        let outcome = relay_once(
+            discovery_file(dir.path()),
+            Some(TOKEN),
+            &[initialized_notification()],
+        )
+        .await;
+
+        assert!(outcome.lines.is_empty(), "{body:?}: {:?}", outcome.lines);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Instance discovery follows the app
 // ---------------------------------------------------------------------------
@@ -725,7 +793,7 @@ async fn a_challenge_proves_the_instance_before_the_token_is_sent() {
 }
 
 #[tokio::test]
-async fn the_proof_is_verified_once_for_a_port_and_key_pair() {
+async fn every_request_is_challenged_before_its_token_is_sent() {
     let dir = tempfile::tempdir().unwrap();
     let app = FakeApp::start(|request| {
         let id: Value = serde_json::from_str::<Value>(&request.body).unwrap()["id"].clone();
@@ -742,8 +810,63 @@ async fn the_proof_is_verified_once_for_a_port_and_key_pair() {
     let outcome = harness.finish().await;
     assert_eq!(outcome.lines.len(), 2, "{:?}", outcome.lines);
 
-    assert_eq!(app.challenge_requests().len(), 1, "the pair stays verified");
+    assert_eq!(
+        app.challenge_requests().len(),
+        2,
+        "no earlier verification is trusted"
+    );
     assert_eq!(app.requests().len(), 2);
+    // Each token-bearing request is directly preceded by its own challenge.
+    let order: Vec<bool> = app
+        .all_requests()
+        .iter()
+        .map(|request| request.challenge)
+        .collect();
+    assert_eq!(order, [true, false, true, false]);
+}
+
+#[tokio::test]
+async fn a_process_that_takes_over_a_verified_port_never_sees_the_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|request| {
+        let id: Value = serde_json::from_str::<Value>(&request.body).unwrap()["id"].clone();
+        Reply::json(json!({ "jsonrpc": "2.0", "id": id, "result": {} }).to_string())
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+    let mut harness = Harness::start(discovery_file(dir.path()), Some(TOKEN));
+    harness.send(&initialize(1)).await;
+    assert_eq!(parse(&harness.next_line().await)["id"], 1);
+    assert_eq!(app.requests().len(), 1, "the first exchange was verified");
+
+    // The app died and left the discovery file; another process now answers on
+    // the same port without holding the instance key.
+    for (mode, id) in [(Proof::Wrong, 2), (Proof::Missing, 3)] {
+        app.set_proof(mode);
+        harness.send(&tools_list(id)).await;
+        let response = parse(&harness.next_line().await);
+        assert_eq!(response["id"], id);
+        assert_eq!(error_code(&response), "app_absent", "{mode:?}");
+        assert_rpc_family(&response);
+    }
+    harness.finish().await;
+
+    assert_eq!(app.challenge_requests().len(), 3);
+    assert_eq!(
+        app.requests().len(),
+        1,
+        "the replacement received no MCP message"
+    );
+    let with_token = app
+        .all_requests()
+        .iter()
+        .filter(|request| request.header("authorization").is_some())
+        .count();
+    assert_eq!(
+        with_token, 1,
+        "only the verified exchange carried the token"
+    );
 }
 
 #[tokio::test]

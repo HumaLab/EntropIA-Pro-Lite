@@ -9,8 +9,9 @@
 //! The discovery file is read again for every message, so an app restart on a
 //! new port is followed without restarting the agent; the credential is read
 //! from the keyring for every message too, so revocation applies to the next
-//! request and nothing is cached in the process — except the D12 instance proof,
-//! which is cached only for the `(port, instanceKey)` pair it verified.
+//! request and nothing is cached in the process. The D12 instance proof is not
+//! cached either: every request that carries `Authorization` is preceded by its
+//! own challenge, so an earlier verification never vouches for a later request.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -98,8 +99,6 @@ struct Connector {
     http: reqwest::Client,
     /// The version `initialize` negotiated, sent on every later request.
     negotiated: Mutex<Option<String>>,
-    /// The `(port, instanceKey)` pair this process already proved (D12).
-    verified: Mutex<Option<(u16, String)>>,
     diagnostics: Arc<dyn Diagnostics>,
     /// The one channel every stdout line goes through.
     lines: mpsc::Sender<String>,
@@ -134,7 +133,6 @@ where
         source,
         http,
         negotiated: Mutex::new(None),
-        verified: Mutex::new(None),
         diagnostics: config.diagnostics,
         lines,
     });
@@ -236,16 +234,23 @@ impl Connector {
                 }
             }
             Ok(Reply::Sse(body)) => {
+                let mut forwarded = 0usize;
                 for event in parse_sse(&body) {
                     match serde_json::from_str::<Value>(&event) {
                         Ok(value) => {
                             self.remember_version(&method, &event);
                             let _ = self.lines.send(value.to_string()).await;
+                            forwarded += 1;
                         }
                         Err(error) => self.diagnostics.warn(&format!(
                             "EntropIA envió un evento SSE que no es JSON ({error}): {event}"
                         )),
                     }
+                }
+                // A stream with no JSON event leaves the agent waiting for this
+                // id for good, so the silence becomes an error like W2's.
+                if forwarded == 0 {
+                    self.emit(id, &ConnectorError::empty_stream()).await;
                 }
             }
             Err(error) => self.emit(id, &error).await,
@@ -254,7 +259,7 @@ impl Connector {
 
     /// Read the endpoint, prove the instance, read the credential, and POST one
     /// message. The order matters: no token leaves the connector towards a
-    /// process that has not proved it holds this discovery file (D12).
+    /// process that has not just proved it holds this discovery file (D12).
     async fn forward(&self, method: &str, body: &str) -> Result<Reply, ConnectorError> {
         let discovery = self.discovery().await?;
         self.verify_instance(&discovery).await?;
@@ -304,26 +309,15 @@ impl Connector {
         discovery::parse(&bytes, &path)
     }
 
-    /// Whether this process already proved this exact `(port, instanceKey)` pair.
-    fn is_verified(&self, discovery: &Discovery) -> bool {
-        self.verified
-            .lock()
-            .ok()
-            .and_then(|verified| verified.clone())
-            .is_some_and(|(port, key)| port == discovery.port && key == discovery.instance_key)
-    }
-
-    /// Prove, before the first token goes to this pair, that the process holding
-    /// the advertised port read the same discovery file (D12).
+    /// Prove, before every token, that the process holding the advertised port
+    /// read the same discovery file (D12). Nothing is remembered between calls:
+    /// a port verified a moment ago may belong to another process now.
     ///
     /// The challenge is a POST to `/mcp` with no `Authorization`: the guard
     /// answers it with the usual 401 plus the HMAC of the challenge under the
     /// instance key. A missing or wrong proof is `app_absent` and the token is
     /// never sent.
     async fn verify_instance(&self, discovery: &Discovery) -> Result<(), ConnectorError> {
-        if self.is_verified(discovery) {
-            return Ok(());
-        }
         let url = discovery.endpoint();
         let challenge = proof::challenge().map_err(|error| {
             ConnectorError::instance_unverified(format!("no pude generar el desafío: {error}"))
@@ -353,9 +347,6 @@ impl Connector {
                 "no pude verificar que {url} sea la instancia anunciada por {} (HTTP {status})",
                 self.source.discovery_path().display()
             )));
-        }
-        if let Ok(mut verified) = self.verified.lock() {
-            *verified = Some((discovery.port, discovery.instance_key.clone()));
         }
         Ok(())
     }

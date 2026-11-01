@@ -178,6 +178,18 @@ impl ConnectorError {
         )
     }
 
+    /// A `text/event-stream` reply to a request that carried no JSON event, so
+    /// there is no result to forward (same silent-wait hazard as W2).
+    pub fn empty_stream() -> Self {
+        Self::new(
+            UNEXPECTED_STATUS,
+            "endpoint_error",
+            "EntropIA respondió con un flujo de eventos sin ninguna respuesta legible: volvé a \
+             intentarlo; si el problema sigue, actualizá la aplicación y el conector.",
+            Some("the event stream carried no JSON event".to_string()),
+        )
+    }
+
     /// A 2xx body that is not JSON where a result was expected (W2).
     pub fn invalid_reply(error: impl Display) -> Self {
         Self::new(
