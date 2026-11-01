@@ -24,7 +24,7 @@ Facts this table is built from:
   designed, not built; the stage is the plan's stage that owns it.
   `not exposed` = deliberately stays out of MCP, with the reason.
 - **Scope**: the target scope from `PROTOCOL.md` (`read`, `local_write`,
-  `remote_spend`, `external_write`, `admin`). `—` for rows that are not exposed.
+  `remote_spend`, `external_write`, `admin`, `web`). `—` for rows that are not exposed.
 - **Planned tool names** beyond the nine the plan itself proposes
   (`entropia_status`, `collections_create`, `documents_import_prepare`,
   `processing_start`, `jobs_get`, `search_passages`, `writing_apply_patch`,
@@ -154,9 +154,9 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Downloads | `navegador_save_download`, `navegador_download_dir`, `navegador_set_download_dir`, `navegador_discard_draft` | `browser_download` | local_write | Both | planned (stage 4) |
 | Saved sources | `navegador_list_sources`, `navegador_source_detail`, `navegador_delete_source` | `browser_sources_list`, `browser_sources_delete` | read / local_write | Both | planned (stage 4) |
 | Copy a captured page into a collection | `navegador_save_capture` plus the import path | `browser_save_to_collection` | local_write | Both | planned (stage 4) |
-| Copy to Zotero (ticket, list, run, cancel, launch, libraries, status) | `navegador_zotero_copy_ticket`, `navegador_zotero_copy_list`, `navegador_zotero_copy_run`, `navegador_zotero_copy_cancel`, `navegador_zotero_launch`, `navegador_zotero_libraries`, `navegador_zotero_status` | `browser_zotero_copy` (approval required) | external_write | Both | planned (stage 4) |
+| Copy to Zotero (request, list, run, cancel, launch, libraries, status) | `navegador_zotero_copy_request`, `navegador_zotero_copy_list`, `navegador_zotero_copy_run`, `navegador_zotero_copy_cancel`, `navegador_zotero_launch`, `navegador_zotero_libraries`, `navegador_zotero_status` | `browser_zotero_copy` (approval required) | external_write | Both | planned (stage 4) |
 | Internet Archive: search, browse, resolve | `internet_archive::commands::ia_search`, `ia_list_collection`, `ia_get_item`, `ia_resolve_identifier` | `ia_search`, `ia_item_get` | read | Both | planned (stage 4) |
-| Internet Archive: import a PDF | `ia_prepare_import`, `ia_start_import`, `ia_cancel_import`, `ia_get_import_status`, `ia_list_jobs`, `ia_list_verified_files`, `ia_discard_draft`, `internet_archive::import::ia_begin_file_import`, `ia_confirm_file_imported`, `ia_fail_file_import`, `ia_list_reconcile`, `ia_finish_reconcile` | `ia_import_prepare`, `ia_import_start` | local_write + external_read | Both | planned (stage 4) |
+| Internet Archive: import a PDF | `ia_prepare_import`, `ia_start_import`, `ia_cancel_import`, `ia_get_import_status`, `ia_list_jobs`, `ia_list_verified_files`, `ia_discard_draft`, `internet_archive::import::ia_begin_file_import`, `ia_confirm_file_imported`, `ia_fail_file_import`, `ia_list_reconcile`, `ia_finish_reconcile` | `ia_import_prepare`, `ia_import_start` | local_write + read | Both | planned (stage 4) |
 
 ## Escritura
 
