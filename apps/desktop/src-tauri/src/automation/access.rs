@@ -226,6 +226,9 @@ fn create_private_dir(dir: &Path) -> Result<(), String> {
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| format!("Could not restrict {}: {e}", dir.display()))?;
     }
+    #[cfg(windows)]
+    super::private_acl::restrict_dir(dir)
+        .map_err(|e| format!("Could not restrict {}: {e}", dir.display()))?;
     Ok(())
 }
 
@@ -300,7 +303,8 @@ fn temp_file_in(dir: &Path) -> std::io::Result<tempfile::NamedTempFile> {
 }
 
 /// Write `bytes` to `path` through a sibling temp file and a rename, so a crash
-/// never leaves half a file. Readable by the owner only on Unix. Shared with
+/// never leaves half a file. Readable by the owner only: mode 0600 on Unix, an
+/// owner-and-SYSTEM access list on Windows (`private_acl.rs`). Shared with
 /// [`super::server`], which writes the discovery file the same way.
 pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path
@@ -319,6 +323,11 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("Could not restrict {}: {e}", tmp.path().display()))?;
     }
+    // Before any byte is written: the temp file must never hold the secret
+    // under the folder's inherited access list.
+    #[cfg(windows)]
+    super::private_acl::restrict_file(tmp.as_file())
+        .map_err(|e| format!("Could not restrict {}: {e}", tmp.path().display()))?;
     use std::io::Write;
     tmp.write_all(bytes)
         .and_then(|_| tmp.as_file().sync_all())
