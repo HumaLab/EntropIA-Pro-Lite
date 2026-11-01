@@ -196,3 +196,20 @@ fn a_profile_is_nested_under_the_dev_profiles_directory() {
             .join("agents")
     );
 }
+
+/// The OS answer wins; `APPDATA` is only the fallback for a process whose
+/// profile path was redirected (a sandbox, a test harness setting
+/// `USERPROFILE`), where the known-folder lookup fails but `APPDATA` still names
+/// the real roaming folder.
+#[test]
+fn the_platform_data_dir_falls_back_to_appdata_only_when_the_os_has_no_answer() {
+    let os = Some(PathBuf::from(r"C:\Users\ana\AppData\Roaming"));
+    let appdata = Some(std::ffi::OsString::from(r"D:\Roaming"));
+    assert_eq!(cli::platform_data_dir(os.clone(), appdata.clone()), os);
+    assert_eq!(
+        cli::platform_data_dir(None, appdata),
+        Some(PathBuf::from(r"D:\Roaming"))
+    );
+    assert_eq!(cli::platform_data_dir(None, Some("".into())), None);
+    assert_eq!(cli::platform_data_dir(None, None), None);
+}

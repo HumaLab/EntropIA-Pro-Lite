@@ -286,6 +286,19 @@ fn view(record: &ClientRecord) -> ClientView {
     }
 }
 
+/// Name prefix of the temporary sibling every atomic write stages through.
+/// Until the rename it holds the same secret as its target (a token hash, the
+/// instance key), so the backup skips anything named like this (backup.rs).
+pub const TEMP_PREFIX: &str = ".agent-write-";
+
+/// The temporary sibling of an atomic write in `dir`, named under
+/// [`TEMP_PREFIX`].
+fn temp_file_in(dir: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(TEMP_PREFIX)
+        .tempfile_in(dir)
+}
+
 /// Write `bytes` to `path` through a sibling temp file and a rename, so a crash
 /// never leaves half a file. Readable by the owner only on Unix. Shared with
 /// [`super::server`], which writes the discovery file the same way.
@@ -293,7 +306,7 @@ pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| {
+    let mut tmp = temp_file_in(dir).map_err(|e| {
         format!(
             "Could not create a temporary file in {}: {e}",
             dir.display()
@@ -587,6 +600,19 @@ pub(crate) mod tests {
 
     fn file(dir: &tempfile::TempDir) -> String {
         std::fs::read_to_string(dir.path().join(ACCESS_FILE)).unwrap_or_default()
+    }
+
+    #[test]
+    fn atomic_writes_stage_under_the_prefix_backups_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let staged = temp_file_in(dir.path()).unwrap();
+        let name = staged
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(name.starts_with(TEMP_PREFIX), "{name}");
     }
 
     #[test]

@@ -37,7 +37,8 @@ const DB_FILE: &str = "entropia.sqlite";
 /// assistant endpoint's local state: `agent-tokens/` holds the tokens of
 /// machines with no credential store, `agent-access.json` their hashes and
 /// `agent-endpoint.json` the instance key (D14). A copy is a copy of the
-/// archive, never of a credential.
+/// archive, never of a credential, so the temporary siblings those files are
+/// written through (`access::TEMP_PREFIX`) stay out too.
 const SKIPPED: [&str; 8] = [
     "entropia.sqlite",
     "entropia.sqlite-wal",
@@ -200,7 +201,10 @@ fn run_backup_unguarded(db_path: &Path) -> Result<PathBuf, String> {
     {
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if SKIPPED.contains(&name.as_ref()) || name.ends_with(".lock") {
+        if SKIPPED.contains(&name.as_ref())
+            || name.ends_with(".lock")
+            || name.starts_with(crate::automation::access::TEMP_PREFIX)
+        {
             continue;
         }
         let target = partial.join(&file_name);
@@ -401,6 +405,10 @@ mod tests {
         .unwrap();
         std::fs::write(archive.path().join("agent-access.json"), b"{}").unwrap();
         std::fs::write(archive.path().join("agent-endpoint.json"), b"{}").unwrap();
+        // A write of either file caught half way: the temporary sibling holds
+        // the same secret under a random name until it is renamed.
+        let in_flight = format!("{}x7Qk2", crate::automation::access::TEMP_PREFIX);
+        std::fs::write(archive.path().join(&in_flight), b"{\"instanceKey\":\"k\"}").unwrap();
         std::fs::create_dir_all(archive.path().join("assets")).unwrap();
         std::fs::write(archive.path().join("assets/doc.pdf"), b"%PDF").unwrap();
 
@@ -417,6 +425,10 @@ mod tests {
         assert!(
             !copy.join("agent-endpoint.json").exists(),
             "a copy must never carry the instance key"
+        );
+        assert!(
+            !copy.join(&in_flight).exists(),
+            "a copy must never carry a half-written agent file"
         );
         assert!(
             copy.join("assets/doc.pdf").exists(),

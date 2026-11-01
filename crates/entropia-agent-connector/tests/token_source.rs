@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use common::{FakeApp, Reply};
 use entropia_agent_connector::cli;
+use entropia_agent_connector::error::{ConnectorError, CREDENTIAL_STORE_UNAVAILABLE};
 use entropia_agent_connector::keyring_source::{
     token_path, CredentialStore, KeyringOutcome, KeyringSource, TOKENS_DIR,
 };
@@ -143,7 +144,7 @@ async fn a_file_token_is_used_when_the_credential_store_has_no_entry() {
     write_discovery(dir.path(), app.port);
     write_token_file(dir.path(), "eat_from_file", 0o600);
 
-    let lines = relay_once(source(dir.path(), KeyringOutcome::Fallback)).await;
+    let lines = relay_once(source(dir.path(), KeyringOutcome::NoEntry)).await;
 
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(parse(&lines[0])["result"], json!({}));
@@ -168,7 +169,7 @@ async fn a_token_file_other_users_can_read_is_refused_before_any_request() {
     write_discovery(dir.path(), app.port);
     write_token_file(dir.path(), "eat_world_readable", 0o644);
 
-    let lines = relay_once(source(dir.path(), KeyringOutcome::Fallback)).await;
+    let lines = relay_once(source(dir.path(), KeyringOutcome::NoEntry)).await;
 
     assert_eq!(lines.len(), 1, "{lines:?}");
     let response = parse(&lines[0]);
@@ -195,8 +196,39 @@ async fn a_token_file_other_users_can_read_is_refused_before_any_request() {
 #[test]
 fn neither_a_store_entry_nor_a_file_is_a_missing_credential() {
     let dir = tempfile::tempdir().unwrap();
-    let source = source(dir.path(), KeyringOutcome::Fallback);
+    let source = source(dir.path(), KeyringOutcome::NoEntry);
     assert_eq!(source.token(CLIENT_ID), Err(TokenError::Missing));
+}
+
+/// A process started with a scrubbed environment (Codex does this) cannot
+/// reach the session keyring. Reporting that as "not paired" sent people to
+/// re-pair a client that was paired all along.
+#[test]
+fn an_unreachable_store_without_a_file_says_so_instead_of_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = source(
+        dir.path(),
+        KeyringOutcome::Unavailable("no session bus".into()),
+    );
+    let error = source.token(CLIENT_ID).unwrap_err();
+    assert_eq!(error, TokenError::StoreUnavailable("no session bus".into()));
+    let rpc = ConnectorError::credential(error);
+    assert_eq!(rpc.rpc_code, CREDENTIAL_STORE_UNAVAILABLE);
+    assert_eq!(rpc.rpc_code, -32007);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert_eq!(rpc.detail.as_deref(), Some("no session bus"));
+    assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+}
+
+#[test]
+fn an_unreachable_store_still_falls_back_to_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write_token_file(dir.path(), "eat_from_file", 0o600);
+    let source = source(
+        dir.path(),
+        KeyringOutcome::Unavailable("no session bus".into()),
+    );
+    assert_eq!(source.token(CLIENT_ID), Ok("eat_from_file".to_string()));
 }
 
 #[test]
@@ -227,6 +259,6 @@ fn a_dev_profile_reads_the_token_directory_inside_its_own_data_dir() {
     // A release run's file in the shared root belongs to another run.
     write_token_file(&shared, "eat_release", 0o600);
     write_token_file(&profile, "eat_profile", 0o600);
-    let source = source(&profile, KeyringOutcome::Fallback);
+    let source = source(&profile, KeyringOutcome::NoEntry);
     assert_eq!(source.token(CLIENT_ID), Ok("eat_profile".to_string()));
 }

@@ -7,9 +7,9 @@ local-only and off by default**, and it is the same code in Pro and Lite.
 
 Status: the endpoint and the connector exist and were exercised end to end
 against a real Lite debug build (isolated dev profile, one seeded client):
-OpenCode, Claude Code and Pi connected and listed the five tools; the Codex
-recipe registers the server, but its connection was not exercised because that
-needs a model session. The connector now ships **with every installer** — Pro and
+OpenCode, Claude Code and Pi connected and listed the five tools, and a
+non-interactive Codex session (`codex exec`) called `entropia_status` through the
+connector. The connector now ships **with every installer** — Pro and
 Lite, Windows NSIS/MSI and MSIX, Linux `.deb`, macOS `.app`/`.dmg` — and Settings ›
 Asistentes names its absolute path. See the **Verified** column under “Pair a
 client” for what exactly was and was not proven, and “Where the connector is
@@ -81,10 +81,10 @@ describes the Lite debug run, where `<connector>` was
 
 | Client | Line | Verified |
 |---|---|---|
-| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Yes — `claude mcp list` reported **✔ Connected** |
-| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Registering only — `codex mcp add` accepted the recipe; its connection was not exercised (it needs a model session) |
-| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Yes — `opencode mcp list` reported **connected** |
-| Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Yes — `pi mcp list` reported **connected** with 5 tools |
+| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Linux and Windows — `claude mcp list` reported **Connected**; Claude Code 2.1 speaks MCP `2026-07-28` (`server/discover`, then `tools/list`) |
+| Codex | `codex mcp add entropia -- <connector> --client cl_…` | Linux — `codex exec` called `entropia_status`. Windows — handshake and `tools/list` completed (the model call itself failed on that machine's account). Codex starts MCP servers with a reduced environment; the connector copes on both |
+| OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Linux and Windows — `opencode mcp list` reported **connected** |
+| Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Linux and Windows — `pi mcp list` reported **connected** with 5 tools |
 
 "No token in the config" held for all four: each config names only the client id.
 
@@ -165,7 +165,27 @@ instance key; `unauthorized` means the client was revoked or was never paired;
 has no instance key (update app and connector); `credential_missing` means there is
 no token for that client id (not paired, or revoked); `credential_insecure` means
 the fallback token file is readable by other users, so fix its permissions
-(`chmod 600`) or pair the assistant again.
+(`chmod 600`) or pair the assistant again; `credential_store_unavailable` means the
+connector could not reach the OS keyring from the process the agent started (log
+in to the desktop session with the keyring unlocked, or pass the agent
+`DBUS_SESSION_BUS_ADDRESS`).
+
+### Known issues on Windows
+
+- **Antivirus sandboxing delays every start.** Avast's Autosandbox (and similar
+  "unknown program" sandboxes) holds an unsigned program that keeps running until
+  its emulation times out: on a test machine the connector took about **26 s** to
+  start, on every launch, and back to ~0 s with the antivirus paused. The
+  installers do not sign the connector yet (see `CODE_SIGNING.md`). Clients with a
+  short MCP startup limit give up first: Codex defaults to 10 s, so set
+  `startup_timeout_sec = 60` under `[mcp_servers.entropia]` in `config.toml`, or
+  exclude the EntropIA install folder in the antivirus. The Store (MSIX) build is
+  signed by the Store on publication; whether that avoids the sandbox was not
+  measured.
+- **SSH sessions have no keyring.** Windows denies the Credential Manager to a
+  key-authenticated SSH logon (`ERROR_NO_SUCH_LOGON_SESSION`); run the agent in the
+  desktop session, or the connector answers `credential_store_unavailable` unless
+  the fallback token file exists.
 
 ## Read next
 

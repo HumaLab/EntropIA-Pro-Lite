@@ -672,6 +672,29 @@ async fn the_audit_trail_lives_under_the_cache_directory() {
     );
 }
 
+/// Every tool says it only reads and touches nothing outside this machine.
+/// Clients act on this: Codex cancels a non-interactive call to a tool that
+/// does not declare itself read-only, because it cannot ask for approval.
+#[tokio::test]
+async fn every_tool_declares_itself_read_only_and_closed_world() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Codex");
+    let body = harness
+        .rpc(
+            &token,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        )
+        .await;
+    let tools = body["result"]["tools"].as_array().expect("tools").clone();
+    assert_eq!(tools.len(), 5);
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap_or_default().to_string();
+        let annotations = &tool["annotations"];
+        assert_eq!(annotations["readOnlyHint"], true, "{name}");
+        assert_eq!(annotations["openWorldHint"], false, "{name}");
+    }
+}
+
 #[tokio::test]
 async fn every_tool_publishes_a_strict_input_schema() {
     let harness = harness().await;

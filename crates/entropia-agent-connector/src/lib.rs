@@ -16,5 +16,6 @@ pub mod error;
 pub mod keyring_source;
 pub mod proof;
 pub mod relay;
+pub mod session_bus;
 
 pub use error::ConnectorError;

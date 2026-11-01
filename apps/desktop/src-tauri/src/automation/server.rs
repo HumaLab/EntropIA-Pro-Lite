@@ -655,6 +655,48 @@ mod tests {
         }
     }
 
+    /// The request body cap (D6) is enforced before any tool runs: an oversized
+    /// call from a paired client is refused with 413, not parsed.
+    #[tokio::test]
+    async fn a_body_over_the_cap_is_refused_before_any_tool_runs() {
+        let h = harness().await;
+        let (_id, token) = h.pair("Claude Code");
+        let padding = "x".repeat(MAX_REQUEST_BODY_BYTES + 1);
+        let response = h
+            .mcp_request(Some(&token))
+            .body(format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{{"pad":"{padding}"}}}}"#
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// The app and the connector each declare the protocol string and the
+    /// keyring service (the connector is a separate crate and cannot import
+    /// them). A change on one side only would fail every connection at runtime;
+    /// this pins both sides together.
+    #[test]
+    fn the_connector_declares_the_same_protocol_and_keyring_service() {
+        let discovery =
+            include_str!("../../../../../crates/entropia-agent-connector/src/discovery.rs");
+        let keyring =
+            include_str!("../../../../../crates/entropia-agent-connector/src/keyring_source.rs");
+        assert!(
+            discovery.contains(&format!("pub const PROTOCOL: &str = \"{PROTOCOL}\";")),
+            "connector discovery.rs must declare PROTOCOL = {PROTOCOL:?}"
+        );
+        assert!(
+            keyring.contains(&format!(
+                "pub const KEYRING_SERVICE: &str = \"{}\";",
+                access::KEYRING_SERVICE
+            )),
+            "connector keyring_source.rs must declare KEYRING_SERVICE = {:?}",
+            access::KEYRING_SERVICE
+        );
+    }
+
     async fn harness() -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let secrets = Arc::new(MemorySecrets::default());

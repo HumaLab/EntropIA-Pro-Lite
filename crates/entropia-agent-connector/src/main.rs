@@ -14,8 +14,50 @@ use entropia_agent_connector::discovery::DISCOVERY_FILE;
 use entropia_agent_connector::keyring_source::KeyringSource;
 use entropia_agent_connector::relay::{self, RelayConfig};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // Before the runtime starts any thread: setting a variable is only sound
+    // while nothing else can read the environment.
+    point_keyring_at_session_bus();
+    match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime.block_on(start()),
+        Err(error) => {
+            eprintln!("entropia-agent-connector: no pude iniciar el runtime: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Give the keyring the user's session bus when the agent launched this
+/// process without one (see `session_bus`). Linux only: the other platforms'
+/// stores do not use D-Bus.
+#[cfg(target_os = "linux")]
+fn point_keyring_at_session_bus() {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let Ok(me) = std::fs::metadata("/proc/self") else {
+        return;
+    };
+    let existing = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+    let address = entropia_agent_connector::session_bus::default_address(
+        existing.as_deref(),
+        runtime_dir.as_deref(),
+        me.uid(),
+        |path| {
+            std::fs::symlink_metadata(path)
+                .ok()
+                .filter(|meta| meta.file_type().is_socket())
+                .map(|meta| meta.uid())
+        },
+    );
+    if let Some(address) = address {
+        std::env::set_var("DBUS_SESSION_BUS_ADDRESS", address);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn point_keyring_at_session_bus() {}
+
+async fn start() -> ExitCode {
     let invocation = match cli::parse_args(std::env::args()) {
         Ok(invocation) => invocation,
         Err(error) => {
@@ -41,7 +83,7 @@ async fn run(options: cli::Options) -> ExitCode {
     let platform_data = match &override_dir {
         // Ignored: the override replaces the whole shared directory.
         Some(_) => PathBuf::new(),
-        None => match dirs::data_dir() {
+        None => match cli::platform_data_dir(dirs::data_dir(), std::env::var_os("APPDATA")) {
             Some(dir) => dir,
             None => {
                 eprintln!(

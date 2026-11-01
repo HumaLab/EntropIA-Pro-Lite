@@ -45,6 +45,76 @@ pub enum TokenError {
     Insecure(String),
     /// The credential store itself failed in a way that is not "unavailable".
     Failed(String),
+    /// The credential store cannot be reached from this process and there is
+    /// no fallback file, so whether the client is paired is unknown.
+    StoreUnavailable(String),
+}
+
+/// The MCP Streamable HTTP routing headers (SEP-2243) of one message:
+/// `Mcp-Method` always, and `Mcp-Name` for the methods that name a target. The
+/// endpoint refuses a 2026-07-28 request whose headers do not repeat its body;
+/// older protocol versions ignore them.
+pub fn routing_headers(body: &str) -> Vec<(&'static str, String)> {
+    let Ok(message) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
+    let Some(method) = message.get("method").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    if is_header_token(method) {
+        headers.push(("Mcp-Method", method.to_string()));
+    }
+    let key = match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" | "resources/subscribe" | "resources/unsubscribe" => Some("uri"),
+        "tasks/get" | "tasks/update" | "tasks/cancel" => Some("taskId"),
+        _ => None,
+    };
+    let name = key.and_then(|key| message.get("params")?.get(key)?.as_str());
+    if let Some(name) = name {
+        headers.push(("Mcp-Name", encode_header_value(name)));
+    }
+    headers
+}
+
+/// A value as it may travel in an `Mcp-*` header: itself when it is visible
+/// ASCII without edge whitespace, else wrapped as `=?base64?...?=` (the same
+/// rule as the endpoint's rmcp).
+fn encode_header_value(value: &str) -> String {
+    use base64::Engine as _;
+    let edge_space = value.starts_with([' ', '\t']) || value.ends_with([' ', '\t']);
+    let invisible = value
+        .chars()
+        .any(|c| (c as u32) < 0x20 || (c as u32) > 0x7E);
+    let looks_encoded = value.starts_with("=?base64?") && value.ends_with("?=");
+    if !value.is_empty() && (edge_space || invisible || looks_encoded) {
+        format!(
+            "=?base64?{}?=",
+            base64::engine::general_purpose::STANDARD.encode(value)
+        )
+    } else {
+        value.to_string()
+    }
+}
+
+/// Whether a method name can be a header value as is (it always is for MCP's
+/// own methods; a malformed one is simply not promoted to a header).
+fn is_header_token(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// The protocol version an MCP 2026-07-28 request carries in
+/// `params._meta["io.modelcontextprotocol/protocolVersion"]`, if any.
+fn request_protocol_version(body: &str) -> Option<String> {
+    let message: Value = serde_json::from_str(body).ok()?;
+    message
+        .get("params")?
+        .get("_meta")?
+        .get("io.modelcontextprotocol/protocolVersion")?
+        .as_str()
+        .filter(|version| !version.is_empty())
+        .map(str::to_string)
 }
 
 /// Where diagnostics go. Never stdout: that channel belongs to the protocol.
@@ -145,7 +215,12 @@ where
         if reader.read_line(&mut input).await? == 0 {
             break;
         }
-        let message = input.trim_end_matches(['\n', '\r']).to_string();
+        // A byte order mark is encoding noise, not message: Windows PowerShell
+        // 5.1 adds one to what it pipes once `$OutputEncoding` is UTF-8.
+        let message = input
+            .trim_end_matches(['\n', '\r'])
+            .trim_start_matches('\u{feff}')
+            .to_string();
         if message.trim().is_empty() {
             continue;
         }
@@ -276,17 +351,24 @@ impl Connector {
             .header("accept", "application/json, text/event-stream")
             .header("authorization", format!("Bearer {token}"))
             .body(body.to_string());
-        // The header describes a negotiated session, so it cannot be on the
-        // request that negotiates it.
-        if method != "initialize" {
-            if let Some(version) = self
-                .negotiated
+        // An MCP 2026-07-28 request names its own version in `_meta`, and the
+        // endpoint refuses it unless the header agrees, so that version wins.
+        // Otherwise the header describes the negotiated session, which cannot
+        // be on the request that negotiates it.
+        let version = request_protocol_version(body).or_else(|| {
+            if method == "initialize" {
+                return None;
+            }
+            self.negotiated
                 .lock()
                 .ok()
                 .and_then(|negotiated| negotiated.clone())
-            {
-                request = request.header("MCP-Protocol-Version", version);
-            }
+        });
+        if let Some(version) = version {
+            request = request.header("MCP-Protocol-Version", version);
+        }
+        for (name, value) in routing_headers(body) {
+            request = request.header(name, value);
         }
 
         let response = request.send().await.map_err(|error| {

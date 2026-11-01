@@ -316,6 +316,98 @@ async fn an_sse_response_becomes_one_line_per_data_event() {
     assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
 }
 
+/// MCP 2026-07-28 clients carry their protocol version in each request's
+/// `_meta`, and the endpoint (rmcp) refuses such a request with HTTP 400 unless
+/// the `MCP-Protocol-Version` header says the same. Claude Code probes with
+/// `server/discover` before any `initialize`, so the header comes from the
+/// message itself, and it wins over a version negotiated earlier.
+#[tokio::test]
+async fn a_request_carrying_its_protocol_version_sends_it_as_the_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|request| match request.rpc_method().as_str() {
+        "initialize" => initialize_reply(1),
+        _ => Reply::json(json!({ "jsonrpc": "2.0", "id": 3, "result": {} }).to_string()),
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+    let discover = json!({
+        "jsonrpc": "2.0", "id": "probe", "method": "server/discover",
+        "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
+    })
+    .to_string();
+    let modern_call = json!({
+        "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+        "params": { "_meta": { "io.modelcontextprotocol/protocolVersion": "2026-07-28" } }
+    })
+    .to_string();
+
+    let mut harness = Harness::start(discovery_file(dir.path()), Some(TOKEN));
+    harness.send(&discover).await;
+    harness.next_line().await;
+    harness.send(&initialize(1)).await;
+    harness.next_line().await;
+    harness.send(&modern_call).await;
+    harness.next_line().await;
+    harness.finish().await;
+
+    let requests = app.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].rpc_method(), "server/discover");
+    assert_eq!(
+        requests[0].header("mcp-protocol-version"),
+        Some("2026-07-28")
+    );
+    assert_eq!(
+        requests[1].header("mcp-protocol-version"),
+        None,
+        "initialize"
+    );
+    assert_eq!(
+        requests[2].header("mcp-protocol-version"),
+        Some("2026-07-28")
+    );
+}
+
+/// MCP 2026-07-28 Streamable HTTP routing headers (SEP-2243): the endpoint
+/// refuses a request whose `Mcp-Method` (and, for named methods, `Mcp-Name`)
+/// does not repeat the body. Names that are not plain header tokens travel as
+/// `=?base64?...?=`.
+#[tokio::test]
+async fn every_request_carries_its_routing_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|_| {
+        Reply::json(json!({ "jsonrpc": "2.0", "id": 1, "result": {} }).to_string())
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": { "name": "entropia_status", "arguments": {} } })
+    .to_string();
+    let read = json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+        "params": { "uri": "entropia://colección/1" } })
+    .to_string();
+    let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+
+    let mut harness = Harness::start(discovery_file(dir.path()), Some(TOKEN));
+    for message in [&call, &read, &list] {
+        harness.send(message).await;
+        harness.next_line().await;
+    }
+    harness.finish().await;
+
+    let requests = app.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].header("mcp-method"), Some("tools/call"));
+    assert_eq!(requests[0].header("mcp-name"), Some("entropia_status"));
+    assert_eq!(requests[1].header("mcp-method"), Some("resources/read"));
+    assert_eq!(
+        requests[1].header("mcp-name"),
+        Some("=?base64?ZW50cm9waWE6Ly9jb2xlY2Npw7NuLzE=?=")
+    );
+    assert_eq!(requests[2].header("mcp-method"), Some("tools/list"));
+    assert_eq!(requests[2].header("mcp-name"), None);
+}
+
 #[tokio::test]
 async fn the_negotiated_protocol_version_is_sent_after_initialize_but_not_on_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -468,6 +560,34 @@ async fn a_client_without_a_stored_credential_is_told_to_pair_again() {
     assert_eq!(error_code(&response), "credential_missing");
     assert_rpc_family(&response);
     assert!(app.requests().is_empty());
+}
+
+/// Windows PowerShell 5.1 prefixes what it pipes to a native program with a
+/// UTF-8 byte order mark once `$OutputEncoding` is UTF-8, a common setting for
+/// accented text. The mark is not part of the message, so the relay drops it
+/// instead of answering a parse error.
+#[tokio::test]
+async fn a_byte_order_mark_before_a_message_is_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|request| match request.rpc_method().as_str() {
+        "initialize" => initialize_reply(1),
+        _ => Reply::json(json!({ "jsonrpc": "2.0", "id": 6, "result": {} }).to_string()),
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+    let outcome = relay_once(
+        discovery_file(dir.path()),
+        Some(TOKEN),
+        &[format!("\u{feff}{}", tools_list(6))],
+    )
+    .await;
+
+    assert_eq!(outcome.lines.len(), 1, "{:?}", outcome.lines);
+    let response = parse(&outcome.lines[0]);
+    assert_eq!(response["id"], 6, "{response}");
+    assert_eq!(response["result"], json!({}));
+    assert_eq!(app.requests().len(), 1);
 }
 
 #[tokio::test]
