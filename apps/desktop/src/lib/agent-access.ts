@@ -9,7 +9,7 @@ import { invoke } from '@tauri-apps/api/core'
  */
 
 /** What a paired client may do. Only `read` is granted in this release. */
-export type AgentScope = 'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin'
+export type AgentScope = 'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
 
 /** One paired assistant, as the panel lists it. */
 export interface AgentClient {
