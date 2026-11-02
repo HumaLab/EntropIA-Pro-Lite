@@ -5,6 +5,7 @@
 //! - [`audit`] — the local trail of what an assistant did (S9).
 //! - [`commands`] — the Tauri commands the Asistentes panel calls (D11).
 //! - [`connector`] — where the bundled assistant connector is installed (D15).
+//! - [`jobs`] — the processing tools' adapter over the batch services.
 //! - [`mcp`] — what the endpoint offers over MCP (one tool per intent).
 //! - [`proof`] — the instance key and HMAC that keep a token from reaching a
 //!   process that is not this app (D12).
@@ -15,6 +16,7 @@ pub mod access;
 pub mod audit;
 pub mod commands;
 pub mod connector;
+pub mod jobs;
 pub mod mcp;
 #[cfg(windows)]
 mod private_acl;

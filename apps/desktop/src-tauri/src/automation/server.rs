@@ -880,6 +880,8 @@ mod tests {
                 "entropia_status",
                 "items_get",
                 "items_list",
+                "jobs_get",
+                "jobs_list",
                 "search_items"
             ]
         );

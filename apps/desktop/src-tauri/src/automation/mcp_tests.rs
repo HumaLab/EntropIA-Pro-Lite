@@ -109,6 +109,24 @@ impl Harness {
         body["result"]["structuredContent"].clone()
     }
 
+    fn db_path(&self) -> PathBuf {
+        self.root.path().join("entropia.sqlite")
+    }
+
+    /// Prepare an OCR draft over one collection through the same service the
+    /// Procesamiento tab uses, returning its batch id.
+    fn prepare(&self, request_id: &str, collection: &str) -> String {
+        let conn = crate::processing::commands::open_ready(&self.db_path()).unwrap();
+        crate::processing::commands::prepare_batch(
+            &conn,
+            request_id,
+            &[collection.to_string()],
+            &["ocr".to_string()],
+        )
+        .unwrap()
+        .batch_id
+    }
+
     fn audit_lines(&self) -> Vec<Value> {
         std::fs::read_to_string(self.audit_path())
             .unwrap_or_default()
@@ -214,6 +232,8 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "entropia_status",
             "items_get",
             "items_list",
+            "jobs_get",
+            "jobs_list",
             "search_items"
         ])
     );
@@ -686,7 +706,7 @@ async fn every_tool_declares_itself_read_only_and_closed_world() {
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 7);
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
         let annotations = &tool["annotations"];
@@ -710,11 +730,22 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 5] = [
+    let expected: [(&str, &[&str]); 7] = [
         ("collections_list", &["cursor", "limit"]),
         ("entropia_status", &[]),
         ("items_get", &["itemId"]),
         ("items_list", &["collectionId", "cursor", "limit"]),
+        (
+            "jobs_get",
+            &[
+                "jobId",
+                "taskKind",
+                "taskState",
+                "tasksCursor",
+                "tasksLimit",
+            ],
+        ),
+        ("jobs_list", &["cursor", "limit", "states"]),
         ("search_items", &["collectionId", "limit", "query"]),
     ];
     assert_eq!(tools.len(), expected.len(), "no tool beyond D10's list");
@@ -739,6 +770,120 @@ async fn every_tool_publishes_a_strict_input_schema() {
         expected_names.sort_unstable();
         assert_eq!(names, expected_names, "{tool}");
     }
+}
+
+#[tokio::test]
+async fn jobs_list_pages_the_users_batches_with_every_field_once() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let first = harness.prepare("req-a", ALFA);
+    let second = harness.prepare("req-b", BETA);
+
+    let page = harness
+        .payload(&token, "jobs_list", json!({ "limit": 1 }))
+        .await;
+    assert_eq!(keys(&page), sorted(&["records", "nextCursor"]));
+    let record = &records(&page)[0];
+    assert_eq!(
+        keys(record),
+        sorted(&[
+            "id",
+            "state",
+            "desiredState",
+            "operations",
+            "revision",
+            "priority",
+            "createdAt",
+            "updatedAt",
+            "activeUnits",
+            "failedUnits",
+            "succeededUnits",
+        ])
+    );
+    assert_eq!(record["state"], "preparing");
+    assert_eq!(record["operations"], json!(["ocr"]));
+    let cursor = page["nextCursor"]
+        .as_str()
+        .expect("one more page")
+        .to_string();
+
+    let rest = harness
+        .payload(&token, "jobs_list", json!({ "limit": 1, "cursor": cursor }))
+        .await;
+    assert_eq!(rest["nextCursor"], Value::Null, "two batches, two pages");
+    let mut seen = vec![ids(&page)[0].clone(), ids(&rest)[0].clone()];
+    seen.sort();
+    let mut expected = vec![first, second];
+    expected.sort();
+    assert_eq!(seen, expected, "each batch exactly once");
+}
+
+#[tokio::test]
+async fn jobs_get_reports_the_batch_its_scope_and_its_tasks() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let batch = harness.prepare("req-a", ALFA);
+
+    let detail = harness
+        .payload(&token, "jobs_get", json!({ "jobId": batch }))
+        .await;
+    assert_eq!(keys(&detail), sorted(&["job", "tasks", "nextTasksCursor"]));
+    let job = &detail["job"];
+    assert_eq!(job["id"], batch);
+    assert_eq!(job["state"], "preparing");
+    assert_eq!(job["desiredState"], "pause");
+    assert_eq!(job["operations"], json!(["ocr"]));
+    assert_eq!(job["membersTotal"], 2);
+    assert_eq!(job["collections"], json!([{ "id": ALFA, "name": "Alfa" }]));
+    assert_eq!(detail["tasks"], json!([]), "no task exists before planning");
+    assert_eq!(detail["nextTasksCursor"], Value::Null);
+
+    let last = harness.audit_lines().last().cloned().expect("audited");
+    assert_eq!(last["tool"], "jobs_get");
+    assert_eq!(last["status"], "ok");
+    assert_eq!(last["objectIds"], json!([batch]));
+}
+
+#[tokio::test]
+async fn jobs_get_names_an_unknown_job_not_found() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let refusal = harness
+        .refusal(&token, "jobs_get", json!({ "jobId": "batch-missing" }))
+        .await;
+    assert_eq!(refusal["error"], ERROR_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn jobs_tools_refuse_unknown_states_and_out_of_range_limits() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let batch = harness.prepare("req-a", ALFA);
+    for (tool, arguments) in [
+        ("jobs_list", json!({ "states": ["exploded"] })),
+        ("jobs_list", json!({ "limit": 0 })),
+        ("jobs_list", json!({ "cursor": "not-a-cursor" })),
+        ("jobs_get", json!({ "jobId": batch, "tasksLimit": 201 })),
+        (
+            "jobs_get",
+            json!({ "jobId": batch, "taskState": "exploded" }),
+        ),
+    ] {
+        let refusal = harness.refusal(&token, tool, arguments.clone()).await;
+        assert_eq!(
+            refusal["error"], ERROR_INVALID_ARGUMENT,
+            "{tool} {arguments}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn jobs_tools_need_the_read_scope() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.access.set_scopes(&id, vec![]).unwrap();
+    let refusal = harness.refusal(&token, "jobs_list", json!({})).await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read

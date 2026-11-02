@@ -37,6 +37,7 @@ use serde_json::Value;
 
 use crate::automation::access::{Principal, Scope};
 use crate::automation::audit::{AuditLine, AuditLog};
+use crate::automation::jobs::{JobDetail, JobsArchive, JobsError, JobsPage};
 use crate::automation::read::{
     ArchiveCounts, ArchiveReader, CollectionsPage, ItemDetail, ItemsPage, ReadError, SearchResults,
 };
@@ -62,6 +63,8 @@ const TOOL_COLLECTIONS_LIST: &str = "collections_list";
 const TOOL_ITEMS_LIST: &str = "items_list";
 const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
+const TOOL_JOBS_LIST: &str = "jobs_list";
+const TOOL_JOBS_GET: &str = "jobs_get";
 
 /// `entropia_status`'s payload: this instance, this archive, this caller.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -150,6 +153,38 @@ pub struct SearchItemsParams {
     pub limit: Option<u32>,
 }
 
+/// `jobs_list` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobsListParams {
+    /// Only jobs in these states: `preparing`, `ready`, `running`, `pausing`,
+    /// `paused`, `cancelling`, `cancelled`, `interrupted`, `completed`,
+    /// `completed_with_errors`.
+    pub states: Option<Vec<String>>,
+    /// The `nextCursor` the previous page returned. Omit for the first page.
+    pub cursor: Option<String>,
+    /// Page size, 1 to 200; the default is 50.
+    pub limit: Option<u32>,
+}
+
+/// `jobs_get` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobsGetParams {
+    /// The job's id, as `jobs_list` or `processing_prepare` returned it.
+    pub job_id: String,
+    /// Only tasks in this state: `pending`, `blocked`, `running`, `retry_wait`,
+    /// `interrupted`, `succeeded`, `failed`, `skipped`, `cancelled`.
+    pub task_state: Option<String>,
+    /// Only tasks of this kind: `ocr`, `embedding`, `ner`, `triples`,
+    /// `schema_extract`.
+    pub task_kind: Option<String>,
+    /// The `nextTasksCursor` the previous call returned.
+    pub tasks_cursor: Option<String>,
+    /// Tasks per page, 1 to 200; the default is 50.
+    pub tasks_limit: Option<u32>,
+}
+
 /// Arguments that deserialize strictly but fail as a tool error.
 ///
 /// rmcp turns a failed `Parameters` extraction into a plain-text tool result, and
@@ -182,6 +217,7 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for Strict<T> {
 pub struct AgentServer {
     tool_router: ToolRouter<Self>,
     reader: ArchiveReader,
+    jobs: JobsArchive,
     audit: AuditLog,
 }
 
@@ -189,8 +225,10 @@ impl AgentServer {
     /// `db_path` is the archive the tools read; `cache_dir` receives the audit
     /// trail under `logs/`.
     pub fn new(db_path: impl Into<PathBuf>, cache_dir: impl Into<PathBuf>) -> Self {
+        let db_path = db_path.into();
         Self {
             tool_router: Self::tool_router(),
+            jobs: JobsArchive::new(db_path.clone()),
             reader: ArchiveReader::new(db_path),
             audit: AuditLog::new(cache_dir.into().join("logs")),
         }
@@ -286,6 +324,27 @@ impl AgentServer {
     ) -> CallToolResult {
         self.audit_error(caller, tool, error.code(), query_chars);
         tool_error(error.code(), error.message().to_string())
+    }
+
+    /// Record and answer a failed processing request.
+    fn jobs_failure(&self, caller: &Principal, tool: &str, error: JobsError) -> CallToolResult {
+        self.audit_error(caller, tool, error.code, None);
+        tool_error(error.code, error.message)
+    }
+
+    /// Run one blocking processing call off the async runtime.
+    async fn on_jobs<T, F>(work: F) -> Result<T, JobsError>
+    where
+        F: FnOnce() -> Result<T, JobsError> + Send + 'static,
+        T: Send + 'static,
+    {
+        match tokio::task::spawn_blocking(work).await {
+            Ok(result) => result,
+            Err(error) => {
+                log::warn!(target: "automation", "the processing task did not finish: {error}");
+                Err(JobsError::unavailable())
+            }
+        }
     }
 
     /// Run one blocking archive read off the async runtime.
@@ -480,6 +539,62 @@ impl AgentServer {
             .collect();
         self.audit_ok(&caller, TOOL_SEARCH_ITEMS, object_ids, query_chars);
         Ok(Json(results))
+    }
+
+    #[tool(
+        name = "jobs_list",
+        description = "Trabajos de procesamiento (lotes de OCR, embeddings, entidades, tripletas o extracción) que la persona preparó o empezó, del más nuevo al más viejo, con su estado y cuántas unidades terminaron, fallaron o siguen activas. Filtra por `states`. Pagina con `cursor` y `limit` (1 a 200, por defecto 50).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn jobs_list(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<JobsListParams>>,
+    ) -> Result<Json<JobsPage>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_JOBS_LIST)?;
+        let args = self.arguments(&caller, TOOL_JOBS_LIST, args)?;
+        let jobs = self.jobs.clone();
+        let page =
+            match Self::on_jobs(move || jobs.list(args.states, args.cursor.as_deref(), args.limit))
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => return Err(self.jobs_failure(&caller, TOOL_JOBS_LIST, error)),
+            };
+        let object_ids = page.records.iter().map(|job| job.id.clone()).collect();
+        self.audit_ok(&caller, TOOL_JOBS_LIST, object_ids, None);
+        Ok(Json(page))
+    }
+
+    #[tool(
+        name = "jobs_get",
+        description = "Un trabajo de procesamiento por su id: estado, operaciones, colecciones, progreso, revisión y una página de sus tareas (filtrables por `taskState` y `taskKind`, paginadas con `tasksCursor` y `tasksLimit`). La `revision` es la que piden las acciones sobre el trabajo.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn jobs_get(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<JobsGetParams>>,
+    ) -> Result<Json<JobDetail>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_JOBS_GET)?;
+        let args = self.arguments(&caller, TOOL_JOBS_GET, args)?;
+        let jobs = self.jobs.clone();
+        let detail = match Self::on_jobs(move || {
+            jobs.get(
+                &args.job_id,
+                args.task_state.as_deref(),
+                args.task_kind.as_deref(),
+                args.tasks_cursor.as_deref(),
+                args.tasks_limit,
+            )
+        })
+        .await
+        {
+            Ok(detail) => detail,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_JOBS_GET, error)),
+        };
+        self.audit_ok(&caller, TOOL_JOBS_GET, vec![detail.job.id.clone()], None);
+        Ok(Json(detail))
     }
 }
 

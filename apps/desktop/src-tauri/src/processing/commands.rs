@@ -54,7 +54,7 @@ pub struct PrepareResponse {
     pub members: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchSnapshotDto {
     pub id: String,
@@ -82,21 +82,21 @@ pub struct BatchSnapshotDto {
     pub collections: Vec<CollectionRefDto>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StateCountDto {
     pub name: String,
     pub count: i64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionRefDto {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchSummaryDto {
     pub id: String,
@@ -126,7 +126,7 @@ pub struct ListBatchesResponse {
     pub next_cursor: Option<BatchCursorDto>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskSummaryDto {
     pub task_id: String,

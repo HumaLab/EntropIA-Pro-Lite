@@ -40,9 +40,12 @@ the read-only tranche in `odd/tasks/agent-mcp-connector.md` (merged in v1.2.0).
   `agent:<clientId>:<requestId>` in `processing_requests`, so a replay returns the same batch and the same
   id with other parameters is refused. Asking to start the same batch at the same revision returns the
   same pending approval instead of a second dialog.
-- D6 — Impact and cost (S3): the plan always reports counts (members, tasks by kind); a USD figure only
-  where a rate is known (GLM-OCR through `bibliography::reprocess::estimated_usd`), labelled estimated;
-  otherwise it says no estimate is available. Agent costs are not EntropIA's and are never reported.
+- D6 — Impact and cost (S3): prepare reports the files in scope and the operations; once planning finishes,
+  `jobs_get` reports the units per kind (`tasksByKind`). Page counts are only known after planning, so no
+  USD figure is computed at prepare time: the result says so explicitly instead of guessing (L4). In Lite,
+  embeddings, entities, triples and schemas need the OpenRouter key exactly as the Procesamiento tab requires;
+  without it prepare answers `provider_not_configured` (S7). Agent costs are not EntropIA's and are never
+  reported.
 - D7 — No schema migration in this feature (sync `schema_tag`, AGENTS.md): approvals are in memory,
   batches keep `origin='user'` so the Procesamiento tab shows them (it already refreshes on
   `processing:changed`, S6), and which client asked lives in the audit log (S9).
@@ -51,7 +54,7 @@ the read-only tranche in `odd/tasks/agent-mcp-connector.md` (merged in v1.2.0).
 
 - [x] T1 — Extract `&Connection` services for prepare, start, control, priority, retry, list/get batches and tasks; Tauri commands delegate. S3, S6. Route: inline, TDD (RED: 24 compile errors, services missing → GREEN 11 service tests); start became a conditional update so two starts at one revision run once. Full Rust suite 3298 passed / 0 failed, clippy -D warnings clean. Risk: item 3 (shared code the Procesamiento tab uses). Commit: 1a4f225b
 - [x] T2 — Owner grants `local_write`/`remote_spend` per client: `AgentAccess::set_grants` (only those two; `read` and other scopes untouched), `agent_client_set_grants` command (handler, APP_COMMANDS, capability), checkboxes in Asistentes: granting asks for confirmation, withdrawing applies at once. S2, S4. Route: inline, TDD (RED: `Grants`/`set_grants` missing; Vitest 3 failing → GREEN Rust 4 tests, Vitest 22/22 Pro and Lite). Full Rust suite 3298/0, clippy clean, lint, typecheck Pro and Lite clean, svelte-autofixer no issues. Risk: item 2 (permissions). Commit: see git log (feat(agents): let the owner grant processing scopes)
-- [ ] T3 — Read tools `jobs_list`, `jobs_get` (batch snapshot + paged tasks). S3. Route: inline, TDD. Commit: —
+- [x] T3 — Read tools `jobs_list`, `jobs_get` (batch snapshot + paged tasks) through `automation/jobs.rs`, a `query_only` adapter over the T1 services: limits refused outside 1..200, opaque cursors, service errors mapped to stable codes (`not_found`, `invalid_argument`, `revision_conflict`, `invalid_state`, `unavailable`) without leaking paths. S3, S7. Route: inline, TDD (RED: 8 endpoint tests failing with the implementation stashed → GREEN automation 89; found and fixed: "unknown batch state" was mapped to not_found). Full Rust suite 3305/0, clippy clean. Commit: see git log (feat(agents): add jobs_list and jobs_get)
 - [ ] T4 — `processing_prepare` (local_write): collections and items, operations, `requestId` idempotency, impact and estimate. S2, S3, S8. Route: inline, TDD. Risk: item 3. Commit: —
 - [ ] T5 — Approval core: store, plan digest, expiry, single use, events, window focus, `agent_approvals_*` commands. S4, S5. Route: inline, TDD. Risk: items 2, 4. Commit: —
 - [ ] T6 — `processing_start`, `processing_control` (pause, resume, cancel, retry), `approvals_status`; resume/retry through T5. S2, S4, S7, S8. Route: inline, TDD. Risk: item 2. Commit: —
@@ -66,3 +69,4 @@ the read-only tranche in `odd/tasks/agent-mcp-connector.md` (merged in v1.2.0).
 - L1 (2026-11-02, owner): "bien, entoces tenemos que avanzar con lo pendiente para que la conexion mcp tenga sentido, ahora solo es una funcionalidad poco util si so es lectura, avanzamos???"
 - L2 (2026-11-02, owner answer): "Procesamiento primero (recomendado)" over "Corpus primero" and "Etapa 3 completa".
 - L3 (2026-11-02, exploration): batch commands take only `State<AppDbState>` (no AppHandle); prepare scopes collections only and reports counts, no cost; start fences by `expected_revision` and has no request id; prepare/retry are idempotent by `request_id` + payload hash; control with no batch id acts on every live batch; the UI refreshes on `processing:changed` and polls every 3 s; no Rust-triggered approval exists; clients are always created with `read` only; the only USD estimator is GLM-OCR's in `bibliography/reprocess.rs`.
+- L4 (2026-11-02, design): a batch's OCR pages are counted by background planning, not at prepare time, and the only known rate is GLM-OCR's; D6 now reports files, operations and later the planned units instead of a USD estimate it cannot compute. T4 also adds item scope to `prepare_batch` (hash unchanged for collection-only requests, so the tab's replays keep matching).
