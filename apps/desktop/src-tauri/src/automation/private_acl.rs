@@ -246,8 +246,16 @@ mod tests {
             )
         };
         assert_eq!(status, ERROR_SUCCESS, "read {}", path.display());
+        let sddl = descriptor_sddl(descriptor);
+        // SAFETY: freeing the descriptor the call above allocated.
+        let _ = unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        sddl
+    }
+
+    /// A descriptor's DACL as SDDL, the way Windows writes it.
+    fn descriptor_sddl(descriptor: PSECURITY_DESCRIPTOR) -> String {
         let mut text = PWSTR::null();
-        // SAFETY: `descriptor` is the one just read.
+        // SAFETY: `descriptor` is a valid descriptor owned by the caller.
         unsafe {
             ConvertSecurityDescriptorToStringSecurityDescriptorW(
                 descriptor,
@@ -260,12 +268,31 @@ mod tests {
         .unwrap();
         // SAFETY: NUL-terminated string allocated by the conversion.
         let sddl = unsafe { text.to_string() }.unwrap();
-        // SAFETY: freeing what the two calls above allocated.
-        unsafe {
-            let _ = LocalFree(Some(HLOCAL(text.0.cast())));
-            let _ = LocalFree(Some(HLOCAL(descriptor.0)));
-        }
+        // SAFETY: freeing the string the conversion allocated.
+        let _ = unsafe { LocalFree(Some(HLOCAL(text.0.cast()))) };
         sddl
+    }
+
+    /// `entries` as Windows itself writes them back. SDDL has aliases for
+    /// well-known accounts (the built-in Administrator, RID 500, prints as
+    /// `LA`), so an expected list spelled with raw SIDs is compared after the
+    /// same round trip as the observed one.
+    fn canonical_entries(entries: &str) -> String {
+        let mut descriptor = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+        // SAFETY: out-parameter call; the descriptor is freed below.
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                &HSTRING::from(format!("D:{entries}")),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .unwrap();
+        let sddl = descriptor_sddl(descriptor);
+        // SAFETY: freeing the descriptor the conversion allocated.
+        let _ = unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
+        split(&sddl).1.to_string()
     }
 
     /// Split a DACL's SDDL into its control flags and its entries.
@@ -280,7 +307,21 @@ mod tests {
         let sddl = dacl_sddl(path);
         let (flags, aces) = split(&sddl);
         assert!(flags.contains('P'), "not protected: {sddl}");
-        assert_eq!(aces, entries, "{}", path.display());
+        assert_eq!(aces, canonical_entries(entries), "{}", path.display());
+    }
+
+    /// The comparison must not depend on who runs the tests: a raw SID and its
+    /// SDDL alias name the same account. CI runs as the built-in Administrator,
+    /// whose SID Windows writes back as `LA`.
+    #[test]
+    fn expected_entries_are_compared_in_the_spelling_windows_uses() {
+        assert_eq!(canonical_entries("(A;;FA;;;S-1-5-18)"), "(A;;FA;;;SY)");
+        let user = current_user_sid().unwrap();
+        let spelled = canonical_entries(&format!("(A;;FA;;;{user})"));
+        assert!(
+            spelled.starts_with("(A;;FA;;;") && spelled.ends_with(')'),
+            "{spelled}"
+        );
     }
 
     #[test]
@@ -363,7 +404,7 @@ mod tests {
         let sddl = dacl_sddl(&child);
         assert_eq!(
             split(&sddl).1,
-            format!("(A;ID;FA;;;{user})(A;ID;FA;;;SY)"),
+            canonical_entries(&format!("(A;ID;FA;;;{user})(A;ID;FA;;;SY)")),
             "a file created inside inherits only the two entries"
         );
     }
