@@ -17,6 +17,7 @@
   import { join } from '@tauri-apps/api/path'
   import { remove } from '@tauri-apps/plugin-fs'
   import { DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT } from '$lib/document-explorer'
+  import { COLLECTIONS_CHANGED_EXTERNALLY_EVENT } from '$lib/corpus-events'
   import type { Collection } from '@entropia/store'
 
   const navigation = getNavigation()
@@ -206,15 +207,22 @@
     searchQuery = detail || ''
   }
 
+  // An assistant created or renamed a collection: show what the archive holds.
+  function handleExternalChange() {
+    void loadCollections()
+  }
+
   onMount(() => {
     loadCollections()
     window.addEventListener('entropia:create-collection', handleExternalCreate)
     window.addEventListener('entropia:filter-collections', handleExternalFilter)
+    window.addEventListener(COLLECTIONS_CHANGED_EXTERNALLY_EVENT, handleExternalChange)
   })
 
   onDestroy(() => {
     window.removeEventListener('entropia:create-collection', handleExternalCreate)
     window.removeEventListener('entropia:filter-collections', handleExternalFilter)
+    window.removeEventListener(COLLECTIONS_CHANGED_EXTERNALLY_EVENT, handleExternalChange)
   })
 </script>
 

@@ -1075,6 +1075,14 @@ pub fn run() {
                             }
                         }
                     }));
+                // A corpus write an assistant made reaches the views that show
+                // collections and items, which re-read on it.
+                let corpus_handle = app.handle().clone();
+                agent_endpoint
+                    .corpus_events()
+                    .set_notifier(std::sync::Arc::new(move |change| {
+                        let _ = corpus_handle.emit("corpus:changed", change);
+                    }));
                 app.manage(agent_access.clone());
                 app.manage(agent_endpoint.clone());
                 tauri::async_runtime::spawn(async move {

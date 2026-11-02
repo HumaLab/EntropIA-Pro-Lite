@@ -1,0 +1,306 @@
+//! The corpus edit tools' adapter: the services of [`crate::corpus`] under the
+//! agent tool contract.
+//!
+//! Like [`super::jobs`] for processing, no corpus rule lives here: validation,
+//! revision fencing and the reserved metadata keys belong to the services the
+//! app's own views use. This module adds what only the agent path needs: a
+//! required revision on every update, idempotent creation keyed by the
+//! client's request id, stable error codes, and the announcement that lets the
+//! app's views refresh after a write they did not make (S6).
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use rusqlite::Connection;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use super::jobs::JobsError;
+use crate::corpus::{self, CollectionDto, CollectionPatch, CorpusError, ItemPatch};
+use crate::processing::repository;
+
+/// Longest request id an assistant may send.
+const REQUEST_ID_MAX_CHARS: usize = 128;
+
+/// What changed, for the app's views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorpusChange {
+    /// `collection` or `item`.
+    pub kind: &'static str,
+    pub id: String,
+    /// The collection the changed record belongs to (itself for a collection).
+    pub collection_id: String,
+}
+
+/// Called after every successful write; installed by the app (an event the
+/// views listen to). Never called while a connection is open in a transaction.
+pub type CorpusNotifier = Arc<dyn Fn(CorpusChange) + Send + Sync>;
+
+/// The endpoint's announcer of corpus writes.
+#[derive(Default)]
+pub struct CorpusEvents {
+    notifier: Mutex<Option<CorpusNotifier>>,
+}
+
+impl CorpusEvents {
+    pub fn set_notifier(&self, notifier: CorpusNotifier) {
+        if let Ok(mut slot) = self.notifier.lock() {
+            *slot = Some(notifier);
+        }
+    }
+
+    pub fn notify(&self, change: CorpusChange) {
+        let notifier = self.notifier.lock().ok().and_then(|slot| slot.clone());
+        if let Some(notifier) = notifier {
+            notifier(change);
+        }
+    }
+}
+
+/// `collections_create`'s payload.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedCollection {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    /// The revision `collections_update` names.
+    pub updated_at: i64,
+    /// False when this request id already created this collection.
+    pub created: bool,
+}
+
+/// An item after `items_update`, in the shape `items_get` uses.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedItem {
+    pub id: String,
+    pub title: String,
+    pub collection_id: String,
+    pub metadata: serde_json::Value,
+    pub created_at: i64,
+    /// The revision the next update names.
+    pub updated_at: i64,
+}
+
+fn refusal(code: &'static str, message: impl Into<String>) -> JobsError {
+    JobsError {
+        code,
+        message: message.into(),
+    }
+}
+
+/// The stable code and Spanish sentence for a refused corpus write. The
+/// service's detail names only ids and limits; an unavailable archive's
+/// detail may name a path, so it stays in the log.
+fn from_corpus(error: CorpusError) -> JobsError {
+    match error {
+        CorpusError::InvalidArgument(detail) => refusal(
+            "invalid_argument",
+            format!("La petición no es válida: {detail}."),
+        ),
+        CorpusError::NotFound(detail) => {
+            refusal("not_found", format!("No existe en este archivo: {detail}."))
+        }
+        CorpusError::RevisionConflict(detail) => refusal(
+            super::jobs::ERROR_REVISION_CONFLICT,
+            format!("Cambió desde la última lectura ({detail}). Volvé a leerlo y reintentá con su `updatedAt` como `revision`."),
+        ),
+        CorpusError::Unavailable(detail) => {
+            log::warn!(target: "automation", "a corpus write failed: {detail}");
+            JobsError::unavailable()
+        }
+    }
+}
+
+fn check_request_id(request_id: &str) -> Result<(), JobsError> {
+    if request_id.trim().is_empty()
+        || request_id.chars().count() > REQUEST_ID_MAX_CHARS
+        || request_id.chars().any(char::is_control)
+    {
+        return Err(refusal(
+            "invalid_argument",
+            format!(
+                "`requestId` tiene que tener entre 1 y {REQUEST_ID_MAX_CHARS} caracteres visibles."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn payload_hash(parts: &[&str]) -> String {
+    hex::encode(Sha256::digest(parts.join("\u{0}").as_bytes()))
+}
+
+/// The corpus of one archive, as the edit tools see it.
+#[derive(Clone)]
+pub struct CorpusArchive {
+    db_path: PathBuf,
+    events: Arc<CorpusEvents>,
+}
+
+impl CorpusArchive {
+    pub fn new(db_path: impl Into<PathBuf>, events: Arc<CorpusEvents>) -> Self {
+        Self {
+            db_path: db_path.into(),
+            events,
+        }
+    }
+
+    fn connection(&self) -> Result<Connection, JobsError> {
+        crate::db::open::open_archive_connection(&self.db_path).map_err(|error| {
+            log::warn!(target: "automation", "could not open the archive for a corpus write: {error}");
+            JobsError::unavailable()
+        })
+    }
+
+    /// Create a collection once per client request id: a retry with the same
+    /// arguments returns the same collection, other arguments are refused.
+    pub fn create_collection(
+        &self,
+        client_id: &str,
+        request_id: &str,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<CreatedCollection, JobsError> {
+        check_request_id(request_id)?;
+        let key = format!("agent:{client_id}:{request_id}");
+        let hash = payload_hash(&["collection_create", name, description.unwrap_or("")]);
+        let conn = self.connection()?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|_| JobsError::unavailable())?;
+        let result = (|| {
+            if let Some(previous) = repository::find_request(&conn, &key)
+                .map_err(|error| from_corpus(CorpusError::Unavailable(error)))?
+            {
+                if previous.payload_hash != hash {
+                    return Err(refusal(
+                        "invalid_argument",
+                        format!("El pedido {request_id} ya se usó con otros datos: usá otro `requestId`."),
+                    ));
+                }
+                let stored: CreatedCollection = previous
+                    .response_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str(json).ok())
+                    .ok_or_else(JobsError::unavailable)?;
+                return Ok(CreatedCollection {
+                    created: false,
+                    ..stored
+                });
+            }
+            let created: CollectionDto =
+                corpus::create_collection(&conn, name, description, None).map_err(from_corpus)?;
+            let answer = CreatedCollection {
+                id: created.id,
+                name: created.name,
+                description: created.description,
+                created_at: created.created_at,
+                updated_at: created.updated_at,
+                created: true,
+            };
+            let json = serde_json::to_string(&answer).map_err(|_| JobsError::unavailable())?;
+            repository::record_request(
+                &conn,
+                &key,
+                "collection_create",
+                None,
+                &hash,
+                &json,
+                repository::now_ms(),
+            )
+            .map_err(|error| from_corpus(CorpusError::Unavailable(error)))?;
+            Ok(answer)
+        })();
+        match result {
+            Ok(answer) => {
+                conn.execute_batch("COMMIT")
+                    .map_err(|_| JobsError::unavailable())?;
+                if answer.created {
+                    self.events.notify(CorpusChange {
+                        kind: "collection",
+                        id: answer.id.clone(),
+                        collection_id: answer.id.clone(),
+                    });
+                }
+                Ok(answer)
+            }
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    /// Rename or re-describe a collection at the revision the assistant read.
+    pub fn update_collection(
+        &self,
+        collection_id: &str,
+        revision: i64,
+        patch: &CollectionPatch,
+    ) -> Result<CollectionDto, JobsError> {
+        let conn = self.connection()?;
+        let updated = corpus::update_collection(&conn, collection_id, patch, Some(revision))
+            .map_err(from_corpus)?;
+        self.events.notify(CorpusChange {
+            kind: "collection",
+            id: updated.id.clone(),
+            collection_id: updated.id.clone(),
+        });
+        Ok(updated)
+    }
+
+    /// Retitle an item or replace its metadata fields at the revision the
+    /// assistant read; the app's reserved keys are kept and cannot be written.
+    pub fn update_item(
+        &self,
+        item_id: &str,
+        revision: i64,
+        title: Option<String>,
+        metadata: Option<BTreeMap<String, String>>,
+    ) -> Result<UpdatedItem, JobsError> {
+        let conn = self.connection()?;
+        let patch = ItemPatch {
+            title,
+            metadata,
+            metadata_json: None,
+        };
+        let updated =
+            corpus::update_item(&conn, item_id, &patch, Some(revision)).map_err(from_corpus)?;
+        self.events.notify(CorpusChange {
+            kind: "item",
+            id: updated.id.clone(),
+            collection_id: updated.collection_id.clone(),
+        });
+        let metadata = updated
+            .metadata
+            .as_deref()
+            .and_then(|json| serde_json::from_str(json).ok())
+            .unwrap_or(serde_json::Value::Null);
+        Ok(UpdatedItem {
+            id: updated.id,
+            title: updated.title,
+            collection_id: updated.collection_id,
+            metadata: visible_metadata(metadata),
+            created_at: updated.created_at,
+            updated_at: updated.updated_at,
+        })
+    }
+}
+
+/// What an assistant sees of an item's metadata after an edit: its own
+/// fields. The reserved keys are the app's bookkeeping and stay stored.
+fn visible_metadata(metadata: serde_json::Value) -> serde_json::Value {
+    match metadata {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .filter(|(key, _)| !key.starts_with(corpus::commands::RESERVED_METADATA_PREFIX))
+                .collect(),
+        ),
+        other => other,
+    }
+}

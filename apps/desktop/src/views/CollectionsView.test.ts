@@ -320,6 +320,13 @@ describe('CollectionsView consumer compatibility', () => {
     }
   })
 
+  it('reloads the list when an assistant changed the collections', async () => {
+    render(CollectionsView)
+    await waitFor(() => expect(storeRef.current.collections.findAll).toHaveBeenCalledTimes(1))
+    window.dispatchEvent(new CustomEvent('entropia:collections-changed-externally'))
+    await waitFor(() => expect(storeRef.current.collections.findAll).toHaveBeenCalledTimes(2))
+  })
+
   it('does not notify the document explorer when the write fails', async () => {
     const listener = vi.fn()
     storeRef.current.collections.create.mockRejectedValue(new Error('disco lleno'))

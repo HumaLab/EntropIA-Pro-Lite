@@ -285,7 +285,7 @@ are the `snake_case` names (`automation/access.rs`).
 | Scope | Meaning | Granted today |
 |---|---|---|
 | `read` | Read the archive through the read tools | **Yes**, every paired client |
-| `local_write` | Change the local archive: prepare, pause, cancel processing jobs | By the owner, per client: «Preparar y controlar procesamiento» |
+| `local_write` | Change the local archive: prepare, pause, cancel processing jobs; create and rename collections; edit item titles and metadata | By the owner, per client: «Preparar procesamiento y editar el corpus» |
 | `remote_spend` | Ask for paid provider work (start, resume, retry); each request still needs the owner's approval | By the owner, per client: «Pedir procesamiento pago» |
 | `external_write` | Write outside EntropIA (Zotero, publication) | No |
 | `admin` | Change access, keys, maintenance | No |
@@ -310,7 +310,7 @@ through the tool itself. Clients rely on this; Codex cancels a non-interactive
 call to a tool that does not declare itself read-only, so it asks before calling
 the three writing tools.
 
-Thirteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+Sixteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
 The seven archive tools:
 
 | Tool | Arguments | Result |
@@ -343,6 +343,34 @@ Contract details that hold for every tool:
 - **Reads are isolated.** Each call opens its own connection with
   `open_archive_connection` + `PRAGMA query_only = ON`; the UI connection is
   never used, and blocking work runs on a blocking task.
+
+### Editing the corpus
+
+`local_write`, no dialog: these edits spend nothing and are revision-fenced. They go
+through the same Rust services the app's own views use (`src-tauri/src/corpus`), so
+the rules are the app's.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `collections_create` | `requestId`, `name`, `description?` | `{id, name, description, createdAt, updatedAt, created}` |
+| `collections_update` | `collectionId`, `revision`, `name?`, `description?` (`null` clears it) | `{id, name, description, createdAt, updatedAt}` |
+| `items_update` | `itemId`, `revision`, `title?`, `metadata?` (object of text values) | `{id, title, collectionId, metadata, createdAt, updatedAt}` |
+
+- **Revisions.** `revision` is the `updatedAt` the assistant read (`collections_list`,
+  `items_get`). A record that changed since then answers `revision_conflict` and
+  nothing changes; a successful write always moves `updatedAt` forward.
+- **Idempotent creation.** `collections_create` stores its `requestId` as
+  `agent:<client id>:<requestId>`: resending it with the same arguments returns the
+  same collection (`created: false`), with other arguments it is `invalid_argument`.
+- **Item metadata.** `metadata` replaces every field of the item with text values.
+  The app's own bookkeeping (keys starting with `__entropia_`, such as an imported
+  file's provenance) is kept, never returned and cannot be written. Title and
+  metadata are searchable with `search_items` as soon as the edit answers.
+- **The app refreshes.** After each write the app emits `corpus:changed`
+  (`{kind, id, collectionId}`); the sidebar and Colecciones re-read on it. An item
+  already open in the app does not reload by itself yet (it may hold unsaved edits).
+- Names are 1-200 characters, descriptions up to 2000, titles 1-500, at most 100
+  metadata fields; control characters are refused.
 
 ### Reading text and citing
 

@@ -65,12 +65,12 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
 | List collections with item counts | `automation/read.rs` (`collections`) | `collections_list` | read | Both | implemented |
-| Create / rename / edit a collection | `packages/store/src/repos/collection.repo.ts` via `db::commands::db_execute*` | `collections_create`, `collections_update` | local_write | Both | planned (stage 3) |
+| Create / rename / edit a collection | `corpus::create_collection`, `corpus::update_collection` (the app's views use them through `lib/corpus.ts`) | `collections_create`, `collections_update` | local_write | Both | implemented |
 | Delete a collection and its contents | `collection.repo.ts`, deletion flow in `apps/desktop/src/views/CollectionView.svelte` | `collections_delete` (confirmation required) | local_write | Both | planned (stage 3) |
 | List items, optionally by collection | `automation/read.rs` (`items`) | `items_list` | read | Both | implemented |
 | One item: metadata and file list | `automation/read.rs` (`item`) | `items_get` | read | Both | implemented |
 | Search titles, metadata and indexed text | `automation/read.rs` (`search`), `nlp::commands::fts_search`, `packages/store/src/repos/fts.repo.ts`, `apps/desktop/src/lib/collection-search-plan.ts` | `search_items` | read | Both | implemented |
-| Edit item metadata / custom fields | `packages/store/src/repos/item.repo.ts` | `items_update` | local_write | Both | planned (stage 3) |
+| Edit item metadata / custom fields | `corpus::update_item` (the app's views use it through `lib/corpus.ts`) | `items_update` | local_write | Both | implemented |
 | Import files (picker or drag and drop) | `apps/desktop/src/lib/file-import.ts`, `collection-import.ts`, Tauri dialog/fs plugins | `documents_import_prepare`, `documents_import_start` | local_write | Both | planned (stage 3) |
 | Import deduplication | same modules (`file-import.ts`) | folded into `documents_import_prepare` (returns the impact) | local_write | Both | planned (stage 3) |
 | Delete a document, page or asset | `packages/store/src/repos/asset.repo.ts`, `image_edit::delete_asset_files`, `navegador_delete_source` | `documents_delete` (confirmation required) | local_write | Both | planned (stage 3) |

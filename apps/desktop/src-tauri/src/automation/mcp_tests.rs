@@ -283,11 +283,14 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
         status["tools"],
         json!([
             "approvals_status",
+            "collections_create",
             "collections_list",
+            "collections_update",
             "documents_get_text",
             "entropia_status",
             "items_get",
             "items_list",
+            "items_update",
             "jobs_get",
             "jobs_list",
             "processing_control",
@@ -768,11 +771,14 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 13);
+    assert_eq!(tools.len(), 16);
     let writes = [
         "processing_prepare",
         "processing_start",
         "processing_control",
+        "collections_create",
+        "collections_update",
+        "items_update",
     ];
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
@@ -801,9 +807,14 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 13] = [
+    let expected: [(&str, &[&str]); 16] = [
         ("approvals_status", &["approvalId"]),
+        ("collections_create", &["description", "name", "requestId"]),
         ("collections_list", &["cursor", "limit"]),
+        (
+            "collections_update",
+            &["collectionId", "description", "name", "revision"],
+        ),
         (
             "documents_get_text",
             &["assetId", "cursor", "itemId", "maxChars"],
@@ -811,6 +822,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         ("entropia_status", &[]),
         ("items_get", &["itemId"]),
         ("items_list", &["collectionId", "cursor", "limit"]),
+        ("items_update", &["itemId", "metadata", "revision", "title"]),
         (
             "jobs_get",
             &[
@@ -1789,6 +1801,193 @@ async fn search_passages_is_scoped_and_refuses_bad_requests() {
         .refusal(&token, "search_passages", json!({ "query": "acción" }))
         .await;
     assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+}
+
+impl Harness {
+    /// Count the corpus changes the endpoint announces to the app.
+    fn watch_corpus(&self) -> Arc<std::sync::Mutex<Vec<String>>> {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        self.endpoint.corpus_events().set_notifier(Arc::new(
+            move |change: super::corpus_tools::CorpusChange| {
+                sink.lock()
+                    .unwrap()
+                    .push(format!("{}:{}", change.kind, change.id));
+            },
+        ));
+        seen
+    }
+
+    fn collection_count(&self) -> i64 {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row("SELECT count(*) FROM collections", [], |row| row.get(0))
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn collections_create_needs_the_local_grant_and_a_retry_never_duplicates() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    let seen = harness.watch_corpus();
+    let before = harness.collection_count();
+    let arguments =
+        json!({ "requestId": "c1", "name": "  Cartas  ", "description": "Epistolario" });
+    let refusal = harness
+        .refusal(&token, "collections_create", arguments.clone())
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+    assert_eq!(harness.collection_count(), before);
+
+    harness.grant(&id, true, false);
+    let created = harness
+        .payload(&token, "collections_create", arguments.clone())
+        .await;
+    assert_eq!(
+        keys(&created),
+        sorted(&[
+            "id",
+            "name",
+            "description",
+            "createdAt",
+            "updatedAt",
+            "created"
+        ])
+    );
+    assert_eq!(created["name"], "Cartas");
+    assert_eq!(created["description"], "Epistolario");
+    assert_eq!(created["created"], true);
+    let replay = harness
+        .payload(&token, "collections_create", arguments)
+        .await;
+    assert_eq!(
+        replay["id"], created["id"],
+        "a retry returns the same collection"
+    );
+    assert_eq!(replay["created"], false);
+    assert_eq!(harness.collection_count(), before + 1, "never a second one");
+
+    let reused = harness
+        .refusal(
+            &token,
+            "collections_create",
+            json!({ "requestId": "c1", "name": "Otra" }),
+        )
+        .await;
+    assert_eq!(reused["error"], ERROR_INVALID_ARGUMENT);
+    let blank = harness
+        .refusal(
+            &token,
+            "collections_create",
+            json!({ "requestId": "c2", "name": "   " }),
+        )
+        .await;
+    assert_eq!(blank["error"], ERROR_INVALID_ARGUMENT);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![format!("collection:{}", created["id"].as_str().unwrap())],
+        "the app hears about the one real change"
+    );
+}
+
+#[tokio::test]
+async fn collections_update_is_fenced_by_the_revision_the_assistant_read() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    let revision = 2_000; // the fixture's ALFA revision
+    let stale = harness
+        .refusal(
+            &token,
+            "collections_update",
+            json!({ "collectionId": ALFA, "revision": revision - 1, "name": "X" }),
+        )
+        .await;
+    assert_eq!(stale["error"], "revision_conflict");
+    let missing = harness
+        .refusal(
+            &token,
+            "collections_update",
+            json!({ "collectionId": "col_missing", "revision": 1, "name": "X" }),
+        )
+        .await;
+    assert_eq!(missing["error"], ERROR_NOT_FOUND);
+    let renamed = harness
+        .payload(
+            &token,
+            "collections_update",
+            json!({ "collectionId": ALFA, "revision": revision, "name": "Alfa nueva", "description": null }),
+        )
+        .await;
+    assert_eq!(renamed["name"], "Alfa nueva");
+    assert_eq!(renamed["description"], Value::Null);
+    assert!(renamed["updatedAt"].as_i64().unwrap() > revision);
+    assert_eq!(*seen.lock().unwrap(), vec![format!("collection:{ALFA}")]);
+}
+
+#[tokio::test]
+async fn items_update_edits_fields_keeps_what_the_app_reserves_and_is_searchable() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    let item = test_archive::item_id(ALFA, 1);
+    let current = harness
+        .payload(&token, "items_get", json!({ "itemId": item }))
+        .await;
+    let revision = current["updatedAt"].as_i64().unwrap();
+
+    let reserved = harness
+        .refusal(
+            &token,
+            "items_update",
+            json!({ "itemId": item, "revision": revision, "metadata": { "__entropia_file_metadata": "x" } }),
+        )
+        .await;
+    assert_eq!(reserved["error"], ERROR_INVALID_ARGUMENT);
+
+    let updated = harness
+        .payload(
+            &token,
+            "items_update",
+            json!({ "itemId": item, "revision": revision, "title": "Carta de Sarmiento", "metadata": { "autor": "Sarmiento" } }),
+        )
+        .await;
+    assert_eq!(
+        keys(&updated),
+        sorted(&[
+            "id",
+            "title",
+            "collectionId",
+            "metadata",
+            "createdAt",
+            "updatedAt"
+        ])
+    );
+    assert_eq!(updated["title"], "Carta de Sarmiento");
+    assert_eq!(updated["metadata"], json!({ "autor": "Sarmiento" }));
+    let again = harness
+        .refusal(
+            &token,
+            "items_update",
+            json!({ "itemId": item, "revision": revision, "title": "Otra vez" }),
+        )
+        .await;
+    assert_eq!(
+        again["error"], "revision_conflict",
+        "the old revision is spent"
+    );
+
+    let found = harness
+        .payload(&token, "search_items", json!({ "query": "Sarmiento" }))
+        .await;
+    assert_eq!(
+        ids(&found),
+        vec![item.clone()],
+        "the edit is searchable at once"
+    );
+    assert_eq!(*seen.lock().unwrap(), vec![format!("item:{item}")]);
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read
