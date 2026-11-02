@@ -513,18 +513,21 @@ pub async fn processing_sync_bibliography_library(
 // The Tauri commands below and the agent endpoint (`automation::mcp`) both call
 // these, so the rules — validation, idempotency, revision fencing — exist once.
 
-/// Snapshots one batch scope durably as a paused draft. Retried requests with
-/// the same `request_id` return the original batch; the same id with a
-/// different payload is rejected, never forked.
+/// Snapshots one batch scope durably as a paused draft. The scope is a set of
+/// collections, of items, or both; each file is a member once. Retried
+/// requests with the same `request_id` return the original batch; the same id
+/// with a different payload is rejected, never forked.
 pub fn prepare_batch(
     conn: &Connection,
     request_id: &str,
     collection_ids: &[String],
+    item_ids: &[String],
     operations: &[String],
 ) -> Result<PrepareResponse, String> {
-    if request_id.trim().is_empty() || collection_ids.is_empty() {
+    if request_id.trim().is_empty() || (collection_ids.is_empty() && item_ids.is_empty()) {
         return Err(
-            "invalid_selection: a request id and at least one collection are required".to_string(),
+            "invalid_selection: a request id and at least one collection or item are required"
+                .to_string(),
         );
     }
     let mut ops: Vec<String> = operations
@@ -543,109 +546,128 @@ pub fn prepare_batch(
     let mut scope = collection_ids.to_vec();
     scope.sort();
     scope.dedup();
-    let hash = payload_hash(&[&scope.join(","), &ops.join(",")]);
-    {
-        conn.execute_batch("BEGIN IMMEDIATE")
-            .map_err(|e| e.to_string())?;
-        let result = (|| {
-            if let Some(previous) = repository::find_request(conn, request_id)? {
-                if previous.payload_hash != hash {
-                    return Err(format!("invalid_selection: request {request_id} was already used with different parameters"));
-                }
-                let batch_id = previous.batch_id.ok_or_else(|| {
-                    format!("invalid_selection: request {request_id} has no batch")
-                })?;
-                let members: usize = previous
-                    .response_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                    .and_then(|value| value.get("members")?.as_u64())
-                    .unwrap_or(0) as usize;
-                return Ok(PrepareResponse {
-                    batch_id,
-                    created: false,
-                    members,
-                });
+    let mut items = item_ids.to_vec();
+    items.sort();
+    items.dedup();
+    // A collection-only scope hashes exactly as it always did, so a request an
+    // earlier build recorded still replays instead of reading as a conflict.
+    let items_part = format!("items:{}", items.join(","));
+    let mut hash_parts = vec![scope.join(","), ops.join(",")];
+    if !items.is_empty() {
+        hash_parts.push(items_part);
+    }
+    let hash = payload_hash(&hash_parts.iter().map(String::as_str).collect::<Vec<_>>());
+    let scope_json =
+        serde_json::to_string(&scope).map_err(|e| format!("Failed to encode scope: {e}"))?;
+    let items_json =
+        serde_json::to_string(&items).map_err(|e| format!("Failed to encode scope: {e}"))?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        if let Some(previous) = repository::find_request(conn, request_id)? {
+            if previous.payload_hash != hash {
+                return Err(format!("invalid_selection: request {request_id} was already used with different parameters"));
             }
-            // Every referenced collection must exist: a typo must fail here, not
-            // produce an empty batch that looks like "nothing to do".
-            let placeholders = scope.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-            let found: i64 = conn
+            let batch_id = previous
+                .batch_id
+                .ok_or_else(|| format!("invalid_selection: request {request_id} has no batch"))?;
+            let members: usize = previous
+                .response_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|value| value.get("members")?.as_u64())
+                .unwrap_or(0) as usize;
+            return Ok(PrepareResponse {
+                batch_id,
+                created: false,
+                members,
+            });
+        }
+        // Every referenced collection and item must exist: a typo must fail
+        // here, not produce an empty batch that looks like "nothing to do".
+        let count = |table: &str, ids: &str| -> Result<usize, String> {
+            conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM {table} WHERE id IN (SELECT value FROM json_each(?1))"
+                ),
+                [ids],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|found| found as usize)
+            .map_err(|e| format!("Failed to validate {table}: {e}"))
+        };
+        if count("collections", &scope_json)? != scope.len() {
+            return Err("invalid_selection: one or more collections do not exist".to_string());
+        }
+        if count("items", &items_json)? != items.len() {
+            return Err("invalid_selection: one or more items do not exist".to_string());
+        }
+        for schema_id in ops.iter().filter_map(|op| op.strip_prefix("schema:")) {
+            let exists: bool = conn
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM collections WHERE id IN ({placeholders})"),
-                    rusqlite::params_from_iter(scope.iter()),
+                    "SELECT EXISTS(SELECT 1 FROM extraction_schemas WHERE id = ?1)",
+                    [schema_id],
                     |row| row.get(0),
                 )
-                .map_err(|e| format!("Failed to validate collections: {e}"))?;
-            if found as usize != scope.len() {
-                return Err("invalid_selection: one or more collections do not exist".to_string());
+                .map_err(|e| format!("Failed to validate schema: {e}"))?;
+            if !exists {
+                return Err(format!(
+                    "invalid_selection: schema {schema_id} does not exist"
+                ));
             }
-            for schema_id in ops.iter().filter_map(|op| op.strip_prefix("schema:")) {
-                let exists: bool = conn
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM extraction_schemas WHERE id = ?1)",
-                        [schema_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| format!("Failed to validate schema: {e}"))?;
-                if !exists {
-                    return Err(format!(
-                        "invalid_selection: schema {schema_id} does not exist"
-                    ));
-                }
-            }
-            let batch_id = format!("batch-{}", uuid::Uuid::new_v4());
-            let ops_json = serde_json::to_string(&ops)
-                .map_err(|e| format!("Failed to encode operations: {e}"))?;
-            let now = repository::now_ms();
-            conn.execute(
+        }
+        let batch_id = format!("batch-{}", uuid::Uuid::new_v4());
+        let ops_json =
+            serde_json::to_string(&ops).map_err(|e| format!("Failed to encode operations: {e}"))?;
+        let now = repository::now_ms();
+        conn.execute(
             "INSERT INTO processing_batches (id, request_id, origin, state, desired_state, operations, created_at, updated_at)
              VALUES (?1, ?2, 'user', 'preparing', 'pause', ?3, ?4, ?4)",
             rusqlite::params![batch_id, request_id, ops_json, now],
         )
         .map_err(|e| format!("Failed to create batch: {e}"))?;
-            conn.execute(
-            &format!(
-                "INSERT INTO processing_batch_collections (batch_id, collection_id_snapshot, name_snapshot)
-                 SELECT ?1, id, name FROM collections WHERE id IN ({placeholders})"
-            ),
-            rusqlite::params_from_iter(std::iter::once(&batch_id).chain(scope.iter())),
+        // The collections the tab names: the ones selected and the ones the
+        // selected items belong to.
+        conn.execute(
+            "INSERT INTO processing_batch_collections (batch_id, collection_id_snapshot, name_snapshot)
+             SELECT ?1, id, name FROM collections
+             WHERE id IN (SELECT value FROM json_each(?2))
+                OR id IN (SELECT collection_id FROM items WHERE id IN (SELECT value FROM json_each(?3)))",
+            rusqlite::params![batch_id, scope_json, items_json],
         )
         .map_err(|e| format!("Failed to snapshot scope: {e}"))?;
-            let members = repository::prepare_membership(conn, &batch_id, &scope)?;
-            if members == 0 {
-                conn.execute(
-                    "UPDATE processing_batches SET planning_done = 1 WHERE id = ?1",
-                    [&batch_id],
-                )
-                .map_err(|e| format!("Failed to close empty planning: {e}"))?;
-            }
-            let response =
-                serde_json::json!({ "batchId": batch_id, "members": members }).to_string();
-            repository::record_request(
-                conn,
-                request_id,
-                "prepare",
-                Some(&batch_id),
-                &hash,
-                &response,
-                now,
-            )?;
-            Ok(PrepareResponse {
-                batch_id,
-                created: true,
-                members,
-            })
-        })();
-        match result {
-            Ok(response) => {
-                conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
-                Ok(response)
-            }
-            Err(error) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
+        let members = repository::prepare_scope_membership(conn, &batch_id, &scope, &items)?;
+        if members == 0 {
+            conn.execute(
+                "UPDATE processing_batches SET planning_done = 1 WHERE id = ?1",
+                [&batch_id],
+            )
+            .map_err(|e| format!("Failed to close empty planning: {e}"))?;
+        }
+        let response = serde_json::json!({ "batchId": batch_id, "members": members }).to_string();
+        repository::record_request(
+            conn,
+            request_id,
+            "prepare",
+            Some(&batch_id),
+            &hash,
+            &response,
+            now,
+        )?;
+        Ok(PrepareResponse {
+            batch_id,
+            created: true,
+            members,
+        })
+    })();
+    match result {
+        Ok(response) => {
+            conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
         }
     }
 }
@@ -959,7 +981,7 @@ pub async fn processing_prepare(
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_ready(&db_path)?;
-        prepare_batch(&conn, &request_id, &collection_ids, &operations)
+        prepare_batch(&conn, &request_id, &collection_ids, &[], &operations)
     })
     .await
 }
@@ -1160,7 +1182,7 @@ pub async fn processing_get_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automation::test_archive::{seeded_archive, ALFA, BETA};
+    use crate::automation::test_archive::{item_id, seeded_archive, ALFA, BETA};
 
     fn archive() -> (tempfile::TempDir, Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -1193,7 +1215,7 @@ mod tests {
     #[test]
     fn prepare_snapshots_a_paused_draft_and_replays_the_same_request() {
         let (_dir, conn) = archive();
-        let first = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"]))
+        let first = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"]))
             .expect("prepare a draft");
         assert!(first.created);
         assert_eq!(first.members, 2, "the two assets of the first Alfa item");
@@ -1203,7 +1225,7 @@ mod tests {
         assert_eq!(snapshot.operations, vec!["ocr".to_string()]);
         assert_eq!(snapshot.origin, "user");
 
-        let replay = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"]))
+        let replay = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"]))
             .expect("the same request replays");
         assert_eq!(replay.batch_id, first.batch_id);
         assert!(!replay.created);
@@ -1215,11 +1237,101 @@ mod tests {
         );
     }
 
+    fn snapshot_collection_ids(conn: &Connection, batch_id: &str) -> Vec<String> {
+        let mut ids: Vec<String> = batch_snapshot(conn, batch_id)
+            .unwrap()
+            .collections
+            .into_iter()
+            .map(|collection| collection.id)
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn prepare_by_items_takes_only_their_assets_and_names_their_collections() {
+        let (_dir, conn) = archive();
+        let items = [item_id(ALFA, 1), item_id(BETA, 1)];
+        let prepared = prepare_batch(&conn, "req-1", &[], &items, &ops(&["ocr"]))
+            .expect("items alone are a scope");
+        assert_eq!(prepared.members, 2, "only the first Alfa item has files");
+        assert_eq!(
+            snapshot_collection_ids(&conn, &prepared.batch_id),
+            vec![ALFA.to_string(), BETA.to_string()]
+        );
+    }
+
+    #[test]
+    fn a_collection_and_one_of_its_items_count_each_file_once() {
+        let (_dir, conn) = archive();
+        let prepared = prepare_batch(
+            &conn,
+            "req-1",
+            &[ALFA.to_string()],
+            &[item_id(ALFA, 1)],
+            &ops(&["ocr"]),
+        )
+        .unwrap();
+        assert_eq!(prepared.members, 2);
+        assert_eq!(
+            snapshot_collection_ids(&conn, &prepared.batch_id),
+            vec![ALFA.to_string()]
+        );
+    }
+
+    #[test]
+    fn prepare_refuses_an_unknown_item_without_creating_anything() {
+        let (_dir, conn) = archive();
+        let error = prepare_batch(
+            &conn,
+            "req-1",
+            &[],
+            &[item_id(ALFA, 1), "ite_missing".to_string()],
+            &ops(&["ocr"]),
+        )
+        .expect_err("a missing item fails");
+        assert_eq!(error, "invalid_selection: one or more items do not exist");
+        assert_eq!(batch_count(&conn), 0);
+    }
+
+    #[test]
+    fn prepare_refuses_an_empty_scope() {
+        let (_dir, conn) = archive();
+        let error = prepare_batch(&conn, "req-1", &[], &[], &ops(&["ocr"])).expect_err("empty");
+        assert_eq!(
+            error,
+            "invalid_selection: a request id and at least one collection or item are required"
+        );
+    }
+
+    /// The tab replays a lost IPC answer with the same request id. A request
+    /// recorded by an earlier build must still match, so a collection-only
+    /// scope keeps the exact hash it always had.
+    #[test]
+    fn a_collection_only_request_keeps_the_hash_earlier_builds_recorded() {
+        let (_dir, conn) = archive();
+        prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
+        let recorded = repository::find_request(&conn, "req-1").unwrap().unwrap();
+        assert_eq!(recorded.payload_hash, payload_hash(&[ALFA, "ocr"]));
+        let with_item = prepare_batch(
+            &conn,
+            "req-2",
+            &[ALFA.to_string()],
+            &[item_id(ALFA, 1)],
+            &ops(&["ocr"]),
+        )
+        .unwrap();
+        assert!(
+            with_item.created,
+            "a different scope is a different request"
+        );
+    }
+
     #[test]
     fn prepare_refuses_a_reused_request_id_with_other_parameters() {
         let (_dir, conn) = archive();
-        prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"])).unwrap();
-        let error = prepare_batch(&conn, "req-1", &[BETA.to_string()], &ops(&["ocr"]))
+        prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
+        let error = prepare_batch(&conn, "req-1", &[BETA.to_string()], &[], &ops(&["ocr"]))
             .expect_err("same id, different scope");
         assert_eq!(
             error,
@@ -1235,6 +1347,7 @@ mod tests {
             &conn,
             "req-1",
             &[ALFA.to_string(), "col_missing".to_string()],
+            &[],
             &ops(&["ocr"]),
         )
         .expect_err("a missing collection fails");
@@ -1249,7 +1362,7 @@ mod tests {
     #[test]
     fn prepare_refuses_no_known_operation() {
         let (_dir, conn) = archive();
-        let error = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["shell"]))
+        let error = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["shell"]))
             .expect_err("only the five operations exist");
         assert_eq!(
             error,
@@ -1261,7 +1374,8 @@ mod tests {
     #[test]
     fn start_runs_a_ready_draft_and_bumps_its_revision() {
         let (_dir, conn) = archive();
-        let prepared = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"])).unwrap();
+        let prepared =
+            prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
         mark_ready(&conn, &prepared.batch_id);
         let before = batch_snapshot(&conn, &prepared.batch_id).unwrap().revision;
         let started = start_batch(&conn, &prepared.batch_id, Some(before)).expect("start");
@@ -1272,7 +1386,8 @@ mod tests {
     #[test]
     fn start_is_fenced_by_revision_and_runs_once() {
         let (_dir, conn) = archive();
-        let prepared = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"])).unwrap();
+        let prepared =
+            prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
         mark_ready(&conn, &prepared.batch_id);
         let revision = batch_snapshot(&conn, &prepared.batch_id).unwrap().revision;
 
@@ -1303,7 +1418,8 @@ mod tests {
     #[test]
     fn start_refuses_a_draft_that_is_still_planning() {
         let (_dir, conn) = archive();
-        let prepared = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"])).unwrap();
+        let prepared =
+            prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
         let error = start_batch(&conn, &prepared.batch_id, None).expect_err("not ready yet");
         assert_eq!(
             error,
@@ -1324,7 +1440,8 @@ mod tests {
     #[test]
     fn control_pauses_and_cancels_one_batch_but_never_cancels_all() {
         let (_dir, conn) = archive();
-        let prepared = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &ops(&["ocr"])).unwrap();
+        let prepared =
+            prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["ocr"])).unwrap();
         let all = control_batches(
             &conn,
             &ControlRequest {

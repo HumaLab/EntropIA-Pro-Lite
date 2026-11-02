@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::access::{tests::MemorySecrets, AgentAccess, Scope};
+use super::access::{tests::MemorySecrets, AgentAccess, Grants, Scope};
 use super::audit::AUDIT_FILE;
 use super::mcp::{
     ERROR_FORBIDDEN_SCOPE, ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND, ERROR_UNAVAILABLE,
@@ -121,10 +121,24 @@ impl Harness {
             &conn,
             request_id,
             &[collection.to_string()],
+            &[],
             &["ocr".to_string()],
         )
         .unwrap()
         .batch_id
+    }
+
+    /// Give a paired client the processing grants the owner sets in Asistentes.
+    fn grant(&self, client_id: &str, local_write: bool, remote_spend: bool) {
+        self.access
+            .set_grants(
+                client_id,
+                Grants {
+                    local_write,
+                    remote_spend,
+                },
+            )
+            .unwrap();
     }
 
     fn audit_lines(&self) -> Vec<Value> {
@@ -234,6 +248,7 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "items_list",
             "jobs_get",
             "jobs_list",
+            "processing_prepare",
             "search_items"
         ])
     );
@@ -694,9 +709,11 @@ async fn the_audit_trail_lives_under_the_cache_directory() {
 
 /// Every tool says it only reads and touches nothing outside this machine.
 /// Clients act on this: Codex cancels a non-interactive call to a tool that
-/// does not declare itself read-only, because it cannot ask for approval.
+/// does not declare itself read-only, because it cannot ask for approval. So
+/// every reading tool says it is read-only, and a tool that changes the archive
+/// says it does, without claiming to destroy anything.
 #[tokio::test]
-async fn every_tool_declares_itself_read_only_and_closed_world() {
+async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_world() {
     let harness = harness().await;
     let (_id, token) = harness.pair("Codex");
     let body = harness
@@ -706,11 +723,16 @@ async fn every_tool_declares_itself_read_only_and_closed_world() {
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 8);
+    let writes = ["processing_prepare"];
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
         let annotations = &tool["annotations"];
-        assert_eq!(annotations["readOnlyHint"], true, "{name}");
+        let writes_archive = writes.contains(&name.as_str());
+        assert_eq!(annotations["readOnlyHint"], !writes_archive, "{name}");
+        if writes_archive {
+            assert_eq!(annotations["destructiveHint"], false, "{name}");
+        }
         assert_eq!(annotations["openWorldHint"], false, "{name}");
     }
 }
@@ -730,7 +752,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 7] = [
+    let expected: [(&str, &[&str]); 8] = [
         ("collections_list", &["cursor", "limit"]),
         ("entropia_status", &[]),
         ("items_get", &["itemId"]),
@@ -746,6 +768,10 @@ async fn every_tool_publishes_a_strict_input_schema() {
             ],
         ),
         ("jobs_list", &["cursor", "limit", "states"]),
+        (
+            "processing_prepare",
+            &["collectionIds", "itemIds", "operations", "requestId"],
+        ),
         ("search_items", &["collectionId", "limit", "query"]),
     ];
     assert_eq!(tools.len(), expected.len(), "no tool beyond D10's list");
@@ -884,6 +910,167 @@ async fn jobs_tools_need_the_read_scope() {
     harness.access.set_scopes(&id, vec![]).unwrap();
     let refusal = harness.refusal(&token, "jobs_list", json!({})).await;
     assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+}
+
+fn prepare_args(request_id: &str) -> Value {
+    json!({ "requestId": request_id, "collectionIds": [ALFA], "operations": ["ocr"] })
+}
+
+#[tokio::test]
+async fn processing_prepare_needs_the_local_write_grant_and_creates_nothing_without_it() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    let refusal = harness
+        .refusal(&token, "processing_prepare", prepare_args("r1"))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert!(records(&jobs).is_empty(), "nothing was prepared");
+    let last = harness
+        .audit_lines()
+        .into_iter()
+        .rev()
+        .find(|line| line["tool"] == "processing_prepare")
+        .expect("audited");
+    assert_eq!(last["status"], "error");
+    assert_eq!(last["errorCode"], ERROR_FORBIDDEN_SCOPE);
+}
+
+#[tokio::test]
+async fn processing_prepare_creates_a_paused_draft_and_a_replay_returns_it() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+
+    let first = harness
+        .payload(&token, "processing_prepare", prepare_args("r1"))
+        .await;
+    assert_eq!(
+        keys(&first),
+        sorted(&[
+            "jobId",
+            "created",
+            "files",
+            "operations",
+            "state",
+            "revision",
+            "costNote",
+            "nextStep",
+        ])
+    );
+    assert_eq!(first["created"], true);
+    assert_eq!(first["files"], 2);
+    assert_eq!(first["operations"], json!(["ocr"]));
+    assert_eq!(first["state"], "preparing");
+    let job_id = first["jobId"].as_str().expect("a job id").to_string();
+
+    let replay = harness
+        .payload(&token, "processing_prepare", prepare_args("r1"))
+        .await;
+    assert_eq!(
+        replay["jobId"], job_id,
+        "a retried request returns the same job"
+    );
+    assert_eq!(replay["created"], false);
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert_eq!(ids(&jobs), vec![job_id.clone()], "never a second batch");
+
+    let conn = crate::processing::commands::open_ready(&harness.db_path()).unwrap();
+    assert!(
+        crate::processing::repository::find_request(&conn, &format!("agent:{id}:r1"))
+            .unwrap()
+            .is_some(),
+        "the request id is stored under the client that sent it"
+    );
+    let last = harness
+        .audit_lines()
+        .into_iter()
+        .rev()
+        .find(|line| line["tool"] == "processing_prepare")
+        .expect("audited");
+    assert_eq!(last["objectIds"], json!([job_id]));
+}
+
+#[tokio::test]
+async fn two_assistants_with_the_same_request_id_get_separate_jobs() {
+    let harness = harness().await;
+    let (first_id, first_token) = harness.pair("Claude Code");
+    let (second_id, second_token) = harness.pair("Codex");
+    harness.grant(&first_id, true, false);
+    harness.grant(&second_id, true, false);
+    let first = harness
+        .payload(&first_token, "processing_prepare", prepare_args("r1"))
+        .await;
+    let second = harness
+        .payload(&second_token, "processing_prepare", prepare_args("r1"))
+        .await;
+    assert_ne!(first["jobId"], second["jobId"]);
+    assert_eq!(second["created"], true);
+}
+
+#[tokio::test]
+async fn processing_prepare_takes_items_and_refuses_bad_requests() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let by_item = harness
+        .payload(
+            &token,
+            "processing_prepare",
+            json!({
+                "requestId": "r-items",
+                "itemIds": [test_archive::item_id(ALFA, 1)],
+                "operations": ["ocr"]
+            }),
+        )
+        .await;
+    assert_eq!(by_item["files"], 2);
+
+    let long_id = "x".repeat(129);
+    for arguments in [
+        json!({ "requestId": "r-items", "collectionIds": [BETA], "operations": ["ocr"] }),
+        json!({ "requestId": "r2", "collectionIds": [ALFA], "operations": ["shell"] }),
+        json!({ "requestId": "r3", "operations": ["ocr"] }),
+        json!({ "requestId": "", "collectionIds": [ALFA], "operations": ["ocr"] }),
+        json!({ "requestId": long_id, "collectionIds": [ALFA], "operations": ["ocr"] }),
+        json!({ "requestId": "r4", "collectionIds": ["col_missing"], "operations": ["ocr"] }),
+    ] {
+        let refusal = harness
+            .refusal(&token, "processing_prepare", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], ERROR_INVALID_ARGUMENT, "{arguments}");
+    }
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert_eq!(
+        records(&jobs).len(),
+        1,
+        "no refused request created a batch"
+    );
+}
+
+/// Lite calls OpenRouter for every text operation; the Procesamiento tab
+/// blocks them without the key, and so does the tool (S7).
+#[cfg(not(feature = "local-ml"))]
+#[tokio::test]
+async fn lite_refuses_paid_text_operations_without_the_openrouter_key() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    for operation in ["embeddings", "ner", "triples"] {
+        let refusal = harness
+            .refusal(
+                &token,
+                "processing_prepare",
+                json!({ "requestId": operation, "collectionIds": [ALFA], "operations": [operation] }),
+            )
+            .await;
+        assert_eq!(refusal["error"], "provider_not_configured", "{operation}");
+    }
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert!(records(&jobs).is_empty());
+    harness
+        .payload(&token, "processing_prepare", prepare_args("ocr-only"))
+        .await;
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read

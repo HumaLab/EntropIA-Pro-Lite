@@ -33,6 +33,12 @@ pub const ERROR_REVISION_CONFLICT: &str = "revision_conflict";
 /// The job's current state does not admit the requested action.
 pub const ERROR_INVALID_STATE: &str = "invalid_state";
 
+/// The operation needs a provider the person has not configured (S7).
+pub const ERROR_PROVIDER_NOT_CONFIGURED: &str = "provider_not_configured";
+
+/// Longest request id an assistant may send.
+const REQUEST_ID_MAX_CHARS: usize = 128;
+
 /// A refusal under the tool contract: a stable code and one sentence for the
 /// person reading the assistant's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +120,24 @@ pub struct JobDetail {
     pub next_tasks_cursor: Option<String>,
 }
 
+/// `processing_prepare`'s payload: the draft and what to do next.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareReport {
+    pub job_id: String,
+    /// False when this request id already prepared this job.
+    pub created: bool,
+    /// Files in scope, each once.
+    pub files: usize,
+    pub operations: Vec<String>,
+    pub state: String,
+    /// The revision `processing_start` must name.
+    pub revision: i64,
+    /// What EntropIA knows about the cost at this point.
+    pub cost_note: String,
+    pub next_step: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JobsCursor {
@@ -155,6 +179,37 @@ fn resolve_limit(limit: Option<u32>) -> Result<usize, JobsError> {
     Ok(limit)
 }
 
+/// Operations Lite runs through OpenRouter: the Procesamiento tab refuses them
+/// without the key, and so does the endpoint.
+fn needs_openrouter(operations: &[String]) -> bool {
+    operations.iter().any(|op| {
+        matches!(op.as_str(), "embeddings" | "ner" | "triples") || op.starts_with("schema:")
+    })
+}
+
+/// Whether the OpenRouter key is configured. Reads the stored value (a keyring
+/// reference or the legacy plain value) and never resolves the secret itself.
+fn openrouter_configured(conn: &Connection) -> bool {
+    crate::settings::get_raw_setting(conn, crate::settings::OPENROUTER_API_KEY)
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn check_request_id(request_id: &str) -> Result<(), JobsError> {
+    let chars = request_id.chars().count();
+    if request_id.trim().is_empty()
+        || chars > REQUEST_ID_MAX_CHARS
+        || request_id.chars().any(char::is_control)
+    {
+        return Err(JobsError::new(
+            "invalid_argument",
+            format!(
+                "`requestId` tiene que tener entre 1 y {REQUEST_ID_MAX_CHARS} caracteres visibles."
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// The processing state of one archive, as the tools see it.
 #[derive(Debug, Clone)]
 pub struct JobsArchive {
@@ -177,6 +232,60 @@ impl JobsArchive {
             return Err(JobsError::unavailable());
         }
         Ok(conn)
+    }
+
+    /// A connection that may write, to an archive whose batch queue exists.
+    fn write_connection(&self) -> Result<Connection, JobsError> {
+        batches::open_ready(&self.db_path).map_err(from_service)
+    }
+
+    /// Prepare a paused draft for a client. The request id is stored under
+    /// the client (`agent:<client>:<request>`), so a retry returns the same
+    /// job and two assistants can never collide on one id (D5).
+    pub fn prepare(
+        &self,
+        client_id: &str,
+        request_id: &str,
+        collection_ids: &[String],
+        item_ids: &[String],
+        operations: &[String],
+    ) -> Result<PrepareReport, JobsError> {
+        check_request_id(request_id)?;
+        if collection_ids.is_empty() && item_ids.is_empty() {
+            return Err(JobsError::new(
+                "invalid_argument",
+                "Indicá al menos una colección (`collectionIds`) o un ítem (`itemIds`).",
+            ));
+        }
+        let conn = self.write_connection()?;
+        if !cfg!(feature = "local-ml")
+            && needs_openrouter(operations)
+            && !openrouter_configured(&conn)
+        {
+            return Err(JobsError::new(
+                ERROR_PROVIDER_NOT_CONFIGURED,
+                "Embeddings, entidades, tripletas y esquemas necesitan la clave de OpenRouter, que no está configurada. La persona puede cargarla en Configuración › Modelos; mientras tanto se puede preparar solo OCR.",
+            ));
+        }
+        let prepared = batches::prepare_batch(
+            &conn,
+            &format!("agent:{client_id}:{request_id}"),
+            collection_ids,
+            item_ids,
+            operations,
+        )
+        .map_err(from_service)?;
+        let job = batches::batch_snapshot(&conn, &prepared.batch_id).map_err(from_service)?;
+        Ok(PrepareReport {
+            job_id: job.id,
+            created: prepared.created,
+            files: prepared.members,
+            operations: job.operations,
+            state: job.state,
+            revision: job.revision,
+            cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
+            next_step: "Esperá a que jobs_get muestre state \"ready\"; después pedí empezar con processing_start, que la persona aprueba en EntropIA.".to_string(),
+        })
     }
 
     /// One page of the person's batches, newest first. System containers

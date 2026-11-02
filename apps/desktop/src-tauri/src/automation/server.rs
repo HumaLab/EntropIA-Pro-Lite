@@ -882,6 +882,7 @@ mod tests {
                 "items_list",
                 "jobs_get",
                 "jobs_list",
+                "processing_prepare",
                 "search_items"
             ]
         );

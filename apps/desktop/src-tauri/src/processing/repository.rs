@@ -192,19 +192,33 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
 }
 
 /// Snapshots the batch scope: one member row per asset currently in the given
-/// collections. A single `INSERT ... SELECT` statement, so concurrent imports
-/// cannot leak half a scope into the batch — assets added afterwards belong
-/// to a later batch. Returns the number of members added.
+/// collections. See [`prepare_scope_membership`].
 #[allow(dead_code)]
 pub fn prepare_membership(
     conn: &Connection,
     batch_id: &str,
     collection_ids: &[String],
 ) -> Result<usize, String> {
-    if collection_ids.is_empty() {
+    prepare_scope_membership(conn, batch_id, collection_ids, &[])
+}
+
+/// Snapshots the batch scope: one member row per asset currently in the given
+/// collections or items, each asset once even when its item is named and its
+/// collection too. A single `INSERT ... SELECT` statement, so concurrent
+/// imports cannot leak half a scope into the batch — assets added afterwards
+/// belong to a later batch. Returns the number of members added.
+pub fn prepare_scope_membership(
+    conn: &Connection,
+    batch_id: &str,
+    collection_ids: &[String],
+    item_ids: &[String],
+) -> Result<usize, String> {
+    if collection_ids.is_empty() && item_ids.is_empty() {
         return Ok(0);
     }
-    let scope = serde_json::to_string(collection_ids)
+    let collections = serde_json::to_string(collection_ids)
+        .map_err(|e| format!("Failed to encode batch scope: {e}"))?;
+    let items = serde_json::to_string(item_ids)
         .map_err(|e| format!("Failed to encode batch scope: {e}"))?;
     let added = conn
         .execute(
@@ -213,8 +227,9 @@ pub fn prepare_membership(
              SELECT ?1, ROW_NUMBER() OVER (ORDER BY a.created_at, a.id) - 1,
                     a.id, a.item_id, i.collection_id, i.title
              FROM assets a JOIN items i ON i.id = a.item_id
-             WHERE i.collection_id IN (SELECT value FROM json_each(?2))",
-            rusqlite::params![batch_id, scope],
+             WHERE i.collection_id IN (SELECT value FROM json_each(?2))
+                OR i.id IN (SELECT value FROM json_each(?3))",
+            rusqlite::params![batch_id, collections, items],
         )
         .map_err(|e| format!("Failed to snapshot scope of batch {batch_id}: {e}"))?;
     Ok(added as usize)

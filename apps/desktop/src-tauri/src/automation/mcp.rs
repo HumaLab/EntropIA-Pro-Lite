@@ -37,7 +37,7 @@ use serde_json::Value;
 
 use crate::automation::access::{Principal, Scope};
 use crate::automation::audit::{AuditLine, AuditLog};
-use crate::automation::jobs::{JobDetail, JobsArchive, JobsError, JobsPage};
+use crate::automation::jobs::{JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport};
 use crate::automation::read::{
     ArchiveCounts, ArchiveReader, CollectionsPage, ItemDetail, ItemsPage, ReadError, SearchResults,
 };
@@ -65,6 +65,7 @@ const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
 const TOOL_JOBS_LIST: &str = "jobs_list";
 const TOOL_JOBS_GET: &str = "jobs_get";
+const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
 
 /// `entropia_status`'s payload: this instance, this archive, this caller.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -185,6 +186,21 @@ pub struct JobsGetParams {
     pub tasks_limit: Option<u32>,
 }
 
+/// `processing_prepare` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessingPrepareParams {
+    /// Your own id for this request, 1 to 128 characters. Sending it again
+    /// with the same arguments returns the same job instead of a second one.
+    pub request_id: String,
+    /// Collections whose files enter the job.
+    pub collection_ids: Option<Vec<String>>,
+    /// Items whose files enter the job.
+    pub item_ids: Option<Vec<String>>,
+    /// `ocr`, `embeddings`, `ner`, `triples`, or `schema:<id>`.
+    pub operations: Vec<String>,
+}
+
 /// Arguments that deserialize strictly but fail as a tool error.
 ///
 /// rmcp turns a failed `Parameters` extraction into a plain-text tool result, and
@@ -261,16 +277,29 @@ impl AgentServer {
         context: &RequestContext<RoleServer>,
         tool: &str,
     ) -> Result<Principal, CallToolResult> {
+        self.guard_scope(
+            context,
+            tool,
+            Scope::Read,
+            "Este asistente no tiene permiso de lectura en EntropIA: pedile a la persona que lo emparejó que revise sus permisos.",
+        )
+    }
+
+    /// The caller, provided it holds `scope`; otherwise the refusal, audited,
+    /// before any archive is touched.
+    fn guard_scope(
+        &self,
+        context: &RequestContext<RoleServer>,
+        tool: &str,
+        scope: Scope,
+        refusal: &str,
+    ) -> Result<Principal, CallToolResult> {
         let caller = Self::caller(context)?;
-        if caller.has(Scope::Read) {
+        if caller.has(scope) {
             return Ok(caller);
         }
         self.audit_error(&caller, tool, ERROR_FORBIDDEN_SCOPE, None);
-        Err(tool_error(
-            ERROR_FORBIDDEN_SCOPE,
-            "Este asistente no tiene permiso de lectura en EntropIA: pedile a la persona que lo emparejó que revise sus permisos."
-                .to_string(),
-        ))
+        Err(tool_error(ERROR_FORBIDDEN_SCOPE, refusal.to_string()))
     }
 
     /// Arguments, or the audit and refusal that turn down what cannot be parsed.
@@ -595,6 +624,53 @@ impl AgentServer {
         };
         self.audit_ok(&caller, TOOL_JOBS_GET, vec![detail.job.id.clone()], None);
         Ok(Json(detail))
+    }
+
+    #[tool(
+        name = "processing_prepare",
+        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`) o un esquema (`schema:<id>`). No gasta nada: empezar lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar y controlar procesamiento».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn processing_prepare(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ProcessingPrepareParams>>,
+    ) -> Result<Json<PrepareReport>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_PROCESSING_PREPARE,
+            Scope::LocalWrite,
+            "Este asistente no tiene permiso para preparar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar y controlar procesamiento»).",
+        )?;
+        let args = self.arguments(&caller, TOOL_PROCESSING_PREPARE, args)?;
+        let jobs = self.jobs.clone();
+        let client_id = caller.client_id.clone();
+        let report = match Self::on_jobs(move || {
+            jobs.prepare(
+                &client_id,
+                &args.request_id,
+                &args.collection_ids.unwrap_or_default(),
+                &args.item_ids.unwrap_or_default(),
+                &args.operations,
+            )
+        })
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_PROCESSING_PREPARE, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_PROCESSING_PREPARE,
+            vec![report.job_id.clone()],
+            None,
+        );
+        Ok(Json(report))
     }
 }
 
