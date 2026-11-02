@@ -16,6 +16,8 @@ pub mod error;
 pub mod keyring_source;
 pub mod proof;
 pub mod relay;
+// D-Bus (the Secret Service) exists on Unix desktops only.
+#[cfg(unix)]
 pub mod session_bus;
 
 pub use error::ConnectorError;
