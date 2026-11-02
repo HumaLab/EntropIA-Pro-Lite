@@ -12,10 +12,11 @@ pub mod commands;
 pub mod ingest;
 
 pub use commands::{
-    create_collection, reindex_item, replace_page_text, update_collection, update_item,
-    CollectionDto, CollectionPatch, CorpusError, ItemDto, ItemPatch, ReplacedText,
-    MAX_PAGE_TEXT_CHARS,
+    create_collection, import_path, reindex_item, replace_page_text, update_collection,
+    update_item, CollectionDto, CollectionPatch, CorpusError, ImportedPath, ItemDto, ItemPatch,
+    ReplacedText, MAX_PAGE_TEXT_CHARS,
 };
+pub use ingest::ImportOverrides;
 
 #[cfg(test)]
 mod ingest_tests;

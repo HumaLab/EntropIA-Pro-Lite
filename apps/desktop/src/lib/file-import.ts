@@ -1,6 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog'
-import { copyFile, mkdir, readFile, remove, stat } from '@tauri-apps/plugin-fs'
-import { join } from '@tauri-apps/api/path'
+import { copyFile, readFile, remove } from '@tauri-apps/plugin-fs'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { invoke } from '@tauri-apps/api/core'
 import { getAssetPathLabel } from './item-metadata'
@@ -8,34 +7,6 @@ import { getAssetPathLabel } from './item-metadata'
 const SUPPORTED_IMAGES = ['png', 'jpg', 'jpeg', 'webp', 'tiff', 'tif']
 const SUPPORTED_AUDIO = ['wav', 'mp3', 'flac', 'm4a', 'aac', 'ogg']
 export const SUPPORTED_FORMATS = [...SUPPORTED_IMAGES, 'pdf', ...SUPPORTED_AUDIO]
-
-export interface ImportedFile {
-  originalName: string
-  originalPath: string
-  destPath: string
-  type: 'image' | 'pdf' | 'audio'
-  size: number
-  originalMetadata: ImportedFileMetadata
-}
-
-export interface ImportedFileMetadata {
-  originalName: string
-  originalPath: string
-  importedAt: string
-  sizeBytes: number
-  readonly?: boolean
-  isFile?: boolean
-  isDirectory?: boolean
-  createdAt?: number | null
-  modifiedAt?: number | null
-  accessedAt?: number | null
-}
-
-export interface ImportFromPathsResult {
-  imported: ImportedFile[]
-  rejected: string[]
-  skippedDuplicatePaths: number
-}
 
 /** A single rendered PDF page returned by the backend. */
 export interface RenderedPage {
@@ -80,104 +51,6 @@ export async function pickFiles(): Promise<string[]> {
 }
 
 /**
- * Open a file picker dialog, copy selected files into the app data directory,
- * and return metadata about imported files.
- */
-export async function pickAndImportFiles(
-  collectionId: string,
-  itemId: string
-): Promise<ImportedFile[]> {
-  try {
-    const selected = await open({
-      multiple: true,
-      filters: [
-        {
-          name: 'Documents',
-          extensions: SUPPORTED_FORMATS,
-        },
-      ],
-    })
-
-    if (!selected) return []
-
-    const files = Array.isArray(selected) ? selected : [selected]
-
-    const result = await importFilesFromPaths(files, collectionId, itemId)
-    return result.imported
-  } catch (e) {
-    console.error('[file-import] pickAndImportFiles error:', e)
-    throw new Error(`Failed to open file dialog: ${e instanceof Error ? e.message : String(e)}`)
-  }
-}
-
-/**
- * Copy a single file into the app data directory under `{collectionId}/{itemId}/`.
- * Returns the destination path.
- */
-async function copyFileToItem(
-  sourcePath: string,
-  collectionId: string,
-  itemId: string,
-  fileName?: string
-): Promise<string> {
-  const dataDir = await invoke<string>('resolve_data_dir')
-  const destDir = await join(dataDir, 'assets', collectionId, itemId)
-  await mkdir(destDir, { recursive: true })
-
-  const name = fileName ?? sourcePath.split(/[/\\]/).pop() ?? 'unknown'
-  const destPath = await join(destDir, `${crypto.randomUUID()}_${name}`)
-  await copyFile(sourcePath, destPath)
-  // The copy needs the absolute destination; the caller stores the return value
-  // in `assets.path`, which holds the relative key.
-  return toStoredAssetPath(destPath)
-}
-
-function timestampFromFsDate(value: unknown): number | null {
-  if (value instanceof Date) return value.getTime()
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
-}
-
-async function readOriginalFileMetadata(
-  sourcePath: string,
-  originalName: string
-): Promise<ImportedFileMetadata> {
-  const metadata = await stat(sourcePath)
-  const sizeBytes = Number(metadata.size ?? 0)
-
-  return {
-    originalName,
-    originalPath: sourcePath,
-    importedAt: new Date().toISOString(),
-    sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : 0,
-    readonly: metadata.readonly,
-    isFile: metadata.isFile,
-    isDirectory: metadata.isDirectory,
-    createdAt: timestampFromFsDate(metadata.birthtime),
-    modifiedAt: timestampFromFsDate(metadata.mtime),
-    accessedAt: timestampFromFsDate(metadata.atime),
-  }
-}
-
-/**
- * What identifies a source file across imports: where it is, its size and when
- * it last changed. Built from the same metadata an import records, so it
- * compares against what earlier imports stored.
- */
-export async function readSourceFingerprint(sourcePath: string): Promise<{
-  originalPath: string
-  sizeBytes: number
-  modifiedAt: number | null
-}> {
-  const { originalPath, sizeBytes, modifiedAt } = await readOriginalFileMetadata(sourcePath, '')
-  return { originalPath, sizeBytes, modifiedAt: modifiedAt ?? null }
-}
-
-/**
  * Classify and validate a batch of file paths.
  * Returns classified files ready to be imported and rejected filenames.
  */
@@ -207,69 +80,6 @@ export function classifyFiles(filePaths: string[]): {
   }
 
   return { classified, rejected }
-}
-
-export async function importFilesFromPaths(
-  filePaths: string[],
-  collectionId: string,
-  itemId: string
-): Promise<ImportFromPathsResult> {
-  const { classified, rejected } = classifyFiles(filePaths)
-  const skippedDuplicatePaths = filePaths.length - classified.length - rejected.length
-
-  const imported: ImportedFile[] = []
-
-  for (const file of classified) {
-    const originalMetadata = await readOriginalFileMetadata(file.sourcePath, file.name)
-    const destPath = await copyFileToItem(file.sourcePath, collectionId, itemId)
-    imported.push({
-      originalName: file.name,
-      originalPath: file.sourcePath,
-      destPath,
-      type: file.type,
-      size: originalMetadata.sizeBytes,
-      originalMetadata,
-    })
-  }
-
-  return {
-    imported,
-    rejected,
-    skippedDuplicatePaths,
-  }
-}
-
-/**
- * Import a single file: copy it to the app data directory under its own item.
- * Returns the ImportedFile metadata.
- *
- * `fileName` renames the stored copy (and the original name it records) for a
- * source whose own file name says nothing, such as a saved web capture's id. The
- * file is still classified by the source's real extension.
- */
-export async function importSingleFile(
-  sourcePath: string,
-  collectionId: string,
-  itemId: string,
-  fileName?: string
-): Promise<ImportedFile> {
-  const sourceName = sourcePath.split(/[/\\]/).pop() ?? 'unknown'
-  const type = classifyFileType(sourceName)
-  if (!type) {
-    throw new Error(`Unsupported file format: ${sourceName}`)
-  }
-  const name = fileName ?? sourceName
-
-  const destPath = await copyFileToItem(sourcePath, collectionId, itemId, fileName)
-  const originalMetadata = await readOriginalFileMetadata(sourcePath, name)
-  return {
-    originalName: name,
-    originalPath: sourcePath,
-    destPath,
-    type,
-    size: originalMetadata.sizeBytes,
-    originalMetadata,
-  }
 }
 
 /**
@@ -576,35 +386,6 @@ export async function renderPdfPages(
   filenamePrefix: string
 ): Promise<RenderedPage[]> {
   return invoke<RenderedPage[]>('render_pdf_pages', {
-    pdfPath,
-    outputDir,
-    filenamePrefix,
-  })
-}
-
-/** A single-page PDF produced by splitting a multi-page PDF. */
-export interface SplitPage {
-  page_number: number
-  pdf_path: string
-}
-
-/**
- * Split a multi-page PDF into one single-page PDF file per page.
- *
- * Each page is preserved as an independent PDF — no rasterization and no
- * recompression — so original quality is retained. Page order is preserved.
- *
- * @param pdfPath Absolute path to the source PDF file on the filesystem
- * @param outputDir Directory where single-page PDF files will be saved
- * @param filenamePrefix Prefix for output filenames (e.g. "document" → "document_page_1.pdf")
- * @returns Array of {page_number, pdf_path} objects with absolute filesystem paths
- */
-export async function splitPdfPages(
-  pdfPath: string,
-  outputDir: string,
-  filenamePrefix: string
-): Promise<SplitPage[]> {
-  return invoke<SplitPage[]>('split_pdf_pages', {
     pdfPath,
     outputDir,
     filenamePrefix,

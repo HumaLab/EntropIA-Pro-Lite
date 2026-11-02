@@ -5,6 +5,7 @@ import { locale } from '$lib/i18n'
 import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
 import { exportCollectionById } from '$lib/export'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 // Real module (not mocked): CollectionView.svelte's Task 3.5 pane-targeting
 // guard reads this same registry via `currentPaneRects()`.
 import { registerPaneRect, unregisterPaneRect } from '$lib/pane-rects'
@@ -68,9 +69,6 @@ const { storeRef, navigationRef, workspaceRef, fileImportRef, dragDropRef } = vi
   fileImportRef: {
     pickFiles: vi.fn(),
     classifyFiles: vi.fn(),
-    importSingleFile: vi.fn(),
-    splitPdfPages: vi.fn(),
-    readSourceFingerprint: vi.fn(),
     generateImageThumbnail: vi.fn(),
   },
   dragDropRef: {
@@ -169,13 +167,6 @@ vi.mock('$lib/workspace', () => ({
 vi.mock('$lib/file-import', () => ({
   pickFiles: fileImportRef.pickFiles,
   classifyFiles: fileImportRef.classifyFiles,
-  importSingleFile: fileImportRef.importSingleFile,
-  splitPdfPages: fileImportRef.splitPdfPages,
-  readSourceFingerprint: fileImportRef.readSourceFingerprint,
-  pickAndImportFiles: vi.fn().mockResolvedValue([]),
-  importFilesFromPaths: vi
-    .fn()
-    .mockResolvedValue({ imported: [], rejected: [], skippedDuplicatePaths: 0 }),
   getAssetUrl: vi.fn().mockImplementation((p: string) => `asset://localhost${p}`),
   generateImageThumbnail: fileImportRef.generateImageThumbnail,
   deleteAssetFile: vi.fn().mockResolvedValue(undefined),
@@ -199,13 +190,9 @@ vi.mock('@tauri-apps/api/webview', () => ({
 beforeEach(() => {
   fileImportRef.pickFiles.mockReset()
   fileImportRef.classifyFiles.mockReset()
-  fileImportRef.importSingleFile.mockReset()
-  fileImportRef.splitPdfPages.mockReset()
-  fileImportRef.readSourceFingerprint.mockReset()
   fileImportRef.generateImageThumbnail.mockReset()
   fileImportRef.pickFiles.mockResolvedValue([])
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
-  fileImportRef.splitPdfPages.mockResolvedValue([])
   fileImportRef.generateImageThumbnail.mockResolvedValue(
     'asset://localhost/thumbs/image-asset-1.png'
   )
@@ -731,292 +718,61 @@ describe('CollectionView import flow', () => {
     navigationRef.navigate.mockReset()
     navigationRef.current = { name: 'collection', collectionName: 'Colección' }
     storeRef.current = createStore([])
-    storeRef.current.items.create = vi.fn().mockResolvedValue({ id: 'item-new' })
-    storeRef.current.items.update = vi.fn().mockResolvedValue(undefined)
-    storeRef.current.items.delete = vi.fn().mockResolvedValue(undefined)
-    storeRef.current.assets.create = vi.fn().mockResolvedValue({ id: 'asset-new' })
   })
 
   afterEach(() => {
     vi.useRealTimers()
-  })
-
-  function mockImageImport(sourcePath = 'C:\\tmp\\photo.png') {
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath, name: 'photo.png', type: 'image' }],
-      rejected: [],
-    })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'photo.png',
-      originalPath: sourcePath,
-      destPath: 'C:\\app-data\\assets\\col-1\\item-new\\photo.png',
-      type: 'image',
-      size: 123,
-      originalMetadata: {
-        originalName: 'photo.png',
-        originalPath: sourcePath,
-        importedAt: '2026-06-02T00:00:00.000Z',
-        sizeBytes: 123,
-      },
-    })
-  }
-
-  function mockPdfImport(pageCount: number) {
-    const sourcePath = 'C:\\tmp\\doc.pdf'
-    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath, name: 'doc.pdf', type: 'pdf' }],
-      rejected: [],
-    })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'doc.pdf',
-      originalPath: sourcePath,
-      destPath: 'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
-      type: 'pdf',
-      size: 9999,
-      originalMetadata: {
-        originalName: 'doc.pdf',
-        originalPath: sourcePath,
-        importedAt: '2026-06-02T00:00:00.000Z',
-        sizeBytes: 9999,
-      },
-    })
-    fileImportRef.splitPdfPages.mockResolvedValue(
-      Array.from({ length: pageCount }, (_, i) => ({
-        page_number: i + 1,
-        pdf_path: `C:\\app-data\\assets\\col-1\\item-new\\doc_page_${i + 1}.pdf`,
-      }))
+    // Back to the answer the shared setup gives every other test.
+    vi.mocked(invoke).mockReset()
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'resolve_data_dir' ? '/mock/app-data' : undefined
     )
-  }
-
-  it('splits a multi-page PDF into single-page PDF assets linked to a kept parent', async () => {
-    mockPdfImport(3)
-
-    render(CollectionView, { collectionId: 'col-1' })
-
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(fileImportRef.splitPdfPages).toHaveBeenCalledWith(
-        'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
-        expect.any(String),
-        'doc'
-      )
-    })
-
-    const createCalls = storeRef.current.assets.create.mock.calls
-    // The original PDF is kept as the parent asset (no rasterization, no deletion).
-    expect(createCalls[0]?.[0]).toMatchObject({
-      itemId: 'item-new',
-      path: 'C:\\app-data\\assets\\col-1\\item-new\\doc.pdf',
-      type: 'pdf',
-      size: 9999,
-      sortIndex: 0,
-    })
-    // One single-page PDF child per page, ordered, linked to the parent.
-    expect(createCalls).toHaveLength(4)
-    expect(createCalls[1]?.[0]).toMatchObject({
-      type: 'pdf',
-      parentAssetId: 'asset-new',
-      pageNumber: 1,
-      sortIndex: 0,
-    })
-    expect(createCalls[2]?.[0]).toMatchObject({
-      type: 'pdf',
-      parentAssetId: 'asset-new',
-      pageNumber: 2,
-      sortIndex: 1,
-    })
-    expect(createCalls[3]?.[0]).toMatchObject({
-      type: 'pdf',
-      parentAssetId: 'asset-new',
-      pageNumber: 3,
-      sortIndex: 2,
-    })
   })
 
-  it('creates a page asset for a single-page PDF through the same split pipeline', async () => {
-    mockPdfImport(1)
-
-    render(CollectionView, { collectionId: 'col-1' })
-
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => expect(fileImportRef.splitPdfPages).toHaveBeenCalled())
-    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(2)
-    expect(storeRef.current.assets.create.mock.calls[0]?.[0]).toMatchObject({
-      type: 'pdf',
-      sortIndex: 0,
-    })
-    expect(storeRef.current.assets.create.mock.calls[1]?.[0]).toMatchObject({
-      type: 'pdf',
-      parentAssetId: 'asset-new',
-      pageNumber: 1,
-      sortIndex: 0,
-    })
-  })
-
-  it('fails the import instead of retaining a processable PDF parent when splitting fails', async () => {
-    mockPdfImport(2)
-    fileImportRef.splitPdfPages.mockRejectedValueOnce(new Error('PDF split failed'))
-
-    render(CollectionView, { collectionId: 'col-1' })
-
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(storeRef.current.items.delete).toHaveBeenCalledWith('item-new')
-    })
-    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(1)
-    expect(navigationRef.navigate).not.toHaveBeenCalled()
-    await waitFor(() => {
-      expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
-    })
-  })
-
-  // Behaves like the archive with foreign_keys=ON: an item that still owns
-  // assets cannot be deleted, and the item cascade also drops a collection it
-  // leaves empty.
-  function useArchiveLikeStore() {
-    const archive = {
-      items: new Set<string>(),
-      assets: new Map<string, string | null>(),
-      collectionDeleted: false,
-    }
-    const store = storeRef.current
-    store.items.create = vi.fn(async () => {
-      archive.items.add('item-new')
-      return { id: 'item-new' }
-    })
-    store.assets.create = vi.fn(async (data: { parentAssetId?: string | null }) => {
-      const id = `asset-${archive.assets.size + 1}`
-      archive.assets.set(id, data.parentAssetId ?? null)
-      return { id }
-    })
-    store.assets.findByItem = vi.fn(async () =>
-      [...archive.assets].map(([id, parentAssetId]) => ({
-        id,
+  /**
+   * The import command as the view sees it: one request per classified file.
+   * `answers` says what one path's request does — an import (the default), a
+   * duplicate, or a failure carrying that message. The copy, the PDF split,
+   * the item and its assets are the backend's business now
+   * (`odd/tasks/agent-corpus-tools.md` D10); the view only reads the answer.
+   */
+  function answerImports(answers: Record<string, 'duplicate' | string> = {}) {
+    vi.mocked(invoke).mockImplementation((async (
+      command: string,
+      args?: Record<string, unknown>
+    ) => {
+      if (command === 'resolve_data_dir') return '/mock/app-data'
+      if (command !== 'corpus_import_path') return undefined
+      const sourcePath = String(args?.sourcePath)
+      const answer = answers[sourcePath] ?? 'imported'
+      if (answer === 'duplicate') return { outcome: 'duplicate', itemId: 'item-old' }
+      if (answer !== 'imported') throw answer
+      const name = sourcePath.split(/[/\\]/).pop() ?? sourcePath
+      return {
+        outcome: 'imported',
         itemId: 'item-new',
-        path: `assets/col-1/item-new/${id}.pdf`,
-        type: 'pdf',
-        size: null,
-        parentAssetId,
-        createdAt: 1,
-      }))
-    )
-    store.assets.deleteWithCascade = vi.fn(async (id: string) => {
-      for (const [child, parent] of archive.assets) {
-        if (parent === id) archive.assets.delete(child)
+        title: name.replace(/\.[^.]+$/, ''),
+        assets: 1,
       }
-      archive.assets.delete(id)
-    })
-    store.items.delete = vi.fn(async (id: string) => {
-      if (archive.assets.size > 0) throw new Error('FOREIGN KEY constraint failed')
-      archive.items.delete(id)
-    })
-    store.items.deleteWithCascade = vi.fn(async (id: string) => {
-      archive.assets.clear()
-      archive.items.delete(id)
-      if (archive.items.size === 0) archive.collectionDeleted = true
-    })
-    return archive
+    }) as never)
   }
 
-  it('leaves no item behind when splitting fails, and keeps the collection', async () => {
-    mockPdfImport(2)
-    const archive = useArchiveLikeStore()
-    fileImportRef.splitPdfPages.mockRejectedValueOnce(
-      new Error('El PDF está protegido con contraseña y no se puede leer.')
-    )
-
-    render(CollectionView, { collectionId: 'col-1' })
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(screen.getAllByText(/protegido con contraseña/).length).toBeGreaterThan(0)
+  /** One classified file, as `classifyFiles` would report it. */
+  function classifyOne(sourcePath: string, name: string, type: 'image' | 'pdf' = 'image') {
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [{ sourcePath, name, type }],
+      rejected: [],
     })
-    expect(archive.items.size).toBe(0)
-    expect(archive.assets.size).toBe(0)
-    expect(archive.collectionDeleted).toBe(false)
-  })
+  }
 
-  it('removes the folder a failed PDF import copied into', async () => {
-    mockPdfImport(2)
-    fileImportRef.splitPdfPages.mockRejectedValueOnce(new Error('PDF split failed'))
-    const { remove } = await import('@tauri-apps/plugin-fs')
-    vi.mocked(remove).mockClear()
+  function importRequests(): unknown[][] {
+    return vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'corpus_import_path')
+      .map(([, args]) => [args])
+  }
 
-    render(CollectionView, { collectionId: 'col-1' })
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(screen.getAllByText(/PDF split failed/).length).toBeGreaterThan(0)
-    })
-    expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-new', {
-      recursive: true,
-    })
-  })
-
-  it('skips a file already imported into this collection', async () => {
-    mockPdfImport(2)
-    const fingerprint = { originalPath: 'C:\\tmp\\doc.pdf', sizeBytes: 9999, modifiedAt: 1 }
-    fileImportRef.readSourceFingerprint.mockResolvedValue(fingerprint)
-    Object.assign(storeRef.current.items, {
-      findImportedFromSource: vi.fn(async (collection: string, source: typeof fingerprint) =>
-        collection === 'col-1' && source.originalPath === fingerprint.originalPath
-          ? 'item-old'
-          : null
-      ),
-    })
-
-    render(CollectionView, { collectionId: 'col-1' })
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Ya estaban importados en esta colección: doc\.pdf/)
-      ).toBeInTheDocument()
-    })
-    expect(storeRef.current.items.create).not.toHaveBeenCalled()
-    expect(fileImportRef.importSingleFile).not.toHaveBeenCalled()
-  })
-
-  it('does not call a duplicate-only import a failure', async () => {
-    mockPdfImport(2)
-    fileImportRef.readSourceFingerprint.mockResolvedValue({
-      originalPath: 'C:\\tmp\\doc.pdf',
-      sizeBytes: 9999,
-      modifiedAt: 1,
-    })
-    Object.assign(storeRef.current.items, {
-      findImportedFromSource: vi.fn().mockResolvedValue('item-old'),
-    })
-
-    render(CollectionView, { collectionId: 'col-1' })
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          /Algunos archivos ya estaban en esta colección y no se volvieron a importar/
-        )
-      ).toBeInTheDocument()
-    })
-    expect(screen.queryByText(/no se pudieron importar/)).not.toBeInTheDocument()
-  })
-
-  it('still imports the file when the duplicate check cannot run', async () => {
-    mockPdfImport(2)
-    fileImportRef.readSourceFingerprint.mockRejectedValue(new Error('stat failed'))
-
-    render(CollectionView, { collectionId: 'col-1' })
-    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
-
-    await waitFor(() => expect(fileImportRef.splitPdfPages).toHaveBeenCalled())
-    expect(storeRef.current.items.create).toHaveBeenCalledOnce()
-  })
-
-  it('imports picker-selected paths through the shared item/asset workflow', async () => {
+  it('imports picker-selected paths through the backend and opens the item it created', async () => {
     const sourcePath = 'C:\\tmp\\photo.png'
     const explorerRefreshes: CustomEvent[] = []
     const handleExplorerRefresh = (event: Event) => {
@@ -1024,7 +780,8 @@ describe('CollectionView import flow', () => {
     }
     window.addEventListener(DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT, handleExplorerRefresh)
     fileImportRef.pickFiles.mockResolvedValue([sourcePath])
-    mockImageImport(sourcePath)
+    classifyOne(sourcePath, 'photo.png')
+    answerImports()
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1032,18 +789,10 @@ describe('CollectionView import flow', () => {
 
     await waitFor(() => {
       expect(fileImportRef.classifyFiles).toHaveBeenCalledWith([sourcePath])
-      expect(storeRef.current.items.create).toHaveBeenCalledWith({
-        title: 'photo',
+      expect(invoke).toHaveBeenCalledWith('corpus_import_path', {
         collectionId: 'col-1',
-        metadata: null,
-      })
-      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(sourcePath, 'col-1', 'item-new')
-      expect(storeRef.current.assets.create).toHaveBeenCalledWith({
-        itemId: 'item-new',
-        path: 'C:\\app-data\\assets\\col-1\\item-new\\photo.png',
-        type: 'image',
-        size: 123,
-        sortIndex: 0,
+        sourcePath,
+        overrides: null,
       })
       expect(navigationRef.navigate).toHaveBeenCalledWith({
         name: 'item',
@@ -1062,6 +811,115 @@ describe('CollectionView import flow', () => {
     expect(screen.getByText('Importados')).toBeInTheDocument()
     expect(screen.getByText('Omitidos')).toBeInTheDocument()
     expect(screen.getByText('Errores')).toBeInTheDocument()
+  })
+
+  it('imports a PDF through the backend and opens the document it created', async () => {
+    // The original plus one single-page asset per page is pinned in Rust
+    // (`corpus::ingest_tests`); the view only reads the answer.
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports()
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('corpus_import_path', {
+        collectionId: 'col-1',
+        sourcePath,
+        overrides: null,
+      })
+      expect(navigationRef.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'item', itemId: 'item-new', itemTitle: 'doc' })
+      )
+    })
+  })
+
+  it('reports a failed import, cleans nothing itself and stays in the collection', async () => {
+    // A PDF that cannot be split fails inside the service, which also removes
+    // the item and its folder it had already written
+    // (`corpus::ingest_tests::a_failed_import_leaves_no_item_and_no_files`).
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports({
+      [sourcePath]: 'invalid_file: doc.pdf could not be split into pages: PDF split failed',
+    })
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/importing doc\.pdf.*doc\.pdf could not be split into pages/)
+      ).toBeInTheDocument()
+    })
+    expect(screen.getAllByText(/PDF split failed/)).toHaveLength(2)
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+    // The renderer no longer deletes anything on a failed import.
+    expect(storeRef.current.items.delete).not.toHaveBeenCalled()
+    expect(storeRef.current.assets.deleteWithCascade).not.toHaveBeenCalled()
+  })
+
+  it('skips a file already imported into this collection', async () => {
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports({ [sourcePath]: 'duplicate' })
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Ya estaban importados en esta colección: doc\.pdf/)
+      ).toBeInTheDocument()
+    })
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
+  })
+
+  it('does not call a duplicate-only import a failure', async () => {
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports({ [sourcePath]: 'duplicate' })
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          /Algunos archivos ya estaban en esta colección y no se volvieron a importar/
+        )
+      ).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/no se pudieron importar/)).not.toBeInTheDocument()
+  })
+
+  // Before D10 the renderer ran the duplicate check itself and imported a file
+  // whose check had failed. The check now runs inside the import's transaction,
+  // so a check that cannot run is that file's error and nothing is imported.
+  it('reports a duplicate check that could not run as this file’s failure', async () => {
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports({
+      [sourcePath]: 'unavailable: could not check for an earlier import: database is locked',
+    })
+
+    render(CollectionView, { collectionId: 'col-1' })
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/could not check for an earlier import: database is locked/)
+      ).toBeInTheDocument()
+    })
+    expect(navigationRef.navigate).not.toHaveBeenCalled()
   })
 
   it('shows import progress while the picker is pending', async () => {
@@ -1085,33 +943,8 @@ describe('CollectionView import flow', () => {
   it('updates native progress per completed source file and keeps successful batch summaries visible', async () => {
     const firstPath = 'C:\\tmp\\first.png'
     const secondPath = 'C:\\tmp\\second.png'
-    const firstImport = deferred<{
-      originalName: string
-      originalPath: string
-      destPath: string
-      type: 'image'
-      size: number
-      originalMetadata: {
-        originalName: string
-        originalPath: string
-        importedAt: string
-        sizeBytes: number
-      }
-    }>()
-    const secondImport = deferred<{
-      originalName: string
-      originalPath: string
-      destPath: string
-      type: 'image'
-      size: number
-      originalMetadata: {
-        originalName: string
-        originalPath: string
-        importedAt: string
-        sizeBytes: number
-      }
-    }>()
-    let createdItems = 0
+    const firstImport = deferred<unknown>()
+    const secondImport = deferred<unknown>()
     fileImportRef.pickFiles.mockResolvedValue([firstPath, secondPath])
     fileImportRef.classifyFiles.mockReturnValue({
       classified: [
@@ -1120,19 +953,20 @@ describe('CollectionView import flow', () => {
       ],
       rejected: [],
     })
-    storeRef.current.items.create = vi.fn().mockImplementation(async () => ({
-      id: `item-${++createdItems}`,
-    }))
-    fileImportRef.importSingleFile.mockImplementation((sourcePath: string) =>
-      sourcePath === firstPath ? firstImport.promise : secondImport.promise
-    )
+    vi.mocked(invoke).mockImplementation(((command: string, args?: Record<string, unknown>) => {
+      if (command === 'resolve_data_dir') return Promise.resolve('/mock/app-data')
+      if (command !== 'corpus_import_path') return Promise.resolve(undefined)
+      return String(args?.sourcePath) === firstPath ? firstImport.promise : secondImport.promise
+    }) as never)
 
     render(CollectionView, { collectionId: 'col-1' })
 
     await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
 
     await waitFor(() => {
-      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(firstPath, 'col-1', 'item-1')
+      expect(importRequests()).toEqual([
+        [{ collectionId: 'col-1', sourcePath: firstPath, overrides: null }],
+      ])
     })
 
     const progress = screen.getByRole('progressbar', { name: 'Progreso de la importación' })
@@ -1144,22 +978,10 @@ describe('CollectionView import flow', () => {
     )
     expect(screen.getByText('Archivo actual: first.png.')).toBeInTheDocument()
 
-    firstImport.resolve({
-      originalName: 'first.png',
-      originalPath: firstPath,
-      destPath: 'C:\\app-data\\assets\\col-1\\item-1\\first.png',
-      type: 'image',
-      size: 1,
-      originalMetadata: {
-        originalName: 'first.png',
-        originalPath: firstPath,
-        importedAt: '2026-06-02T00:00:00.000Z',
-        sizeBytes: 1,
-      },
-    })
+    firstImport.resolve({ outcome: 'imported', itemId: 'item-1', title: 'first', assets: 1 })
 
     await waitFor(() => {
-      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(secondPath, 'col-1', 'item-2')
+      expect(importRequests()).toHaveLength(2)
       expect(progress).toHaveAttribute('value', '1')
     })
     expect(screen.getByText('Archivo actual: second.png.')).toBeInTheDocument()
@@ -1167,19 +989,7 @@ describe('CollectionView import flow', () => {
       document.getElementById('collection-import-progress-description-pane-test')
     ).toHaveTextContent('1 de 2 archivos procesados.')
 
-    secondImport.resolve({
-      originalName: 'second.png',
-      originalPath: secondPath,
-      destPath: 'C:\\app-data\\assets\\col-1\\item-2\\second.png',
-      type: 'image',
-      size: 1,
-      originalMetadata: {
-        originalName: 'second.png',
-        originalPath: secondPath,
-        importedAt: '2026-06-02T00:00:00.000Z',
-        sizeBytes: 1,
-      },
-    })
+    secondImport.resolve({ outcome: 'imported', itemId: 'item-2', title: 'second', assets: 1 })
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Cerrar resumen' })).toBeInTheDocument()
@@ -1192,7 +1002,7 @@ describe('CollectionView import flow', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('summarizes skipped unsupported files without creating items', async () => {
+  it('summarizes skipped unsupported files without asking the backend', async () => {
     const sourcePath = 'C:\\tmp\\notes.exe'
     fileImportRef.pickFiles.mockResolvedValue([sourcePath])
     fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: ['notes.exe'] })
@@ -1204,7 +1014,7 @@ describe('CollectionView import flow', () => {
     await waitFor(() => {
       expect(screen.getByRole('region', { name: 'Resumen de importación' })).toBeInTheDocument()
       expect(screen.getByText('Omitidos: notes.exe')).toBeInTheDocument()
-      expect(storeRef.current.items.create).not.toHaveBeenCalled()
+      expect(importRequests()).toEqual([])
     })
   })
 
@@ -1219,26 +1029,7 @@ describe('CollectionView import flow', () => {
       ],
       rejected: [],
     })
-    storeRef.current.items.create = vi
-      .fn()
-      .mockResolvedValueOnce({ id: 'item-ok' })
-      .mockResolvedValueOnce({ id: 'item-broken' })
-    fileImportRef.importSingleFile.mockImplementation(async (sourcePath: string) => {
-      if (sourcePath === brokenPath) throw new Error('disk full')
-      return {
-        originalName: 'photo.png',
-        originalPath: sourcePath,
-        destPath: 'C:\\app-data\\assets\\col-1\\item-ok\\photo.png',
-        type: 'image',
-        size: 123,
-        originalMetadata: {
-          originalName: 'photo.png',
-          originalPath: sourcePath,
-          importedAt: '2026-06-02T00:00:00.000Z',
-          sizeBytes: 123,
-        },
-      }
-    })
+    answerImports({ [brokenPath]: 'unavailable: could not copy broken.png: disk full' })
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1258,9 +1049,9 @@ describe('CollectionView import flow', () => {
     expect(screen.getByText('Errores').parentElement).toHaveTextContent('1')
     expect(summary).not.toHaveAttribute('aria-live')
 
-    // Both files were attempted; the failed item was cleaned up.
-    expect(fileImportRef.importSingleFile).toHaveBeenCalledTimes(2)
-    expect(storeRef.current.items.delete).toHaveBeenCalledWith('item-broken')
+    // Both files were attempted; nothing is deleted by the renderer.
+    expect(importRequests()).toHaveLength(2)
+    expect(storeRef.current.items.delete).not.toHaveBeenCalled()
 
     // Partial failure → no auto-navigation, summary stays visible.
     expect(navigationRef.navigate).not.toHaveBeenCalled()
@@ -1293,26 +1084,9 @@ describe('CollectionView import flow', () => {
       ],
       rejected: [],
     })
-    let createCount = 0
-    storeRef.current.items.create = vi.fn().mockImplementation(async () => ({
-      id: `item-${++createCount}`,
-    }))
-    fileImportRef.importSingleFile.mockImplementation(async (sourcePath: string) => {
-      if (sourcePath.endsWith('a.png')) throw new Error('copy failed a')
-      if (sourcePath.endsWith('b.png')) throw new Error('copy failed b')
-      return {
-        originalName: 'c.png',
-        originalPath: sourcePath,
-        destPath: 'C:\\app-data\\assets\\col-1\\item-3\\c.png',
-        type: 'image',
-        size: 1,
-        originalMetadata: {
-          originalName: 'c.png',
-          originalPath: sourcePath,
-          importedAt: '2026-06-02T00:00:00.000Z',
-          sizeBytes: 1,
-        },
-      }
+    answerImports({
+      'C:\\tmp\\a.png': 'unavailable: could not copy a.png: copy failed a',
+      'C:\\tmp\\b.png': 'unavailable: could not copy b.png: copy failed b',
     })
 
     render(CollectionView, { collectionId: 'col-1' })
@@ -1325,15 +1099,14 @@ describe('CollectionView import flow', () => {
     })
 
     // The third file still imported despite the earlier failures.
-    expect(storeRef.current.assets.create).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: 'item-3' })
-    )
+    expect(importRequests()).toHaveLength(3)
     expect(navigationRef.navigate).not.toHaveBeenCalled()
   })
 
-  it('imports dropped paths through the same item/asset workflow', async () => {
+  it('imports dropped paths through the same backend workflow', async () => {
     const sourcePath = 'C:\\tmp\\photo.png'
-    mockImageImport(sourcePath)
+    classifyOne(sourcePath, 'photo.png')
+    answerImports()
 
     render(CollectionView, { collectionId: 'col-1' })
 
@@ -1345,18 +1118,10 @@ describe('CollectionView import flow', () => {
 
     await waitFor(() => {
       expect(fileImportRef.classifyFiles).toHaveBeenCalledWith([sourcePath])
-      expect(storeRef.current.items.create).toHaveBeenCalledWith({
-        title: 'photo',
+      expect(invoke).toHaveBeenCalledWith('corpus_import_path', {
         collectionId: 'col-1',
-        metadata: null,
-      })
-      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(sourcePath, 'col-1', 'item-new')
-      expect(storeRef.current.assets.create).toHaveBeenCalledWith({
-        itemId: 'item-new',
-        path: 'C:\\app-data\\assets\\col-1\\item-new\\photo.png',
-        type: 'image',
-        size: 123,
-        sortIndex: 0,
+        sourcePath,
+        overrides: null,
       })
       expect(navigationRef.navigate).toHaveBeenCalledWith({
         name: 'item',
@@ -1377,7 +1142,8 @@ describe('CollectionView import flow', () => {
   describe('a subscription that settles after the view is gone', () => {
     it('releases a drag-drop listener that resolves after unmount, and never imports through it', async () => {
       const sourcePath = 'C:\\tmp\\photo.png'
-      mockImageImport(sourcePath)
+      classifyOne(sourcePath, 'photo.png')
+      answerImports()
       let resolveListener: ((unlisten: () => void) => void) | undefined
       dragDropRef.onDragDropEvent.mockImplementation((handler) => {
         dragDropRef.handler = handler
@@ -1401,8 +1167,7 @@ describe('CollectionView import flow', () => {
       dragDropRef.handler?.({ payload: { type: 'drop', paths: [sourcePath] } })
       await vi.advanceTimersByTimeAsync(0)
       expect(fileImportRef.classifyFiles).not.toHaveBeenCalled()
-      expect(fileImportRef.importSingleFile).not.toHaveBeenCalled()
-      expect(storeRef.current.items.create).not.toHaveBeenCalled()
+      expect(importRequests()).toEqual([])
     })
 
     it('releases event listeners that resolve after unmount', async () => {
@@ -1476,7 +1241,8 @@ describe('CollectionView import flow', () => {
 
     it("ignores a drop whose position falls inside another pane's rect, not this one", async () => {
       const sourcePath = 'C:\\tmp\\photo.png'
-      mockImageImport(sourcePath)
+      classifyOne(sourcePath, 'photo.png')
+      answerImports()
       workspaceRef.activeTabId = 'other-pane'
       registerPaneRect('other-pane', () => ({ left: 500, top: 0, right: 1000, bottom: 400 }))
 
@@ -1495,7 +1261,7 @@ describe('CollectionView import flow', () => {
         // (see its own `beforeEach` above), so a real `setTimeout` would
         // never fire — advance the fake clock instead.
         await vi.advanceTimersByTimeAsync(0)
-        expect(storeRef.current.items.create).not.toHaveBeenCalled()
+        expect(importRequests()).toEqual([])
       } finally {
         unregisterPaneRect('other-pane')
       }
@@ -1503,7 +1269,8 @@ describe('CollectionView import flow', () => {
 
     it("imports a drop whose position falls inside this pane's own registered rect", async () => {
       const sourcePath = 'C:\\tmp\\photo.png'
-      mockImageImport(sourcePath)
+      classifyOne(sourcePath, 'photo.png')
+      answerImports()
       workspaceRef.activeTabId = 'other-pane'
       registerPaneRect('pane-test', () => ({ left: 0, top: 0, right: 500, bottom: 400 }))
 
@@ -1518,11 +1285,9 @@ describe('CollectionView import flow', () => {
         })
 
         await waitFor(() => {
-          expect(storeRef.current.items.create).toHaveBeenCalledWith({
-            title: 'photo',
-            collectionId: 'col-1',
-            metadata: null,
-          })
+          expect(importRequests()).toEqual([
+            [{ collectionId: 'col-1', sourcePath, overrides: null }],
+          ])
         })
       } finally {
         unregisterPaneRect('pane-test')
@@ -1531,7 +1296,8 @@ describe('CollectionView import flow', () => {
 
     it('imports a drop whose position is outside every registered rect, falling back to the active pane', async () => {
       const sourcePath = 'C:\\tmp\\photo.png'
-      mockImageImport(sourcePath)
+      classifyOne(sourcePath, 'photo.png')
+      answerImports()
       workspaceRef.activeTabId = 'pane-test'
 
       render(CollectionView, { collectionId: 'col-1' })
@@ -1544,11 +1310,7 @@ describe('CollectionView import flow', () => {
       })
 
       await waitFor(() => {
-        expect(storeRef.current.items.create).toHaveBeenCalledWith({
-          title: 'photo',
-          collectionId: 'col-1',
-          metadata: null,
-        })
+        expect(importRequests()).toEqual([[{ collectionId: 'col-1', sourcePath, overrides: null }]])
       })
     })
   })

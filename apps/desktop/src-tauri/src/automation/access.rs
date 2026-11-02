@@ -583,7 +583,9 @@ impl AgentAccess {
                 "invalid_folder: {path} is the root of a disk; choose a folder inside it"
             ));
         }
-        let canonical = canonical.to_string_lossy().to_string();
+        // Stored and compared in its plain form: on Windows `canonicalize`
+        // answers `\\?\C:\…`, which the owner would see in the panel.
+        let canonical = crate::path_utils::normalize_windows_path_string(&canonical);
         let mut state = self.lock()?;
         if state.import_folders.contains(&canonical) {
             return Ok(state.import_folders.clone());

@@ -280,6 +280,7 @@ const APP_COMMANDS: &[&str] = &[
     "corpus_collection_create",
     "corpus_collection_update",
     "corpus_item_update",
+    "corpus_import_path",
     // Where the bundled connector is, for the recipes the panel copies (D15).
     "agent_connector_location",
 ];

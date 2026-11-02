@@ -27,8 +27,6 @@ vi.mock('$lib/pane-context', () => ({
 vi.mock('$lib/file-import', () => ({
   pickFiles: vi.fn(),
   classifyFiles: vi.fn(),
-  importSingleFile: vi.fn(),
-  splitPdfPages: vi.fn(),
   getAssetUrl: (path: string) => path,
   generateImageThumbnail: vi.fn(async (path: string) => `/thumbs${path}`),
   generatePdfThumbnail: vi.fn(async (path: string) => `/pdf-thumbs${path}`),

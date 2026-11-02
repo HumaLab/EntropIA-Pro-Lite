@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Largest file one import may copy.
 pub const MAX_SOURCE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -40,13 +40,15 @@ impl FileKind {
     }
 }
 
-/// The kind of a file by its extension, case-insensitive.
+/// The kind of a file by its extension, case-insensitive. The list is the
+/// app's own (`lib/file-import.ts` `SUPPORTED_*`), so a file the app classified
+/// is never refused here.
 pub fn classify(path: &Path) -> Option<FileKind> {
     let extension = path.extension()?.to_string_lossy().to_lowercase();
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "webp" | "tiff" | "tif" => Some(FileKind::Image),
         "pdf" => Some(FileKind::Pdf),
-        "wav" | "mp3" | "flac" | "m4a" | "aac" => Some(FileKind::Audio),
+        "wav" | "mp3" | "flac" | "m4a" | "aac" | "ogg" => Some(FileKind::Audio),
         _ => None,
     }
 }
@@ -109,14 +111,55 @@ pub fn check_source(
     if !metadata.is_file() {
         return Err(format!("not_a_file: {path} is not a file"));
     }
-    let inside = real
-        .parent()
-        .is_some_and(|parent| folders.iter().any(|folder| folder == parent));
+    // Enabled folders are stored in their plain form (no `\\?\` on Windows).
+    let inside = real.parent().is_some_and(|parent| {
+        let parent = crate::path_utils::normalize_windows_path(parent);
+        folders.iter().any(|folder| folder == &parent)
+    });
     if !inside {
         return Err(format!(
             "not_in_folder: {path} is not directly inside an enabled folder"
         ));
     }
+    describe(path, real, &metadata, limits)
+}
+
+/// Check one candidate the owner chose for the app's own import: a file from
+/// the picker or a drop, or one the app staged for the Internet Archive, the
+/// Navegador copy or the sample collection.
+///
+/// The owner chose the path, so there is no enabled-folder rule (D10(a)). The
+/// one place the import never reads is the archive's own `assets`: a file there
+/// is already imported, and importing it again would copy a document into
+/// itself. The app does stage inside the data directory, so `in_archive` here
+/// means exactly that folder. The other reasons are the same as
+/// [`check_source`]: `missing`, `not_a_file`, `unsupported`, `too_large`.
+pub fn check_app_source(
+    path: &str,
+    data_dir: &Path,
+    limits: &SourceLimits,
+) -> Result<SourceFile, String> {
+    let real =
+        std::fs::canonicalize(path).map_err(|_| format!("missing: {path} does not exist"))?;
+    let data_dir = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    if real.starts_with(data_dir.join("assets")) {
+        return Err(format!("in_archive: {path} is part of EntropIA's own data"));
+    }
+    let metadata =
+        std::fs::metadata(&real).map_err(|_| format!("missing: {path} cannot be read"))?;
+    if !metadata.is_file() {
+        return Err(format!("not_a_file: {path} is not a file"));
+    }
+    describe(path, real, &metadata, limits)
+}
+
+/// The file a check accepted, by its kind and size.
+fn describe(
+    path: &str,
+    real: PathBuf,
+    metadata: &std::fs::Metadata,
+    limits: &SourceLimits,
+) -> Result<SourceFile, String> {
     let kind = classify(&real)
         .ok_or_else(|| format!("unsupported: {path} is not a PDF, an image or an audio file"))?;
     if metadata.len() > limits.max_bytes {
@@ -159,7 +202,8 @@ pub fn list_folder(
 ) -> Result<FolderListing, String> {
     let real = std::fs::canonicalize(folder)
         .map_err(|_| format!("not_enabled: {} is not an enabled folder", folder.display()))?;
-    if !folders.iter().any(|enabled| enabled == &real) {
+    let plain = crate::path_utils::normalize_windows_path(&real);
+    if !folders.iter().any(|enabled| enabled == &plain) {
         return Err(format!(
             "not_enabled: {} is not an enabled folder",
             folder.display()
@@ -205,6 +249,13 @@ pub enum ImportOutcome {
 /// The item of `collection_id` that already holds this unchanged file: the
 /// app's rule (`findImportedFromSource`), same path ignoring case, same size,
 /// same modification time.
+/// The path provenance records and duplicates are matched by: the real path in
+/// its plain form, as the renderer always wrote it (never `\\?\` on Windows),
+/// so a file imported before keeps matching.
+pub(crate) fn original_path(file: &SourceFile) -> String {
+    crate::path_utils::normalize_windows_path_string(&file.path)
+}
+
 pub fn find_duplicate(
     conn: &Connection,
     collection_id: &str,
@@ -219,7 +270,7 @@ pub fn find_duplicate(
          LIMIT 1",
         params![
             collection_id,
-            file.path.to_string_lossy(),
+            original_path(file),
             file.size_bytes as i64,
             file.modified_at
         ],
@@ -233,12 +284,55 @@ fn now_ms() -> i64 {
     crate::processing::repository::now_ms()
 }
 
-fn provenance(file: &SourceFile) -> serde_json::Value {
-    let imported_at = crate::navegador::capture::rfc3339_utc((now_ms() / 1000).max(0) as u64);
-    serde_json::json!({
-        "__entropia_file_metadata": {
-            "originalName": file.name,
-            "originalPath": file.path.to_string_lossy(),
+/// `ms` since the epoch, UTC, with milliseconds: the shape the app has always
+/// written (`new Date().toISOString()`, e.g. `2026-11-02T22:03:48.123Z`).
+fn rfc3339_utc_ms(ms: i64) -> String {
+    let ms = ms.max(0);
+    let stamp = crate::navegador::capture::rfc3339_utc((ms / 1000) as u64);
+    let millis = ms % 1000;
+    format!("{}.{millis:03}Z", stamp.trim_end_matches('Z'))
+}
+
+/// The reserved key an import's own provenance lives under
+/// (`lib/item-metadata.ts`). Nothing a caller sends may replace it.
+const FILE_METADATA_KEY: &str = "__entropia_file_metadata";
+
+/// Longest stored file name one import may write, extension included.
+const STORED_NAME_MAX_CHARS: usize = 255;
+
+/// What the caller may override about one import (D10(b)).
+///
+/// The agent's own import passes none of it: its title comes from the file
+/// name, it stores the file under its own name and it never adds metadata.
+/// The app's import names the item (a saved web capture has the page's title),
+/// stores the copy under a name it chose, adds the provenance of its own flow
+/// beside the file's, and decides the duplicate question itself when it has
+/// already asked the person about it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ImportOverrides {
+    /// The item's title; by default the file name without its extension.
+    pub title: Option<String>,
+    /// The name the stored copy and its recorded original name carry.
+    pub file_name: Option<String>,
+    /// Written beside `__entropia_file_metadata`, never replacing that key.
+    pub extra_metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Import even when this unchanged source is already in the collection.
+    pub allow_duplicate: bool,
+}
+
+fn provenance(
+    file: &SourceFile,
+    stored_name: &str,
+    extra: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let mut metadata = extra.cloned().unwrap_or_default();
+    let imported_at = rfc3339_utc_ms(now_ms());
+    metadata.insert(
+        FILE_METADATA_KEY.to_string(),
+        serde_json::json!({
+            "originalName": stored_name,
+            "originalPath": original_path(file),
             "importedAt": imported_at,
             "sizeBytes": file.size_bytes,
             "readonly": file.readonly,
@@ -247,8 +341,9 @@ fn provenance(file: &SourceFile) -> serde_json::Value {
             "createdAt": file.created_at,
             "modifiedAt": file.modified_at,
             "accessedAt": file.accessed_at,
-        }
-    })
+        }),
+    );
+    serde_json::Value::Object(metadata)
 }
 
 /// The item title for a file: its name without the last extension, bounded
@@ -318,6 +413,42 @@ fn discard(conn: &Connection, item_id: &str, item_dir: &Path) {
     let _ = std::fs::remove_dir_all(item_dir);
 }
 
+/// The name the stored copy carries: the caller's, or the source's own. It
+/// must stay a plain file name, since it names a file inside the item folder.
+fn stored_copy_name<'a>(
+    file: &'a SourceFile,
+    overrides: &'a ImportOverrides,
+) -> Result<&'a str, String> {
+    let name = overrides.file_name.as_deref().unwrap_or(&file.name).trim();
+    let plain = !name.is_empty()
+        && name.chars().count() <= STORED_NAME_MAX_CHARS
+        && !name.contains(['/', '\\', ':', '\0'])
+        && name != "."
+        && name != "..";
+    if !plain {
+        return Err(format!(
+            "invalid_argument: {name:?} is not a usable file name"
+        ));
+    }
+    Ok(name)
+}
+
+/// The item's title: the caller's, or the file name without its extension.
+fn title_with_override(file: &SourceFile, overrides: &ImportOverrides) -> String {
+    match overrides
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        Some(title) => title
+            .chars()
+            .take(super::commands::ITEM_TITLE_MAX_CHARS)
+            .collect(),
+        None => title_for(&file.name),
+    }
+}
+
 /// Import one checked file into `collection_id`.
 ///
 /// The duplicate check and the item row share one transaction, so a second
@@ -325,12 +456,17 @@ fn discard(conn: &Connection, item_id: &str, item_dir: &Path) {
 /// split run outside any transaction (they can take a while), then the asset
 /// rows and the search entry are written in a second one. Any failure removes
 /// the item, its rows and its folder.
+///
+/// `overrides` is what the app may add to an import (D10(b)); the agent path
+/// passes [`ImportOverrides::default`] and gets the same result as before.
 pub fn import_file(
     conn: &Connection,
     data_dir: &Path,
     collection_id: &str,
     file: &SourceFile,
+    overrides: &ImportOverrides,
 ) -> Result<ImportOutcome, String> {
+    let stored_name = stored_copy_name(file, overrides)?;
     let collection: Option<String> = conn
         .query_row(
             "SELECT id FROM collections WHERE id = ?1",
@@ -343,12 +479,14 @@ pub fn import_file(
         return Err(format!("not_found: no collection {collection_id}"));
     }
     let item_id = uuid::Uuid::new_v4().to_string();
-    let title = title_for(&file.name);
+    let title = title_with_override(file, overrides);
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|error| format!("unavailable: could not begin the import: {error}"))?;
     let admitted = (|| {
-        if let Some(existing) = find_duplicate(conn, collection_id, file)? {
-            return Ok(Some(existing));
+        if !overrides.allow_duplicate {
+            if let Some(existing) = find_duplicate(conn, collection_id, file)? {
+                return Ok(Some(existing));
+            }
         }
         let now = now_ms();
         conn.execute(
@@ -358,7 +496,7 @@ pub fn import_file(
                 item_id,
                 title,
                 collection_id,
-                provenance(file).to_string(),
+                provenance(file, stored_name, overrides.extra_metadata.as_ref()).to_string(),
                 now
             ],
         )
@@ -383,24 +521,23 @@ pub fn import_file(
     let copied = (|| {
         std::fs::create_dir_all(&item_dir)
             .map_err(|error| format!("unavailable: could not create the item folder: {error}"))?;
-        let destination = item_dir.join(format!("{}_{}", uuid::Uuid::new_v4(), file.name));
+        let destination = item_dir.join(format!("{}_{stored_name}", uuid::Uuid::new_v4()));
         std::fs::copy(&file.path, &destination)
-            .map_err(|error| format!("unavailable: could not copy {}: {error}", file.name))?;
+            .map_err(|error| format!("unavailable: could not copy {stored_name}: {error}"))?;
         let mut pages = Vec::new();
         if file.kind == FileKind::Pdf {
             let bytes = std::fs::read(&destination)
                 .map_err(|error| format!("unavailable: could not read the copy: {error}"))?;
-            let base = title_for(&file.name);
+            // The page assets are named after the stored copy, as the app has
+            // always named them (`splitPdfPages` with the copy's base name).
+            let base = title_for(stored_name);
             let limits = crate::ocr::commands::split_limits_for(&item_dir);
             pages = crate::ocr::pdf::split_pdf_to_files(&bytes, &item_dir, &base, &limits)
                 .map_err(|error| {
-                    format!(
-                        "invalid_file: {} could not be split into pages: {error}",
-                        file.name
-                    )
+                    format!("invalid_file: {stored_name} could not be split into pages: {error}")
                 })?;
             if pages.is_empty() {
-                return Err(format!("invalid_file: {} has no pages", file.name));
+                return Err(format!("invalid_file: {stored_name} has no pages"));
             }
         }
         Ok((destination, pages))

@@ -482,7 +482,9 @@ fn run_import(
     collection_id: &str,
     context: &ExecContext,
 ) -> Result<ImportResult, String> {
-    use crate::corpus::ingest::{check_source, import_file, ImportOutcome, SourceLimits};
+    use crate::corpus::ingest::{
+        check_source, import_file, ImportOutcome, ImportOverrides, SourceLimits,
+    };
     let data_dir = context
         .data_dir
         .as_deref()
@@ -525,7 +527,13 @@ fn run_import(
             )));
             continue;
         }
-        match import_file(conn, data_dir, collection_id, &current) {
+        match import_file(
+            conn,
+            data_dir,
+            collection_id,
+            &current,
+            &ImportOverrides::default(),
+        ) {
             Ok(ImportOutcome::Imported { item_id, title, .. }) => {
                 result.imported.push(ImportedFileReport {
                     name: planned.name.clone(),

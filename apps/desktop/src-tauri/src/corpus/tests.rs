@@ -495,3 +495,166 @@ fn a_page_text_that_changed_or_is_not_an_extraction_is_not_replaced() {
         "nothing would change"
     );
 }
+
+/// D10(a): the app's import command takes a path the owner chose, stages it
+/// wherever the app stages things (inside the data directory is allowed), and
+/// imports it through the same service the agent uses.
+#[test]
+fn the_app_import_command_imports_a_file_it_staged_inside_the_archive() {
+    let (dir, conn) = archive();
+    let staged = dir.path().join("sample-staging").join("acta.jpg");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+    std::fs::write(&staged, b"jpeg bytes").unwrap();
+
+    let imported = import_path(
+        &conn,
+        dir.path(),
+        ALFA,
+        &staged.to_string_lossy(),
+        &ImportOverrides::default(),
+    )
+    .unwrap();
+    let ImportedPath::Imported {
+        item_id,
+        title,
+        assets,
+    } = imported
+    else {
+        panic!("expected an import, got {imported:?}");
+    };
+    assert_eq!(title, "acta");
+    assert_eq!(assets, 1);
+    let metadata: String = conn
+        .query_row(
+            "SELECT metadata FROM items WHERE id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(
+        metadata["__entropia_file_metadata"]["originalPath"],
+        staged.to_string_lossy().as_ref()
+    );
+    assert_eq!(search_hits(&conn, "acta"), vec![item_id.clone()]);
+}
+
+#[test]
+fn the_app_import_command_refuses_the_archives_own_assets_and_creates_nothing() {
+    let (dir, conn) = archive();
+    let inside = dir.path().join("assets").join("col-1").join("item-1");
+    std::fs::create_dir_all(&inside).unwrap();
+    let file = inside.join("a.jpg");
+    std::fs::write(&file, b"jpeg bytes").unwrap();
+    let before = row_count(&conn, "items");
+
+    let error = import_path(
+        &conn,
+        dir.path(),
+        ALFA,
+        &file.to_string_lossy(),
+        &ImportOverrides::default(),
+    )
+    .unwrap_err();
+    assert!(error.starts_with("in_archive"), "{error}");
+    assert_eq!(row_count(&conn, "items"), before);
+}
+
+#[test]
+fn the_app_import_command_forwards_the_name_and_the_metadata_it_was_given() {
+    let (dir, conn) = archive();
+    let staged = dir
+        .path()
+        .join("web-captures")
+        .join("copies")
+        .join("c1.jpg");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+    std::fs::write(&staged, b"jpeg bytes").unwrap();
+    let overrides = ImportOverrides {
+        title: Some("The paper".to_string()),
+        file_name: Some("The paper.jpg".to_string()),
+        extra_metadata: serde_json::json!({ "__entropia_web_capture": { "captureId": "c1" } })
+            .as_object()
+            .cloned(),
+        allow_duplicate: false,
+    };
+
+    let ImportedPath::Imported { item_id, title, .. } = import_path(
+        &conn,
+        dir.path(),
+        ALFA,
+        &staged.to_string_lossy(),
+        &overrides,
+    )
+    .unwrap() else {
+        panic!("expected an import");
+    };
+    assert_eq!(title, "The paper");
+    let (path, stored_title): (String, String) = conn
+        .query_row(
+            "SELECT a.path, i.title FROM assets a JOIN items i ON i.id = a.item_id
+             WHERE a.item_id = ?1",
+            [&item_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_title, "The paper");
+    assert!(path.ends_with("_The paper.jpg"), "{path}");
+}
+
+#[test]
+fn a_refused_app_import_says_why_and_creates_nothing() {
+    let (dir, conn) = archive();
+    let before = row_count(&conn, "items");
+    let unsupported = dir.path().join("notas.txt");
+    std::fs::write(&unsupported, b"x").unwrap();
+    let missing = dir.path().join("missing.pdf");
+
+    for (path, reason) in [
+        (unsupported.to_string_lossy().to_string(), "unsupported"),
+        (missing.to_string_lossy().to_string(), "missing"),
+        (
+            dir.path().join(".").to_string_lossy().to_string(),
+            "not_a_file",
+        ),
+    ] {
+        let error =
+            import_path(&conn, dir.path(), ALFA, &path, &ImportOverrides::default()).unwrap_err();
+        assert!(error.starts_with(reason), "{path}: {error}");
+    }
+    let unknown = import_path(
+        &conn,
+        dir.path(),
+        "col_missing",
+        &unsupported.to_string_lossy(),
+        &ImportOverrides::default(),
+    )
+    .unwrap_err();
+    assert!(unknown.starts_with("unsupported"), "{unknown}");
+    assert_eq!(row_count(&conn, "items"), before);
+    assert!(!dir.path().join("assets").join("col_missing").exists());
+}
+
+/// D10(b): the overrides cross the IPC boundary in the shape the app sends
+/// (`lib/collection-import.ts`), and an empty object is the agent's shape.
+#[test]
+fn the_import_overrides_arrive_as_the_app_sends_them() {
+    let overrides: ImportOverrides = serde_json::from_value(serde_json::json!({
+        "title": "The paper",
+        "fileName": "The paper.pdf",
+        "extraMetadata": { "__entropia_web_capture": { "captureId": "c1" } },
+        "allowDuplicate": true
+    }))
+    .unwrap();
+    assert_eq!(overrides.title.as_deref(), Some("The paper"));
+    assert_eq!(overrides.file_name.as_deref(), Some("The paper.pdf"));
+    assert!(overrides.allow_duplicate);
+    assert!(overrides
+        .extra_metadata
+        .as_ref()
+        .unwrap()
+        .contains_key("__entropia_web_capture"));
+
+    let none: ImportOverrides = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(none, ImportOverrides::default());
+}
