@@ -49,8 +49,8 @@ the read-only tranche in `odd/tasks/agent-mcp-connector.md` (merged in v1.2.0).
 
 ## Tasks
 
-- [ ] T1 — Extract `&Connection` services for prepare, start, control, priority, retry, list/get batches and tasks; Tauri commands delegate. S3, S6. Route: inline, existing tests stay green + service tests. Risk: item 3 (shared code the UI uses). Commit: —
-- [ ] T2 — Owner grants `local_write`/`remote_spend` per client: `AgentAccess::set_scopes` (validated), Tauri command, toggles with confirmation in Asistentes. S2, S4. Route: inline, TDD (Rust + Vitest Pro/Lite). Risk: item 2. Commit: —
+- [x] T1 — Extract `&Connection` services for prepare, start, control, priority, retry, list/get batches and tasks; Tauri commands delegate. S3, S6. Route: inline, TDD (RED: 24 compile errors, services missing → GREEN 11 service tests); start became a conditional update so two starts at one revision run once. Full Rust suite 3298 passed / 0 failed, clippy -D warnings clean. Risk: item 3 (shared code the Procesamiento tab uses). Commit: 1a4f225b
+- [x] T2 — Owner grants `local_write`/`remote_spend` per client: `AgentAccess::set_grants` (only those two; `read` and other scopes untouched), `agent_client_set_grants` command (handler, APP_COMMANDS, capability), checkboxes in Asistentes: granting asks for confirmation, withdrawing applies at once. S2, S4. Route: inline, TDD (RED: `Grants`/`set_grants` missing; Vitest 3 failing → GREEN Rust 4 tests, Vitest 22/22 Pro and Lite). Full Rust suite 3298/0, clippy clean, lint, typecheck Pro and Lite clean, svelte-autofixer no issues. Risk: item 2 (permissions). Commit: see git log (feat(agents): let the owner grant processing scopes)
 - [ ] T3 — Read tools `jobs_list`, `jobs_get` (batch snapshot + paged tasks). S3. Route: inline, TDD. Commit: —
 - [ ] T4 — `processing_prepare` (local_write): collections and items, operations, `requestId` idempotency, impact and estimate. S2, S3, S8. Route: inline, TDD. Risk: item 3. Commit: —
 - [ ] T5 — Approval core: store, plan digest, expiry, single use, events, window focus, `agent_approvals_*` commands. S4, S5. Route: inline, TDD. Risk: items 2, 4. Commit: —
@@ -58,6 +58,8 @@ the read-only tranche in `odd/tasks/agent-mcp-connector.md` (merged in v1.2.0).
 - [ ] T7 — Approval dialog in the app (Svelte, Pro and Lite). S5, S6. Route: inline, TDD (Vitest). Commit: —
 - [ ] T8 — Docs: PROTOCOL (tools, scopes, approvals, codes), README, INVENTORY statuses. S7, S9. Route: inline. Commit: —
 - [ ] T9 — End-to-end proof on an isolated dev profile with a real client. S10. Route: inline + independent verify. Commit: —
+
+- Slices: commits exceed ~400 authored lines where code moves with its tests (T1 is ~1k lines, mostly the commands' bodies moved into services). Each task is its own commit; the branch goes to `main` as one PR after T9, or split per task if the owner prefers.
 
 ## Log
 

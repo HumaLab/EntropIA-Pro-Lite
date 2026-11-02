@@ -1676,6 +1676,7 @@ pub fn run() {
             automation::commands::agent_access_set_enabled,
             automation::commands::agent_client_create,
             automation::commands::agent_client_revoke,
+            automation::commands::agent_client_set_grants,
             automation::commands::agent_connector_location,
         ])
         .build(tauri::generate_context!())

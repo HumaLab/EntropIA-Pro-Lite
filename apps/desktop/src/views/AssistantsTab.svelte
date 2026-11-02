@@ -16,12 +16,15 @@
     agentAccessStatus,
     agentClientCreate,
     agentClientRevoke,
+    agentClientSetGrants,
     agentConnectorLocation,
     connectorInvocation,
     isWindowsProgram,
     connectorRecipes,
+    grantsOf,
     type AgentAccessStatus,
     type AgentClient,
+    type AgentGrants,
     type ConnectorLocation,
     type CreatedAgentClient,
   } from '$lib/agent-access'
@@ -35,8 +38,30 @@
   let busy = $state(false)
   let errorMessage = $state<string | null>(null)
   let pendingRevoke = $state<AgentClient | null>(null)
+  /** A grant waiting for the owner's confirmation; withdrawing never waits. */
+  let pendingGrant = $state<{ client: AgentClient; grant: keyof AgentGrants } | null>(null)
   let copiedLabel = $state<string | null>(null)
   let destroyed = false
+
+  /** What each grantable scope lets an assistant do, as the panel words it. */
+  const GRANT_COPY: Record<
+    keyof AgentGrants,
+    { label: string; meta: string; confirm: (name: string) => string }
+  > = {
+    localWrite: {
+      label: 'Preparar y controlar procesamiento',
+      meta: 'Arma lotes sobre tus colecciones y los pausa o cancela. No gasta.',
+      confirm: (name) =>
+        `${name} va a poder armar lotes de procesamiento sobre tus colecciones y pausarlos o cancelarlos. Armar un lote no gasta: empezar a procesar sigue pidiendo tu aprobación.`,
+    },
+    remoteSpend: {
+      label: 'Pedir procesamiento pago',
+      meta: 'Cada pedido se aprueba en EntropIA antes de gastar.',
+      confirm: (name) =>
+        `${name} va a poder pedir que empiece procesamiento con proveedores pagos (OCR, embeddings, entidades). Cada pedido abre un diálogo en EntropIA y no gasta nada hasta que lo apruebes.`,
+    },
+  }
+  const GRANT_KEYS: (keyof AgentGrants)[] = ['localWrite', 'remoteSpend']
 
   const recipes = $derived(created ? connectorRecipes(created.client.id, connector) : [])
   const invocation = $derived(created ? connectorInvocation(created.client.id, connector) : '')
@@ -131,6 +156,41 @@
     }
   }
 
+  /**
+   * Granting asks first; withdrawing applies at once, because it only takes a
+   * permission away.
+   */
+  function toggleGrant(client: AgentClient, grant: keyof AgentGrants) {
+    if (busy) return
+    const current = grantsOf(client)
+    if (current[grant]) {
+      void applyGrants(client, { ...current, [grant]: false })
+    } else {
+      pendingGrant = { client, grant }
+    }
+  }
+
+  async function confirmGrant() {
+    const pending = pendingGrant
+    if (!pending || busy) return
+    await applyGrants(pending.client, { ...grantsOf(pending.client), [pending.grant]: true })
+    pendingGrant = null
+  }
+
+  async function applyGrants(client: AgentClient, grants: AgentGrants) {
+    busy = true
+    errorMessage = null
+    copiedLabel = null
+    try {
+      status = await agentClientSetGrants(client.id, grants)
+    } catch (error) {
+      errorMessage = String(error)
+      await refresh()
+    } finally {
+      busy = false
+    }
+  }
+
   async function copy(label: string, text: string) {
     errorMessage = null
     try {
@@ -161,9 +221,9 @@
 <Card>
   <section class="assistants-tab">
     <p class="assistants-tab__hint">
-      Permití que un asistente externo consulte este archivo en modo lectura. En esta versión solo
-      se puede leer, y solo desde esta computadora: el endpoint escucha en 127.0.0.1 y nunca en la
-      red local.
+      Permití que un asistente externo consulte este archivo desde esta computadora: el endpoint
+      escucha en 127.0.0.1 y nunca en la red local. Un asistente nuevo solo puede leer; abajo podés
+      dejarle preparar procesamiento y pedir procesamiento pago, que siempre aprobás acá.
     </p>
 
     {#if errorMessage}
@@ -230,6 +290,28 @@
                     puede leer tu usuario.
                   </span>
                 {/if}
+                <div class="assistants-tab__grants">
+                  {#each GRANT_KEYS as grant (grant)}
+                    <label class="assistants-tab__grant">
+                      <input
+                        type="checkbox"
+                        checked={grantsOf(client)[grant]}
+                        aria-label="{GRANT_COPY[grant].label}: {client.name}"
+                        disabled={busy}
+                        onclick={(event) => {
+                          // The backend owns the grant: the box follows the
+                          // status it returns, never the click itself.
+                          event.preventDefault()
+                          toggleGrant(client, grant)
+                        }}
+                      />
+                      <span class="assistants-tab__copy">
+                        <span class="assistants-tab__value">{GRANT_COPY[grant].label}</span>
+                        <span class="assistants-tab__meta">{GRANT_COPY[grant].meta}</span>
+                      </span>
+                    </label>
+                  {/each}
+                </div>
               </div>
               <Button
                 variant="danger"
@@ -356,6 +438,19 @@
   />
 {/if}
 
+{#if pendingGrant}
+  <ConfirmDialog
+    title="Permitir a {pendingGrant.client.name}: {GRANT_COPY[pendingGrant.grant].label}"
+    titleId="assistants-grant-title"
+    message={GRANT_COPY[pendingGrant.grant].confirm(pendingGrant.client.name)}
+    cancelLabel="Cancelar"
+    confirmLabel="Permitir"
+    confirming={busy}
+    oncancel={() => (pendingGrant = null)}
+    onconfirm={confirmGrant}
+  />
+{/if}
+
 <style>
   .assistants-tab {
     display: flex;
@@ -478,6 +573,24 @@
     padding: var(--space-2) var(--space-3);
     border: 1px solid var(--color-hairline);
     border-radius: var(--radius-md);
+  }
+
+  .assistants-tab__grants {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-top: var(--space-2);
+  }
+
+  .assistants-tab__grant {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    cursor: pointer;
+  }
+
+  .assistants-tab__grant input {
+    margin-top: 3px;
   }
 
   .assistants-tab__connection {

@@ -8,7 +8,10 @@ import { invoke } from '@tauri-apps/api/core'
  * the client view has fields for id, name, scopes and timestamps only (S4).
  */
 
-/** What a paired client may do. Only `read` is granted in this release. */
+/**
+ * What a paired client may do. Every pairing gets `read`; the owner can add
+ * `local_write` and `remote_spend` (see {@link AgentGrants}).
+ */
 export type AgentScope =
   'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
 
@@ -45,6 +48,33 @@ export interface AgentAccessStatus {
 export interface CreatedAgentClient {
   client: AgentClient
   status: AgentAccessStatus
+}
+
+/**
+ * The scopes the owner can grant from this panel. `read` comes with every
+ * pairing and the other scopes are not offered.
+ */
+export interface AgentGrants {
+  /** Prepare, pause, cancel and reprioritize processing batches. */
+  localWrite: boolean
+  /** Ask to start paid processing; each request is still approved in the app. */
+  remoteSpend: boolean
+}
+
+/** The grants a client currently holds. */
+export function grantsOf(client: AgentClient): AgentGrants {
+  return {
+    localWrite: client.scopes.includes('local_write'),
+    remoteSpend: client.scopes.includes('remote_spend'),
+  }
+}
+
+/** Replace one client's grants; answers with the fresh status. */
+export function agentClientSetGrants(
+  clientId: string,
+  grants: AgentGrants
+): Promise<AgentAccessStatus> {
+  return invoke<AgentAccessStatus>('agent_client_set_grants', { clientId, grants })
 }
 
 /** The connector binary every assistant config names. */

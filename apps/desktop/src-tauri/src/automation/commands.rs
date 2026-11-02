@@ -16,7 +16,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use super::access::{AgentAccess, ClientView};
+use super::access::{AgentAccess, ClientView, Grants};
 use super::connector::{current_location, ConnectorLocation};
 use super::server::AgentEndpointState;
 
@@ -95,6 +95,18 @@ pub fn revoke_client(
     status(access, endpoint)
 }
 
+/// Apply the owner's grants to one client and report the status after it.
+/// Unlike revoking, an unknown client is an error: there is nothing to grant.
+pub fn set_client_grants(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    client_id: &str,
+    grants: Grants,
+) -> Result<AgentStatusView, String> {
+    access.set_grants(client_id, grants)?;
+    status(access, endpoint)
+}
+
 #[tauri::command]
 pub fn agent_access_status(
     access: State<'_, Arc<AgentAccess>>,
@@ -130,6 +142,16 @@ pub fn agent_client_revoke(
     client_id: String,
 ) -> Result<AgentStatusView, String> {
     revoke_client(access.inner(), endpoint.inner(), &client_id)
+}
+
+#[tauri::command]
+pub fn agent_client_set_grants(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    client_id: String,
+    grants: Grants,
+) -> Result<AgentStatusView, String> {
+    set_client_grants(access.inner(), endpoint.inner(), &client_id, grants)
 }
 
 /// Where the bundled connector is, so the panel can name an absolute path in
@@ -267,6 +289,32 @@ mod tests {
             .unwrap()
             .clients
             .is_empty());
+    }
+
+    #[test]
+    fn granting_scopes_returns_the_status_with_the_updated_client() {
+        let harness = harness();
+        let created = create_client(&harness.access, &harness.endpoint, "Codex").unwrap();
+        let view = set_client_grants(
+            &harness.access,
+            &harness.endpoint,
+            &created.client.id,
+            Grants {
+                local_write: true,
+                remote_spend: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(view.clients.len(), 1);
+        assert_eq!(view.clients[0].scopes, vec![Scope::Read, Scope::LocalWrite]);
+        let error = set_client_grants(
+            &harness.access,
+            &harness.endpoint,
+            "cl_missing",
+            Grants::default(),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("unknown_client"), "{error}");
     }
 
     #[tokio::test]
