@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { initStore, type StoreApi } from '@entropia/store'
 import { createTauriDbClient } from './tauri-db-client'
 import { ensureSyncCapture } from '$lib/sync'
+import { routeCorpusWrites } from '$lib/corpus'
 
 let _store: StoreApi | null = null
 
@@ -57,6 +58,9 @@ export async function initDb(): Promise<void> {
   // it reads `_migrations` and rejects when the backend did not migrate, which
   // surfaces through this init error path (no migration window anymore).
   _store = await initStore(createTauriDbClient())
+  // Collection and item writes go through the Rust corpus service, the one the
+  // assistant endpoint also uses (odd/tasks/agent-corpus-tools.md D8).
+  routeCorpusWrites(_store)
   // Sync capture bootstrap (DESIGN §6.1): every synced table exists because
   // the backend applied all migrations; ensure the sync schema + capture
   // triggers. Best-effort — never block app init.

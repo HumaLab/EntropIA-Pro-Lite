@@ -10,6 +10,7 @@ mod audio_preview;
 pub mod automation;
 mod backup;
 pub mod bibliography;
+pub mod corpus;
 mod db;
 mod dev_profile;
 pub mod fs_scope;
@@ -1697,6 +1698,9 @@ pub fn run() {
             automation::commands::agent_client_set_grants,
             automation::commands::agent_approvals_pending,
             automation::commands::agent_approval_decide,
+            corpus::commands::corpus_collection_create,
+            corpus::commands::corpus_collection_update,
+            corpus::commands::corpus_item_update,
             automation::commands::agent_connector_location,
         ])
         .build(tauri::generate_context!())
