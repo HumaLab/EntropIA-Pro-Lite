@@ -104,14 +104,19 @@ describe('windows pro validation trigger', () => {
     expect(trigger).not.toContain('release.yml')
     expect(trigger).not.toContain('lite-preview.yml')
     expect(trigger).not.toContain('pull_request')
-    expect(trigger).not.toContain('workflow_dispatch')
     expect(trigger).not.toContain('workflow_call')
     expect(trigger).not.toContain('schedule')
   })
 
-  it('does not rely on workflow_dispatch for the branch-only workflow', () => {
+  // Dispatch was left out while the workflow lived only on a feature branch,
+  // where GitHub cannot dispatch it. Now that it is on the default branch it
+  // can be run by hand from any branch to check a Pro installer before a
+  // release; it takes no inputs, so no tag or release parameter can reach it.
+  it('can be dispatched by hand, with no inputs and never as a reusable workflow', () => {
     const workflow = readWorkflowOrEmpty()
-    expect(workflow).not.toContain('workflow_dispatch')
+    const trigger = onBlock(workflow)
+    expect(trigger).toMatch(/^\s*workflow_dispatch:\s*$/m)
+    expect(trigger).not.toContain('inputs:')
     expect(workflow).not.toContain('workflow_call')
   })
 })
