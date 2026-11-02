@@ -95,6 +95,16 @@ The same panel lists every paired client with its creation date and last use, an
 **"Revocar"** (behind a confirmation) makes that credential useless on the next
 request, even for a copy someone saved earlier.
 
+## What an assistant can read
+
+Besides listing collections and items and searching by item, a paired assistant
+reads what the documents say: `documents_get_text` returns a document's text page
+by page in windows (native text, OCR or the transcription of an audio), and
+`search_passages` finds passages across the archive. Both give each passage its
+page and character offsets plus a hash of the page text, so the assistant can cite
+precisely and notice when a text changed. Passages exist only for documents
+processed with embeddings; the answer says how many are.
+
 ## Let an assistant process documents
 
 A paired assistant can only read. Under each assistant in Settings › Asistentes,
@@ -217,7 +227,7 @@ in to the desktop session with the keyring unlocked, or pass the agent
 ## Read next
 
 - [`PROTOCOL.md`](PROTOCOL.md) — protocol version and compatibility policy,
-  transport and guard order, discovery file, credentials, scopes, the eleven
+  transport and guard order, discovery file, credentials, scopes, the thirteen
   tools and the approvals, every error code, and the audit format.
 - [`INVENTORY.md`](INVENTORY.md) — what each product operation maps to today,
   which tool would expose it, and what is deliberately not exposed.

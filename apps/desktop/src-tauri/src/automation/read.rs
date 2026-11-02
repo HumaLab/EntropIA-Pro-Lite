@@ -150,6 +150,48 @@ pub struct SearchResults {
     pub matches: usize,
 }
 
+/// One passage that matched a `search_passages` query, located for citing.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageRecord {
+    pub item_id: String,
+    pub title: String,
+    pub collection_id: String,
+    pub asset_id: String,
+    pub page_number: Option<i64>,
+    /// `extraction` or `transcription`: which page text the offsets index.
+    pub source: String,
+    /// Unicode-character offsets into that page text.
+    pub start_char: i64,
+    pub end_char: i64,
+    /// sha256 of the page text the passage was cut from.
+    pub text_hash: String,
+    /// Whether that page text is still the current one; `false` means the
+    /// page was re-read or corrected after the passage was indexed.
+    pub current: bool,
+    pub text: String,
+    pub rank: f64,
+}
+
+/// How much of the scope the passage index covers: passages exist only for
+/// documents processed with embeddings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageCoverage {
+    pub items_in_scope: usize,
+    pub items_with_passages: usize,
+}
+
+/// `search_passages`'s payload.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageResults {
+    pub records: Vec<PassageRecord>,
+    /// Every matching passage before the limit.
+    pub matches: usize,
+    pub coverage: PassageCoverage,
+}
+
 /// Characters a `documents_get_text` call returns when the caller names none.
 pub const DEFAULT_TEXT_WINDOW: usize = 4000;
 
@@ -562,6 +604,125 @@ impl ArchiveReader {
             },
             pages,
             next_cursor,
+        })
+    }
+
+    /// Passages that match `query`, best first (BM25 over the chunk index the
+    /// app's own chat uses), narrowed to a collection or an item, with how many
+    /// items in that scope have passages at all.
+    pub fn passages(
+        &self,
+        query: &str,
+        collection_id: Option<&str>,
+        item_id: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<PassageResults, ReadError> {
+        let limit = resolve_limit(limit)?;
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(ReadError::InvalidArgument(
+                "La búsqueda necesita un texto: escribí qué querés encontrar.".to_string(),
+            ));
+        }
+        let conn = self.connection()?;
+        let scope = params![collection_id, item_id];
+        let failed = |error: rusqlite::Error| unavailable("buscar pasajes", error);
+        let items_in_scope: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM items i
+                 WHERE (?1 IS NULL OR i.collection_id = ?1) AND (?2 IS NULL OR i.id = ?2)",
+                scope,
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let items_with_passages: i64 = conn
+            .query_row(
+                "SELECT count(DISTINCT c.item_id) FROM rag_chunks c JOIN items i ON i.id = c.item_id
+                 WHERE (?1 IS NULL OR i.collection_id = ?1) AND (?2 IS NULL OR i.id = ?2)",
+                scope,
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let coverage = PassageCoverage {
+            items_in_scope: items_in_scope.max(0) as usize,
+            items_with_passages: items_with_passages.max(0) as usize,
+        };
+        let expression = crate::nlp::fts::sanitize_fts5_query_with_mode(
+            query,
+            crate::nlp::fts::FtsMatchMode::Any,
+        );
+        if expression.is_empty() {
+            return Ok(PassageResults {
+                records: Vec::new(),
+                matches: 0,
+                coverage,
+            });
+        }
+        let from = "FROM rag_chunks_fts f
+             JOIN rag_chunks c ON c.id = f.chunk_id
+             JOIN items i ON i.id = c.item_id
+             JOIN assets a ON a.id = c.asset_id
+             WHERE rag_chunks_fts MATCH ?1
+               AND (?2 IS NULL OR i.collection_id = ?2) AND (?3 IS NULL OR c.item_id = ?3)";
+        let matches: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) {from}"),
+                params![expression, collection_id, item_id],
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT c.item_id, i.title, i.collection_id, c.asset_id, a.page_number,
+                        c.source_kind, c.start_char, c.end_char, c.source_text_hash,
+                        c.text_content, bm25(rag_chunks_fts) AS rank
+                 {from} ORDER BY rank LIMIT {limit}"
+            ))
+            .map_err(failed)?;
+        let hits = collect(
+            statement
+                .query_map(params![expression, collection_id, item_id], |row| {
+                    Ok(PassageRecord {
+                        item_id: row.get(0)?,
+                        title: row.get(1)?,
+                        collection_id: row.get(2)?,
+                        asset_id: row.get(3)?,
+                        page_number: row.get(4)?,
+                        source: row.get(5)?,
+                        start_char: row.get(6)?,
+                        end_char: row.get(7)?,
+                        text_hash: row.get(8)?,
+                        current: false,
+                        text: row.get(9)?,
+                        rank: row.get(10)?,
+                    })
+                })
+                .map_err(failed)?,
+            "los pasajes",
+        )?;
+        drop(statement);
+        // A passage is current when the page text it indexes is still the one
+        // documents_get_text reads; one hash per page, however many passages.
+        let mut current_hash: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
+        let mut records = Vec::with_capacity(hits.len());
+        for mut record in hits {
+            let hash = match current_hash.get(&record.asset_id) {
+                Some(hash) => hash.clone(),
+                None => {
+                    let hash =
+                        page_source(&conn, &record.asset_id)?.map(|page| sha256_hex(&page.text));
+                    current_hash.insert(record.asset_id.clone(), hash.clone());
+                    hash
+                }
+            };
+            record.current = hash.as_deref() == Some(record.text_hash.as_str());
+            records.push(record);
+        }
+        Ok(PassageResults {
+            records,
+            matches: matches.max(0) as usize,
+            coverage,
         })
     }
 

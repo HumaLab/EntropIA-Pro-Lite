@@ -293,7 +293,8 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "processing_control",
             "processing_prepare",
             "processing_start",
-            "search_items"
+            "search_items",
+            "search_passages"
         ])
     );
 }
@@ -767,7 +768,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 13);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -800,7 +801,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 12] = [
+    let expected: [(&str, &[&str]); 13] = [
         ("approvals_status", &["approvalId"]),
         ("collections_list", &["cursor", "limit"]),
         (
@@ -831,6 +832,10 @@ async fn every_tool_publishes_a_strict_input_schema() {
         ),
         ("processing_start", &["jobId", "revision"]),
         ("search_items", &["collectionId", "limit", "query"]),
+        (
+            "search_passages",
+            &["collectionId", "itemId", "limit", "query"],
+        ),
     ];
     assert_eq!(tools.len(), expected.len(), "no tool beyond D10's list");
     for (tool, properties) in expected {
@@ -1603,6 +1608,185 @@ async fn documents_get_text_reads_one_asset_and_refuses_bad_requests() {
     harness.access.set_scopes(&id, vec![]).unwrap();
     let refusal = harness
         .refusal(&token, "documents_get_text", json!({ "itemId": item }))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+}
+
+impl Harness {
+    /// Two passages of the first Alfa item: one cut from the current page
+    /// text, one left over from a transcription that has since been replaced.
+    fn seed_passages(&self) {
+        self.seed_page_texts();
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        let current: String = PAGE_ONE.chars().take(33).collect();
+        for (id, asset, kind, source, ordinal, text, start, end, hash) in [
+            (
+                "chk_1",
+                "ast_alfa_1",
+                "extraction",
+                "ext_1",
+                0_i64,
+                current.clone(),
+                0_i64,
+                33_i64,
+                sha256_hex(PAGE_ONE),
+            ),
+            (
+                "chk_2",
+                "ast_alfa_2",
+                "transcription",
+                "trn_old",
+                0,
+                "Tapa antigua: acción descartada.".to_string(),
+                0,
+                32,
+                sha256_hex("texto que ya no existe"),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO rag_chunks (id, asset_id, item_id, source_kind, source_id, chunk_ordinal, text_content, start_char, end_char, source_text_hash, chunking_contract, embedding, embedding_model, embedding_contract, dimensions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'chunks-v1', x'00000000', 'test', 'test', 1)",
+                rusqlite::params![
+                    id,
+                    asset,
+                    test_archive::item_id(ALFA, 1),
+                    kind,
+                    source,
+                    ordinal,
+                    text,
+                    start,
+                    end,
+                    hash
+                ],
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn search_passages_returns_citable_passages_and_flags_stale_ones() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    harness.seed_passages();
+    let found = harness
+        .payload(&token, "search_passages", json!({ "query": "acción" }))
+        .await;
+    assert_eq!(keys(&found), sorted(&["records", "matches", "coverage"]));
+    assert_eq!(found["matches"], 2);
+    assert_eq!(
+        found["coverage"],
+        json!({ "itemsInScope": ALFA_ITEMS + BETA_ITEMS, "itemsWithPassages": 1 })
+    );
+    let records = records(&found);
+    let current = records
+        .iter()
+        .find(|record| record["assetId"] == "ast_alfa_1")
+        .expect("the current passage");
+    assert_eq!(
+        keys(current),
+        sorted(&[
+            "itemId",
+            "title",
+            "collectionId",
+            "assetId",
+            "pageNumber",
+            "source",
+            "startChar",
+            "endChar",
+            "textHash",
+            "current",
+            "text",
+            "rank",
+        ])
+    );
+    assert_eq!(current["itemId"], test_archive::item_id(ALFA, 1));
+    assert_eq!(current["title"], "Documento 1");
+    assert_eq!(current["collectionId"], ALFA);
+    assert_eq!(current["source"], "extraction");
+    assert_eq!(current["startChar"], 0);
+    assert_eq!(current["endChar"], 33);
+    assert_eq!(current["textHash"], sha256_hex(PAGE_ONE));
+    assert_eq!(
+        current["current"], true,
+        "the page text it indexes is the current one"
+    );
+    let text: String = PAGE_ONE.chars().take(33).collect();
+    assert_eq!(current["text"], text);
+
+    // The same window read through documents_get_text is the same text.
+    let page = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": test_archive::item_id(ALFA, 1), "assetId": "ast_alfa_1", "maxChars": 33 }),
+        )
+        .await;
+    assert_eq!(page["pages"][0]["text"], current["text"]);
+    assert_eq!(page["pages"][0]["textHash"], current["textHash"]);
+
+    let stale = records
+        .iter()
+        .find(|record| record["assetId"] == "ast_alfa_2")
+        .expect("the stale passage");
+    assert_eq!(stale["current"], false, "its page text has changed since");
+}
+
+#[tokio::test]
+async fn search_passages_is_scoped_and_refuses_bad_requests() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.seed_passages();
+    let in_beta = harness
+        .payload(
+            &token,
+            "search_passages",
+            json!({ "query": "acción", "collectionId": BETA }),
+        )
+        .await;
+    assert_eq!(in_beta["matches"], 0);
+    assert_eq!(
+        in_beta["coverage"],
+        json!({ "itemsInScope": BETA_ITEMS, "itemsWithPassages": 0 })
+    );
+    let in_item = harness
+        .payload(
+            &token,
+            "search_passages",
+            json!({ "query": "acción", "itemId": test_archive::item_id(ALFA, 1), "limit": 1 }),
+        )
+        .await;
+    assert_eq!(records(&in_item).len(), 1, "limit applies");
+    assert_eq!(in_item["matches"], 2, "matches counts before the limit");
+    assert_eq!(
+        in_item["coverage"],
+        json!({ "itemsInScope": 1, "itemsWithPassages": 1 })
+    );
+
+    for arguments in [
+        json!({ "query": "   " }),
+        json!({ "query": "acción", "limit": 0 }),
+        json!({ "query": "acción", "limit": 201 }),
+    ] {
+        let refusal = harness
+            .refusal(&token, "search_passages", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], ERROR_INVALID_ARGUMENT, "{arguments}");
+    }
+    let last = harness
+        .audit_lines()
+        .into_iter()
+        .rev()
+        .find(|line| line["tool"] == "search_passages" && line["status"] == "ok")
+        .expect("audited");
+    assert!(
+        last.get("queryChars").is_some(),
+        "only the query length is audited"
+    );
+
+    harness.access.set_scopes(&id, vec![]).unwrap();
+    let refusal = harness
+        .refusal(&token, "search_passages", json!({ "query": "acción" }))
         .await;
     assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
 }

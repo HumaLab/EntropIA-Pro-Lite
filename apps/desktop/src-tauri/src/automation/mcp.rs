@@ -43,8 +43,8 @@ use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
 };
 use crate::automation::read::{
-    ArchiveCounts, ArchiveReader, CollectionsPage, DocumentText, ItemDetail, ItemsPage, ReadError,
-    SearchResults,
+    ArchiveCounts, ArchiveReader, CollectionsPage, DocumentText, ItemDetail, ItemsPage,
+    PassageResults, ReadError, SearchResults,
 };
 use crate::automation::server::{app_version, profile_name, variant_name, PROTOCOL};
 
@@ -69,6 +69,7 @@ const TOOL_ITEMS_LIST: &str = "items_list";
 const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
 const TOOL_DOCUMENTS_GET_TEXT: &str = "documents_get_text";
+const TOOL_SEARCH_PASSAGES: &str = "search_passages";
 const TOOL_JOBS_LIST: &str = "jobs_list";
 const TOOL_JOBS_GET: &str = "jobs_get";
 const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
@@ -163,6 +164,20 @@ pub struct SearchItemsParams {
     /// Only the items of this collection.
     pub collection_id: Option<String>,
     /// How many hits to return, 1 to 200; the default is 50.
+    pub limit: Option<u32>,
+}
+
+/// `search_passages` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchPassagesParams {
+    /// What to look for, in natural language.
+    pub query: String,
+    /// Only passages of this collection's items.
+    pub collection_id: Option<String>,
+    /// Only passages of this item.
+    pub item_id: Option<String>,
+    /// How many passages to return, 1 to 200; the default is 50.
     pub limit: Option<u32>,
 }
 
@@ -685,6 +700,45 @@ impl AgentServer {
             .map(|record| record.id.clone())
             .collect();
         self.audit_ok(&caller, TOOL_SEARCH_ITEMS, object_ids, query_chars);
+        Ok(Json(results))
+    }
+
+    #[tool(
+        name = "search_passages",
+        description = "Busca pasajes del texto de los documentos (fragmentos, no ítems enteros), del más al menos relevante, cada uno con su ítem, archivo, página, posiciones `startChar`/`endChar` y `textHash` para citarlo; `current` es false si el texto de esa página cambió después de indexarlo. Solo tienen pasajes los documentos procesados con embeddings: `coverage` dice cuántos ítems del alcance los tienen. Filtra por `collectionId` o `itemId` y limita con `limit` (1 a 200, por defecto 50).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn search_passages(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<SearchPassagesParams>>,
+    ) -> Result<Json<PassageResults>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_SEARCH_PASSAGES)?;
+        let args = self.arguments(&caller, TOOL_SEARCH_PASSAGES, args)?;
+        let query_chars = Some(args.query.chars().count());
+        let reader = self.reader.clone();
+        let results = match Self::on_archive(move || {
+            reader.passages(
+                &args.query,
+                args.collection_id.as_deref(),
+                args.item_id.as_deref(),
+                args.limit,
+            )
+        })
+        .await
+        {
+            Ok(results) => results,
+            Err(error) => {
+                return Err(self.read_failure(&caller, TOOL_SEARCH_PASSAGES, error, query_chars))
+            }
+        };
+        let mut object_ids: Vec<String> = Vec::new();
+        for record in &results.records {
+            if !object_ids.contains(&record.item_id) {
+                object_ids.push(record.item_id.clone());
+            }
+        }
+        self.audit_ok(&caller, TOOL_SEARCH_PASSAGES, object_ids, query_chars);
         Ok(Json(results))
     }
 

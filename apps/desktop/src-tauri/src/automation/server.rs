@@ -912,7 +912,8 @@ mod tests {
                 "processing_control",
                 "processing_prepare",
                 "processing_start",
-                "search_items"
+                "search_items",
+                "search_passages"
             ]
         );
 

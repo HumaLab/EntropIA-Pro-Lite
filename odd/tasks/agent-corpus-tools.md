@@ -17,9 +17,10 @@ loopback MCP endpoint. Builds on `odd/tasks/agent-processing-tools.md` (PR #207,
 
 ## Decisions
 
-- D1 — Delivery in slices, one PR each, all accumulated before one version (L1): A read (T1-T2), B edits (T3-T4),
+- D1 — Delivery in slices, all accumulated before one version (L1): A read (T1-T2), B edits (T3-T4),
   C import (T5), D delete (T6), E per-document media operations (T7). Each slice: TDD, full Rust and desktop
   suites, `pnpm format:check`, docs, one independent verify at the slice end when it touches a high-risk item.
+  Slices are commits on `feat/agent-corpus-tools`; pushing and opening PRs is the owner's call (L4).
 - D2 — Text is located, not identified (exploration L2): extraction and chunk rows get new random ids on every
   re-extraction, so a citation is `itemId` + `assetId` + `pageNumber` + `startChar`/`endChar` + `textHash`
   (sha256 of the page text the offsets index). A changed hash tells the assistant its citation is stale.
@@ -39,7 +40,7 @@ loopback MCP endpoint. Builds on `odd/tasks/agent-processing-tools.md` (PR #207,
 ## Tasks
 
 - [x] T1 — `documents_get_text` (read): an item's or an asset's pages in file order, each a window with `source`, `method`, `textHash`, `pageNumber`, `totalChars`, `startChar`/`endChar` (Unicode characters), transcription segments for audio; `maxChars` 1-20000 (default 4000) across pages; opaque cursor that refuses a document whose files changed; files without text are left out. S3, S4. Route: inline, TDD (RED 7 failing → GREEN automation 117). Full Rust suite 3339/0, clippy clean. Commit: see git log (feat(agents): add documents_get_text)
-- [ ] T2 — `search_passages` (read): FTS over chunks with item, asset, page, offsets, `textHash`, snippet; collection filter; coverage count. S4. Route: inline, TDD. Commit: —
+- [x] T2 — `search_passages` (read): BM25 over `rag_chunks_fts` with item, asset, page, `source`, offsets, `textHash`, `current` (the page text it indexes is still current), passage text; `collectionId` / `itemId` scope; `matches` before the limit; `coverage` (items in scope, items with passages). A passage and the same window read by `documents_get_text` have the same text and hash (test). Docs: PROTOCOL "Reading text and citing", README, INVENTORY. S4. Route: inline, TDD (RED 6 failing → GREEN automation 119). Full Rust suite 3341/0, clippy clean, format:check clean. Commit: see git log (feat(agents): add search_passages)
 - [ ] T3 — Rust corpus service: collections create/update, item title/metadata update, revision-fenced; MCP tools `collections_create`, `collections_update`, `items_update` (local_write); UI callers migrated. S2, S3, S6, S7. Route: inline, TDD. Risk: item 3 (UI callers move). Commit: —
 - [ ] T4 — `documents_text_update` (approval, overwrite) and `documents_index` (local_write). S3, S5. Route: inline, TDD. Risk: item 1 (overwrites recognized text). Commit: —
 - [ ] T5 — Import: `documents_import_prepare` (local_write; path safety, allowlist, size, fingerprint dedupe, plan) and approval-run import through a Rust ingest service; UI import migrated. S2, S3, S5, S6. Route: inline, TDD. Risk: items 1, 2. Commit: —
@@ -52,4 +53,5 @@ loopback MCP endpoint. Builds on `odd/tasks/agent-processing-tools.md` (PR #207,
 - L1 (2026-11-02, owner): "antes de hacer una nueva version sigamos con lo pendiente y versionamos todo junto"
 - L2 (2026-11-02, exploration): text tables `extractions`/`transcriptions` keep the latest row per asset (`DELETE` + insert, random ids, no version column); PDFs split into child page assets with `page_number`; `rag_chunks` carry `start_char`/`end_char`/`source_text_hash` and `rag_chunks_fts` indexes them; `fts_items` is contentless and item-level; every collection/item/asset mutation is TypeScript SQL through `db_execute*`, cascades delete `fts_items` and `vec_assets` by hand and files on disk are removed by the caller; sync triggers capture writes from any connection; the UI does not refresh on writes it did not make.
 - L3 (2026-11-02, design): chunk offsets (`nlp/embeddings.rs` `plan_rag_chunks`) count Unicode characters and `source_text_hash` is sha256 of the stored `text_content` as is (`processing/embedding.rs` `staged_text`). `documents_get_text` uses the same units and hash, so a passage from `search_passages` can be checked against the page text it came from.
+- L4 (2026-11-02, delivery): pushing and PR creation stay the owner's decision, as for PR #207; slices are committed locally and the owner is asked before anything is published. Slice A is read-only and its tests drive the real loopback endpoint over the real migrations, so its end-to-end run on a dev profile is done together with slice B's.
 
