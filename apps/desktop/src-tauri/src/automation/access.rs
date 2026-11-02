@@ -123,6 +123,29 @@ pub struct AccessView {
     pub clients: Vec<ClientView>,
 }
 
+/// The scopes the owner can grant an assistant from Settings › Asistentes.
+/// `read` is part of every pairing and the other scopes are not offered yet,
+/// so neither appears here: a grant can only add or withdraw these two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Grants {
+    /// Prepare, pause, cancel and reprioritize processing batches.
+    pub local_write: bool,
+    /// Ask to start, resume or retry paid work; each request still needs the
+    /// owner's approval in the app.
+    pub remote_spend: bool,
+}
+
+/// Every scope in declaration order, the order a client's list is kept in.
+const SCOPE_ORDER: [Scope; 6] = [
+    Scope::Read,
+    Scope::LocalWrite,
+    Scope::RemoteSpend,
+    Scope::ExternalWrite,
+    Scope::Admin,
+    Scope::Web,
+];
+
 /// The authenticated caller of one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
@@ -502,6 +525,31 @@ impl AgentAccess {
             .map_err(|e| format!("revoked, but the token copy could not be removed: {e}"))
     }
 
+    /// Apply the owner's grants to a client: add or withdraw `local_write` and
+    /// `remote_spend`, keep every other scope as it is. Persisted before the
+    /// in-memory state changes, and `authenticate` reads the record on every
+    /// request, so a withdrawn scope stops working on the next one.
+    pub fn set_grants(&self, client_id: &str, grants: Grants) -> Result<ClientView, String> {
+        let mut state = self.lock()?;
+        let mut next = state.clone();
+        let record = next
+            .clients
+            .iter_mut()
+            .find(|client| client.id == client_id)
+            .ok_or_else(|| format!("unknown_client: no assistant {client_id} is paired"))?;
+        let wanted = |scope: Scope| match scope {
+            Scope::LocalWrite => grants.local_write,
+            Scope::RemoteSpend => grants.remote_spend,
+            other => record.scopes.contains(&other),
+        };
+        let scopes: Vec<Scope> = SCOPE_ORDER.into_iter().filter(|s| wanted(*s)).collect();
+        record.scopes = scopes;
+        let updated = view(record);
+        self.persist(&next)?;
+        *state = next;
+        Ok(updated)
+    }
+
     /// Replace a client's scopes. `create_client` always grants [`Scope::Read`],
     /// so this is how a test builds the "paired but not allowed to read" case the
     /// tool contract has to refuse.
@@ -626,6 +674,87 @@ pub(crate) mod tests {
             .to_string_lossy()
             .into_owned();
         assert!(name.starts_with(TEMP_PREFIX), "{name}");
+    }
+
+    #[test]
+    fn the_owner_grants_and_withdraws_processing_scopes_and_the_next_request_sees_it() {
+        let (dir, secrets, access) = setup();
+        access.set_enabled(true).unwrap();
+        let client = access.create_client("Claude Code").unwrap();
+        let token = secrets.token(&client.id).unwrap();
+
+        let granted = access
+            .set_grants(
+                &client.id,
+                Grants {
+                    local_write: true,
+                    remote_spend: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            granted.scopes,
+            vec![Scope::Read, Scope::LocalWrite, Scope::RemoteSpend]
+        );
+        let principal = access.authenticate(&token).unwrap();
+        assert!(principal.has(Scope::LocalWrite) && principal.has(Scope::RemoteSpend));
+        let reloaded = AgentAccess::load(dir.path(), secrets.clone());
+        assert_eq!(reloaded.view().unwrap().clients[0].scopes, granted.scopes);
+
+        let withdrawn = access
+            .set_grants(
+                &client.id,
+                Grants {
+                    local_write: false,
+                    remote_spend: false,
+                },
+            )
+            .unwrap();
+        assert_eq!(withdrawn.scopes, vec![Scope::Read]);
+        let principal = access.authenticate(&token).unwrap();
+        assert!(
+            !principal.has(Scope::LocalWrite) && !principal.has(Scope::RemoteSpend),
+            "a withdrawn scope is gone on the very next request"
+        );
+    }
+
+    #[test]
+    fn grants_keep_read_and_every_scope_the_owner_was_not_offered() {
+        let (_dir, _, access) = setup();
+        let client = access.create_client("Pi").unwrap();
+        access
+            .set_scopes(&client.id, vec![Scope::Web, Scope::Read])
+            .unwrap();
+        let view = access
+            .set_grants(
+                &client.id,
+                Grants {
+                    local_write: false,
+                    remote_spend: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            view.scopes,
+            vec![Scope::Read, Scope::RemoteSpend, Scope::Web],
+            "canonical order; read and web untouched"
+        );
+    }
+
+    #[test]
+    fn granting_to_an_unknown_client_fails_and_writes_nothing() {
+        let (dir, _, access) = setup();
+        let error = access
+            .set_grants(
+                "cl_missing",
+                Grants {
+                    local_write: true,
+                    remote_spend: true,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error, "unknown_client: no assistant cl_missing is paired");
+        assert_eq!(file(&dir), "", "nothing was persisted");
     }
 
     #[test]

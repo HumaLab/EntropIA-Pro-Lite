@@ -21,6 +21,7 @@
 
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use rmcp::{
     handler::server::{
@@ -36,7 +37,11 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::automation::access::{Principal, Scope};
+use crate::automation::approvals::{Approval, ApprovalAction, ApprovalStore};
 use crate::automation::audit::{AuditLine, AuditLog};
+use crate::automation::jobs::{
+    ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
+};
 use crate::automation::read::{
     ArchiveCounts, ArchiveReader, CollectionsPage, ItemDetail, ItemsPage, ReadError, SearchResults,
 };
@@ -62,6 +67,15 @@ const TOOL_COLLECTIONS_LIST: &str = "collections_list";
 const TOOL_ITEMS_LIST: &str = "items_list";
 const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
+const TOOL_JOBS_LIST: &str = "jobs_list";
+const TOOL_JOBS_GET: &str = "jobs_get";
+const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
+const TOOL_PROCESSING_START: &str = "processing_start";
+const TOOL_PROCESSING_CONTROL: &str = "processing_control";
+const TOOL_APPROVALS_STATUS: &str = "approvals_status";
+
+const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar y controlar procesamiento»).";
+const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
 
 /// `entropia_status`'s payload: this instance, this archive, this caller.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -150,6 +164,88 @@ pub struct SearchItemsParams {
     pub limit: Option<u32>,
 }
 
+/// `jobs_list` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobsListParams {
+    /// Only jobs in these states: `preparing`, `ready`, `running`, `pausing`,
+    /// `paused`, `cancelling`, `cancelled`, `interrupted`, `completed`,
+    /// `completed_with_errors`.
+    pub states: Option<Vec<String>>,
+    /// The `nextCursor` the previous page returned. Omit for the first page.
+    pub cursor: Option<String>,
+    /// Page size, 1 to 200; the default is 50.
+    pub limit: Option<u32>,
+}
+
+/// `jobs_get` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobsGetParams {
+    /// The job's id, as `jobs_list` or `processing_prepare` returned it.
+    pub job_id: String,
+    /// Only tasks in this state: `pending`, `blocked`, `running`, `retry_wait`,
+    /// `interrupted`, `succeeded`, `failed`, `skipped`, `cancelled`.
+    pub task_state: Option<String>,
+    /// Only tasks of this kind: `ocr`, `embedding`, `ner`, `triples`,
+    /// `schema_extract`.
+    pub task_kind: Option<String>,
+    /// The `nextTasksCursor` the previous call returned.
+    pub tasks_cursor: Option<String>,
+    /// Tasks per page, 1 to 200; the default is 50.
+    pub tasks_limit: Option<u32>,
+}
+
+/// `processing_prepare` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessingPrepareParams {
+    /// Your own id for this request, 1 to 128 characters. Sending it again
+    /// with the same arguments returns the same job instead of a second one.
+    pub request_id: String,
+    /// Collections whose files enter the job.
+    pub collection_ids: Option<Vec<String>>,
+    /// Items whose files enter the job.
+    pub item_ids: Option<Vec<String>>,
+    /// `ocr`, `embeddings`, `ner`, `triples`, or `schema:<id>`.
+    pub operations: Vec<String>,
+}
+
+/// `processing_start` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessingStartParams {
+    /// The job to start, in state `ready`.
+    pub job_id: String,
+    /// The `revision` jobs_get returned: the person approves exactly that state.
+    pub revision: i64,
+}
+
+/// `processing_control` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProcessingControlParams {
+    pub job_id: String,
+    /// `pause` or `cancel` (apply now), `resume` or `retry` (wait for the
+    /// person's approval).
+    pub action: String,
+    /// The job's `revision` from jobs_get. Required for `resume` and `retry`;
+    /// optional for `pause` and `cancel`, where it refuses a stale request.
+    pub revision: Option<i64>,
+    /// `retry` only: the one task to reopen.
+    pub task_id: Option<String>,
+    /// `retry` only: reopen every failed task.
+    pub failed_only: Option<bool>,
+}
+
+/// `approvals_status` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApprovalsStatusParams {
+    /// The `id` processing_start or processing_control returned.
+    pub approval_id: String,
+}
+
 /// Arguments that deserialize strictly but fail as a tool error.
 ///
 /// rmcp turns a failed `Parameters` extraction into a plain-text tool result, and
@@ -182,15 +278,25 @@ impl<'de, T: DeserializeOwned> Deserialize<'de> for Strict<T> {
 pub struct AgentServer {
     tool_router: ToolRouter<Self>,
     reader: ArchiveReader,
+    jobs: JobsArchive,
+    /// Where paid requests wait for the owner (D3); shared with the app.
+    approvals: Arc<ApprovalStore>,
     audit: AuditLog,
 }
 
 impl AgentServer {
     /// `db_path` is the archive the tools read; `cache_dir` receives the audit
-    /// trail under `logs/`.
-    pub fn new(db_path: impl Into<PathBuf>, cache_dir: impl Into<PathBuf>) -> Self {
+    /// trail under `logs/`; `approvals` is where paid requests wait.
+    pub fn new(
+        db_path: impl Into<PathBuf>,
+        cache_dir: impl Into<PathBuf>,
+        approvals: Arc<ApprovalStore>,
+    ) -> Self {
+        let db_path = db_path.into();
         Self {
             tool_router: Self::tool_router(),
+            approvals,
+            jobs: JobsArchive::new(db_path.clone()),
             reader: ArchiveReader::new(db_path),
             audit: AuditLog::new(cache_dir.into().join("logs")),
         }
@@ -223,16 +329,29 @@ impl AgentServer {
         context: &RequestContext<RoleServer>,
         tool: &str,
     ) -> Result<Principal, CallToolResult> {
+        self.guard_scope(
+            context,
+            tool,
+            Scope::Read,
+            "Este asistente no tiene permiso de lectura en EntropIA: pedile a la persona que lo emparejó que revise sus permisos.",
+        )
+    }
+
+    /// The caller, provided it holds `scope`; otherwise the refusal, audited,
+    /// before any archive is touched.
+    fn guard_scope(
+        &self,
+        context: &RequestContext<RoleServer>,
+        tool: &str,
+        scope: Scope,
+        refusal: &str,
+    ) -> Result<Principal, CallToolResult> {
         let caller = Self::caller(context)?;
-        if caller.has(Scope::Read) {
+        if caller.has(scope) {
             return Ok(caller);
         }
         self.audit_error(&caller, tool, ERROR_FORBIDDEN_SCOPE, None);
-        Err(tool_error(
-            ERROR_FORBIDDEN_SCOPE,
-            "Este asistente no tiene permiso de lectura en EntropIA: pedile a la persona que lo emparejó que revise sus permisos."
-                .to_string(),
-        ))
+        Err(tool_error(ERROR_FORBIDDEN_SCOPE, refusal.to_string()))
     }
 
     /// Arguments, or the audit and refusal that turn down what cannot be parsed.
@@ -286,6 +405,77 @@ impl AgentServer {
     ) -> CallToolResult {
         self.audit_error(caller, tool, error.code(), query_chars);
         tool_error(error.code(), error.message().to_string())
+    }
+
+    /// Refuse a caller that lacks the scope an action needs, audited.
+    fn refuse_scope(&self, caller: &Principal, tool: &str, message: &str) -> CallToolResult {
+        self.audit_error(caller, tool, ERROR_FORBIDDEN_SCOPE, None);
+        tool_error(ERROR_FORBIDDEN_SCOPE, message.to_string())
+    }
+
+    /// Refuse arguments that parsed but cannot be used, audited.
+    fn refuse_argument(&self, caller: &Principal, tool: &str, message: &str) -> CallToolResult {
+        self.audit_error(caller, tool, ERROR_INVALID_ARGUMENT, None);
+        tool_error(ERROR_INVALID_ARGUMENT, message.to_string())
+    }
+
+    /// Ask the owner to approve one paid action, off the async runtime.
+    async fn ask_owner(
+        &self,
+        caller: &Principal,
+        tool: &str,
+        action: ApprovalAction,
+        job_id: String,
+        revision: i64,
+    ) -> Result<Approval, CallToolResult> {
+        let jobs = self.jobs.clone();
+        let approvals = self.approvals.clone();
+        let client_id = caller.client_id.clone();
+        let client_name = caller.name.clone();
+        match Self::on_jobs(move || {
+            jobs.request_approval(
+                &approvals,
+                &client_id,
+                &client_name,
+                action,
+                &job_id,
+                revision,
+            )
+        })
+        .await
+        {
+            Ok(approval) => {
+                self.audit_ok(
+                    caller,
+                    tool,
+                    vec![approval.job_id.clone(), approval.id.clone()],
+                    None,
+                );
+                Ok(approval)
+            }
+            Err(error) => Err(self.jobs_failure(caller, tool, error)),
+        }
+    }
+
+    /// Record and answer a failed processing request.
+    fn jobs_failure(&self, caller: &Principal, tool: &str, error: JobsError) -> CallToolResult {
+        self.audit_error(caller, tool, error.code, None);
+        tool_error(error.code, error.message)
+    }
+
+    /// Run one blocking processing call off the async runtime.
+    async fn on_jobs<T, F>(work: F) -> Result<T, JobsError>
+    where
+        F: FnOnce() -> Result<T, JobsError> + Send + 'static,
+        T: Send + 'static,
+    {
+        match tokio::task::spawn_blocking(work).await {
+            Ok(result) => result,
+            Err(error) => {
+                log::warn!(target: "automation", "the processing task did not finish: {error}");
+                Err(JobsError::unavailable())
+            }
+        }
     }
 
     /// Run one blocking archive read off the async runtime.
@@ -480,6 +670,265 @@ impl AgentServer {
             .collect();
         self.audit_ok(&caller, TOOL_SEARCH_ITEMS, object_ids, query_chars);
         Ok(Json(results))
+    }
+
+    #[tool(
+        name = "jobs_list",
+        description = "Trabajos de procesamiento (lotes de OCR, embeddings, entidades, tripletas o extracción) que la persona preparó o empezó, del más nuevo al más viejo, con su estado y cuántas unidades terminaron, fallaron o siguen activas. Filtra por `states`. Pagina con `cursor` y `limit` (1 a 200, por defecto 50).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn jobs_list(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<JobsListParams>>,
+    ) -> Result<Json<JobsPage>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_JOBS_LIST)?;
+        let args = self.arguments(&caller, TOOL_JOBS_LIST, args)?;
+        let jobs = self.jobs.clone();
+        let page =
+            match Self::on_jobs(move || jobs.list(args.states, args.cursor.as_deref(), args.limit))
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => return Err(self.jobs_failure(&caller, TOOL_JOBS_LIST, error)),
+            };
+        let object_ids = page.records.iter().map(|job| job.id.clone()).collect();
+        self.audit_ok(&caller, TOOL_JOBS_LIST, object_ids, None);
+        Ok(Json(page))
+    }
+
+    #[tool(
+        name = "jobs_get",
+        description = "Un trabajo de procesamiento por su id: estado, operaciones, colecciones, progreso, revisión y una página de sus tareas (filtrables por `taskState` y `taskKind`, paginadas con `tasksCursor` y `tasksLimit`). La `revision` es la que piden las acciones sobre el trabajo.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn jobs_get(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<JobsGetParams>>,
+    ) -> Result<Json<JobDetail>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_JOBS_GET)?;
+        let args = self.arguments(&caller, TOOL_JOBS_GET, args)?;
+        let jobs = self.jobs.clone();
+        let detail = match Self::on_jobs(move || {
+            jobs.get(
+                &args.job_id,
+                args.task_state.as_deref(),
+                args.task_kind.as_deref(),
+                args.tasks_cursor.as_deref(),
+                args.tasks_limit,
+            )
+        })
+        .await
+        {
+            Ok(detail) => detail,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_JOBS_GET, error)),
+        };
+        self.audit_ok(&caller, TOOL_JOBS_GET, vec![detail.job.id.clone()], None);
+        Ok(Json(detail))
+    }
+
+    #[tool(
+        name = "processing_prepare",
+        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`) o un esquema (`schema:<id>`). No gasta nada: empezar lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar y controlar procesamiento».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn processing_prepare(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ProcessingPrepareParams>>,
+    ) -> Result<Json<PrepareReport>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_PROCESSING_PREPARE,
+            Scope::LocalWrite,
+            "Este asistente no tiene permiso para preparar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar y controlar procesamiento»).",
+        )?;
+        let args = self.arguments(&caller, TOOL_PROCESSING_PREPARE, args)?;
+        let jobs = self.jobs.clone();
+        let client_id = caller.client_id.clone();
+        let report = match Self::on_jobs(move || {
+            jobs.prepare(
+                &client_id,
+                &args.request_id,
+                &args.collection_ids.unwrap_or_default(),
+                &args.item_ids.unwrap_or_default(),
+                &args.operations,
+            )
+        })
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_PROCESSING_PREPARE, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_PROCESSING_PREPARE,
+            vec![report.job_id.clone()],
+            None,
+        );
+        Ok(Json(report))
+    }
+
+    #[tool(
+        name = "processing_start",
+        description = "Pide empezar un trabajo preparado (state \"ready\") en la `revision` que devolvió jobs_get. No empieza nada por sí solo: la persona lo aprueba o rechaza en EntropIA, que se abre para mostrarle el pedido. Devuelve el pedido (`id`, `status` pending); consultalo con approvals_status. Repetir el mismo pedido devuelve el mismo. Necesita el permiso «Pedir procesamiento pago».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn processing_start(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ProcessingStartParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_PROCESSING_START,
+            Scope::RemoteSpend,
+            REFUSE_REMOTE_SPEND,
+        )?;
+        let args = self.arguments(&caller, TOOL_PROCESSING_START, args)?;
+        let approval = self
+            .ask_owner(
+                &caller,
+                TOOL_PROCESSING_START,
+                ApprovalAction::Start,
+                args.job_id,
+                args.revision,
+            )
+            .await?;
+        Ok(Json(approval))
+    }
+
+    #[tool(
+        name = "processing_control",
+        description = "Controla un trabajo. `pause` y `cancel` se aplican enseguida y no gastan: las unidades en curso terminan su paso y lo ya procesado se conserva (permiso «Preparar y controlar procesamiento»). `resume` y `retry` vuelven a gastar, así que piden la aprobación de la persona en EntropIA y necesitan `revision` (permiso «Pedir procesamiento pago»); `retry` reabre una tarea (`taskId`) o todas las fallidas (`failedOnly`: true).",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn processing_control(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ProcessingControlParams>>,
+    ) -> Result<Json<ControlReport>, CallToolResult> {
+        let caller = Self::caller(&context)?;
+        let args = self.arguments(&caller, TOOL_PROCESSING_CONTROL, args)?;
+        let tool = TOOL_PROCESSING_CONTROL;
+        match args.action.as_str() {
+            "pause" | "cancel" => {
+                if !caller.has(Scope::LocalWrite) {
+                    return Err(self.refuse_scope(&caller, tool, REFUSE_LOCAL_WRITE));
+                }
+                let jobs = self.jobs.clone();
+                let (job_id, action, revision) =
+                    (args.job_id.clone(), args.action.clone(), args.revision);
+                let job = match Self::on_jobs(move || jobs.control_now(&job_id, &action, revision))
+                    .await
+                {
+                    Ok(job) => job,
+                    Err(error) => return Err(self.jobs_failure(&caller, tool, error)),
+                };
+                self.audit_ok(&caller, tool, vec![job.id.clone()], None);
+                Ok(Json(ControlReport {
+                    job_id: job.id.clone(),
+                    action: args.action,
+                    outcome: "done".to_string(),
+                    job: Some(job),
+                    approval: None,
+                }))
+            }
+            "resume" | "retry" => {
+                if !caller.has(Scope::RemoteSpend) {
+                    return Err(self.refuse_scope(&caller, tool, REFUSE_REMOTE_SPEND));
+                }
+                let Some(revision) = args.revision else {
+                    return Err(self.refuse_argument(
+                        &caller,
+                        tool,
+                        "`resume` y `retry` necesitan `revision` (la que devolvió jobs_get): la persona aprueba exactamente ese estado.",
+                    ));
+                };
+                let action = if args.action == "resume" {
+                    ApprovalAction::Resume
+                } else {
+                    let failed_only = args.failed_only.unwrap_or(false);
+                    if args.task_id.is_none() && !failed_only {
+                        return Err(self.refuse_argument(
+                            &caller,
+                            tool,
+                            "`retry` necesita `taskId` o `failedOnly`: true.",
+                        ));
+                    }
+                    ApprovalAction::Retry {
+                        task_id: args.task_id.clone(),
+                        failed_only,
+                    }
+                };
+                let approval = self
+                    .ask_owner(&caller, tool, action, args.job_id.clone(), revision)
+                    .await?;
+                Ok(Json(ControlReport {
+                    job_id: args.job_id,
+                    action: args.action,
+                    outcome: "approval_pending".to_string(),
+                    job: None,
+                    approval: Some(approval),
+                }))
+            }
+            other => Err(self.refuse_argument(
+                &caller,
+                tool,
+                &format!("Acción desconocida \"{other}\": usá pause, cancel, resume o retry."),
+            )),
+        }
+    }
+
+    #[tool(
+        name = "approvals_status",
+        description = "Estado de un pedido de aprobación de este asistente: pending (esperando a la persona), approved (aprobado y ejecutado), failed (aprobado pero el trabajo había cambiado; no se ejecutó nada), rejected o expired (vence a los 10 minutos).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn approvals_status(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ApprovalsStatusParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_APPROVALS_STATUS)?;
+        let args = self.arguments(&caller, TOOL_APPROVALS_STATUS, args)?;
+        match self
+            .approvals
+            .get_for_client(&caller.client_id, &args.approval_id)
+        {
+            Some(approval) => {
+                self.audit_ok(
+                    &caller,
+                    TOOL_APPROVALS_STATUS,
+                    vec![approval.id.clone()],
+                    None,
+                );
+                Ok(Json(approval))
+            }
+            None => {
+                self.audit_error(&caller, TOOL_APPROVALS_STATUS, ERROR_NOT_FOUND, None);
+                Err(tool_error(
+                    ERROR_NOT_FOUND,
+                    format!("No hay un pedido {} de este asistente.", args.approval_id),
+                ))
+            }
+        }
     }
 }
 

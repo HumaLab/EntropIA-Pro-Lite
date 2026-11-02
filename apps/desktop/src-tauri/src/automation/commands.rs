@@ -16,7 +16,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::State;
 
-use super::access::{AgentAccess, ClientView};
+use super::access::{AgentAccess, ClientView, Grants};
+use super::approvals::Approval;
 use super::connector::{current_location, ConnectorLocation};
 use super::server::AgentEndpointState;
 
@@ -95,6 +96,50 @@ pub fn revoke_client(
     status(access, endpoint)
 }
 
+/// Apply the owner's grants to one client and report the status after it.
+/// Unlike revoking, an unknown client is an error: there is nothing to grant.
+pub fn set_client_grants(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    client_id: &str,
+    grants: Grants,
+) -> Result<AgentStatusView, String> {
+    access.set_grants(client_id, grants)?;
+    status(access, endpoint)
+}
+
+/// The requests waiting for the owner, oldest first.
+pub fn pending_approvals(endpoint: &AgentEndpointState) -> Vec<Approval> {
+    endpoint.approvals().pending()
+}
+
+/// The owner's answer to one request. Approving runs the action once on a
+/// fresh connection to `db_path`, fenced by the revision the assistant saw.
+pub fn decide_approval(
+    endpoint: &AgentEndpointState,
+    db_path: &std::path::Path,
+    approval_id: &str,
+    approve: bool,
+) -> Result<Approval, String> {
+    let conn = crate::processing::commands::open_ready(db_path)?;
+    let decided = endpoint.approvals().decide(&conn, approval_id, approve)?;
+    let decision = match decided.status {
+        super::approvals::ApprovalStatus::Approved => "approved",
+        super::approvals::ApprovalStatus::Failed => "failed",
+        _ => "rejected",
+    };
+    endpoint
+        .audit_log()
+        .append(&super::audit::AuditLine::owner_decision(
+            &decided.client_id,
+            &decided.client_name,
+            &decided.id,
+            &decided.job_id,
+            decision,
+        ));
+    Ok(decided)
+}
+
 #[tauri::command]
 pub fn agent_access_status(
     access: State<'_, Arc<AgentAccess>>,
@@ -130,6 +175,35 @@ pub fn agent_client_revoke(
     client_id: String,
 ) -> Result<AgentStatusView, String> {
     revoke_client(access.inner(), endpoint.inner(), &client_id)
+}
+
+#[tauri::command]
+pub fn agent_client_set_grants(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    client_id: String,
+    grants: Grants,
+) -> Result<AgentStatusView, String> {
+    set_client_grants(access.inner(), endpoint.inner(), &client_id, grants)
+}
+
+#[tauri::command]
+pub fn agent_approvals_pending(endpoint: State<'_, Arc<AgentEndpointState>>) -> Vec<Approval> {
+    pending_approvals(endpoint.inner())
+}
+
+#[tauri::command]
+pub async fn agent_approval_decide(
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    db: State<'_, crate::db::state::AppDbState>,
+    approval_id: String,
+    approve: bool,
+) -> Result<Approval, String> {
+    let endpoint = endpoint.inner().clone();
+    let db_path = db.db_path.clone();
+    tokio::task::spawn_blocking(move || decide_approval(&endpoint, &db_path, &approval_id, approve))
+        .await
+        .map_err(|e| format!("the approval task did not finish: {e}"))?
 }
 
 /// Where the bundled connector is, so the panel can name an absolute path in
@@ -267,6 +341,100 @@ mod tests {
             .unwrap()
             .clients
             .is_empty());
+    }
+
+    #[test]
+    fn granting_scopes_returns_the_status_with_the_updated_client() {
+        let harness = harness();
+        let created = create_client(&harness.access, &harness.endpoint, "Codex").unwrap();
+        let view = set_client_grants(
+            &harness.access,
+            &harness.endpoint,
+            &created.client.id,
+            Grants {
+                local_write: true,
+                remote_spend: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(view.clients.len(), 1);
+        assert_eq!(view.clients[0].scopes, vec![Scope::Read, Scope::LocalWrite]);
+        let error = set_client_grants(
+            &harness.access,
+            &harness.endpoint,
+            "cl_missing",
+            Grants::default(),
+        )
+        .unwrap_err();
+        assert!(error.starts_with("unknown_client"), "{error}");
+    }
+
+    #[test]
+    fn the_owner_lists_and_answers_an_assistants_request() {
+        use crate::automation::approvals::{ApprovalAction, ApprovalRequest, ApprovalStatus};
+        use crate::automation::test_archive::{seeded_archive, ALFA};
+        use crate::processing::commands as batches;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = seeded_archive(dir.path());
+        let endpoint = AgentEndpointState::new(
+            dir.path().to_path_buf(),
+            db_path.clone(),
+            dir.path().join("cache"),
+        );
+        let conn = batches::open_ready(&db_path).unwrap();
+        let job = batches::prepare_batch(
+            &conn,
+            "req-1",
+            &[ALFA.to_string()],
+            &[],
+            &["ocr".to_string()],
+        )
+        .unwrap()
+        .batch_id;
+        conn.execute(
+            "UPDATE processing_batches SET state = 'ready', planning_done = 1 WHERE id = ?1",
+            [&job],
+        )
+        .unwrap();
+        let revision = batches::batch_snapshot(&conn, &job).unwrap().revision;
+        let asked = endpoint.approvals().request(ApprovalRequest {
+            client_id: "cl_a".into(),
+            client_name: "Claude Code".into(),
+            action: ApprovalAction::Start,
+            job_id: job.clone(),
+            revision,
+            operations: vec!["ocr".into()],
+            collections: vec!["Alfa".into()],
+            files: 2,
+        });
+
+        assert_eq!(pending_approvals(&endpoint), vec![asked.clone()]);
+        let decided = decide_approval(&endpoint, &db_path, &asked.id, true).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        assert_eq!(
+            batches::batch_snapshot(&conn, &job).unwrap().desired_state,
+            "run"
+        );
+        assert!(pending_approvals(&endpoint).is_empty());
+        let json = serde_json::to_string(&decided).unwrap();
+        assert!(!json.contains("eat_"), "an approval never carries a token");
+
+        // S9: the owner's answer is in the audit trail, ids only.
+        let trail = std::fs::read_to_string(
+            dir.path()
+                .join("cache")
+                .join("logs")
+                .join(crate::automation::audit::AUDIT_FILE),
+        )
+        .expect("the decision was audited");
+        let line: serde_json::Value =
+            serde_json::from_str(trail.lines().last().expect("one line")).unwrap();
+        assert_eq!(line["tool"], "owner_decision");
+        assert_eq!(line["clientId"], "cl_a");
+        assert_eq!(line["status"], "ok");
+        assert_eq!(line["decision"], "approved");
+        assert_eq!(line["objectIds"], serde_json::json!([asked.id, job]));
     }
 
     #[tokio::test]

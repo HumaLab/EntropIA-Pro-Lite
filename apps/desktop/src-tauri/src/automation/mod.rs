@@ -2,9 +2,11 @@
 //! Pi) operate this installed app through MCP. See `integrations/agents/`.
 //!
 //! - [`access`] — paired clients, their tokens and scopes.
+//! - [`approvals`] — the owner's approval of paid work an assistant asked for.
 //! - [`audit`] — the local trail of what an assistant did (S9).
 //! - [`commands`] — the Tauri commands the Asistentes panel calls (D11).
 //! - [`connector`] — where the bundled assistant connector is installed (D15).
+//! - [`jobs`] — the processing tools' adapter over the batch services.
 //! - [`mcp`] — what the endpoint offers over MCP (one tool per intent).
 //! - [`proof`] — the instance key and HMAC that keep a token from reaching a
 //!   process that is not this app (D12).
@@ -12,9 +14,11 @@
 //! - [`server`] — the loopback HTTP endpoint, its request guard and lifecycle.
 
 pub mod access;
+pub mod approvals;
 pub mod audit;
 pub mod commands;
 pub mod connector;
+pub mod jobs;
 pub mod mcp;
 #[cfg(windows)]
 mod private_acl;

@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use tower_service::Service;
 
 use crate::automation::access::{self, AgentAccess};
+use crate::automation::approvals::ApprovalStore;
 use crate::automation::mcp::AgentServer;
 use crate::automation::proof;
 
@@ -139,6 +140,9 @@ pub struct AgentEndpointState {
     /// The cache directory; the audit trail lives under its `logs/` (S9).
     cache_dir: PathBuf,
     running: Mutex<Option<Running>>,
+    /// Paid work assistants asked for, waiting for the owner (D3). Outlives
+    /// endpoint restarts within one app run; an app restart clears it.
+    approvals: Arc<ApprovalStore>,
 }
 
 impl AgentEndpointState {
@@ -152,7 +156,18 @@ impl AgentEndpointState {
             db_path: db_path.into(),
             cache_dir: cache_dir.into(),
             running: Mutex::new(None),
+            approvals: Arc::new(ApprovalStore::default()),
         }
+    }
+
+    /// The audit trail the tools write, for what the owner answers in the app.
+    pub fn audit_log(&self) -> crate::automation::audit::AuditLog {
+        crate::automation::audit::AuditLog::new(self.cache_dir.join("logs"))
+    }
+
+    /// The approvals store the endpoint fills and the app answers.
+    pub fn approvals(&self) -> Arc<ApprovalStore> {
+        self.approvals.clone()
     }
 
     /// Start or stop so the endpoint reflects the access state. Async only so
@@ -174,6 +189,7 @@ impl AgentEndpointState {
                     access.clone(),
                     self.db_path.clone(),
                     self.cache_dir.clone(),
+                    self.approvals.clone(),
                 )?);
                 Ok(())
             }
@@ -214,6 +230,7 @@ fn start(
     access: Arc<AgentAccess>,
     db_path: PathBuf,
     cache_dir: PathBuf,
+    approvals: Arc<ApprovalStore>,
 ) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .map_err(|e| format!("could not bind the assistant endpoint on {LOOPBACK}: {e}"))?;
@@ -244,6 +261,7 @@ fn start(
         cancel.clone(),
         db_path,
         cache_dir,
+        approvals,
     );
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
@@ -361,6 +379,7 @@ impl GuardedEndpoint {
         cancel: CancellationToken,
         db_path: PathBuf,
         cache_dir: PathBuf,
+        approvals: Arc<ApprovalStore>,
     ) -> Self {
         let hosts = vec![format!("{LOOPBACK}:{port}"), format!("localhost:{port}")];
         let config = StreamableHttpServerConfig::default()
@@ -376,7 +395,13 @@ impl GuardedEndpoint {
             inner: StreamableHttpService::new(
                 // One server per request: the tools read the archive from the
                 // path it was built with and never touch the UI connection.
-                move || Ok(AgentServer::new(db_path.clone(), cache_dir.clone())),
+                move || {
+                    Ok(AgentServer::new(
+                        db_path.clone(),
+                        cache_dir.clone(),
+                        approvals.clone(),
+                    ))
+                },
                 Arc::new(NeverSessionManager::default()),
                 config,
             ),
@@ -876,10 +901,16 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "approvals_status",
                 "collections_list",
                 "entropia_status",
                 "items_get",
                 "items_list",
+                "jobs_get",
+                "jobs_list",
+                "processing_control",
+                "processing_prepare",
+                "processing_start",
                 "search_items"
             ]
         );

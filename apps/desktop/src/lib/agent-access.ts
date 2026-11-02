@@ -8,7 +8,10 @@ import { invoke } from '@tauri-apps/api/core'
  * the client view has fields for id, name, scopes and timestamps only (S4).
  */
 
-/** What a paired client may do. Only `read` is granted in this release. */
+/**
+ * What a paired client may do. Every pairing gets `read`; the owner can add
+ * `local_write` and `remote_spend` (see {@link AgentGrants}).
+ */
 export type AgentScope =
   'read' | 'local_write' | 'remote_spend' | 'external_write' | 'admin' | 'web'
 
@@ -45,6 +48,77 @@ export interface AgentAccessStatus {
 export interface CreatedAgentClient {
   client: AgentClient
   status: AgentAccessStatus
+}
+
+/**
+ * The scopes the owner can grant from this panel. `read` comes with every
+ * pairing and the other scopes are not offered.
+ */
+export interface AgentGrants {
+  /** Prepare, pause, cancel and reprioritize processing batches. */
+  localWrite: boolean
+  /** Ask to start paid processing; each request is still approved in the app. */
+  remoteSpend: boolean
+}
+
+/** The grants a client currently holds. */
+export function grantsOf(client: AgentClient): AgentGrants {
+  return {
+    localWrite: client.scopes.includes('local_write'),
+    remoteSpend: client.scopes.includes('remote_spend'),
+  }
+}
+
+/** Replace one client's grants; answers with the fresh status. */
+export function agentClientSetGrants(
+  clientId: string,
+  grants: AgentGrants
+): Promise<AgentAccessStatus> {
+  return invoke<AgentAccessStatus>('agent_client_set_grants', { clientId, grants })
+}
+
+/** What an assistant asked to do with a processing job (D3). */
+export type AgentApprovalAction =
+  | { kind: 'start' }
+  | { kind: 'resume' }
+  | { kind: 'retry'; task_id: string | null; failed_only: boolean }
+
+export type AgentApprovalStatus = 'pending' | 'approved' | 'failed' | 'rejected' | 'expired'
+
+/**
+ * A request for paid work, waiting for the owner. Bound to the client, the job
+ * and the job revision the assistant saw; it carries names and counts only.
+ */
+export interface AgentApproval {
+  id: string
+  clientId: string
+  clientName: string
+  action: AgentApprovalAction
+  jobId: string
+  revision: number
+  operations: string[]
+  collections: string[]
+  files: number
+  status: AgentApprovalStatus
+  /** Unix milliseconds. */
+  createdAt: number
+  expiresAt: number
+  decidedAt: number | null
+  /** Why an approved action did not run. */
+  failure: string | null
+}
+
+/** The event the backend emits whenever the approvals change. */
+export const AGENT_APPROVALS_CHANGED_EVENT = 'agent-approvals:changed'
+
+/** The requests waiting for the owner, oldest first. */
+export function agentApprovalsPending(): Promise<AgentApproval[]> {
+  return invoke<AgentApproval[]>('agent_approvals_pending')
+}
+
+/** The owner's answer; approving runs the action once. */
+export function agentApprovalDecide(approvalId: string, approve: boolean): Promise<AgentApproval> {
+  return invoke<AgentApproval>('agent_approval_decide', { approvalId, approve })
 }
 
 /** The connector binary every assistant config names. */

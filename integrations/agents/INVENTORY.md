@@ -82,7 +82,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
-| Remote OCR (OCRH / GLM-OCR) | `ocr/commands.rs` (`extract_text`, `test_glm_ocr_connection`, `is_scanned_pdf`, `probe_pdf`) | `documents_ocr_start` (impact + cost first) | remote_spend | Both | planned (stage 3) |
+| Remote OCR (OCRH / GLM-OCR) | `ocr/commands.rs` (`extract_text`, `test_glm_ocr_connection`, `is_scanned_pdf`, `probe_pdf`) | as a batch: `processing_prepare` with `ocr`, then `processing_start`; a per-document `documents_ocr_start` stays planned | remote_spend | Both | implemented as a batch (stage 3) |
 | Local OCR | `ocr/pdf.rs`, gated by `local-ml` | `documents_ocr_start` | local_write | Pro only | planned (stage 3) |
 | OCR correction and summaries with a provider | `llm/commands.rs` (`llm_correct_ocr`, `llm_correct_ocr_asset`, `llm_summarize`, `llm_summarize_asset`, `llm_get_results`, `llm_get_result`, `llm_can_restore_original_ocr_asset`, `llm_restore_original_ocr_asset`) | `documents_transform_start` | remote_spend | Both | planned (stage 3) |
 | Edit or restore recognized text | `ocr::update_extraction_text_cmd`, `llm_restore_original_ocr_asset`, `packages/store/src/repos/extraction.repo.ts` | `documents_text_update` | local_write | Both | planned (stage 3) |
@@ -97,7 +97,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
 | INDEX: prepare text for lexical search | `nlp::commands::index_fts`, `fts.repo.ts` | `documents_index` | local_write | Both | planned (stage 3) |
-| EMBED: prepare embeddings | `nlp::commands::embed_asset`, `backfill_asset_embeddings`, `packages/store/src/repos/rag-chunk.repo.ts` | `documents_embed` | remote_spend | Both (local embeddings in Pro) | planned (stage 3) |
+| EMBED: prepare embeddings | `nlp::commands::embed_asset`, `backfill_asset_embeddings`, `packages/store/src/repos/rag-chunk.repo.ts` | as a batch: `processing_prepare` with `embeddings`; a per-document `documents_embed` stays planned | remote_spend | Both (local embeddings in Pro) | implemented as a batch (stage 3) |
 | Similar assets | `nlp::commands::similar_assets` | `search_similar` | read | Both | planned (stage 4) |
 | NER: entities | `nlp::commands::extract_entities`, `extract_entities_for_asset`, `llm_extract_entities`, `llm_extract_entities_asset`, `enrich_item`, `packages/store/src/repos/entity.repo.ts` | `analysis_entities_start` | remote_spend | Both | planned (stage 4) |
 | TRIPLET: relations | `nlp::commands::extract_triples`, `extract_triples_for_asset`, `llm_extract_triples`, `llm_extract_triples_asset`, `packages/store/src/repos/triple.repo.ts` | `analysis_triples_start` | remote_spend | Both | planned (stage 4) |
@@ -111,13 +111,13 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
-| Prepare a batch: scope, operations, estimated cost | `processing::commands::processing_prepare`, `processing::processing_initialize`, `apps/desktop/src/lib/batch-processing.ts` | `processing_prepare` | local_write | Both | planned (stage 3) |
-| Start a batch | `processing::commands::processing_start` | `processing_start` | remote_spend | Both | planned (stage 3) |
-| Batch, task and progress read | `processing_list_batches`, `processing_get_batch`, `processing_list_tasks`, `processing_get_task`, `apps/desktop/src/lib/batch-pagination.ts` | `jobs_get`, `jobs_list` | read | Both | planned (stage 3) |
-| Pause, resume, cancel | `processing::commands::processing_control` | `processing_control` | local_write | Both | planned (stage 3) |
-| Priority | `processing::commands::processing_set_priority` | `processing_set_priority` | local_write | Both | planned (stage 3) |
-| Retry failed work | `processing::commands::processing_retry` | `processing_retry` | local_write | Both | planned (stage 3) |
-| Recovery after closing the app | `batch-processing.ts`, `processing_*` state machines | `jobs_get` | read | Both | planned (stage 3) |
+| Prepare a batch: scope, operations, estimated cost | `processing::commands::prepare_batch` (shared with the tab's `processing_prepare` command), `apps/desktop/src/lib/batch-processing.ts` | `processing_prepare` (collections and/or items; no cost before planning) | local_write | Both | implemented |
+| Start a batch | `processing::commands::start_batch` | `processing_start` → owner approval in the app (`automation/approvals.rs`) | remote_spend | Both | implemented |
+| Batch, task and progress read | `processing::commands::{list_batches_page, batch_snapshot, list_batch_tasks}`, `apps/desktop/src/lib/batch-pagination.ts` | `jobs_get`, `jobs_list` | read | Both | implemented |
+| Pause, resume, cancel | `processing::commands::control_batches` | `processing_control` (pause/cancel: local_write, at once; resume: remote_spend + owner approval) | local_write, remote_spend | Both | implemented |
+| Priority | `processing::commands::set_priority` | `processing_set_priority` | local_write | Both | planned (stage 3): the service is shared, the tool is not exposed yet |
+| Retry failed work | `processing::commands::retry_batch` | `processing_control` action `retry` (owner approval) | remote_spend | Both | implemented |
+| Recovery after closing the app | `batch-processing.ts`, `processing_*` state machines | `jobs_get` (jobs persist; approvals do not survive a restart) | read | Both | implemented |
 | Custom schema extraction and CSV | `processing::schema_extract::extraction_schemas_list`, `extraction_schema_save`, `extraction_schema_delete`, `extraction_records_list`, `packages/store/src/repos/extraction.repo.ts` | `schemas_list`, `schemas_save`, `schemas_extract_start` | remote_spend | Both | planned (stage 4) |
 | Zotero library sync queued as batches | `processing_sync_bibliography_library`, `processing_bibliography_sync_status`, `processing_latest_bibliography_sync_status` | `library_sync_start`, `library_sync_status` | remote_spend | Both | planned (stage 4) |
 | Saved batch flows | `apps/desktop/src/lib/batch-flows.ts` | not exposed | — | Both | not exposed: a UI preference that names operations, not a domain operation |

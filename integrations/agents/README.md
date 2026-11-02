@@ -2,8 +2,11 @@
 
 An external assistant — Claude Code, Codex, OpenCode, Pi — can read this
 installed EntropIA archive through a loopback MCP endpoint, once you pair it in
-**Configuración › Asistentes**. In this version the endpoint is **read-only,
-local-only and off by default**, and it is the same code in Pro and Lite.
+**Configuración › Asistentes**. If you allow it there, it can also prepare and
+control processing jobs (OCR, embeddings, entities, triples, schemas) and ask to
+start paid work, which you approve in the app. The endpoint is **local-only and
+off by default**, a new assistant can only read, and it is the same code in Pro
+and Lite.
 
 Status: the endpoint and the connector exist and were exercised end to end
 against a real Lite debug build (isolated dev profile, one seeded client):
@@ -91,6 +94,30 @@ describes the Lite debug run, where `<connector>` was
 The same panel lists every paired client with its creation date and last use, and
 **"Revocar"** (behind a confirmation) makes that credential useless on the next
 request, even for a copy someone saved earlier.
+
+## Let an assistant process documents
+
+A paired assistant can only read. Under each assistant in Settings › Asistentes,
+two boxes add more; granting one asks for a confirmation, unticking it applies at
+once and the next request is refused.
+
+| Box | Scope | What the assistant can do |
+|---|---|---|
+| **Preparar y controlar procesamiento** | `local_write` | Prepare a paused job over collections or items (`processing_prepare`), pause or cancel it (`processing_control`). Nothing is spent. |
+| **Pedir procesamiento pago** | `remote_spend` | Ask to start, resume or retry a job (`processing_start`, `processing_control`). Each request waits for you. |
+
+When an assistant asks to start paid work, EntropIA comes to the front with a
+dialog: who asks, which operations, over which collections and how many files.
+Only **Aprobar** runs it; **Rechazar** is focused first, Escape rejects, and a
+request nobody answers expires after ten minutes. If the job changed between the
+request and your answer (another priority, a pause), nothing runs and the
+assistant has to ask again. Approvals are not kept across a restart.
+
+The flow an assistant follows: `processing_prepare` → poll `jobs_get` until the
+job is `ready` (planning counts the pages and units) → `processing_start` with
+that `revision` → poll `approvals_status` until `approved` → follow progress with
+`jobs_get`. Jobs it prepares show up in Procesamiento like your own. See
+`PROTOCOL.md` for every argument and error code.
 
 ## Try it against an isolated dev profile
 
@@ -190,7 +217,7 @@ in to the desktop session with the keyring unlocked, or pass the agent
 ## Read next
 
 - [`PROTOCOL.md`](PROTOCOL.md) — protocol version and compatibility policy,
-  transport and guard order, discovery file, credentials, scopes, the five tools,
-  every error code, and the audit format.
+  transport and guard order, discovery file, credentials, scopes, the eleven
+  tools and the approvals, every error code, and the audit format.
 - [`INVENTORY.md`](INVENTORY.md) — what each product operation maps to today,
   which tool would expose it, and what is deliberately not exposed.

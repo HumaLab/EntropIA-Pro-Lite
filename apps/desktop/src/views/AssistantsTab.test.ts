@@ -239,6 +239,87 @@ describe('AssistantsTab', () => {
     await waitFor(() => expect(screen.queryByText('Claude Code')).not.toBeInTheDocument())
   })
 
+  it('grants processing only after the confirmation', async () => {
+    const granted: AgentClient = { ...CLAUDE, scopes: ['read', 'local_write'] }
+    respond({
+      agent_access_status: ACTIVE_STATUS,
+      agent_client_set_grants: { ...ACTIVE_STATUS, clients: [granted] },
+    })
+    render(AssistantsTab)
+
+    const prepare = await screen.findByRole('checkbox', {
+      name: 'Preparar y controlar procesamiento: Claude Code',
+    })
+    expect(prepare).not.toBeChecked()
+    await fireEvent.click(prepare)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Armar un lote no gasta')
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
+
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
+    // The box shows what the backend holds again once the owner cancels.
+    const again = screen.getByRole('checkbox', {
+      name: 'Preparar y controlar procesamiento: Claude Code',
+    })
+    expect(again).not.toBeChecked()
+
+    await fireEvent.click(again)
+    await fireEvent.click(
+      within(screen.getByRole('dialog')).getByRole('button', { name: 'Permitir' })
+    )
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith('agent_client_set_grants', {
+        clientId: 'cl_abc123',
+        grants: { localWrite: true, remoteSpend: false },
+      })
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('checkbox', { name: 'Preparar y controlar procesamiento: Claude Code' })
+      ).toBeChecked()
+    )
+  })
+
+  it('says every paid request is approved in the app before granting spend', async () => {
+    respond({ agent_access_status: ACTIVE_STATUS })
+    render(AssistantsTab)
+
+    await fireEvent.click(
+      await screen.findByRole('checkbox', { name: 'Pedir procesamiento pago: Claude Code' })
+    )
+    expect(screen.getByRole('dialog')).toHaveTextContent('no gasta nada hasta que lo apruebes')
+  })
+
+  it('withdraws a grant at once, without asking', async () => {
+    const both: AgentClient = { ...CLAUDE, scopes: ['read', 'local_write', 'remote_spend'] }
+    const prepareOnly: AgentClient = { ...CLAUDE, scopes: ['read', 'local_write'] }
+    respond({
+      agent_access_status: { ...ACTIVE_STATUS, clients: [both] },
+      agent_client_set_grants: { ...ACTIVE_STATUS, clients: [prepareOnly] },
+    })
+    render(AssistantsTab)
+
+    const spend = await screen.findByRole('checkbox', {
+      name: 'Pedir procesamiento pago: Claude Code',
+    })
+    expect(spend).toBeChecked()
+    await fireEvent.click(spend)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith('agent_client_set_grants', {
+        clientId: 'cl_abc123',
+        grants: { localWrite: true, remoteSpend: false },
+      })
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByRole('checkbox', { name: 'Pedir procesamiento pago: Claude Code' })
+      ).not.toBeChecked()
+    )
+  })
+
   it('shows where each client token is stored', async () => {
     respond({ agent_access_status: { ...ACTIVE_STATUS, clients: [CLAUDE, FILE_STORED] } })
     render(AssistantsTab)

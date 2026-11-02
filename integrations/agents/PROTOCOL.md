@@ -12,6 +12,8 @@ Source of truth, by concern:
 | Instance key, HMAC and constant-time compare (D12) | `apps/desktop/src-tauri/src/automation/proof.rs`, `crates/entropia-agent-connector/src/proof.rs` |
 | Tools, arguments, results, tool error codes | `apps/desktop/src-tauri/src/automation/mcp.rs` |
 | Read connection, pagination, read errors | `apps/desktop/src-tauri/src/automation/read.rs` |
+| Processing tools' adapter over the batch services | `apps/desktop/src-tauri/src/automation/jobs.rs`, `apps/desktop/src-tauri/src/processing/commands.rs` |
+| Owner approvals of paid work | `apps/desktop/src-tauri/src/automation/approvals.rs`, `apps/desktop/src/components/AgentApprovalDialog.svelte` |
 | Clients, tokens, keyring target, token file fallback, scopes, revocation | `apps/desktop/src-tauri/src/automation/access.rs` |
 | Audit trail | `apps/desktop/src-tauri/src/automation/audit.rs` |
 | App surface (Tauri commands) | `apps/desktop/src-tauri/src/automation/commands.rs` |
@@ -22,10 +24,11 @@ Source of truth, by concern:
 
 | Piece | State |
 |---|---|
-| App endpoint (`automation/server.rs`) | Implemented. Loopback, stateless, read-only tools. Same code in Pro and Lite. |
+| App endpoint (`automation/server.rs`) | Implemented. Loopback, stateless. Read tools, plus processing tools gated by owner-granted scopes and, for paid work, the owner's approval in the app. Same code in Pro and Lite. |
 | Connector crate (`crates/entropia-agent-connector`) | Implemented. **Bundled with every installer** (Pro and Lite; NSIS/MSI, MSIX through the `entropia-agent-connector.exe` execution alias, `.deb`, macOS `.app`/`.dmg`) through the `tauri.connector.conf.json` / `tauri.connector.pro.conf.json` overlays. Code signing of the extra executable is not integrated for any binary. |
 | Skill (`integrations/agents/skill/`) | **Planned** (stage 6). No code, no contract, no version declared yet. |
-| Write, processing, research, library, writing tools | **Planned** (stages 3-5). See `INVENTORY.md`. |
+| Processing tools (prepare, follow, control, ask to start) | Implemented (stage 3, processing half). |
+| Corpus write, research, library, writing tools | **Planned** (stages 3-5). See `INVENTORY.md`. |
 
 ## Compatibility policy
 
@@ -282,25 +285,33 @@ are the `snake_case` names (`automation/access.rs`).
 | Scope | Meaning | Granted today |
 |---|---|---|
 | `read` | Read the archive through the read tools | **Yes**, every paired client |
-| `local_write` | Change the local archive | No |
-| `remote_spend` | Call a paid provider on the person's behalf | No |
+| `local_write` | Change the local archive: prepare, pause, cancel processing jobs | By the owner, per client: «Preparar y controlar procesamiento» |
+| `remote_spend` | Ask for paid provider work (start, resume, retry); each request still needs the owner's approval | By the owner, per client: «Pedir procesamiento pago» |
 | `external_write` | Write outside EntropIA (Zotero, publication) | No |
 | `admin` | Change access, keys, maintenance | No |
 | `web` | Browse external sites with the Navegador (network egress) | No |
 
-`create_client` always grants exactly `["read"]`. A tool a client may not use
+`create_client` always grants exactly `["read"]`. The owner adds or withdraws
+`local_write` and `remote_spend` in Settings › Asistentes (`agent_client_set_grants`,
+`AgentAccess::set_grants`): granting asks for a confirmation, withdrawing applies
+at once, and `read` and every other scope stay as they are. The endpoint reads a
+client's scopes on every request, so a withdrawn scope fails on the next call. No
+tool, document or assistant can grant a scope. A tool a client may not use
 answers the tool error `forbidden_scope` **before** any archive is touched, so a
-refusal cannot leak whether a row exists. Changing a client's scopes is not
-exposed in the app in this tranche.
+refusal cannot leak whether a row exists.
 
 ## Tool catalogue
 
-Every tool is published with the annotations `readOnlyHint: true` and
-`openWorldHint: false`: it only reads the archive and reaches nothing outside this
-machine. Clients rely on this; Codex cancels a non-interactive call to a tool that
-does not declare itself read-only.
+Every reading tool is published with `readOnlyHint: true`; the three tools that
+change the archive (`processing_prepare`, `processing_start`,
+`processing_control`) declare `readOnlyHint: false` and `destructiveHint: false`.
+Every tool declares `openWorldHint: false`: nothing reaches outside this machine
+through the tool itself. Clients rely on this; Codex cancels a non-interactive
+call to a tool that does not declare itself read-only, so it asks before calling
+the three writing tools.
 
-Five tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+Eleven tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+The five archive tools:
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -310,7 +321,7 @@ Five tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
 | `items_get` | `itemId` | `{id, title, collectionId, metadata, createdAt, updatedAt, assets:[{id, type, path, sortIndex, size, pageNumber, createdAt}…]}` — metadata and file list, **never** extracted text |
 | `search_items` | `query`, `collectionId?`, `limit?` | `{records:[{id, title, collectionId, updatedAt, rank}], matches}` — FTS5/BM25, any-term matching, best first |
 
-Contract details that hold for all five:
+Contract details that hold for every tool:
 
 - **Strict arguments.** Every argument struct denies unknown fields and the
   published JSON Schema says so. A wrong type, an unknown field or an
@@ -331,6 +342,77 @@ Contract details that hold for all five:
   `open_archive_connection` + `PRAGMA query_only = ON`; the UI connection is
   never used, and blocking work runs on a blocking task.
 
+### Processing tools
+
+They drive the same persistent batch queue as the Procesamiento tab, through the
+same services (`processing/commands.rs`): a job an assistant prepares appears in
+the tab, and the tab's rules (validation, revision fencing, idempotency) apply
+unchanged. A "job" is a batch.
+
+| Tool | Scope | Arguments | Result |
+|---|---|---|---|
+| `jobs_list` | `read` | `states?`, `cursor?`, `limit?` | `{records:[{id, state, desiredState, operations, revision, priority, createdAt, updatedAt, activeUnits, failedUnits, succeededUnits}], nextCursor}`, newest first; system containers (library sync, repairs) are not listed |
+| `jobs_get` | `read` | `jobId`, `taskState?`, `taskKind?`, `tasksCursor?`, `tasksLimit?` | `{job:{id, state, desiredState, operations, revision, planningDone, membersTotal, progressDone, progressTotal, tasksByState, tasksByKind, collections, …}, tasks:[…], nextTasksCursor}` |
+| `processing_prepare` | `local_write` | `requestId`, `collectionIds?`, `itemIds?`, `operations` | `{jobId, created, files, operations, state, revision, costNote, nextStep}` — a **paused** draft; nothing is spent |
+| `processing_start` | `remote_spend` | `jobId`, `revision` | An approval (below) with `status: "pending"`; nothing starts until the owner approves |
+| `processing_control` | see below | `jobId`, `action`, `revision?`, `taskId?`, `failedOnly?` | `{jobId, action, outcome, job, approval}` |
+| `approvals_status` | `read` | `approvalId` | The approval, for the client that asked for it only |
+
+- **Prepare.** `operations` are `ocr`, `embeddings`, `ner`, `triples` and
+  `schema:<id>`; any other value is `invalid_argument` (never silently dropped).
+  The scope is collections, items or both; each file enters once.
+  `requestId` (1-128 visible characters) is stored as `agent:<client id>:<requestId>`:
+  sending it again with the same arguments returns the same job (`created: false`),
+  with other arguments it is `invalid_argument`, and two assistants never collide.
+  Pages and units are counted by background planning, so no cost is estimated at
+  this point (`costNote` says so); `jobs_get` reports `tasksByKind` once
+  `planningDone` is true. In Lite, embeddings, entities, triples and schemas need
+  the OpenRouter key, as in the tab: without it the answer is
+  `provider_not_configured`. Only the stored reference is checked; the secret is
+  never read.
+- **Control.** `pause` and `cancel` need `local_write` and apply at once to that
+  one job (never "all jobs"); they only withdraw demand — running units finish
+  their current step and confirmed results are kept. `resume` and `retry` spend
+  again, so they need `remote_spend` and `revision` and become an approval. Only a
+  job that has started can be resumed: a draft (`preparing`, `ready`) is started
+  with `processing_start`, and `resume` on it is `invalid_state`
+  (`outcome: "approval_pending"`); `retry` reopens one task (`taskId`) or every
+  failed one (`failedOnly: true`).
+
+### Approvals
+
+An assistant can never start, resume or retry paid work by itself. `processing_start`
+and the paying `processing_control` actions create an approval
+(`automation/approvals.rs`) bound to the client, the action, the job and the job
+`revision` the assistant named. The app is told (`agent-approvals:changed`), its
+window is unminimized and brought to the front, and a dialog shows who asks, the
+operations, the collections and the number of files. Only the owner's «Aprobar»
+runs the action, through the same services, fenced by that revision: if the job
+changed in the meantime nothing runs and the approval ends `failed`. The dialog's
+initial focus is «Rechazar», Escape rejects and a click outside does nothing.
+
+```json
+{"id": "apr_…", "clientId": "cl_…", "clientName": "Claude Code",
+ "action": {"kind": "start"}, "jobId": "batch-…", "revision": 3,
+ "operations": ["ocr"], "collections": ["Alfa"], "files": 12,
+ "status": "pending", "createdAt": 1767225600000, "expiresAt": 1767226200000,
+ "decidedAt": null, "failure": null}
+```
+
+`action` is `{"kind": "start"}`, `{"kind": "resume"}` or
+`{"kind": "retry", "task_id": …, "failed_only": …}`. `status` is `pending`,
+`approved` (approved and run), `failed` (approved, but the job had changed; nothing
+ran, `failure` says why), `rejected` or `expired`.
+
+- **Ten minutes, once.** An approval expires ten minutes after it was asked for and
+  can be answered once; two answers racing cannot both run.
+- **No duplicates.** The same client asking the same action on the same job at the
+  same revision while it is pending gets that approval back, not a second dialog.
+- **Memory only.** Approvals are not persisted: an app restart leaves nothing
+  approved, and the assistant has to ask again.
+- **Nothing the assistant sends approves.** The endpoint can only create approvals
+  and read the caller's own; the answer comes from the app (`agent_approval_decide`).
+
 ### Tool result and tool error shape
 
 A success is a normal MCP tool result with `structuredContent` and
@@ -340,10 +422,13 @@ A success is a normal MCP tool result with `structuredContent` and
 
 | `error` | When | Source |
 |---|---|---|
-| `forbidden_scope` | The client lacks `read` | `mcp.rs` (`guard`) |
-| `invalid_argument` | Unknown field, wrong type, bad cursor, `limit` outside 1-200, empty search text | `mcp.rs`, `read.rs` |
-| `not_found` | `items_get` names an id that does not exist in this archive | `read.rs` |
-| `unavailable` | The archive could not be opened or read right now | `read.rs`, `mcp.rs` |
+| `forbidden_scope` | The client lacks the scope the tool or action needs | `mcp.rs` (`guard`, `guard_scope`) |
+| `invalid_argument` | Unknown field, wrong type, bad cursor, `limit` outside 1-200, empty search text, unknown state, kind, operation or action, a `requestId` reused with other arguments, a missing `revision` for `resume`/`retry` | `mcp.rs`, `read.rs`, `jobs.rs` |
+| `not_found` | An item, job or approval id that does not exist here (or, for an approval, belongs to another client) | `read.rs`, `jobs.rs`, `mcp.rs` |
+| `revision_conflict` | The job is no longer at the `revision` the assistant named: read it again with `jobs_get` and retry | `jobs.rs` |
+| `invalid_state` | The job's state does not admit the action (start before planning finished, resume a job that is not paused, act on a finished one) | `jobs.rs` |
+| `provider_not_configured` | Lite, an operation that needs the OpenRouter key, and no key configured | `jobs.rs` |
+| `unavailable` | The archive could not be opened or read right now; a processing error the contract has no code for also lands here, with its detail kept in the app log | `read.rs`, `jobs.rs`, `mcp.rs` |
 | `internal_error` | A request reached a tool without an authenticated principal — a server bug, never something the caller caused | `mcp.rs` (`caller`) |
 
 ## Connector errors
@@ -391,8 +476,14 @@ the app's local cache directory (`automation/audit.rs`, wired in `lib.rs`).
 | `tool` | Tool name |
 | `status` | `ok` or `error` |
 | `errorCode` | Present only on `error`: the stable code above |
-| `objectIds` | Ids the call returned or touched |
+| `objectIds` | Ids the call returned or touched (for a paid request, the job id and the approval id) |
 | `queryChars` | Present only for `search_items`: the query **length** |
+| `decision` | Present only on `owner_decision` lines: `approved`, `failed` (approved, but the job had changed and nothing ran) or `rejected` |
+
+When the owner answers a request in the app, the trail gets one line with
+`tool: "owner_decision"`, attributed to the assistant that asked, with
+`objectIds: [approval id, job id]` and the `decision`. A request that expires
+unanswered leaves no `owner_decision` line.
 
 Never recorded: the query text, titles, paths, any other free text, tokens.
 Rotation: before appending, if the file is non-empty and the new line would pass
@@ -413,8 +504,10 @@ assistant do", not "who knocked on the port".
   every installer (see Status); code signing of that extra executable is not
   integrated for any binary.
 - The skill artifact and its declared protocol version (stage 6).
-- Write tools, jobs/approvals tools, progress notifications and any session
-  state (stages 3-5). `approvals_status`, `collections_create`,
-  `documents_import_prepare`, `processing_start`, `jobs_get`,
-  `search_passages`, `writing_apply_patch` and `writing_export` are names the
-  plan proposes; none of them exists in this code.
+- Corpus write tools, research, library and writing tools, progress
+  notifications and any session state (stages 3-5). `collections_create`,
+  `documents_import_prepare`, `search_passages`, `writing_apply_patch` and
+  `writing_export` are names the plan proposes; none of them exists in this code.
+- A USD estimate before a job starts: pages are only counted by planning (see
+  Processing tools).
+- Approvals that survive an app restart; today they are memory only on purpose.
