@@ -17,9 +17,10 @@ use rusqlite::Connection;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::approvals::{Approval, ApprovalAction, ApprovalRequest, ApprovalStore};
 use super::read::MAX_LIMIT;
 use crate::processing::commands::{
-    self as batches, BatchSnapshotDto, BatchSummaryDto, TaskQuery, TaskSummaryDto,
+    self as batches, BatchSnapshotDto, BatchSummaryDto, ControlRequest, TaskQuery, TaskSummaryDto,
 };
 use crate::processing::repository;
 
@@ -136,6 +137,21 @@ pub struct PrepareReport {
     /// What EntropIA knows about the cost at this point.
     pub cost_note: String,
     pub next_step: String,
+}
+
+/// `processing_control`'s payload: what happened to the job.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlReport {
+    pub job_id: String,
+    pub action: String,
+    /// `done` when the action already applied (pause, cancel);
+    /// `approval_pending` when it waits for the person (resume, retry).
+    pub outcome: String,
+    /// The job after the action, when it applied.
+    pub job: Option<BatchSnapshotDto>,
+    /// The request waiting for the person, when the action spends.
+    pub approval: Option<Approval>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -286,6 +302,86 @@ impl JobsArchive {
             cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
             next_step: "Esperá a que jobs_get muestre state \"ready\"; después pedí empezar con processing_start, que la persona aprueba en EntropIA.".to_string(),
         })
+    }
+
+    /// Ask the owner to approve paid work on a job. The job must be at the
+    /// revision the assistant names and in a state the action admits; the
+    /// approval is bound to both (D3).
+    pub fn request_approval(
+        &self,
+        approvals: &ApprovalStore,
+        client_id: &str,
+        client_name: &str,
+        action: ApprovalAction,
+        job_id: &str,
+        revision: i64,
+    ) -> Result<Approval, JobsError> {
+        let conn = self.read_connection()?;
+        let job = batches::batch_snapshot(&conn, job_id).map_err(from_service)?;
+        if job.revision != revision {
+            return Err(JobsError::new(
+                ERROR_REVISION_CONFLICT,
+                format!(
+                    "El trabajo está en la revisión {}, no en la {revision}: volvé a leerlo con jobs_get y pedí de nuevo.",
+                    job.revision
+                ),
+            ));
+        }
+        let terminal = matches!(
+            job.state.as_str(),
+            "completed" | "completed_with_errors" | "cancelled" | "cancelling"
+        );
+        let admitted = match action {
+            ApprovalAction::Start => job.state == "ready",
+            ApprovalAction::Resume => job.desired_state == "pause" && !terminal,
+            ApprovalAction::Retry { .. } => {
+                !matches!(job.state.as_str(), "cancelled" | "cancelling")
+            }
+        };
+        if !admitted {
+            let what = match action {
+                ApprovalAction::Start => {
+                    "empezar (tiene que estar en \"ready\", con la planificación terminada)"
+                }
+                ApprovalAction::Resume => "reanudar (tiene que estar pausado)",
+                ApprovalAction::Retry { .. } => "reintentar (fue cancelado)",
+            };
+            return Err(JobsError::new(
+                ERROR_INVALID_STATE,
+                format!("El trabajo está en \"{}\" y no se puede {what}.", job.state),
+            ));
+        }
+        Ok(approvals.request(ApprovalRequest {
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            action,
+            job_id: job.id,
+            revision: job.revision,
+            operations: job.operations,
+            collections: job.collections.into_iter().map(|c| c.name).collect(),
+            files: job.members_total,
+        }))
+    }
+
+    /// Pause or cancel a job now. Both only withdraw demand: running units
+    /// finish their current checkpoint and confirmed results are kept.
+    pub fn control_now(
+        &self,
+        job_id: &str,
+        action: &str,
+        revision: Option<i64>,
+    ) -> Result<BatchSnapshotDto, JobsError> {
+        let conn = self.write_connection()?;
+        let response = batches::control_batches(
+            &conn,
+            &ControlRequest {
+                batch_id: Some(job_id.to_string()),
+                action: action.to_string(),
+                expected_revision: revision,
+            },
+        )
+        .map_err(from_service)?;
+        response.snapshot.ok_or_else(JobsError::unavailable)
     }
 
     /// One page of the person's batches, newest first. System containers

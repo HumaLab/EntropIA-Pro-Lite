@@ -184,6 +184,7 @@ impl AgentEndpointState {
                     access.clone(),
                     self.db_path.clone(),
                     self.cache_dir.clone(),
+                    self.approvals.clone(),
                 )?);
                 Ok(())
             }
@@ -224,6 +225,7 @@ fn start(
     access: Arc<AgentAccess>,
     db_path: PathBuf,
     cache_dir: PathBuf,
+    approvals: Arc<ApprovalStore>,
 ) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .map_err(|e| format!("could not bind the assistant endpoint on {LOOPBACK}: {e}"))?;
@@ -254,6 +256,7 @@ fn start(
         cancel.clone(),
         db_path,
         cache_dir,
+        approvals,
     );
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
@@ -371,6 +374,7 @@ impl GuardedEndpoint {
         cancel: CancellationToken,
         db_path: PathBuf,
         cache_dir: PathBuf,
+        approvals: Arc<ApprovalStore>,
     ) -> Self {
         let hosts = vec![format!("{LOOPBACK}:{port}"), format!("localhost:{port}")];
         let config = StreamableHttpServerConfig::default()
@@ -386,7 +390,13 @@ impl GuardedEndpoint {
             inner: StreamableHttpService::new(
                 // One server per request: the tools read the archive from the
                 // path it was built with and never touch the UI connection.
-                move || Ok(AgentServer::new(db_path.clone(), cache_dir.clone())),
+                move || {
+                    Ok(AgentServer::new(
+                        db_path.clone(),
+                        cache_dir.clone(),
+                        approvals.clone(),
+                    ))
+                },
                 Arc::new(NeverSessionManager::default()),
                 config,
             ),
@@ -886,13 +896,16 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "approvals_status",
                 "collections_list",
                 "entropia_status",
                 "items_get",
                 "items_list",
                 "jobs_get",
                 "jobs_list",
+                "processing_control",
                 "processing_prepare",
+                "processing_start",
                 "search_items"
             ]
         );
