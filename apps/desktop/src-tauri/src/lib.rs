@@ -1056,6 +1056,24 @@ pub fn run() {
                         cache_dir.clone(),
                     ),
                 );
+                // A request from an assistant reaches the person at once: the
+                // Asistentes dialog re-reads on the event, and a new request
+                // brings the window forward even when it was minimized.
+                use tauri::Emitter as _;
+                let approvals_handle = app.handle().clone();
+                agent_endpoint
+                    .approvals()
+                    .set_notifier(std::sync::Arc::new(move |change| {
+                        let _ = approvals_handle
+                            .emit(automation::approvals::APPROVALS_CHANGED_EVENT, ());
+                        if change == automation::approvals::ApprovalChange::Requested {
+                            if let Some(main) = approvals_handle.get_webview_window("main") {
+                                let _ = main.unminimize();
+                                let _ = main.show();
+                                let _ = main.set_focus();
+                            }
+                        }
+                    }));
                 app.manage(agent_access.clone());
                 app.manage(agent_endpoint.clone());
                 tauri::async_runtime::spawn(async move {
@@ -1677,6 +1695,8 @@ pub fn run() {
             automation::commands::agent_client_create,
             automation::commands::agent_client_revoke,
             automation::commands::agent_client_set_grants,
+            automation::commands::agent_approvals_pending,
+            automation::commands::agent_approval_decide,
             automation::commands::agent_connector_location,
         ])
         .build(tauri::generate_context!())

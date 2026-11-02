@@ -233,6 +233,8 @@
     "allow-agent-client-create",
     "allow-agent-client-revoke",
     "allow-agent-client-set-grants",
+    "allow-agent-approvals-pending",
+    "allow-agent-approval-decide",
     "allow-agent-connector-location",
     "allow-navegador-open",
     "allow-navegador-navigate",

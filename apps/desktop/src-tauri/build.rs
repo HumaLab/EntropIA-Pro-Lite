@@ -273,6 +273,8 @@ const APP_COMMANDS: &[&str] = &[
     "agent_client_create",
     "agent_client_revoke",
     "agent_client_set_grants",
+    "agent_approvals_pending",
+    "agent_approval_decide",
     // Where the bundled connector is, for the recipes the panel copies (D15).
     "agent_connector_location",
 ];

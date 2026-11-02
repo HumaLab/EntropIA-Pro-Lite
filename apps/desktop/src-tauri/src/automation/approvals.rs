@@ -1,0 +1,546 @@
+//! The owner's approval of paid work an assistant asked for (D3, S4, S5).
+//!
+//! An assistant can never start, resume or retry paid processing by itself. Its
+//! request becomes a pending approval here, bound to who asked (client id),
+//! what they asked (the action) and exactly which state of which job they
+//! looked at (job id and revision). The app shows it; only the person's answer
+//! in the app executes it, through [`ApprovalStore::decide`] and the batch
+//! services, with that same revision as the fence: if the job changed in the
+//! meantime the start refuses instead of running something else.
+//!
+//! Approvals are single use and expire ten minutes after they were asked for.
+//! They live in memory only, so an app restart leaves nothing approved. Nothing
+//! an assistant sends can mark an approval approved: the endpoint can only
+//! create them and read the caller's own.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use rusqlite::Connection;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::processing::commands::{self as batches, ControlRequest};
+
+/// How long a request waits for the person (D13).
+pub const APPROVAL_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// The event the app listens to: re-read the pending approvals.
+pub const APPROVALS_CHANGED_EVENT: &str = "agent-approvals:changed";
+
+/// What changed, so the app knows when to come to the front.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalChange {
+    /// An assistant asked: show the request and bring the window forward.
+    Requested,
+    /// The person answered.
+    Decided,
+    /// A request ran out of time.
+    Expired,
+}
+
+/// What the assistant asked to do with a job.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ApprovalAction {
+    /// Start a prepared draft.
+    Start,
+    /// Resume a paused job.
+    Resume,
+    /// Reopen failed work: one task, or every failed task.
+    Retry {
+        task_id: Option<String>,
+        failed_only: bool,
+    },
+}
+
+/// Where an approval stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    /// Waiting for the person.
+    Pending,
+    /// The person approved and the action ran.
+    Approved,
+    /// The person approved but the action could not run (the job changed).
+    Failed,
+    /// The person said no.
+    Rejected,
+    /// Nobody answered in time.
+    Expired,
+}
+
+/// One approval as both the app and the assistant see it. It carries ids,
+/// names and counts only: never a token, never document content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Approval {
+    pub id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub action: ApprovalAction,
+    pub job_id: String,
+    /// The job revision the assistant looked at; the action runs only at it.
+    pub revision: i64,
+    pub operations: Vec<String>,
+    /// Collection names in the job's scope, for the dialog.
+    pub collections: Vec<String>,
+    /// Files in the job's scope.
+    pub files: i64,
+    pub status: ApprovalStatus,
+    /// Unix milliseconds.
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub decided_at: Option<i64>,
+    /// Why an approved action failed, in one sentence.
+    pub failure: Option<String>,
+}
+
+/// What the endpoint knows when an assistant asks.
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub client_id: String,
+    pub client_name: String,
+    pub action: ApprovalAction,
+    pub job_id: String,
+    pub revision: i64,
+    pub operations: Vec<String>,
+    pub collections: Vec<String>,
+    pub files: i64,
+}
+
+/// Called after every change, so the app can show the request and come to the
+/// front. Never called with the store's lock held.
+pub type ApprovalNotifier = Arc<dyn Fn(ApprovalChange) + Send + Sync>;
+
+/// The pending and recent approvals of this app run.
+pub struct ApprovalStore {
+    approvals: Mutex<HashMap<String, Approval>>,
+    notifier: Mutex<Option<ApprovalNotifier>>,
+    now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+}
+
+impl Default for ApprovalStore {
+    fn default() -> Self {
+        Self::with_clock(Arc::new(crate::processing::repository::now_ms))
+    }
+}
+
+impl ApprovalStore {
+    /// A store reading time from `now_ms`, so tests can move the clock.
+    pub fn with_clock(now_ms: Arc<dyn Fn() -> i64 + Send + Sync>) -> Self {
+        Self {
+            approvals: Mutex::new(HashMap::new()),
+            notifier: Mutex::new(None),
+            now_ms,
+        }
+    }
+
+    /// Install what runs after every change (the app's event and window focus).
+    pub fn set_notifier(&self, notifier: ApprovalNotifier) {
+        if let Ok(mut slot) = self.notifier.lock() {
+            *slot = Some(notifier);
+        }
+    }
+
+    fn notify(&self, change: ApprovalChange) {
+        let notifier = self.notifier.lock().ok().and_then(|slot| slot.clone());
+        if let Some(notifier) = notifier {
+            notifier(change);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Approval>> {
+        // A poisoned lock only means a panic elsewhere; the map is still valid.
+        self.approvals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Mark every pending approval past its deadline as expired.
+    fn expire(&self, approvals: &mut HashMap<String, Approval>, now: i64) -> bool {
+        let mut changed = false;
+        for approval in approvals.values_mut() {
+            if approval.status == ApprovalStatus::Pending && now >= approval.expires_at {
+                approval.status = ApprovalStatus::Expired;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Ask the person. The same client asking the same action on the same job
+    /// at the same revision while a request is pending gets that request back,
+    /// so a retrying assistant opens one dialog, not many.
+    pub fn request(&self, request: ApprovalRequest) -> Approval {
+        let now = (self.now_ms)();
+        let approval = {
+            let mut approvals = self.lock();
+            self.expire(&mut approvals, now);
+            let existing = approvals.values().find(|approval| {
+                approval.status == ApprovalStatus::Pending
+                    && approval.client_id == request.client_id
+                    && approval.job_id == request.job_id
+                    && approval.revision == request.revision
+                    && approval.action == request.action
+            });
+            if let Some(existing) = existing {
+                return existing.clone();
+            }
+            let approval = Approval {
+                id: format!("apr_{}", uuid::Uuid::new_v4().simple()),
+                client_id: request.client_id,
+                client_name: request.client_name,
+                action: request.action,
+                job_id: request.job_id,
+                revision: request.revision,
+                operations: request.operations,
+                collections: request.collections,
+                files: request.files,
+                status: ApprovalStatus::Pending,
+                created_at: now,
+                expires_at: now + APPROVAL_TTL_MS,
+                decided_at: None,
+                failure: None,
+            };
+            approvals.insert(approval.id.clone(), approval.clone());
+            approval
+        };
+        self.notify(ApprovalChange::Requested);
+        approval
+    }
+
+    /// One approval, for the client that asked for it only: another client's
+    /// id reads as unknown.
+    pub fn get_for_client(&self, client_id: &str, approval_id: &str) -> Option<Approval> {
+        let now = (self.now_ms)();
+        let mut approvals = self.lock();
+        self.expire(&mut approvals, now);
+        approvals
+            .get(approval_id)
+            .filter(|approval| approval.client_id == client_id)
+            .cloned()
+    }
+
+    /// What the app's dialog lists: the requests still waiting, oldest first.
+    pub fn pending(&self) -> Vec<Approval> {
+        let now = (self.now_ms)();
+        let changed;
+        let mut pending: Vec<Approval> = {
+            let mut approvals = self.lock();
+            changed = self.expire(&mut approvals, now);
+            approvals
+                .values()
+                .filter(|approval| approval.status == ApprovalStatus::Pending)
+                .cloned()
+                .collect()
+        };
+        if changed {
+            self.notify(ApprovalChange::Expired);
+        }
+        pending.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        pending
+    }
+
+    /// The person's answer. Approving runs the action once, fenced by the
+    /// revision the assistant saw; rejecting runs nothing. An approval that is
+    /// unknown, already answered or expired is refused and nothing runs.
+    pub fn decide(
+        &self,
+        conn: &Connection,
+        approval_id: &str,
+        approve: bool,
+    ) -> Result<Approval, String> {
+        let now = (self.now_ms)();
+        // Claim it under the lock so two answers can never both execute.
+        let claimed = {
+            let mut approvals = self.lock();
+            self.expire(&mut approvals, now);
+            let approval = approvals
+                .get_mut(approval_id)
+                .ok_or_else(|| format!("unknown_approval: no request {approval_id}"))?;
+            match approval.status {
+                ApprovalStatus::Pending => {}
+                ApprovalStatus::Expired => {
+                    return Err(format!(
+                        "approval_expired: request {approval_id} expired before it was answered"
+                    ))
+                }
+                _ => {
+                    return Err(format!(
+                        "approval_used: request {approval_id} was already answered"
+                    ))
+                }
+            }
+            approval.decided_at = Some(now);
+            if !approve {
+                approval.status = ApprovalStatus::Rejected;
+                None
+            } else {
+                approval.status = ApprovalStatus::Approved;
+                Some(approval.clone())
+            }
+        };
+        if let Some(approval) = claimed {
+            if let Err(error) = execute(conn, &approval) {
+                let mut approvals = self.lock();
+                if let Some(stored) = approvals.get_mut(approval_id) {
+                    stored.status = ApprovalStatus::Failed;
+                    stored.failure = Some(failure_sentence(&error));
+                }
+            }
+        }
+        self.notify(ApprovalChange::Decided);
+        self.lock()
+            .get(approval_id)
+            .cloned()
+            .ok_or_else(|| format!("unknown_approval: no request {approval_id}"))
+    }
+}
+
+/// Run an approved action with the revision it was approved at.
+fn execute(conn: &Connection, approval: &Approval) -> Result<(), String> {
+    match &approval.action {
+        ApprovalAction::Start => {
+            batches::start_batch(conn, &approval.job_id, Some(approval.revision)).map(|_| ())
+        }
+        ApprovalAction::Resume => batches::control_batches(
+            conn,
+            &ControlRequest {
+                batch_id: Some(approval.job_id.clone()),
+                action: "resume".to_string(),
+                expected_revision: Some(approval.revision),
+            },
+        )
+        .map(|_| ()),
+        ApprovalAction::Retry {
+            task_id,
+            failed_only,
+        } => {
+            fence(conn, &approval.job_id, approval.revision)?;
+            batches::retry_batch(
+                conn,
+                // The approval id is the idempotency key: one approval, one cycle.
+                &format!("agent:{}:{}", approval.client_id, approval.id),
+                &approval.job_id,
+                task_id.as_deref(),
+                *failed_only,
+            )
+            .map(|_| ())
+        }
+    }
+}
+
+/// Retry has no revision fence of its own; check the approved one first.
+fn fence(conn: &Connection, job_id: &str, revision: i64) -> Result<(), String> {
+    let current = batches::batch_snapshot(conn, job_id)?.revision;
+    if current != revision {
+        return Err(format!(
+            "revision_conflict: batch {job_id} is at revision {current}, not {revision}"
+        ));
+    }
+    Ok(())
+}
+
+/// The sentence the dialog and the assistant show for a failed approved action.
+fn failure_sentence(error: &str) -> String {
+    if error.starts_with("revision_conflict:") {
+        "El trabajo cambió después del pedido; no se ejecutó nada. El asistente tiene que volver a pedirlo.".to_string()
+    } else if error.starts_with("invalid_transition:") {
+        "El trabajo ya no está en un estado que admita esta acción; no se ejecutó nada.".to_string()
+    } else {
+        log::warn!(target: "automation", "an approved agent action failed: {error}");
+        "No se pudo ejecutar la acción aprobada; no se ejecutó nada.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::automation::test_archive::{seeded_archive, ALFA};
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        conn: Connection,
+        clock: Arc<AtomicI64>,
+        store: ApprovalStore,
+        notified: Arc<AtomicUsize>,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = batches::open_ready(&seeded_archive(dir.path())).unwrap();
+        let clock = Arc::new(AtomicI64::new(1_000_000));
+        let reader = clock.clone();
+        let store = ApprovalStore::with_clock(Arc::new(move || reader.load(Ordering::SeqCst)));
+        let notified = Arc::new(AtomicUsize::new(0));
+        let counter = notified.clone();
+        store.set_notifier(Arc::new(move |change| {
+            if change == ApprovalChange::Requested {
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+        Fixture {
+            _dir: dir,
+            conn,
+            clock,
+            store,
+            notified,
+        }
+    }
+
+    /// A draft planning has finished, the state an assistant asks to start.
+    fn ready_job(conn: &Connection) -> (String, i64) {
+        let prepared = batches::prepare_batch(
+            conn,
+            "req-1",
+            &[ALFA.to_string()],
+            &[],
+            &["ocr".to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE processing_batches SET state = 'ready', planning_done = 1 WHERE id = ?1",
+            [&prepared.batch_id],
+        )
+        .unwrap();
+        let revision = batches::batch_snapshot(conn, &prepared.batch_id)
+            .unwrap()
+            .revision;
+        (prepared.batch_id, revision)
+    }
+
+    fn start_request(client: &str, job: &str, revision: i64) -> ApprovalRequest {
+        ApprovalRequest {
+            client_id: client.to_string(),
+            client_name: "Claude Code".to_string(),
+            action: ApprovalAction::Start,
+            job_id: job.to_string(),
+            revision,
+            operations: vec!["ocr".to_string()],
+            collections: vec!["Alfa".to_string()],
+            files: 2,
+        }
+    }
+
+    fn desired_state(conn: &Connection, job: &str) -> String {
+        batches::batch_snapshot(conn, job).unwrap().desired_state
+    }
+
+    #[test]
+    fn a_request_waits_and_runs_nothing_until_the_person_approves() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        assert_eq!(approval.status, ApprovalStatus::Pending);
+        assert_eq!(approval.expires_at, approval.created_at + APPROVAL_TTL_MS);
+        assert_eq!(f.store.pending(), vec![approval.clone()]);
+        assert_eq!(desired_state(&f.conn, &job), "pause", "nothing started yet");
+        assert_eq!(
+            f.notified.load(Ordering::SeqCst),
+            1,
+            "the app was told once"
+        );
+
+        let decided = f.store.decide(&f.conn, &approval.id, true).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        assert_eq!(desired_state(&f.conn, &job), "run");
+        assert!(f.store.pending().is_empty());
+    }
+
+    #[test]
+    fn an_approval_runs_once() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        f.store.decide(&f.conn, &approval.id, true).unwrap();
+        let again = f.store.decide(&f.conn, &approval.id, true).unwrap_err();
+        assert!(again.starts_with("approval_used:"), "{again}");
+    }
+
+    #[test]
+    fn a_rejection_runs_nothing() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        let decided = f.store.decide(&f.conn, &approval.id, false).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Rejected);
+        assert_eq!(desired_state(&f.conn, &job), "pause");
+    }
+
+    #[test]
+    fn an_unanswered_request_expires_after_ten_minutes_and_cannot_be_approved() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        f.clock.fetch_add(APPROVAL_TTL_MS - 1, Ordering::SeqCst);
+        assert_eq!(f.store.pending().len(), 1, "still waiting one ms before");
+        f.clock.fetch_add(1, Ordering::SeqCst);
+        assert!(f.store.pending().is_empty());
+        let late = f.store.decide(&f.conn, &approval.id, true).unwrap_err();
+        assert!(late.starts_with("approval_expired:"), "{late}");
+        assert_eq!(desired_state(&f.conn, &job), "pause");
+        assert_eq!(
+            f.store.get_for_client("cl_a", &approval.id).unwrap().status,
+            ApprovalStatus::Expired
+        );
+    }
+
+    #[test]
+    fn a_job_that_changed_after_the_request_is_not_started() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        // The person changes the job's priority in the tab: a new revision.
+        batches::set_priority(
+            &f.conn,
+            &batches::SetPriorityRequest {
+                batch_id: job.clone(),
+                priority: 1,
+                expected_revision: None,
+            },
+        )
+        .unwrap();
+        let decided = f.store.decide(&f.conn, &approval.id, true).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Failed);
+        assert!(decided.failure.unwrap().contains("cambió"));
+        assert_eq!(desired_state(&f.conn, &job), "pause");
+    }
+
+    #[test]
+    fn the_same_request_returns_the_pending_approval_instead_of_a_second_one() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let first = f.store.request(start_request("cl_a", &job, revision));
+        let again = f.store.request(start_request("cl_a", &job, revision));
+        assert_eq!(first.id, again.id);
+        assert_eq!(f.store.pending().len(), 1);
+        assert_eq!(
+            f.notified.load(Ordering::SeqCst),
+            1,
+            "a repeated request does not bring the window up again"
+        );
+        let other_client = f.store.request(start_request("cl_b", &job, revision));
+        assert_ne!(
+            other_client.id, first.id,
+            "another assistant asks on its own"
+        );
+    }
+
+    #[test]
+    fn a_client_only_reads_its_own_approvals() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        assert!(f.store.get_for_client("cl_a", &approval.id).is_some());
+        assert!(f.store.get_for_client("cl_b", &approval.id).is_none());
+    }
+
+    #[test]
+    fn an_unknown_approval_is_refused() {
+        let f = fixture();
+        let error = f.store.decide(&f.conn, "apr_missing", true).unwrap_err();
+        assert_eq!(error, "unknown_approval: no request apr_missing");
+    }
+}

@@ -2,6 +2,7 @@
 //! Pi) operate this installed app through MCP. See `integrations/agents/`.
 //!
 //! - [`access`] — paired clients, their tokens and scopes.
+//! - [`approvals`] — the owner's approval of paid work an assistant asked for.
 //! - [`audit`] — the local trail of what an assistant did (S9).
 //! - [`commands`] — the Tauri commands the Asistentes panel calls (D11).
 //! - [`connector`] — where the bundled assistant connector is installed (D15).
@@ -13,6 +14,7 @@
 //! - [`server`] — the loopback HTTP endpoint, its request guard and lifecycle.
 
 pub mod access;
+pub mod approvals;
 pub mod audit;
 pub mod commands;
 pub mod connector;

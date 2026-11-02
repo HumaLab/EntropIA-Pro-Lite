@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 use tower_service::Service;
 
 use crate::automation::access::{self, AgentAccess};
+use crate::automation::approvals::ApprovalStore;
 use crate::automation::mcp::AgentServer;
 use crate::automation::proof;
 
@@ -139,6 +140,9 @@ pub struct AgentEndpointState {
     /// The cache directory; the audit trail lives under its `logs/` (S9).
     cache_dir: PathBuf,
     running: Mutex<Option<Running>>,
+    /// Paid work assistants asked for, waiting for the owner (D3). Outlives
+    /// endpoint restarts within one app run; an app restart clears it.
+    approvals: Arc<ApprovalStore>,
 }
 
 impl AgentEndpointState {
@@ -152,7 +156,13 @@ impl AgentEndpointState {
             db_path: db_path.into(),
             cache_dir: cache_dir.into(),
             running: Mutex::new(None),
+            approvals: Arc::new(ApprovalStore::default()),
         }
+    }
+
+    /// The approvals store the endpoint fills and the app answers.
+    pub fn approvals(&self) -> Arc<ApprovalStore> {
+        self.approvals.clone()
     }
 
     /// Start or stop so the endpoint reflects the access state. Async only so
