@@ -101,6 +101,21 @@ export type AgentApprovalAction =
       text_hash: string
       new_text_hash: string
     }
+  | { kind: 'import_files'; collection_id: string; files: number; plan_hash: string }
+
+/** One file of an import request: name, kind and size, never its path. */
+export interface AgentImportFile {
+  name: string
+  kind: 'image' | 'pdf' | 'audio'
+  sizeBytes: number
+}
+
+/** What an approved import did, file by file. */
+export interface AgentImportResult {
+  collectionId: string
+  imported: Array<{ name: string; itemId: string; title: string }>
+  skipped: Array<{ name: string; reason: string }>
+}
 
 export type AgentApprovalStatus = 'pending' | 'approved' | 'failed' | 'rejected' | 'expired'
 
@@ -127,6 +142,10 @@ export interface AgentApproval {
   failure: string | null
   /** The start of a proposed text (`replace_text`). */
   preview: string | null
+  /** The files an import would bring in (`import_files`). */
+  importFiles: AgentImportFile[] | null
+  /** What an approved import did. */
+  importResult: AgentImportResult | null
 }
 
 /** The event the backend emits whenever the approvals change. */

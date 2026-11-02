@@ -59,9 +59,9 @@
   > = {
     localWrite: {
       label: 'Preparar procesamiento y editar el corpus',
-      meta: 'Arma, pausa y cancela lotes; crea y renombra colecciones; edita títulos y metadatos. No gasta.',
+      meta: 'Arma, pausa y cancela lotes; crea y renombra colecciones; edita títulos y metadatos; propone importaciones. No gasta.',
       confirm: (name) =>
-        `${name} va a poder armar lotes de procesamiento y pausarlos o cancelarlos, crear y renombrar colecciones, y editar títulos y metadatos de tus ítems. Nada de esto gasta: empezar a procesar sigue pidiendo tu aprobación.`,
+        `${name} va a poder armar lotes de procesamiento y pausarlos o cancelarlos, crear y renombrar colecciones, editar títulos y metadatos de tus ítems, y proponer importar archivos de tus carpetas de entrada (cada importación la aprobás vos). Nada de esto gasta: empezar a procesar sigue pidiendo tu aprobación.`,
     },
     remoteSpend: {
       label: 'Pedir procesamiento pago',

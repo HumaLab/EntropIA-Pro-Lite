@@ -146,6 +146,54 @@ pub struct TextReplacement {
     pub text: String,
 }
 
+/// Most files one import request may list.
+pub const MAX_IMPORT_FILES: usize = 200;
+
+/// Most files `import_sources_list` shows per folder.
+pub const MAX_LISTED_FILES: usize = 500;
+
+/// One importable file, as the assistant sees it.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSummary {
+    pub name: String,
+    pub kind: crate::corpus::ingest::FileKind,
+    pub size_bytes: u64,
+    pub modified_at: Option<i64>,
+}
+
+/// One enabled folder and its importable files.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceFolder {
+    pub path: String,
+    pub files: Vec<SourceSummary>,
+    pub truncated: bool,
+}
+
+/// `import_sources_list`'s payload.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSources {
+    pub folders: Vec<SourceFolder>,
+}
+
+/// What an assistant asks to import.
+pub struct ImportRequest {
+    pub collection_id: String,
+    pub folder: String,
+    pub files: Vec<String>,
+}
+
+/// The data directory of the archive at `db_path`: it holds the database and
+/// `assets/`.
+fn data_dir_of(db_path: &std::path::Path) -> Result<PathBuf, JobsError> {
+    db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(JobsError::unavailable)
+}
+
 /// Characters of a proposed text the owner's dialog shows.
 const PREVIEW_CHARS: usize = 400;
 
@@ -352,6 +400,140 @@ impl CorpusArchive {
             files: 1,
             preview: Some(text.chars().take(PREVIEW_CHARS).collect()),
             text: Some(text.to_string()),
+            import_plan: None,
+        }))
+    }
+
+    /// The supported files directly inside each enabled folder.
+    pub fn import_sources(&self, folders: &[PathBuf]) -> Result<ImportSources, JobsError> {
+        let data_dir = data_dir_of(&self.db_path)?;
+        let mut listed = Vec::with_capacity(folders.len());
+        for folder in folders {
+            match crate::corpus::ingest::list_folder(folder, folders, &data_dir, MAX_LISTED_FILES) {
+                Ok(listing) => listed.push(SourceFolder {
+                    path: folder.to_string_lossy().to_string(),
+                    files: listing
+                        .files
+                        .into_iter()
+                        .map(|file| SourceSummary {
+                            name: file.name,
+                            kind: file.kind,
+                            size_bytes: file.size_bytes,
+                            modified_at: file.modified_at,
+                        })
+                        .collect(),
+                    truncated: listing.truncated,
+                }),
+                // A folder that vanished or cannot be read is left out.
+                Err(error) => {
+                    log::warn!(target: "automation", "an import folder could not be listed: {error}")
+                }
+            }
+        }
+        Ok(ImportSources { folders: listed })
+    }
+
+    /// Ask the owner to import files from one enabled folder into a
+    /// collection. Every file is checked first; one that cannot be imported
+    /// refuses the whole request, so the dialog only ever lists real files.
+    pub fn request_import(
+        &self,
+        approvals: &ApprovalStore,
+        client_id: &str,
+        client_name: &str,
+        folders: &[PathBuf],
+        request: &ImportRequest,
+    ) -> Result<Approval, JobsError> {
+        use crate::corpus::ingest::{check_source, SourceLimits};
+        if request.files.is_empty() || request.files.len() > MAX_IMPORT_FILES {
+            return Err(refusal(
+                "invalid_argument",
+                format!("`files` tiene que nombrar entre 1 y {MAX_IMPORT_FILES} archivos."),
+            ));
+        }
+        let conn = self.connection()?;
+        let collection: Option<String> = conn
+            .query_row(
+                "SELECT name FROM collections WHERE id = ?1",
+                params![request.collection_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| JobsError::unavailable())?;
+        let collection = collection.ok_or_else(|| {
+            refusal(
+                "not_found",
+                format!(
+                    "No existe una colección con el id «{}».",
+                    request.collection_id
+                ),
+            )
+        })?;
+        let folder = std::fs::canonicalize(&request.folder)
+            .ok()
+            .filter(|real| folders.contains(real))
+            .ok_or_else(|| {
+                refusal(
+                    "invalid_argument",
+                    "Esa carpeta no está habilitada para importar: usá una de las que lista import_sources_list.",
+                )
+            })?;
+        let data_dir = data_dir_of(&self.db_path)?;
+        let mut names = request.files.clone();
+        names.sort();
+        names.dedup();
+        let mut plan = Vec::with_capacity(names.len());
+        for name in &names {
+            let plain = !name.is_empty()
+                && name != "."
+                && name != ".."
+                && !name.contains('/')
+                && !name.contains('\\');
+            if !plain {
+                return Err(refusal(
+                    "invalid_argument",
+                    format!("«{name}» no es un nombre de archivo de la carpeta (sin subcarpetas ni rutas)."),
+                ));
+            }
+            let source = check_source(
+                &folder.join(name).to_string_lossy(),
+                folders,
+                &data_dir,
+                &SourceLimits::default(),
+            )
+            .map_err(|reason| {
+                let code = reason.split(':').next().unwrap_or("invalid");
+                refusal(
+                    "invalid_argument",
+                    format!("«{name}» no se puede importar ({code}): revisá la lista de import_sources_list."),
+                )
+            })?;
+            plan.push(source);
+        }
+        let mut digest = Sha256::new();
+        digest.update(request.collection_id.as_bytes());
+        for file in &plan {
+            digest.update(b"\0");
+            digest.update(file.path.to_string_lossy().as_bytes());
+            digest.update(format!("|{}|{:?}", file.size_bytes, file.modified_at).as_bytes());
+        }
+        let plan_hash = hex::encode(digest.finalize());
+        Ok(approvals.request(ApprovalRequest {
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            action: ApprovalAction::ImportFiles {
+                collection_id: request.collection_id.clone(),
+                files: plan.len(),
+                plan_hash,
+            },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["import_files".to_string()],
+            collections: vec![collection],
+            files: plan.len() as i64,
+            preview: None,
+            text: None,
+            import_plan: Some(plan),
         }))
     }
 

@@ -71,8 +71,8 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | One item: metadata and file list | `automation/read.rs` (`item`) | `items_get` | read | Both | implemented |
 | Search titles, metadata and indexed text | `automation/read.rs` (`search`), `nlp::commands::fts_search`, `packages/store/src/repos/fts.repo.ts`, `apps/desktop/src/lib/collection-search-plan.ts` | `search_items` | read | Both | implemented |
 | Edit item metadata / custom fields | `corpus::update_item` (the app's views use it through `lib/corpus.ts`) | `items_update` | local_write | Both | implemented |
-| Import files (picker or drag and drop) | `apps/desktop/src/lib/file-import.ts`, `collection-import.ts`, Tauri dialog/fs plugins | `documents_import_prepare`, `documents_import_start` | local_write | Both | planned (stage 3) |
-| Import deduplication | same modules (`file-import.ts`) | folded into `documents_import_prepare` (returns the impact) | local_write | Both | planned (stage 3) |
+| Import files (picker or drag and drop) | agent: `corpus::ingest` from owner-enabled folders; app: `lib/file-import.ts`, `collection-import.ts`, Tauri dialog/fs plugins | `import_sources_list`, `documents_import` (owner approval with the file list) | local_write + owner approval | Both | implemented for the agent; the app's own import moves to `corpus::ingest` later |
+| Import deduplication | `corpus::ingest::find_duplicate` (the app's rule, inside the import transaction); app: `item.repo.ts` `findImportedFromSource` | part of `documents_import` (a duplicate is skipped and reported) | local_write | Both | implemented |
 | Delete a document, page or asset | `packages/store/src/repos/asset.repo.ts`, `image_edit::delete_asset_files`, `navegador_delete_source` | `documents_delete` (confirmation required) | local_write | Both | planned (stage 3) |
 | Export a collection as JSON | `apps/desktop/src/lib/export.ts` | `collections_export` | read | Both | planned (stage 5) |
 | Asset integrity check | `asset_integrity::assets_check_integrity` | `archive_check` | admin | Both | planned (stage 5) |

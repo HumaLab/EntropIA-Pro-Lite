@@ -359,7 +359,7 @@ impl JobsArchive {
                 !matches!(job.state.as_str(), "cancelled" | "cancelling")
             }
             // Not a job action: replacing a page text has its own tool.
-            ApprovalAction::ReplaceText { .. } => false,
+            ApprovalAction::ReplaceText { .. } | ApprovalAction::ImportFiles { .. } => false,
         };
         if !admitted {
             let what = match action {
@@ -370,7 +370,9 @@ impl JobsArchive {
                     "reanudar (tiene que haber empezado y estar pausado; un borrador se empieza con processing_start)"
                 }
                 ApprovalAction::Retry { .. } => "reintentar (fue cancelado)",
-                ApprovalAction::ReplaceText { .. } => "reemplazar un texto (no es una acción sobre trabajos)",
+                ApprovalAction::ReplaceText { .. } | ApprovalAction::ImportFiles { .. } => {
+                    "hacer eso (no es una acción sobre trabajos)"
+                }
             };
             return Err(JobsError::new(
                 ERROR_INVALID_STATE,
@@ -388,6 +390,7 @@ impl JobsArchive {
             files: job.members_total,
             preview: None,
             text: None,
+            import_plan: None,
         }))
     }
 

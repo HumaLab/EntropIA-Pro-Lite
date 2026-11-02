@@ -310,7 +310,7 @@ through the tool itself. Clients rely on this; Codex cancels a non-interactive
 call to a tool that does not declare itself read-only, so it asks before calling
 the three writing tools.
 
-Eighteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+Twenty tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
 The seven archive tools:
 
 | Tool | Arguments | Result |
@@ -384,6 +384,38 @@ the rules are the app's.
   with `processing_prepare`, which has its own approval.
 - Names are 1-200 characters, descriptions up to 2000, titles 1-500, at most 100
   metadata fields; control characters are refused.
+
+### Importing files
+
+The owner enables import folders in Settings › Asistentes («Carpetas de entrada»,
+stored in `agent-access.json` as `import_folders`, canonical paths). An assistant can
+only read files **directly** inside them (no subfolders) and never names a folder of
+its own. Both tools need `local_write`.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `import_sources_list` | none | `{folders:[{path, files:[{name, kind, sizeBytes, modifiedAt}], truncated}]}` — supported files (PDF, images, audio) by name, up to 500 per folder |
+| `documents_import` | `collectionId`, `folder`, `files` (names, 1-200) | An approval (`action.kind: "import_files"`) waiting for the owner |
+
+- **Checked before any dialog.** The folder must be an enabled one; each name must be a
+  plain file name; each file is checked by its real path (links and `..` resolved) to be
+  a regular, supported file of at most 1 GiB directly inside an enabled folder and
+  outside EntropIA's own data. One bad file refuses the whole request
+  (`invalid_argument`), so the dialog only lists real files.
+- **The owner sees the list.** The dialog shows the collection and every file's name and
+  size; the approval carries the same list as `importFiles` (`name`, `kind`,
+  `sizeBytes`), never the paths. The same files in any order are the same request.
+- **Checked again at the answer.** On approval each file is checked against the folders
+  enabled *at that moment* and against the size and modification time it was listed
+  with. A file that changed, left the folders, or is already in the collection (same
+  path ignoring case, size and modification time, the app's own rule) is skipped.
+  `approvals_status` then reports `importResult`: `{collectionId, imported:[{name,
+  itemId, title}], skipped:[{name, reason}]}`, where `reason` starts with a stable word
+  (`changed`, `duplicate`, `not_in_folder`, `missing`, …).
+- **The same result as the app's import.** One item per file titled by its name without
+  the extension, the file copied into the archive with its provenance, each PDF kept as
+  a parent with one page asset per page, the title searchable at once. Importing spends
+  nothing; recognizing text or embedding is a processing job with its own approval.
 
 ### Reading text and citing
 
@@ -467,9 +499,11 @@ initial focus is «Rechazar», Escape rejects and a click outside does nothing.
 ```
 
 `action` is `{"kind": "start"}`, `{"kind": "resume"}`,
-`{"kind": "retry", "task_id": …, "failed_only": …}` or
-`{"kind": "replace_text", "item_id": …, "asset_id": …, "text_hash": …, "new_text_hash": …}`.
-For `replace_text`, `jobId` is empty, `revision` is 0 and `preview` holds the first
+`{"kind": "retry", "task_id": …, "failed_only": …}`,
+`{"kind": "replace_text", "item_id": …, "asset_id": …, "text_hash": …, "new_text_hash": …}` or
+`{"kind": "import_files", "collection_id": …, "files": …, "plan_hash": …}`.
+For `import_files`, `jobId` is empty, `revision` is 0, `importFiles` lists the files and
+`importResult` is filled once it ran. For `replace_text`, `jobId` is empty, `revision` is 0 and `preview` holds the first
 400 characters of the proposed text; the whole text is never returned. `status` is `pending`,
 `approved` (approved and run), `failed` (approved, but the job had changed; nothing
 ran, `failure` says why), `rejected` or `expired`.

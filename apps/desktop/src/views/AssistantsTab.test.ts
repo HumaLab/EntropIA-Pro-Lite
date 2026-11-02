@@ -264,6 +264,7 @@ describe('AssistantsTab', () => {
     await fireEvent.click(prepare)
     const dialog = screen.getByRole('dialog')
     expect(dialog).toHaveTextContent('Nada de esto gasta')
+    expect(dialog).toHaveTextContent('proponer importar archivos de tus carpetas de entrada')
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))

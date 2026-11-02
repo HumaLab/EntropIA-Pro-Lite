@@ -60,6 +60,59 @@ pub enum ApprovalAction {
         text_hash: String,
         new_text_hash: String,
     },
+    /// Import files from the owner's enabled folders into a collection. Bound
+    /// to the exact files (path, size, modification time) the plan listed.
+    ImportFiles {
+        collection_id: String,
+        files: usize,
+        plan_hash: String,
+    },
+}
+
+/// One file of an import request, as the dialog and the assistant see it:
+/// its name, kind and size, never its path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFileView {
+    pub name: String,
+    pub kind: crate::corpus::ingest::FileKind,
+    pub size_bytes: u64,
+}
+
+/// One imported file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedFileReport {
+    pub name: String,
+    pub item_id: String,
+    pub title: String,
+}
+
+/// One file that was not imported, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedFileReport {
+    pub name: String,
+    /// A stable reason first (`changed`, `duplicate`, `not_in_folder`,
+    /// `missing`, `failed`, …), then a sentence.
+    pub reason: String,
+}
+
+/// What an approved import did, file by file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub collection_id: String,
+    pub imported: Vec<ImportedFileReport>,
+    pub skipped: Vec<SkippedFileReport>,
+}
+
+/// What executing an approved action needs from the app beyond a connection:
+/// the archive's data directory and the folders imports may read right now.
+#[derive(Debug, Clone, Default)]
+pub struct ExecContext {
+    pub data_dir: Option<std::path::PathBuf>,
+    pub folders: Vec<std::path::PathBuf>,
 }
 
 /// Where an approval stands.
@@ -111,6 +164,15 @@ pub struct Approval {
     #[serde(skip)]
     #[schemars(skip)]
     pub text: Option<String>,
+    /// The files an import would bring in (`import_files`), without paths.
+    pub import_files: Option<Vec<ImportFileView>>,
+    /// The checked files an import would copy. Kept here until it runs;
+    /// never serialized, so paths stay in the app.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub import_plan: Option<Vec<crate::corpus::ingest::SourceFile>>,
+    /// What an approved import did, file by file.
+    pub import_result: Option<ImportResult>,
 }
 
 /// What the endpoint knows when an assistant asks.
@@ -126,6 +188,7 @@ pub struct ApprovalRequest {
     pub files: i64,
     pub preview: Option<String>,
     pub text: Option<String>,
+    pub import_plan: Option<Vec<crate::corpus::ingest::SourceFile>>,
 }
 
 /// Called after every change, so the app can show the request and come to the
@@ -223,6 +286,17 @@ impl ApprovalStore {
                 failure: None,
                 preview: request.preview,
                 text: request.text,
+                import_files: request.import_plan.as_ref().map(|plan| {
+                    plan.iter()
+                        .map(|file| ImportFileView {
+                            name: file.name.clone(),
+                            kind: file.kind,
+                            size_bytes: file.size_bytes,
+                        })
+                        .collect()
+                }),
+                import_plan: request.import_plan,
+                import_result: None,
             };
             approvals.insert(approval.id.clone(), approval.clone());
             approval
@@ -272,6 +346,18 @@ impl ApprovalStore {
         approval_id: &str,
         approve: bool,
     ) -> Result<Approval, String> {
+        self.decide_with(conn, approval_id, approve, &ExecContext::default())
+    }
+
+    /// [`Self::decide`] with what an import needs: the data directory and the
+    /// folders enabled at the moment of the answer.
+    pub fn decide_with(
+        &self,
+        conn: &Connection,
+        approval_id: &str,
+        approve: bool,
+        context: &ExecContext,
+    ) -> Result<Approval, String> {
         let now = (self.now_ms)();
         // Claim it under the lock so two answers can never both execute.
         let claimed = {
@@ -303,14 +389,23 @@ impl ApprovalStore {
             }
         };
         if let Some(approval) = claimed {
-            let outcome = execute(conn, &approval);
+            let outcome = match &approval.action {
+                ApprovalAction::ImportFiles { collection_id, .. } => {
+                    run_import(conn, &approval, collection_id, context).map(Some)
+                }
+                _ => execute(conn, &approval).map(|()| None),
+            };
             let mut approvals = self.lock();
             if let Some(stored) = approvals.get_mut(approval_id) {
-                // The proposed text has done its job either way.
+                // The proposed text and file list have done their job either way.
                 stored.text = None;
-                if let Err(error) = outcome {
-                    stored.status = ApprovalStatus::Failed;
-                    stored.failure = Some(failure_sentence(&error));
+                stored.import_plan = None;
+                match outcome {
+                    Ok(result) => stored.import_result = result,
+                    Err(error) => {
+                        stored.status = ApprovalStatus::Failed;
+                        stored.failure = Some(failure_sentence(&error));
+                    }
                 }
             }
         }
@@ -370,7 +465,84 @@ fn execute(conn: &Connection, approval: &Approval) -> Result<(), String> {
                     other => other.to_string(),
                 })
         }
+        // Imports run through `run_import`, which needs the app's context.
+        ApprovalAction::ImportFiles { .. } => {
+            Err("invalid_transition: an import needs the app's context".to_string())
+        }
     }
+}
+
+/// Import the files an approved request listed. Each file is checked again
+/// against the folders enabled now: a file that left them, changed size or
+/// modification time, or is already in the collection is skipped with its
+/// reason, so an approval never imports something other than what it showed.
+fn run_import(
+    conn: &Connection,
+    approval: &Approval,
+    collection_id: &str,
+    context: &ExecContext,
+) -> Result<ImportResult, String> {
+    use crate::corpus::ingest::{check_source, import_file, ImportOutcome, SourceLimits};
+    let data_dir = context
+        .data_dir
+        .as_deref()
+        .ok_or_else(|| "invalid_transition: the archive folder is unknown".to_string())?;
+    let plan = approval
+        .import_plan
+        .as_ref()
+        .ok_or_else(|| "invalid_transition: the file list is gone".to_string())?;
+    let mut result = ImportResult {
+        collection_id: collection_id.to_string(),
+        ..ImportResult::default()
+    };
+    let limits = SourceLimits::default();
+    for planned in plan {
+        let skip = |reason: String| SkippedFileReport {
+            name: planned.name.clone(),
+            reason,
+        };
+        let current = match check_source(
+            &planned.path.to_string_lossy(),
+            &context.folders,
+            data_dir,
+            &limits,
+        ) {
+            Ok(current) => current,
+            Err(reason) => {
+                result.skipped.push(skip(reason));
+                continue;
+            }
+        };
+        if current.size_bytes != planned.size_bytes || current.modified_at != planned.modified_at {
+            result.skipped.push(skip(format!(
+                "changed: {} changed after the request; it was not imported",
+                planned.name
+            )));
+            continue;
+        }
+        match import_file(conn, data_dir, collection_id, &current) {
+            Ok(ImportOutcome::Imported { item_id, title, .. }) => {
+                result.imported.push(ImportedFileReport {
+                    name: planned.name.clone(),
+                    item_id,
+                    title,
+                })
+            }
+            Ok(ImportOutcome::Duplicate { item_id }) => result.skipped.push(skip(format!(
+                "duplicate: {} is already in the collection as item {item_id}",
+                planned.name
+            ))),
+            Err(error) => {
+                log::warn!(target: "automation", "an approved import of one file failed: {error}");
+                let reason = error.split(':').next().unwrap_or("failed");
+                result.skipped.push(skip(format!(
+                    "{reason}: {} could not be imported",
+                    planned.name
+                )));
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Retry has no revision fence of its own; check the approved one first.
@@ -468,6 +640,7 @@ mod tests {
             files: 2,
             preview: None,
             text: None,
+            import_plan: None,
         }
     }
 
@@ -500,6 +673,7 @@ mod tests {
             files: 1,
             preview: Some(new_text.chars().take(10).collect()),
             text: Some(new_text.to_string()),
+            import_plan: None,
         }
     }
 
@@ -571,6 +745,168 @@ mod tests {
             first.id, second.id,
             "a request is bound to the text it proposes"
         );
+    }
+
+    /// Files waiting in an enabled folder outside the archive.
+    struct Inbox {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+    }
+
+    fn inbox(files: &[(&str, &[u8])]) -> Inbox {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::fs::canonicalize(dir.path()).unwrap();
+        for (name, bytes) in files {
+            std::fs::write(path.join(name), bytes).unwrap();
+        }
+        Inbox { _dir: dir, path }
+    }
+
+    fn import_request(f: &Fixture, inbox: &Inbox, names: &[&str]) -> ApprovalRequest {
+        let folders = vec![inbox.path.clone()];
+        let plan: Vec<crate::corpus::ingest::SourceFile> = names
+            .iter()
+            .map(|name| {
+                crate::corpus::ingest::check_source(
+                    &inbox.path.join(name).to_string_lossy(),
+                    &folders,
+                    f._dir.path(),
+                    &Default::default(),
+                )
+                .unwrap()
+            })
+            .collect();
+        ApprovalRequest {
+            client_id: "cl_a".to_string(),
+            client_name: "Claude Code".to_string(),
+            action: ApprovalAction::ImportFiles {
+                collection_id: ALFA.to_string(),
+                files: plan.len(),
+                plan_hash: format!("hash-{}", names.join(",")),
+            },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["import_files".to_string()],
+            collections: vec!["Alfa".to_string()],
+            files: plan.len() as i64,
+            preview: None,
+            text: None,
+            import_plan: Some(plan),
+        }
+    }
+
+    fn context(f: &Fixture, inbox: &Inbox) -> ExecContext {
+        ExecContext {
+            data_dir: Some(f._dir.path().to_path_buf()),
+            folders: vec![inbox.path.clone()],
+        }
+    }
+
+    fn items_titled(conn: &Connection, title: &str) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM items WHERE title = ?1",
+            [title],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_approved_import_imports_the_files_it_listed_and_reports_them() {
+        let f = fixture();
+        let inbox = inbox(&[("Carta.jpg", b"jpg"), ("Retrato.png", b"png")]);
+        let approval = f
+            .store
+            .request(import_request(&f, &inbox, &["Carta.jpg", "Retrato.png"]));
+        let json = serde_json::to_value(&approval).unwrap();
+        assert_eq!(
+            json["importFiles"],
+            serde_json::json!([
+                { "name": "Carta.jpg", "kind": "image", "sizeBytes": 3 },
+                { "name": "Retrato.png", "kind": "image", "sizeBytes": 3 }
+            ])
+        );
+        assert!(json.get("importPlan").is_none(), "paths stay in the app");
+        assert_eq!(
+            items_titled(&f.conn, "Carta"),
+            0,
+            "nothing before the answer"
+        );
+
+        let decided = f
+            .store
+            .decide_with(&f.conn, &approval.id, true, &context(&f, &inbox))
+            .unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        let result = decided.import_result.expect("a result");
+        assert_eq!(result.imported.len(), 2);
+        assert!(result.skipped.is_empty());
+        assert_eq!(result.imported[0].name, "Carta.jpg");
+        assert_eq!(items_titled(&f.conn, "Carta"), 1);
+        assert_eq!(items_titled(&f.conn, "Retrato"), 1);
+    }
+
+    #[test]
+    fn a_file_that_changed_or_left_the_enabled_folders_is_skipped() {
+        let f = fixture();
+        let inbox = inbox(&[("Carta.jpg", b"jpg"), ("Retrato.png", b"png")]);
+        let approval = f
+            .store
+            .request(import_request(&f, &inbox, &["Carta.jpg", "Retrato.png"]));
+        std::fs::write(inbox.path.join("Carta.jpg"), b"a longer jpg").unwrap();
+        let decided = f
+            .store
+            .decide_with(&f.conn, &approval.id, true, &context(&f, &inbox))
+            .unwrap();
+        let result = decided.import_result.unwrap();
+        assert_eq!(result.imported.len(), 1);
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].name, "Carta.jpg");
+        assert!(
+            result.skipped[0].reason.starts_with("changed"),
+            "{:?}",
+            result.skipped
+        );
+        assert_eq!(items_titled(&f.conn, "Carta"), 0);
+
+        // The owner removed the folder before answering.
+        let second = inbox_request_after_disable(&f);
+        assert_eq!(second.0, 0);
+        assert!(second.1.starts_with("not_in_folder"), "{}", second.1);
+    }
+
+    /// Ask for one file, then answer with no enabled folder left.
+    fn inbox_request_after_disable(f: &Fixture) -> (usize, String) {
+        let inbox = inbox(&[("Nota.jpg", b"jpg")]);
+        let approval = f.store.request(import_request(f, &inbox, &["Nota.jpg"]));
+        let decided = f
+            .store
+            .decide_with(
+                &f.conn,
+                &approval.id,
+                true,
+                &ExecContext {
+                    data_dir: Some(f._dir.path().to_path_buf()),
+                    folders: Vec::new(),
+                },
+            )
+            .unwrap();
+        let result = decided.import_result.unwrap();
+        (result.imported.len(), result.skipped[0].reason.clone())
+    }
+
+    #[test]
+    fn a_rejected_import_imports_nothing() {
+        let f = fixture();
+        let inbox = inbox(&[("Carta.jpg", b"jpg")]);
+        let approval = f.store.request(import_request(&f, &inbox, &["Carta.jpg"]));
+        let decided = f
+            .store
+            .decide_with(&f.conn, &approval.id, false, &context(&f, &inbox))
+            .unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Rejected);
+        assert!(decided.import_result.is_none());
+        assert_eq!(items_titled(&f.conn, "Carta"), 0);
     }
 
     fn desired_state(conn: &Connection, job: &str) -> String {

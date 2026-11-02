@@ -83,12 +83,14 @@ impl AuditLine {
     }
 
     /// The owner answered an assistant's request in the app. Attributed to the
-    /// assistant that asked, with the approval and job ids and the answer.
+    /// assistant that asked, with the approval id, the id of what it acts on
+    /// (the job, the item whose text it replaces, or the collection an import
+    /// fills) and the answer.
     pub fn owner_decision(
         client_id: &str,
         client_name: &str,
         approval_id: &str,
-        job_id: &str,
+        target_id: &str,
         decision: &str,
     ) -> Self {
         Self {
@@ -98,7 +100,7 @@ impl AuditLine {
             tool: "owner_decision".to_string(),
             status: AuditStatus::Ok,
             error_code: None,
-            object_ids: vec![approval_id.to_string(), job_id.to_string()],
+            object_ids: vec![approval_id.to_string(), target_id.to_string()],
             query_chars: None,
             decision: Some(decision.to_string()),
         }
