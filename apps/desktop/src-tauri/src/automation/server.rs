@@ -914,6 +914,8 @@ mod tests {
                 "collections_list",
                 "collections_update",
                 "documents_get_text",
+                "documents_index",
+                "documents_text_update",
                 "entropia_status",
                 "items_get",
                 "items_list",

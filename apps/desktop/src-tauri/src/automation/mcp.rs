@@ -40,7 +40,7 @@ use crate::automation::access::{Principal, Scope};
 use crate::automation::approvals::{Approval, ApprovalAction, ApprovalStore};
 use crate::automation::audit::{AuditLine, AuditLog};
 use crate::automation::corpus_tools::{
-    CorpusArchive, CorpusEvents, CreatedCollection, UpdatedItem,
+    CorpusArchive, CorpusEvents, CreatedCollection, IndexedItem, TextReplacement, UpdatedItem,
 };
 use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
@@ -83,6 +83,8 @@ const TOOL_APPROVALS_STATUS: &str = "approvals_status";
 const TOOL_COLLECTIONS_CREATE: &str = "collections_create";
 const TOOL_COLLECTIONS_UPDATE: &str = "collections_update";
 const TOOL_ITEMS_UPDATE: &str = "items_update";
+const TOOL_DOCUMENTS_TEXT_UPDATE: &str = "documents_text_update";
+const TOOL_DOCUMENTS_INDEX: &str = "documents_index";
 
 const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
@@ -284,6 +286,26 @@ pub struct ItemsUpdateParams {
     pub title: Option<String>,
     /// Every metadata field, as text values: it replaces the item's fields.
     pub metadata: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// `documents_text_update` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsTextUpdateParams {
+    pub item_id: String,
+    /// The page (file) whose text to replace.
+    pub asset_id: String,
+    /// The page's `textHash` as `documents_get_text` returned it.
+    pub text_hash: String,
+    /// The whole new text of the page.
+    pub text: String,
+}
+
+/// `documents_index` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsIndexParams {
+    pub item_id: String,
 }
 
 /// Tells an absent field from an explicit `null`.
@@ -1063,6 +1085,97 @@ impl AgentServer {
         };
         self.audit_ok(&caller, TOOL_ITEMS_UPDATE, vec![updated.id.clone()], None);
         Ok(Json(updated))
+    }
+
+    #[tool(
+        name = "documents_text_update",
+        description = "Pide reemplazar el texto reconocido (nativo u OCR) de una página por `text`, el texto completo nuevo. `textHash` es el de documents_get_text: si la página cambió, responde revision_conflict. No cambia nada por sí solo: la persona ve una vista previa en EntropIA y lo aprueba o rechaza; consultalo con approvals_status. Si se aplica, el texto anterior queda guardado y «Restaurar original» lo deshace. No sirve para transcripciones de audio. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_text_update(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsTextUpdateParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_TEXT_UPDATE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, args)?;
+        let corpus = self.corpus.clone();
+        let approvals = self.approvals.clone();
+        let (client_id, client_name) = (caller.client_id.clone(), caller.name.clone());
+        let approval = match Self::on_jobs(move || {
+            corpus.request_text_replacement(
+                &approvals,
+                &client_id,
+                &client_name,
+                &TextReplacement {
+                    item_id: args.item_id,
+                    asset_id: args.asset_id,
+                    text_hash: args.text_hash,
+                    text: args.text,
+                },
+            )
+        })
+        .await
+        {
+            Ok(approval) => approval,
+            Err(error) => {
+                return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, error))
+            }
+        };
+        let object_ids = match &approval.action {
+            ApprovalAction::ReplaceText { item_id, .. } => {
+                vec![item_id.clone(), approval.id.clone()]
+            }
+            _ => vec![approval.id.clone()],
+        };
+        self.audit_ok(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, object_ids, None);
+        Ok(Json(approval))
+    }
+
+    #[tool(
+        name = "documents_index",
+        description = "Vuelve a indexar un ítem para la búsqueda (`search_items`) con su título, metadatos y texto actuales. Las ediciones hechas con las herramientas ya lo hacen solas; sirve cuando el índice quedó atrasado. No gasta. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_index(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsIndexParams>>,
+    ) -> Result<Json<IndexedItem>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_INDEX,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_INDEX, args)?;
+        let corpus = self.corpus.clone();
+        let indexed = match Self::on_jobs(move || corpus.reindex(&args.item_id)).await {
+            Ok(indexed) => indexed,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_INDEX, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_DOCUMENTS_INDEX,
+            vec![indexed.item_id.clone()],
+            None,
+        );
+        Ok(Json(indexed))
     }
 
     #[tool(

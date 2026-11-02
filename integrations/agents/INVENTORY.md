@@ -85,7 +85,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 | Remote OCR (OCRH / GLM-OCR) | `ocr/commands.rs` (`extract_text`, `test_glm_ocr_connection`, `is_scanned_pdf`, `probe_pdf`) | as a batch: `processing_prepare` with `ocr`, then `processing_start`; a per-document `documents_ocr_start` stays planned | remote_spend | Both | implemented as a batch (stage 3) |
 | Local OCR | `ocr/pdf.rs`, gated by `local-ml` | `documents_ocr_start` | local_write | Pro only | planned (stage 3) |
 | OCR correction and summaries with a provider | `llm/commands.rs` (`llm_correct_ocr`, `llm_correct_ocr_asset`, `llm_summarize`, `llm_summarize_asset`, `llm_get_results`, `llm_get_result`, `llm_can_restore_original_ocr_asset`, `llm_restore_original_ocr_asset`) | `documents_transform_start` | remote_spend | Both | planned (stage 3) |
-| Edit or restore recognized text | `ocr::update_extraction_text_cmd`, `llm_restore_original_ocr_asset`, `packages/store/src/repos/extraction.repo.ts` | `documents_text_update` | local_write | Both | planned (stage 3) |
+| Edit or restore recognized text | `corpus::replace_page_text` (agent; owner approval, backup kept), `ocr::update_extraction_text_cmd` (app), `llm_restore_original_ocr_asset` (undo) | `documents_text_update` (recognized text; transcriptions stay planned) | local_write + owner approval | Both | implemented for recognized text |
 | Read extracted text, layout or transcript | `automation::read::document_text` (same rule as `lib/page-text.ts`), `layout.repo.ts`, `ocr::render_pdf_pages` | `documents_get_text` (windows, never the whole file); `documents_get_layout` stays planned | read | Both | implemented (text and transcript); layout planned (stage 3) |
 | Crop, rotate, cover a region, split pages | `ocr::crop_pdf`, `edit_pdf`, `split_pdf_pages`, `image_edit::crop_image`, `rotate_image`, `rotate_image_degrees`, `erase_region` | `documents_edit` | local_write | Both | planned (stage 3) |
 | Transcription and dictation | `transcription::transcribe_audio`, `transcribe_dictation`, `update_transcription_text_cmd`, `test_assemblyai_connection` | `documents_transcribe_start` | remote_spend | Both | planned (stage 3) |
@@ -96,7 +96,7 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 
 | Product operation | Where it lives today | Planned tool | Scope | Pro/Lite | Status |
 |---|---|---|---|---|---|
-| INDEX: prepare text for lexical search | `nlp::commands::index_fts`, `fts.repo.ts` | `documents_index` | local_write | Both | planned (stage 3) |
+| INDEX: prepare text for lexical search | `corpus::reindex_item` (`nlp::fts::index_item_from_db`), `nlp::commands::index_fts` | `documents_index` | local_write | Both | implemented |
 | EMBED: prepare embeddings | `nlp::commands::embed_asset`, `backfill_asset_embeddings`, `packages/store/src/repos/rag-chunk.repo.ts` | as a batch: `processing_prepare` with `embeddings`; a per-document `documents_embed` stays planned | remote_spend | Both (local embeddings in Pro) | implemented as a batch (stage 3) |
 | Similar assets | `nlp::commands::similar_assets` | `search_similar` | read | Both | planned (stage 4) |
 | NER: entities | `nlp::commands::extract_entities`, `extract_entities_for_asset`, `llm_extract_entities`, `llm_extract_entities_asset`, `enrich_item`, `packages/store/src/repos/entity.repo.ts` | `analysis_entities_start` | remote_spend | Both | planned (stage 4) |

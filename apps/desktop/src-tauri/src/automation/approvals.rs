@@ -52,6 +52,14 @@ pub enum ApprovalAction {
         task_id: Option<String>,
         failed_only: bool,
     },
+    /// Replace the recognized text of one page. Bound to the page text the
+    /// assistant read (`text_hash`) and to the text it proposes.
+    ReplaceText {
+        item_id: String,
+        asset_id: String,
+        text_hash: String,
+        new_text_hash: String,
+    },
 }
 
 /// Where an approval stands.
@@ -79,6 +87,8 @@ pub struct Approval {
     pub client_id: String,
     pub client_name: String,
     pub action: ApprovalAction,
+    /// The job the action runs on; empty for an action that is not about a
+    /// job (`replace_text` names its page in `action`).
     pub job_id: String,
     /// The job revision the assistant looked at; the action runs only at it.
     pub revision: i64,
@@ -94,6 +104,13 @@ pub struct Approval {
     pub decided_at: Option<i64>,
     /// Why an approved action failed, in one sentence.
     pub failure: Option<String>,
+    /// The start of the proposed text, for the dialog (`replace_text`).
+    pub preview: Option<String>,
+    /// The whole proposed text. Kept here until it runs; never serialized,
+    /// so neither the app's list nor `approvals_status` carries it.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub text: Option<String>,
 }
 
 /// What the endpoint knows when an assistant asks.
@@ -107,6 +124,8 @@ pub struct ApprovalRequest {
     pub operations: Vec<String>,
     pub collections: Vec<String>,
     pub files: i64,
+    pub preview: Option<String>,
+    pub text: Option<String>,
 }
 
 /// Called after every change, so the app can show the request and come to the
@@ -202,6 +221,8 @@ impl ApprovalStore {
                 expires_at: now + APPROVAL_TTL_MS,
                 decided_at: None,
                 failure: None,
+                preview: request.preview,
+                text: request.text,
             };
             approvals.insert(approval.id.clone(), approval.clone());
             approval
@@ -282,9 +303,12 @@ impl ApprovalStore {
             }
         };
         if let Some(approval) = claimed {
-            if let Err(error) = execute(conn, &approval) {
-                let mut approvals = self.lock();
-                if let Some(stored) = approvals.get_mut(approval_id) {
+            let outcome = execute(conn, &approval);
+            let mut approvals = self.lock();
+            if let Some(stored) = approvals.get_mut(approval_id) {
+                // The proposed text has done its job either way.
+                stored.text = None;
+                if let Err(error) = outcome {
                     stored.status = ApprovalStatus::Failed;
                     stored.failure = Some(failure_sentence(&error));
                 }
@@ -327,6 +351,24 @@ fn execute(conn: &Connection, approval: &Approval) -> Result<(), String> {
                 *failed_only,
             )
             .map(|_| ())
+        }
+        ApprovalAction::ReplaceText {
+            asset_id,
+            text_hash,
+            ..
+        } => {
+            let text = approval
+                .text
+                .as_deref()
+                .ok_or_else(|| "invalid_transition: the proposed text is gone".to_string())?;
+            crate::corpus::replace_page_text(conn, asset_id, text_hash, text)
+                .map(|_| ())
+                .map_err(|error| match error {
+                    crate::corpus::CorpusError::RevisionConflict(detail) => {
+                        format!("revision_conflict: {detail}")
+                    }
+                    other => other.to_string(),
+                })
         }
     }
 }
@@ -424,7 +466,111 @@ mod tests {
             operations: vec!["ocr".to_string()],
             collections: vec!["Alfa".to_string()],
             files: 2,
+            preview: None,
+            text: None,
         }
+    }
+
+    fn sha(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(text.as_bytes()))
+    }
+
+    /// A page with recognized text and a request to replace it.
+    fn replace_request(conn: &Connection, current: &str, new_text: &str) -> ApprovalRequest {
+        conn.execute(
+            "INSERT OR REPLACE INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+             VALUES ('ext_a', 'ast_alfa_1', ?1, 'ocr', 0.8, 1000)",
+            [current],
+        )
+        .unwrap();
+        ApprovalRequest {
+            client_id: "cl_a".to_string(),
+            client_name: "Claude Code".to_string(),
+            action: ApprovalAction::ReplaceText {
+                item_id: crate::automation::test_archive::item_id(ALFA, 1),
+                asset_id: "ast_alfa_1".to_string(),
+                text_hash: sha(current),
+                new_text_hash: sha(new_text),
+            },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["replace_text".to_string()],
+            collections: vec!["Alfa".to_string()],
+            files: 1,
+            preview: Some(new_text.chars().take(10).collect()),
+            text: Some(new_text.to_string()),
+        }
+    }
+
+    fn page_text(conn: &Connection) -> String {
+        conn.query_row(
+            "SELECT text_content FROM extractions WHERE asset_id = 'ast_alfa_1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_approved_text_replacement_runs_once_and_never_shows_the_whole_text() {
+        let f = fixture();
+        let approval = f.store.request(replace_request(
+            &f.conn,
+            "Texto viejo",
+            "Texto nuevo y largo",
+        ));
+        let json = serde_json::to_value(&approval).unwrap();
+        assert_eq!(json["preview"], "Texto nuev");
+        assert!(
+            json.get("text").is_none(),
+            "the full text is never serialized"
+        );
+        assert_eq!(
+            page_text(&f.conn),
+            "Texto viejo",
+            "nothing changes before the answer"
+        );
+
+        let decided = f.store.decide(&f.conn, &approval.id, true).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Approved);
+        assert_eq!(page_text(&f.conn), "Texto nuevo y largo");
+        let again = f.store.decide(&f.conn, &approval.id, true).unwrap_err();
+        assert!(again.starts_with("approval_used:"), "{again}");
+    }
+
+    #[test]
+    fn a_text_replacement_is_not_applied_when_the_page_changed_meanwhile() {
+        let f = fixture();
+        let approval = f
+            .store
+            .request(replace_request(&f.conn, "Texto viejo", "Propuesta"));
+        // The person corrects the page in the app before answering.
+        f.conn
+            .execute(
+                "UPDATE extractions SET text_content = 'Corrección manual' WHERE asset_id = 'ast_alfa_1'",
+                [],
+            )
+            .unwrap();
+        let decided = f.store.decide(&f.conn, &approval.id, true).unwrap();
+        assert_eq!(decided.status, ApprovalStatus::Failed);
+        assert!(decided.failure.unwrap().contains("cambió"));
+        assert_eq!(
+            page_text(&f.conn),
+            "Corrección manual",
+            "the person's text stays"
+        );
+    }
+
+    #[test]
+    fn two_different_texts_for_one_page_are_two_requests() {
+        let f = fixture();
+        let first = f.store.request(replace_request(&f.conn, "Viejo", "Uno"));
+        let second = f.store.request(replace_request(&f.conn, "Viejo", "Dos"));
+        assert_ne!(
+            first.id, second.id,
+            "a request is bound to the text it proposes"
+        );
     }
 
     fn desired_state(conn: &Connection, job: &str) -> String {

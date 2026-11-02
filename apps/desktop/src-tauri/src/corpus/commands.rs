@@ -16,6 +16,8 @@ pub const COLLECTION_DESCRIPTION_MAX_CHARS: usize = 2000;
 pub const ITEM_TITLE_MAX_CHARS: usize = 500;
 /// Most metadata fields one item may hold.
 pub const ITEM_METADATA_MAX_FIELDS: usize = 100;
+/// Longest page text an edit may write.
+pub const MAX_PAGE_TEXT_CHARS: usize = 200_000;
 /// Metadata keys the app keeps for itself (import and web-capture provenance,
 /// `lib/item-metadata.ts`). An edit never writes them and always keeps them.
 pub const RESERVED_METADATA_PREFIX: &str = "__entropia_";
@@ -408,6 +410,120 @@ pub fn update_item(
             Err(error)
         }
     }
+}
+
+/// Where a replaced page text lives now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacedText {
+    pub item_id: String,
+    pub collection_id: String,
+    pub asset_id: String,
+    /// sha256 of the new page text, the hash `documents_get_text` now reports.
+    pub text_hash: String,
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// Replace the recognized text of one page (its latest extraction) when that
+/// text still has `expected_hash`, keeping the text it had before the first
+/// correction in `ocr_correction_backups`, so the app's «Restaurar original»
+/// undoes it, and refreshing the item's search entry, all in one transaction.
+/// A page whose text is a transcription is refused: audio has no such undo.
+pub fn replace_page_text(
+    conn: &Connection,
+    asset_id: &str,
+    expected_hash: &str,
+    text: &str,
+) -> Result<ReplacedText, CorpusError> {
+    if text.trim().is_empty() || text.chars().count() > MAX_PAGE_TEXT_CHARS {
+        return Err(CorpusError::InvalidArgument(format!(
+            "the page text must be 1 to {MAX_PAGE_TEXT_CHARS} characters"
+        )));
+    }
+    let owner: Option<(String, String)> = conn
+        .query_row(
+            "SELECT a.item_id, i.collection_id FROM assets a JOIN items i ON i.id = a.item_id
+             WHERE a.id = ?1",
+            params![asset_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| unavailable("read the page", error))?;
+    let (item_id, collection_id) =
+        owner.ok_or_else(|| CorpusError::NotFound(format!("no file {asset_id}")))?;
+    crate::llm::ocr_correction::ensure_schema(conn)
+        .map_err(|error| unavailable("prepare the text backup", error))?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|error| unavailable("begin the text replacement", error))?;
+    let replaced = (|| {
+        let current: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id, text_content FROM extractions WHERE asset_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![asset_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| unavailable("read the page text", error))?;
+        let Some((extraction_id, current)) = current.filter(|(_, text)| !text.trim().is_empty())
+        else {
+            return Err(CorpusError::InvalidArgument(format!(
+                "file {asset_id} has no recognized text to replace (an audio transcription cannot be replaced this way)"
+            )));
+        };
+        let current_hash = sha256_hex(&current);
+        if current_hash != expected_hash {
+            return Err(CorpusError::RevisionConflict(format!(
+                "the text of file {asset_id} changed since it was read"
+            )));
+        }
+        if current == text {
+            return Err(CorpusError::InvalidArgument(
+                "the new text is the same as the current one".into(),
+            ));
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO ocr_correction_backups (asset_id, original_text_content, created_at)
+             VALUES (?1, ?2, ?3)",
+            params![asset_id, current, now_ms()],
+        )
+        .map_err(|error| unavailable("keep the original text", error))?;
+        conn.execute(
+            "UPDATE extractions SET text_content = ?1 WHERE id = ?2",
+            params![text, extraction_id],
+        )
+        .map_err(|error| unavailable("replace the page text", error))?;
+        crate::nlp::fts::index_item_from_db(conn, &item_id)
+            .map_err(|error| unavailable("refresh the search index", error))?;
+        Ok(ReplacedText {
+            item_id: item_id.clone(),
+            collection_id: collection_id.clone(),
+            asset_id: asset_id.to_string(),
+            text_hash: sha256_hex(text),
+        })
+    })();
+    match replaced {
+        Ok(replaced) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|error| unavailable("commit the text replacement", error))?;
+            Ok(replaced)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// Refresh one item's search entry from its current title, metadata and text.
+pub fn reindex_item(conn: &Connection, item_id: &str) -> Result<(), CorpusError> {
+    read_item(conn, item_id)?.ok_or_else(|| CorpusError::NotFound(format!("no item {item_id}")))?;
+    crate::nlp::fts::index_item_from_db(conn, item_id)
+        .map_err(|error| unavailable("refresh the search index", error))
 }
 
 fn open(db: &AppDbState) -> Result<Connection, String> {

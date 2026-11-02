@@ -11,8 +11,9 @@
 pub mod commands;
 
 pub use commands::{
-    create_collection, update_collection, update_item, CollectionDto, CollectionPatch, CorpusError,
-    ItemDto, ItemPatch,
+    create_collection, reindex_item, replace_page_text, update_collection, update_item,
+    CollectionDto, CollectionPatch, CorpusError, ItemDto, ItemPatch, ReplacedText,
+    MAX_PAGE_TEXT_CHARS,
 };
 
 #[cfg(test)]

@@ -113,7 +113,7 @@ once and the next request is refused.
 
 | Box | Scope | What the assistant can do |
 |---|---|---|
-| **Preparar procesamiento y editar el corpus** | `local_write` | Prepare a paused job over collections or items (`processing_prepare`), pause or cancel it (`processing_control`); create and rename collections (`collections_create`, `collections_update`); edit item titles and metadata (`items_update`). Nothing is spent. |
+| **Preparar procesamiento y editar el corpus** | `local_write` | Prepare a paused job over collections or items (`processing_prepare`), pause or cancel it (`processing_control`); create and rename collections (`collections_create`, `collections_update`); edit item titles and metadata (`items_update`); propose a correction of a page's recognized text (`documents_text_update`, which you approve, and «Restaurar original» undoes). Nothing is spent. |
 | **Pedir procesamiento pago** | `remote_spend` | Ask to start, resume or retry a job (`processing_start`, `processing_control`). Each request waits for you. |
 
 When an assistant asks to start paid work, EntropIA comes to the front with a
@@ -227,7 +227,7 @@ in to the desktop session with the keyring unlocked, or pass the agent
 ## Read next
 
 - [`PROTOCOL.md`](PROTOCOL.md) — protocol version and compatibility policy,
-  transport and guard order, discovery file, credentials, scopes, the sixteen
+  transport and guard order, discovery file, credentials, scopes, the eighteen
   tools and the approvals, every error code, and the audit format.
 - [`INVENTORY.md`](INVENTORY.md) — what each product operation maps to today,
   which tool would expose it, and what is deliberately not exposed.

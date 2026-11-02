@@ -381,3 +381,117 @@ fn the_app_can_store_the_metadata_json_it_built_itself() {
         );
     }
 }
+
+fn sha(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+fn seed_extraction(conn: &Connection, asset: &str, text: &str) {
+    conn.execute(
+        "INSERT INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+         VALUES (?1, ?2, ?3, 'ocr', 0.8, 1000)",
+        rusqlite::params![format!("ext_{asset}"), asset, text],
+    )
+    .unwrap();
+}
+
+fn extraction_text(conn: &Connection, asset: &str) -> String {
+    conn.query_row(
+        "SELECT text_content FROM extractions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",
+        [asset],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+fn backup(conn: &Connection, asset: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT original_text_content FROM ocr_correction_backups WHERE asset_id = ?1",
+        [asset],
+        |row| row.get(0),
+    )
+    .optional()
+    .unwrap()
+}
+
+use rusqlite::OptionalExtension;
+
+#[test]
+fn replacing_a_page_text_keeps_the_first_original_and_refreshes_search() {
+    let (_dir, conn) = archive();
+    seed_extraction(&conn, "ast_alfa_1", "Texto con errroes de OCR");
+    let replaced = replace_page_text(
+        &conn,
+        "ast_alfa_1",
+        &sha("Texto con errroes de OCR"),
+        "Texto corregido por Sarmiento",
+    )
+    .unwrap();
+    assert_eq!(replaced.item_id, item_id(ALFA, 1));
+    assert_eq!(replaced.collection_id, ALFA);
+    assert_eq!(replaced.text_hash, sha("Texto corregido por Sarmiento"));
+    assert_eq!(
+        extraction_text(&conn, "ast_alfa_1"),
+        "Texto corregido por Sarmiento"
+    );
+    assert_eq!(
+        backup(&conn, "ast_alfa_1").as_deref(),
+        Some("Texto con errroes de OCR"),
+        "the text before the edit is kept for «Restaurar original»"
+    );
+    assert_eq!(search_hits(&conn, "sarmiento"), vec![item_id(ALFA, 1)]);
+
+    // A second edit keeps the first original, as the LLM correction does.
+    replace_page_text(
+        &conn,
+        "ast_alfa_1",
+        &sha("Texto corregido por Sarmiento"),
+        "Tercera versión",
+    )
+    .unwrap();
+    assert_eq!(
+        backup(&conn, "ast_alfa_1").as_deref(),
+        Some("Texto con errroes de OCR")
+    );
+}
+
+#[test]
+fn a_page_text_that_changed_or_is_not_an_extraction_is_not_replaced() {
+    let (_dir, conn) = archive();
+    seed_extraction(&conn, "ast_alfa_1", "Original");
+    let stale = replace_page_text(&conn, "ast_alfa_1", &sha("otro texto"), "Nuevo").unwrap_err();
+    assert!(
+        matches!(stale, CorpusError::RevisionConflict(_)),
+        "{stale:?}"
+    );
+    assert_eq!(extraction_text(&conn, "ast_alfa_1"), "Original");
+    assert_eq!(
+        backup(&conn, "ast_alfa_1"),
+        None,
+        "a refused edit keeps nothing"
+    );
+
+    conn.execute(
+        "INSERT INTO transcriptions (id, asset_id, text_content, model, created_at)
+         VALUES ('trn_x', 'ast_alfa_2', 'audio', 'test', 1)",
+        [],
+    )
+    .unwrap();
+    let audio = replace_page_text(&conn, "ast_alfa_2", &sha("audio"), "otro").unwrap_err();
+    assert!(
+        matches!(audio, CorpusError::InvalidArgument(_)),
+        "{audio:?}"
+    );
+    let missing = replace_page_text(&conn, "ast_missing", &sha("x"), "y").unwrap_err();
+    assert!(matches!(missing, CorpusError::NotFound(_)), "{missing:?}");
+    for text in ["   ", &"x".repeat(MAX_PAGE_TEXT_CHARS + 1)] {
+        let error = replace_page_text(&conn, "ast_alfa_1", &sha("Original"), text).unwrap_err();
+        assert!(matches!(error, CorpusError::InvalidArgument(_)));
+    }
+    let same = replace_page_text(&conn, "ast_alfa_1", &sha("Original"), "Original").unwrap_err();
+    assert!(
+        matches!(same, CorpusError::InvalidArgument(_)),
+        "nothing would change"
+    );
+}

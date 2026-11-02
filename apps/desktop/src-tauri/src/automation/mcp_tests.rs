@@ -287,6 +287,8 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "collections_list",
             "collections_update",
             "documents_get_text",
+            "documents_index",
+            "documents_text_update",
             "entropia_status",
             "items_get",
             "items_list",
@@ -771,7 +773,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 16);
+    assert_eq!(tools.len(), 18);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -779,6 +781,8 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         "collections_create",
         "collections_update",
         "items_update",
+        "documents_text_update",
+        "documents_index",
     ];
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
@@ -807,7 +811,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 16] = [
+    let expected: [(&str, &[&str]); 18] = [
         ("approvals_status", &["approvalId"]),
         ("collections_create", &["description", "name", "requestId"]),
         ("collections_list", &["cursor", "limit"]),
@@ -818,6 +822,11 @@ async fn every_tool_publishes_a_strict_input_schema() {
         (
             "documents_get_text",
             &["assetId", "cursor", "itemId", "maxChars"],
+        ),
+        ("documents_index", &["itemId"]),
+        (
+            "documents_text_update",
+            &["assetId", "itemId", "text", "textHash"],
         ),
         ("entropia_status", &[]),
         ("items_get", &["itemId"]),
@@ -1988,6 +1997,167 @@ async fn items_update_edits_fields_keeps_what_the_app_reserves_and_is_searchable
         "the edit is searchable at once"
     );
     assert_eq!(*seen.lock().unwrap(), vec![format!("item:{item}")]);
+}
+
+#[tokio::test]
+async fn documents_text_update_asks_the_owner_and_applies_only_after_approval() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.seed_page_texts();
+    let seen = harness.watch_corpus();
+    let item = test_archive::item_id(ALFA, 1);
+    let arguments = json!({
+        "itemId": item,
+        "assetId": "ast_alfa_1",
+        "textHash": sha256_hex(PAGE_ONE),
+        "text": "Página uno corregida por Sarmiento."
+    });
+    let refusal = harness
+        .refusal(&token, "documents_text_update", arguments.clone())
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+
+    harness.grant(&id, true, false);
+    let asked = harness
+        .payload(&token, "documents_text_update", arguments)
+        .await;
+    assert_eq!(asked["status"], "pending");
+    assert_eq!(asked["action"]["kind"], "replace_text");
+    assert_eq!(asked["action"]["asset_id"], "ast_alfa_1");
+    assert_eq!(asked["jobId"], "");
+    assert_eq!(asked["collections"], json!(["Alfa"]));
+    assert!(asked["preview"]
+        .as_str()
+        .unwrap()
+        .starts_with("Página uno corregida"));
+    assert!(
+        asked.get("text").is_none(),
+        "the proposal never comes back whole"
+    );
+    let before = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": item, "assetId": "ast_alfa_1" }),
+        )
+        .await;
+    assert_eq!(
+        before["pages"][0]["text"], PAGE_ONE,
+        "nothing changes before the answer"
+    );
+
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    let after = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": item, "assetId": "ast_alfa_1" }),
+        )
+        .await;
+    assert_eq!(
+        after["pages"][0]["text"],
+        "Página uno corregida por Sarmiento."
+    );
+    assert_eq!(
+        after["pages"][0]["textHash"],
+        sha256_hex("Página uno corregida por Sarmiento.")
+    );
+    let found = harness
+        .payload(&token, "search_items", json!({ "query": "Sarmiento" }))
+        .await;
+    assert_eq!(ids(&found), vec![item.clone()]);
+    let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
+    assert!(
+        crate::llm::ocr_correction::can_restore_original(&conn, "ast_alfa_1").unwrap(),
+        "«Restaurar original» can undo it"
+    );
+    assert_eq!(*seen.lock().unwrap(), vec![format!("item:{item}")]);
+}
+
+#[tokio::test]
+async fn documents_text_update_refuses_what_it_cannot_safely_replace() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    harness.seed_page_texts();
+    let item = test_archive::item_id(ALFA, 1);
+    for (arguments, code) in [
+        (
+            json!({ "itemId": item, "assetId": "ast_alfa_1", "textHash": sha256_hex("otro"), "text": "x" }),
+            "revision_conflict",
+        ),
+        (
+            json!({ "itemId": item, "assetId": "ast_alfa_1", "textHash": sha256_hex(PAGE_ONE), "text": PAGE_ONE }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "itemId": item, "assetId": "ast_alfa_2", "textHash": sha256_hex(COVER), "text": "otra" }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "itemId": test_archive::item_id(BETA, 1), "assetId": "ast_alfa_1", "textHash": sha256_hex(PAGE_ONE), "text": "x" }),
+            ERROR_NOT_FOUND,
+        ),
+        (
+            json!({ "itemId": item, "assetId": "ast_alfa_1", "textHash": sha256_hex(PAGE_ONE), "text": "   " }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+    ] {
+        let refusal = harness
+            .refusal(&token, "documents_text_update", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], code, "{arguments}");
+    }
+    assert!(
+        harness.endpoint.approvals().pending().is_empty(),
+        "no dialog for a refusal"
+    );
+}
+
+#[tokio::test]
+async fn documents_index_refreshes_an_items_search_entry() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    let item = test_archive::item_id(ALFA, 2);
+    let refusal = harness
+        .refusal(&token, "documents_index", json!({ "itemId": item }))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+    harness.grant(&id, true, false);
+    // A title written behind the index's back is not searchable yet.
+    let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
+    conn.execute(
+        "UPDATE items SET title = 'Memorias de Belgrano' WHERE id = ?1",
+        [&item],
+    )
+    .unwrap();
+    let before = harness
+        .payload(&token, "search_items", json!({ "query": "Belgrano" }))
+        .await;
+    assert!(ids(&before).is_empty());
+    let indexed = harness
+        .payload(&token, "documents_index", json!({ "itemId": item }))
+        .await;
+    assert_eq!(indexed, json!({ "itemId": item, "indexed": true }));
+    let after = harness
+        .payload(&token, "search_items", json!({ "query": "Belgrano" }))
+        .await;
+    assert_eq!(ids(&after), vec![item.clone()]);
+    let missing = harness
+        .refusal(
+            &token,
+            "documents_index",
+            json!({ "itemId": "ite_missing" }),
+        )
+        .await;
+    assert_eq!(missing["error"], ERROR_NOT_FOUND);
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read

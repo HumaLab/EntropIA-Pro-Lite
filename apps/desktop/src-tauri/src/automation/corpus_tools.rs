@@ -12,11 +12,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::approvals::{Approval, ApprovalAction, ApprovalRequest, ApprovalStore};
 use super::jobs::JobsError;
 use crate::corpus::{self, CollectionDto, CollectionPatch, CorpusError, ItemPatch};
 use crate::processing::repository;
@@ -136,6 +137,30 @@ fn payload_hash(parts: &[&str]) -> String {
     hex::encode(Sha256::digest(parts.join("\u{0}").as_bytes()))
 }
 
+/// What an assistant proposes for one page.
+pub struct TextReplacement {
+    pub item_id: String,
+    pub asset_id: String,
+    /// The page's `textHash` as the assistant read it.
+    pub text_hash: String,
+    pub text: String,
+}
+
+/// Characters of a proposed text the owner's dialog shows.
+const PREVIEW_CHARS: usize = 400;
+
+/// `documents_index`'s payload.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedItem {
+    pub item_id: String,
+    pub indexed: bool,
+}
+
+fn sha256_hex(text: &str) -> String {
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
 /// The corpus of one archive, as the edit tools see it.
 #[derive(Clone)]
 pub struct CorpusArchive {
@@ -234,6 +259,110 @@ impl CorpusArchive {
                 Err(error)
             }
         }
+    }
+
+    /// Ask the owner to replace one page's recognized text. Everything that
+    /// can be refused is refused here, before a dialog opens: an unknown or
+    /// foreign file, a page without recognized text (audio), a text that
+    /// changed since it was read, an empty or unchanged proposal.
+    pub fn request_text_replacement(
+        &self,
+        approvals: &ApprovalStore,
+        client_id: &str,
+        client_name: &str,
+        proposal: &TextReplacement,
+    ) -> Result<Approval, JobsError> {
+        let TextReplacement {
+            item_id,
+            asset_id,
+            text_hash,
+            text,
+        } = proposal;
+        let (item_id, asset_id, text_hash, text) = (
+            item_id.as_str(),
+            asset_id.as_str(),
+            text_hash.as_str(),
+            text.as_str(),
+        );
+        let max = corpus::MAX_PAGE_TEXT_CHARS;
+        if text.trim().is_empty() || text.chars().count() > max {
+            return Err(refusal(
+                "invalid_argument",
+                format!("El texto nuevo tiene que tener entre 1 y {max} caracteres."),
+            ));
+        }
+        let conn = self.connection()?;
+        let collection: Option<String> = conn
+            .query_row(
+                "SELECT c.name FROM assets a
+                 JOIN items i ON i.id = a.item_id
+                 JOIN collections c ON c.id = i.collection_id
+                 WHERE a.id = ?1 AND a.item_id = ?2",
+                params![asset_id, item_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| JobsError::unavailable())?;
+        let collection = collection.ok_or_else(|| {
+            refusal(
+                "not_found",
+                format!("El ítem «{item_id}» no tiene un archivo con el id «{asset_id}»."),
+            )
+        })?;
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE asset_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![asset_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| JobsError::unavailable())?;
+        let Some(current) = current.filter(|text| !text.trim().is_empty()) else {
+            return Err(refusal(
+                "invalid_argument",
+                "Esta página no tiene texto reconocido que reemplazar (una transcripción de audio no se puede reemplazar así).",
+            ));
+        };
+        if sha256_hex(&current) != text_hash {
+            return Err(refusal(
+                super::jobs::ERROR_REVISION_CONFLICT,
+                "El texto de la página cambió desde que lo leíste: volvé a leerlo con documents_get_text y usá su `textHash`.",
+            ));
+        }
+        if current == text {
+            return Err(refusal(
+                "invalid_argument",
+                "El texto nuevo es igual al actual: no hay nada que reemplazar.",
+            ));
+        }
+        Ok(approvals.request(ApprovalRequest {
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            action: ApprovalAction::ReplaceText {
+                item_id: item_id.to_string(),
+                asset_id: asset_id.to_string(),
+                text_hash: text_hash.to_string(),
+                new_text_hash: sha256_hex(text),
+            },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["replace_text".to_string()],
+            collections: vec![collection],
+            files: 1,
+            preview: Some(text.chars().take(PREVIEW_CHARS).collect()),
+            text: Some(text.to_string()),
+        }))
+    }
+
+    /// Refresh one item's search entry.
+    pub fn reindex(&self, item_id: &str) -> Result<IndexedItem, JobsError> {
+        let conn = self.connection()?;
+        corpus::reindex_item(&conn, item_id).map_err(from_corpus)?;
+        Ok(IndexedItem {
+            item_id: item_id.to_string(),
+            indexed: true,
+        })
     }
 
     /// Rename or re-describe a collection at the revision the assistant read.

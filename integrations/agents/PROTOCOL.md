@@ -310,7 +310,7 @@ through the tool itself. Clients rely on this; Codex cancels a non-interactive
 call to a tool that does not declare itself read-only, so it asks before calling
 the three writing tools.
 
-Sixteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+Eighteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
 The seven archive tools:
 
 | Tool | Arguments | Result |
@@ -355,6 +355,8 @@ the rules are the app's.
 | `collections_create` | `requestId`, `name`, `description?` | `{id, name, description, createdAt, updatedAt, created}` |
 | `collections_update` | `collectionId`, `revision`, `name?`, `description?` (`null` clears it) | `{id, name, description, createdAt, updatedAt}` |
 | `items_update` | `itemId`, `revision`, `title?`, `metadata?` (object of text values) | `{id, title, collectionId, metadata, createdAt, updatedAt}` |
+| `documents_text_update` | `itemId`, `assetId`, `textHash`, `text` | An approval (`action.kind: "replace_text"`) waiting for the owner |
+| `documents_index` | `itemId` | `{itemId, indexed: true}` — refreshes the item's `search_items` entry |
 
 - **Revisions.** `revision` is the `updatedAt` the assistant read (`collections_list`,
   `items_get`). A record that changed since then answers `revision_conflict` and
@@ -369,6 +371,17 @@ the rules are the app's.
 - **The app refreshes.** After each write the app emits `corpus:changed`
   (`{kind, id, collectionId}`); the sidebar and Colecciones re-read on it. An item
   already open in the app does not reload by itself yet (it may hold unsaved edits).
+- **Replacing a page text asks the owner** (S5: overwriting needs a specific
+  confirmation). `documents_text_update` checks everything first: the file belongs to
+  the item, the page has recognized text (native or OCR; an audio transcription
+  cannot be replaced this way), `textHash` is still the page's, the text is new and
+  1-200000 characters. Then it creates an approval and nothing changes until the
+  owner approves in the app, which shows the collection and the first 400 characters
+  of the proposal. On approval the text is replaced only if the page's hash is still
+  the approved one (otherwise the approval ends `failed`), the text it had before the
+  first correction is kept in `ocr_correction_backups`, so «Restaurar original»
+  undoes it, and the item is re-indexed. Embeddings are not recomputed: ask for them
+  with `processing_prepare`, which has its own approval.
 - Names are 1-200 characters, descriptions up to 2000, titles 1-500, at most 100
   metadata fields; control characters are refused.
 
@@ -453,8 +466,11 @@ initial focus is «Rechazar», Escape rejects and a click outside does nothing.
  "decidedAt": null, "failure": null}
 ```
 
-`action` is `{"kind": "start"}`, `{"kind": "resume"}` or
-`{"kind": "retry", "task_id": …, "failed_only": …}`. `status` is `pending`,
+`action` is `{"kind": "start"}`, `{"kind": "resume"}`,
+`{"kind": "retry", "task_id": …, "failed_only": …}` or
+`{"kind": "replace_text", "item_id": …, "asset_id": …, "text_hash": …, "new_text_hash": …}`.
+For `replace_text`, `jobId` is empty, `revision` is 0 and `preview` holds the first
+400 characters of the proposed text; the whole text is never returned. `status` is `pending`,
 `approved` (approved and run), `failed` (approved, but the job had changed; nothing
 ran, `failure` says why), `rejected` or `expired`.
 

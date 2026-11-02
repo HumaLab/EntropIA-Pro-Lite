@@ -38,6 +38,7 @@ const START: AgentApproval = {
   expiresAt: 1_767_226_200_000,
   decidedAt: null,
   failure: null,
+  preview: null,
 }
 
 /** Answer the commands the dialog calls; anything else fails loudly. */
@@ -127,6 +128,36 @@ describe('AgentApprovalDialog', () => {
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveTextContent('Claude Code pide reanudar un procesamiento')
     expect(dialog).toHaveTextContent('1 pedido más esperando')
+  })
+
+  it('shows a proposed text replacement with its preview and its undo, without spending', async () => {
+    respond([
+      [
+        {
+          ...START,
+          id: 'apr_txt',
+          action: {
+            kind: 'replace_text',
+            item_id: 'ite_1',
+            asset_id: 'ast_1',
+            text_hash: 'a'.repeat(64),
+            new_text_hash: 'b'.repeat(64),
+          },
+          jobId: '',
+          operations: ['replace_text'],
+          collections: ['Alfa'],
+          files: 1,
+          preview: 'Página uno corregida por Sarmiento.',
+        },
+      ],
+    ])
+    render(AgentApprovalDialog)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Claude Code pide reemplazar el texto de una página')
+    expect(dialog).toHaveTextContent('Página uno corregida por Sarmiento.')
+    expect(dialog).toHaveTextContent('Restaurar original')
+    expect(dialog).not.toHaveTextContent('proveedores pagos')
+    expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
   })
 
   it('reads the queue again when the backend says it changed', async () => {
