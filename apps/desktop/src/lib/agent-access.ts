@@ -77,6 +77,50 @@ export function agentClientSetGrants(
   return invoke<AgentAccessStatus>('agent_client_set_grants', { clientId, grants })
 }
 
+/** What an assistant asked to do with a processing job (D3). */
+export type AgentApprovalAction =
+  | { kind: 'start' }
+  | { kind: 'resume' }
+  | { kind: 'retry'; task_id: string | null; failed_only: boolean }
+
+export type AgentApprovalStatus = 'pending' | 'approved' | 'failed' | 'rejected' | 'expired'
+
+/**
+ * A request for paid work, waiting for the owner. Bound to the client, the job
+ * and the job revision the assistant saw; it carries names and counts only.
+ */
+export interface AgentApproval {
+  id: string
+  clientId: string
+  clientName: string
+  action: AgentApprovalAction
+  jobId: string
+  revision: number
+  operations: string[]
+  collections: string[]
+  files: number
+  status: AgentApprovalStatus
+  /** Unix milliseconds. */
+  createdAt: number
+  expiresAt: number
+  decidedAt: number | null
+  /** Why an approved action did not run. */
+  failure: string | null
+}
+
+/** The event the backend emits whenever the approvals change. */
+export const AGENT_APPROVALS_CHANGED_EVENT = 'agent-approvals:changed'
+
+/** The requests waiting for the owner, oldest first. */
+export function agentApprovalsPending(): Promise<AgentApproval[]> {
+  return invoke<AgentApproval[]>('agent_approvals_pending')
+}
+
+/** The owner's answer; approving runs the action once. */
+export function agentApprovalDecide(approvalId: string, approve: boolean): Promise<AgentApproval> {
+  return invoke<AgentApproval>('agent_approval_decide', { approvalId, approve })
+}
+
 /** The connector binary every assistant config names. */
 export const CONNECTOR_COMMAND = 'entropia-agent-connector'
 

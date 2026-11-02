@@ -21,6 +21,7 @@
   import { runStartupReconcile } from '$lib/internet-archive-reconcile'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
+  import AgentApprovalDialog from './components/AgentApprovalDialog.svelte'
 
   let ready = $state(false)
   let error = $state<string | null>(null)
@@ -143,6 +144,9 @@
       storeNoticeDismissed = true
     }}
   />
+  <!-- Paid work an external assistant asked for waits here for the owner,
+       whatever view is open (Configuración › Asistentes). -->
+  <AgentApprovalDialog />
 {/if}
 
 {#if $compacting}

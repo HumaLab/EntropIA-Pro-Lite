@@ -241,6 +241,22 @@ describe('App archive compaction notice', () => {
   })
 })
 
+describe('App assistant approvals', () => {
+  it('listens for requests from external assistants once the app is ready', async () => {
+    const { listen } = await import('@tauri-apps/api/event')
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(listen).mockClear()
+    render(App)
+    await waitForStartupToFinish()
+    await vi.waitFor(() =>
+      expect(vi.mocked(listen).mock.calls.map(([event]) => event)).toContain(
+        'agent-approvals:changed'
+      )
+    )
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('agent_approvals_pending')
+  })
+})
+
 describe('App lazy routes', () => {
   it('shows a pending state and completes item navigation with the required props', async () => {
     let resolveRoute: ((module: { default: typeof LazyRouteStub }) => void) | undefined
