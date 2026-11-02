@@ -31,6 +31,8 @@ pub struct AgentStatusView {
     /// The port the endpoint listens on, while it listens.
     pub port: Option<u16>,
     pub clients: Vec<ClientView>,
+    /// Folders assistants may import from.
+    pub import_folders: Vec<String>,
 }
 
 /// `agent_client_create`'s payload: the new client and the status after adding
@@ -55,6 +57,7 @@ pub fn status(
         running: port.is_some(),
         port,
         clients: view.clients,
+        import_folders: view.import_folders,
     })
 }
 
@@ -105,6 +108,26 @@ pub fn set_client_grants(
     grants: Grants,
 ) -> Result<AgentStatusView, String> {
     access.set_grants(client_id, grants)?;
+    status(access, endpoint)
+}
+
+/// Enable a folder for assistant imports and report the status after it.
+pub fn add_import_folder(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    path: &str,
+) -> Result<AgentStatusView, String> {
+    access.add_import_folder(path)?;
+    status(access, endpoint)
+}
+
+/// Stop assistant imports from a folder and report the status after it.
+pub fn remove_import_folder(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    path: &str,
+) -> Result<AgentStatusView, String> {
+    access.remove_import_folder(path)?;
     status(access, endpoint)
 }
 
@@ -209,6 +232,24 @@ pub fn agent_client_set_grants(
 }
 
 #[tauri::command]
+pub fn agent_import_folder_add(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    path: String,
+) -> Result<AgentStatusView, String> {
+    add_import_folder(access.inner(), endpoint.inner(), &path)
+}
+
+#[tauri::command]
+pub fn agent_import_folder_remove(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    path: String,
+) -> Result<AgentStatusView, String> {
+    remove_import_folder(access.inner(), endpoint.inner(), &path)
+}
+
+#[tauri::command]
 pub fn agent_approvals_pending(endpoint: State<'_, Arc<AgentEndpointState>>) -> Vec<Approval> {
     pending_approvals(endpoint.inner())
 }
@@ -283,6 +324,7 @@ mod tests {
                 running: false,
                 port: None,
                 clients: vec![],
+                import_folders: vec![],
             }
         );
         let client = harness.access.create_client("Claude Code").unwrap();
@@ -458,6 +500,27 @@ mod tests {
         assert_eq!(line["status"], "ok");
         assert_eq!(line["decision"], "approved");
         assert_eq!(line["objectIds"], serde_json::json!([asked.id, job]));
+    }
+
+    #[test]
+    fn import_folders_are_added_and_removed_through_the_status() {
+        let harness = harness();
+        let inbox = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(inbox.path()).unwrap();
+        let real = real.to_string_lossy().to_string();
+        let added = add_import_folder(
+            &harness.access,
+            &harness.endpoint,
+            &inbox.path().to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(added.import_folders, vec![real.clone()]);
+        let refused = add_import_folder(&harness.access, &harness.endpoint, "").unwrap_err();
+        assert!(refused.starts_with("invalid_folder:"), "{refused}");
+        let removed = remove_import_folder(&harness.access, &harness.endpoint, &real).unwrap();
+        assert!(removed.import_folders.is_empty());
+        let json = serde_json::to_string(&added).unwrap();
+        assert!(json.contains("\"importFolders\""), "{json}");
     }
 
     #[tokio::test]

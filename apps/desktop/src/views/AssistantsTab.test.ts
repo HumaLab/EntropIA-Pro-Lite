@@ -16,12 +16,14 @@ import {
  * pin the IPC payloads.
  */
 
-const { invokeMock, writeTextMock } = vi.hoisted(() => ({
+const { invokeMock, writeTextMock, openDialogMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   writeTextMock: vi.fn<(_: string) => Promise<void>>(),
+  openDialogMock: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: openDialogMock }))
 
 const SCOPES: AgentScope[] = ['read']
 
@@ -76,6 +78,7 @@ const ACTIVE_STATUS: AgentAccessStatus = {
   running: true,
   port: 41123,
   clients: [CLAUDE],
+  importFolders: [],
 }
 
 const STOPPED_STATUS: AgentAccessStatus = {
@@ -83,6 +86,7 @@ const STOPPED_STATUS: AgentAccessStatus = {
   running: false,
   port: null,
   clients: [CLAUDE],
+  importFolders: [],
 }
 
 /**
@@ -151,7 +155,13 @@ describe('AssistantsTab', () => {
 
   it('shows a stopped endpoint and no clients when access is disabled', async () => {
     respond({
-      agent_access_status: { enabled: false, running: false, port: null, clients: [] },
+      agent_access_status: {
+        enabled: false,
+        running: false,
+        port: null,
+        clients: [],
+        importFolders: [],
+      },
     })
     render(AssistantsTab)
 
@@ -320,6 +330,56 @@ describe('AssistantsTab', () => {
         screen.getByRole('checkbox', { name: 'Pedir procesamiento pago: Claude Code' })
       ).not.toBeChecked()
     )
+  })
+
+  it('adds an import folder chosen with the system folder picker', async () => {
+    openDialogMock.mockResolvedValue('/home/ana/Cartas')
+    respond({
+      agent_access_status: ACTIVE_STATUS,
+      agent_import_folder_add: { ...ACTIVE_STATUS, importFolders: ['/home/ana/Cartas'] },
+    })
+    render(AssistantsTab)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Agregar carpeta' }))
+    expect(openDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: true, multiple: false })
+    )
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith('agent_import_folder_add', {
+        path: '/home/ana/Cartas',
+      })
+    )
+    expect(await screen.findByText('/home/ana/Cartas')).toBeInTheDocument()
+  })
+
+  it('does nothing when the folder picker is cancelled', async () => {
+    openDialogMock.mockResolvedValue(null)
+    respond({ agent_access_status: ACTIVE_STATUS })
+    render(AssistantsTab)
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Agregar carpeta' }))
+    await waitFor(() => expect(openDialogMock).toHaveBeenCalled())
+    expect(invokeMock).not.toHaveBeenCalledWith('agent_import_folder_add', expect.anything())
+    expect(screen.getByText('Ninguna carpeta habilitada.')).toBeInTheDocument()
+  })
+
+  it('removes an import folder at once', async () => {
+    respond({
+      agent_access_status: { ...ACTIVE_STATUS, importFolders: ['/home/ana/Cartas'] },
+      agent_import_folder_remove: ACTIVE_STATUS,
+    })
+    render(AssistantsTab)
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Quitar carpeta /home/ana/Cartas' })
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith('agent_import_folder_remove', {
+        path: '/home/ana/Cartas',
+      })
+    )
+    await waitFor(() => expect(screen.queryByText('/home/ana/Cartas')).not.toBeInTheDocument())
   })
 
   it('shows where each client token is stored', async () => {

@@ -1706,6 +1706,8 @@ pub fn run() {
             automation::commands::agent_client_set_grants,
             automation::commands::agent_approvals_pending,
             automation::commands::agent_approval_decide,
+            automation::commands::agent_import_folder_add,
+            automation::commands::agent_import_folder_remove,
             corpus::commands::corpus_collection_create,
             corpus::commands::corpus_collection_update,
             corpus::commands::corpus_item_update,

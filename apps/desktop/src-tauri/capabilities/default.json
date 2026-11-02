@@ -235,6 +235,8 @@
     "allow-agent-client-set-grants",
     "allow-agent-approvals-pending",
     "allow-agent-approval-decide",
+    "allow-agent-import-folder-add",
+    "allow-agent-import-folder-remove",
     "allow-corpus-collection-create",
     "allow-corpus-collection-update",
     "allow-corpus-item-update",

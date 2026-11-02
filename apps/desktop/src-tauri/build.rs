@@ -275,6 +275,8 @@ const APP_COMMANDS: &[&str] = &[
     "agent_client_set_grants",
     "agent_approvals_pending",
     "agent_approval_decide",
+    "agent_import_folder_add",
+    "agent_import_folder_remove",
     "corpus_collection_create",
     "corpus_collection_update",
     "corpus_item_update",

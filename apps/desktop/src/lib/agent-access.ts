@@ -43,6 +43,8 @@ export interface AgentAccessStatus {
   /** The ephemeral port while it listens. */
   port: number | null
   clients: AgentClient[]
+  /** Folders assistants may import from, as real paths. */
+  importFolders: string[]
 }
 
 export interface CreatedAgentClient {
@@ -67,6 +69,16 @@ export function grantsOf(client: AgentClient): AgentGrants {
     localWrite: client.scopes.includes('local_write'),
     remoteSpend: client.scopes.includes('remote_spend'),
   }
+}
+
+/** Let assistants import from a folder; answers with the fresh status. */
+export function agentImportFolderAdd(path: string): Promise<AgentAccessStatus> {
+  return invoke<AgentAccessStatus>('agent_import_folder_add', { path })
+}
+
+/** Stop assistant imports from a folder; answers with the fresh status. */
+export function agentImportFolderRemove(path: string): Promise<AgentAccessStatus> {
+  return invoke<AgentAccessStatus>('agent_import_folder_remove', { path })
 }
 
 /** Replace one client's grants; answers with the fresh status. */
