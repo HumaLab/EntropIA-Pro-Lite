@@ -142,6 +142,16 @@ impl Harness {
             .revision
     }
 
+    /// A job the owner started and the scheduler picked up.
+    fn mark_running(&self, job_id: &str) {
+        let conn = crate::processing::commands::open_ready(&self.db_path()).unwrap();
+        conn.execute(
+            "UPDATE processing_batches SET state = 'running', desired_state = 'run', planning_done = 1 WHERE id = ?1",
+            [job_id],
+        )
+        .unwrap();
+    }
+
     fn desired_state(&self, job_id: &str) -> String {
         let conn = crate::processing::commands::open_ready(&self.db_path()).unwrap();
         crate::processing::commands::batch_snapshot(&conn, job_id)
@@ -1281,6 +1291,7 @@ async fn resume_and_retry_need_the_spend_grant_and_wait_for_the_owner() {
     let (id, token) = harness.pair("Claude Code");
     harness.grant(&id, true, false);
     let job = harness.prepare("req-a", ALFA);
+    harness.mark_running(&job);
     let paused = harness
         .payload(
             &token,
@@ -1314,6 +1325,57 @@ async fn resume_and_retry_need_the_spend_grant_and_wait_for_the_owner() {
         json!({ "kind": "retry", "task_id": null, "failed_only": true })
     );
     assert_eq!(harness.endpoint.approvals().pending().len(), 2);
+}
+
+#[tokio::test]
+async fn resume_is_refused_on_a_job_that_never_started() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, true);
+    let draft = harness.prepare("req-a", ALFA);
+    let ready = harness.prepare("req-b", ALFA);
+    let ready_revision = harness.mark_ready(&ready);
+    let draft_revision = harness
+        .payload(&token, "jobs_get", json!({ "jobId": draft }))
+        .await["job"]["revision"]
+        .as_i64()
+        .unwrap();
+    for (job, revision) in [(draft, draft_revision), (ready, ready_revision)] {
+        let refusal = harness
+            .refusal(
+                &token,
+                "processing_control",
+                json!({ "jobId": job, "action": "resume", "revision": revision }),
+            )
+            .await;
+        assert_eq!(refusal["error"], "invalid_state", "{job}");
+        assert!(
+            refusal["message"]
+                .as_str()
+                .unwrap()
+                .contains("processing_start"),
+            "the refusal names the right tool: {refusal}"
+        );
+    }
+    assert!(harness.endpoint.approvals().pending().is_empty());
+}
+
+#[tokio::test]
+async fn processing_prepare_refuses_an_unknown_operation_instead_of_dropping_it() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let refusal = harness
+        .refusal(
+            &token,
+            "processing_prepare",
+            json!({ "requestId": "r1", "collectionIds": [ALFA], "operations": ["ocr", "shell"] }),
+        )
+        .await;
+    assert_eq!(refusal["error"], ERROR_INVALID_ARGUMENT);
+    assert!(refusal["message"].as_str().unwrap().contains("shell"));
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert!(records(&jobs).is_empty());
 }
 
 #[tokio::test]

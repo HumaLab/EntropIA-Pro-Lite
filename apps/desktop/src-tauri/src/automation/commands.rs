@@ -122,7 +122,22 @@ pub fn decide_approval(
     approve: bool,
 ) -> Result<Approval, String> {
     let conn = crate::processing::commands::open_ready(db_path)?;
-    endpoint.approvals().decide(&conn, approval_id, approve)
+    let decided = endpoint.approvals().decide(&conn, approval_id, approve)?;
+    let decision = match decided.status {
+        super::approvals::ApprovalStatus::Approved => "approved",
+        super::approvals::ApprovalStatus::Failed => "failed",
+        _ => "rejected",
+    };
+    endpoint
+        .audit_log()
+        .append(&super::audit::AuditLine::owner_decision(
+            &decided.client_id,
+            &decided.client_name,
+            &decided.id,
+            &decided.job_id,
+            decision,
+        ));
+    Ok(decided)
 }
 
 #[tauri::command]
@@ -404,6 +419,22 @@ mod tests {
         assert!(pending_approvals(&endpoint).is_empty());
         let json = serde_json::to_string(&decided).unwrap();
         assert!(!json.contains("eat_"), "an approval never carries a token");
+
+        // S9: the owner's answer is in the audit trail, ids only.
+        let trail = std::fs::read_to_string(
+            dir.path()
+                .join("cache")
+                .join("logs")
+                .join(crate::automation::audit::AUDIT_FILE),
+        )
+        .expect("the decision was audited");
+        let line: serde_json::Value =
+            serde_json::from_str(trail.lines().last().expect("one line")).unwrap();
+        assert_eq!(line["tool"], "owner_decision");
+        assert_eq!(line["clientId"], "cl_a");
+        assert_eq!(line["status"], "ok");
+        assert_eq!(line["decision"], "approved");
+        assert_eq!(line["objectIds"], serde_json::json!([asked.id, job]));
     }
 
     #[tokio::test]

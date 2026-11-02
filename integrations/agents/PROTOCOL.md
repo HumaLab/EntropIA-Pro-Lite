@@ -359,7 +359,8 @@ unchanged. A "job" is a batch.
 | `approvals_status` | `read` | `approvalId` | The approval, for the client that asked for it only |
 
 - **Prepare.** `operations` are `ocr`, `embeddings`, `ner`, `triples` and
-  `schema:<id>`. The scope is collections, items or both; each file enters once.
+  `schema:<id>`; any other value is `invalid_argument` (never silently dropped).
+  The scope is collections, items or both; each file enters once.
   `requestId` (1-128 visible characters) is stored as `agent:<client id>:<requestId>`:
   sending it again with the same arguments returns the same job (`created: false`),
   with other arguments it is `invalid_argument`, and two assistants never collide.
@@ -372,7 +373,9 @@ unchanged. A "job" is a batch.
 - **Control.** `pause` and `cancel` need `local_write` and apply at once to that
   one job (never "all jobs"); they only withdraw demand — running units finish
   their current step and confirmed results are kept. `resume` and `retry` spend
-  again, so they need `remote_spend` and `revision` and become an approval
+  again, so they need `remote_spend` and `revision` and become an approval. Only a
+  job that has started can be resumed: a draft (`preparing`, `ready`) is started
+  with `processing_start`, and `resume` on it is `invalid_state`
   (`outcome: "approval_pending"`); `retry` reopens one task (`taskId`) or every
   failed one (`failedOnly: true`).
 
@@ -475,6 +478,12 @@ the app's local cache directory (`automation/audit.rs`, wired in `lib.rs`).
 | `errorCode` | Present only on `error`: the stable code above |
 | `objectIds` | Ids the call returned or touched (for a paid request, the job id and the approval id) |
 | `queryChars` | Present only for `search_items`: the query **length** |
+| `decision` | Present only on `owner_decision` lines: `approved`, `failed` (approved, but the job had changed and nothing ran) or `rejected` |
+
+When the owner answers a request in the app, the trail gets one line with
+`tool: "owner_decision"`, attributed to the assistant that asked, with
+`objectIds: [approval id, job id]` and the `decision`. A request that expires
+unanswered leaves no `owner_decision` line.
 
 Never recorded: the query text, titles, paths, any other free text, tokens.
 Rotation: before appending, if the file is non-empty and the new line would pass

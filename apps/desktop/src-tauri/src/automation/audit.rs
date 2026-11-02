@@ -55,6 +55,10 @@ pub struct AuditLine {
     /// reaches the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_chars: Option<usize>,
+    /// The owner's answer to an assistant's request (`owner_decision` lines
+    /// only): `approved`, `failed` (approved, nothing ran) or `rejected`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
 }
 
 impl AuditLine {
@@ -74,6 +78,29 @@ impl AuditLine {
             error_code: None,
             object_ids,
             query_chars,
+            decision: None,
+        }
+    }
+
+    /// The owner answered an assistant's request in the app. Attributed to the
+    /// assistant that asked, with the approval and job ids and the answer.
+    pub fn owner_decision(
+        client_id: &str,
+        client_name: &str,
+        approval_id: &str,
+        job_id: &str,
+        decision: &str,
+    ) -> Self {
+        Self {
+            ts: now_ms(),
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            tool: "owner_decision".to_string(),
+            status: AuditStatus::Ok,
+            error_code: None,
+            object_ids: vec![approval_id.to_string(), job_id.to_string()],
+            query_chars: None,
+            decision: Some(decision.to_string()),
         }
     }
 
@@ -93,6 +120,7 @@ impl AuditLine {
             error_code: Some(error_code.to_string()),
             object_ids: Vec::new(),
             query_chars,
+            decision: None,
         }
     }
 }

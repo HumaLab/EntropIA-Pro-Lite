@@ -160,6 +160,11 @@ impl AgentEndpointState {
         }
     }
 
+    /// The audit trail the tools write, for what the owner answers in the app.
+    pub fn audit_log(&self) -> crate::automation::audit::AuditLog {
+        crate::automation::audit::AuditLog::new(self.cache_dir.join("logs"))
+    }
+
     /// The approvals store the endpoint fills and the app answers.
     pub fn approvals(&self) -> Arc<ApprovalStore> {
         self.approvals.clone()

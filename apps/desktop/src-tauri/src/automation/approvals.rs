@@ -362,6 +362,7 @@ mod tests {
 
     struct Fixture {
         _dir: tempfile::TempDir,
+        db_path: std::path::PathBuf,
         conn: Connection,
         clock: Arc<AtomicI64>,
         store: ApprovalStore,
@@ -370,7 +371,8 @@ mod tests {
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
-        let conn = batches::open_ready(&seeded_archive(dir.path())).unwrap();
+        let db_path = seeded_archive(dir.path());
+        let conn = batches::open_ready(&db_path).unwrap();
         let clock = Arc::new(AtomicI64::new(1_000_000));
         let reader = clock.clone();
         let store = ApprovalStore::with_clock(Arc::new(move || reader.load(Ordering::SeqCst)));
@@ -383,6 +385,7 @@ mod tests {
         }));
         Fixture {
             _dir: dir,
+            db_path,
             conn,
             clock,
             store,
@@ -535,6 +538,49 @@ mod tests {
         let approval = f.store.request(start_request("cl_a", &job, revision));
         assert!(f.store.get_for_client("cl_a", &approval.id).is_some());
         assert!(f.store.get_for_client("cl_b", &approval.id).is_none());
+    }
+
+    #[test]
+    fn racing_answers_run_the_approval_once() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let approval = f.store.request(start_request("cl_a", &job, revision));
+        let outcomes: Vec<Result<Approval, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let conn = batches::open_ready(&f.db_path).unwrap();
+                        f.store.decide(&conn, &approval.id, true)
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+        let snapshot = batches::batch_snapshot(&f.conn, &job).unwrap();
+        assert_eq!(snapshot.revision, revision + 1, "started exactly once");
+        assert_eq!(snapshot.desired_state, "run");
+    }
+
+    #[test]
+    fn two_assistants_asking_the_same_start_run_it_once() {
+        let f = fixture();
+        let (job, revision) = ready_job(&f.conn);
+        let first = f.store.request(start_request("cl_a", &job, revision));
+        let second = f.store.request(start_request("cl_b", &job, revision));
+        assert_eq!(
+            f.store.decide(&f.conn, &first.id, true).unwrap().status,
+            ApprovalStatus::Approved
+        );
+        assert_eq!(
+            f.store.decide(&f.conn, &second.id, true).unwrap().status,
+            ApprovalStatus::Failed,
+            "the job moved on: the second approval runs nothing"
+        );
+        assert_eq!(
+            batches::batch_snapshot(&f.conn, &job).unwrap().revision,
+            revision + 1
+        );
     }
 
     #[test]

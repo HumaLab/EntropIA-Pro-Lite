@@ -969,6 +969,28 @@ pub fn task_detail(
 
 // ── Batch commands ──────────────────────────────────────────────────────────
 
+/// The tab's own request checks, run before the archive is opened and worded
+/// as the command always worded them. The tab never sends item ids.
+fn validate_tab_prepare(
+    request_id: &str,
+    collection_ids: &[String],
+    operations: &[String],
+) -> Result<(), String> {
+    if request_id.trim().is_empty() || collection_ids.is_empty() {
+        return Err(
+            "invalid_selection: a request id and at least one collection are required".to_string(),
+        );
+    }
+    let known = operations.iter().any(|op| {
+        matches!(op.as_str(), "ocr" | "embeddings" | "ner" | "triples")
+            || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+    });
+    if !known {
+        return Err("invalid_selection: select OCR, embeddings, entities or triples".to_string());
+    }
+    Ok(())
+}
+
 /// Snapshots one batch scope durably and returns its id immediately (see
 /// [`prepare_batch`]).
 #[tauri::command]
@@ -978,6 +1000,7 @@ pub async fn processing_prepare(
     operations: Vec<String>,
     db: State<'_, AppDbState>,
 ) -> Result<PrepareResponse, String> {
+    validate_tab_prepare(&request_id, &collection_ids, &operations)?;
     let db_path = db.db_path.clone();
     blocking(move || {
         let conn = open_ready(&db_path)?;
@@ -1325,6 +1348,25 @@ mod tests {
             with_item.created,
             "a different scope is a different request"
         );
+    }
+
+    /// The Procesamiento tab's command checks its request before opening the
+    /// archive, with the sentences it always used; item scope is not its own.
+    #[test]
+    fn the_tab_command_validates_before_the_archive_with_its_own_words() {
+        assert_eq!(
+            validate_tab_prepare("req", &[], &ops(&["ocr"])).unwrap_err(),
+            "invalid_selection: a request id and at least one collection are required"
+        );
+        assert_eq!(
+            validate_tab_prepare(" ", &[ALFA.to_string()], &ops(&["ocr"])).unwrap_err(),
+            "invalid_selection: a request id and at least one collection are required"
+        );
+        assert_eq!(
+            validate_tab_prepare("req", &[ALFA.to_string()], &ops(&["shell"])).unwrap_err(),
+            "invalid_selection: select OCR, embeddings, entities or triples"
+        );
+        assert!(validate_tab_prepare("req", &[ALFA.to_string()], &ops(&["ocr"])).is_ok());
     }
 
     #[test]

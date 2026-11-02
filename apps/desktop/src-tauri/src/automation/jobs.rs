@@ -210,6 +210,13 @@ fn openrouter_configured(conn: &Connection) -> bool {
         .is_some_and(|value| !value.trim().is_empty())
 }
 
+/// The operations a batch runs. The tab only ever sends these; an assistant's
+/// typo is refused instead of silently dropped.
+fn is_known_operation(op: &str) -> bool {
+    matches!(op, "ocr" | "embeddings" | "ner" | "triples")
+        || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+}
+
 fn check_request_id(request_id: &str) -> Result<(), JobsError> {
     let chars = request_id.chars().count();
     if request_id.trim().is_empty()
@@ -267,6 +274,14 @@ impl JobsArchive {
         operations: &[String],
     ) -> Result<PrepareReport, JobsError> {
         check_request_id(request_id)?;
+        if let Some(unknown) = operations.iter().find(|op| !is_known_operation(op)) {
+            return Err(JobsError::new(
+                "invalid_argument",
+                format!(
+                    "Operación desconocida \"{unknown}\": usá ocr, embeddings, ner, triples o schema:<id>."
+                ),
+            ));
+        }
         if collection_ids.is_empty() && item_ids.is_empty() {
             return Err(JobsError::new(
                 "invalid_argument",
@@ -333,7 +348,13 @@ impl JobsArchive {
         );
         let admitted = match action {
             ApprovalAction::Start => job.state == "ready",
-            ApprovalAction::Resume => job.desired_state == "pause" && !terminal,
+            // A draft (preparing or ready) has never run: that is a start,
+            // and it goes through processing_start's own check.
+            ApprovalAction::Resume => {
+                job.desired_state == "pause"
+                    && !terminal
+                    && !matches!(job.state.as_str(), "preparing" | "ready")
+            }
             ApprovalAction::Retry { .. } => {
                 !matches!(job.state.as_str(), "cancelled" | "cancelling")
             }
@@ -343,7 +364,9 @@ impl JobsArchive {
                 ApprovalAction::Start => {
                     "empezar (tiene que estar en \"ready\", con la planificación terminada)"
                 }
-                ApprovalAction::Resume => "reanudar (tiene que estar pausado)",
+                ApprovalAction::Resume => {
+                    "reanudar (tiene que haber empezado y estar pausado; un borrador se empieza con processing_start)"
+                }
                 ApprovalAction::Retry { .. } => "reintentar (fue cancelado)",
             };
             return Err(JobsError::new(
