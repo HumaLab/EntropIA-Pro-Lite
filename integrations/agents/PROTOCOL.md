@@ -139,7 +139,8 @@ Notes that are part of the contract:
 ### Discovery file
 
 `agent-endpoint.json` in the app's data directory (`DISCOVERY_FILE` in
-`automation/server.rs`), written mode `0600` through a sibling temp file and a
+`automation/server.rs`), written owner-only (mode `0600` on Unix, a protected
+user-and-SYSTEM access list given at creation on Windows) through a sibling temp file and a
 rename. Written when the listener is already bound (so it never names a dead
 port) and removed when the endpoint stops or the app exits.
 
@@ -240,7 +241,7 @@ Only when the OS credential store is **unavailable** — keyring
 | Piece | Value |
 |---|---|
 | Path | `<data dir>/agent-tokens/<client id>.token` (so a dev profile keeps its own) |
-| Permissions | directory `0700`, file `0600` on Unix; the per-user profile ACL on Windows |
+| Permissions | directory `0700`, file `0600` on Unix; on Windows a protected access list naming only the user and SYSTEM (`automation/private_acl.rs`), so nothing inherited from `%APPDATA%` applies |
 | Write | atomic, like `agent-access.json` |
 | Record | `token_store: "file"` in `agent-access.json`; the panel shows **Archivo protegido** |
 
