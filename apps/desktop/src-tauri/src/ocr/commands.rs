@@ -699,6 +699,19 @@ const SPLIT_FREE_SPACE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
 // A split that runs longer than this is pathological; abort instead of hanging import.
 const SPLIT_MAX_DURATION: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+/// The split budget for one import into `out_dir`: the live free space minus
+/// a reserve, capped so one import cannot claim the whole disk, and a time
+/// bound. Shared by this command and the Rust ingest service.
+pub(crate) fn split_limits_for(out_dir: &std::path::Path) -> super::pdf::SplitLimits {
+    let free = fs2::available_space(out_dir).unwrap_or(u64::MAX);
+    super::pdf::SplitLimits {
+        max_output_bytes: free
+            .saturating_sub(SPLIT_FREE_SPACE_RESERVE_BYTES)
+            .min(SPLIT_MAX_OUTPUT_BYTES),
+        max_duration: SPLIT_MAX_DURATION,
+    }
+}
+
 /// Split a multi-page PDF into one single-page PDF file per page.
 ///
 /// Each page is preserved as an independent PDF — no rasterization, no
@@ -735,13 +748,7 @@ pub async fn split_pdf_pages(
         // import cannot claim the whole disk. Unknown free space falls back to
         // the cap; free space at or below the reserve yields a zero budget so
         // the split fails cleanly instead of filling the volume.
-        let free = fs2::available_space(&out_dir).unwrap_or(u64::MAX);
-        let limits = super::pdf::SplitLimits {
-            max_output_bytes: free
-                .saturating_sub(SPLIT_FREE_SPACE_RESERVE_BYTES)
-                .min(SPLIT_MAX_OUTPUT_BYTES),
-            max_duration: SPLIT_MAX_DURATION,
-        };
+        let limits = split_limits_for(&out_dir);
         let split = super::pdf::split_pdf_to_files(&bytes, &out_dir, &filename_prefix, &limits)?;
 
         let mut rendered = Vec::with_capacity(split.len());
