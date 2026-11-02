@@ -43,7 +43,8 @@ use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
 };
 use crate::automation::read::{
-    ArchiveCounts, ArchiveReader, CollectionsPage, ItemDetail, ItemsPage, ReadError, SearchResults,
+    ArchiveCounts, ArchiveReader, CollectionsPage, DocumentText, ItemDetail, ItemsPage, ReadError,
+    SearchResults,
 };
 use crate::automation::server::{app_version, profile_name, variant_name, PROTOCOL};
 
@@ -67,6 +68,7 @@ const TOOL_COLLECTIONS_LIST: &str = "collections_list";
 const TOOL_ITEMS_LIST: &str = "items_list";
 const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
+const TOOL_DOCUMENTS_GET_TEXT: &str = "documents_get_text";
 const TOOL_JOBS_LIST: &str = "jobs_list";
 const TOOL_JOBS_GET: &str = "jobs_get";
 const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
@@ -162,6 +164,20 @@ pub struct SearchItemsParams {
     pub collection_id: Option<String>,
     /// How many hits to return, 1 to 200; the default is 50.
     pub limit: Option<u32>,
+}
+
+/// `documents_get_text` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsGetTextParams {
+    /// The item whose text to read.
+    pub item_id: String,
+    /// Only this one of the item's files.
+    pub asset_id: Option<String>,
+    /// The `nextCursor` the previous call returned.
+    pub cursor: Option<String>,
+    /// Characters per call across pages, 1 to 20000; the default is 4000.
+    pub max_chars: Option<u32>,
 }
 
 /// `jobs_list` arguments.
@@ -619,7 +635,7 @@ impl AgentServer {
 
     #[tool(
         name = "items_get",
-        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto completo: para eso está `search_items`.",
+        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto: para leerlo por páginas está `documents_get_text`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn items_get(
@@ -670,6 +686,43 @@ impl AgentServer {
             .collect();
         self.audit_ok(&caller, TOOL_SEARCH_ITEMS, object_ids, query_chars);
         Ok(Json(results))
+    }
+
+    #[tool(
+        name = "documents_get_text",
+        description = "El texto de un ítem por páginas (un archivo o página del documento por entrada), en el orden de sus archivos: texto nativo u OCR, o la transcripción si es audio. Cada entrada trae `textHash` (sha256 del texto completo de la página) y `startChar`/`endChar` en caracteres Unicode, para citar y para saber si el texto cambió. Devuelve a lo sumo `maxChars` caracteres por llamada (1 a 20000, por defecto 4000); seguí con `cursor` (el `nextCursor` anterior). `assetId` lee un solo archivo.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn documents_get_text(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsGetTextParams>>,
+    ) -> Result<Json<DocumentText>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_DOCUMENTS_GET_TEXT)?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_GET_TEXT, args)?;
+        let reader = self.reader.clone();
+        let text = match Self::on_archive(move || {
+            reader.document_text(
+                &args.item_id,
+                args.asset_id.as_deref(),
+                args.cursor.as_deref(),
+                args.max_chars,
+            )
+        })
+        .await
+        {
+            Ok(text) => text,
+            Err(error) => {
+                return Err(self.read_failure(&caller, TOOL_DOCUMENTS_GET_TEXT, error, None))
+            }
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_DOCUMENTS_GET_TEXT,
+            vec![text.item.id.clone()],
+            None,
+        );
+        Ok(Json(text))
     }
 
     #[tool(

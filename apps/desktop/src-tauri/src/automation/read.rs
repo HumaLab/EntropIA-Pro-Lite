@@ -150,6 +150,149 @@ pub struct SearchResults {
     pub matches: usize,
 }
 
+/// Characters a `documents_get_text` call returns when the caller names none.
+pub const DEFAULT_TEXT_WINDOW: usize = 4000;
+
+/// Largest text window one call may ask for.
+pub const MAX_TEXT_WINDOW: usize = 20_000;
+
+/// The item a text read belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemRef {
+    pub id: String,
+    pub title: String,
+}
+
+/// One timed stretch of a transcription, in milliseconds from the start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+/// One window of one page's text, located so it can be cited.
+///
+/// Offsets count Unicode characters of the whole page text, the unit the
+/// passage index uses, and `textHash` is sha256 of that text: the same value a
+/// passage carries as its source hash, so a citation can tell whether the text
+/// it points into is still the current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PageWindow {
+    pub asset_id: String,
+    #[serde(rename = "type")]
+    pub asset_type: String,
+    /// The page of the original document, when the file is one page of it.
+    pub page_number: Option<i64>,
+    /// `extraction` (native text or OCR) or `transcription` (audio).
+    pub source: String,
+    /// For an extraction: `native` or `ocr`. `null` for a transcription.
+    pub method: Option<String>,
+    pub text_hash: String,
+    pub total_chars: usize,
+    pub start_char: usize,
+    pub end_char: usize,
+    pub text: String,
+    /// The transcription's timed segments, when the page is audio.
+    pub segments: Option<Vec<TranscriptSegment>>,
+}
+
+/// `documents_get_text`'s payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentText {
+    pub item: ItemRef,
+    /// The pages with text, in the item's file order. Files without text yet
+    /// (not extracted, or nothing readable) are left out; `items_get` lists all.
+    pub pages: Vec<PageWindow>,
+    /// Hand it back as `cursor` for the next window; `null` at the end.
+    pub next_cursor: Option<String>,
+}
+
+/// Where the next text window starts: the asset (by position and id, so a
+/// changed document is noticed) and the character offset inside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TextCursor {
+    i: usize,
+    a: String,
+    o: usize,
+}
+
+/// One page's whole text and where it came from.
+struct PageSource {
+    source: &'static str,
+    method: Option<String>,
+    text: String,
+    segments: Option<Vec<TranscriptSegment>>,
+}
+
+#[derive(Deserialize)]
+struct StoredSegment {
+    start_ms: i64,
+    end_ms: i64,
+    text: String,
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// The page text the app itself cites (`lib/page-text.ts`): the latest
+/// extraction when it has text, otherwise the latest transcription.
+fn page_source(conn: &Connection, asset_id: &str) -> Result<Option<PageSource>, ReadError> {
+    let extraction = conn
+        .query_row(
+            "SELECT text_content, method FROM extractions WHERE asset_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![asset_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| unavailable("leer el texto extraído", error))?;
+    if let Some((text, method)) = extraction {
+        if !text.trim().is_empty() {
+            return Ok(Some(PageSource {
+                source: "extraction",
+                method: Some(method),
+                text,
+                segments: None,
+            }));
+        }
+    }
+    let transcription = conn
+        .query_row(
+            "SELECT text_content, segments FROM transcriptions WHERE asset_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![asset_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(|error| unavailable("leer la transcripción", error))?;
+    Ok(transcription
+        .filter(|(text, _)| !text.trim().is_empty())
+        .map(|(text, segments)| PageSource {
+            source: "transcription",
+            method: None,
+            text,
+            segments: segments
+                .and_then(|json| serde_json::from_str::<Vec<StoredSegment>>(&json).ok())
+                .map(|stored| {
+                    stored
+                        .into_iter()
+                        .map(|segment| TranscriptSegment {
+                            start_ms: segment.start_ms,
+                            end_ms: segment.end_ms,
+                            text: segment.text,
+                        })
+                        .collect()
+                }),
+        }))
+}
+
 /// The last record a page handed out, encoded so only this module decodes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Cursor {
@@ -287,6 +430,137 @@ impl ArchiveReader {
         });
         Ok(ItemsPage {
             records,
+            next_cursor,
+        })
+    }
+
+    /// An item's page texts in file order, one window of at most `max_chars`
+    /// characters per call across pages (S4: never the whole file by default).
+    /// `asset_id` narrows the read to one of the item's files.
+    pub fn document_text(
+        &self,
+        item_id: &str,
+        asset_id: Option<&str>,
+        cursor: Option<&str>,
+        max_chars: Option<u32>,
+    ) -> Result<DocumentText, ReadError> {
+        let budget = max_chars.map_or(DEFAULT_TEXT_WINDOW, |max| max as usize);
+        if budget == 0 || budget > MAX_TEXT_WINDOW {
+            return Err(ReadError::InvalidArgument(format!(
+                "`maxChars` tiene que estar entre 1 y {MAX_TEXT_WINDOW}: llegó {budget}."
+            )));
+        }
+        let start = cursor
+            .map(|raw| {
+                URL_SAFE_NO_PAD
+                    .decode(raw)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<TextCursor>(&bytes).ok())
+                    .ok_or_else(invalid_cursor)
+            })
+            .transpose()?;
+        let conn = self.connection()?;
+        let title = conn
+            .query_row(
+                "SELECT title FROM items WHERE id = ?1",
+                params![item_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| unavailable("leer el ítem", error))?
+            .ok_or_else(|| {
+                ReadError::NotFound(format!(
+                    "No existe ningún ítem con el id «{item_id}» en este archivo."
+                ))
+            })?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id, type, page_number FROM assets WHERE item_id = ?1
+                 ORDER BY sort_index, page_number, id",
+            )
+            .map_err(|error| unavailable("leer los archivos del ítem", error))?;
+        let mut assets: Vec<(String, String, Option<i64>)> = collect(
+            statement
+                .query_map(params![item_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(|error| unavailable("leer los archivos del ítem", error))?,
+            "los archivos del ítem",
+        )?;
+        drop(statement);
+        if let Some(asset_id) = asset_id {
+            assets.retain(|(id, _, _)| id == asset_id);
+            if assets.is_empty() {
+                return Err(ReadError::NotFound(format!(
+                    "El ítem «{item_id}» no tiene un archivo con el id «{asset_id}»."
+                )));
+            }
+        }
+        let (mut index, mut offset) = match &start {
+            Some(cursor) => {
+                if assets.get(cursor.i).map(|(id, _, _)| id.as_str()) != Some(cursor.a.as_str()) {
+                    return Err(ReadError::InvalidArgument(
+                        "El cursor ya no corresponde a este documento (cambiaron sus archivos): volvé a leerlo sin cursor."
+                            .to_string(),
+                    ));
+                }
+                (cursor.i, cursor.o)
+            }
+            None => (0, 0),
+        };
+        let mut remaining = budget;
+        let mut pages = Vec::new();
+        let mut next_cursor = None;
+        while index < assets.len() {
+            let (id, asset_type, page_number) = &assets[index];
+            let Some(page) = page_source(&conn, id)? else {
+                index += 1;
+                offset = 0;
+                continue;
+            };
+            let chars: Vec<char> = page.text.chars().collect();
+            let total = chars.len();
+            if offset >= total {
+                index += 1;
+                offset = 0;
+                continue;
+            }
+            if remaining == 0 {
+                next_cursor = Some(
+                    URL_SAFE_NO_PAD.encode(
+                        serde_json::to_vec(&TextCursor {
+                            i: index,
+                            a: id.clone(),
+                            o: offset,
+                        })
+                        .unwrap_or_default(),
+                    ),
+                );
+                break;
+            }
+            let end = (offset + remaining).min(total);
+            pages.push(PageWindow {
+                asset_id: id.clone(),
+                asset_type: asset_type.clone(),
+                page_number: *page_number,
+                source: page.source.to_string(),
+                method: page.method,
+                text_hash: sha256_hex(&page.text),
+                total_chars: total,
+                start_char: offset,
+                end_char: end,
+                text: chars[offset..end].iter().collect(),
+                segments: page.segments,
+            });
+            remaining -= end - offset;
+            offset = end;
+        }
+        Ok(DocumentText {
+            item: ItemRef {
+                id: item_id.to_string(),
+                title,
+            },
+            pages,
             next_cursor,
         })
     }

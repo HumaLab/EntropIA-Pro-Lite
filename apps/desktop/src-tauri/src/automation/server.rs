@@ -903,6 +903,7 @@ mod tests {
             vec![
                 "approvals_status",
                 "collections_list",
+                "documents_get_text",
                 "entropia_status",
                 "items_get",
                 "items_list",
