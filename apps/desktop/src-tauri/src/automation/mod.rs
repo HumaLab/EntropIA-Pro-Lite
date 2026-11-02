@@ -12,12 +12,12 @@
 //! - [`server`] — the loopback HTTP endpoint, its request guard and lifecycle.
 
 pub mod access;
-#[cfg(windows)]
-mod private_acl;
 pub mod audit;
 pub mod commands;
 pub mod connector;
 pub mod mcp;
+#[cfg(windows)]
+mod private_acl;
 pub mod proof;
 pub mod read;
 pub mod server;
