@@ -289,9 +289,7 @@ describe('AssistantsTab', () => {
     await fireEvent.click(
       await screen.findByRole('checkbox', { name: 'Pedir procesamiento pago: Claude Code' })
     )
-    expect(screen.getByRole('dialog')).toHaveTextContent(
-      'no gasta nada hasta que lo apruebes'
-    )
+    expect(screen.getByRole('dialog')).toHaveTextContent('no gasta nada hasta que lo apruebes')
   })
 
   it('withdraws a grant at once, without asking', async () => {
