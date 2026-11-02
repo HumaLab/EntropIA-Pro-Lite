@@ -508,8 +508,13 @@ fn run_import(
             &limits,
         ) {
             Ok(current) => current,
+            // Keep the stable code and name the file; the check's sentence
+            // carries the path, which never leaves the app.
             Err(reason) => {
-                result.skipped.push(skip(reason));
+                let code = reason.split(':').next().unwrap_or("invalid");
+                result
+                    .skipped
+                    .push(skip(format!("{code}: {} was not imported", planned.name)));
                 continue;
             }
         };
@@ -873,6 +878,11 @@ mod tests {
         let second = inbox_request_after_disable(&f);
         assert_eq!(second.0, 0);
         assert!(second.1.starts_with("not_in_folder"), "{}", second.1);
+        assert!(
+            !second.1.contains(std::path::MAIN_SEPARATOR),
+            "a reason names the file, never its path: {}",
+            second.1
+        );
     }
 
     /// Ask for one file, then answer with no enabled folder left.
