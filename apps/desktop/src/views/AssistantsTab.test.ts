@@ -259,9 +259,13 @@ describe('AssistantsTab', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
-    expect(prepare).not.toBeChecked()
+    // The box shows what the backend holds again once the owner cancels.
+    const again = screen.getByRole('checkbox', {
+      name: 'Preparar y controlar procesamiento: Claude Code',
+    })
+    expect(again).not.toBeChecked()
 
-    await fireEvent.click(prepare)
+    await fireEvent.click(again)
     await fireEvent.click(
       within(screen.getByRole('dialog')).getByRole('button', { name: 'Permitir' })
     )

@@ -10,7 +10,7 @@
    * an assistant's configuration names.
    */
   import { onMount } from 'svelte'
-  import { ActionIcon, Button, Card, ConfirmDialog, Input } from '@entropia/ui'
+  import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
   import {
     agentAccessSetEnabled,
     agentAccessStatus,
@@ -40,6 +40,12 @@
   let pendingRevoke = $state<AgentClient | null>(null)
   /** A grant waiting for the owner's confirmation; withdrawing never waits. */
   let pendingGrant = $state<{ client: AgentClient; grant: keyof AgentGrants } | null>(null)
+  /**
+   * Bumped after every grant decision. The shared Checkbox keeps the state of
+   * its own click; re-creating it makes it show what the backend holds, also
+   * when the owner cancels the confirmation.
+   */
+  let grantRender = $state(0)
   let copiedLabel = $state<string | null>(null)
   let destroyed = false
 
@@ -170,6 +176,11 @@
     }
   }
 
+  function cancelGrant() {
+    pendingGrant = null
+    grantRender += 1
+  }
+
   async function confirmGrant() {
     const pending = pendingGrant
     if (!pending || busy) return
@@ -188,6 +199,7 @@
       await refresh()
     } finally {
       busy = false
+      grantRender += 1
     }
   }
 
@@ -292,24 +304,21 @@
                 {/if}
                 <div class="assistants-tab__grants">
                   {#each GRANT_KEYS as grant (grant)}
-                    <label class="assistants-tab__grant">
-                      <input
-                        type="checkbox"
+                    <!-- The backend owns the grant: the box shows the status it
+                         returns, never the click itself. -->
+                    {#key `${grantRender}`}
+                      <Checkbox
                         checked={grantsOf(client)[grant]}
-                        aria-label="{GRANT_COPY[grant].label}: {client.name}"
+                        label="{GRANT_COPY[grant].label}: {client.name}"
                         disabled={busy}
-                        onclick={(event) => {
-                          // The backend owns the grant: the box follows the
-                          // status it returns, never the click itself.
-                          event.preventDefault()
-                          toggleGrant(client, grant)
-                        }}
-                      />
-                      <span class="assistants-tab__copy">
-                        <span class="assistants-tab__value">{GRANT_COPY[grant].label}</span>
-                        <span class="assistants-tab__meta">{GRANT_COPY[grant].meta}</span>
-                      </span>
-                    </label>
+                        onchange={() => toggleGrant(client, grant)}
+                      >
+                        <span class="assistants-tab__copy">
+                          <span class="assistants-tab__value">{GRANT_COPY[grant].label}</span>
+                          <span class="assistants-tab__meta">{GRANT_COPY[grant].meta}</span>
+                        </span>
+                      </Checkbox>
+                    {/key}
                   {/each}
                 </div>
               </div>
@@ -446,7 +455,7 @@
     cancelLabel="Cancelar"
     confirmLabel="Permitir"
     confirming={busy}
-    oncancel={() => (pendingGrant = null)}
+    oncancel={cancelGrant}
     onconfirm={confirmGrant}
   />
 {/if}
@@ -580,17 +589,6 @@
     flex-direction: column;
     gap: var(--space-1);
     padding-top: var(--space-2);
-  }
-
-  .assistants-tab__grant {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--space-2);
-    cursor: pointer;
-  }
-
-  .assistants-tab__grant input {
-    margin-top: 3px;
   }
 
   .assistants-tab__connection {
