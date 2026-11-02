@@ -123,6 +123,7 @@
   import BatchProcessingTab from './BatchProcessingTab.svelte'
   import AppearanceTab from './AppearanceTab.svelte'
   import BackupTab from './BackupTab.svelte'
+  import AssistantsTab from './AssistantsTab.svelte'
   import VercelFallbackCard from './VercelFallbackCard.svelte'
   import SyncSettingsCard from './SyncSettingsCard.svelte'
   import { onSettingsTabRequest } from '$lib/settings-tab-request'
@@ -147,6 +148,7 @@
     | 'modelParams'
     | 'ragParams'
     | 'sync'
+    | 'assistants'
     | 'dependencias'
     | 'batch'
     | 'logs'
@@ -1595,6 +1597,9 @@
         <TabButton active={activeTab === 'sync'} onclick={() => (activeTab = 'sync')}>
           {t('settings.syncTab')}
         </TabButton>
+        <TabButton active={activeTab === 'assistants'} onclick={() => (activeTab = 'assistants')}>
+          {t('settings.assistantsTab')}
+        </TabButton>
         {#if LOCAL_ML}
           <TabButton
             active={activeTab === 'dependencias'}
@@ -2961,6 +2966,8 @@
       {/if}
     {:else if activeTab === 'sync'}
       <SyncSettingsCard />
+    {:else if activeTab === 'assistants'}
+      <AssistantsTab />
     {:else if activeTab === 'logs'}
       <LogsTab />
     {:else if activeTab === 'batch'}

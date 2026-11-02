@@ -21,6 +21,7 @@ interface TauriConfig {
     shortDescription?: string
     longDescription?: string
     resources?: string[]
+    externalBin?: string[]
     linux?: { deb?: { desktopTemplate?: string; conflicts?: string[]; replaces?: string[] } }
     macOS?: { frameworks?: string[] }
   }
@@ -221,11 +222,55 @@ describe('Lite Windows bundle (tauri.lite.windows.conf.json)', () => {
     expect(liteWindows.app).toBeUndefined()
   })
 
-  it('is passed to the Windows Lite release build', () => {
+  it('is passed to the Windows Lite release build, with the connector overlay', () => {
     const release = readFileSync(join(tauriDir, '../../../.github/workflows/release.yml'), 'utf8')
     expect(release).toContain(
-      '--config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --bundles nsis,msi'
+      'args: --config apps/desktop/src-tauri/tauri.lite.conf.json --config apps/desktop/src-tauri/tauri.lite.windows.conf.json --config apps/desktop/src-tauri/tauri.connector.conf.json --bundles nsis,msi'
     )
+  })
+})
+
+// The agent connector is a bundle.externalBin, which tauri-build copies during
+// ANY cargo build of the app and refuses when the file is missing. So it lives
+// only in explicit overlays the installer builds pass (D15), and Pro has its own
+// sidecar name so the Lite and Pro .deb packages can coexist (D16).
+describe('Agent connector overlays', () => {
+  const workflows = join(tauriDir, '../../../.github/workflows')
+
+  it('is never declared in a config every build merges', () => {
+    for (const name of [
+      'tauri.conf.json',
+      'tauri.linux.conf.json',
+      'tauri.windows.conf.json',
+      'tauri.macos.conf.json',
+    ]) {
+      if (!existsSync(join(tauriDir, name))) continue
+      expect(readConfig(name).bundle?.externalBin, name).toBeUndefined()
+    }
+  })
+
+  it('names one sidecar per variant', () => {
+    expect(readConfig('tauri.connector.conf.json').bundle?.externalBin).toEqual([
+      'binaries/entropia-agent-connector',
+    ])
+    expect(readConfig('tauri.connector.pro.conf.json').bundle?.externalBin).toEqual([
+      'binaries/entropia-pro-agent-connector',
+    ])
+  })
+
+  it('builds the Pro sidecar for the Pro installers', () => {
+    for (const name of ['release.yml', 'windows-pro-validation.yml']) {
+      const workflow = readFileSync(join(workflows, name), 'utf8')
+      expect(workflow, name).toMatch(/build-agent-connector\.mjs --target \S+ --variant pro/)
+      expect(workflow, name).toContain('tauri.connector.pro.conf.json')
+    }
+  })
+
+  it('keeps the Lite sidecar for every Lite installer', () => {
+    const preview = readFileSync(join(workflows, 'lite-preview.yml'), 'utf8')
+    expect(preview).not.toContain('--variant pro')
+    expect(preview).not.toContain('tauri.connector.pro.conf.json')
+    expect(preview.match(/--config src-tauri\/tauri\.connector\.conf\.json/g)).toHaveLength(2)
   })
 })
 

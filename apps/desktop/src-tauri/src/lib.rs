@@ -4,6 +4,10 @@ mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
 mod audio_preview;
+// `pub` so the assistant endpoint's surface is real crate API between tasks
+// instead of dead code: T3 adds tools to it and T4's commands drive its state
+// (the same reason `sync` and `writing` are `pub`).
+pub mod automation;
 mod backup;
 pub mod bibliography;
 mod db;
@@ -1028,6 +1032,41 @@ pub fn run() {
             // get their own staging area. The store creates its directory
             // lazily on first write, never here.
             app.manage(internet_archive::IaState::new(&app_dir));
+
+            // The assistant endpoint (S2, S3, D6-D8, D10). Paired clients live
+            // in `agent-access.json` next to the archive (never in SQLite: see
+            // `automation::access`), and the loopback MCP endpoint starts only
+            // when access is enabled. Its tools read the archive through their
+            // own query-only connection (from `db_path`) and audit under the
+            // cache. Neither loading nor starting it is fatal: a failed start is
+            // logged and the app opens exactly as without it.
+            {
+                let agent_access = std::sync::Arc::new(
+                    automation::access::AgentAccess::load(
+                        &app_dir,
+                        std::sync::Arc::new(automation::access::KeyringSecretStore::new(
+                            dev_profile::active(),
+                        )),
+                    ),
+                );
+                let agent_endpoint = std::sync::Arc::new(
+                    automation::server::AgentEndpointState::new(
+                        app_dir.clone(),
+                        db_path.clone(),
+                        cache_dir.clone(),
+                    ),
+                );
+                app.manage(agent_access.clone());
+                app.manage(agent_endpoint.clone());
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = agent_endpoint.sync(&agent_access).await {
+                        log::warn!(
+                            target: "automation",
+                            "the assistant endpoint did not start: {error}"
+                        );
+                    }
+                });
+            }
             // Startup recovery for interrupted downloads: normalize every job
             // folder and never block or fail startup over it. Reconcile
             // entries are durable and derived on demand from `job.json` (a
@@ -1633,6 +1672,11 @@ pub fn run() {
             internet_archive::import::ia_fail_file_import,
             internet_archive::import::ia_list_reconcile,
             internet_archive::import::ia_finish_reconcile,
+            automation::commands::agent_access_status,
+            automation::commands::agent_access_set_enabled,
+            automation::commands::agent_client_create,
+            automation::commands::agent_client_revoke,
+            automation::commands::agent_connector_location,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1642,6 +1686,13 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(engine) = app_handle.try_state::<sync::engine::SyncEngine>() {
                     engine.shutdown();
+                }
+                // Stop serving and drop the discovery file: a file left behind
+                // would point the connector at a port nobody listens on.
+                if let Some(endpoint) = app_handle
+                    .try_state::<std::sync::Arc<automation::server::AgentEndpointState>>()
+                {
+                    endpoint.stop();
                 }
             }
         });

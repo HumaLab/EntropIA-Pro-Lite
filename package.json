@@ -10,6 +10,7 @@
   "scripts": {
     "binaries:check": "node apps/desktop/scripts/verify-binaries.mjs check",
     "binaries:verify-upstream": "node apps/desktop/scripts/verify-binaries.mjs verify-upstream",
+    "connector:build": "node apps/desktop/scripts/build-agent-connector.mjs",
     "dev": "turbo dev",
     "build": "turbo build",
     "desktop:dev:isolated": "pnpm --filter @entropia-pro/desktop tauri:dev:isolated",

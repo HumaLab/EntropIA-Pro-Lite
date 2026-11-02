@@ -33,13 +33,21 @@ const PARTIAL_SUFFIX: &str = ".partial";
 const DB_FILE: &str = "entropia.sqlite";
 /// What the copy leaves out of the archive folder: the live database files
 /// (the copy takes a consistent snapshot instead), lock files, other archives
-/// (dev profiles) and models, which are downloaded again on demand.
-const SKIPPED: [&str; 5] = [
+/// (dev profiles), models, which are downloaded again on demand, and the
+/// assistant endpoint's local state: `agent-tokens/` holds the tokens of
+/// machines with no credential store, `agent-access.json` their hashes and
+/// `agent-endpoint.json` the instance key (D14). A copy is a copy of the
+/// archive, never of a credential, so the temporary siblings those files are
+/// written through (`access::TEMP_PREFIX`) stay out too.
+const SKIPPED: [&str; 8] = [
     "entropia.sqlite",
     "entropia.sqlite-wal",
     "entropia.sqlite-shm",
     "dev-profiles",
     "models",
+    "agent-tokens",
+    "agent-access.json",
+    "agent-endpoint.json",
 ];
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -193,7 +201,10 @@ fn run_backup_unguarded(db_path: &Path) -> Result<PathBuf, String> {
     {
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if SKIPPED.contains(&name.as_ref()) || name.ends_with(".lock") {
+        if SKIPPED.contains(&name.as_ref())
+            || name.ends_with(".lock")
+            || name.starts_with(crate::automation::access::TEMP_PREFIX)
+        {
             continue;
         }
         let target = partial.join(&file_name);
@@ -379,6 +390,50 @@ mod tests {
 
         let conn = open_archive_connection(&db_path).unwrap();
         assert!(get_setting(&conn, BACKUP_LAST_AT_KEY).is_some());
+    }
+
+    #[test]
+    fn a_copy_never_carries_the_agent_secrets() {
+        let target = tempfile::tempdir().unwrap();
+        let dir = target.path().to_string_lossy().into_owned();
+        let (archive, db_path) = archive_with_settings(&[(BACKUP_DIR_KEY, &dir)]);
+        std::fs::create_dir_all(archive.path().join("agent-tokens")).unwrap();
+        std::fs::write(
+            archive.path().join("agent-tokens/cl_1.token"),
+            b"eat_secret",
+        )
+        .unwrap();
+        std::fs::write(archive.path().join("agent-access.json"), b"{}").unwrap();
+        std::fs::write(archive.path().join("agent-endpoint.json"), b"{}").unwrap();
+        // A write of either file caught half way: the temporary sibling holds
+        // the same secret under a random name until it is renamed.
+        let in_flight = format!("{}x7Qk2", crate::automation::access::TEMP_PREFIX);
+        std::fs::write(archive.path().join(&in_flight), b"{\"instanceKey\":\"k\"}").unwrap();
+        std::fs::create_dir_all(archive.path().join("assets")).unwrap();
+        std::fs::write(archive.path().join("assets/doc.pdf"), b"%PDF").unwrap();
+
+        let copy = run_backup_unguarded(&db_path).expect("backup");
+
+        assert!(
+            !copy.join("agent-tokens").exists(),
+            "a copy must never carry an assistant token"
+        );
+        assert!(
+            !copy.join("agent-access.json").exists(),
+            "a copy must never carry the token hashes"
+        );
+        assert!(
+            !copy.join("agent-endpoint.json").exists(),
+            "a copy must never carry the instance key"
+        );
+        assert!(
+            !copy.join(&in_flight).exists(),
+            "a copy must never carry a half-written agent file"
+        );
+        assert!(
+            copy.join("assets/doc.pdf").exists(),
+            "the archive itself is still copied"
+        );
     }
 
     #[test]

@@ -51,7 +51,7 @@ jobs:
 
           # Integration tests, capabilities (the ACL tests read them), the
           # vecscan crate and this workflow change what the Rust jobs check.
-          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^crates/.*\.(rs|toml)$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|(src|tests)/.*\.rs|capabilities/.*\.json|scripts/.*\.ps1)$)' >/dev/null; then
+          if echo "$FILES" | grep -E '(^rust-toolchain\.toml$|^\.github/workflows/ci\.yml$|^crates/.*\.(rs|toml)$|^crates/.*/Cargo\.lock$|^apps/desktop/src-tauri/(Cargo\.(toml|lock)|build\.rs|tauri(\..*)?\.conf\.json|(src|tests)/.*\.rs|capabilities/.*\.json|scripts/.*\.ps1)$)' >/dev/null; then
             echo "has_rs_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_rs_changes=false" >> "$GITHUB_OUTPUT"
@@ -192,6 +192,52 @@ jobs:
 
       - name: Clippy (Pro, local-ml)
         run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --features local-ml --all-targets -- -D warnings
+
+  # The agent connector is a standalone crate (own Cargo.lock) that the app
+  # does not depend on, so the app jobs never compile it. It ships on every
+  # platform next to the app, and its token lookup is per-OS (keyring backends,
+  # file fallback permissions), hence the three-OS matrix.
+  agent-connector:
+    name: Agent Connector (${{ matrix.os }})
+    needs: [detect-rust-changes]
+    if: needs.detect-rust-changes.outputs.has_rs_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        # libdbus-1-dev backs the keyring secret-service feature.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: 1.90.0
+
+      - name: Install rustfmt and clippy for the pinned toolchain
+        run: rustup component add rustfmt clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: crates/entropia-agent-connector
+
+      - name: Rustfmt
+        run: cargo fmt --manifest-path crates/entropia-agent-connector/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path crates/entropia-agent-connector/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path crates/entropia-agent-connector/Cargo.toml --locked
 
   rust-quality-report:
     name: Rust Quality Report (report-first)

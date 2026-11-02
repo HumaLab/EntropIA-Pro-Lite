@@ -267,6 +267,13 @@ const APP_COMMANDS: &[&str] = &[
     "ia_fail_file_import",
     "ia_list_reconcile",
     "ia_finish_reconcile",
+    // The assistant endpoint's settings panel (D11).
+    "agent_access_status",
+    "agent_access_set_enabled",
+    "agent_client_create",
+    "agent_client_revoke",
+    // Where the bundled connector is, for the recipes the panel copies (D15).
+    "agent_connector_location",
 ];
 
 fn main() {
