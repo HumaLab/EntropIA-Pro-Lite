@@ -184,6 +184,13 @@
         Este procesamiento puede usar proveedores pagos. Lo que ya está procesado, o compartido
         desde otro equipo, no se vuelve a pagar.
       </p>
+      {#if current.operations.includes('ocr') && !current.operations.includes('embeddings')}
+        <!-- Every committed OCR admits a repair embedding (lib.rs processing_commit_observer). -->
+        <p class="agent-approval__note">
+          Después del OCR, EntropIA calcula los embeddings de cada página reconocida con el
+          proveedor configurado, lo que también puede tener costo.
+        </p>
+      {/if}
     {/if}
     <p class="agent-approval__note">{expiresLabel(current)}</p>
     {#if pending.length > 1}
