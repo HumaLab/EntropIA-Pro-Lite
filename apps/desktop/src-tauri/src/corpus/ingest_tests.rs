@@ -144,7 +144,16 @@ fn a_supported_file_directly_in_an_enabled_folder_is_accepted() {
     assert_eq!(source.name, "Carta de Sarmiento.pdf");
     assert_eq!(source.kind, FileKind::Pdf);
     assert_eq!(source.size_bytes, 10);
-    assert_eq!(source.path, f.inbox.join("Carta de Sarmiento.pdf"));
+    // The real path is kept as the OS spells it (verbatim on Windows, which
+    // allows long paths for the copy); what the app records is the plain form.
+    assert_eq!(
+        crate::path_utils::normalize_windows_path(&source.path),
+        f.inbox.join("Carta de Sarmiento.pdf")
+    );
+    assert_eq!(
+        original_path(&source),
+        f.inbox.join("Carta de Sarmiento.pdf").to_string_lossy()
+    );
     assert!(source.modified_at.is_some());
 }
 
