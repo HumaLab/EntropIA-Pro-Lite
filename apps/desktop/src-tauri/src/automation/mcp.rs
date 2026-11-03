@@ -39,6 +39,9 @@ use serde_json::Value;
 use crate::automation::access::{Principal, Scope};
 use crate::automation::approvals::{Approval, ApprovalAction, ApprovalStore};
 use crate::automation::audit::{AuditLine, AuditLog};
+use crate::automation::corpus_tools::{
+    CorpusArchive, CorpusEvents, CreatedCollection, IndexedItem, TextReplacement, UpdatedItem,
+};
 use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
 };
@@ -47,6 +50,7 @@ use crate::automation::read::{
     PassageResults, ReadError, SearchResults,
 };
 use crate::automation::server::{app_version, profile_name, variant_name, PROTOCOL};
+use crate::corpus::{CollectionDto, CollectionPatch};
 
 /// Name the endpoint answers `initialize` with.
 pub const SERVER_NAME: &str = "entropia";
@@ -76,8 +80,13 @@ const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
 const TOOL_PROCESSING_START: &str = "processing_start";
 const TOOL_PROCESSING_CONTROL: &str = "processing_control";
 const TOOL_APPROVALS_STATUS: &str = "approvals_status";
+const TOOL_COLLECTIONS_CREATE: &str = "collections_create";
+const TOOL_COLLECTIONS_UPDATE: &str = "collections_update";
+const TOOL_ITEMS_UPDATE: &str = "items_update";
+const TOOL_DOCUMENTS_TEXT_UPDATE: &str = "documents_text_update";
+const TOOL_DOCUMENTS_INDEX: &str = "documents_index";
 
-const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar y controlar procesamiento»).";
+const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
 
 /// `entropia_status`'s payload: this instance, this archive, this caller.
@@ -242,6 +251,71 @@ pub struct ProcessingPrepareParams {
     pub operations: Vec<String>,
 }
 
+/// `collections_create` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectionsCreateParams {
+    /// Your own id for this request, 1 to 128 characters; resending it with the
+    /// same arguments returns the same collection instead of a second one.
+    pub request_id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+/// `collections_update` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectionsUpdateParams {
+    pub collection_id: String,
+    /// The collection's `updatedAt` as you read it.
+    pub revision: i64,
+    pub name: Option<String>,
+    /// `null` clears the description; omit it to leave it as it is.
+    #[serde(default, deserialize_with = "double_option")]
+    #[schemars(with = "Option<String>")]
+    pub description: Option<Option<String>>,
+}
+
+/// `items_update` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ItemsUpdateParams {
+    pub item_id: String,
+    /// The item's `updatedAt` as you read it.
+    pub revision: i64,
+    pub title: Option<String>,
+    /// Every metadata field, as text values: it replaces the item's fields.
+    pub metadata: Option<std::collections::BTreeMap<String, String>>,
+}
+
+/// `documents_text_update` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsTextUpdateParams {
+    pub item_id: String,
+    /// The page (file) whose text to replace.
+    pub asset_id: String,
+    /// The page's `textHash` as `documents_get_text` returned it.
+    pub text_hash: String,
+    /// The whole new text of the page.
+    pub text: String,
+}
+
+/// `documents_index` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsIndexParams {
+    pub item_id: String,
+}
+
+/// Tells an absent field from an explicit `null`.
+fn double_option<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
 /// `processing_start` arguments.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -312,6 +386,7 @@ pub struct AgentServer {
     jobs: JobsArchive,
     /// Where paid requests wait for the owner (D3); shared with the app.
     approvals: Arc<ApprovalStore>,
+    corpus: CorpusArchive,
     audit: AuditLog,
 }
 
@@ -322,11 +397,13 @@ impl AgentServer {
         db_path: impl Into<PathBuf>,
         cache_dir: impl Into<PathBuf>,
         approvals: Arc<ApprovalStore>,
+        corpus_events: Arc<CorpusEvents>,
     ) -> Self {
         let db_path = db_path.into();
         Self {
             tool_router: Self::tool_router(),
             approvals,
+            corpus: CorpusArchive::new(db_path.clone(), corpus_events),
             jobs: JobsArchive::new(db_path.clone()),
             reader: ArchiveReader::new(db_path),
             audit: AuditLog::new(cache_dir.into().join("logs")),
@@ -837,7 +914,7 @@ impl AgentServer {
 
     #[tool(
         name = "processing_prepare",
-        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`) o un esquema (`schema:<id>`). No gasta nada: empezar lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar y controlar procesamiento».",
+        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`) o un esquema (`schema:<id>`). No gasta nada: empezar lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar procesamiento y editar el corpus».",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -854,7 +931,7 @@ impl AgentServer {
             &context,
             TOOL_PROCESSING_PREPARE,
             Scope::LocalWrite,
-            "Este asistente no tiene permiso para preparar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar y controlar procesamiento»).",
+            "Este asistente no tiene permiso para preparar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).",
         )?;
         let args = self.arguments(&caller, TOOL_PROCESSING_PREPARE, args)?;
         let jobs = self.jobs.clone();
@@ -880,6 +957,225 @@ impl AgentServer {
             None,
         );
         Ok(Json(report))
+    }
+
+    #[tool(
+        name = "collections_create",
+        description = "Crea una colección con `name` y, si querés, `description`. `requestId` es tu id para este pedido: reenviarlo igual devuelve la misma colección (`created` false) en vez de crear otra. Necesita el permiso «Preparar procesamiento y editar el corpus», que también habilita editar el corpus.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn collections_create(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<CollectionsCreateParams>>,
+    ) -> Result<Json<CreatedCollection>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_COLLECTIONS_CREATE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_COLLECTIONS_CREATE, args)?;
+        let corpus = self.corpus.clone();
+        let client_id = caller.client_id.clone();
+        let created = match Self::on_jobs(move || {
+            corpus.create_collection(
+                &client_id,
+                &args.request_id,
+                &args.name,
+                args.description.as_deref(),
+            )
+        })
+        .await
+        {
+            Ok(created) => created,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_COLLECTIONS_CREATE, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_COLLECTIONS_CREATE,
+            vec![created.id.clone()],
+            None,
+        );
+        Ok(Json(created))
+    }
+
+    #[tool(
+        name = "collections_update",
+        description = "Renombra una colección o cambia su descripción (`null` la borra). `revision` es el `updatedAt` que leíste: si la colección cambió desde entonces, responde revision_conflict y no cambia nada. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn collections_update(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<CollectionsUpdateParams>>,
+    ) -> Result<Json<CollectionDto>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_COLLECTIONS_UPDATE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_COLLECTIONS_UPDATE, args)?;
+        let corpus = self.corpus.clone();
+        let updated = match Self::on_jobs(move || {
+            corpus.update_collection(
+                &args.collection_id,
+                args.revision,
+                &CollectionPatch {
+                    name: args.name,
+                    description: args.description,
+                },
+            )
+        })
+        .await
+        {
+            Ok(updated) => updated,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_COLLECTIONS_UPDATE, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_COLLECTIONS_UPDATE,
+            vec![updated.id.clone()],
+            None,
+        );
+        Ok(Json(updated))
+    }
+
+    #[tool(
+        name = "items_update",
+        description = "Cambia el título de un ítem o sus campos de metadatos (`metadata` reemplaza todos los campos; los valores son texto). `revision` es el `updatedAt` que leíste: si el ítem cambió, responde revision_conflict y no cambia nada. Los datos internos de EntropIA se conservan y no se pueden escribir. El cambio queda buscable enseguida. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn items_update(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ItemsUpdateParams>>,
+    ) -> Result<Json<UpdatedItem>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_ITEMS_UPDATE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_ITEMS_UPDATE, args)?;
+        let corpus = self.corpus.clone();
+        let updated = match Self::on_jobs(move || {
+            corpus.update_item(&args.item_id, args.revision, args.title, args.metadata)
+        })
+        .await
+        {
+            Ok(updated) => updated,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_ITEMS_UPDATE, error)),
+        };
+        self.audit_ok(&caller, TOOL_ITEMS_UPDATE, vec![updated.id.clone()], None);
+        Ok(Json(updated))
+    }
+
+    #[tool(
+        name = "documents_text_update",
+        description = "Pide reemplazar el texto reconocido (nativo u OCR) de una página por `text`, el texto completo nuevo. `textHash` es el de documents_get_text: si la página cambió, responde revision_conflict. No cambia nada por sí solo: la persona ve una vista previa en EntropIA y lo aprueba o rechaza; consultalo con approvals_status. Si se aplica, el texto anterior queda guardado y «Restaurar original» lo deshace. No sirve para transcripciones de audio. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_text_update(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsTextUpdateParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_TEXT_UPDATE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, args)?;
+        let corpus = self.corpus.clone();
+        let approvals = self.approvals.clone();
+        let (client_id, client_name) = (caller.client_id.clone(), caller.name.clone());
+        let approval = match Self::on_jobs(move || {
+            corpus.request_text_replacement(
+                &approvals,
+                &client_id,
+                &client_name,
+                &TextReplacement {
+                    item_id: args.item_id,
+                    asset_id: args.asset_id,
+                    text_hash: args.text_hash,
+                    text: args.text,
+                },
+            )
+        })
+        .await
+        {
+            Ok(approval) => approval,
+            Err(error) => {
+                return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, error))
+            }
+        };
+        let object_ids = match &approval.action {
+            ApprovalAction::ReplaceText { item_id, .. } => {
+                vec![item_id.clone(), approval.id.clone()]
+            }
+            _ => vec![approval.id.clone()],
+        };
+        self.audit_ok(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, object_ids, None);
+        Ok(Json(approval))
+    }
+
+    #[tool(
+        name = "documents_index",
+        description = "Vuelve a indexar un ítem para la búsqueda (`search_items`) con su título, metadatos y texto actuales. Las ediciones hechas con las herramientas ya lo hacen solas; sirve cuando el índice quedó atrasado. No gasta. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_index(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsIndexParams>>,
+    ) -> Result<Json<IndexedItem>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_INDEX,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_INDEX, args)?;
+        let corpus = self.corpus.clone();
+        let indexed = match Self::on_jobs(move || corpus.reindex(&args.item_id)).await {
+            Ok(indexed) => indexed,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_INDEX, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_DOCUMENTS_INDEX,
+            vec![indexed.item_id.clone()],
+            None,
+        );
+        Ok(Json(indexed))
     }
 
     #[tool(
@@ -918,7 +1214,7 @@ impl AgentServer {
 
     #[tool(
         name = "processing_control",
-        description = "Controla un trabajo. `pause` y `cancel` se aplican enseguida y no gastan: las unidades en curso terminan su paso y lo ya procesado se conserva (permiso «Preparar y controlar procesamiento»). `resume` y `retry` vuelven a gastar, así que piden la aprobación de la persona en EntropIA y necesitan `revision` (permiso «Pedir procesamiento pago»); `retry` reabre una tarea (`taskId`) o todas las fallidas (`failedOnly`: true).",
+        description = "Controla un trabajo. `pause` y `cancel` se aplican enseguida y no gastan: las unidades en curso terminan su paso y lo ya procesado se conserva (permiso «Preparar procesamiento y editar el corpus»). `resume` y `retry` vuelven a gastar, así que piden la aprobación de la persona en EntropIA y necesitan `revision` (permiso «Pedir procesamiento pago»); `retry` reabre una tarea (`taskId`) o todas las fallidas (`failedOnly`: true).",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

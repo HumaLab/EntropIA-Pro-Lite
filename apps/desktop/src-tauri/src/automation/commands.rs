@@ -128,6 +128,27 @@ pub fn decide_approval(
         super::approvals::ApprovalStatus::Failed => "failed",
         _ => "rejected",
     };
+    // An applied text replacement changed an item the views may show.
+    if decided.status == super::approvals::ApprovalStatus::Approved {
+        if let super::approvals::ApprovalAction::ReplaceText { item_id, .. } = &decided.action {
+            let collection_id: Option<String> = conn
+                .query_row(
+                    "SELECT collection_id FROM items WHERE id = ?1",
+                    [item_id],
+                    |row| row.get(0),
+                )
+                .ok();
+            if let Some(collection_id) = collection_id {
+                endpoint
+                    .corpus_events()
+                    .notify(super::corpus_tools::CorpusChange {
+                        kind: "item",
+                        id: item_id.clone(),
+                        collection_id,
+                    });
+            }
+        }
+    }
     endpoint
         .audit_log()
         .append(&super::audit::AuditLine::owner_decision(
@@ -407,6 +428,8 @@ mod tests {
             operations: vec!["ocr".into()],
             collections: vec!["Alfa".into()],
             files: 2,
+            preview: None,
+            text: None,
         });
 
         assert_eq!(pending_approvals(&endpoint), vec![asked.clone()]);

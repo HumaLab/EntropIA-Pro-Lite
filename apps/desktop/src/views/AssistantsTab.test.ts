@@ -248,12 +248,12 @@ describe('AssistantsTab', () => {
     render(AssistantsTab)
 
     const prepare = await screen.findByRole('checkbox', {
-      name: 'Preparar y controlar procesamiento: Claude Code',
+      name: 'Preparar procesamiento y editar el corpus: Claude Code',
     })
     expect(prepare).not.toBeChecked()
     await fireEvent.click(prepare)
     const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveTextContent('Armar un lote no gasta')
+    expect(dialog).toHaveTextContent('Nada de esto gasta')
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
 
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
@@ -261,7 +261,7 @@ describe('AssistantsTab', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('agent_client_set_grants', expect.anything())
     // The box shows what the backend holds again once the owner cancels.
     const again = screen.getByRole('checkbox', {
-      name: 'Preparar y controlar procesamiento: Claude Code',
+      name: 'Preparar procesamiento y editar el corpus: Claude Code',
     })
     expect(again).not.toBeChecked()
 
@@ -277,7 +277,9 @@ describe('AssistantsTab', () => {
     )
     await waitFor(() =>
       expect(
-        screen.getByRole('checkbox', { name: 'Preparar y controlar procesamiento: Claude Code' })
+        screen.getByRole('checkbox', {
+          name: 'Preparar procesamiento y editar el corpus: Claude Code',
+        })
       ).toBeChecked()
     )
   })

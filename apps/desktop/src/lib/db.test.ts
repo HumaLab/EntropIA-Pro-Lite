@@ -18,7 +18,8 @@ const mockInvoke = vi.mocked(invoke)
 const mockInitStore = vi.mocked(initStore)
 const mockEnsureSyncCapture = vi.mocked(ensureSyncCapture)
 
-const fakeStore = {} as Awaited<ReturnType<typeof initStore>>
+// The real store always has these repos; initDb routes some of their writes.
+const fakeStore = { collections: {}, items: {} } as unknown as Awaited<ReturnType<typeof initStore>>
 
 describe('initDb and the verify-only migration gate', () => {
   beforeEach(() => {
@@ -26,6 +27,17 @@ describe('initDb and the verify-only migration gate', () => {
     mockInvoke.mockResolvedValue(undefined)
     mockEnsureSyncCapture.mockResolvedValue(undefined)
     mockInitStore.mockResolvedValue(fakeStore)
+  })
+
+  it('routes collection writes through the backend corpus service', async () => {
+    await initDb()
+    mockInvoke.mockClear()
+    await fakeStore.collections.create({ name: 'Cartas' })
+    expect(mockInvoke).toHaveBeenCalledWith('corpus_collection_create', {
+      name: 'Cartas',
+      description: null,
+      id: null,
+    })
   })
 
   it('runs initStore, sync capture and processing init without the removed migration window', async () => {

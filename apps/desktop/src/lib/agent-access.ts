@@ -82,6 +82,13 @@ export type AgentApprovalAction =
   | { kind: 'start' }
   | { kind: 'resume' }
   | { kind: 'retry'; task_id: string | null; failed_only: boolean }
+  | {
+      kind: 'replace_text'
+      item_id: string
+      asset_id: string
+      text_hash: string
+      new_text_hash: string
+    }
 
 export type AgentApprovalStatus = 'pending' | 'approved' | 'failed' | 'rejected' | 'expired'
 
@@ -106,6 +113,8 @@ export interface AgentApproval {
   decidedAt: number | null
   /** Why an approved action did not run. */
   failure: string | null
+  /** The start of a proposed text (`replace_text`). */
+  preview: string | null
 }
 
 /** The event the backend emits whenever the approvals change. */

@@ -30,6 +30,7 @@
     embeddings: 'Embeddings',
     ner: 'Entidades',
     triples: 'Tripletas',
+    replace_text: 'Reemplazar texto',
   }
 
   function operationLabel(operation: string): string {
@@ -47,6 +48,8 @@
         return approval.action.failed_only
           ? 'reintentar las tareas fallidas de un procesamiento'
           : 'reintentar una tarea de un procesamiento'
+      case 'replace_text':
+        return 'reemplazar el texto de una página'
     }
   }
 
@@ -142,10 +145,21 @@
       <dt>Alcance</dt>
       <dd>{current.files} {current.files === 1 ? 'archivo' : 'archivos'}</dd>
     </dl>
-    <p class="agent-approval__note">
-      Este procesamiento puede usar proveedores pagos. Lo que ya está procesado, o compartido desde
-      otro equipo, no se vuelve a pagar.
-    </p>
+    {#if current.action.kind === 'replace_text'}
+      {#if current.preview}
+        <p class="agent-approval__label">Texto propuesto (comienzo)</p>
+        <blockquote class="agent-approval__preview">{current.preview}</blockquote>
+      {/if}
+      <p class="agent-approval__note">
+        No gasta. El texto actual queda guardado y «Restaurar original», en la vista del documento,
+        lo deshace. Si la página cambia antes de que respondas, no se aplica.
+      </p>
+    {:else}
+      <p class="agent-approval__note">
+        Este procesamiento puede usar proveedores pagos. Lo que ya está procesado, o compartido
+        desde otro equipo, no se vuelve a pagar.
+      </p>
+    {/if}
     <p class="agent-approval__note">{expiresLabel(current)}</p>
     {#if pending.length > 1}
       <p class="agent-approval__note">
@@ -188,6 +202,24 @@
     margin: var(--space-1) 0 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .agent-approval__label {
+    margin: var(--space-2) 0 var(--space-1);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+  }
+
+  .agent-approval__preview {
+    max-height: 9em;
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    overflow: auto;
+    border-left: 2px solid var(--color-hairline);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .agent-approval__notice {

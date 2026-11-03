@@ -19,6 +19,7 @@
   import { waitForFirstPaint } from '$lib/first-paint'
   import { matchWindowBackground } from '$lib/window-background'
   import { runStartupReconcile } from '$lib/internet-archive-reconcile'
+  import { startCorpusEventBridge } from '$lib/corpus-events'
   import startupMark from './assets/hlab-mark.png'
   import AppShell from './layout/AppShell.svelte'
   import AgentApprovalDialog from './components/AgentApprovalDialog.svelte'
@@ -99,6 +100,16 @@
     // Close handshake (src-tauri/src/lib.rs): on window close, durably flush
     // the open editor before Rust runs its bounded sync-and-close sequence.
     void startAppClose()
+    // An assistant's corpus writes refresh the sidebar and Colecciones.
+    let stopCorpusEvents: (() => void) | null = null
+    let unmounted = false
+    void startCorpusEventBridge().then(
+      (stop) => {
+        if (unmounted) stop()
+        else stopCorpusEvents = stop
+      },
+      (error) => console.error('[App] corpus event bridge failed:', error)
+    )
     // Close-time archive compaction: a notice while Rust rewrites the file.
     void startCompactionNotice()
 
@@ -106,6 +117,8 @@
 
     return () => {
       stopAppClose()
+      unmounted = true
+      stopCorpusEvents?.()
       stopCompactionNotice()
       cleanupKeyboard()
     }

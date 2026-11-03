@@ -40,6 +40,7 @@ use tower_service::Service;
 
 use crate::automation::access::{self, AgentAccess};
 use crate::automation::approvals::ApprovalStore;
+use crate::automation::corpus_tools::CorpusEvents;
 use crate::automation::mcp::AgentServer;
 use crate::automation::proof;
 
@@ -143,6 +144,8 @@ pub struct AgentEndpointState {
     /// Paid work assistants asked for, waiting for the owner (D3). Outlives
     /// endpoint restarts within one app run; an app restart clears it.
     approvals: Arc<ApprovalStore>,
+    /// Announces corpus writes so the app's views refresh.
+    corpus_events: Arc<CorpusEvents>,
 }
 
 impl AgentEndpointState {
@@ -157,7 +160,13 @@ impl AgentEndpointState {
             cache_dir: cache_dir.into(),
             running: Mutex::new(None),
             approvals: Arc::new(ApprovalStore::default()),
+            corpus_events: Arc::new(CorpusEvents::default()),
         }
+    }
+
+    /// The announcer of corpus writes the endpoint makes.
+    pub fn corpus_events(&self) -> Arc<CorpusEvents> {
+        self.corpus_events.clone()
     }
 
     /// The audit trail the tools write, for what the owner answers in the app.
@@ -187,9 +196,12 @@ impl AgentEndpointState {
                 *running = Some(start(
                     &self.dir,
                     access.clone(),
-                    self.db_path.clone(),
-                    self.cache_dir.clone(),
-                    self.approvals.clone(),
+                    ToolContext {
+                        db_path: self.db_path.clone(),
+                        cache_dir: self.cache_dir.clone(),
+                        approvals: self.approvals.clone(),
+                        corpus_events: self.corpus_events.clone(),
+                    },
                 )?);
                 Ok(())
             }
@@ -222,16 +234,21 @@ impl AgentEndpointState {
     }
 }
 
-/// Bind, advertise and spawn. The listener is bound before the discovery file
-/// is written, so the file never names a port nobody listens on; if either
-/// step fails nothing keeps running.
-fn start(
-    dir: &Path,
-    access: Arc<AgentAccess>,
+/// What every tool call is built with: the archive it reads and writes, the
+/// cache that receives the audit trail, and the two channels to the app
+/// (approvals the owner answers, corpus writes the views refresh on).
+#[derive(Clone)]
+struct ToolContext {
     db_path: PathBuf,
     cache_dir: PathBuf,
     approvals: Arc<ApprovalStore>,
-) -> Result<Running, String> {
+    corpus_events: Arc<CorpusEvents>,
+}
+
+/// Bind, advertise and spawn. The listener is bound before the discovery file
+/// is written, so the file never names a port nobody listens on; if either
+/// step fails nothing keeps running.
+fn start(dir: &Path, access: Arc<AgentAccess>, context: ToolContext) -> Result<Running, String> {
     let listener = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .map_err(|e| format!("could not bind the assistant endpoint on {LOOPBACK}: {e}"))?;
     let port = listener
@@ -254,15 +271,7 @@ fn start(
     access::write_atomic(&discovery_path, &bytes)?;
 
     let cancel = CancellationToken::new();
-    let service = GuardedEndpoint::new(
-        access,
-        port,
-        instance_key,
-        cancel.clone(),
-        db_path,
-        cache_dir,
-        approvals,
-    );
+    let service = GuardedEndpoint::new(access, port, instance_key, cancel.clone(), context);
     tokio::spawn(serve(listener, service, cancel.clone()));
     Ok(Running {
         port,
@@ -377,9 +386,7 @@ impl GuardedEndpoint {
         port: u16,
         instance_key: String,
         cancel: CancellationToken,
-        db_path: PathBuf,
-        cache_dir: PathBuf,
-        approvals: Arc<ApprovalStore>,
+        context: ToolContext,
     ) -> Self {
         let hosts = vec![format!("{LOOPBACK}:{port}"), format!("localhost:{port}")];
         let config = StreamableHttpServerConfig::default()
@@ -397,9 +404,10 @@ impl GuardedEndpoint {
                 // path it was built with and never touch the UI connection.
                 move || {
                     Ok(AgentServer::new(
-                        db_path.clone(),
-                        cache_dir.clone(),
-                        approvals.clone(),
+                        context.db_path.clone(),
+                        context.cache_dir.clone(),
+                        context.approvals.clone(),
+                        context.corpus_events.clone(),
                     ))
                 },
                 Arc::new(NeverSessionManager::default()),
@@ -902,11 +910,16 @@ mod tests {
             names,
             vec![
                 "approvals_status",
+                "collections_create",
                 "collections_list",
+                "collections_update",
                 "documents_get_text",
+                "documents_index",
+                "documents_text_update",
                 "entropia_status",
                 "items_get",
                 "items_list",
+                "items_update",
                 "jobs_get",
                 "jobs_list",
                 "processing_control",
