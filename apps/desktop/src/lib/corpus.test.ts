@@ -16,11 +16,27 @@ function fakeStore() {
   const sqlCreate = vi.fn()
   const sqlCollectionUpdate = vi.fn()
   const sqlItemUpdate = vi.fn()
+  const sqlCollectionDelete = vi.fn()
+  const sqlItemDelete = vi.fn()
+  const forgetVocabulary = vi.fn()
   const store = {
-    collections: { create: sqlCreate, update: sqlCollectionUpdate },
-    items: { update: sqlItemUpdate },
+    collections: {
+      create: sqlCreate,
+      update: sqlCollectionUpdate,
+      delete: sqlCollectionDelete,
+    },
+    items: { update: sqlItemUpdate, deleteWithCascade: sqlItemDelete },
+    fts: { forgetVocabulary },
   } as unknown as StoreApi
-  return { store, sqlCreate, sqlCollectionUpdate, sqlItemUpdate }
+  return {
+    store,
+    sqlCreate,
+    sqlCollectionUpdate,
+    sqlItemUpdate,
+    sqlCollectionDelete,
+    sqlItemDelete,
+    forgetVocabulary,
+  }
 }
 
 const COLLECTION = {
@@ -118,6 +134,53 @@ describe('routeCorpusWrites', () => {
     )
     await expect(store.collections.create({ name: '   ' })).rejects.toBe(
       'invalid_argument: the collection name must be 1 to 200 characters'
+    )
+  })
+
+  it('deletes an item through the backend delete service', async () => {
+    const { store, sqlItemDelete, forgetVocabulary } = fakeStore()
+    routeCorpusWrites(store)
+    invokeMock.mockResolvedValue(undefined)
+
+    await expect(store.items.deleteWithCascade('ite_1')).resolves.toBeUndefined()
+    expect(invokeMock).toHaveBeenLastCalledWith('corpus_items_delete', {
+      itemIds: ['ite_1'],
+    })
+    expect(sqlItemDelete).not.toHaveBeenCalled()
+    expect(forgetVocabulary).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes a collection through the backend delete service', async () => {
+    const { store, sqlCollectionDelete, forgetVocabulary } = fakeStore()
+    routeCorpusWrites(store)
+    invokeMock.mockResolvedValue(undefined)
+
+    await expect(store.collections.delete('col_1')).resolves.toBeUndefined()
+    expect(invokeMock).toHaveBeenLastCalledWith('corpus_collection_delete', {
+      collectionId: 'col_1',
+    })
+    expect(sqlCollectionDelete).not.toHaveBeenCalled()
+    expect(forgetVocabulary).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the renderer search vocabulary when a delete fails', async () => {
+    const { store, forgetVocabulary } = fakeStore()
+    routeCorpusWrites(store)
+    invokeMock.mockRejectedValue('not_found: no item ite_missing')
+
+    await expect(store.items.deleteWithCascade('ite_missing')).rejects.toBe(
+      'not_found: no item ite_missing'
+    )
+    expect(forgetVocabulary).not.toHaveBeenCalled()
+  })
+
+  it('passes a backend delete refusal to the caller', async () => {
+    const { store } = fakeStore()
+    routeCorpusWrites(store)
+    invokeMock.mockRejectedValue('not_found: no item ite_missing')
+
+    await expect(store.items.deleteWithCascade('ite_missing')).rejects.toBe(
+      'not_found: no item ite_missing'
     )
   })
 })

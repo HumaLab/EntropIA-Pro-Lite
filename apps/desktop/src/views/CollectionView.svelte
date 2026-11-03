@@ -7,16 +7,7 @@
   import { currentPaneRects } from '$lib/pane-rects'
   import { locale, t } from '$lib/i18n'
   import { pickFiles } from '$lib/file-import'
-  import {
-    getAssetUrl,
-    generateImageThumbnail,
-    generatePdfThumbnail,
-    deleteAssetFile,
-    deleteImageThumbnail,
-    deletePdfThumbnail,
-    isOutsideDataDir,
-    resolveStoredAssetPath,
-  } from '$lib/file-import'
+  import { getAssetUrl, generateImageThumbnail, generatePdfThumbnail } from '$lib/file-import'
   import {
     importClassifiedPathsIntoCollection,
     formatImportStageError,
@@ -24,9 +15,6 @@
     type ImportProgress,
     type ImportStage,
   } from '$lib/collection-import'
-  import { join } from '@tauri-apps/api/path'
-  import { invoke } from '@tauri-apps/api/core'
-  import { remove } from '@tauri-apps/plugin-fs'
   import { exportCollectionById } from '$lib/export'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
@@ -342,7 +330,6 @@
 
   // Delete confirmation state
   let showDeleteConfirm = $state(false)
-  let pendingDeleteAssetId = $state<string | null>(null)
   let pendingDeleteItemId = $state<string | null>(null)
   let pendingDeleteItemLabel = $state<string | null>(null)
   let deleting = $state(false)
@@ -678,7 +665,6 @@
     importProgress = null
     dragActive = false
     showDeleteConfirm = false
-    pendingDeleteAssetId = null
     pendingDeleteItemId = null
     pendingDeleteItemLabel = null
     deleting = false
@@ -852,7 +838,6 @@
   /** Open the delete confirmation dialog for an item and all its assets. */
   function handleDeleteClick(itemId: string) {
     const meta = getItemAssetMeta(itemId)
-    pendingDeleteAssetId = meta.primaryAssetId
     pendingDeleteItemId = itemId
     pendingDeleteItemLabel =
       items.find((item) => item.id === itemId)?.title ??
@@ -861,42 +846,12 @@
     deleteError = null
   }
 
-  /**
-   * Cancel the delete confirmation dialog.
-   */
+  /** Cancel the delete confirmation dialog. */
   function handleDeleteCancel() {
     showDeleteConfirm = false
-    pendingDeleteAssetId = null
     pendingDeleteItemId = null
     pendingDeleteItemLabel = null
     deleteError = null
-  }
-
-  /**
-   * Remove the folders a deleted item leaves on disk. Its files are already
-   * gone but its folder is not, and deleting a collection's last item drops
-   * the collection too. The collection folder is removed without `recursive`,
-   * which the fs plugin refuses on a folder still holding other items, so it
-   * only goes once empty.
-   */
-  async function removeDeletedItemFolders(itemId: string) {
-    let collectionDir: string
-    try {
-      collectionDir = await join(await invoke<string>('resolve_data_dir'), 'assets', collectionId)
-    } catch (e) {
-      console.warn('[CollectionView] Could not locate the deleted item folder:', e)
-      return
-    }
-    try {
-      await remove(await join(collectionDir, itemId), { recursive: true })
-    } catch (e) {
-      console.warn('[CollectionView] A deleted item left its folder behind:', e)
-    }
-    try {
-      await remove(collectionDir)
-    } catch {
-      // Not empty: other items still live in this collection.
-    }
   }
 
   /** Delete the item represented by the card, including every associated asset. */
@@ -908,53 +863,9 @@
 
     const store = getStore()
     const itemId = pendingDeleteItemId
-    const meta = getItemAssetMeta(itemId)
-    let assetsForCleanup: Array<Pick<Asset, 'id' | 'path' | 'type' | 'parentAssetId'>> = []
-    try {
-      assetsForCleanup = await store.assets.findByItem(itemId)
-    } catch (e) {
-      console.warn('[CollectionView] Failed to load item assets for cleanup:', e)
-    }
 
-    // The cached primary asset is a best-effort fallback when the full lookup fails.
-    if (
-      assetsForCleanup.length === 0 &&
-      pendingDeleteAssetId &&
-      meta.primaryAssetPath &&
-      meta.primaryAssetType
-    ) {
-      assetsForCleanup = [
-        {
-          id: pendingDeleteAssetId,
-          path: meta.primaryAssetPath,
-          type: meta.primaryAssetType,
-          parentAssetId: null,
-        },
-      ]
-    }
-
-    // Filesystem cleanup is best-effort; the item DB cascade is authoritative.
-    for (const asset of assetsForCleanup) {
-      try {
-        if (asset.type === 'image') {
-          await invoke('delete_asset_files', { assetPath: asset.path })
-          await deleteImageThumbnail(asset.id)
-        } else {
-          await deleteAssetFile(asset.path)
-          if (asset.type === 'pdf') await deletePdfThumbnail(asset.id)
-        }
-
-        if (asset.type === 'pdf' && !asset.parentAssetId && !isOutsideDataDir(asset.path)) {
-          await remove(resolveStoredAssetPath(asset.path).replace(/\.pdf$/i, '.pages'), {
-            recursive: true,
-          })
-        }
-      } catch (e) {
-        console.warn('[CollectionView] Item asset cleanup warning:', e)
-      }
-    }
-
-    // Step 2: Try DB cleanup — non-blocking, but keep the warning visible if it fails.
+    // The Rust service deletes the rows in one transaction and the files after
+    // the commit, so the renderer no longer touches them.
     let dbCleanupFailed = false
     try {
       await store.items.deleteWithCascade(itemId)
@@ -974,8 +885,6 @@
       deleting = false
       return
     }
-
-    await removeDeletedItemFolders(itemId)
 
     // Only once the DB cascade actually landed: the early return above for
     // a failed cleanup skips this, leaving any history entry for the item

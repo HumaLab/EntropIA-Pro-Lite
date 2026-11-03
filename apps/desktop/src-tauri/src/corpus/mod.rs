@@ -9,6 +9,7 @@
 //! other write, so they reach the other devices unchanged (D7).
 
 pub mod commands;
+pub mod delete;
 pub mod ingest;
 
 pub use commands::{
@@ -16,8 +17,11 @@ pub use commands::{
     update_item, CollectionDto, CollectionPatch, CorpusError, ImportedPath, ItemDto, ItemPatch,
     ReplacedText, MAX_PAGE_TEXT_CHARS,
 };
+pub use delete::{delete_collection, delete_impact, delete_items, DeleteImpact, DeleteScope};
 pub use ingest::ImportOverrides;
 
+#[cfg(test)]
+mod delete_tests;
 #[cfg(test)]
 mod ingest_tests;
 #[cfg(test)]
