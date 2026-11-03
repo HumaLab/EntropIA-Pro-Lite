@@ -811,7 +811,8 @@ pub(crate) mod tests {
         // A path written with a detour is stored as the folder it really is.
         let detour = inbox.path().join("cartas").join("..").join("cartas");
         let folders = access.add_import_folder(&detour.to_string_lossy()).unwrap();
-        let real = std::fs::canonicalize(inbox.path().join("cartas")).unwrap();
+        let real =
+            crate::bibliography::attachment::plain_canonical(&inbox.path().join("cartas")).unwrap();
         assert_eq!(folders, vec![real.to_string_lossy().to_string()]);
         // Adding it again keeps one entry.
         assert_eq!(

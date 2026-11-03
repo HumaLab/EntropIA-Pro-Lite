@@ -26,7 +26,7 @@ fn fixture() -> Fixture {
     let conn = crate::db::open::open_archive_connection(&seeded_archive(&data_dir)).unwrap();
     Fixture {
         data_dir: std::fs::canonicalize(&data_dir).unwrap(),
-        inbox: std::fs::canonicalize(&inbox).unwrap(),
+        inbox: crate::bibliography::attachment::plain_canonical(&inbox).unwrap(),
         _root: root,
         conn,
     }
@@ -694,6 +694,14 @@ fn windows_paths_are_recorded_and_matched_without_the_verbatim_prefix() {
         &SourceLimits::default(),
     )
     .expect("a file directly inside a plainly stored folder is accepted");
+    let verbatim_folder = std::fs::canonicalize(inbox.path()).unwrap();
+    check_source(
+        &file.to_string_lossy(),
+        std::slice::from_ref(&verbatim_folder),
+        data.path(),
+        &SourceLimits::default(),
+    )
+    .expect("a folder list in the verbatim spelling still matches");
     let listed = list_folder(inbox.path(), &[plain_folder], data.path(), 10).unwrap();
     assert_eq!(listed.files.len(), 1);
     let original = original_path(&checked);

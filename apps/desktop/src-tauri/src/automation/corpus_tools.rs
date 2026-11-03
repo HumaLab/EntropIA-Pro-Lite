@@ -574,7 +574,11 @@ impl CorpusArchive {
         let folder = std::fs::canonicalize(&request.folder)
             .ok()
             .map(crate::path_utils::normalize_windows_path)
-            .filter(|real| folders.contains(real))
+            .filter(|real| {
+                folders
+                    .iter()
+                    .any(|folder| crate::corpus::ingest::same_folder(folder, real))
+            })
             .ok_or_else(|| {
                 refusal(
                     "invalid_argument",

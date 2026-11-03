@@ -534,7 +534,10 @@ fn the_app_import_command_imports_a_file_it_staged_inside_the_archive() {
     let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
     assert_eq!(
         metadata["__entropia_file_metadata"]["originalPath"],
-        staged.to_string_lossy().as_ref()
+        crate::bibliography::attachment::plain_canonical(&staged)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     assert_eq!(search_hits(&conn, "acta"), vec![item_id.clone()]);
 }
