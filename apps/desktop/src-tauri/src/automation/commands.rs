@@ -578,7 +578,7 @@ mod tests {
     fn import_folders_are_added_and_removed_through_the_status() {
         let harness = harness();
         let inbox = tempfile::tempdir().unwrap();
-        let real = std::fs::canonicalize(inbox.path()).unwrap();
+        let real = crate::bibliography::attachment::plain_canonical(inbox.path()).unwrap();
         let real = real.to_string_lossy().to_string();
         let added = add_import_folder(
             &harness.access,

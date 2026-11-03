@@ -874,7 +874,7 @@ mod tests {
 
     fn inbox(files: &[(&str, &[u8])]) -> Inbox {
         let dir = tempfile::tempdir().unwrap();
-        let path = std::fs::canonicalize(dir.path()).unwrap();
+        let path = crate::bibliography::attachment::plain_canonical(dir.path()).unwrap();
         for (name, bytes) in files {
             std::fs::write(path.join(name), bytes).unwrap();
         }

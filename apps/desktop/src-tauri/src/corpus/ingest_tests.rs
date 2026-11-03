@@ -26,7 +26,7 @@ fn fixture() -> Fixture {
     let conn = crate::db::open::open_archive_connection(&seeded_archive(&data_dir)).unwrap();
     Fixture {
         data_dir: std::fs::canonicalize(&data_dir).unwrap(),
-        inbox: std::fs::canonicalize(&inbox).unwrap(),
+        inbox: crate::bibliography::attachment::plain_canonical(&inbox).unwrap(),
         _root: root,
         conn,
     }
@@ -144,7 +144,16 @@ fn a_supported_file_directly_in_an_enabled_folder_is_accepted() {
     assert_eq!(source.name, "Carta de Sarmiento.pdf");
     assert_eq!(source.kind, FileKind::Pdf);
     assert_eq!(source.size_bytes, 10);
-    assert_eq!(source.path, f.inbox.join("Carta de Sarmiento.pdf"));
+    // The real path is kept as the OS spells it (verbatim on Windows, which
+    // allows long paths for the copy); what the app records is the plain form.
+    assert_eq!(
+        crate::path_utils::normalize_windows_path(&source.path),
+        f.inbox.join("Carta de Sarmiento.pdf")
+    );
+    assert_eq!(
+        original_path(&source),
+        f.inbox.join("Carta de Sarmiento.pdf").to_string_lossy()
+    );
     assert!(source.modified_at.is_some());
 }
 
@@ -689,11 +698,19 @@ fn windows_paths_are_recorded_and_matched_without_the_verbatim_prefix() {
     assert!(!plain_folder.to_string_lossy().starts_with(r"\\?\"));
     let checked = check_source(
         &file.to_string_lossy(),
-        &[plain_folder.clone()],
+        std::slice::from_ref(&plain_folder),
         data.path(),
         &SourceLimits::default(),
     )
     .expect("a file directly inside a plainly stored folder is accepted");
+    let verbatim_folder = std::fs::canonicalize(inbox.path()).unwrap();
+    check_source(
+        &file.to_string_lossy(),
+        std::slice::from_ref(&verbatim_folder),
+        data.path(),
+        &SourceLimits::default(),
+    )
+    .expect("a folder list in the verbatim spelling still matches");
     let listed = list_folder(inbox.path(), &[plain_folder], data.path(), 10).unwrap();
     assert_eq!(listed.files.len(), 1);
     let original = original_path(&checked);

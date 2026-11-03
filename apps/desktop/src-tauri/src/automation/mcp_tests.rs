@@ -2189,7 +2189,7 @@ impl Harness {
             .access
             .add_import_folder(&dir.path().to_string_lossy())
             .unwrap();
-        let real = std::fs::canonicalize(dir.path()).unwrap();
+        let real = crate::bibliography::attachment::plain_canonical(dir.path()).unwrap();
         let real = real.to_string_lossy().to_string();
         assert!(folders.contains(&real));
         (dir, real)

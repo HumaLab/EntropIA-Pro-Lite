@@ -94,6 +94,13 @@ fn millis(time: std::io::Result<std::time::SystemTime>) -> Option<i64> {
 /// Check one candidate. The error starts with a stable reason
 /// (`missing`, `not_a_file`, `in_archive`, `not_in_folder`, `unsupported`,
 /// `too_large`) followed by `: ` and a detail.
+/// Whether an enabled folder is `plain`, a folder in its plain form. The
+/// folders are compared in plain form too, so a list holding a verbatim
+/// (`\\?\`) spelling still matches on Windows.
+pub(crate) fn same_folder(enabled: &Path, plain: &Path) -> bool {
+    crate::path_utils::normalize_windows_path(enabled) == plain
+}
+
 pub fn check_source(
     path: &str,
     folders: &[PathBuf],
@@ -114,7 +121,7 @@ pub fn check_source(
     // Enabled folders are stored in their plain form (no `\\?\` on Windows).
     let inside = real.parent().is_some_and(|parent| {
         let parent = crate::path_utils::normalize_windows_path(parent);
-        folders.iter().any(|folder| folder == &parent)
+        folders.iter().any(|folder| same_folder(folder, &parent))
     });
     if !inside {
         return Err(format!(
@@ -203,7 +210,7 @@ pub fn list_folder(
     let real = std::fs::canonicalize(folder)
         .map_err(|_| format!("not_enabled: {} is not an enabled folder", folder.display()))?;
     let plain = crate::path_utils::normalize_windows_path(&real);
-    if !folders.iter().any(|enabled| enabled == &plain) {
+    if !folders.iter().any(|enabled| same_folder(enabled, &plain)) {
         return Err(format!(
             "not_enabled: {} is not an enabled folder",
             folder.display()
