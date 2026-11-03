@@ -12,12 +12,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::approvals::{Approval, ApprovalAction, ApprovalRequest, ApprovalStore};
+use super::approvals::{
+    Approval, ApprovalAction, ApprovalRequest, ApprovalStore, DeletePlan, DeleteTarget,
+};
 use super::jobs::JobsError;
 use crate::corpus::{self, CollectionDto, CollectionPatch, CorpusError, ItemPatch};
 use crate::processing::repository;
@@ -29,7 +31,9 @@ const REQUEST_ID_MAX_CHARS: usize = 128;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorpusChange {
-    /// `collection` or `item`.
+    /// `collection` or `item` for a write to a record that still exists;
+    /// `collection_deleted` or `item_deleted` after an approved delete, which
+    /// also takes the record's screen away.
     pub kind: &'static str,
     pub id: String,
     /// The collection the changed record belongs to (itself for a collection).
@@ -149,6 +153,12 @@ pub struct TextReplacement {
 /// Most files one import request may list.
 pub const MAX_IMPORT_FILES: usize = 200;
 
+/// Most documents one delete request may name (D11 e).
+pub const MAX_DELETE_ITEMS: usize = 200;
+
+/// Document titles a delete approval lists; `files` carries the total.
+pub const MAX_DELETE_TITLES: usize = 20;
+
 /// Most files `import_sources_list` shows per folder.
 pub const MAX_LISTED_FILES: usize = 500;
 
@@ -192,6 +202,97 @@ fn data_dir_of(db_path: &std::path::Path) -> Result<PathBuf, JobsError> {
         .parent()
         .map(std::path::Path::to_path_buf)
         .ok_or_else(JobsError::unavailable)
+}
+
+fn placeholders(count: usize) -> String {
+    (1..=count)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Collections the documents belong to, by name, each with one of them, so the
+/// app can refresh every collection a delete touches.
+fn delete_targets(
+    conn: &Connection,
+    item_ids: &[String],
+) -> Result<(Vec<String>, Vec<DeleteTarget>), JobsError> {
+    let sql = format!(
+        "SELECT c.id, c.name, MIN(i.id) FROM items i
+         JOIN collections c ON c.id = i.collection_id
+         WHERE i.id IN ({})
+         GROUP BY c.id, c.name
+         ORDER BY c.name COLLATE NOCASE, c.id",
+        placeholders(item_ids.len())
+    );
+    let mut statement = conn.prepare(&sql).map_err(|_| JobsError::unavailable())?;
+    let rows = statement
+        .query_map(params_from_iter(item_ids), |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                DeleteTarget {
+                    collection_id: row.get(0)?,
+                    item_id: row.get(2)?,
+                },
+            ))
+        })
+        .map_err(|_| JobsError::unavailable())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| JobsError::unavailable())?;
+    Ok(rows.into_iter().unzip())
+}
+
+/// The first `limit` titles of these documents, so the dialog can name them.
+fn delete_titles(
+    conn: &Connection,
+    item_ids: &[String],
+    limit: usize,
+) -> Result<Vec<String>, JobsError> {
+    let sql = format!(
+        "SELECT title FROM items WHERE id IN ({})
+         ORDER BY title COLLATE NOCASE, id LIMIT {limit}",
+        placeholders(item_ids.len())
+    );
+    let mut statement = conn.prepare(&sql).map_err(|_| JobsError::unavailable())?;
+    let titles = statement
+        .query_map(params_from_iter(item_ids), |row| row.get::<_, String>(0))
+        .map_err(|_| JobsError::unavailable())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| JobsError::unavailable())?;
+    Ok(titles)
+}
+
+/// The first `limit` titles of a collection's documents.
+fn collection_titles(
+    conn: &Connection,
+    collection_id: &str,
+    limit: usize,
+) -> Result<Vec<String>, JobsError> {
+    let mut statement = conn
+        .prepare(
+            "SELECT title FROM items WHERE collection_id = ?1
+             ORDER BY title COLLATE NOCASE, id LIMIT ?2",
+        )
+        .map_err(|_| JobsError::unavailable())?;
+    let titles = statement
+        .query_map(params![collection_id, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|_| JobsError::unavailable())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| JobsError::unavailable())?;
+    Ok(titles)
+}
+
+/// One document of a collection, for the app to refresh it afterwards.
+fn first_item_id(conn: &Connection, collection_id: &str) -> Result<Option<String>, JobsError> {
+    conn.query_row(
+        "SELECT id FROM items WHERE collection_id = ?1 ORDER BY id LIMIT 1",
+        [collection_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|_| JobsError::unavailable())
 }
 
 /// Characters of a proposed text the owner's dialog shows.
@@ -401,6 +502,7 @@ impl CorpusArchive {
             preview: Some(text.chars().take(PREVIEW_CHARS).collect()),
             text: Some(text.to_string()),
             import_plan: None,
+            delete: None,
         }))
     }
 
@@ -535,6 +637,103 @@ impl CorpusArchive {
             preview: None,
             text: None,
             import_plan: Some(plan),
+            delete: None,
+        }))
+    }
+
+    /// Ask the owner to delete documents (D11 e). Everything that can be
+    /// refused is refused here, before a dialog opens: an empty or oversized
+    /// list, a blank id and an unknown one. The approval carries the exact set
+    /// (ids sorted, and the fence over each one's revision and asset count),
+    /// the impact, the collections and the first titles, never a path.
+    pub fn request_items_deletion(
+        &self,
+        approvals: &ApprovalStore,
+        client_id: &str,
+        client_name: &str,
+        item_ids: &[String],
+    ) -> Result<Approval, JobsError> {
+        if item_ids.is_empty() || item_ids.len() > MAX_DELETE_ITEMS {
+            return Err(refusal(
+                "invalid_argument",
+                format!("`itemIds` tiene que nombrar entre 1 y {MAX_DELETE_ITEMS} documentos."),
+            ));
+        }
+        let conn = self.connection()?;
+        // The service dedupes and checks the ids; sorting makes the set
+        // canonical, so any order is the same request.
+        let mut item_ids = corpus::normalized_item_ids(item_ids).map_err(from_corpus)?;
+        item_ids.sort();
+        let scope = corpus::DeleteScope::Items(item_ids.clone());
+        let impact = corpus::delete_impact(&conn, &scope).map_err(from_corpus)?;
+        let set_hash = corpus::delete_fence(&conn, &scope).map_err(from_corpus)?;
+        let (collections, targets) = delete_targets(&conn, &item_ids)?;
+        let titles = delete_titles(&conn, &item_ids, MAX_DELETE_TITLES)?;
+        Ok(approvals.request(ApprovalRequest {
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            action: ApprovalAction::DeleteItems { item_ids, set_hash },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["delete_items".to_string()],
+            collections,
+            files: impact.documents,
+            preview: None,
+            text: None,
+            import_plan: None,
+            delete: Some(DeletePlan {
+                impact,
+                titles,
+                targets,
+            }),
+        }))
+    }
+
+    /// Ask the owner to delete one collection and everything it holds. An
+    /// unknown collection is a `not_found` refusal and opens no dialog.
+    pub fn request_collection_deletion(
+        &self,
+        approvals: &ApprovalStore,
+        client_id: &str,
+        client_name: &str,
+        collection_id: &str,
+    ) -> Result<Approval, JobsError> {
+        let conn = self.connection()?;
+        let scope = corpus::DeleteScope::Collection(collection_id.to_string());
+        let impact = corpus::delete_impact(&conn, &scope).map_err(from_corpus)?;
+        let set_hash = corpus::delete_fence(&conn, &scope).map_err(from_corpus)?;
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM collections WHERE id = ?1",
+                params![collection_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| JobsError::unavailable())?;
+        let titles = collection_titles(&conn, collection_id, MAX_DELETE_TITLES)?;
+        let first = first_item_id(&conn, collection_id)?.unwrap_or_default();
+        Ok(approvals.request(ApprovalRequest {
+            client_id: client_id.to_string(),
+            client_name: client_name.to_string(),
+            action: ApprovalAction::DeleteCollection {
+                collection_id: collection_id.to_string(),
+                set_hash,
+            },
+            job_id: String::new(),
+            revision: 0,
+            operations: vec!["delete_collection".to_string()],
+            collections: vec![name],
+            files: impact.documents,
+            preview: None,
+            text: None,
+            import_plan: None,
+            delete: Some(DeletePlan {
+                impact,
+                titles,
+                targets: vec![DeleteTarget {
+                    collection_id: collection_id.to_string(),
+                    item_id: first,
+                }],
+            }),
         }))
     }
 

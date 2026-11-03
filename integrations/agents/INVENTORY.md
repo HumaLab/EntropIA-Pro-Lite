@@ -66,14 +66,15 @@ Two facts explain most of the "where it lives" column and shape stages 3-5:
 |---|---|---|---|---|---|
 | List collections with item counts | `automation/read.rs` (`collections`) | `collections_list` | read | Both | implemented |
 | Create / rename / edit a collection | `corpus::create_collection`, `corpus::update_collection` (the app's views use them through `lib/corpus.ts`) | `collections_create`, `collections_update` | local_write | Both | implemented |
-| Delete a collection and its contents | `collection.repo.ts`, deletion flow in `apps/desktop/src/views/CollectionView.svelte` | `collections_delete` (confirmation required) | local_write | Both | planned (stage 3) |
+| Delete a collection and its contents | `corpus::delete::delete_collection` (the app's Colecciones view uses it through `lib/corpus.ts`) | `collections_delete` (owner approval with the impact; nothing is deleted before the answer) | local_write + owner approval | Both | implemented |
 | List items, optionally by collection | `automation/read.rs` (`items`) | `items_list` | read | Both | implemented |
 | One item: metadata and file list | `automation/read.rs` (`item`) | `items_get` | read | Both | implemented |
 | Search titles, metadata and indexed text | `automation/read.rs` (`search`), `nlp::commands::fts_search`, `packages/store/src/repos/fts.repo.ts`, `apps/desktop/src/lib/collection-search-plan.ts` | `search_items` | read | Both | implemented |
 | Edit item metadata / custom fields | `corpus::update_item` (the app's views use it through `lib/corpus.ts`) | `items_update` | local_write | Both | implemented |
 | Import files (picker or drag and drop) | agent: `corpus::ingest` from owner-enabled folders; app: `lib/file-import.ts`, `collection-import.ts`, Tauri dialog/fs plugins | `import_sources_list`, `documents_import` (owner approval with the file list) | local_write + owner approval | Both | implemented for the agent; the app's own import moves to `corpus::ingest` later |
 | Import deduplication | `corpus::ingest::find_duplicate` (the app's rule, inside the import transaction); app: `item.repo.ts` `findImportedFromSource` | part of `documents_import` (a duplicate is skipped and reported) | local_write | Both | implemented |
-| Delete a document, page or asset | `packages/store/src/repos/asset.repo.ts`, `image_edit::delete_asset_files`, `navegador_delete_source` | `documents_delete` (confirmation required) | local_write | Both | planned (stage 3) |
+| Delete a document | `corpus::delete::delete_items` (the app's CollectionView uses it through `lib/corpus.ts`) | `documents_delete` (owner approval with the impact and the titles; nothing is deleted before the answer) | local_write + owner approval | Both | implemented |
+| Delete a page (asset) | `packages/store/src/repos/asset.repo.ts`, `image_edit::delete_asset_files`, `navegador_delete_source` | not exposed | — | Both | not exposed: page deletion stays in the renderer for now (D11 d) |
 | Export a collection as JSON | `apps/desktop/src/lib/export.ts` | `collections_export` | read | Both | planned (stage 5) |
 | Asset integrity check | `asset_integrity::assets_check_integrity` | `archive_check` | admin | Both | planned (stage 5) |
 | Move items between collections, reorder pages, add a page to an existing document | no code (the manual lists these as unavailable) | not exposed | — | Both | not exposed: no product operation exists to expose |

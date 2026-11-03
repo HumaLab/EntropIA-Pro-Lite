@@ -102,6 +102,20 @@ export type AgentApprovalAction =
       new_text_hash: string
     }
   | { kind: 'import_files'; collection_id: string; files: number; plan_hash: string }
+  | { kind: 'delete_items'; item_ids: string[]; set_hash: string }
+  | { kind: 'delete_collection'; collection_id: string; set_hash: string }
+
+/**
+ * What deleting a request's scope would remove, as the dialog says it. The
+ * documents with recognized text are counted apart so their loss can be named.
+ */
+export interface AgentDeleteImpact {
+  documents: number
+  pages: number
+  notes: number
+  annotations: number
+  documentsWithText: number
+}
 
 /** One file of an import request: name, kind and size, never its path. */
 export interface AgentImportFile {
@@ -144,6 +158,10 @@ export interface AgentApproval {
   preview: string | null
   /** The files an import would bring in (`import_files`). */
   importFiles: AgentImportFile[] | null
+  /** What deleting the scope would remove (`delete_items`, `delete_collection`). */
+  deleteImpact: AgentDeleteImpact | null
+  /** The first titles the delete would remove (`documentTitles`); `files` says how many. */
+  documentTitles: string[] | null
   /** What an approved import did. */
   importResult: AgentImportResult | null
 }

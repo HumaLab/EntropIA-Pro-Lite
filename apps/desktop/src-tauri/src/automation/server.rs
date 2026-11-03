@@ -174,6 +174,12 @@ impl AgentEndpointState {
         crate::automation::audit::AuditLog::new(self.cache_dir.join("logs"))
     }
 
+    /// The cache directory: the app's own, so an approved delete removes the
+    /// same thumbnails its commands would.
+    pub fn cache_dir(&self) -> PathBuf {
+        self.cache_dir.clone()
+    }
+
     /// The approvals store the endpoint fills and the app answers.
     pub fn approvals(&self) -> Arc<ApprovalStore> {
         self.approvals.clone()
@@ -913,8 +919,10 @@ mod tests {
             vec![
                 "approvals_status",
                 "collections_create",
+                "collections_delete",
                 "collections_list",
                 "collections_update",
+                "documents_delete",
                 "documents_get_text",
                 "documents_import",
                 "documents_index",

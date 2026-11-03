@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params_from_iter, Connection};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::corpus::commands::CorpusError;
 
@@ -80,7 +81,9 @@ fn placeholders(count: usize) -> String {
         .join(", ")
 }
 
-fn normalize_item_ids(item_ids: &[String]) -> Result<Vec<String>, CorpusError> {
+/// The ids a delete applies to, deduplicated and checked the way the delete
+/// service checks them: at least one, each one not blank.
+pub fn normalized_item_ids(item_ids: &[String]) -> Result<Vec<String>, CorpusError> {
     if item_ids.is_empty() {
         return Err(CorpusError::InvalidArgument(
             "at least one item id is required".into(),
@@ -218,7 +221,7 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool, CorpusError> {
 fn read_scope_item_ids(conn: &Connection, scope: &DeleteScope) -> Result<Vec<String>, CorpusError> {
     match scope {
         DeleteScope::Items(item_ids) => {
-            let item_ids = normalize_item_ids(item_ids)?;
+            let item_ids = normalized_item_ids(item_ids)?;
             read_item_owners(conn, &item_ids)?;
             Ok(item_ids)
         }
@@ -275,6 +278,74 @@ pub fn delete_impact(conn: &Connection, scope: &DeleteScope) -> Result<DeleteImp
         annotations,
         documents_with_text,
     })
+}
+
+/// The fence of a delete (D11 e): a sha256 over the exact set that would go,
+/// so an approval answers the state the assistant saw and nothing else. An
+/// item contributes its id, its `updated_at` and its counts of assets, notes,
+/// annotations and text extractions (what the dialog says is lost); a collection
+/// contributes its own id and all its items, so a document gained or lost
+/// changes the fence too.
+pub fn delete_fence(conn: &Connection, scope: &DeleteScope) -> Result<String, CorpusError> {
+    let mut item_ids = read_scope_item_ids(conn, scope)?;
+    item_ids.sort();
+    let mut digest = Sha256::new();
+    match scope {
+        DeleteScope::Items(_) => digest.update(b"items"),
+        DeleteScope::Collection(collection_id) => {
+            digest.update(b"collection\0");
+            digest.update(collection_id.as_bytes());
+        }
+    }
+    for item_id in &item_ids {
+        // Everything the dialog counts as lost, per document: a note, an
+        // annotation or recognized text added after the request changes it
+        // even though the item row itself does not.
+        let counts: [i64; 5] = conn
+            .query_row(
+                "SELECT updated_at,
+                        (SELECT count(*) FROM assets WHERE item_id = items.id),
+                        (SELECT count(*) FROM notes WHERE item_id = items.id),
+                        (SELECT count(*) FROM annotations WHERE asset_id IN
+                           (SELECT id FROM assets WHERE item_id = items.id)),
+                        (SELECT count(*) FROM extractions WHERE asset_id IN
+                           (SELECT id FROM assets WHERE item_id = items.id))
+                 FROM items WHERE id = ?1",
+                [item_id],
+                |row| {
+                    Ok([
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ])
+                },
+            )
+            .map_err(|error| unavailable("read the delete fence", error))?;
+        digest.update(b"\0");
+        digest.update(item_id.as_bytes());
+        for count in counts {
+            digest.update(b"\0");
+            digest.update(count.to_string().as_bytes());
+        }
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+/// Refuse unless the scope is still exactly the one whose fence was approved.
+fn check_fence(
+    conn: &Connection,
+    scope: &DeleteScope,
+    expected_fence: &str,
+) -> Result<(), CorpusError> {
+    let current = delete_fence(conn, scope)?;
+    if current != expected_fence {
+        return Err(CorpusError::RevisionConflict(
+            "what would be deleted changed after the request".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn run_in_transaction<T>(
@@ -742,8 +813,27 @@ pub fn delete_items(
     cache_dir: &Path,
     item_ids: &[String],
 ) -> Result<(), CorpusError> {
-    let item_ids = normalize_item_ids(item_ids)?;
+    let item_ids = normalized_item_ids(item_ids)?;
     let outcome = run_in_transaction(conn, || delete_items_rows(conn, data_dir, &item_ids))?;
+    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    Ok(())
+}
+
+/// [`delete_items`] for an approved request: the same delete, only while the
+/// set is exactly the one whose fence the owner approved. The check and the
+/// delete share one transaction, so nothing can change in between.
+pub fn delete_items_if_unchanged(
+    conn: &Connection,
+    data_dir: &Path,
+    cache_dir: &Path,
+    item_ids: &[String],
+    expected_fence: &str,
+) -> Result<(), CorpusError> {
+    let item_ids = normalized_item_ids(item_ids)?;
+    let outcome = run_in_transaction(conn, || {
+        check_fence(conn, &DeleteScope::Items(item_ids.clone()), expected_fence)?;
+        delete_items_rows(conn, data_dir, &item_ids)
+    })?;
     remove_files_after_commit(data_dir, cache_dir, &outcome);
     Ok(())
 }
@@ -757,6 +847,27 @@ pub fn delete_collection(
     collection_id: &str,
 ) -> Result<(), CorpusError> {
     let outcome = run_in_transaction(conn, || {
+        delete_collection_rows(conn, data_dir, collection_id)
+    })?;
+    remove_files_after_commit(data_dir, cache_dir, &outcome);
+    Ok(())
+}
+
+/// [`delete_collection`] for an approved request: only while the collection
+/// holds exactly the documents whose fence the owner approved.
+pub fn delete_collection_if_unchanged(
+    conn: &Connection,
+    data_dir: &Path,
+    cache_dir: &Path,
+    collection_id: &str,
+    expected_fence: &str,
+) -> Result<(), CorpusError> {
+    let outcome = run_in_transaction(conn, || {
+        check_fence(
+            conn,
+            &DeleteScope::Collection(collection_id.to_string()),
+            expected_fence,
+        )?;
         delete_collection_rows(conn, data_dir, collection_id)
     })?;
     remove_files_after_commit(data_dir, cache_dir, &outcome);

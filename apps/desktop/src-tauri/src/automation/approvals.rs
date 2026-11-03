@@ -67,6 +67,36 @@ pub enum ApprovalAction {
         files: usize,
         plan_hash: String,
     },
+    /// Delete documents. Bound to the exact set the assistant listed: its ids
+    /// sorted, and `set_hash` over each one's revision and asset count.
+    DeleteItems {
+        item_ids: Vec<String>,
+        set_hash: String,
+    },
+    /// Delete one collection and everything it holds. `set_hash` covers every
+    /// document the collection had, so one gained or lost changes it.
+    DeleteCollection {
+        collection_id: String,
+        set_hash: String,
+    },
+}
+
+/// One collection a delete touches, as the app refreshes it afterwards: the
+/// collection and one of the documents that go with it. Kept in memory only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteTarget {
+    pub collection_id: String,
+    pub item_id: String,
+}
+
+/// What a delete would remove, as the dialog and the assistant see it: the
+/// impact counts, the first document titles and the collections to refresh,
+/// never a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletePlan {
+    pub impact: crate::corpus::delete::DeleteImpact,
+    pub titles: Vec<String>,
+    pub targets: Vec<DeleteTarget>,
 }
 
 /// One file of an import request, as the dialog and the assistant see it:
@@ -108,10 +138,12 @@ pub struct ImportResult {
 }
 
 /// What executing an approved action needs from the app beyond a connection:
-/// the archive's data directory and the folders imports may read right now.
+/// the archive's data directory, its cache directory (thumbnails live there)
+/// and the folders imports may read right now.
 #[derive(Debug, Clone, Default)]
 pub struct ExecContext {
     pub data_dir: Option<std::path::PathBuf>,
+    pub cache_dir: Option<std::path::PathBuf>,
     pub folders: Vec<std::path::PathBuf>,
 }
 
@@ -166,6 +198,17 @@ pub struct Approval {
     pub text: Option<String>,
     /// The files an import would bring in (`import_files`), without paths.
     pub import_files: Option<Vec<ImportFileView>>,
+    /// What deleting the request's scope would remove (`delete_items`,
+    /// `delete_collection`).
+    pub delete_impact: Option<crate::corpus::delete::DeleteImpact>,
+    /// The documents the delete would remove, first titles only; `files` says
+    /// how many there are.
+    pub document_titles: Option<Vec<String>>,
+    /// The collections a delete touches, so the app refreshes them after it.
+    /// Kept here until it runs; never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub delete_targets: Option<Vec<DeleteTarget>>,
     /// The checked files an import would copy. Kept here until it runs;
     /// never serialized, so paths stay in the app.
     #[serde(skip)]
@@ -189,6 +232,9 @@ pub struct ApprovalRequest {
     pub preview: Option<String>,
     pub text: Option<String>,
     pub import_plan: Option<Vec<crate::corpus::ingest::SourceFile>>,
+    /// What a delete would remove, for the dialog; absent for every other
+    /// action.
+    pub delete: Option<DeletePlan>,
 }
 
 /// Called after every change, so the app can show the request and come to the
@@ -297,6 +343,9 @@ impl ApprovalStore {
                 }),
                 import_plan: request.import_plan,
                 import_result: None,
+                delete_impact: request.delete.as_ref().map(|plan| plan.impact),
+                document_titles: request.delete.as_ref().map(|plan| plan.titles.clone()),
+                delete_targets: request.delete.map(|plan| plan.targets),
             };
             approvals.insert(approval.id.clone(), approval.clone());
             approval
@@ -393,6 +442,9 @@ impl ApprovalStore {
                 ApprovalAction::ImportFiles { collection_id, .. } => {
                     run_import(conn, &approval, collection_id, context).map(Some)
                 }
+                ApprovalAction::DeleteItems { .. } | ApprovalAction::DeleteCollection { .. } => {
+                    run_delete(conn, &approval, context).map(|()| None)
+                }
                 _ => execute(conn, &approval).map(|()| None),
             };
             let mut approvals = self.lock();
@@ -469,6 +521,54 @@ fn execute(conn: &Connection, approval: &Approval) -> Result<(), String> {
         ApprovalAction::ImportFiles { .. } => {
             Err("invalid_transition: an import needs the app's context".to_string())
         }
+        // Deletes run through `run_delete`: they need the archive's folders.
+        ApprovalAction::DeleteItems { .. } | ApprovalAction::DeleteCollection { .. } => {
+            Err("invalid_transition: a delete needs the app's context".to_string())
+        }
+    }
+}
+
+/// Delete what the owner approved, only while it is still exactly what the
+/// dialog showed (D11 e). The fence is checked and the rows removed in one
+/// transaction, so a document that changed or a collection that gained or lost
+/// one fails the approval and nothing is deleted.
+fn run_delete(conn: &Connection, approval: &Approval, context: &ExecContext) -> Result<(), String> {
+    let data_dir = context
+        .data_dir
+        .as_deref()
+        .ok_or_else(|| "invalid_transition: the archive folder is unknown".to_string())?;
+    let cache_dir = context
+        .cache_dir
+        .as_deref()
+        .ok_or_else(|| "invalid_transition: the cache folder is unknown".to_string())?;
+    match &approval.action {
+        ApprovalAction::DeleteItems { item_ids, set_hash } => {
+            crate::corpus::delete_items_if_unchanged(conn, data_dir, cache_dir, item_ids, set_hash)
+        }
+        ApprovalAction::DeleteCollection {
+            collection_id,
+            set_hash,
+        } => crate::corpus::delete_collection_if_unchanged(
+            conn,
+            data_dir,
+            cache_dir,
+            collection_id,
+            set_hash,
+        ),
+        _ => Ok(()),
+    }
+    .map_err(delete_error)
+}
+
+/// The stable prefix a failed delete carries, so its sentence never borrows
+/// the wording of a changed job.
+fn delete_error(error: crate::corpus::CorpusError) -> String {
+    match error {
+        crate::corpus::CorpusError::RevisionConflict(detail) => {
+            format!("delete_changed: {detail}")
+        }
+        crate::corpus::CorpusError::NotFound(detail) => format!("delete_missing: {detail}"),
+        other => other.to_string(),
     }
 }
 
@@ -571,7 +671,11 @@ fn fence(conn: &Connection, job_id: &str, revision: i64) -> Result<(), String> {
 
 /// The sentence the dialog and the assistant show for a failed approved action.
 fn failure_sentence(error: &str) -> String {
-    if error.starts_with("revision_conflict:") {
+    if error.starts_with("delete_changed:") {
+        "Lo que se iba a borrar cambió después del pedido; no se borró nada. El asistente tiene que volver a pedirlo.".to_string()
+    } else if error.starts_with("delete_missing:") {
+        "Lo que se iba a borrar ya no existe en este archivo; no se borró nada.".to_string()
+    } else if error.starts_with("revision_conflict:") {
         "El trabajo cambió después del pedido; no se ejecutó nada. El asistente tiene que volver a pedirlo.".to_string()
     } else if error.starts_with("invalid_transition:") {
         "El trabajo ya no está en un estado que admita esta acción; no se ejecutó nada.".to_string()
@@ -654,6 +758,7 @@ mod tests {
             preview: None,
             text: None,
             import_plan: None,
+            delete: None,
         }
     }
 
@@ -687,6 +792,7 @@ mod tests {
             preview: Some(new_text.chars().take(10).collect()),
             text: Some(new_text.to_string()),
             import_plan: None,
+            delete: None,
         }
     }
 
@@ -805,12 +911,14 @@ mod tests {
             preview: None,
             text: None,
             import_plan: Some(plan),
+            delete: None,
         }
     }
 
     fn context(f: &Fixture, inbox: &Inbox) -> ExecContext {
         ExecContext {
             data_dir: Some(f._dir.path().to_path_buf()),
+            cache_dir: Some(f._dir.path().join("cache")),
             folders: vec![inbox.path.clone()],
         }
     }
@@ -905,6 +1013,7 @@ mod tests {
                 true,
                 &ExecContext {
                     data_dir: Some(f._dir.path().to_path_buf()),
+                    cache_dir: Some(f._dir.path().join("cache")),
                     folders: Vec::new(),
                 },
             )

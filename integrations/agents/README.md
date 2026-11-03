@@ -113,7 +113,7 @@ once and the next request is refused.
 
 | Box | Scope | What the assistant can do |
 |---|---|---|
-| **Preparar procesamiento y editar el corpus** | `local_write` | Prepare a paused job over collections or items (`processing_prepare`), pause or cancel it (`processing_control`); create and rename collections (`collections_create`, `collections_update`); edit item titles and metadata (`items_update`); propose a correction of a page's recognized text (`documents_text_update`, which you approve, and «Restaurar original» undoes); propose importing files from your «Carpetas de entrada» (`import_sources_list`, `documents_import`, which you approve seeing the list of files). Nothing is spent. |
+| **Preparar procesamiento y editar el corpus** | `local_write` | Prepare a paused job over collections or items (`processing_prepare`), pause or cancel it (`processing_control`); create and rename collections (`collections_create`, `collections_update`); edit item titles and metadata (`items_update`); propose a correction of a page's recognized text (`documents_text_update`, which you approve, and «Restaurar original» undoes); propose importing files from your «Carpetas de entrada» (`import_sources_list`, `documents_import`, which you approve seeing the list of files); propose deleting documents (`documents_delete`) or a whole collection (`collections_delete`), which you approve seeing how many pages, notes and annotations are lost. Nothing is spent. |
 | **Pedir procesamiento pago** | `remote_spend` | Ask to start, resume or retry a job (`processing_start`, `processing_control`). Each request waits for you. |
 
 When an assistant asks to start paid work, EntropIA comes to the front with a
@@ -122,6 +122,13 @@ Only **Aprobar** runs it; **Rechazar** is focused first, Escape rejects, and a
 request nobody answers expires after ten minutes. If the job changed between the
 request and your answer (another priority, a pause), nothing runs and the
 assistant has to ask again. Approvals are not kept across a restart.
+
+A request to delete looks the same, with **Borrar** instead of **Aprobar**: it
+names the collection and the documents, and says what is lost («Se pierden: 3
+documentos, 14 páginas, 2 notas, 5 anotaciones y su texto reconocido») and that it
+cannot be undone and deletes on every device. If a document changed, or a
+collection gained or lost one, between the request and your answer, nothing is
+deleted.
 
 The flow an assistant follows: `processing_prepare` → poll `jobs_get` until the
 job is `ready` (planning counts the pages and units) → `processing_start` with
@@ -227,7 +234,7 @@ in to the desktop session with the keyring unlocked, or pass the agent
 ## Read next
 
 - [`PROTOCOL.md`](PROTOCOL.md) — protocol version and compatibility policy,
-  transport and guard order, discovery file, credentials, scopes, the twenty
+  transport and guard order, discovery file, credentials, scopes, the twenty-two
   tools and the approvals, every error code, and the audit format.
 - [`INVENTORY.md`](INVENTORY.md) — what each product operation maps to today,
   which tool would expose it, and what is deliberately not exposed.

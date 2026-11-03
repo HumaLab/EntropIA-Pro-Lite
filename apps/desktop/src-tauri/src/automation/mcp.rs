@@ -88,6 +88,8 @@ const TOOL_DOCUMENTS_TEXT_UPDATE: &str = "documents_text_update";
 const TOOL_DOCUMENTS_INDEX: &str = "documents_index";
 const TOOL_IMPORT_SOURCES_LIST: &str = "import_sources_list";
 const TOOL_DOCUMENTS_IMPORT: &str = "documents_import";
+const TOOL_DOCUMENTS_DELETE: &str = "documents_delete";
+const TOOL_COLLECTIONS_DELETE: &str = "collections_delete";
 
 const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
@@ -326,6 +328,22 @@ pub struct DocumentsImportParams {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentsIndexParams {
     pub item_id: String,
+}
+
+/// `documents_delete` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsDeleteParams {
+    /// The documents to delete, 1 to 200 ids, as `items_list` returned them.
+    pub item_ids: Vec<String>,
+}
+
+/// `collections_delete` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CollectionsDeleteParams {
+    /// The collection to delete with everything it holds.
+    pub collection_id: String,
 }
 
 /// Tells an absent field from an explicit `null`.
@@ -1077,6 +1095,49 @@ impl AgentServer {
     }
 
     #[tool(
+        name = "collections_delete",
+        description = "Pide borrar una colección y todo su contenido: documentos, páginas, notas y anotaciones. No borra nada por sí solo: la persona ve en EntropIA qué se pierde y lo aprueba o rechaza; consultalo con approvals_status. Si la colección ganó o perdió un documento antes de la respuesta, no se borra nada y el pedido termina failed. No se puede deshacer y el borrado llega a todos los equipos. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn collections_delete(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<CollectionsDeleteParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_COLLECTIONS_DELETE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_COLLECTIONS_DELETE, args)?;
+        let corpus = self.corpus.clone();
+        let approvals = self.approvals.clone();
+        let collection_id = args.collection_id.clone();
+        let (client_id, client_name) = (caller.client_id.clone(), caller.name.clone());
+        let approval = match Self::on_jobs(move || {
+            corpus.request_collection_deletion(&approvals, &client_id, &client_name, &collection_id)
+        })
+        .await
+        {
+            Ok(approval) => approval,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_COLLECTIONS_DELETE, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_COLLECTIONS_DELETE,
+            vec![args.collection_id, approval.id.clone()],
+            None,
+        );
+        Ok(Json(approval))
+    }
+
+    #[tool(
         name = "items_update",
         description = "Cambia el título de un ítem o sus campos de metadatos (`metadata` reemplaza todos los campos; los valores son texto). `revision` es el `updatedAt` que leíste: si el ítem cambió, responde revision_conflict y no cambia nada. Los datos internos de EntropIA se conservan y no se pueden escribir. El cambio queda buscable enseguida. Necesita el permiso «Preparar procesamiento y editar el corpus».",
         annotations(
@@ -1244,6 +1305,48 @@ impl AgentServer {
             vec![collection_id, approval.id.clone()],
             None,
         );
+        Ok(Json(approval))
+    }
+
+    #[tool(
+        name = "documents_delete",
+        description = "Pide borrar documentos con todo lo que contienen: archivos, páginas, notas y anotaciones. No borra nada por sí solo: la persona ve en EntropIA cuántos documentos, páginas, notas y anotaciones se pierden y lo aprueba o rechaza; consultalo con approvals_status. El pedido queda atado a la revisión de cada documento: si uno cambió antes de la respuesta, no se borra nada y el pedido termina failed. No se puede deshacer y el borrado llega a todos los equipos. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_delete(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsDeleteParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_DELETE,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_DELETE, args)?;
+        let corpus = self.corpus.clone();
+        let approvals = self.approvals.clone();
+        let (client_id, client_name) = (caller.client_id.clone(), caller.name.clone());
+        let approval = match Self::on_jobs(move || {
+            corpus.request_items_deletion(&approvals, &client_id, &client_name, &args.item_ids)
+        })
+        .await
+        {
+            Ok(approval) => approval,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_DELETE, error)),
+        };
+        let mut object_ids = match &approval.action {
+            ApprovalAction::DeleteItems { item_ids, .. } => item_ids.clone(),
+            _ => Vec::new(),
+        };
+        object_ids.push(approval.id.clone());
+        self.audit_ok(&caller, TOOL_DOCUMENTS_DELETE, object_ids, None);
         Ok(Json(approval))
     }
 
