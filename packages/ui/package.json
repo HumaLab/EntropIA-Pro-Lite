@@ -12,7 +12,7 @@
     "./components/MapViewer": "./src/components/MapViewer/index.ts"
   },
   "dependencies": {
-    "@tabler/icons-svelte-runes": "^3.49.0",
+    "@tabler/icons-svelte-runes": "^3.50.0",
     "@tiptap/core": "catalog:",
     "@tiptap/extension-document": "catalog:",
     "@tiptap/extension-gapcursor": "catalog:",
@@ -32,7 +32,7 @@
     "tiptap-footnotes": "^3.0.1"
   },
   "peerDependencies": {
-    "svelte": "^5.57.2"
+    "svelte": "^5.57.3"
   },
   "devDependencies": {
     "@entropia/config-ts": "workspace:*",
@@ -42,7 +42,7 @@
     "@types/leaflet": "^1.9.22",
     "@types/node": "^25.6.0",
     "happy-dom": "^21.0.4",
-    "svelte": "^5.57.2",
+    "svelte": "^5.57.3",
     "svelte-check": "^4",
     "vite": "^6.4.3",
     "vitest": "^4.1.11"
