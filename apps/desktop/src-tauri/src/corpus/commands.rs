@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::corpus::delete::{delete_collection, delete_items};
 use crate::corpus::ingest::{
     check_app_source, import_file, ImportOutcome, ImportOverrides, SourceLimits,
 };
@@ -658,4 +659,48 @@ pub async fn corpus_import_path(
         .ok_or_else(|| "unavailable: the archive folder is unknown".to_string())?;
     let overrides = overrides.unwrap_or_default();
     blocking(move || import_path(&conn, &data_dir, &collection_id, &source_path, &overrides)).await
+}
+
+/// Delete items and everything they own, through the same service the
+/// assistant endpoint will use (`odd/tasks/agent-corpus-tools.md` D11).
+#[tauri::command]
+pub async fn corpus_items_delete(
+    item_ids: Vec<String>,
+    db: State<'_, AppDbState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let conn = open(&db)?;
+    let data_dir = db
+        .db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "unavailable: the archive folder is unknown".to_string())?;
+    // The same cache the thumbnail commands write to.
+    let cache_dir = crate::path_utils::cache_dir(&app)?;
+    blocking(move || {
+        delete_items(&conn, &data_dir, &cache_dir, &item_ids).map_err(|error| error.to_string())
+    })
+    .await
+}
+
+/// Delete a collection and everything it owns, through the same service the
+/// assistant endpoint will use (`odd/tasks/agent-corpus-tools.md` D11).
+#[tauri::command]
+pub async fn corpus_collection_delete(
+    collection_id: String,
+    db: State<'_, AppDbState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let conn = open(&db)?;
+    let data_dir = db
+        .db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "unavailable: the archive folder is unknown".to_string())?;
+    let cache_dir = crate::path_utils::cache_dir(&app)?;
+    blocking(move || {
+        delete_collection(&conn, &data_dir, &cache_dir, &collection_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }

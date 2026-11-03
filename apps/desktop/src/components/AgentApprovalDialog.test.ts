@@ -40,6 +40,8 @@ const START: AgentApproval = {
   failure: null,
   preview: null,
   importFiles: null,
+  deleteImpact: null,
+  documentTitles: null,
   importResult: null,
 }
 
@@ -214,6 +216,119 @@ describe('AgentApprovalDialog', () => {
     expect(dialog).toHaveTextContent('No gasta')
     expect(dialog).not.toHaveTextContent('proveedores pagos')
     expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
+  })
+
+  it('shows a document delete with its impact, its titles and a Borrar button', async () => {
+    respond([
+      [
+        {
+          ...START,
+          id: 'apr_del',
+          action: {
+            kind: 'delete_items',
+            item_ids: ['ite_1', 'ite_2', 'ite_3'],
+            set_hash: 'd'.repeat(64),
+          },
+          jobId: '',
+          revision: 0,
+          operations: ['delete_items'],
+          collections: ['Cartas'],
+          files: 3,
+          deleteImpact: {
+            documents: 3,
+            pages: 14,
+            notes: 2,
+            annotations: 5,
+            documentsWithText: 2,
+          },
+          documentTitles: ['Carta de Sarmiento', 'Retrato de familia', 'Apuntes'],
+        },
+      ],
+    ])
+    render(AgentApprovalDialog)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Claude Code pide borrar 3 documentos')
+    expect(dialog).toHaveTextContent('Cartas')
+    expect(dialog).toHaveTextContent('Carta de Sarmiento')
+    expect(dialog).toHaveTextContent('Retrato de familia')
+    expect(dialog).toHaveTextContent(
+      'Se pierden: 3 documentos, 14 páginas, 2 notas, 5 anotaciones y su texto reconocido'
+    )
+    expect(dialog).toHaveTextContent('No se puede deshacer y se borra en todos tus equipos.')
+    expect(dialog).not.toHaveTextContent('proveedores pagos')
+    expect(within(dialog).getByRole('button', { name: 'Borrar' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: 'Aprobar' })).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
+  })
+
+  it('asks to delete a whole collection by name', async () => {
+    respond([
+      [
+        {
+          ...START,
+          id: 'apr_del_col',
+          action: {
+            kind: 'delete_collection',
+            collection_id: 'col_1',
+            set_hash: 'e'.repeat(64),
+          },
+          jobId: '',
+          revision: 0,
+          operations: ['delete_collection'],
+          collections: ['Cartas'],
+          files: 2,
+          deleteImpact: {
+            documents: 2,
+            pages: 0,
+            notes: 1,
+            annotations: 0,
+            documentsWithText: 0,
+          },
+          documentTitles: ['Revista 1', 'Revista 2'],
+        },
+      ],
+    ])
+    render(AgentApprovalDialog)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Claude Code pide borrar una colección')
+    expect(dialog).toHaveTextContent('Cartas')
+    expect(dialog).toHaveTextContent('Revista 1')
+    expect(dialog).toHaveTextContent('Se pierden: 2 documentos, 1 nota.')
+    expect(dialog).toHaveTextContent('No se puede deshacer y se borra en todos tus equipos.')
+    expect(within(dialog).getByRole('button', { name: 'Borrar' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
+  })
+
+  it('caps the titles of a large delete and counts the rest', async () => {
+    const titles = Array.from({ length: 20 }, (_, index) => `Documento ${index + 1}`)
+    respond([
+      [
+        {
+          ...START,
+          id: 'apr_del_many',
+          action: { kind: 'delete_items', item_ids: ['ite_1'], set_hash: 'f'.repeat(64) },
+          jobId: '',
+          revision: 0,
+          operations: ['delete_items'],
+          collections: ['Cartas'],
+          files: 25,
+          deleteImpact: {
+            documents: 25,
+            pages: 25,
+            notes: 0,
+            annotations: 0,
+            documentsWithText: 0,
+          },
+          documentTitles: titles,
+        },
+      ],
+    ])
+    render(AgentApprovalDialog)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Claude Code pide borrar 25 documentos')
+    expect(dialog).toHaveTextContent('Documento 20')
+    expect(dialog).toHaveTextContent('y 5 más')
+    expect(dialog).toHaveTextContent('Se pierden: 25 documentos, 25 páginas.')
   })
 
   it('reads the queue again when the backend says it changed', async () => {

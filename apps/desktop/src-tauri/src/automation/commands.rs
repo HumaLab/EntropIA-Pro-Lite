@@ -151,6 +151,8 @@ pub fn decide_approval(
     let context = super::approvals::ExecContext {
         // The archive's data directory holds the database and `assets/`.
         data_dir: db_path.parent().map(std::path::Path::to_path_buf),
+        // The same cache the thumbnail commands write to.
+        cache_dir: Some(endpoint.cache_dir()),
         folders: access.import_folders(),
     };
     let decided = endpoint
@@ -193,10 +195,46 @@ pub fn decide_approval(
                     });
             }
         }
+        // A delete removes documents the views may show. Each collection it
+        // touched is refreshed, and the deleted documents (or the collection
+        // itself, when it is gone) are forgotten in every tab, exactly as the
+        // app's own deletes do. A collection deleted whole, or emptied by the
+        // item cascade, which deletes it, refreshes the list instead.
+        if let Some(targets) = &decided.delete_targets {
+            for target in targets {
+                let exists: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?1)",
+                        [&target.collection_id],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                let (kind, id) = if exists {
+                    ("item_deleted", target.item_id.clone())
+                } else {
+                    ("collection_deleted", target.collection_id.clone())
+                };
+                endpoint
+                    .corpus_events()
+                    .notify(super::corpus_tools::CorpusChange {
+                        kind,
+                        id,
+                        collection_id: target.collection_id.clone(),
+                    });
+            }
+        }
     }
     let target_id = match &decided.action {
         super::approvals::ApprovalAction::ReplaceText { item_id, .. } => item_id,
         super::approvals::ApprovalAction::ImportFiles { collection_id, .. } => collection_id,
+        // A delete names the first collection the documents belonged to.
+        super::approvals::ApprovalAction::DeleteItems { .. } => decided
+            .delete_targets
+            .as_ref()
+            .and_then(|targets| targets.first())
+            .map(|target| &target.collection_id)
+            .unwrap_or(&decided.job_id),
+        super::approvals::ApprovalAction::DeleteCollection { collection_id, .. } => collection_id,
         _ => &decided.job_id,
     };
     endpoint
@@ -504,6 +542,7 @@ mod tests {
             preview: None,
             text: None,
             import_plan: None,
+            delete: None,
         });
 
         assert_eq!(pending_approvals(&endpoint), vec![asked.clone()]);

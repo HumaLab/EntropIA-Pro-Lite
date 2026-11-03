@@ -39,4 +39,18 @@ export function routeCorpusWrites(store: StoreApi): void {
     if (data.metadata !== undefined && data.metadata !== null) patch.metadataJson = data.metadata
     return invoke<Item>('corpus_item_update', { id, patch, expectedUpdatedAt: null })
   }
+
+  // Deletes move with the rest: database first, files after the commit, both
+  // inside the Rust service (odd/tasks/agent-corpus-tools.md D11). The Rust
+  // search reads the vocabulary live, but the store's renderer-side cache has
+  // to drop the terms of the rows that just left.
+  store.items.deleteWithCascade = async (id) => {
+    await invoke<void>('corpus_items_delete', { itemIds: [id] })
+    store.fts.forgetVocabulary()
+  }
+
+  store.collections.delete = async (id) => {
+    await invoke<void>('corpus_collection_delete', { collectionId: id })
+    store.fts.forgetVocabulary()
+  }
 }

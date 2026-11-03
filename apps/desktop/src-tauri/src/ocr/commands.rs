@@ -529,8 +529,16 @@ pub async fn delete_image_thumbnail(
 ) -> Result<(), String> {
     let app_dir = crate::path_utils::cache_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    delete_image_thumbnail_files(&app_dir, &asset_id)
+}
 
-    let thumb_dir = app_dir.join("thumbnails");
+/// Delete every cached image thumbnail for `asset_id` under
+/// `<cache_dir>/thumbnails`, leaving other assets' files alone.
+pub(crate) fn delete_image_thumbnail_files(
+    cache_dir: &std::path::Path,
+    asset_id: &str,
+) -> Result<(), String> {
+    let thumb_dir = cache_dir.join("thumbnails");
     if !thumb_dir.exists() {
         return Ok(());
     }
@@ -562,8 +570,16 @@ pub async fn delete_pdf_thumbnail(
 ) -> Result<(), String> {
     let app_dir = crate::path_utils::cache_dir(&app_handle)
         .map_err(|e| format!("Failed to get app data dir: {e}"))?;
+    delete_pdf_thumbnail_file(&app_dir, &asset_id)
+}
 
-    let thumb_path = app_dir.join("thumbnails").join(format!("{asset_id}.png"));
+/// Delete the cached PDF thumbnail for `asset_id` under
+/// `<cache_dir>/thumbnails`.
+pub(crate) fn delete_pdf_thumbnail_file(
+    cache_dir: &std::path::Path,
+    asset_id: &str,
+) -> Result<(), String> {
+    let thumb_path = cache_dir.join("thumbnails").join(format!("{asset_id}.png"));
 
     if thumb_path.exists() {
         std::fs::remove_file(&thumb_path)

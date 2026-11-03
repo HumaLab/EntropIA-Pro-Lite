@@ -90,7 +90,7 @@ describe('CollectionsView collection deletion', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar colección' }))
   }
 
-  it('removes the collection folder once the collection is deleted', async () => {
+  it('leaves the collection folder to the backend delete service', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockClear()
     storeRef.current.collections.delete.mockResolvedValue(undefined)
@@ -98,11 +98,14 @@ describe('CollectionsView collection deletion', () => {
     await deleteTheCollection()
 
     await waitFor(() => {
-      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1', { recursive: true })
+      expect(storeRef.current.collections.delete).toHaveBeenCalledWith('col-1')
     })
+    // The routed store call is Rust's corpus_collection_delete: it removes the
+    // folder after the commit, so the renderer must not remove it too.
+    expect(remove).not.toHaveBeenCalled()
   })
 
-  it('keeps the collection folder when the database delete fails', async () => {
+  it('does not touch the collection folder from the renderer when the delete fails', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
     vi.mocked(remove).mockClear()
     storeRef.current.collections.delete.mockRejectedValue(new Error('database is locked'))

@@ -1843,7 +1843,8 @@ const es = {
   'collection.error.unsupportedFormat': 'Formato no soportado: {files}',
   'collection.error.noAssetToDelete': 'No se encontró una página para eliminar en este documento.',
   'collection.error.deleteAsset': 'No se pudo eliminar la página: {message}',
-  'collection.error.fileRemovedDbFailed': 'Archivo eliminado. Falló la limpieza en DB: {message}',
+  'collection.error.fileRemovedDbFailed':
+    'No se pudo eliminar el documento. No se eliminó ningún archivo: {message}',
   'collection.unknownFile': 'archivo desconocido',
   'collection.importNotice.rejected': '{count} no soportados omitidos: {files}',
   'collection.importNotice.error': 'error: {message}',
@@ -4707,7 +4708,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.error.unsupportedFormat': 'Unsupported format: {files}',
   'collection.error.noAssetToDelete': 'No page found to delete for this document.',
   'collection.error.deleteAsset': 'Failed to delete page: {message}',
-  'collection.error.fileRemovedDbFailed': 'File removed. DB cleanup failed: {message}',
+  'collection.error.fileRemovedDbFailed':
+    'The document could not be deleted. Nothing was removed: {message}',
   'collection.unknownFile': 'unknown file',
   'collection.importNotice.rejected': '{count} unsupported skipped: {files}',
   'collection.importNotice.error': 'error: {message}',

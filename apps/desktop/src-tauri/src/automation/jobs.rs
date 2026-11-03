@@ -358,8 +358,12 @@ impl JobsArchive {
             ApprovalAction::Retry { .. } => {
                 !matches!(job.state.as_str(), "cancelled" | "cancelling")
             }
-            // Not a job action: replacing a page text has its own tool.
-            ApprovalAction::ReplaceText { .. } | ApprovalAction::ImportFiles { .. } => false,
+            // Not a job action: replacing a page text or deleting corpus
+            // records has its own tool and its own approval.
+            ApprovalAction::ReplaceText { .. }
+            | ApprovalAction::ImportFiles { .. }
+            | ApprovalAction::DeleteItems { .. }
+            | ApprovalAction::DeleteCollection { .. } => false,
         };
         if !admitted {
             let what = match action {
@@ -370,7 +374,10 @@ impl JobsArchive {
                     "reanudar (tiene que haber empezado y estar pausado; un borrador se empieza con processing_start)"
                 }
                 ApprovalAction::Retry { .. } => "reintentar (fue cancelado)",
-                ApprovalAction::ReplaceText { .. } | ApprovalAction::ImportFiles { .. } => {
+                ApprovalAction::ReplaceText { .. }
+                | ApprovalAction::ImportFiles { .. }
+                | ApprovalAction::DeleteItems { .. }
+                | ApprovalAction::DeleteCollection { .. } => {
                     "hacer eso (no es una acción sobre trabajos)"
                 }
             };
@@ -391,6 +398,7 @@ impl JobsArchive {
             preview: None,
             text: None,
             import_plan: None,
+            delete: None,
         }))
     }
 

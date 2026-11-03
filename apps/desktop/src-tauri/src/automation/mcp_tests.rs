@@ -284,8 +284,10 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
         json!([
             "approvals_status",
             "collections_create",
+            "collections_delete",
             "collections_list",
             "collections_update",
+            "documents_delete",
             "documents_get_text",
             "documents_import",
             "documents_index",
@@ -775,25 +777,33 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 20);
+    assert_eq!(tools.len(), 22);
     let writes = [
         "processing_prepare",
         "processing_start",
         "processing_control",
         "collections_create",
+        "collections_delete",
         "collections_update",
         "items_update",
         "documents_text_update",
         "documents_index",
+        "documents_delete",
         "documents_import",
     ];
+    // Deleting is the only thing an assistant may ask for that destroys data.
+    let destructive = ["collections_delete", "documents_delete"];
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
         let annotations = &tool["annotations"];
         let writes_archive = writes.contains(&name.as_str());
         assert_eq!(annotations["readOnlyHint"], !writes_archive, "{name}");
         if writes_archive {
-            assert_eq!(annotations["destructiveHint"], false, "{name}");
+            assert_eq!(
+                annotations["destructiveHint"],
+                destructive.contains(&name.as_str()),
+                "{name}"
+            );
         }
         assert_eq!(annotations["openWorldHint"], false, "{name}");
     }
@@ -814,14 +824,16 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 20] = [
+    let expected: [(&str, &[&str]); 22] = [
         ("approvals_status", &["approvalId"]),
         ("collections_create", &["description", "name", "requestId"]),
+        ("collections_delete", &["collectionId"]),
         ("collections_list", &["cursor", "limit"]),
         (
             "collections_update",
             &["collectionId", "description", "name", "revision"],
         ),
+        ("documents_delete", &["itemIds"]),
         (
             "documents_get_text",
             &["assetId", "cursor", "itemId", "maxChars"],
@@ -2384,4 +2396,503 @@ fn the_read_errors_report_the_codes_the_tool_contract_publishes() {
         ReadError::Unavailable(String::new()).code(),
         ERROR_UNAVAILABLE
     );
+}
+
+/// What a delete asks the owner to approve (D11 e): the exact set, hashed, the
+/// impact and the first titles, never a path.
+impl Harness {
+    fn item_count(&self) -> i64 {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row("SELECT count(*) FROM items", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn asset_count(&self, item_id: &str) -> i64 {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row(
+            "SELECT count(*) FROM assets WHERE item_id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn collection_exists(&self, collection_id: &str) -> bool {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?1)",
+            [collection_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()
+    }
+
+    /// A file inside the archive's data directory, at the path the fixture's
+    /// asset rows store.
+    fn write_archive_file(&self, relative: &str, bytes: &[u8]) {
+        let path = self.root.path().join(relative);
+        std::fs::create_dir_all(path.parent().expect("a parent folder")).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn archive_file(&self, relative: &str) -> std::path::PathBuf {
+        self.root.path().join(relative)
+    }
+
+    fn add_item(&self, collection: &str, item: &str, title: &str) {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, title, collection_id, metadata, created_at, updated_at)
+             VALUES (?1, ?2, ?3, NULL, 9000, 9000)",
+            rusqlite::params![item, title, collection],
+        )
+        .unwrap();
+    }
+
+    fn item_count_with_id(&self, item: &str) -> i64 {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row("SELECT count(*) FROM items WHERE id = ?1", [item], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
+    fn retitle_item(&self, item: &str, title: &str) {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.execute(
+            "UPDATE items SET title = ?2, updated_at = updated_at + 1 WHERE id = ?1",
+            rusqlite::params![item, title],
+        )
+        .unwrap();
+    }
+
+    fn last_owner_decision(&self) -> Value {
+        self.audit_lines()
+            .into_iter()
+            .rfind(|line| line["tool"] == "owner_decision")
+            .expect("the owner's answer is audited")
+    }
+}
+
+#[tokio::test]
+async fn documents_delete_waits_for_the_owner_and_shows_what_would_be_lost() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    let (first, second) = (
+        test_archive::item_id(ALFA, 1),
+        test_archive::item_id(ALFA, 2),
+    );
+    // The first item has two assets, the second none.
+    harness.write_archive_file("assets/alfa-1.pdf", b"pdf");
+    harness.write_archive_file("assets/alfa-1-cover.jpg", b"jpg");
+    harness.write_archive_file("assets/col_alfa/ite_alfa_1/extra.txt", b"x");
+
+    let asked = harness
+        .payload(
+            &token,
+            "documents_delete",
+            json!({ "itemIds": [second, first] }),
+        )
+        .await;
+    assert_eq!(asked["status"], "pending");
+    // The exact shape the dialog reads: no path, and the skipped fields
+    // (`deleteTargets`, `importPlan`) never leave the app.
+    assert_eq!(
+        keys(&asked),
+        sorted(&[
+            "action",
+            "clientId",
+            "clientName",
+            "collections",
+            "createdAt",
+            "decidedAt",
+            "deleteImpact",
+            "documentTitles",
+            "expiresAt",
+            "failure",
+            "files",
+            "id",
+            "importFiles",
+            "importResult",
+            "jobId",
+            "operations",
+            "preview",
+            "revision",
+            "status",
+        ])
+    );
+    assert_eq!(asked["action"]["kind"], "delete_items");
+    assert_eq!(
+        asked["action"]["item_ids"],
+        json!([first, second]),
+        "the set is canonical, so any order is the same request"
+    );
+    assert_eq!(
+        asked["action"]["set_hash"].as_str().unwrap().len(),
+        64,
+        "the fence is a sha256"
+    );
+    assert_eq!(asked["collections"], json!(["Alfa"]));
+    assert_eq!(asked["files"], 2, "files is the number of documents");
+    assert_eq!(
+        asked["deleteImpact"],
+        json!({
+            "documents": 2,
+            "pages": 2,
+            "notes": 0,
+            "annotations": 0,
+            "documentsWithText": 0
+        })
+    );
+    assert_eq!(
+        asked["documentTitles"],
+        json!(["Documento 1", "Documento 2"])
+    );
+    let raw = serde_json::to_string(&asked).unwrap();
+    assert!(!raw.contains("assets/"), "an approval never carries a path");
+    assert!(!raw.contains("\"path\""), "nor a path field: {raw}");
+    assert_eq!(
+        harness.items_titled("Documento 1"),
+        1,
+        "nothing is deleted before the answer"
+    );
+
+    let again = harness
+        .payload(
+            &token,
+            "documents_delete",
+            json!({ "itemIds": [first, second] }),
+        )
+        .await;
+    assert_eq!(again["id"], asked["id"], "the same set is the same request");
+
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    let status = harness
+        .payload(
+            &token,
+            "approvals_status",
+            json!({ "approvalId": approval_id }),
+        )
+        .await;
+    assert_eq!(status["status"], "approved");
+    assert_eq!(harness.items_titled("Documento 1"), 0);
+    assert_eq!(harness.items_titled("Documento 2"), 0);
+    assert_eq!(harness.asset_count(&first), 0);
+    assert!(
+        !harness.archive_file("assets/alfa-1.pdf").exists(),
+        "the deleted asset's file is gone"
+    );
+    assert!(
+        !harness.archive_file("assets/alfa-1-cover.jpg").exists(),
+        "the deleted image is gone"
+    );
+    assert!(
+        !harness.archive_file("assets/col_alfa/ite_alfa_1").exists(),
+        "the item folder is gone"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![format!("item_deleted:{first}")],
+        "the sidebar forgets the deleted document and refreshes its collection"
+    );
+    let decision = harness.last_owner_decision();
+    assert_eq!(decision["decision"], "approved");
+    assert_eq!(
+        decision["objectIds"],
+        json!([approval_id, ALFA]),
+        "a delete's decision names its first collection"
+    );
+}
+
+#[tokio::test]
+async fn documents_delete_refuses_before_any_dialog() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let (_, read_only) = harness.pair("Codex");
+    let first = test_archive::item_id(ALFA, 1);
+    let too_many: Vec<String> = (0..201).map(|index| format!("ite_bulk_{index}")).collect();
+    let refused = harness
+        .refusal(
+            &read_only,
+            "documents_delete",
+            json!({ "itemIds": [first] }),
+        )
+        .await;
+    assert_eq!(refused["error"], ERROR_FORBIDDEN_SCOPE);
+    for (arguments, code) in [
+        (json!({ "itemIds": [] }), ERROR_INVALID_ARGUMENT),
+        (json!({ "itemIds": too_many }), ERROR_INVALID_ARGUMENT),
+        (json!({ "itemIds": [""] }), ERROR_INVALID_ARGUMENT),
+        (json!({ "itemIds": first }), ERROR_INVALID_ARGUMENT),
+        (
+            json!({ "itemIds": [first, "ite_missing"] }),
+            ERROR_NOT_FOUND,
+        ),
+    ] {
+        let refusal = harness
+            .refusal(&token, "documents_delete", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], code, "{arguments}");
+    }
+    let refused = harness
+        .refusal(
+            &token,
+            "collections_delete",
+            json!({ "collectionId": "col_missing" }),
+        )
+        .await;
+    assert_eq!(refused["error"], ERROR_NOT_FOUND);
+    assert!(
+        harness.endpoint.approvals().pending().is_empty(),
+        "a refusal opens no dialog"
+    );
+
+    // A repeated id is one document, normalized as the delete service does.
+    let asked = harness
+        .payload(
+            &token,
+            "documents_delete",
+            json!({ "itemIds": [first, first] }),
+        )
+        .await;
+    assert_eq!(asked["action"]["item_ids"], json!([first]));
+    assert_eq!(asked["files"], 1);
+    assert_eq!(harness.endpoint.approvals().pending().len(), 1);
+    assert_eq!(
+        harness.items_titled("Documento 1"),
+        1,
+        "a refusal deletes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_delete_deletes_nothing() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let first = test_archive::item_id(ALFA, 1);
+    harness.write_archive_file("assets/alfa-1.pdf", b"pdf");
+    let asked = harness
+        .payload(&token, "documents_delete", json!({ "itemIds": [first] }))
+        .await;
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    let decided = crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        decided.status,
+        crate::automation::approvals::ApprovalStatus::Rejected
+    );
+    assert_eq!(harness.items_titled("Documento 1"), 1);
+    assert_eq!(harness.asset_count(&first), 2);
+    assert!(harness.archive_file("assets/alfa-1.pdf").exists());
+    assert!(harness.endpoint.approvals().pending().is_empty());
+    assert_eq!(harness.last_owner_decision()["decision"], "rejected");
+}
+
+#[tokio::test]
+async fn a_note_added_after_the_request_stops_the_delete() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let first = test_archive::item_id(ALFA, 1);
+    let asked = harness
+        .payload(&token, "documents_delete", json!({ "itemIds": [first] }))
+        .await;
+    assert_eq!(asked["deleteImpact"]["notes"], 0);
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    // A note the dialog did not count appears before the answer; nothing on
+    // the item itself changes.
+    {
+        let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
+        conn.execute(
+            "INSERT INTO notes (id, item_id, content, created_at, updated_at)
+             VALUES ('note-late', ?1, 'nota', 1, 1)",
+            [&first],
+        )
+        .unwrap();
+    }
+    let decided = crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        decided.status,
+        crate::automation::approvals::ApprovalStatus::Failed,
+        "the owner approved losing no notes"
+    );
+    assert_eq!(harness.item_count_with_id(&first), 1, "nothing deleted");
+}
+
+#[tokio::test]
+async fn a_document_that_changed_after_the_request_is_not_deleted() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    let (first, second) = (
+        test_archive::item_id(ALFA, 1),
+        test_archive::item_id(ALFA, 2),
+    );
+    harness.write_archive_file("assets/alfa-1.pdf", b"pdf");
+    let asked = harness
+        .payload(
+            &token,
+            "documents_delete",
+            json!({ "itemIds": [first, second] }),
+        )
+        .await;
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    // The owner retitles one of them in the app before answering.
+    harness.retitle_item(&first, "Renombrado");
+
+    let decided = crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        decided.status,
+        crate::automation::approvals::ApprovalStatus::Failed
+    );
+    assert!(
+        decided
+            .failure
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cambió"),
+        "{:?}",
+        decided.failure
+    );
+    assert_eq!(harness.items_titled("Renombrado"), 1);
+    assert_eq!(harness.items_titled("Documento 2"), 1);
+    assert_eq!(harness.asset_count(&first), 2);
+    assert!(harness.archive_file("assets/alfa-1.pdf").exists());
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a failed delete changes nothing"
+    );
+    let status = harness
+        .payload(
+            &token,
+            "approvals_status",
+            json!({ "approvalId": approval_id }),
+        )
+        .await;
+    assert_eq!(status["status"], "failed");
+    assert_eq!(harness.last_owner_decision()["decision"], "failed");
+}
+
+#[tokio::test]
+async fn collections_delete_asks_the_owner_and_deletes_the_whole_collection() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    harness.write_archive_file("assets/col_beta/orphan.txt", b"x");
+
+    let asked = harness
+        .payload(
+            &token,
+            "collections_delete",
+            json!({ "collectionId": BETA }),
+        )
+        .await;
+    assert_eq!(asked["status"], "pending");
+    assert_eq!(asked["action"]["kind"], "delete_collection");
+    assert_eq!(asked["action"]["collection_id"], BETA);
+    assert_eq!(asked["action"]["set_hash"].as_str().unwrap().len(), 64);
+    assert_eq!(asked["collections"], json!(["Beta"]));
+    assert_eq!(asked["files"], BETA_ITEMS, "the documents it holds");
+    assert_eq!(asked["deleteImpact"]["documents"], BETA_ITEMS as i64);
+    assert_eq!(asked["documentTitles"], json!(["Revista 1", "Revista 2"]));
+    assert_eq!(harness.collection_count(), 2, "nothing before the answer");
+
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    let status = harness
+        .payload(
+            &token,
+            "approvals_status",
+            json!({ "approvalId": approval_id }),
+        )
+        .await;
+    assert_eq!(status["status"], "approved");
+    assert!(!harness.collection_exists(BETA));
+    assert_eq!(harness.collection_count(), 1);
+    assert_eq!(harness.item_count(), ALFA_ITEMS as i64);
+    assert!(
+        !harness.archive_file("assets/col_beta").exists(),
+        "the collection folder is gone"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![format!("collection_deleted:{BETA}")],
+        "a collection deleted whole refreshes the lists and is forgotten"
+    );
+    let decision = harness.last_owner_decision();
+    assert_eq!(decision["decision"], "approved");
+    assert_eq!(decision["objectIds"], json!([approval_id, BETA]));
+}
+
+#[tokio::test]
+async fn a_collection_that_gained_a_document_after_the_request_is_not_deleted() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let asked = harness
+        .payload(
+            &token,
+            "collections_delete",
+            json!({ "collectionId": BETA }),
+        )
+        .await;
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    harness.add_item(BETA, "ite_beta_3", "Revista 3");
+
+    let decided = crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        decided.status,
+        crate::automation::approvals::ApprovalStatus::Failed
+    );
+    assert!(harness.collection_exists(BETA));
+    assert_eq!(harness.item_count(), (ALFA_ITEMS + BETA_ITEMS + 1) as i64);
+    assert_eq!(harness.items_titled("Revista 3"), 1);
 }

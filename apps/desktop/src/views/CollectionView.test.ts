@@ -1391,8 +1391,9 @@ describe('CollectionView asset deletion', () => {
     })
   })
 
-  it('deletes entire item when last asset is removed — card disappears from grid', async () => {
+  it('deletes the whole item through the routed backend — card disappears from grid', async () => {
     const { deleteAssetFile } = await import('$lib/file-import')
+    vi.mocked(deleteAssetFile).mockClear()
     const explorerRefreshes: CustomEvent[] = []
     const handleExplorerRefresh = (event: Event) => {
       explorerRefreshes.push(event as CustomEvent)
@@ -1412,8 +1413,9 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      expect(deleteAssetFile).toHaveBeenCalledWith(sampleAsset.path)
-      // Last asset → entire item is deleted, not just the asset
+      // The routed store call is Rust's corpus_items_delete: it owns the rows
+      // and the files, so the renderer must not delete the file first.
+      expect(deleteAssetFile).not.toHaveBeenCalled()
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
       expect(explorerRefreshes.at(-1)?.detail).toEqual({ collectionId: 'col-1', itemId: 'item-1' })
     })
@@ -1437,27 +1439,16 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
   }
 
-  it('removes the deleted item folder, and the collection folder only if it is empty', async () => {
+  it('leaves the item folder and thumbnails to the backend', async () => {
     const { remove } = await import('@tauri-apps/plugin-fs')
+    const { deleteAssetFile, deleteImageThumbnail, deletePdfThumbnail } =
+      await import('$lib/file-import')
+    const { invoke } = await import('@tauri-apps/api/core')
     vi.mocked(remove).mockClear()
-
-    await confirmDeletingActa()
-
-    await waitFor(() => {
-      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-1', {
-        recursive: true,
-      })
-      // Without `recursive` the plugin refuses a non-empty folder, so the
-      // collection folder only goes when no other item lives in it.
-      expect(remove).toHaveBeenCalledWith('/mock/app-data/assets/col-1')
-    })
-    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1', { recursive: true })
-  })
-
-  it('keeps the item folder when the database delete fails', async () => {
-    const { remove } = await import('@tauri-apps/plugin-fs')
-    vi.mocked(remove).mockClear()
-    storeRef.current.items.deleteWithCascade = vi.fn().mockRejectedValueOnce(new Error('DB locked'))
+    vi.mocked(deleteAssetFile).mockClear()
+    vi.mocked(deleteImageThumbnail).mockClear()
+    vi.mocked(deletePdfThumbnail).mockClear()
+    vi.mocked(invoke).mockClear()
 
     await confirmDeletingActa()
 
@@ -1466,10 +1457,30 @@ describe('CollectionView asset deletion', () => {
     })
     await vi.advanceTimersByTimeAsync(0)
     await vi.advanceTimersByTimeAsync(0)
-    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1/item-1', {
-      recursive: true,
+    expect(remove).not.toHaveBeenCalled()
+    expect(deleteAssetFile).not.toHaveBeenCalled()
+    expect(deleteImageThumbnail).not.toHaveBeenCalled()
+    expect(deletePdfThumbnail).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('delete_asset_files', expect.anything())
+  })
+
+  it('does not attempt renderer file cleanup when the backend delete fails', async () => {
+    const { remove } = await import('@tauri-apps/plugin-fs')
+    const { deleteAssetFile } = await import('$lib/file-import')
+    vi.mocked(remove).mockClear()
+    vi.mocked(deleteAssetFile).mockClear()
+    storeRef.current.items.deleteWithCascade = vi.fn().mockRejectedValueOnce(new Error('DB locked'))
+
+    await confirmDeletingActa()
+
+    await waitFor(() => {
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
+      expect(screen.getByText(/DB locked/)).toBeInTheDocument()
     })
-    expect(remove).not.toHaveBeenCalledWith('/mock/app-data/assets/col-1')
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(remove).not.toHaveBeenCalled()
+    expect(deleteAssetFile).not.toHaveBeenCalled()
   })
 
   /**
@@ -1519,9 +1530,10 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      // File was still attempted
-      expect(deleteAssetFile).toHaveBeenCalledWith(sampleAsset.path)
-      // DB failed but...
+      // The backend owns the files as well as the rows; a failed delete leaves
+      // both alone.
+      expect(deleteAssetFile).not.toHaveBeenCalled()
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
 
     // Card stays visible because DB cleanup is the authoritative state.
@@ -1529,15 +1541,20 @@ describe('CollectionView asset deletion', () => {
       expect(screen.getByText('Acta')).toBeInTheDocument()
     })
 
-    // Modal stays open and explains the partial failure instead of pretending success.
+    // Modal stays open and explains that nothing was removed.
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText(/No se pudo eliminar el documento/)).toBeInTheDocument()
       expect(screen.getByText(/DB locked/)).toBeInTheDocument()
     })
   })
 
-  it('does NOT call findById — uses cached path for file deletion', async () => {
-    const { deleteAssetFile } = await import('$lib/file-import')
+  it('does not read asset paths before deleting — the backend owns them', async () => {
+    const { deleteAssetFile, deleteImageThumbnail, deletePdfThumbnail } =
+      await import('$lib/file-import')
+    vi.mocked(deleteAssetFile).mockClear()
+    vi.mocked(deleteImageThumbnail).mockClear()
+    vi.mocked(deletePdfThumbnail).mockClear()
 
     await renderAndWaitForItems()
 
@@ -1549,13 +1566,17 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      expect(deleteAssetFile).toHaveBeenCalled()
-      // findById should NOT be called — path comes from cache
-      expect(storeRef.current.assets.findById).not.toHaveBeenCalled()
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
+    // The routed command reads the asset rows itself; the renderer never asks
+    // for one by id nor removes a file or thumbnail.
+    expect(storeRef.current.assets.findById).not.toHaveBeenCalled()
+    expect(deleteAssetFile).not.toHaveBeenCalled()
+    expect(deleteImageThumbnail).not.toHaveBeenCalled()
+    expect(deletePdfThumbnail).not.toHaveBeenCalled()
   })
 
-  it('routes image asset deletion through delete_asset_files to remove versioned siblings', async () => {
+  it('deletes an image item without the renderer asset-file route', async () => {
     const { invoke } = await import('@tauri-apps/api/core')
     const { deleteAssetFile } = await import('$lib/file-import')
     vi.mocked(invoke).mockClear()
@@ -1592,12 +1613,11 @@ describe('CollectionView asset deletion', () => {
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      // Image files go through the backend GC so edited versions
-      // (foto_v2.png, foto_v3.png, …) are deleted together.
-      expect(invoke).toHaveBeenCalledWith('delete_asset_files', { assetPath: imageAsset.path })
-      // The plain single-file deletion must NOT be used for images.
+      // The backend removes the whole item folder (versioned siblings
+      // included), so the renderer must not call delete_asset_files.
+      expect(invoke).not.toHaveBeenCalledWith('delete_asset_files', expect.anything())
       expect(deleteAssetFile).not.toHaveBeenCalled()
-      // DB cascade is preserved: last asset → entire item removed.
+      // The routed delete is the only path.
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
   })
@@ -1659,8 +1679,9 @@ describe('CollectionView PDF thumbnail', () => {
     expect(generatePdfThumbnail).toHaveBeenCalledTimes(1)
   })
 
-  it('cleans up PDF thumbnail when deleting a PDF asset', async () => {
+  it('leaves PDF thumbnail cleanup to the backend', async () => {
     const { deletePdfThumbnail } = await import('$lib/file-import')
+    vi.mocked(deletePdfThumbnail).mockClear()
 
     await renderAndWaitForItems()
 
@@ -1672,14 +1693,17 @@ describe('CollectionView PDF thumbnail', () => {
     await fireEvent.click(confirmBtn)
 
     await waitFor(() => {
-      expect(deletePdfThumbnail).toHaveBeenCalledWith(pdfAsset.id)
+      expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
+    expect(deletePdfThumbnail).not.toHaveBeenCalled()
   })
 
-  it('deletes a source PDF, its generated pages, and the generated directory as one lifecycle', async () => {
+  it('deletes a source PDF and its generated pages through the backend without renderer cleanup', async () => {
     const { deleteAssetFile, deleteImageThumbnail } = await import('$lib/file-import')
     const { remove } = await import('@tauri-apps/plugin-fs')
     const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(deleteAssetFile).mockClear()
+    vi.mocked(deleteImageThumbnail).mockClear()
     vi.mocked(remove).mockClear()
     vi.mocked(invoke).mockClear()
     const pageAsset: AssetRow = {
@@ -1712,14 +1736,14 @@ describe('CollectionView PDF thumbnail', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
-      expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
-      expect(invoke).toHaveBeenCalledWith('delete_asset_files', { assetPath: pageAsset.path })
-      expect(deleteImageThumbnail).toHaveBeenCalledWith(pageAsset.id)
-      expect(remove).toHaveBeenCalledWith('/app-data/assets/col-1/item-1/uuid_doc.pages', {
-        recursive: true,
-      })
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
     })
+    // The backend removes the item folder (the generated .pages directory
+    // included) and every thumbnail, so the renderer touches no file.
+    expect(deleteAssetFile).not.toHaveBeenCalled()
+    expect(deleteImageThumbnail).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalledWith('delete_asset_files', expect.anything())
   })
 
   it('deletes the item card even when its PDF contains multiple page assets', async () => {
@@ -1781,8 +1805,9 @@ describe('CollectionView PDF thumbnail', () => {
     })
   })
 
-  it('continues item deletion when the full asset cleanup lookup fails', async () => {
+  it('deletes the item even when a card asset lookup fails', async () => {
     const { deleteAssetFile } = await import('$lib/file-import')
+    vi.mocked(deleteAssetFile).mockClear()
 
     await renderAndWaitForItems()
     storeRef.current.assets.findByItem.mockRejectedValueOnce(new Error('DB locked'))
@@ -1790,10 +1815,10 @@ describe('CollectionView PDF thumbnail', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Eliminar documento' }))
 
     await waitFor(() => {
-      expect(deleteAssetFile).toHaveBeenCalledWith(pdfAsset.path)
       expect(storeRef.current.items.deleteWithCascade).toHaveBeenCalledWith('item-1')
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
+    expect(deleteAssetFile).not.toHaveBeenCalled()
   })
 
   it('renders the confirm delete action as the shared trash icon button', async () => {

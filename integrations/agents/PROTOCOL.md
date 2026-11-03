@@ -285,7 +285,7 @@ are the `snake_case` names (`automation/access.rs`).
 | Scope | Meaning | Granted today |
 |---|---|---|
 | `read` | Read the archive through the read tools | **Yes**, every paired client |
-| `local_write` | Change the local archive: prepare, pause, cancel processing jobs; create and rename collections; edit item titles and metadata | By the owner, per client: «Preparar procesamiento y editar el corpus» |
+| `local_write` | Change the local archive: prepare, pause, cancel processing jobs; create and rename collections; edit item titles and metadata; propose imports, text replacements and deletions, each still approved by the owner | By the owner, per client: «Preparar procesamiento y editar el corpus» |
 | `remote_spend` | Ask for paid provider work (start, resume, retry); each request still needs the owner's approval | By the owner, per client: «Pedir procesamiento pago» |
 | `external_write` | Write outside EntropIA (Zotero, publication) | No |
 | `admin` | Change access, keys, maintenance | No |
@@ -302,16 +302,17 @@ refusal cannot leak whether a row exists.
 
 ## Tool catalogue
 
-Every reading tool is published with `readOnlyHint: true`; the three tools that
-change the archive (`processing_prepare`, `processing_start`,
-`processing_control`) declare `readOnlyHint: false` and `destructiveHint: false`.
-Every tool declares `openWorldHint: false`: nothing reaches outside this machine
-through the tool itself. Clients rely on this; Codex cancels a non-interactive
-call to a tool that does not declare itself read-only, so it asks before calling
-the three writing tools.
+Every reading tool is published with `readOnlyHint: true`; the tools that change
+the archive declare `readOnlyHint: false` and, except for the two delete tools,
+`destructiveHint: false` (`documents_delete` and `collections_delete` declare it
+`true`: what they run destroys rows and files, and it only runs after the owner
+approves). Every tool declares `openWorldHint: false`: nothing reaches outside
+this machine through the tool itself. Clients rely on this; Codex cancels a
+non-interactive call to a tool that does not declare itself read-only, so it asks
+before calling a writing tool.
 
-Twenty tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
-The seven archive tools:
+Twenty-two tools are served (`automation/mcp.rs`; `tools/list` order is
+alphabetical). The seven archive tools:
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -417,6 +418,46 @@ its own. Both tools need `local_write`.
   a parent with one page asset per page, the title searchable at once. Importing spends
   nothing; recognizing text or embedding is a processing job with its own approval.
 
+### Deleting documents and collections
+
+Deleting is the one request whose effect cannot be undone, so it always goes
+through the owner (S5, D11): the tools create an approval and delete nothing
+themselves. Both need `local_write`.
+
+| Tool | Arguments | Result |
+|---|---|---|
+| `documents_delete` | `itemIds` (1-200 ids) | An approval (`action.kind: "delete_items"`) waiting for the owner |
+| `collections_delete` | `collectionId` | An approval (`action.kind: "delete_collection"`), with the documents it holds, waiting for the owner |
+
+- **Checked before any dialog.** A blank list, more than 200 ids or a malformed
+  argument is `invalid_argument`; an id that is not in this archive is
+  `not_found`; a collection that does not exist is `not_found`. A refused request
+  opens no dialog. Ids are deduplicated the way the delete service deduplicates
+  them, and the request carries them sorted, so the same set in any order is the
+  same request and shows one dialog.
+- **The owner sees the loss** (`deleteImpact`): how many `documents`, `pages`,
+  `notes` and `annotations` go, and how many `documentsWithText` lose recognized
+  text. `documentTitles` lists the first 20 document titles (never a path) and
+  `files` is how many documents are deleted, so a larger request says «y N más».
+  The dialog's confirm button says «Borrar», its focus stays on
+  «Rechazar», and it says the delete cannot be undone and reaches every device.
+- **Fenced on the exact set.** `set_hash` is a sha256 over the ids sorted, each
+  with its `updatedAt` and its counts of pages, notes, annotations and text
+  extractions (for a collection, over every document it holds). The answer
+  recomputes it in the same transaction as the delete: a document edited in the
+  app, a note, annotation or recognized text added, a collection that gained or
+  lost a document, or an id that is gone makes the approval end `failed` with
+  nothing deleted, and the assistant has to ask again.
+- **What it deletes** is what the app's own delete deletes: the document rows with
+  their pages, notes, annotations, entities, triples, LLM results and search
+  entries, a collection left empty by deleting its last document, and the files
+  and thumbnails afterwards. Deletes are recorded as `D` tombstones by the sync
+  triggers, so the change reaches every device that syncs.
+- **The app refreshes.** On approval the app emits `corpus:changed` with
+  `kind: "item_deleted"` (or `"collection_deleted"` when the collection itself is
+  gone): the sidebar and Colecciones re-read, and an open document or collection
+  that was deleted leaves its screen, as after the app's own delete.
+
 ### Reading text and citing
 
 A **page** is one file of an item: a split PDF has one file per page (with
@@ -489,9 +530,11 @@ operations, the collections and the number of files. A job with OCR and no
 embeddings also says that every recognized page is then embedded with the configured
 provider, which may cost too: the app admits that follow-up for every committed OCR.
 Only the owner's «Aprobar»
-runs the action, through the same services, fenced by that revision: if the job
-changed in the meantime nothing runs and the approval ends `failed`. The dialog's
-initial focus is «Rechazar», Escape rejects and a click outside does nothing.
+(or «Borrar», for the two delete kinds) runs the action, through the same
+services, fenced by that revision (or by `set_hash`): if the job, the documents or
+the collection changed in the meantime nothing runs and the approval ends
+`failed`. The dialog's initial focus is «Rechazar», Escape rejects and a click
+outside does nothing.
 
 ```json
 {"id": "apr_…", "clientId": "cl_…", "clientName": "Claude Code",
@@ -503,13 +546,17 @@ initial focus is «Rechazar», Escape rejects and a click outside does nothing.
 
 `action` is `{"kind": "start"}`, `{"kind": "resume"}`,
 `{"kind": "retry", "task_id": …, "failed_only": …}`,
-`{"kind": "replace_text", "item_id": …, "asset_id": …, "text_hash": …, "new_text_hash": …}` or
-`{"kind": "import_files", "collection_id": …, "files": …, "plan_hash": …}`.
+`{"kind": "replace_text", "item_id": …, "asset_id": …, "text_hash": …, "new_text_hash": …}`,
+`{"kind": "import_files", "collection_id": …, "files": …, "plan_hash": …}`,
+`{"kind": "delete_items", "item_ids": […], "set_hash": …}` or
+`{"kind": "delete_collection", "collection_id": …, "set_hash": …}`.
 For `import_files`, `jobId` is empty, `revision` is 0, `importFiles` lists the files and
 `importResult` is filled once it ran. For `replace_text`, `jobId` is empty, `revision` is 0 and `preview` holds the first
-400 characters of the proposed text; the whole text is never returned. `status` is `pending`,
-`approved` (approved and run), `failed` (approved, but the job had changed; nothing
-ran, `failure` says why), `rejected` or `expired`.
+400 characters of the proposed text; the whole text is never returned. For both delete kinds,
+`jobId` is empty and `revision` is 0: the fence is `set_hash`, and `deleteImpact` and
+`documentTitles` say what would be lost. `status` is `pending`,
+`approved` (approved and run), `failed` (approved, but the job, the documents or the
+collection had changed; nothing ran, `failure` says why), `rejected` or `expired`.
 
 - **Ten minutes, once.** An approval expires ten minutes after it was asked for and
   can be answered once; two answers racing cannot both run.
@@ -611,10 +658,9 @@ assistant do", not "who knocked on the port".
   every installer (see Status); code signing of that extra executable is not
   integrated for any binary.
 - The skill artifact and its declared protocol version (stage 6).
-- Corpus write tools, research, library and writing tools, progress
-  notifications and any session state (stages 3-5). `collections_create`,
-  `documents_import_prepare`, `search_passages`, `writing_apply_patch` and
-  `writing_export` are names the plan proposes; none of them exists in this code.
+- The corpus write tools beyond the ones listed above, and the research,
+  library and writing tools, progress notifications and any session state
+  (stages 3-5).
 - A USD estimate before a job starts: pages are only counted by planning (see
   Processing tools).
 - Approvals that survive an app restart; today they are memory only on purpose.

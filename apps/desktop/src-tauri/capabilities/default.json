@@ -241,6 +241,8 @@
     "allow-corpus-collection-update",
     "allow-corpus-item-update",
     "allow-corpus-import-path",
+    "allow-corpus-items-delete",
+    "allow-corpus-collection-delete",
     "allow-agent-connector-location",
     "allow-navegador-open",
     "allow-navegador-navigate",

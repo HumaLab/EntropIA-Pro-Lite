@@ -3,10 +3,12 @@
    * The owner's answer to paid work an external assistant asked for (D3).
    *
    * An assistant can only ask; this dialog is the one place where the request
-   * runs, and only on "Aprobar". The initial focus is on "Rechazar", Escape
-   * rejects and a click outside does nothing, so a stray key never spends. The
-   * backend binds each request to the job revision the assistant saw and runs
-   * it at most once; this component only shows the queue and sends the answer.
+   * runs, and only on "Aprobar" (or "Borrar" for the two delete kinds). The
+   * initial focus is on "Rechazar", Escape rejects and a click outside does
+   * nothing, so a stray key never spends or deletes. The backend binds each
+   * request to the job revision (or the exact corpus set) the assistant saw and
+   * runs it at most once; this component only shows the queue and sends the
+   * answer.
    */
   import { onMount } from 'svelte'
   import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -16,6 +18,7 @@
     agentApprovalDecide,
     agentApprovalsPending,
     type AgentApproval,
+    type AgentDeleteImpact,
   } from '$lib/agent-access'
 
   let pending = $state<AgentApproval[]>([])
@@ -24,6 +27,9 @@
   let destroyed = false
 
   const current = $derived(pending[0] ?? null)
+  const deleting = $derived(
+    current?.action.kind === 'delete_items' || current?.action.kind === 'delete_collection'
+  )
 
   const OPERATION_LABELS: Record<string, string> = {
     ocr: 'OCR',
@@ -32,6 +38,8 @@
     triples: 'Tripletas',
     replace_text: 'Reemplazar texto',
     import_files: 'Importar archivos',
+    delete_items: 'Borrar documentos',
+    delete_collection: 'Borrar una colección',
   }
 
   function operationLabel(operation: string): string {
@@ -53,7 +61,32 @@
         return 'reemplazar el texto de una página'
       case 'import_files':
         return 'importar archivos a una colección'
+      case 'delete_items':
+        return `borrar ${approval.files} ${approval.files === 1 ? 'documento' : 'documentos'}`
+      case 'delete_collection':
+        return 'borrar una colección'
     }
+  }
+
+  /** What the person loses, in one sentence, without the zero counts. */
+  function impactSentence(impact: AgentDeleteImpact | null): string {
+    if (!impact) return ''
+    const counts: string[] = []
+    const add = (count: number, one: string, many: string) => {
+      if (count > 0) counts.push(`${count} ${count === 1 ? one : many}`)
+    }
+    add(impact.documents, 'documento', 'documentos')
+    add(impact.pages, 'página', 'páginas')
+    add(impact.notes, 'nota', 'notas')
+    add(impact.annotations, 'anotación', 'anotaciones')
+    if (counts.length === 0) return 'No se pierde contenido: la colección está vacía.'
+    const recognized = impact.documentsWithText > 0 ? ' y su texto reconocido' : ''
+    return `Se pierden: ${counts.join(', ')}${recognized}.`
+  }
+
+  /** Titles the backend did not list because the request was larger. */
+  function hiddenTitles(approval: AgentApproval): number {
+    return Math.max(0, approval.files - (approval.documentTitles?.length ?? 0))
   }
 
   /** A file size the way people read it. */
@@ -138,23 +171,50 @@
   <ConfirmDialog
     title="{current.clientName} pide {actionVerb(current)}"
     titleId="agent-approval-title"
-    message="Lo pidió un asistente externo conectado a EntropIA. Revisá qué va a procesar antes de aprobar."
+    message={deleting
+      ? 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué se va a borrar antes de aprobar.'
+      : 'Lo pidió un asistente externo conectado a EntropIA. Revisá qué va a procesar antes de aprobar.'}
     cancelLabel="Rechazar"
-    confirmLabel="Aprobar"
+    confirmLabel={deleting ? 'Borrar' : 'Aprobar'}
+    variant={deleting ? 'destructive' : 'default'}
     confirming={busy}
     cancelDisabled={busy}
     dismissOnOverlay={false}
     oncancel={() => void decide(false)}
     onconfirm={() => void decide(true)}
   >
-    <dl class="agent-approval__facts">
-      <dt>Operaciones</dt>
-      <dd>{current.operations.map(operationLabel).join(', ')}</dd>
-      <dt>Colecciones</dt>
-      <dd>{current.collections.length > 0 ? current.collections.join(', ') : '—'}</dd>
-      <dt>Alcance</dt>
-      <dd>{current.files} {current.files === 1 ? 'archivo' : 'archivos'}</dd>
-    </dl>
+    {#if deleting}
+      <dl class="agent-approval__facts">
+        <dt>Colecciones</dt>
+        <dd>{current.collections.length > 0 ? current.collections.join(', ') : '—'}</dd>
+        <dt>Documentos</dt>
+        <dd>{current.files} {current.files === 1 ? 'documento' : 'documentos'}</dd>
+      </dl>
+      {#if current.documentTitles && current.documentTitles.length > 0}
+        <p class="agent-approval__label">Se van a borrar</p>
+        <ul class="agent-approval__files">
+          {#each current.documentTitles as title, index (index)}
+            <li>{title}</li>
+          {/each}
+          {#if hiddenTitles(current) > 0}
+            <li class="agent-approval__size">y {hiddenTitles(current)} más</li>
+          {/if}
+        </ul>
+      {/if}
+      <p class="agent-approval__note">{impactSentence(current.deleteImpact)}</p>
+      <p class="agent-approval__note agent-approval__danger">
+        No se puede deshacer y se borra en todos tus equipos.
+      </p>
+    {:else}
+      <dl class="agent-approval__facts">
+        <dt>Operaciones</dt>
+        <dd>{current.operations.map(operationLabel).join(', ')}</dd>
+        <dt>Colecciones</dt>
+        <dd>{current.collections.length > 0 ? current.collections.join(', ') : '—'}</dd>
+        <dt>Alcance</dt>
+        <dd>{current.files} {current.files === 1 ? 'archivo' : 'archivos'}</dd>
+      </dl>
+    {/if}
     {#if current.action.kind === 'import_files'}
       {#if current.importFiles && current.importFiles.length > 0}
         <p class="agent-approval__label">Archivos</p>
@@ -179,7 +239,7 @@
         No gasta. El texto actual queda guardado y «Restaurar original», en la vista del documento,
         lo deshace. Si la página cambia antes de que respondas, no se aplica.
       </p>
-    {:else}
+    {:else if !deleting}
       <p class="agent-approval__note">
         Este procesamiento puede usar proveedores pagos. Lo que ya está procesado, o compartido
         desde otro equipo, no se vuelve a pagar.
@@ -234,6 +294,10 @@
     margin: var(--space-1) 0 0;
     color: var(--color-text-secondary);
     font-size: var(--font-size-xs);
+  }
+
+  .agent-approval__danger {
+    color: var(--color-danger);
   }
 
   .agent-approval__label {
