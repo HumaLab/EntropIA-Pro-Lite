@@ -689,7 +689,7 @@ fn windows_paths_are_recorded_and_matched_without_the_verbatim_prefix() {
     assert!(!plain_folder.to_string_lossy().starts_with(r"\\?\"));
     let checked = check_source(
         &file.to_string_lossy(),
-        &[plain_folder.clone()],
+        std::slice::from_ref(&plain_folder),
         data.path(),
         &SourceLimits::default(),
     )
