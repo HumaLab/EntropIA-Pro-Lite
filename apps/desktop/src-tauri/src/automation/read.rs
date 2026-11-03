@@ -150,6 +150,191 @@ pub struct SearchResults {
     pub matches: usize,
 }
 
+/// One passage that matched a `search_passages` query, located for citing.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageRecord {
+    pub item_id: String,
+    pub title: String,
+    pub collection_id: String,
+    pub asset_id: String,
+    pub page_number: Option<i64>,
+    /// `extraction` or `transcription`: which page text the offsets index.
+    pub source: String,
+    /// Unicode-character offsets into that page text.
+    pub start_char: i64,
+    pub end_char: i64,
+    /// sha256 of the page text the passage was cut from.
+    pub text_hash: String,
+    /// Whether that page text is still the current one; `false` means the
+    /// page was re-read or corrected after the passage was indexed.
+    pub current: bool,
+    pub text: String,
+    pub rank: f64,
+}
+
+/// How much of the scope the passage index covers: passages exist only for
+/// documents processed with embeddings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageCoverage {
+    pub items_in_scope: usize,
+    pub items_with_passages: usize,
+}
+
+/// `search_passages`'s payload.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PassageResults {
+    pub records: Vec<PassageRecord>,
+    /// Every matching passage before the limit.
+    pub matches: usize,
+    pub coverage: PassageCoverage,
+}
+
+/// Characters a `documents_get_text` call returns when the caller names none.
+pub const DEFAULT_TEXT_WINDOW: usize = 4000;
+
+/// Largest text window one call may ask for.
+pub const MAX_TEXT_WINDOW: usize = 20_000;
+
+/// The item a text read belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemRef {
+    pub id: String,
+    pub title: String,
+}
+
+/// One timed stretch of a transcription, in milliseconds from the start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSegment {
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: String,
+}
+
+/// One window of one page's text, located so it can be cited.
+///
+/// Offsets count Unicode characters of the whole page text, the unit the
+/// passage index uses, and `textHash` is sha256 of that text: the same value a
+/// passage carries as its source hash, so a citation can tell whether the text
+/// it points into is still the current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PageWindow {
+    pub asset_id: String,
+    #[serde(rename = "type")]
+    pub asset_type: String,
+    /// The page of the original document, when the file is one page of it.
+    pub page_number: Option<i64>,
+    /// `extraction` (native text or OCR) or `transcription` (audio).
+    pub source: String,
+    /// For an extraction: `native` or `ocr`. `null` for a transcription.
+    pub method: Option<String>,
+    pub text_hash: String,
+    pub total_chars: usize,
+    pub start_char: usize,
+    pub end_char: usize,
+    pub text: String,
+    /// The transcription's timed segments, when the page is audio.
+    pub segments: Option<Vec<TranscriptSegment>>,
+}
+
+/// `documents_get_text`'s payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentText {
+    pub item: ItemRef,
+    /// The pages with text, in the item's file order. Files without text yet
+    /// (not extracted, or nothing readable) are left out; `items_get` lists all.
+    pub pages: Vec<PageWindow>,
+    /// Hand it back as `cursor` for the next window; `null` at the end.
+    pub next_cursor: Option<String>,
+}
+
+/// Where the next text window starts: the asset (by position and id, so a
+/// changed document is noticed) and the character offset inside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TextCursor {
+    i: usize,
+    a: String,
+    o: usize,
+}
+
+/// One page's whole text and where it came from.
+struct PageSource {
+    source: &'static str,
+    method: Option<String>,
+    text: String,
+    segments: Option<Vec<TranscriptSegment>>,
+}
+
+#[derive(Deserialize)]
+struct StoredSegment {
+    start_ms: i64,
+    end_ms: i64,
+    text: String,
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+/// The page text the app itself cites (`lib/page-text.ts`): the latest
+/// extraction when it has text, otherwise the latest transcription.
+fn page_source(conn: &Connection, asset_id: &str) -> Result<Option<PageSource>, ReadError> {
+    let extraction = conn
+        .query_row(
+            "SELECT text_content, method FROM extractions WHERE asset_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![asset_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| unavailable("leer el texto extraído", error))?;
+    if let Some((text, method)) = extraction {
+        if !text.trim().is_empty() {
+            return Ok(Some(PageSource {
+                source: "extraction",
+                method: Some(method),
+                text,
+                segments: None,
+            }));
+        }
+    }
+    let transcription = conn
+        .query_row(
+            "SELECT text_content, segments FROM transcriptions WHERE asset_id = ?1
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![asset_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .map_err(|error| unavailable("leer la transcripción", error))?;
+    Ok(transcription
+        .filter(|(text, _)| !text.trim().is_empty())
+        .map(|(text, segments)| PageSource {
+            source: "transcription",
+            method: None,
+            text,
+            segments: segments
+                .and_then(|json| serde_json::from_str::<Vec<StoredSegment>>(&json).ok())
+                .map(|stored| {
+                    stored
+                        .into_iter()
+                        .map(|segment| TranscriptSegment {
+                            start_ms: segment.start_ms,
+                            end_ms: segment.end_ms,
+                            text: segment.text,
+                        })
+                        .collect()
+                }),
+        }))
+}
+
 /// The last record a page handed out, encoded so only this module decodes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Cursor {
@@ -288,6 +473,256 @@ impl ArchiveReader {
         Ok(ItemsPage {
             records,
             next_cursor,
+        })
+    }
+
+    /// An item's page texts in file order, one window of at most `max_chars`
+    /// characters per call across pages (S4: never the whole file by default).
+    /// `asset_id` narrows the read to one of the item's files.
+    pub fn document_text(
+        &self,
+        item_id: &str,
+        asset_id: Option<&str>,
+        cursor: Option<&str>,
+        max_chars: Option<u32>,
+    ) -> Result<DocumentText, ReadError> {
+        let budget = max_chars.map_or(DEFAULT_TEXT_WINDOW, |max| max as usize);
+        if budget == 0 || budget > MAX_TEXT_WINDOW {
+            return Err(ReadError::InvalidArgument(format!(
+                "`maxChars` tiene que estar entre 1 y {MAX_TEXT_WINDOW}: llegó {budget}."
+            )));
+        }
+        let start = cursor
+            .map(|raw| {
+                URL_SAFE_NO_PAD
+                    .decode(raw)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<TextCursor>(&bytes).ok())
+                    .ok_or_else(invalid_cursor)
+            })
+            .transpose()?;
+        let conn = self.connection()?;
+        let title = conn
+            .query_row(
+                "SELECT title FROM items WHERE id = ?1",
+                params![item_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| unavailable("leer el ítem", error))?
+            .ok_or_else(|| {
+                ReadError::NotFound(format!(
+                    "No existe ningún ítem con el id «{item_id}» en este archivo."
+                ))
+            })?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id, type, page_number FROM assets WHERE item_id = ?1
+                 ORDER BY sort_index, page_number, id",
+            )
+            .map_err(|error| unavailable("leer los archivos del ítem", error))?;
+        let mut assets: Vec<(String, String, Option<i64>)> = collect(
+            statement
+                .query_map(params![item_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(|error| unavailable("leer los archivos del ítem", error))?,
+            "los archivos del ítem",
+        )?;
+        drop(statement);
+        if let Some(asset_id) = asset_id {
+            assets.retain(|(id, _, _)| id == asset_id);
+            if assets.is_empty() {
+                return Err(ReadError::NotFound(format!(
+                    "El ítem «{item_id}» no tiene un archivo con el id «{asset_id}»."
+                )));
+            }
+        }
+        let (mut index, mut offset) = match &start {
+            Some(cursor) => {
+                if assets.get(cursor.i).map(|(id, _, _)| id.as_str()) != Some(cursor.a.as_str()) {
+                    return Err(ReadError::InvalidArgument(
+                        "El cursor ya no corresponde a este documento (cambiaron sus archivos): volvé a leerlo sin cursor."
+                            .to_string(),
+                    ));
+                }
+                (cursor.i, cursor.o)
+            }
+            None => (0, 0),
+        };
+        let mut remaining = budget;
+        let mut pages = Vec::new();
+        let mut next_cursor = None;
+        while index < assets.len() {
+            let (id, asset_type, page_number) = &assets[index];
+            let Some(page) = page_source(&conn, id)? else {
+                index += 1;
+                offset = 0;
+                continue;
+            };
+            let chars: Vec<char> = page.text.chars().collect();
+            let total = chars.len();
+            if offset >= total {
+                index += 1;
+                offset = 0;
+                continue;
+            }
+            if remaining == 0 {
+                next_cursor = Some(
+                    URL_SAFE_NO_PAD.encode(
+                        serde_json::to_vec(&TextCursor {
+                            i: index,
+                            a: id.clone(),
+                            o: offset,
+                        })
+                        .unwrap_or_default(),
+                    ),
+                );
+                break;
+            }
+            let end = (offset + remaining).min(total);
+            pages.push(PageWindow {
+                asset_id: id.clone(),
+                asset_type: asset_type.clone(),
+                page_number: *page_number,
+                source: page.source.to_string(),
+                method: page.method,
+                text_hash: sha256_hex(&page.text),
+                total_chars: total,
+                start_char: offset,
+                end_char: end,
+                text: chars[offset..end].iter().collect(),
+                segments: page.segments,
+            });
+            remaining -= end - offset;
+            offset = end;
+        }
+        Ok(DocumentText {
+            item: ItemRef {
+                id: item_id.to_string(),
+                title,
+            },
+            pages,
+            next_cursor,
+        })
+    }
+
+    /// Passages that match `query`, best first (BM25 over the chunk index the
+    /// app's own chat uses), narrowed to a collection or an item, with how many
+    /// items in that scope have passages at all.
+    pub fn passages(
+        &self,
+        query: &str,
+        collection_id: Option<&str>,
+        item_id: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<PassageResults, ReadError> {
+        let limit = resolve_limit(limit)?;
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(ReadError::InvalidArgument(
+                "La búsqueda necesita un texto: escribí qué querés encontrar.".to_string(),
+            ));
+        }
+        let conn = self.connection()?;
+        let scope = params![collection_id, item_id];
+        let failed = |error: rusqlite::Error| unavailable("buscar pasajes", error);
+        let items_in_scope: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM items i
+                 WHERE (?1 IS NULL OR i.collection_id = ?1) AND (?2 IS NULL OR i.id = ?2)",
+                scope,
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let items_with_passages: i64 = conn
+            .query_row(
+                "SELECT count(DISTINCT c.item_id) FROM rag_chunks c JOIN items i ON i.id = c.item_id
+                 WHERE (?1 IS NULL OR i.collection_id = ?1) AND (?2 IS NULL OR i.id = ?2)",
+                scope,
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let coverage = PassageCoverage {
+            items_in_scope: items_in_scope.max(0) as usize,
+            items_with_passages: items_with_passages.max(0) as usize,
+        };
+        let expression = crate::nlp::fts::sanitize_fts5_query_with_mode(
+            query,
+            crate::nlp::fts::FtsMatchMode::Any,
+        );
+        if expression.is_empty() {
+            return Ok(PassageResults {
+                records: Vec::new(),
+                matches: 0,
+                coverage,
+            });
+        }
+        let from = "FROM rag_chunks_fts f
+             JOIN rag_chunks c ON c.id = f.chunk_id
+             JOIN items i ON i.id = c.item_id
+             JOIN assets a ON a.id = c.asset_id
+             WHERE rag_chunks_fts MATCH ?1
+               AND (?2 IS NULL OR i.collection_id = ?2) AND (?3 IS NULL OR c.item_id = ?3)";
+        let matches: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) {from}"),
+                params![expression, collection_id, item_id],
+                |row| row.get(0),
+            )
+            .map_err(failed)?;
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT c.item_id, i.title, i.collection_id, c.asset_id, a.page_number,
+                        c.source_kind, c.start_char, c.end_char, c.source_text_hash,
+                        c.text_content, bm25(rag_chunks_fts) AS rank
+                 {from} ORDER BY rank LIMIT {limit}"
+            ))
+            .map_err(failed)?;
+        let hits = collect(
+            statement
+                .query_map(params![expression, collection_id, item_id], |row| {
+                    Ok(PassageRecord {
+                        item_id: row.get(0)?,
+                        title: row.get(1)?,
+                        collection_id: row.get(2)?,
+                        asset_id: row.get(3)?,
+                        page_number: row.get(4)?,
+                        source: row.get(5)?,
+                        start_char: row.get(6)?,
+                        end_char: row.get(7)?,
+                        text_hash: row.get(8)?,
+                        current: false,
+                        text: row.get(9)?,
+                        rank: row.get(10)?,
+                    })
+                })
+                .map_err(failed)?,
+            "los pasajes",
+        )?;
+        drop(statement);
+        // A passage is current when the page text it indexes is still the one
+        // documents_get_text reads; one hash per page, however many passages.
+        let mut current_hash: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
+        let mut records = Vec::with_capacity(hits.len());
+        for mut record in hits {
+            let hash = match current_hash.get(&record.asset_id) {
+                Some(hash) => hash.clone(),
+                None => {
+                    let hash =
+                        page_source(&conn, &record.asset_id)?.map(|page| sha256_hex(&page.text));
+                    current_hash.insert(record.asset_id.clone(), hash.clone());
+                    hash
+                }
+            };
+            record.current = hash.as_deref() == Some(record.text_hash.as_str());
+            records.push(record);
+        }
+        Ok(PassageResults {
+            records,
+            matches: matches.max(0) as usize,
+            coverage,
         })
     }
 

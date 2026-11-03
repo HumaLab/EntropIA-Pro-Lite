@@ -903,6 +903,7 @@ mod tests {
             vec![
                 "approvals_status",
                 "collections_list",
+                "documents_get_text",
                 "entropia_status",
                 "items_get",
                 "items_list",
@@ -911,7 +912,8 @@ mod tests {
                 "processing_control",
                 "processing_prepare",
                 "processing_start",
-                "search_items"
+                "search_items",
+                "search_passages"
             ]
         );
 

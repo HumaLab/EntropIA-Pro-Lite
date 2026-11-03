@@ -43,7 +43,8 @@ use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
 };
 use crate::automation::read::{
-    ArchiveCounts, ArchiveReader, CollectionsPage, ItemDetail, ItemsPage, ReadError, SearchResults,
+    ArchiveCounts, ArchiveReader, CollectionsPage, DocumentText, ItemDetail, ItemsPage,
+    PassageResults, ReadError, SearchResults,
 };
 use crate::automation::server::{app_version, profile_name, variant_name, PROTOCOL};
 
@@ -67,6 +68,8 @@ const TOOL_COLLECTIONS_LIST: &str = "collections_list";
 const TOOL_ITEMS_LIST: &str = "items_list";
 const TOOL_ITEMS_GET: &str = "items_get";
 const TOOL_SEARCH_ITEMS: &str = "search_items";
+const TOOL_DOCUMENTS_GET_TEXT: &str = "documents_get_text";
+const TOOL_SEARCH_PASSAGES: &str = "search_passages";
 const TOOL_JOBS_LIST: &str = "jobs_list";
 const TOOL_JOBS_GET: &str = "jobs_get";
 const TOOL_PROCESSING_PREPARE: &str = "processing_prepare";
@@ -162,6 +165,34 @@ pub struct SearchItemsParams {
     pub collection_id: Option<String>,
     /// How many hits to return, 1 to 200; the default is 50.
     pub limit: Option<u32>,
+}
+
+/// `search_passages` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchPassagesParams {
+    /// What to look for, in natural language.
+    pub query: String,
+    /// Only passages of this collection's items.
+    pub collection_id: Option<String>,
+    /// Only passages of this item.
+    pub item_id: Option<String>,
+    /// How many passages to return, 1 to 200; the default is 50.
+    pub limit: Option<u32>,
+}
+
+/// `documents_get_text` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsGetTextParams {
+    /// The item whose text to read.
+    pub item_id: String,
+    /// Only this one of the item's files.
+    pub asset_id: Option<String>,
+    /// The `nextCursor` the previous call returned.
+    pub cursor: Option<String>,
+    /// Characters per call across pages, 1 to 20000; the default is 4000.
+    pub max_chars: Option<u32>,
 }
 
 /// `jobs_list` arguments.
@@ -619,7 +650,7 @@ impl AgentServer {
 
     #[tool(
         name = "items_get",
-        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto completo: para eso está `search_items`.",
+        description = "Un ítem por su id: título, colección, metadatos, revisión y la lista de archivos adjuntos. No devuelve el texto: para leerlo por páginas está `documents_get_text`.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn items_get(
@@ -670,6 +701,82 @@ impl AgentServer {
             .collect();
         self.audit_ok(&caller, TOOL_SEARCH_ITEMS, object_ids, query_chars);
         Ok(Json(results))
+    }
+
+    #[tool(
+        name = "search_passages",
+        description = "Busca pasajes del texto de los documentos (fragmentos, no ítems enteros), del más al menos relevante, cada uno con su ítem, archivo, página, posiciones `startChar`/`endChar` y `textHash` para citarlo; `current` es false si el texto de esa página cambió después de indexarlo. Solo tienen pasajes los documentos procesados con embeddings: `coverage` dice cuántos ítems del alcance los tienen. Filtra por `collectionId` o `itemId` y limita con `limit` (1 a 200, por defecto 50).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn search_passages(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<SearchPassagesParams>>,
+    ) -> Result<Json<PassageResults>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_SEARCH_PASSAGES)?;
+        let args = self.arguments(&caller, TOOL_SEARCH_PASSAGES, args)?;
+        let query_chars = Some(args.query.chars().count());
+        let reader = self.reader.clone();
+        let results = match Self::on_archive(move || {
+            reader.passages(
+                &args.query,
+                args.collection_id.as_deref(),
+                args.item_id.as_deref(),
+                args.limit,
+            )
+        })
+        .await
+        {
+            Ok(results) => results,
+            Err(error) => {
+                return Err(self.read_failure(&caller, TOOL_SEARCH_PASSAGES, error, query_chars))
+            }
+        };
+        let mut object_ids: Vec<String> = Vec::new();
+        for record in &results.records {
+            if !object_ids.contains(&record.item_id) {
+                object_ids.push(record.item_id.clone());
+            }
+        }
+        self.audit_ok(&caller, TOOL_SEARCH_PASSAGES, object_ids, query_chars);
+        Ok(Json(results))
+    }
+
+    #[tool(
+        name = "documents_get_text",
+        description = "El texto de un ítem por páginas (un archivo o página del documento por entrada), en el orden de sus archivos: texto nativo u OCR, o la transcripción si es audio. Cada entrada trae `textHash` (sha256 del texto completo de la página) y `startChar`/`endChar` en caracteres Unicode, para citar y para saber si el texto cambió. Devuelve a lo sumo `maxChars` caracteres por llamada (1 a 20000, por defecto 4000); seguí con `cursor` (el `nextCursor` anterior). `assetId` lee un solo archivo.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn documents_get_text(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsGetTextParams>>,
+    ) -> Result<Json<DocumentText>, CallToolResult> {
+        let caller = self.guard(&context, TOOL_DOCUMENTS_GET_TEXT)?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_GET_TEXT, args)?;
+        let reader = self.reader.clone();
+        let text = match Self::on_archive(move || {
+            reader.document_text(
+                &args.item_id,
+                args.asset_id.as_deref(),
+                args.cursor.as_deref(),
+                args.max_chars,
+            )
+        })
+        .await
+        {
+            Ok(text) => text,
+            Err(error) => {
+                return Err(self.read_failure(&caller, TOOL_DOCUMENTS_GET_TEXT, error, None))
+            }
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_DOCUMENTS_GET_TEXT,
+            vec![text.item.id.clone()],
+            None,
+        );
+        Ok(Json(text))
     }
 
     #[tool(

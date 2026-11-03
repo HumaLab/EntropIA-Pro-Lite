@@ -284,6 +284,7 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
         json!([
             "approvals_status",
             "collections_list",
+            "documents_get_text",
             "entropia_status",
             "items_get",
             "items_list",
@@ -292,7 +293,8 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "processing_control",
             "processing_prepare",
             "processing_start",
-            "search_items"
+            "search_items",
+            "search_passages"
         ])
     );
 }
@@ -766,7 +768,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 13);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -799,9 +801,13 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 11] = [
+    let expected: [(&str, &[&str]); 13] = [
         ("approvals_status", &["approvalId"]),
         ("collections_list", &["cursor", "limit"]),
+        (
+            "documents_get_text",
+            &["assetId", "cursor", "itemId", "maxChars"],
+        ),
         ("entropia_status", &[]),
         ("items_get", &["itemId"]),
         ("items_list", &["collectionId", "cursor", "limit"]),
@@ -826,6 +832,10 @@ async fn every_tool_publishes_a_strict_input_schema() {
         ),
         ("processing_start", &["jobId", "revision"]),
         ("search_items", &["collectionId", "limit", "query"]),
+        (
+            "search_passages",
+            &["collectionId", "itemId", "limit", "query"],
+        ),
     ];
     assert_eq!(tools.len(), expected.len(), "no tool beyond D10's list");
     for (tool, properties) in expected {
@@ -1395,6 +1405,390 @@ async fn processing_control_refuses_unknown_actions_and_unfenced_spending() {
         assert_eq!(refusal["error"], ERROR_INVALID_ARGUMENT, "{arguments}");
     }
     assert!(harness.endpoint.approvals().pending().is_empty());
+}
+
+/// Page texts for the first Alfa item: the PDF page has OCR text with
+/// characters outside ASCII, the cover image only a transcription (the
+/// extraction row is empty), so both sources and the fallback are covered.
+const PAGE_ONE: &str = "Página uno: café, ñandú y acción.\nSegunda línea del documento.";
+const COVER: &str = "Lectura en voz alta de la tapa.";
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+impl Harness {
+    fn seed_page_texts(&self) {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+             VALUES ('ext_1', 'ast_alfa_1', ?1, 'ocr', 0.9, 5000)",
+            [PAGE_ONE],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, confidence, created_at)
+             VALUES ('ext_2', 'ast_alfa_2', '', 'native', NULL, 5001)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transcriptions (id, asset_id, text_content, language, duration_ms, model, segments, confidence, created_at)
+             VALUES ('trn_1', 'ast_alfa_2', ?1, 'es', 4200, 'test', ?2, NULL, 5002)",
+            rusqlite::params![
+                COVER,
+                r#"[{"start_ms":0,"end_ms":4200,"text":"Lectura en voz alta de la tapa."}]"#
+            ],
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn documents_get_text_returns_every_page_with_its_source_and_hash() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    harness.seed_page_texts();
+    let item = test_archive::item_id(ALFA, 1);
+    let text = harness
+        .payload(&token, "documents_get_text", json!({ "itemId": item }))
+        .await;
+
+    assert_eq!(keys(&text), sorted(&["item", "pages", "nextCursor"]));
+    assert_eq!(text["item"], json!({ "id": item, "title": "Documento 1" }));
+    assert_eq!(
+        text["nextCursor"],
+        Value::Null,
+        "everything fit in one call"
+    );
+    let pages = text["pages"].as_array().expect("pages").clone();
+    assert_eq!(pages.len(), 2);
+
+    let first = &pages[0];
+    assert_eq!(
+        keys(first),
+        sorted(&[
+            "assetId",
+            "type",
+            "pageNumber",
+            "source",
+            "method",
+            "textHash",
+            "totalChars",
+            "startChar",
+            "endChar",
+            "text",
+            "segments",
+        ])
+    );
+    assert_eq!(first["assetId"], "ast_alfa_1");
+    assert_eq!(first["source"], "extraction");
+    assert_eq!(first["method"], "ocr");
+    assert_eq!(first["text"], PAGE_ONE);
+    assert_eq!(first["textHash"], sha256_hex(PAGE_ONE));
+    assert_eq!(first["totalChars"], PAGE_ONE.chars().count());
+    assert_eq!(first["startChar"], 0);
+    assert_eq!(first["endChar"], PAGE_ONE.chars().count());
+    assert_eq!(first["segments"], Value::Null);
+
+    let cover = &pages[1];
+    assert_eq!(cover["assetId"], "ast_alfa_2");
+    assert_eq!(
+        cover["source"], "transcription",
+        "an empty extraction falls back"
+    );
+    assert_eq!(cover["text"], COVER);
+    assert_eq!(cover["textHash"], sha256_hex(COVER));
+    assert_eq!(
+        cover["segments"],
+        json!([{ "startMs": 0, "endMs": 4200, "text": COVER }])
+    );
+
+    let last = harness.audit_lines().last().cloned().expect("audited");
+    assert_eq!(last["tool"], "documents_get_text");
+    assert_eq!(last["objectIds"], json!([item]));
+}
+
+#[tokio::test]
+async fn documents_get_text_pages_by_characters_and_never_splits_a_character() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    harness.seed_page_texts();
+    let item = test_archive::item_id(ALFA, 1);
+    let mut cursor: Option<String> = None;
+    let mut collected: std::collections::BTreeMap<String, String> = Default::default();
+    let mut calls = 0;
+    loop {
+        let mut arguments = json!({ "itemId": item, "maxChars": 7 });
+        if let Some(cursor) = &cursor {
+            arguments["cursor"] = json!(cursor);
+        }
+        let page = harness
+            .payload(&token, "documents_get_text", arguments)
+            .await;
+        for window in page["pages"].as_array().unwrap() {
+            let text = window["text"].as_str().unwrap();
+            assert!(text.chars().count() <= 7, "a window respects maxChars");
+            let asset = window["assetId"].as_str().unwrap().to_string();
+            let entry = collected.entry(asset).or_default();
+            assert_eq!(
+                window["startChar"].as_u64().unwrap() as usize,
+                entry.chars().count(),
+                "windows are contiguous"
+            );
+            entry.push_str(text);
+        }
+        calls += 1;
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+        assert!(calls < 100, "the cursor always advances");
+    }
+    assert_eq!(collected["ast_alfa_1"], PAGE_ONE);
+    assert_eq!(collected["ast_alfa_2"], COVER);
+}
+
+#[tokio::test]
+async fn documents_get_text_reads_one_asset_and_refuses_bad_requests() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.seed_page_texts();
+    let item = test_archive::item_id(ALFA, 1);
+    let one = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": item, "assetId": "ast_alfa_2" }),
+        )
+        .await;
+    let pages = one["pages"].as_array().unwrap();
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0]["assetId"], "ast_alfa_2");
+
+    let empty = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": test_archive::item_id(ALFA, 2) }),
+        )
+        .await;
+    assert_eq!(
+        empty["pages"],
+        json!([]),
+        "an item without files has no pages"
+    );
+
+    for (arguments, code) in [
+        (json!({ "itemId": "ite_missing" }), ERROR_NOT_FOUND),
+        (
+            json!({ "itemId": test_archive::item_id(BETA, 1), "assetId": "ast_alfa_1" }),
+            ERROR_NOT_FOUND,
+        ),
+        (
+            json!({ "itemId": item, "maxChars": 0 }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "itemId": item, "maxChars": 20001 }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "itemId": item, "cursor": "nope" }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+    ] {
+        let refusal = harness
+            .refusal(&token, "documents_get_text", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], code, "{arguments}");
+    }
+
+    harness.access.set_scopes(&id, vec![]).unwrap();
+    let refusal = harness
+        .refusal(&token, "documents_get_text", json!({ "itemId": item }))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+}
+
+impl Harness {
+    /// Two passages of the first Alfa item: one cut from the current page
+    /// text, one left over from a transcription that has since been replaced.
+    fn seed_passages(&self) {
+        self.seed_page_texts();
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        let current: String = PAGE_ONE.chars().take(33).collect();
+        for (id, asset, kind, source, ordinal, text, start, end, hash) in [
+            (
+                "chk_1",
+                "ast_alfa_1",
+                "extraction",
+                "ext_1",
+                0_i64,
+                current.clone(),
+                0_i64,
+                33_i64,
+                sha256_hex(PAGE_ONE),
+            ),
+            (
+                "chk_2",
+                "ast_alfa_2",
+                "transcription",
+                "trn_old",
+                0,
+                "Tapa antigua: acción descartada.".to_string(),
+                0,
+                32,
+                sha256_hex("texto que ya no existe"),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO rag_chunks (id, asset_id, item_id, source_kind, source_id, chunk_ordinal, text_content, start_char, end_char, source_text_hash, chunking_contract, embedding, embedding_model, embedding_contract, dimensions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'chunks-v1', x'00000000', 'test', 'test', 1)",
+                rusqlite::params![
+                    id,
+                    asset,
+                    test_archive::item_id(ALFA, 1),
+                    kind,
+                    source,
+                    ordinal,
+                    text,
+                    start,
+                    end,
+                    hash
+                ],
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn search_passages_returns_citable_passages_and_flags_stale_ones() {
+    let harness = harness().await;
+    let (_id, token) = harness.pair("Claude Code");
+    harness.seed_passages();
+    let found = harness
+        .payload(&token, "search_passages", json!({ "query": "acción" }))
+        .await;
+    assert_eq!(keys(&found), sorted(&["records", "matches", "coverage"]));
+    assert_eq!(found["matches"], 2);
+    assert_eq!(
+        found["coverage"],
+        json!({ "itemsInScope": ALFA_ITEMS + BETA_ITEMS, "itemsWithPassages": 1 })
+    );
+    let records = records(&found);
+    let current = records
+        .iter()
+        .find(|record| record["assetId"] == "ast_alfa_1")
+        .expect("the current passage");
+    assert_eq!(
+        keys(current),
+        sorted(&[
+            "itemId",
+            "title",
+            "collectionId",
+            "assetId",
+            "pageNumber",
+            "source",
+            "startChar",
+            "endChar",
+            "textHash",
+            "current",
+            "text",
+            "rank",
+        ])
+    );
+    assert_eq!(current["itemId"], test_archive::item_id(ALFA, 1));
+    assert_eq!(current["title"], "Documento 1");
+    assert_eq!(current["collectionId"], ALFA);
+    assert_eq!(current["source"], "extraction");
+    assert_eq!(current["startChar"], 0);
+    assert_eq!(current["endChar"], 33);
+    assert_eq!(current["textHash"], sha256_hex(PAGE_ONE));
+    assert_eq!(
+        current["current"], true,
+        "the page text it indexes is the current one"
+    );
+    let text: String = PAGE_ONE.chars().take(33).collect();
+    assert_eq!(current["text"], text);
+
+    // The same window read through documents_get_text is the same text.
+    let page = harness
+        .payload(
+            &token,
+            "documents_get_text",
+            json!({ "itemId": test_archive::item_id(ALFA, 1), "assetId": "ast_alfa_1", "maxChars": 33 }),
+        )
+        .await;
+    assert_eq!(page["pages"][0]["text"], current["text"]);
+    assert_eq!(page["pages"][0]["textHash"], current["textHash"]);
+
+    let stale = records
+        .iter()
+        .find(|record| record["assetId"] == "ast_alfa_2")
+        .expect("the stale passage");
+    assert_eq!(stale["current"], false, "its page text has changed since");
+}
+
+#[tokio::test]
+async fn search_passages_is_scoped_and_refuses_bad_requests() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.seed_passages();
+    let in_beta = harness
+        .payload(
+            &token,
+            "search_passages",
+            json!({ "query": "acción", "collectionId": BETA }),
+        )
+        .await;
+    assert_eq!(in_beta["matches"], 0);
+    assert_eq!(
+        in_beta["coverage"],
+        json!({ "itemsInScope": BETA_ITEMS, "itemsWithPassages": 0 })
+    );
+    let in_item = harness
+        .payload(
+            &token,
+            "search_passages",
+            json!({ "query": "acción", "itemId": test_archive::item_id(ALFA, 1), "limit": 1 }),
+        )
+        .await;
+    assert_eq!(records(&in_item).len(), 1, "limit applies");
+    assert_eq!(in_item["matches"], 2, "matches counts before the limit");
+    assert_eq!(
+        in_item["coverage"],
+        json!({ "itemsInScope": 1, "itemsWithPassages": 1 })
+    );
+
+    for arguments in [
+        json!({ "query": "   " }),
+        json!({ "query": "acción", "limit": 0 }),
+        json!({ "query": "acción", "limit": 201 }),
+    ] {
+        let refusal = harness
+            .refusal(&token, "search_passages", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], ERROR_INVALID_ARGUMENT, "{arguments}");
+    }
+    let last = harness
+        .audit_lines()
+        .into_iter()
+        .rev()
+        .find(|line| line["tool"] == "search_passages" && line["status"] == "ok")
+        .expect("audited");
+    assert!(
+        last.get("queryChars").is_some(),
+        "only the query length is audited"
+    );
+
+    harness.access.set_scopes(&id, vec![]).unwrap();
+    let refusal = harness
+        .refusal(&token, "search_passages", json!({ "query": "acción" }))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read

@@ -310,8 +310,8 @@ through the tool itself. Clients rely on this; Codex cancels a non-interactive
 call to a tool that does not declare itself read-only, so it asks before calling
 the three writing tools.
 
-Eleven tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
-The five archive tools:
+Thirteen tools are served (`automation/mcp.rs`; `tools/list` order is alphabetical).
+The seven archive tools:
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -320,6 +320,8 @@ The five archive tools:
 | `items_list` | `collectionId?`, `cursor?`, `limit?` | `{records:[{id, title, collectionId, updatedAt}], nextCursor}` ordered by title, then id |
 | `items_get` | `itemId` | `{id, title, collectionId, metadata, createdAt, updatedAt, assets:[{id, type, path, sortIndex, size, pageNumber, createdAt}…]}` — metadata and file list, **never** extracted text |
 | `search_items` | `query`, `collectionId?`, `limit?` | `{records:[{id, title, collectionId, updatedAt, rank}], matches}` — FTS5/BM25, any-term matching, best first |
+| `documents_get_text` | `itemId`, `assetId?`, `cursor?`, `maxChars?` | `{item:{id,title}, pages:[{assetId, type, pageNumber, source, method, textHash, totalChars, startChar, endChar, text, segments}], nextCursor}` — page text in windows (see below) |
+| `search_passages` | `query`, `collectionId?`, `itemId?`, `limit?` | `{records:[{itemId, title, collectionId, assetId, pageNumber, source, startChar, endChar, textHash, current, text, rank}], matches, coverage:{itemsInScope, itemsWithPassages}}` — passage FTS5/BM25, best first |
 
 Contract details that hold for every tool:
 
@@ -341,6 +343,30 @@ Contract details that hold for every tool:
 - **Reads are isolated.** Each call opens its own connection with
   `open_archive_connection` + `PRAGMA query_only = ON`; the UI connection is
   never used, and blocking work runs on a blocking task.
+
+### Reading text and citing
+
+A **page** is one file of an item: a split PDF has one file per page (with
+`pageNumber`), an image or an audio file is one page. Its text is what the app's
+own citations read (`lib/page-text.ts`): the latest extraction (native text or OCR)
+when it has text, otherwise the latest transcription, whose timed `segments` come
+along.
+
+- **Windows, never the whole file.** `documents_get_text` returns at most
+  `maxChars` characters per call (1-20000, default 4000), across pages in file
+  order, and an opaque `nextCursor` for the rest; `assetId` reads one file. A
+  cursor names the file it stopped in, so a document whose files changed is
+  `invalid_argument` and is read again from the start. Files without text are left
+  out (`items_get` lists every file).
+- **Locations.** `startChar` / `endChar` count **Unicode characters** of the whole
+  page text, the unit the passage index uses, and `textHash` is sha256 of that
+  text. A citation is `itemId` + `assetId` + `pageNumber` + offsets + `textHash`;
+  row ids of extractions and passages are not stable and are never exposed.
+- **Passages.** `search_passages` searches the chunk index the app's chat uses
+  (`rag_chunks_fts`), so only documents processed with embeddings have passages;
+  `coverage` says how many items of the scope do. `current: false` means the page
+  text changed after the passage was indexed: read the page again before citing
+  it. Only the query's length is audited.
 
 ### Processing tools
 
