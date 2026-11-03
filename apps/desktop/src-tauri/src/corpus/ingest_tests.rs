@@ -52,6 +52,20 @@ impl Fixture {
         )
     }
 
+    /// The app's own check: the owner chose the path, so no folder is needed.
+    fn app_check(&self, path: &str) -> Result<SourceFile, String> {
+        check_app_source(path, &self.data_dir, &SourceLimits::default())
+    }
+
+    /// A file written inside the data directory, such as one the app staged
+    /// for the Internet Archive, the Navegador copy or the sample collection.
+    fn write_in_data(&self, relative: &str, bytes: &[u8]) -> String {
+        let path = self.data_dir.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
     fn items_in(&self, collection: &str) -> i64 {
         self.conn
             .query_row(
@@ -112,6 +126,9 @@ fn file_kinds_follow_the_apps_own_list() {
         ("foto.jpeg", Some(FileKind::Image)),
         ("scan.tif", Some(FileKind::Image)),
         ("entrevista.m4a", Some(FileKind::Audio)),
+        // The app's own audio list includes `ogg`, so an import that used to
+        // accept it keeps accepting it now that the service does the work.
+        ("entrevista.ogg", Some(FileKind::Audio)),
         ("notas.txt", None),
         ("sin_extension", None),
     ] {
@@ -233,7 +250,14 @@ fn importing_an_image_creates_an_item_with_its_copy_and_provenance() {
     let f = fixture();
     let path = f.write("Retrato de Mitre.jpg", b"jpeg bytes");
     let source = f.check(&path).unwrap();
-    let outcome = import_file(&f.conn, &f.data_dir, ALFA, &source).unwrap();
+    let outcome = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap();
     let ImportOutcome::Imported {
         item_id,
         title,
@@ -297,7 +321,14 @@ fn importing_a_pdf_keeps_the_original_and_adds_one_asset_per_page() {
     let source = f.check(&path).unwrap();
     let ImportOutcome::Imported {
         item_id, assets, ..
-    } = import_file(&f.conn, &f.data_dir, BETA, &source).unwrap()
+    } = import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap()
     else {
         panic!("expected an import");
     };
@@ -338,20 +369,39 @@ fn the_same_unchanged_file_is_not_imported_twice_into_a_collection() {
     let f = fixture();
     let path = f.write("Carta.pdf", &pdf_with_pages(1));
     let source = f.check(&path).unwrap();
-    let ImportOutcome::Imported { item_id, .. } =
-        import_file(&f.conn, &f.data_dir, ALFA, &source).unwrap()
-    else {
+    let ImportOutcome::Imported { item_id, .. } = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap() else {
         panic!("expected an import");
     };
     let before = f.items_in(ALFA);
     assert_eq!(
-        import_file(&f.conn, &f.data_dir, ALFA, &source).unwrap(),
+        import_file(
+            &f.conn,
+            &f.data_dir,
+            ALFA,
+            &source,
+            &ImportOverrides::default()
+        )
+        .unwrap(),
         ImportOutcome::Duplicate { item_id }
     );
     assert_eq!(f.items_in(ALFA), before);
     assert!(
         matches!(
-            import_file(&f.conn, &f.data_dir, BETA, &source).unwrap(),
+            import_file(
+                &f.conn,
+                &f.data_dir,
+                BETA,
+                &source,
+                &ImportOverrides::default()
+            )
+            .unwrap(),
             ImportOutcome::Imported { .. }
         ),
         "another collection may hold its own copy"
@@ -364,7 +414,14 @@ fn a_failed_import_leaves_no_item_and_no_files() {
     let path = f.write("Roto.pdf", b"%PDF-1.4 not really a pdf");
     let source = f.check(&path).unwrap();
     let before = f.items_in(ALFA);
-    let error = import_file(&f.conn, &f.data_dir, ALFA, &source).unwrap_err();
+    let error = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap_err();
     assert!(!error.is_empty());
     assert_eq!(f.items_in(ALFA), before);
     let leftovers = std::fs::read_dir(f.data_dir.join("assets").join(ALFA))
@@ -378,7 +435,267 @@ fn importing_into_an_unknown_collection_is_refused_before_anything_is_copied() {
     let f = fixture();
     let path = f.write("a.jpg", b"x");
     let source = f.check(&path).unwrap();
-    let error = import_file(&f.conn, &f.data_dir, "col_missing", &source).unwrap_err();
+    let error = import_file(
+        &f.conn,
+        &f.data_dir,
+        "col_missing",
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap_err();
     assert!(error.starts_with("not_found"), "{error}");
     assert!(!f.data_dir.join("assets").join("col_missing").exists());
+}
+
+/// D10(a): the app's own import reads what it stages inside the data directory
+/// (Internet Archive staging, the Navegador copy, the sample collection) and
+/// never a file it already imported under `assets/`.
+#[test]
+fn the_app_may_import_what_it_stages_but_never_its_own_assets() {
+    let f = fixture();
+    let staged = f.write_in_data("staging/internet-archive/Carta.pdf", b"%PDF");
+    assert_eq!(f.app_check(&staged).unwrap().kind, FileKind::Pdf);
+    let sample = f.write_in_data("sample-staging/acta.jpg", b"jpg");
+    assert_eq!(f.app_check(&sample).unwrap().kind, FileKind::Image);
+
+    let already_imported = f.write_in_data("assets/col-1/item-1/abc_Carta.pdf", b"%PDF");
+    let error = f.app_check(&already_imported).unwrap_err();
+    assert!(error.starts_with("in_archive"), "{error}");
+
+    for (path, reason) in [
+        (
+            f.data_dir
+                .join("staging")
+                .join("missing.pdf")
+                .to_string_lossy()
+                .to_string(),
+            "missing",
+        ),
+        (
+            f.data_dir.join("staging").to_string_lossy().to_string(),
+            "not_a_file",
+        ),
+        (f.write_in_data("staging/notas.txt", b"x"), "unsupported"),
+    ] {
+        let error = f.app_check(&path).unwrap_err();
+        assert!(error.starts_with(reason), "{path}: {error}");
+    }
+
+    let big = f.write_in_data("staging/grande.pdf", b"%PDF-1.4 0123456789");
+    let error = check_app_source(&big, &f.data_dir, &SourceLimits { max_bytes: 4 }).unwrap_err();
+    assert!(error.starts_with("too_large"), "{error}");
+}
+
+/// D10(c): the app has always written `importedAt` with milliseconds
+/// (`new Date().toISOString()`), and a copy's provenance is compared against it.
+#[test]
+fn an_import_records_when_it_happened_in_milliseconds() {
+    let f = fixture();
+    let path = f.write("foto.jpg", b"jpg");
+    let source = f.app_check(&path).unwrap();
+    let ImportOutcome::Imported { item_id, .. } = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap() else {
+        panic!("expected an import");
+    };
+    let metadata: String = f
+        .conn
+        .query_row(
+            "SELECT metadata FROM items WHERE id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    let imported_at = metadata["__entropia_file_metadata"]["importedAt"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(imported_at.len(), 24, "{imported_at}");
+    assert!(imported_at.ends_with('Z'), "{imported_at}");
+    assert_eq!(&imported_at[19..20], ".", "{imported_at}");
+    assert!(
+        imported_at[20..23].chars().all(|c| c.is_ascii_digit()),
+        "{imported_at}"
+    );
+    assert_eq!(&imported_at[4..5], "-", "{imported_at}");
+}
+
+/// D10(b): the app names the item and the stored copy. A saved web capture, for
+/// instance, arrives with the page's title and a file name made from it.
+#[test]
+fn the_app_can_name_the_item_the_copy_and_the_pages() {
+    let f = fixture();
+    let path = f.write("capture-1.pdf", &pdf_with_pages(2));
+    let source = f.app_check(&path).unwrap();
+    let overrides = ImportOverrides {
+        title: Some("The paper".to_string()),
+        file_name: Some("The paper.pdf".to_string()),
+        ..ImportOverrides::default()
+    };
+    let ImportOutcome::Imported { item_id, title, .. } =
+        import_file(&f.conn, &f.data_dir, ALFA, &source, &overrides).unwrap()
+    else {
+        panic!("expected an import");
+    };
+    assert_eq!(title, "The paper");
+    let (stored_title, metadata): (String, String) = f
+        .conn
+        .query_row(
+            "SELECT title, metadata FROM items WHERE id = ?1",
+            [&item_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_title, "The paper");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(
+        metadata["__entropia_file_metadata"]["originalName"], "The paper.pdf",
+        "the copy's original name follows the name the app chose"
+    );
+    assert_eq!(metadata["__entropia_file_metadata"]["originalPath"], path);
+
+    let mut statement = f
+        .conn
+        .prepare("SELECT path FROM assets WHERE item_id = ?1 ORDER BY sort_index")
+        .unwrap();
+    let paths: Vec<String> = statement
+        .query_map([&item_id], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(paths[0].ends_with("_The paper.pdf"), "{}", paths[0]);
+    assert!(paths[1].ends_with("The paper_page_1.pdf"), "{}", paths[1]);
+    assert!(paths[2].ends_with("The paper_page_2.pdf"), "{}", paths[2]);
+}
+
+/// D10(b): `extraMetadata` is written beside `__entropia_file_metadata` and
+/// can never replace it, whatever the caller sent.
+#[test]
+fn extra_metadata_sits_beside_the_import_provenance_and_never_replaces_it() {
+    let f = fixture();
+    let path = f.write("captura.jpg", b"jpg");
+    let source = f.app_check(&path).unwrap();
+    let extra: serde_json::Map<String, serde_json::Value> = serde_json::json!({
+        "__entropia_web_capture": { "captureId": "c1" },
+        "__entropia_file_metadata": { "originalName": "forged.jpg" },
+        "tema": "historia"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let overrides = ImportOverrides {
+        extra_metadata: Some(extra),
+        ..ImportOverrides::default()
+    };
+    let ImportOutcome::Imported { item_id, .. } =
+        import_file(&f.conn, &f.data_dir, ALFA, &source, &overrides).unwrap()
+    else {
+        panic!("expected an import");
+    };
+    let metadata: String = f
+        .conn
+        .query_row(
+            "SELECT metadata FROM items WHERE id = ?1",
+            [&item_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    assert_eq!(metadata["__entropia_web_capture"]["captureId"], "c1");
+    assert_eq!(metadata["tema"], "historia");
+    assert_eq!(
+        metadata["__entropia_file_metadata"]["originalName"],
+        "captura.jpg"
+    );
+}
+
+/// D10(b): a caller that already decided the file is new (the Navegador copy
+/// asked the person) imports it even when an identical source is there.
+#[test]
+fn a_duplicate_can_be_allowed_for_a_file_the_app_already_checked() {
+    let f = fixture();
+    let path = f.write("Carta.pdf", &pdf_with_pages(1));
+    let source = f.app_check(&path).unwrap();
+    let first = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap();
+    assert!(matches!(first, ImportOutcome::Imported { .. }));
+    let allowed = ImportOverrides {
+        allow_duplicate: true,
+        ..ImportOverrides::default()
+    };
+    let before = f.items_in(ALFA);
+    let second = import_file(&f.conn, &f.data_dir, ALFA, &source, &allowed).unwrap();
+    assert!(
+        matches!(second, ImportOutcome::Imported { .. }),
+        "{second:?}"
+    );
+    assert_eq!(f.items_in(ALFA), before + 1);
+}
+
+/// The agent's own import keeps its rule: no overrides, a duplicate is skipped.
+#[test]
+fn an_import_without_overrides_keeps_its_title_and_its_duplicate_rule() {
+    let f = fixture();
+    let path = f.write("Acta de 1891.jpg", b"jpg");
+    let source = f.check(&path).unwrap();
+    let ImportOutcome::Imported { item_id, title, .. } = import_file(
+        &f.conn,
+        &f.data_dir,
+        ALFA,
+        &source,
+        &ImportOverrides::default(),
+    )
+    .unwrap() else {
+        panic!("expected an import");
+    };
+    assert_eq!(title, "Acta de 1891");
+    assert_eq!(
+        import_file(
+            &f.conn,
+            &f.data_dir,
+            ALFA,
+            &source,
+            &ImportOverrides::default()
+        )
+        .unwrap(),
+        ImportOutcome::Duplicate { item_id }
+    );
+}
+
+/// On Windows `canonicalize` answers `\\?\C:\…`. Provenance, duplicates and the
+/// enabled folders use the plain form the renderer always wrote, so an earlier
+/// import still matches and the owner never sees the prefix.
+#[cfg(windows)]
+#[test]
+fn windows_paths_are_recorded_and_matched_without_the_verbatim_prefix() {
+    let data = tempfile::tempdir().unwrap();
+    let inbox = tempfile::tempdir().unwrap();
+    let file = inbox.path().join("Carta.jpg");
+    std::fs::write(&file, b"jpg").unwrap();
+    let plain_folder =
+        crate::path_utils::normalize_windows_path(std::fs::canonicalize(inbox.path()).unwrap());
+    assert!(!plain_folder.to_string_lossy().starts_with(r"\\?\"));
+    let checked = check_source(
+        &file.to_string_lossy(),
+        &[plain_folder.clone()],
+        data.path(),
+        &SourceLimits::default(),
+    )
+    .expect("a file directly inside a plainly stored folder is accepted");
+    let listed = list_folder(inbox.path(), &[plain_folder], data.path(), 10).unwrap();
+    assert_eq!(listed.files.len(), 1);
+    let original = original_path(&checked);
+    assert!(!original.starts_with(r"\\?\"), "{original}");
 }

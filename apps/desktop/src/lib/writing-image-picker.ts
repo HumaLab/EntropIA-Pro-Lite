@@ -95,7 +95,7 @@ async function composeFromPath(
  * production callers omit it and get the real Tauri-backed storage.
  */
 export async function pickWritingImage(io?: WritingImageIo): Promise<PickedWritingImage | null> {
-  // Wrapped like file-import.ts's pickFiles/pickAndImportFiles wrap the same
+  // Wrapped like file-import.ts's pickFiles wraps the same
   // call (I5): a file on a USB drive unplugged mid-pick, a network share, or
   // a path outside the fs capability scope rejects here instead of
   // resolving, and this function reports it and changes nothing — the

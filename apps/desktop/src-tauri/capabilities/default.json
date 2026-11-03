@@ -240,6 +240,7 @@
     "allow-corpus-collection-create",
     "allow-corpus-collection-update",
     "allow-corpus-item-update",
+    "allow-corpus-import-path",
     "allow-agent-connector-location",
     "allow-navegador-open",
     "allow-navegador-navigate",

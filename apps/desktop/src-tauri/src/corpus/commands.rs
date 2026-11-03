@@ -6,6 +6,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::corpus::ingest::{
+    check_app_source, import_file, ImportOutcome, ImportOverrides, SourceLimits,
+};
 use crate::db::state::AppDbState;
 
 /// Longest collection name.
@@ -582,4 +585,77 @@ pub async fn corpus_item_update(
         update_item(&conn, &id, &patch, expected_updated_at).map_err(|error| error.to_string())
     })
     .await
+}
+
+/// What importing one chosen file did, as the app reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "outcome")]
+pub enum ImportedPath {
+    /// A new item with `assets` asset rows (a PDF counts its pages too).
+    Imported {
+        #[serde(rename = "itemId")]
+        item_id: String,
+        title: String,
+        assets: usize,
+    },
+    /// The same unchanged file is already an item of the collection.
+    Duplicate {
+        #[serde(rename = "itemId")]
+        item_id: String,
+    },
+}
+
+impl From<ImportOutcome> for ImportedPath {
+    fn from(outcome: ImportOutcome) -> Self {
+        match outcome {
+            ImportOutcome::Imported {
+                item_id,
+                title,
+                assets,
+            } => Self::Imported {
+                item_id,
+                title,
+                assets,
+            },
+            ImportOutcome::Duplicate { item_id } => Self::Duplicate { item_id },
+        }
+    }
+}
+
+/// Import one file the owner chose (a picker, a drop, or one of the app's own
+/// staging folders) into a collection, on the service the agent path uses too
+/// (`odd/tasks/agent-corpus-tools.md` D10).
+///
+/// The owner chose the path, so no enabled folder is required; the archive's
+/// own `assets` folder is refused, and so is a missing, non-file, unsupported
+/// or oversized source. The duplicate check and the item run inside the
+/// import's own transaction, so two imports of one file cannot both pass it.
+pub fn import_path(
+    conn: &Connection,
+    data_dir: &std::path::Path,
+    collection_id: &str,
+    source_path: &str,
+    overrides: &ImportOverrides,
+) -> Result<ImportedPath, String> {
+    let source = check_app_source(source_path, data_dir, &SourceLimits::default())?;
+    import_file(conn, data_dir, collection_id, &source, overrides).map(ImportedPath::from)
+}
+
+#[tauri::command]
+pub async fn corpus_import_path(
+    collection_id: String,
+    source_path: String,
+    overrides: Option<ImportOverrides>,
+    db: State<'_, AppDbState>,
+) -> Result<ImportedPath, String> {
+    let conn = open(&db)?;
+    // The archive's data directory holds the database and `assets/`: the same
+    // derivation the approval path uses (`automation::commands`).
+    let data_dir = db
+        .db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "unavailable: the archive folder is unknown".to_string())?;
+    let overrides = overrides.unwrap_or_default();
+    blocking(move || import_path(&conn, &data_dir, &collection_id, &source_path, &overrides)).await
 }

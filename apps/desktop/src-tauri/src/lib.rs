@@ -1711,6 +1711,7 @@ pub fn run() {
             corpus::commands::corpus_collection_create,
             corpus::commands::corpus_collection_update,
             corpus::commands::corpus_item_update,
+            corpus::commands::corpus_import_path,
             automation::commands::agent_connector_location,
         ])
         .build(tauri::generate_context!())

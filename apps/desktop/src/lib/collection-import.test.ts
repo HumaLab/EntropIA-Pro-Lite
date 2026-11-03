@@ -5,15 +5,18 @@ import {
   buildImportSummary,
 } from './collection-import'
 
-const { storeRef, fileImportRef } = vi.hoisted(() => ({
+/**
+ * The app's own import runs on the Rust ingest service
+ * (`odd/tasks/agent-corpus-tools.md` D10): the renderer classifies, then asks
+ * `corpus_import_path` once per classified file. These tests pin the IPC
+ * payloads and what each answer becomes in the result the views read.
+ */
+
+const { invokeMock, storeRef, fileImportRef } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
   storeRef: {
     current: {
-      items: {
-        create: vi.fn(),
-        update: vi.fn(),
-        delete: vi.fn(),
-        findImportedFromSource: vi.fn().mockResolvedValue(null),
-      },
+      items: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
       assets: {
         create: vi.fn(),
         findByItem: vi.fn().mockResolvedValue([]),
@@ -21,13 +24,10 @@ const { storeRef, fileImportRef } = vi.hoisted(() => ({
       },
     },
   },
-  fileImportRef: {
-    classifyFiles: vi.fn(),
-    importSingleFile: vi.fn(),
-    splitPdfPages: vi.fn(),
-    readSourceFingerprint: vi.fn(),
-  },
+  fileImportRef: { classifyFiles: vi.fn() },
 }))
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 vi.mock('./db', () => ({
   getStore: () => storeRef.current,
@@ -35,20 +35,21 @@ vi.mock('./db', () => ({
 
 vi.mock('./file-import', () => ({
   classifyFiles: fileImportRef.classifyFiles,
-  importSingleFile: fileImportRef.importSingleFile,
-  splitPdfPages: fileImportRef.splitPdfPages,
-  readSourceFingerprint: fileImportRef.readSourceFingerprint,
 }))
+
+function classifyA(sourcePath = '/src/a.png') {
+  fileImportRef.classifyFiles.mockReturnValue({
+    classified: [{ sourcePath, name: 'a.png', type: 'image' }],
+    rejected: [],
+  })
+}
+
+const IMPORTED = { outcome: 'imported', itemId: 'item-1', title: 'a', assets: 1 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   storeRef.current = {
-    items: {
-      create: vi.fn(),
-      update: vi.fn(),
-      delete: vi.fn(),
-      findImportedFromSource: vi.fn().mockResolvedValue(null),
-    },
+    items: { create: vi.fn(), update: vi.fn(), delete: vi.fn() },
     assets: {
       create: vi.fn(),
       findByItem: vi.fn().mockResolvedValue([]),
@@ -56,12 +57,7 @@ beforeEach(() => {
     },
   }
   fileImportRef.classifyFiles.mockReturnValue({ classified: [], rejected: [] })
-  fileImportRef.splitPdfPages.mockResolvedValue([])
-  fileImportRef.readSourceFingerprint.mockResolvedValue({
-    originalPath: '',
-    sizeBytes: 0,
-    modifiedAt: null,
-  })
+  invokeMock.mockResolvedValue(IMPORTED)
 })
 
 describe('importClassifiedPathsIntoCollection', () => {
@@ -79,121 +75,208 @@ describe('importClassifiedPathsIntoCollection', () => {
       importErrors: [],
       alreadyImported: [],
     })
-    expect(storeRef.current.items.create).not.toHaveBeenCalled()
+    expect(invokeMock).not.toHaveBeenCalled()
   })
 
-  it('creates one item and one asset per classified file', async () => {
+  it('imports each classified file through the backend, once per file', async () => {
     fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],
+      classified: [
+        { sourcePath: '/src/a.png', name: 'a.png', type: 'image' },
+        { sourcePath: '/src/b.jpg', name: 'b.jpg', type: 'image' },
+      ],
       rejected: [],
     })
-    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'a.png',
-      originalPath: '/src/a.png',
-      destPath: '/data/a.png',
-      type: 'image',
-      size: 100,
-      originalMetadata: { originalName: 'a.png', originalPath: '/src/a.png', importedAt: 'now' },
-    })
+    invokeMock
+      .mockResolvedValueOnce(IMPORTED)
+      .mockResolvedValueOnce({ outcome: 'imported', itemId: 'item-2', title: 'b', assets: 1 })
 
-    const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
-      baseErrorMessage: 'Failed to import files',
-    })
+    const result = await importClassifiedPathsIntoCollection(
+      ['/src/a.png', '/src/b.jpg'],
+      'col-1',
+      { baseErrorMessage: 'Failed to import files' }
+    )
 
-    expect(storeRef.current.items.create).toHaveBeenCalledWith({
-      title: 'a',
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'corpus_import_path', {
       collectionId: 'col-1',
-      metadata: null,
+      sourcePath: '/src/a.png',
+      overrides: null,
     })
-    expect(storeRef.current.assets.create).toHaveBeenCalledWith({
-      itemId: 'item-1',
-      path: '/data/a.png',
-      type: 'image',
-      size: 100,
-      sortIndex: 0,
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'corpus_import_path', {
+      collectionId: 'col-1',
+      sourcePath: '/src/b.jpg',
+      overrides: null,
     })
-    expect(result.classifiedCount).toBe(1)
-    expect(result.createdItems).toEqual([{ id: 'item-1', title: 'a' }])
+    expect(result.classifiedCount).toBe(2)
+    expect(result.createdItems).toEqual([
+      { id: 'item-1', title: 'a' },
+      { id: 'item-2', title: 'b' },
+    ])
     expect(result.importErrors).toEqual([])
   })
 
-  it('reports progress through onProgress at each stage', async () => {
+  it('titles the item with what the backend created', async () => {
     fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],
+      classified: [{ sourcePath: '/data/web-captures/s1/c1.pdf', name: 'c1.pdf', type: 'pdf' }],
       rejected: [],
     })
-    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'a.png',
-      originalPath: '/src/a.png',
-      destPath: '/data/a.png',
-      type: 'image',
-      size: 100,
-      originalMetadata: { originalName: 'a.png', originalPath: '/src/a.png', importedAt: 'now' },
+    invokeMock.mockResolvedValue({
+      outcome: 'imported',
+      itemId: 'item-1',
+      title: 'The paper',
+      assets: 3,
     })
 
-    const stages: string[] = []
-    await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
-      baseErrorMessage: 'Failed to import files',
-      onProgress: (p) => stages.push(p.stage),
-    })
+    const result = await importClassifiedPathsIntoCollection(
+      ['/data/web-captures/s1/c1.pdf'],
+      'col-1',
+      { baseErrorMessage: 'Failed to import files' }
+    )
 
-    expect(stages).toEqual([
-      'creatingDocument',
-      'creatingDocument',
-      'copyingFile',
-      'savingDocument',
-      'savingDocument',
-      'completed',
-    ])
+    expect(result.createdItems).toEqual([{ id: 'item-1', title: 'The paper' }])
   })
 
-  it('skips a file already imported from the same source and reports it separately', async () => {
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],
-      rejected: [],
-    })
-    storeRef.current.items.findImportedFromSource.mockResolvedValue({ id: 'existing-item' })
+  it('reports an unchanged earlier import as already imported, never as an error', async () => {
+    classifyA()
+    invokeMock.mockResolvedValue({ outcome: 'duplicate', itemId: 'item-old' })
 
     const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
       baseErrorMessage: 'Failed to import files',
     })
 
-    expect(storeRef.current.items.create).not.toHaveBeenCalled()
     expect(result.alreadyImported).toEqual(['a.png'])
     expect(result.createdItems).toEqual([])
+    expect(result.importErrors).toEqual([])
   })
 
-  // The already-imported check is check-then-act: two imports of the same
-  // file running at once (a drop fired into several live handlers, a double
-  // drop, the Inicio dialog next to a drop) both read "not imported" before
-  // either creates its item. A path already being imported into the same
-  // collection is skipped instead of imported twice (drop-dup fix).
+  it('collects a failed file and keeps importing the rest', async () => {
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [
+        { sourcePath: '/src/broken.png', name: 'broken.png', type: 'image' },
+        { sourcePath: '/src/ok.png', name: 'ok.png', type: 'image' },
+      ],
+      rejected: [],
+    })
+    invokeMock
+      .mockRejectedValueOnce('unavailable: could not copy broken.png: disk full')
+      .mockResolvedValueOnce({ outcome: 'imported', itemId: 'item-2', title: 'ok', assets: 1 })
+
+    const result = await importClassifiedPathsIntoCollection(
+      ['/src/broken.png', '/src/ok.png'],
+      'col-1',
+      { baseErrorMessage: 'Failed to import files' }
+    )
+
+    expect(result.importErrors).toEqual([
+      'Failed to import files (importing broken.png): could not copy broken.png: disk full',
+    ])
+    expect(result.createdItems).toEqual([{ id: 'item-2', title: 'ok' }])
+  })
+
+  it('says an unsupported file the way the app has always said it', async () => {
+    classifyA()
+    invokeMock.mockRejectedValueOnce(
+      'unsupported: /src/a.png is not a PDF, an image or an audio file'
+    )
+
+    const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+    })
+
+    expect(result.importErrors).toEqual([
+      'Failed to import files (importing a.png): Unsupported file format: a.png',
+    ])
+  })
+
+  it('forwards the overrides the caller gave, for a file that has its own identity', async () => {
+    fileImportRef.classifyFiles.mockReturnValue({
+      classified: [{ sourcePath: '/data/web-captures/s1/c1.pdf', name: 'c1.pdf', type: 'pdf' }],
+      rejected: [],
+    })
+    const overrides = {
+      title: 'The paper',
+      fileName: 'The paper.pdf',
+      extraMetadata: { __entropia_web_capture: { captureId: 'c1' } },
+      allowDuplicate: true,
+    }
+
+    await importClassifiedPathsIntoCollection(['/data/web-captures/s1/c1.pdf'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+      overrides,
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('corpus_import_path', {
+      collectionId: 'col-1',
+      sourcePath: '/data/web-captures/s1/c1.pdf',
+      overrides,
+    })
+  })
+
+  it('never creates the item or its assets itself', async () => {
+    classifyA()
+
+    await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+    })
+
+    expect(storeRef.current.items.create).not.toHaveBeenCalled()
+    expect(storeRef.current.items.update).not.toHaveBeenCalled()
+    expect(storeRef.current.assets.create).not.toHaveBeenCalled()
+    expect(storeRef.current.items.delete).not.toHaveBeenCalled()
+  })
+
+  it('reports progress from the start to each completed file', async () => {
+    classifyA()
+    const events: Array<{ stage: string; completed: number; currentFileName: string | null }> = []
+
+    await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+      onProgress: (progress) => events.push(progress),
+    })
+
+    expect(events[0]).toMatchObject({
+      total: 1,
+      completed: 0,
+      imported: 0,
+      skipped: 0,
+      currentFileName: null,
+      stage: 'creatingDocument',
+    })
+    expect(
+      events.some(
+        (event) => event.stage === 'creatingDocument' && event.currentFileName === 'a.png'
+      )
+    ).toBe(true)
+    expect(events.at(-1)).toMatchObject({
+      completed: 1,
+      imported: 1,
+      currentFileName: 'a.png',
+      stage: 'completed',
+    })
+  })
+
+  it('counts a failed file as completed and failed, once', async () => {
+    classifyA()
+    invokeMock.mockRejectedValue('unavailable: could not copy a.png: disk full')
+    const events: Array<{ stage: string; completed: number; failed: number }> = []
+
+    await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+      onProgress: (progress) => events.push(progress),
+    })
+
+    expect(events.at(-1)).toMatchObject({ completed: 1, failed: 1, stage: 'completed' })
+  })
+
+  // The claim map is still the renderer's: the backend's duplicate check runs
+  // inside one transaction, but two imports of the same path that started
+  // together must not both report a duplicate of each other. Each call claims
+  // `collectionId + path` before its request and holds it until the file
+  // settles; a concurrent call finding the claim waits for that outcome and
+  // reports "already imported" only if the other import actually left it in
+  // the collection. If that import failed, this call claims and imports it.
   describe('two concurrent imports of the same file into one collection', () => {
-    function classifyA(sourcePath = '/src/a.png') {
-      fileImportRef.classifyFiles.mockReturnValue({
-        classified: [{ sourcePath, name: 'a.png', type: 'image' }],
-        rejected: [],
-      })
-    }
-
-    function importsSucceed() {
-      let next = 0
-      storeRef.current.items.create.mockImplementation(async () => ({ id: `item-${++next}` }))
-      fileImportRef.importSingleFile.mockResolvedValue({
-        originalName: 'a.png',
-        originalPath: '/src/a.png',
-        destPath: '/data/a.png',
-        type: 'image',
-        size: 100,
-        originalMetadata: { originalName: 'a.png', originalPath: '/src/a.png', importedAt: 'now' },
-      })
-    }
-
     it('creates one item and reports the other as already imported', async () => {
       classifyA()
-      importsSucceed()
       const options = { baseErrorMessage: 'Failed to import files' }
 
       const [first, second] = await Promise.all([
@@ -201,14 +284,13 @@ describe('importClassifiedPathsIntoCollection', () => {
         importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options),
       ])
 
-      expect(storeRef.current.items.create).toHaveBeenCalledOnce()
+      expect(invokeMock).toHaveBeenCalledOnce()
       expect([...first.createdItems, ...second.createdItems]).toHaveLength(1)
       expect([...first.alreadyImported, ...second.alreadyImported]).toEqual(['a.png'])
     })
 
     it('still imports the same file into two different collections', async () => {
       classifyA()
-      importsSucceed()
       const options = { baseErrorMessage: 'Failed to import files' }
 
       await Promise.all([
@@ -216,13 +298,12 @@ describe('importClassifiedPathsIntoCollection', () => {
         importClassifiedPathsIntoCollection(['/src/a.png'], 'col-2', options),
       ])
 
-      expect(storeRef.current.items.create).toHaveBeenCalledTimes(2)
+      expect(invokeMock).toHaveBeenCalledTimes(2)
     })
 
     it('imports the file itself when the concurrent import holding it fails', async () => {
       classifyA()
-      importsSucceed()
-      storeRef.current.items.create.mockRejectedValueOnce(new Error('db locked'))
+      invokeMock.mockRejectedValueOnce('unavailable: could not copy a.png: db locked')
       const options = { baseErrorMessage: 'Failed to import files' }
 
       const [first, second] = await Promise.all([
@@ -238,236 +319,15 @@ describe('importClassifiedPathsIntoCollection', () => {
 
     it('releases the path once an import settles, even a failed one', async () => {
       classifyA()
-      storeRef.current.items.create.mockRejectedValueOnce(new Error('db locked'))
+      invokeMock.mockRejectedValueOnce('unavailable: could not copy a.png: db locked')
       const options = { baseErrorMessage: 'Failed to import files' }
       const failed = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options)
       expect(failed.importErrors).toHaveLength(1)
 
-      importsSucceed()
       const retried = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', options)
 
       expect(retried.createdItems).toHaveLength(1)
       expect(retried.alreadyImported).toEqual([])
-    })
-  })
-
-  describe('overrides for a single file that has its own identity', () => {
-    const pdfImported = {
-      originalName: 'The paper.pdf',
-      originalPath: '/data/web-captures/s1/c1.pdf',
-      destPath: 'assets/col-1/item-1/uuid_The paper.pdf',
-      type: 'pdf' as const,
-      size: 500,
-      originalMetadata: {
-        originalName: 'The paper.pdf',
-        originalPath: '/data/web-captures/s1/c1.pdf',
-        importedAt: 'now',
-        sizeBytes: 500,
-      },
-    }
-
-    function readyToImport() {
-      fileImportRef.classifyFiles.mockReturnValue({
-        classified: [{ sourcePath: '/data/web-captures/s1/c1.pdf', name: 'c1.pdf', type: 'pdf' }],
-        rejected: [],
-      })
-      storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-      storeRef.current.assets.create.mockResolvedValue({ id: 'parent-asset' })
-      fileImportRef.importSingleFile.mockResolvedValue(pdfImported)
-      fileImportRef.splitPdfPages.mockResolvedValue([
-        { page_number: 1, pdf_path: 'assets/col-1/item-1/p1.pdf' },
-      ])
-    }
-
-    const run = (
-      overrides?: Parameters<typeof importClassifiedPathsIntoCollection>[2]['overrides']
-    ) =>
-      importClassifiedPathsIntoCollection(['/data/web-captures/s1/c1.pdf'], 'col-1', {
-        baseErrorMessage: 'Failed to import files',
-        overrides,
-      })
-
-    it('titles the item as asked instead of after the file name', async () => {
-      readyToImport()
-
-      const result = await run({ title: 'The paper' })
-
-      expect(storeRef.current.items.create).toHaveBeenCalledWith({
-        title: 'The paper',
-        collectionId: 'col-1',
-        metadata: null,
-      })
-      expect(result.createdItems).toEqual([{ id: 'item-1', title: 'The paper' }])
-    })
-
-    it('stores the copy under the name asked for', async () => {
-      readyToImport()
-
-      await run({ fileName: 'The paper.pdf' })
-
-      expect(fileImportRef.importSingleFile).toHaveBeenCalledWith(
-        '/data/web-captures/s1/c1.pdf',
-        'col-1',
-        'item-1',
-        'The paper.pdf'
-      )
-    })
-
-    it('writes the extra metadata beside the imported-file metadata', async () => {
-      readyToImport()
-      const provenance = { sourceId: 's1', captureId: 'c1' }
-
-      await run({ extraMetadata: { __entropia_web_capture: provenance } })
-
-      const written = JSON.parse(storeRef.current.items.update.mock.calls[0]![1].metadata)
-      expect(written.__entropia_web_capture).toEqual(provenance)
-      expect(written.__entropia_file_metadata.originalName).toBe('The paper.pdf')
-    })
-
-    it('never lets the extra metadata replace the imported-file metadata', async () => {
-      readyToImport()
-
-      await run({ extraMetadata: { __entropia_file_metadata: { originalName: 'forged' } } })
-
-      const written = JSON.parse(storeRef.current.items.update.mock.calls[0]![1].metadata)
-      expect(written.__entropia_file_metadata.originalName).toBe('The paper.pdf')
-    })
-
-    it('imports again, without asking the store, when a duplicate was allowed', async () => {
-      readyToImport()
-      storeRef.current.items.findImportedFromSource.mockResolvedValue('earlier-item')
-
-      const result = await run({ allowDuplicate: true })
-
-      expect(storeRef.current.items.findImportedFromSource).not.toHaveBeenCalled()
-      expect(result.alreadyImported).toEqual([])
-      expect(result.createdItems).toHaveLength(1)
-    })
-
-    it('still skips an exact earlier import when nothing allowed a duplicate', async () => {
-      readyToImport()
-      storeRef.current.items.findImportedFromSource.mockResolvedValue('earlier-item')
-
-      const result = await run()
-
-      expect(result.alreadyImported).toEqual(['c1.pdf'])
-      expect(result.createdItems).toEqual([])
-    })
-  })
-
-  it('discards the item and collects the error when importing a file fails', async () => {
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/a.png', name: 'a.png', type: 'image' }],
-      rejected: [],
-    })
-    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-    fileImportRef.importSingleFile.mockRejectedValue(new Error('copy failed'))
-
-    const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
-      baseErrorMessage: 'Failed to import files',
-    })
-
-    expect(storeRef.current.items.delete).toHaveBeenCalledWith('item-1')
-    expect(result.createdItems).toEqual([])
-    expect(result.importErrors).toEqual(['Failed to import files (importing a.png): copy failed'])
-  })
-
-  it('splits a multi-page PDF into one asset per page', async () => {
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/doc.pdf', name: 'doc.pdf', type: 'pdf' }],
-      rejected: [],
-    })
-    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'doc.pdf',
-      originalPath: '/src/doc.pdf',
-      destPath: '/data/doc.pdf',
-      type: 'pdf',
-      size: 500,
-      originalMetadata: {
-        originalName: 'doc.pdf',
-        originalPath: '/src/doc.pdf',
-        importedAt: 'now',
-      },
-    })
-    storeRef.current.assets.create
-      .mockResolvedValueOnce({ id: 'parent-asset' })
-      .mockResolvedValueOnce({ id: 'page-1' })
-      .mockResolvedValueOnce({ id: 'page-2' })
-    fileImportRef.splitPdfPages.mockResolvedValue([
-      { page_number: 1, pdf_path: '/data/doc_page_1.pdf' },
-      { page_number: 2, pdf_path: '/data/doc_page_2.pdf' },
-    ])
-
-    const result = await importClassifiedPathsIntoCollection(['/src/doc.pdf'], 'col-1', {
-      baseErrorMessage: 'Failed to import files',
-    })
-
-    expect(storeRef.current.assets.create).toHaveBeenCalledTimes(3)
-    expect(result.createdItems).toEqual([{ id: 'item-1', title: 'doc' }])
-  })
-
-  it('records each split page size from the file under the data directory', async () => {
-    // split_pdf_pages returns stored keys relative to the data directory; the
-    // fs plugin scope only accepts absolute paths, so the key must be resolved
-    // before stat or the page size is lost. Absolute paths pass through.
-    const { stat } = await import('@tauri-apps/plugin-fs')
-    const sizes: Record<string, number> = {
-      '/mock/app-data/assets/col-1/item-1/doc_page_1.pdf': 1373,
-      '/legacy/doc_page_2.pdf': 2048,
-    }
-    vi.mocked(stat).mockImplementation(async (path) => {
-      const size = sizes[String(path)]
-      if (size === undefined) throw new Error(`forbidden path: ${String(path)}`)
-      return { size } as Awaited<ReturnType<typeof stat>>
-    })
-    fileImportRef.classifyFiles.mockReturnValue({
-      classified: [{ sourcePath: '/src/doc.pdf', name: 'doc.pdf', type: 'pdf' }],
-      rejected: [],
-    })
-    storeRef.current.items.create.mockResolvedValue({ id: 'item-1' })
-    fileImportRef.importSingleFile.mockResolvedValue({
-      originalName: 'doc.pdf',
-      originalPath: '/src/doc.pdf',
-      destPath: '/mock/app-data/assets/col-1/item-1/doc.pdf',
-      type: 'pdf',
-      size: 7478,
-      originalMetadata: {
-        originalName: 'doc.pdf',
-        originalPath: '/src/doc.pdf',
-        importedAt: 'now',
-      },
-    })
-    storeRef.current.assets.create
-      .mockResolvedValueOnce({ id: 'parent-asset' })
-      .mockResolvedValueOnce({ id: 'page-1' })
-      .mockResolvedValueOnce({ id: 'page-2' })
-    fileImportRef.splitPdfPages.mockResolvedValue([
-      { page_number: 1, pdf_path: 'assets/col-1/item-1/doc_page_1.pdf' },
-      { page_number: 2, pdf_path: '/legacy/doc_page_2.pdf' },
-    ])
-
-    try {
-      await importClassifiedPathsIntoCollection(['/src/doc.pdf'], 'col-1', {
-        baseErrorMessage: 'Failed to import files',
-      })
-    } finally {
-      vi.mocked(stat).mockReset()
-      vi.mocked(stat).mockResolvedValue({ size: 0 } as Awaited<ReturnType<typeof stat>>)
-    }
-
-    const calls = storeRef.current.assets.create.mock.calls.map((c: unknown[]) => c[0])
-    expect(calls[0]).toMatchObject({ size: 7478 })
-    expect(calls[1]).toMatchObject({
-      path: 'assets/col-1/item-1/doc_page_1.pdf',
-      pageNumber: 1,
-      parentAssetId: 'parent-asset',
-      size: 1373,
-    })
-    expect(calls[2]).toMatchObject({
-      path: '/legacy/doc_page_2.pdf',
-      pageNumber: 2,
-      size: 2048,
     })
   })
 })

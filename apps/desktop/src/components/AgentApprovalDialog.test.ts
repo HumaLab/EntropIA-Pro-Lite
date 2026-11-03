@@ -84,6 +84,25 @@ describe('AgentApprovalDialog', () => {
     expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
   })
 
+  it('says OCR alone is followed by automatic embeddings, which may also cost', async () => {
+    respond([[{ ...START, operations: ['ocr'] }]])
+    render(AgentApprovalDialog)
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(
+      'Después del OCR, EntropIA calcula los embeddings de cada página reconocida'
+    )
+    expect(dialog).toHaveTextContent('también puede tener costo')
+  })
+
+  it('does not repeat the embeddings note when they are already requested', async () => {
+    respond([[START]])
+    render(AgentApprovalDialog)
+
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).not.toHaveTextContent('Después del OCR')
+  })
+
   it('approves only on the explicit button and closes when nothing is left', async () => {
     respond([[START], []], { ...START, status: 'approved', decidedAt: 1 })
     render(AgentApprovalDialog)

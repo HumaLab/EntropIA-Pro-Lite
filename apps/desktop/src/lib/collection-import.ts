@@ -1,28 +1,26 @@
 /**
- * Shared file-import engine: classify -> create item -> copy file -> create
- * asset (splitting a PDF into one asset per page) -> dedupe against an
- * earlier import, one collection at a time.
+ * Shared file-import engine: classify, then import one file at a time into one
+ * collection, deduping against an earlier import of the same unchanged file.
  *
  * Extracted from `CollectionView.svelte` (T4, home-view) so the "Importar
  * fuentes" dialog on Inicio can run the exact same pipeline into a
- * chosen/newly-created collection, instead of duplicating it. The logic below
- * mirrors `CollectionView`'s former inline implementation function-for-function;
- * only the view-only concerns (Svelte `$state`, the import summary banner,
- * reloading the item list, the single-item auto-navigate) stayed in the view
- * and now call this module. Progress is reported through `onProgress` instead
- * of mutating component state directly, so any caller can observe it.
+ * chosen/newly-created collection. The import itself runs on the Rust ingest
+ * service (`corpus::ingest`, `odd/tasks/agent-corpus-tools.md` D10), the same
+ * one the agent path uses: the renderer classifies the paths and asks
+ * `corpus_import_path` once per file, so the copy, the PDF split, the item, its
+ * metadata and its asset rows are written by one service with one set of rules.
+ *
+ * What stays here is what the renderer legitimately owns: which files the app
+ * recognizes (`classifyFiles`), the in-process claim map that keeps two imports
+ * of one path apart, per-file error collection so one bad file never aborts the
+ * batch, and the progress the views show. Progress is reported through
+ * `onProgress` instead of mutating component state directly.
  */
 import { getStore } from './db'
-import {
-  classifyFiles,
-  importSingleFile,
-  splitPdfPages,
-  readSourceFingerprint,
-  type ImportedFile,
-} from './file-import'
+import { classifyFiles } from './file-import'
 import { join } from '@tauri-apps/api/path'
 import { invoke } from '@tauri-apps/api/core'
-import { remove, stat } from '@tauri-apps/plugin-fs'
+import { remove } from '@tauri-apps/plugin-fs'
 
 export type ImportStage =
   | 'creatingDocument'
@@ -85,6 +83,11 @@ export interface ImportSummary {
   lastItemTitle: string | null
 }
 
+/** One file's import as `corpus_import_path` answers it. */
+type ImportPathOutcome =
+  | { outcome: 'imported'; itemId: string; title: string; assets: number }
+  | { outcome: 'duplicate'; itemId: string }
+
 /**
  * Reduce an {@link ImportClassifiedPathsResult} to the counts and message
  * every caller shows: `CollectionView`'s own import summary banner and the
@@ -105,65 +108,6 @@ export function buildImportSummary(result: ImportClassifiedPathsResult): ImportS
   }
 }
 
-// Same absolute-path rule as file-import.ts: drive letter, UNC or POSIX root.
-const ABSOLUTE_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
-
-async function readAssetSize(path: string): Promise<number | null> {
-  try {
-    const metadata = await stat(path)
-    const size = Number(metadata.size ?? 0)
-    return Number.isFinite(size) ? size : null
-  } catch (e) {
-    console.warn('[CollectionView] Failed to read rendered page size:', e)
-    return null
-  }
-}
-
-/**
- * Split a multi-page PDF into one single-page PDF asset per page.
- *
- * Each page is preserved as an independent PDF (no rasterization) and linked
- * to the parent asset via parentAssetId/pageNumber. Returns the list of
- * created child asset IDs.
- */
-async function splitPdfIntoPageAssets(
-  imported: ImportedFile,
-  collectionId: string,
-  itemId: string,
-  store: ReturnType<typeof getStore>,
-  parentAssetId: string
-): Promise<string[]> {
-  const dataDir = await invoke<string>('resolve_data_dir')
-  const outputDir = await join(dataDir, 'assets', collectionId, itemId)
-
-  const baseName = imported.originalName.replace(/\.[^.]+$/, '')
-  const pages = await splitPdfPages(imported.destPath, outputDir, baseName)
-  if (pages.length === 0) {
-    throw new Error('PDF splitting produced no pages')
-  }
-
-  const assetIds: string[] = []
-  for (const page of pages) {
-    const asset = await store.assets.create({
-      itemId,
-      path: page.pdf_path,
-      type: 'pdf',
-      sortIndex: page.page_number - 1,
-      // split_pdf_pages returns stored keys relative to the data directory;
-      // the fs plugin scope only accepts absolute paths.
-      size: await readAssetSize(
-        ABSOLUTE_PATH.test(page.pdf_path) ? page.pdf_path : await join(dataDir, page.pdf_path)
-      ),
-      parentAssetId,
-      pageNumber: page.page_number,
-    })
-    assetIds.push(asset.id)
-  }
-
-  console.log(`[CollectionView] Split PDF into ${pages.length} single-page PDF assets`)
-  return assetIds
-}
-
 /**
  * Remove everything a failed import created: its assets, its item and the
  * folder its files were copied into.
@@ -171,10 +115,8 @@ async function splitPdfIntoPageAssets(
  * Exported (unchanged) so the Internet Archive import flow reuses it to drop
  * partial remnants and failed items.
  *
- * When splitting fails the parent asset already exists, so deleting the item
- * alone trips the assets foreign key. The assets go first. The item cascade
- * is not an option: it also deletes the collection when this was its first
- * document.
+ * The import service cleans up after itself, so this is for the flows that
+ * begin an import, keep its item and then cannot confirm it.
  */
 export async function discardFailedImport(collectionId: string, itemId: string) {
   const store = getStore()
@@ -204,73 +146,30 @@ export function formatImportStageError(baseMessage: string, stage: string, e: un
   return `${baseMessage} (${stage}): ${getErrorDetails(e)}`
 }
 
-const IMPORTED_FILE_METADATA_KEY = '__entropia_file_metadata'
-
-function buildImportedItemMetadata(
-  imported: ImportedFile,
-  extraMetadata?: Record<string, unknown>
-): string {
-  return JSON.stringify({
-    ...extraMetadata,
-    [IMPORTED_FILE_METADATA_KEY]: imported.originalMetadata,
-  })
-}
-
-async function finalizeImportedItem(
-  collectionId: string,
-  itemId: string,
-  imported: ImportedFile,
-  onStage: (stage: ImportStage) => void
-) {
-  const store = getStore()
-
-  // Every PDF is decomposed into one single-page PDF asset per page. The
-  // original stays only as the parent container and is never processed itself.
-  if (imported.type === 'pdf') {
-    const parentAsset = await store.assets.create({
-      itemId,
-      path: imported.destPath,
-      type: 'pdf',
-      size: imported.size,
-      sortIndex: 0,
-    })
-
-    onStage('renderingPdf')
-    await splitPdfIntoPageAssets(imported, collectionId, itemId, store, parentAsset.id)
-    return
+/**
+ * What a refused file says in the summary. The backend answers with a stable
+ * code and a sentence (`missing: …`, `too_large: …`); `unsupported` keeps the
+ * message the renderer has always shown for it, and every other code keeps the
+ * service's own sentence, which names the file it is about.
+ */
+function importFailureDetail(name: string, error: unknown): string {
+  const detail = getErrorDetails(error)
+  const separator = detail.indexOf(': ')
+  if (separator === -1) return detail
+  if (detail.slice(0, separator) === 'unsupported') {
+    return `Unsupported file format: ${name}`
   }
-
-  // Default: create a single asset for the imported file
-  await store.assets.create({
-    itemId,
-    path: imported.destPath,
-    type: imported.type,
-    size: imported.size,
-    sortIndex: 0,
-  })
+  return detail.slice(separator + 2)
 }
 
-// The same file, unchanged, already imported into this collection: importing
-// it again would only duplicate the document. When the check itself fails,
-// the file is imported as before rather than silently dropped.
-async function isAlreadyImported(collectionId: string, sourcePath: string) {
-  try {
-    const source = await readSourceFingerprint(sourcePath)
-    return (await getStore().items.findImportedFromSource(collectionId, source)) !== null
-  } catch (e) {
-    console.warn('[CollectionView] Could not check for an earlier import:', e)
-    return false
-  }
-}
-
-// `isAlreadyImported` is check-then-act: two imports of the same file running
+// `corpus_import_path` is check-then-act: two imports of the same file running
 // at once (one drop reaching several live handlers, a double drop, the Inicio
-// dialog alongside a drop) would both read "not imported" before either
-// created its item. Each call claims `collectionId + path` before its check
-// and holds it until the file settles. A concurrent call finding the claim
-// waits for that outcome: the file is reported as already imported only if
-// the other import actually left it in the collection; if that import failed,
-// this call claims the path and imports the file itself (drop-dup fix).
+// dialog alongside a drop) would both be told "not here" before either created
+// its item. Each call claims `collectionId + path` before its request and holds
+// it until the file settles. A concurrent call finding the claim waits for that
+// outcome: the file is reported as already imported only if the other import
+// actually left it in the collection; if that import failed, this call claims
+// the path and imports the file itself (drop-dup fix).
 //
 // The value resolves to whether the file is in the collection once the claim
 // is released.
@@ -279,9 +178,9 @@ const importsInFlight = new Map<string, Promise<boolean>>()
 // Intentionally case-sensitive: folding case here could skip a distinct file
 // on a case-sensitive filesystem. Explorer hands every handler of one drop the
 // same string, which is the duplicate this guards against; a case variant of
-// an already-imported path is still caught afterwards by `isAlreadyImported`,
-// whose store lookup (`findImportedFromSource`) matches the original path
-// case-insensitively, with its size and modification time.
+// an already-imported path is still caught afterwards by the service's own
+// duplicate check, which matches the original path case-insensitively, with
+// its size and modification time.
 function inFlightKey(collectionId: string, sourcePath: string) {
   return `${collectionId}\u0000${sourcePath.trim().replace(/\\/g, '/')}`
 }
@@ -315,9 +214,8 @@ export async function importClassifiedPathsIntoCollection(
   options: ImportClassifiedPathsOptions
 ): Promise<ImportClassifiedPathsResult> {
   const { baseErrorMessage, onProgress, overrides } = options
-  const store = getStore()
 
-  // Classify files before creating items or copying assets.
+  // Classify files before asking the backend for anything.
   const { classified, rejected } = classifyFiles(paths)
 
   if (classified.length === 0) {
@@ -330,9 +228,9 @@ export async function importClassifiedPathsIntoCollection(
     }
   }
 
-  // Create one item per file, copy file, create asset.
-  // Failures are collected per file so every error stays visible in the
-  // import summary; one bad file no longer aborts the remaining imports.
+  // One request per file. Failures are collected per file so every error
+  // stays visible in the import summary; one bad file no longer aborts the
+  // remaining imports.
   const createdItems: Array<{ id: string; title: string }> = []
   const importErrors: string[] = []
   const alreadyImported: string[] = []
@@ -353,8 +251,6 @@ export async function importClassifiedPathsIntoCollection(
   }
 
   for (const file of classified) {
-    const title = overrides?.title ?? file.name.replace(/\.[^.]+$/, '')
-    let itemId: string | null = null
     const claim = inFlightKey(collectionId, file.sourcePath)
     let release: ((inCollection: boolean) => void) | null = null
     let inCollection = false
@@ -372,41 +268,33 @@ export async function importClassifiedPathsIntoCollection(
         // await sits between that lookup and this claim, so a concurrent
         // call cannot slip in between.
         release = claimImport(claim)
-      }
-      if (
-        importedConcurrently ||
-        (!overrides?.allowDuplicate && (await isAlreadyImported(collectionId, file.sourcePath)))
-      ) {
+        const outcome = await invoke<ImportPathOutcome>('corpus_import_path', {
+          collectionId,
+          sourcePath: file.sourcePath,
+          overrides: overrides ?? null,
+        })
+        if (outcome.outcome === 'duplicate') {
+          inCollection = true
+          alreadyImported.push(file.name)
+          updateProgress({ skipped: progress.skipped + 1 })
+          continue
+        }
+        createdItems.push({ id: outcome.itemId, title: outcome.title })
         inCollection = true
-        alreadyImported.push(file.name)
-        updateProgress({ skipped: progress.skipped + 1 })
+        updateProgress({ imported: progress.imported + 1 })
         continue
       }
-      const item = await store.items.create({
-        title,
-        collectionId,
-        metadata: null,
-      })
-      itemId = item.id
-
-      updateProgress({ stage: 'copyingFile' })
-      const imported = overrides?.fileName
-        ? await importSingleFile(file.sourcePath, collectionId, itemId, overrides.fileName)
-        : await importSingleFile(file.sourcePath, collectionId, itemId)
-      updateProgress({ stage: 'savingDocument' })
-      await store.items.update(itemId, {
-        metadata: buildImportedItemMetadata(imported, overrides?.extraMetadata),
-      })
-      await finalizeImportedItem(collectionId, itemId, imported, (stage) =>
-        updateProgress({ stage })
-      )
-      createdItems.push({ id: itemId, title })
       inCollection = true
-      updateProgress({ imported: progress.imported + 1 })
+      alreadyImported.push(file.name)
+      updateProgress({ skipped: progress.skipped + 1 })
     } catch (e) {
-      if (itemId) await discardFailedImport(collectionId, itemId)
-      const stage = itemId ? `importing ${file.name}` : 'creating item'
-      importErrors.push(formatImportStageError(baseErrorMessage, stage, e))
+      importErrors.push(
+        formatImportStageError(
+          baseErrorMessage,
+          `importing ${file.name}`,
+          importFailureDetail(file.name, e)
+        )
+      )
       updateProgress({ failed: progress.failed + 1 })
     } finally {
       release?.(inCollection)

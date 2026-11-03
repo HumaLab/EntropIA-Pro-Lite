@@ -485,7 +485,10 @@ and the paying `processing_control` actions create an approval
 (`automation/approvals.rs`) bound to the client, the action, the job and the job
 `revision` the assistant named. The app is told (`agent-approvals:changed`), its
 window is unminimized and brought to the front, and a dialog shows who asks, the
-operations, the collections and the number of files. Only the owner's «Aprobar»
+operations, the collections and the number of files. A job with OCR and no
+embeddings also says that every recognized page is then embedded with the configured
+provider, which may cost too: the app admits that follow-up for every committed OCR.
+Only the owner's «Aprobar»
 runs the action, through the same services, fenced by that revision: if the job
 changed in the meantime nothing runs and the approval ends `failed`. The dialog's
 initial focus is «Rechazar», Escape rejects and a click outside does nothing.

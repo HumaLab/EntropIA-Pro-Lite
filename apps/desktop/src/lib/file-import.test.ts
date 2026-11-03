@@ -1,12 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  pickAndImportFiles,
   getAssetUrl,
   SUPPORTED_FORMATS,
   classifyFileType,
   classifyFiles,
-  importFilesFromPaths,
-  importSingleFile,
   deleteAssetFile,
   generatePdfThumbnail,
   loadAudioPreviewBlob,
@@ -17,10 +14,7 @@ import {
   primeDataDir,
   resetDataDirCache,
   resolveStoredAssetPath,
-  readSourceFingerprint,
 } from './file-import'
-
-type OpenSelection = string[] | string | null
 
 // Tauri APIs are already mocked globally in test-setup.ts
 
@@ -95,87 +89,6 @@ describe('getAssetUrl', () => {
   })
 })
 
-describe('pickAndImportFiles', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('returns empty array when user cancels dialog', async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    vi.mocked(open).mockResolvedValue(null)
-
-    const result = await pickAndImportFiles('coll-1', 'item-1')
-    expect(result).toEqual([])
-  })
-
-  it('copies selected files and returns ImportedFile array', async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
-    const { appDataDir, join } = await import('@tauri-apps/api/path')
-
-    vi.mocked(open).mockResolvedValue(['C:/photos/sunset.png'] as OpenSelection)
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(appDataDir).mockResolvedValue('/mock/app-data')
-    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
-
-    const result = await pickAndImportFiles('coll-1', 'item-1')
-
-    expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({
-      originalName: 'sunset.png',
-      type: 'image',
-    })
-    expect(result[0]!.destPath).toContain('coll-1')
-    expect(result[0]!.destPath).toContain('item-1')
-    expect(mkdir).toHaveBeenCalled()
-    expect(copyFile).toHaveBeenCalled()
-  })
-})
-
-describe('importFilesFromPaths', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('filters unsupported files and reports them', async () => {
-    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
-    const { appDataDir, join } = await import('@tauri-apps/api/path')
-
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(appDataDir).mockResolvedValue('/mock/app-data')
-    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
-
-    const result = await importFilesFromPaths(
-      ['C:/docs/scan.pdf', 'C:/docs/readme.docx'],
-      'c1',
-      'i1'
-    )
-
-    expect(result.imported).toHaveLength(1)
-    expect(result.imported[0]?.originalName).toBe('scan.pdf')
-    expect(result.rejected).toEqual(['readme.docx'])
-  })
-
-  it('skips duplicate source paths in the same import batch', async () => {
-    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
-    const { appDataDir, join } = await import('@tauri-apps/api/path')
-
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(appDataDir).mockResolvedValue('/mock/app-data')
-    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
-
-    const duplicatePath = 'C:/docs/acta.pdf'
-    const result = await importFilesFromPaths([duplicatePath, duplicatePath], 'c1', 'i1')
-
-    expect(result.imported).toHaveLength(1)
-    expect(result.skippedDuplicatePaths).toBe(1)
-    expect(copyFile).toHaveBeenCalledTimes(1)
-  })
-})
-
 describe('classifyFiles', () => {
   it('classifies a mixed batch of files', () => {
     const result = classifyFiles([
@@ -210,91 +123,6 @@ describe('classifyFiles', () => {
     const result = classifyFiles([])
     expect(result.classified).toEqual([])
     expect(result.rejected).toEqual([])
-  })
-})
-
-describe('importSingleFile', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('copies a single file and returns ImportedFile metadata', async () => {
-    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
-    const { appDataDir, join } = await import('@tauri-apps/api/path')
-
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(appDataDir).mockResolvedValue('/mock/app-data')
-    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
-
-    const result = await importSingleFile('C:/photos/sunset.png', 'coll-1', 'item-1')
-
-    expect(result).toMatchObject({
-      originalName: 'sunset.png',
-      type: 'image',
-    })
-    expect(result.destPath).toContain('coll-1')
-    expect(result.destPath).toContain('item-1')
-    expect(mkdir).toHaveBeenCalled()
-    expect(copyFile).toHaveBeenCalled()
-  })
-
-  it('stores the copy under the name asked for, classified by the real file', async () => {
-    const { copyFile, mkdir } = await import('@tauri-apps/plugin-fs')
-    const { join } = await import('@tauri-apps/api/path')
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(join).mockImplementation((...parts: string[]) => Promise.resolve(parts.join('/')))
-
-    const result = await importSingleFile(
-      'C:/data/web-captures/s1/c1.pdf',
-      'coll-1',
-      'item-1',
-      'The paper.pdf'
-    )
-
-    expect(result.originalName).toBe('The paper.pdf')
-    expect(result.originalMetadata.originalName).toBe('The paper.pdf')
-    expect(result.originalPath).toBe('C:/data/web-captures/s1/c1.pdf')
-    expect(result.type).toBe('pdf')
-    expect(result.destPath).toMatch(/\/[0-9a-f-]{36}_The paper\.pdf$/)
-    expect(result.destPath).not.toContain('c1.pdf')
-    expect(copyFile).toHaveBeenCalledWith('C:/data/web-captures/s1/c1.pdf', expect.any(String))
-  })
-
-  it('throws for unsupported file types', async () => {
-    await expect(importSingleFile('C:/docs/readme.docx', 'coll-1', 'item-1')).rejects.toThrow(
-      'Unsupported file format'
-    )
-  })
-})
-
-describe('readSourceFingerprint', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('fingerprints a file exactly as an import records it', async () => {
-    // A duplicate check that computes a different fingerprint than the import
-    // stored never finds anything, and fails silently.
-    const { copyFile, mkdir, stat } = await import('@tauri-apps/plugin-fs')
-    vi.mocked(mkdir).mockResolvedValue(undefined)
-    vi.mocked(copyFile).mockResolvedValue(undefined)
-    vi.mocked(stat).mockResolvedValue({ size: 685216, mtime: new Date(1302811932000) } as never)
-
-    const imported = await importSingleFile('D:/Fondo/acta.pdf', 'coll-1', 'item-1')
-    const fingerprint = await readSourceFingerprint('D:/Fondo/acta.pdf')
-
-    expect(fingerprint).toEqual({
-      originalPath: 'D:/Fondo/acta.pdf',
-      sizeBytes: 685216,
-      modifiedAt: 1302811932000,
-    })
-    expect(fingerprint).toEqual({
-      originalPath: imported.originalMetadata.originalPath,
-      sizeBytes: imported.originalMetadata.sizeBytes,
-      modifiedAt: imported.originalMetadata.modifiedAt,
-    })
   })
 })
 
