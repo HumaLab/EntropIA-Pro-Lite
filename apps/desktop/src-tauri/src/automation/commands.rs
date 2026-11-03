@@ -31,6 +31,8 @@ pub struct AgentStatusView {
     /// The port the endpoint listens on, while it listens.
     pub port: Option<u16>,
     pub clients: Vec<ClientView>,
+    /// Folders assistants may import from.
+    pub import_folders: Vec<String>,
 }
 
 /// `agent_client_create`'s payload: the new client and the status after adding
@@ -55,6 +57,7 @@ pub fn status(
         running: port.is_some(),
         port,
         clients: view.clients,
+        import_folders: view.import_folders,
     })
 }
 
@@ -108,6 +111,26 @@ pub fn set_client_grants(
     status(access, endpoint)
 }
 
+/// Enable a folder for assistant imports and report the status after it.
+pub fn add_import_folder(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    path: &str,
+) -> Result<AgentStatusView, String> {
+    access.add_import_folder(path)?;
+    status(access, endpoint)
+}
+
+/// Stop assistant imports from a folder and report the status after it.
+pub fn remove_import_folder(
+    access: &AgentAccess,
+    endpoint: &AgentEndpointState,
+    path: &str,
+) -> Result<AgentStatusView, String> {
+    access.remove_import_folder(path)?;
+    status(access, endpoint)
+}
+
 /// The requests waiting for the owner, oldest first.
 pub fn pending_approvals(endpoint: &AgentEndpointState) -> Vec<Approval> {
     endpoint.approvals().pending()
@@ -115,14 +138,24 @@ pub fn pending_approvals(endpoint: &AgentEndpointState) -> Vec<Approval> {
 
 /// The owner's answer to one request. Approving runs the action once on a
 /// fresh connection to `db_path`, fenced by the revision the assistant saw.
+/// An import reads the folders enabled at this moment, so a folder the owner
+/// removed meanwhile is not read.
 pub fn decide_approval(
     endpoint: &AgentEndpointState,
+    access: &AgentAccess,
     db_path: &std::path::Path,
     approval_id: &str,
     approve: bool,
 ) -> Result<Approval, String> {
     let conn = crate::processing::commands::open_ready(db_path)?;
-    let decided = endpoint.approvals().decide(&conn, approval_id, approve)?;
+    let context = super::approvals::ExecContext {
+        // The archive's data directory holds the database and `assets/`.
+        data_dir: db_path.parent().map(std::path::Path::to_path_buf),
+        folders: access.import_folders(),
+    };
+    let decided = endpoint
+        .approvals()
+        .decide_with(&conn, approval_id, approve, &context)?;
     let decision = match decided.status {
         super::approvals::ApprovalStatus::Approved => "approved",
         super::approvals::ApprovalStatus::Failed => "failed",
@@ -148,14 +181,31 @@ pub fn decide_approval(
                     });
             }
         }
+        // Imported items appear in the sidebar and their collection.
+        if let Some(result) = &decided.import_result {
+            for imported in &result.imported {
+                endpoint
+                    .corpus_events()
+                    .notify(super::corpus_tools::CorpusChange {
+                        kind: "item",
+                        id: imported.item_id.clone(),
+                        collection_id: result.collection_id.clone(),
+                    });
+            }
+        }
     }
+    let target_id = match &decided.action {
+        super::approvals::ApprovalAction::ReplaceText { item_id, .. } => item_id,
+        super::approvals::ApprovalAction::ImportFiles { collection_id, .. } => collection_id,
+        _ => &decided.job_id,
+    };
     endpoint
         .audit_log()
         .append(&super::audit::AuditLine::owner_decision(
             &decided.client_id,
             &decided.client_name,
             &decided.id,
-            &decided.job_id,
+            target_id,
             decision,
         ));
     Ok(decided)
@@ -209,6 +259,24 @@ pub fn agent_client_set_grants(
 }
 
 #[tauri::command]
+pub fn agent_import_folder_add(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    path: String,
+) -> Result<AgentStatusView, String> {
+    add_import_folder(access.inner(), endpoint.inner(), &path)
+}
+
+#[tauri::command]
+pub fn agent_import_folder_remove(
+    access: State<'_, Arc<AgentAccess>>,
+    endpoint: State<'_, Arc<AgentEndpointState>>,
+    path: String,
+) -> Result<AgentStatusView, String> {
+    remove_import_folder(access.inner(), endpoint.inner(), &path)
+}
+
+#[tauri::command]
 pub fn agent_approvals_pending(endpoint: State<'_, Arc<AgentEndpointState>>) -> Vec<Approval> {
     pending_approvals(endpoint.inner())
 }
@@ -216,15 +284,19 @@ pub fn agent_approvals_pending(endpoint: State<'_, Arc<AgentEndpointState>>) -> 
 #[tauri::command]
 pub async fn agent_approval_decide(
     endpoint: State<'_, Arc<AgentEndpointState>>,
+    access: State<'_, Arc<AgentAccess>>,
     db: State<'_, crate::db::state::AppDbState>,
     approval_id: String,
     approve: bool,
 ) -> Result<Approval, String> {
     let endpoint = endpoint.inner().clone();
+    let access = access.inner().clone();
     let db_path = db.db_path.clone();
-    tokio::task::spawn_blocking(move || decide_approval(&endpoint, &db_path, &approval_id, approve))
-        .await
-        .map_err(|e| format!("the approval task did not finish: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        decide_approval(&endpoint, &access, &db_path, &approval_id, approve)
+    })
+    .await
+    .map_err(|e| format!("the approval task did not finish: {e}"))?
 }
 
 /// Where the bundled connector is, so the panel can name an absolute path in
@@ -283,6 +355,7 @@ mod tests {
                 running: false,
                 port: None,
                 clients: vec![],
+                import_folders: vec![],
             }
         );
         let client = harness.access.create_client("Claude Code").unwrap();
@@ -430,10 +503,12 @@ mod tests {
             files: 2,
             preview: None,
             text: None,
+            import_plan: None,
         });
 
         assert_eq!(pending_approvals(&endpoint), vec![asked.clone()]);
-        let decided = decide_approval(&endpoint, &db_path, &asked.id, true).unwrap();
+        let access = AgentAccess::load(dir.path(), Arc::new(MemorySecrets::default()));
+        let decided = decide_approval(&endpoint, &access, &db_path, &asked.id, true).unwrap();
         assert_eq!(decided.status, ApprovalStatus::Approved);
         assert_eq!(
             batches::batch_snapshot(&conn, &job).unwrap().desired_state,
@@ -458,6 +533,27 @@ mod tests {
         assert_eq!(line["status"], "ok");
         assert_eq!(line["decision"], "approved");
         assert_eq!(line["objectIds"], serde_json::json!([asked.id, job]));
+    }
+
+    #[test]
+    fn import_folders_are_added_and_removed_through_the_status() {
+        let harness = harness();
+        let inbox = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(inbox.path()).unwrap();
+        let real = real.to_string_lossy().to_string();
+        let added = add_import_folder(
+            &harness.access,
+            &harness.endpoint,
+            &inbox.path().to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(added.import_folders, vec![real.clone()]);
+        let refused = add_import_folder(&harness.access, &harness.endpoint, "").unwrap_err();
+        assert!(refused.starts_with("invalid_folder:"), "{refused}");
+        let removed = remove_import_folder(&harness.access, &harness.endpoint, &real).unwrap();
+        assert!(removed.import_folders.is_empty());
+        let json = serde_json::to_string(&added).unwrap();
+        assert!(json.contains("\"importFolders\""), "{json}");
     }
 
     #[tokio::test]

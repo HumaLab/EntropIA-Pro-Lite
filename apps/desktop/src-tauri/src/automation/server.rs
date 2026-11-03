@@ -397,6 +397,7 @@ impl GuardedEndpoint {
             .enforce_origin_validation()
             .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES)
             .with_cancellation_token(cancel);
+        let tool_access = access.clone();
         Self {
             access,
             inner: StreamableHttpService::new(
@@ -408,6 +409,7 @@ impl GuardedEndpoint {
                         context.cache_dir.clone(),
                         context.approvals.clone(),
                         context.corpus_events.clone(),
+                        tool_access.clone(),
                     ))
                 },
                 Arc::new(NeverSessionManager::default()),
@@ -914,9 +916,11 @@ mod tests {
                 "collections_list",
                 "collections_update",
                 "documents_get_text",
+                "documents_import",
                 "documents_index",
                 "documents_text_update",
                 "entropia_status",
+                "import_sources_list",
                 "items_get",
                 "items_list",
                 "items_update",

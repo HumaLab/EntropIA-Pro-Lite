@@ -31,6 +31,7 @@
     ner: 'Entidades',
     triples: 'Tripletas',
     replace_text: 'Reemplazar texto',
+    import_files: 'Importar archivos',
   }
 
   function operationLabel(operation: string): string {
@@ -50,7 +51,16 @@
           : 'reintentar una tarea de un procesamiento'
       case 'replace_text':
         return 'reemplazar el texto de una página'
+      case 'import_files':
+        return 'importar archivos a una colección'
     }
+  }
+
+  /** A file size the way people read it. */
+  function sizeLabel(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   }
 
   function expiresLabel(approval: AgentApproval): string {
@@ -145,7 +155,22 @@
       <dt>Alcance</dt>
       <dd>{current.files} {current.files === 1 ? 'archivo' : 'archivos'}</dd>
     </dl>
-    {#if current.action.kind === 'replace_text'}
+    {#if current.action.kind === 'import_files'}
+      {#if current.importFiles && current.importFiles.length > 0}
+        <p class="agent-approval__label">Archivos</p>
+        <ul class="agent-approval__files">
+          {#each current.importFiles as file (file.name)}
+            <li>
+              {file.name} <span class="agent-approval__size">{sizeLabel(file.sizeBytes)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <p class="agent-approval__note">
+        No gasta. Cada archivo pasa a ser un documento de la colección; los PDF se dividen en
+        páginas. Un archivo que cambie o que ya esté en la colección se saltea.
+      </p>
+    {:else if current.action.kind === 'replace_text'}
       {#if current.preview}
         <p class="agent-approval__label">Texto propuesto (comienzo)</p>
         <blockquote class="agent-approval__preview">{current.preview}</blockquote>
@@ -220,6 +245,21 @@
     font-size: var(--font-size-sm);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .agent-approval__files {
+    max-height: 9em;
+    margin: 0;
+    padding-left: var(--space-4);
+    overflow: auto;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    overflow-wrap: anywhere;
+  }
+
+  .agent-approval__size {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
   }
 
   .agent-approval__notice {

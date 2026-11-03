@@ -287,9 +287,11 @@ async fn entropia_status_reports_the_archive_counts_and_the_tool_list() {
             "collections_list",
             "collections_update",
             "documents_get_text",
+            "documents_import",
             "documents_index",
             "documents_text_update",
             "entropia_status",
+            "import_sources_list",
             "items_get",
             "items_list",
             "items_update",
@@ -773,7 +775,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         )
         .await;
     let tools = body["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 18);
+    assert_eq!(tools.len(), 20);
     let writes = [
         "processing_prepare",
         "processing_start",
@@ -783,6 +785,7 @@ async fn every_tool_declares_whether_it_changes_the_archive_and_stays_closed_wor
         "items_update",
         "documents_text_update",
         "documents_index",
+        "documents_import",
     ];
     for tool in tools {
         let name = tool["name"].as_str().unwrap_or_default().to_string();
@@ -811,7 +814,7 @@ async fn every_tool_publishes_a_strict_input_schema() {
         .expect("tools/list answers with an array")
         .clone();
 
-    let expected: [(&str, &[&str]); 18] = [
+    let expected: [(&str, &[&str]); 20] = [
         ("approvals_status", &["approvalId"]),
         ("collections_create", &["description", "name", "requestId"]),
         ("collections_list", &["cursor", "limit"]),
@@ -823,12 +826,14 @@ async fn every_tool_publishes_a_strict_input_schema() {
             "documents_get_text",
             &["assetId", "cursor", "itemId", "maxChars"],
         ),
+        ("documents_import", &["collectionId", "files", "folder"]),
         ("documents_index", &["itemId"]),
         (
             "documents_text_update",
             &["assetId", "itemId", "text", "textHash"],
         ),
         ("entropia_status", &[]),
+        ("import_sources_list", &[]),
         ("items_get", &["itemId"]),
         ("items_list", &["collectionId", "cursor", "limit"]),
         ("items_update", &["itemId", "metadata", "revision", "title"]),
@@ -2049,6 +2054,7 @@ async fn documents_text_update_asks_the_owner_and_applies_only_after_approval() 
     let approval_id = asked["id"].as_str().unwrap().to_string();
     crate::automation::commands::decide_approval(
         &harness.endpoint,
+        &harness.access,
         &harness.db_path(),
         &approval_id,
         true,
@@ -2158,6 +2164,210 @@ async fn documents_index_refreshes_an_items_search_entry() {
         )
         .await;
     assert_eq!(missing["error"], ERROR_NOT_FOUND);
+}
+
+impl Harness {
+    /// A folder outside the archive, enabled by the owner, holding `files`.
+    fn enabled_inbox(&self, files: &[(&str, &[u8])]) -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in files {
+            std::fs::write(dir.path().join(name), bytes).unwrap();
+        }
+        let folders = self
+            .access
+            .add_import_folder(&dir.path().to_string_lossy())
+            .unwrap();
+        let real = std::fs::canonicalize(dir.path()).unwrap();
+        let real = real.to_string_lossy().to_string();
+        assert!(folders.contains(&real));
+        (dir, real)
+    }
+
+    fn items_titled(&self, title: &str) -> i64 {
+        let conn = crate::db::open::open_archive_connection(&self.db_path()).unwrap();
+        conn.query_row(
+            "SELECT count(*) FROM items WHERE title = ?1",
+            [title],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn import_sources_list_shows_the_supported_files_of_the_enabled_folders() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    let refusal = harness
+        .refusal(&token, "import_sources_list", json!({}))
+        .await;
+    assert_eq!(refusal["error"], ERROR_FORBIDDEN_SCOPE);
+    harness.grant(&id, true, false);
+    let empty = harness
+        .payload(&token, "import_sources_list", json!({}))
+        .await;
+    assert_eq!(empty, json!({ "folders": [] }));
+
+    let (_inbox, folder) = harness.enabled_inbox(&[
+        ("Carta.jpg", b"jpg"),
+        ("notas.txt", b"no"),
+        ("Actas.pdf", b"%PDF"),
+    ]);
+    let listed = harness
+        .payload(&token, "import_sources_list", json!({}))
+        .await;
+    let folders = listed["folders"].as_array().unwrap();
+    assert_eq!(folders.len(), 1);
+    assert_eq!(folders[0]["path"], folder);
+    assert_eq!(folders[0]["truncated"], false);
+    let files = folders[0]["files"].as_array().unwrap();
+    let names: Vec<&str> = files.iter().map(|f| f["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        vec!["Actas.pdf", "Carta.jpg"],
+        "supported files only, by name"
+    );
+    assert_eq!(
+        keys(&files[0]),
+        sorted(&["name", "kind", "sizeBytes", "modifiedAt"])
+    );
+    assert_eq!(files[0]["kind"], "pdf");
+}
+
+#[tokio::test]
+async fn documents_import_waits_for_the_owner_and_imports_only_what_was_listed() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let seen = harness.watch_corpus();
+    let (_inbox, folder) = harness.enabled_inbox(&[("Carta.jpg", b"jpg"), ("Retrato.png", b"png")]);
+    let asked = harness
+        .payload(
+            &token,
+            "documents_import",
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["Carta.jpg", "Retrato.png"] }),
+        )
+        .await;
+    assert_eq!(asked["status"], "pending");
+    assert_eq!(asked["action"]["kind"], "import_files");
+    assert_eq!(asked["action"]["collection_id"], ALFA);
+    assert_eq!(asked["collections"], json!(["Alfa"]));
+    assert_eq!(asked["files"], 2);
+    assert_eq!(
+        asked["importFiles"],
+        json!([
+            { "name": "Carta.jpg", "kind": "image", "sizeBytes": 3 },
+            { "name": "Retrato.png", "kind": "image", "sizeBytes": 3 }
+        ])
+    );
+    assert!(
+        asked.get("importPlan").is_none(),
+        "paths never leave the app"
+    );
+    assert_eq!(
+        harness.items_titled("Carta"),
+        0,
+        "nothing before the answer"
+    );
+
+    let again = harness
+        .payload(
+            &token,
+            "documents_import",
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["Retrato.png", "Carta.jpg"] }),
+        )
+        .await;
+    assert_eq!(
+        again["id"], asked["id"],
+        "the same files are the same request"
+    );
+
+    let approval_id = asked["id"].as_str().unwrap().to_string();
+    crate::automation::commands::decide_approval(
+        &harness.endpoint,
+        &harness.access,
+        &harness.db_path(),
+        &approval_id,
+        true,
+    )
+    .unwrap();
+    let status = harness
+        .payload(
+            &token,
+            "approvals_status",
+            json!({ "approvalId": approval_id }),
+        )
+        .await;
+    assert_eq!(status["status"], "approved");
+    assert_eq!(
+        status["importResult"]["imported"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(status["importResult"]["skipped"], json!([]));
+    assert_eq!(harness.items_titled("Carta"), 1);
+    assert_eq!(harness.items_titled("Retrato"), 1);
+    assert_eq!(seen.lock().unwrap().len(), 2, "each new item is announced");
+    let decision = harness
+        .audit_lines()
+        .into_iter()
+        .rfind(|line| line["tool"] == "owner_decision")
+        .expect("the answer is audited");
+    assert_eq!(
+        decision["objectIds"],
+        json!([approval_id, ALFA]),
+        "an import's decision names its collection"
+    );
+}
+
+#[tokio::test]
+async fn documents_import_refuses_anything_outside_the_enabled_folders() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    let (inbox, folder) = harness.enabled_inbox(&[("Carta.jpg", b"jpg"), ("notas.txt", b"x")]);
+    std::fs::create_dir(inbox.path().join("sub")).unwrap();
+    std::fs::write(inbox.path().join("sub").join("a.jpg"), b"x").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("b.jpg"), b"x").unwrap();
+    for (arguments, code) in [
+        (
+            json!({ "collectionId": ALFA, "folder": elsewhere.path().to_string_lossy(), "files": ["b.jpg"] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["../b.jpg"] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["sub/a.jpg"] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["notas.txt"] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": ALFA, "folder": folder, "files": ["falta.jpg"] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": ALFA, "folder": folder, "files": [] }),
+            ERROR_INVALID_ARGUMENT,
+        ),
+        (
+            json!({ "collectionId": "col_missing", "folder": folder, "files": ["Carta.jpg"] }),
+            ERROR_NOT_FOUND,
+        ),
+    ] {
+        let refusal = harness
+            .refusal(&token, "documents_import", arguments.clone())
+            .await;
+        assert_eq!(refusal["error"], code, "{arguments}");
+    }
+    assert!(
+        harness.endpoint.approvals().pending().is_empty(),
+        "no dialog for a refusal"
+    );
 }
 
 /// The codes a refusal carries are the ones the tool contract publishes; a read

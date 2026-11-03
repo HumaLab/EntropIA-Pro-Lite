@@ -91,6 +91,11 @@ struct AccessState {
     version: u32,
     enabled: bool,
     clients: Vec<ClientRecord>,
+    /// Folders the owner lets assistants import from (D9 of
+    /// `odd/tasks/agent-corpus-tools.md`), as canonical paths. `serde(default)`
+    /// lets a file written before this field load unchanged.
+    #[serde(default)]
+    import_folders: Vec<String>,
 }
 
 impl Default for AccessState {
@@ -99,6 +104,7 @@ impl Default for AccessState {
             version: ACCESS_FILE_VERSION,
             enabled: false,
             clients: Vec::new(),
+            import_folders: Vec::new(),
         }
     }
 }
@@ -121,6 +127,8 @@ pub struct ClientView {
 pub struct AccessView {
     pub enabled: bool,
     pub clients: Vec<ClientView>,
+    /// Folders assistants may import from, as canonical paths.
+    pub import_folders: Vec<String>,
 }
 
 /// The scopes the owner can grant an assistant from Settings › Asistentes.
@@ -416,6 +424,7 @@ impl AgentAccess {
         Ok(AccessView {
             enabled: state.enabled,
             clients: state.clients.iter().map(view).collect(),
+            import_folders: state.import_folders.clone(),
         })
     }
 
@@ -548,6 +557,57 @@ impl AgentAccess {
         self.persist(&next)?;
         *state = next;
         Ok(updated)
+    }
+
+    /// The folders assistants may import from.
+    pub fn import_folders(&self) -> Vec<PathBuf> {
+        self.lock()
+            .map(|state| state.import_folders.iter().map(PathBuf::from).collect())
+            .unwrap_or_default()
+    }
+
+    /// Enable a folder for imports. It is stored as the directory it really
+    /// is (symlinks and `..` resolved), so the check every import makes compares
+    /// real paths. A filesystem root is refused: it would open the whole disk.
+    pub fn add_import_folder(&self, path: &str) -> Result<Vec<String>, String> {
+        if path.trim().is_empty() {
+            return Err("invalid_folder: choose a folder".to_string());
+        }
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|_| format!("invalid_folder: {path} does not exist"))?;
+        if !canonical.is_dir() {
+            return Err(format!("invalid_folder: {path} is not a folder"));
+        }
+        if canonical.parent().is_none() {
+            return Err(format!(
+                "invalid_folder: {path} is the root of a disk; choose a folder inside it"
+            ));
+        }
+        let canonical = canonical.to_string_lossy().to_string();
+        let mut state = self.lock()?;
+        if state.import_folders.contains(&canonical) {
+            return Ok(state.import_folders.clone());
+        }
+        let mut next = state.clone();
+        next.import_folders.push(canonical);
+        next.import_folders.sort();
+        self.persist(&next)?;
+        *state = next;
+        Ok(state.import_folders.clone())
+    }
+
+    /// Stop allowing imports from a folder, at once. An unknown folder is a
+    /// no-op: the outcome the caller asked for holds either way.
+    pub fn remove_import_folder(&self, path: &str) -> Result<Vec<String>, String> {
+        let mut state = self.lock()?;
+        if !state.import_folders.iter().any(|folder| folder == path) {
+            return Ok(state.import_folders.clone());
+        }
+        let mut next = state.clone();
+        next.import_folders.retain(|folder| folder != path);
+        self.persist(&next)?;
+        *state = next;
+        Ok(state.import_folders.clone())
     }
 
     /// Replace a client's scopes. `create_client` always grants [`Scope::Read`],
@@ -742,6 +802,52 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_owner_enables_import_folders_by_their_real_path_and_removes_them() {
+        let (dir, secrets, access) = setup();
+        let inbox = tempfile::tempdir().unwrap();
+        std::fs::create_dir(inbox.path().join("cartas")).unwrap();
+        // A path written with a detour is stored as the folder it really is.
+        let detour = inbox.path().join("cartas").join("..").join("cartas");
+        let folders = access.add_import_folder(&detour.to_string_lossy()).unwrap();
+        let real = std::fs::canonicalize(inbox.path().join("cartas")).unwrap();
+        assert_eq!(folders, vec![real.to_string_lossy().to_string()]);
+        // Adding it again keeps one entry.
+        assert_eq!(
+            access.add_import_folder(&real.to_string_lossy()).unwrap(),
+            folders
+        );
+        assert_eq!(access.view().unwrap().import_folders, folders);
+        let reloaded = AgentAccess::load(dir.path(), secrets.clone());
+        assert_eq!(reloaded.import_folders(), vec![real.clone()]);
+
+        assert!(access
+            .remove_import_folder(&real.to_string_lossy())
+            .unwrap()
+            .is_empty());
+        assert!(access.import_folders().is_empty());
+    }
+
+    #[test]
+    fn an_import_folder_must_be_an_existing_directory_and_not_a_root() {
+        let (dir, _, access) = setup();
+        let inbox = tempfile::tempdir().unwrap();
+        let a_file = inbox.path().join("a.pdf");
+        std::fs::write(&a_file, b"%PDF").unwrap();
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        for path in [
+            String::new(),
+            inbox.path().join("missing").to_string_lossy().to_string(),
+            a_file.to_string_lossy().to_string(),
+            root.to_string(),
+        ] {
+            let error = access.add_import_folder(&path).unwrap_err();
+            assert!(error.starts_with("invalid_folder:"), "{path:?}: {error}");
+        }
+        assert!(access.import_folders().is_empty());
+        assert_eq!(file(&dir), "", "a refused folder writes nothing");
+    }
+
+    #[test]
     fn granting_to_an_unknown_client_fails_and_writes_nothing() {
         let (dir, _, access) = setup();
         let error = access
@@ -764,7 +870,8 @@ pub(crate) mod tests {
             access.view().unwrap(),
             AccessView {
                 enabled: false,
-                clients: vec![]
+                clients: vec![],
+                import_folders: vec![],
             }
         );
         assert!(!dir.path().join(ACCESS_FILE).exists());

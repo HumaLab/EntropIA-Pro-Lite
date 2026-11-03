@@ -9,6 +9,7 @@
 //! other write, so they reach the other devices unchanged (D7).
 
 pub mod commands;
+pub mod ingest;
 
 pub use commands::{
     create_collection, reindex_item, replace_page_text, update_collection, update_item,
@@ -16,5 +17,7 @@ pub use commands::{
     MAX_PAGE_TEXT_CHARS,
 };
 
+#[cfg(test)]
+mod ingest_tests;
 #[cfg(test)]
 mod tests;

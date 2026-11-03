@@ -39,6 +39,8 @@ const START: AgentApproval = {
   decidedAt: null,
   failure: null,
   preview: null,
+  importFiles: null,
+  importResult: null,
 }
 
 /** Answer the commands the dialog calls; anything else fails loudly. */
@@ -156,6 +158,41 @@ describe('AgentApprovalDialog', () => {
     expect(dialog).toHaveTextContent('Claude Code pide reemplazar el texto de una página')
     expect(dialog).toHaveTextContent('Página uno corregida por Sarmiento.')
     expect(dialog).toHaveTextContent('Restaurar original')
+    expect(dialog).not.toHaveTextContent('proveedores pagos')
+    expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
+  })
+
+  it('lists the files of an import request and says it spends nothing', async () => {
+    respond([
+      [
+        {
+          ...START,
+          id: 'apr_imp',
+          action: {
+            kind: 'import_files',
+            collection_id: 'col_1',
+            files: 2,
+            plan_hash: 'c'.repeat(64),
+          },
+          jobId: '',
+          operations: ['import_files'],
+          collections: ['Cartas'],
+          files: 2,
+          importFiles: [
+            { name: 'Carta de Sarmiento.pdf', kind: 'pdf', sizeBytes: 204800 },
+            { name: 'Retrato.jpg', kind: 'image', sizeBytes: 512 },
+          ],
+        },
+      ],
+    ])
+    render(AgentApprovalDialog)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Claude Code pide importar archivos a una colección')
+    expect(dialog).toHaveTextContent('Cartas')
+    expect(dialog).toHaveTextContent('Carta de Sarmiento.pdf')
+    expect(dialog).toHaveTextContent('Retrato.jpg')
+    expect(dialog).toHaveTextContent('200 KB')
+    expect(dialog).toHaveTextContent('No gasta')
     expect(dialog).not.toHaveTextContent('proveedores pagos')
     expect(within(dialog).getByRole('button', { name: 'Rechazar' })).toHaveFocus()
   })

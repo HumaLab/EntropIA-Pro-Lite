@@ -10,6 +10,7 @@
    * an assistant's configuration names.
    */
   import { onMount } from 'svelte'
+  import { open as openFolderDialog } from '@tauri-apps/plugin-dialog'
   import { ActionIcon, Button, Card, Checkbox, ConfirmDialog, Input } from '@entropia/ui'
   import {
     agentAccessSetEnabled,
@@ -18,6 +19,8 @@
     agentClientRevoke,
     agentClientSetGrants,
     agentConnectorLocation,
+    agentImportFolderAdd,
+    agentImportFolderRemove,
     connectorInvocation,
     isWindowsProgram,
     connectorRecipes,
@@ -56,9 +59,9 @@
   > = {
     localWrite: {
       label: 'Preparar procesamiento y editar el corpus',
-      meta: 'Arma, pausa y cancela lotes; crea y renombra colecciones; edita títulos y metadatos. No gasta.',
+      meta: 'Arma, pausa y cancela lotes; crea y renombra colecciones; edita títulos y metadatos; propone importaciones. No gasta.',
       confirm: (name) =>
-        `${name} va a poder armar lotes de procesamiento y pausarlos o cancelarlos, crear y renombrar colecciones, y editar títulos y metadatos de tus ítems. Nada de esto gasta: empezar a procesar sigue pidiendo tu aprobación.`,
+        `${name} va a poder armar lotes de procesamiento y pausarlos o cancelarlos, crear y renombrar colecciones, editar títulos y metadatos de tus ítems, y proponer importar archivos de tus carpetas de entrada (cada importación la aprobás vos). Nada de esto gasta: empezar a procesar sigue pidiendo tu aprobación.`,
     },
     remoteSpend: {
       label: 'Pedir procesamiento pago',
@@ -203,6 +206,48 @@
     }
   }
 
+  /** The owner picks a folder with the system dialog; assistants never name one. */
+  async function addImportFolder() {
+    if (busy) return
+    errorMessage = null
+    let picked: string | string[] | null
+    try {
+      picked = await openFolderDialog({
+        directory: true,
+        multiple: false,
+        title: 'Carpeta de entrada para asistentes',
+      })
+    } catch (error) {
+      errorMessage = String(error)
+      return
+    }
+    const path = Array.isArray(picked) ? picked[0] : picked
+    if (!path) return
+    busy = true
+    try {
+      status = await agentImportFolderAdd(path)
+    } catch (error) {
+      errorMessage = String(error)
+    } finally {
+      busy = false
+    }
+  }
+
+  /** Removing only takes a permission away, so it applies at once. */
+  async function removeImportFolder(path: string) {
+    if (busy) return
+    busy = true
+    errorMessage = null
+    try {
+      status = await agentImportFolderRemove(path)
+    } catch (error) {
+      errorMessage = String(error)
+      await refresh()
+    } finally {
+      busy = false
+    }
+  }
+
   async function copy(label: string, text: string) {
     errorMessage = null
     try {
@@ -337,6 +382,40 @@
       {:else}
         <p class="assistants-tab__value">Todavía no conectaste ningún asistente.</p>
       {/if}
+    </div>
+
+    <div class="assistants-tab__field">
+      <span class="assistants-tab__label">Carpetas de entrada</span>
+      <p class="assistants-tab__meta">
+        Un asistente con permiso para editar el corpus puede proponer importar archivos de estas
+        carpetas (no de sus subcarpetas). Cada importación la aprobás vos, viendo la lista de
+        archivos.
+      </p>
+      {#if status && status.importFolders.length > 0}
+        <ul class="assistants-tab__folders">
+          {#each status.importFolders as folder (folder)}
+            <li class="assistants-tab__folder">
+              <code class="assistants-tab__code">{folder}</code>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Quitar carpeta {folder}"
+                disabled={busy}
+                onclick={() => removeImportFolder(folder)}
+              >
+                Quitar
+              </Button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="assistants-tab__value">Ninguna carpeta habilitada.</p>
+      {/if}
+      <div>
+        <Button variant="secondary" size="sm" disabled={!status || busy} onclick={addImportFolder}>
+          Agregar carpeta
+        </Button>
+      </div>
     </div>
 
     <div class="assistants-tab__field">
@@ -589,6 +668,21 @@
     flex-direction: column;
     gap: var(--space-1);
     padding-top: var(--space-2);
+  }
+
+  .assistants-tab__folders {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .assistants-tab__folder {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
   }
 
   .assistants-tab__connection {

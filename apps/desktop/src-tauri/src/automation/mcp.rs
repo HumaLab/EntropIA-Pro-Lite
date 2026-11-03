@@ -36,11 +36,12 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::automation::access::{Principal, Scope};
+use crate::automation::access::{AgentAccess, Principal, Scope};
 use crate::automation::approvals::{Approval, ApprovalAction, ApprovalStore};
 use crate::automation::audit::{AuditLine, AuditLog};
 use crate::automation::corpus_tools::{
-    CorpusArchive, CorpusEvents, CreatedCollection, IndexedItem, TextReplacement, UpdatedItem,
+    CorpusArchive, CorpusEvents, CreatedCollection, ImportRequest, ImportSources, IndexedItem,
+    TextReplacement, UpdatedItem,
 };
 use crate::automation::jobs::{
     ControlReport, JobDetail, JobsArchive, JobsError, JobsPage, PrepareReport,
@@ -85,6 +86,8 @@ const TOOL_COLLECTIONS_UPDATE: &str = "collections_update";
 const TOOL_ITEMS_UPDATE: &str = "items_update";
 const TOOL_DOCUMENTS_TEXT_UPDATE: &str = "documents_text_update";
 const TOOL_DOCUMENTS_INDEX: &str = "documents_index";
+const TOOL_IMPORT_SOURCES_LIST: &str = "import_sources_list";
+const TOOL_DOCUMENTS_IMPORT: &str = "documents_import";
 
 const REFUSE_LOCAL_WRITE: &str = "Este asistente no tiene permiso para preparar ni controlar procesamiento: la persona puede dárselo en Configuración › Asistentes («Preparar procesamiento y editar el corpus»).";
 const REFUSE_REMOTE_SPEND: &str = "Este asistente no tiene permiso para pedir procesamiento pago: la persona puede dárselo en Configuración › Asistentes («Pedir procesamiento pago»).";
@@ -301,6 +304,23 @@ pub struct DocumentsTextUpdateParams {
     pub text: String,
 }
 
+/// `import_sources_list` takes no arguments, and refuses any it is given.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportSourcesListParams {}
+
+/// `documents_import` arguments.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentsImportParams {
+    /// The collection the files go into.
+    pub collection_id: String,
+    /// One of the folders `import_sources_list` returned, as it returned it.
+    pub folder: String,
+    /// File names inside that folder (no subfolders), 1 to 200.
+    pub files: Vec<String>,
+}
+
 /// `documents_index` arguments.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -387,6 +407,8 @@ pub struct AgentServer {
     /// Where paid requests wait for the owner (D3); shared with the app.
     approvals: Arc<ApprovalStore>,
     corpus: CorpusArchive,
+    /// Who may connect and which folders imports may read.
+    access: Arc<AgentAccess>,
     audit: AuditLog,
 }
 
@@ -398,11 +420,13 @@ impl AgentServer {
         cache_dir: impl Into<PathBuf>,
         approvals: Arc<ApprovalStore>,
         corpus_events: Arc<CorpusEvents>,
+        access: Arc<AgentAccess>,
     ) -> Self {
         let db_path = db_path.into();
         Self {
             tool_router: Self::tool_router(),
             approvals,
+            access,
             corpus: CorpusArchive::new(db_path.clone(), corpus_events),
             jobs: JobsArchive::new(db_path.clone()),
             reader: ArchiveReader::new(db_path),
@@ -1139,6 +1163,87 @@ impl AgentServer {
             _ => vec![approval.id.clone()],
         };
         self.audit_ok(&caller, TOOL_DOCUMENTS_TEXT_UPDATE, object_ids, None);
+        Ok(Json(approval))
+    }
+
+    #[tool(
+        name = "import_sources_list",
+        description = "Las carpetas de entrada que la persona habilitó en Configuración › Asistentes y los archivos que se pueden importar de cada una (PDF, imágenes y audio, sin subcarpetas; hasta 500 por carpeta). No cambia nada. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn import_sources_list(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<ImportSourcesListParams>>,
+    ) -> Result<Json<ImportSources>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_IMPORT_SOURCES_LIST,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        self.arguments(&caller, TOOL_IMPORT_SOURCES_LIST, args)?;
+        let corpus = self.corpus.clone();
+        let folders = self.access.import_folders();
+        let sources = match Self::on_jobs(move || corpus.import_sources(&folders)).await {
+            Ok(sources) => sources,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_IMPORT_SOURCES_LIST, error)),
+        };
+        self.audit_ok(&caller, TOOL_IMPORT_SOURCES_LIST, Vec::new(), None);
+        Ok(Json(sources))
+    }
+
+    #[tool(
+        name = "documents_import",
+        description = "Pide importar archivos de una carpeta de entrada (`folder`, como la devuelve import_sources_list) a una colección: un ítem por archivo, y cada PDF dividido en páginas. No importa nada por sí solo: la persona ve la lista de archivos en EntropIA y lo aprueba o rechaza; consultalo con approvals_status, que al final dice qué se importó y qué se salteó (un archivo que cambió, que ya estaba en la colección o que dejó de estar habilitado). Repetir el mismo pedido devuelve el mismo. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn documents_import(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<Strict<DocumentsImportParams>>,
+    ) -> Result<Json<Approval>, CallToolResult> {
+        let caller = self.guard_scope(
+            &context,
+            TOOL_DOCUMENTS_IMPORT,
+            Scope::LocalWrite,
+            REFUSE_LOCAL_WRITE,
+        )?;
+        let args = self.arguments(&caller, TOOL_DOCUMENTS_IMPORT, args)?;
+        let corpus = self.corpus.clone();
+        let approvals = self.approvals.clone();
+        let folders = self.access.import_folders();
+        let (client_id, client_name) = (caller.client_id.clone(), caller.name.clone());
+        let collection_id = args.collection_id.clone();
+        let approval = match Self::on_jobs(move || {
+            corpus.request_import(
+                &approvals,
+                &client_id,
+                &client_name,
+                &folders,
+                &ImportRequest {
+                    collection_id: args.collection_id,
+                    folder: args.folder,
+                    files: args.files,
+                },
+            )
+        })
+        .await
+        {
+            Ok(approval) => approval,
+            Err(error) => return Err(self.jobs_failure(&caller, TOOL_DOCUMENTS_IMPORT, error)),
+        };
+        self.audit_ok(
+            &caller,
+            TOOL_DOCUMENTS_IMPORT,
+            vec![collection_id, approval.id.clone()],
+            None,
+        );
         Ok(Json(approval))
     }
 
