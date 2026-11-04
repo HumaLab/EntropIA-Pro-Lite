@@ -2,7 +2,7 @@
 
 ## Manual de usuario
 
-**Versión de EntropIA:** 1.1.0 · **Actualizado:** 17 de octubre de 2026
+**Versión de EntropIA:** 1.3.0 · **Actualizado:** 4 de noviembre de 2026
 
 Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
@@ -12,7 +12,7 @@ Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
 Este manual acompaña el recorrido completo: **preparar el espacio de trabajo → reunir fuentes → obtener y revisar texto → buscar y analizar → investigar → escribir con citas → exportar y respaldar**. No necesitás configurar todas las funciones para empezar.
 
-> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. Las capturas corresponden a la versión 1.0.16: algunos botones agregados después, como **Biblioteca** en la barra superior o la pestaña **Copias** de Configuración, se explican en el texto aunque no se vean en la imagen. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
+> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. Las capturas corresponden a la versión 1.1.1: lo agregado después, como las herramientas de anotación de la Biblioteca o la pestaña **Asistentes** de Configuración, se explica en el texto aunque no se vea en la imagen. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
 
 ### Elegí tu recorrido
 
@@ -26,6 +26,8 @@ Este manual acompaña el recorrido completo: **preparar el espacio de trabajo �
 | Encontrar evidencia y comparar fuentes | [Búsquedas](#capitulo-7-buscar-informacion), [análisis](#capitulo-8-analizar-documentos-y-colecciones) e [Investigación](#capitulo-10-investigacion). |
 | Redactar con notas y bibliografía | [Escritura](#capitulo-11-escritura) y [Zotero y Biblioteca](#capitulo-12-zotero). |
 | Buscar dentro de mi biblioteca de Zotero | [Biblioteca](#biblioteca). |
+| Resaltar y comentar los PDF de Zotero | [Anotar los PDF de la Biblioteca](#anotaciones-zotero). |
+| Dejar que Claude Code, Codex u otro asistente consulte mi archivo | [Asistentes externos](#asistentes-externos). |
 | Conservar o compartir resultados | [Exportar y descargar](#capitulo-17-exportar-y-descargar). |
 | Guardar una copia de seguridad de todo | [Copias de seguridad](#copias-de-seguridad). |
 | Resolver un problema | [¿Qué hago si…?](#capitulo-19-que-hago-si). |
@@ -225,6 +227,8 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 | Importar PDF desde Internet Archive | No necesita IA. | Internet; no hace falta cuenta ni clave. |
 | Sincronizar y buscar en tu biblioteca de Zotero (**Biblioteca**) | No para ver las obras ni buscar por título. | Zotero abierto con comunicación local; OpenRouter para buscar por significado y GLM-OCR para leer PDF escaneados. |
 | Citar desde Zotero | No necesita IA. | Zotero abierto en este equipo y comunicación local habilitada. |
+| Anotar los PDF de la Biblioteca y sincronizar las anotaciones con Zotero | No necesita IA. | Internet y una clave de la Web API de Zotero con permiso de escritura en tu biblioteca personal. |
+| Conectar un asistente externo (Claude Code, Codex, OpenCode, Pi) | No: el asistente es un servicio de IA. | El asistente instalado en este equipo, que usa su propio proveedor y su cuenta. Leer el archivo no gasta en los proveedores de EntropIA. |
 | Sincronizar entre equipos | No necesita IA. | Internet y una cuenta de sincronización. Es opcional. |
 | Hacer copias de seguridad | No necesita IA. | Una carpeta con espacio, idealmente en otro disco. |
 
@@ -354,7 +358,7 @@ El **Navegador** abre páginas web dentro de EntropIA y guarda lo que encontrás
 3. Un PDF que descargás desde una página se verifica antes de ofrecerse: en **Descargas** aparece como **PDF verificado** y se guarda con **Guardar**. Si ya estaba entre tus fuentes, se indica **Ya está en tus fuentes** y no se guarda otra copia. Los archivos que no son PDF van a la **Carpeta de descargas**, que podés elegir con **Cambiar**; EntropIA no los abre.
 4. **Fuentes guardadas** lista lo que guardaste y permite buscar por título, dirección o texto. Desde una fuente podés **Abrir en el navegador**, **Copiar dirección**, ver el PDF guardado, **Copiar a colección**, **Copiar a Zotero** o **Eliminar fuente**.
 
-Las fuentes web no pertenecen a ninguna colección. **Copiar a colección** crea un documento nuevo e independiente, y **Copiar a Zotero** crea el elemento en la biblioteca que elijas; en ambos casos la fuente original no cambia, y borrarla no borra las copias. Si Zotero no está abierto, la copia queda en cola y se envía sola cuando responda.
+Las fuentes web no pertenecen a ninguna colección. **Copiar a colección** crea un documento nuevo e independiente, y **Copiar a Zotero** crea el elemento en la biblioteca que elijas; en ambos casos la fuente original no cambia, y borrarla no borra las copias. Si Zotero no está abierto, la copia queda en cola y se envía sola cuando responda. Si la página ya estaba en esa biblioteca, no se duplica: se vincula, y con una [clave de Zotero](#capitulo-16-configuracion-y-herramientas-generales) con permiso de escritura se completan los campos que le faltan, sin pisar ninguno que ya tenga datos.
 
 El Navegador no guarda cookies ni sesiones: un inicio de sesión dura mientras la aplicación está abierta. Algunas direcciones y descargas se bloquean por seguridad; el motivo se muestra debajo de la barra de dirección. El Navegador está disponible en Windows, macOS y Linux; si en tu sistema la página no se muestra, el aviso **No se pudo abrir la página** indica el motivo.
 
@@ -814,6 +818,8 @@ La sincronización trabaja en segundo plano y continúa al reabrir EntropIA; las
 
 > **Costos y privacidad.** En Lite, leer PDF escaneados de una biblioteca grande puede ser una cantidad importante de páginas pagas a GLM-OCR, y el texto de las obras se envía a OpenRouter para calcular sus embeddings. Probá primero con una biblioteca o un grupo pequeño.
 
+> **No se paga dos veces.** Si usás la [sincronización](#capitulo-15-sincronizacion-y-nube) con la misma cuenta en varios equipos, el texto leído por GLM-OCR y los embeddings que un equipo ya pagó viajan por la nube de EntropIA. Otro equipo con el mismo Zotero y la misma configuración de OCR y embeddings completa **Fichas** y **Pasajes** con esos resultados en lugar de volver a pedirlos al proveedor. Lo mismo vale para los embeddings de tus colecciones. Al iniciar sesión por primera vez, el equipo espera un momento a la nube antes de la primera llamada paga.
+
 **Recorrer la Biblioteca.** El botón **Biblioteca** de la barra superior (el ícono de los libros) muestra las obras sincronizadas como tarjetas, igual que las colecciones:
 
 - **Elegir biblioteca** filtra por biblioteca de Zotero o muestra **Todas las bibliotecas**.
@@ -821,7 +827,7 @@ La sincronización trabaja en segundo plano y continúa al reabrir EntropIA; las
 - **Buscar obras** busca por título, autor o significado.
 - Al pulsar una obra se abre con tres pestañas: **Original** (el PDF adjunto dentro de la aplicación o el texto de una captura web; **Elegir adjunto** cambia entre adjuntos), **Texto** (el texto extraído, página por página, con las tablas como tablas) y **Metadatos** (la ficha de Zotero y sus **Adjuntos**; **Ver en Original** abre uno).
 
-La búsqueda de la barra superior también muestra, debajo de tus documentos, un grupo **Biblioteca** con hasta cinco obras. La Biblioteca es de solo lectura y queda en este equipo: no viaja con la sincronización de EntropIA. Las obras se agregan, corrigen o borran en Zotero y llegan en la siguiente sincronización.
+La búsqueda de la barra superior también muestra, debajo de tus documentos, un grupo **Biblioteca** con hasta cinco obras. Las obras y su ficha no se editan desde EntropIA: se agregan, corrigen o borran en Zotero y llegan en la siguiente sincronización. Lo único que podés cambiar son las [anotaciones de sus PDF](#anotaciones-zotero), que se guardan en Zotero. La Biblioteca queda en este equipo y no viaja con la sincronización de EntropIA; solo se comparten los resultados pagos de OCR y embeddings (ver el recuadro anterior).
 
 ### 12.5. Buscar pasajes y citar desde Obras
 
@@ -845,6 +851,24 @@ Algunos PDF traen un texto digital que parece completo pero es ilegible, o se pr
 
 El costo es una estimación (supone unas 3000 unidades de texto por página); el precio real lo cobra el proveedor. El avance, la pausa y la cancelación están en **Configuración → Lotes**.
 
+<a id="anotaciones-zotero"></a>
+### 12.7. Anotar los PDF de la Biblioteca
+
+Los PDF de tu biblioteca personal de Zotero se pueden resaltar, subrayar y comentar dentro de EntropIA. Cada anotación se guarda en Zotero, así que la ves también en el lector de Zotero y en tus otros equipos; lo que anotes en Zotero aparece en EntropIA.
+
+**Antes de empezar.** Las anotaciones usan la Web API de Zotero, no la comunicación local: guardá en **Configuración → APIs remotas → Zotero** una clave con permiso de escritura en tu biblioteca personal ([16.1](#capitulo-16-configuracion-y-herramientas-generales)). Abrí Zotero al menos una vez para que EntropIA sepa qué cuenta usás. Por ahora funcionan solo en la **biblioteca personal**, no en los grupos.
+
+1. En **Biblioteca**, abrí una obra con PDF y quedate en la pestaña **Original**. A la derecha aparece el panel **Anotaciones**.
+2. Seleccioná texto en la página: el menú **Anotar la selección** ofrece resaltar o subrayar con los colores de Zotero. También podés elegir una herramienta en la columna del visor: **Seleccionar**, **Resaltar**, **Subrayar**, **Nota**, **Área** (un recorte rectangular) o **Texto**.
+3. En el panel, cada anotación aparece por página con su tipo (**Resaltado**, **Subrayado**, **Nota**, **Área**, **Texto**, **Dibujo**) y un campo **Agregar un comentario…**. Con una anotación seleccionada, elegir otro color la recolorea; **Eliminar anotación** pide confirmación.
+4. Cada anotación muestra su estado: **Sincronizada**, **Pendiente** (todavía no llegó a Zotero), **Esperando a Zotero** (el adjunto todavía no está en el servidor), **En conflicto** o **Error**. **Sincronizar con Zotero** envía y trae los cambios en el momento; además se sincronizan al abrir la obra y después de cada sincronización de la biblioteca.
+
+**Si cambió en los dos lados.** Cuando una anotación se modificó en Zotero y en EntropIA antes de sincronizar, el panel muestra **Zotero y EntropIA cambiaron esta anotación** con los dos valores: elegí **Conservar EntropIA** o **Usar Zotero** y pulsá **Aplicar**. Si en Zotero se borró o se movió a la papelera, podés **Conservar la anotación** o **Eliminarla**.
+
+**Papelera.** Las anotaciones que están en la papelera de Zotero no se dibujan sobre la página; se agrupan al final en **En la papelera de Zotero** y **Restaurar** las devuelve. Las anotaciones de adjuntos que no son PDF (por ejemplo, EPUB o capturas web) se cuentan como **anotaciones en otro formato (solo en Zotero)** y se editan en Zotero.
+
+Si no hay conexión, los cambios quedan **Pendiente** y se envían más tarde; si Zotero pide esperar, el panel lo indica. Si el PDF no está en este equipo, el panel sigue mostrando las anotaciones aunque no se pueda ver la página. Las anotaciones de la Biblioteca no viajan con la sincronización de EntropIA: los otros equipos las reciben desde Zotero.
+
 ---
 
 <a id="capitulo-13-chat-y-agentes-de-entropia"></a>
@@ -858,7 +882,7 @@ La interfaz tiene tres ayudas relacionadas, pero distintas:
 | **Investigar** | **Agente de investigación**, o **Profundizar con el Agente** desde Chat. | Investigación por etapas e informe. Corpus acotado a colecciones, Biblioteca o ambos, con consultas bibliográficas del plan a Zotero/OpenAlex. |
 | **Agente de Escritura** | Abrir manuscrito → panel **Agente**. | Propuesta sobre una selección. No modifica el manuscrito hasta **Reemplazar** o **Insertar debajo**. |
 
-Ninguna de estas herramientas sustituye la comprobación de la fuente.
+Ninguna de estas herramientas sustituye la comprobación de la fuente. Aparte de ellas, podés conectar un [asistente externo](#asistentes-externos) que trabaja desde fuera de la aplicación.
 
 ### 13.1. Preguntar sobre tus documentos en el Chat
 
@@ -902,6 +926,34 @@ En **Sugerencias para revisar**, leé **Texto original**, **Texto propuesto**, *
 
 El agente no modifica el manuscrito automáticamente. Si el pasaje cambió, desapareció o no se puede identificar de manera única, EntropIA rechaza la aplicación; pedí otra propuesta o descartala. Sin OpenRouter podés seguir escribiendo a mano.
 
+<a id="asistentes-externos"></a>
+### 13.4. Asistentes externos: Claude Code, Codex, OpenCode y Pi
+
+Además de sus propios agentes, EntropIA puede atender a un **asistente externo** instalado en tu computadora —Claude Code, Codex, OpenCode o Pi— para que consulte tu archivo mientras trabajás con él. La conexión usa el protocolo MCP, está **apagada de entrada**, escucha solo en esta computadora (`127.0.0.1`, nunca en la red local) y funciona igual en Lite y en Pro. EntropIA tiene que estar abierta mientras el asistente trabaja; puede quedar minimizada.
+
+**Conectar un asistente.**
+
+1. Abrí **Configuración → Asistentes** y activá **Permitir asistentes externos**. El estado indica si el servicio quedó activo.
+2. En **Conectar un asistente**, escribí un nombre para reconocerlo después (por ejemplo «Claude Code») y pulsá **Conectar**.
+3. El panel muestra el **Identificador del cliente**, la ubicación del conector instalado con EntropIA y una línea lista para cada asistente. Copiá la que corresponde y pegala en la terminal o en la configuración de ese asistente. En Windows, las líneas son para PowerShell.
+
+Las líneas no contienen ninguna contraseña: la credencial queda en el llavero del sistema o, si el equipo no tiene llavero, en un archivo que solo tu usuario puede leer. **Asistentes emparejados** indica cuál de los dos (**Llavero del sistema** o **Archivo protegido**), cuándo se creó y cuándo se usó por última vez. **Revocar** (con confirmación) deja sin efecto la credencial en el pedido siguiente, aunque alguien haya guardado una copia; para volver a usarlo hay que conectarlo de nuevo.
+
+**Qué puede hacer.** Un asistente recién conectado **solo puede leer**: listar colecciones y documentos, buscar, leer el texto de un documento página por página y encontrar pasajes con su página, para citarlos con precisión. Los pasajes existen solo en documentos procesados con embeddings. Debajo de cada asistente hay dos permisos que podés sumar (cada uno pide confirmación; desmarcarlo rige de inmediato):
+
+| Permiso | Qué agrega |
+|---|---|
+| **Preparar procesamiento y editar el corpus** | Armar, pausar y cancelar lotes; crear y renombrar colecciones; editar títulos y metadatos; proponer correcciones del texto reconocido, importaciones y borrados. No gasta. |
+| **Pedir procesamiento pago** | Pedir que un lote empiece, se reanude o se reintente. Cada pedido se aprueba en EntropIA antes de gastar. |
+
+**Aprobaciones.** Lo que cuesta dinero, borra, importa o reemplaza texto no se hace sin vos. EntropIA pasa al frente con un cuadro que dice qué asistente lo pide y qué va a pasar: operaciones, colecciones y cantidad de archivos para un lote; la lista de archivos para una importación; el comienzo del **Texto propuesto** para una corrección; o, para un borrado, qué se pierde («Se pierden: 3 documentos, 14 páginas, 2 notas…»), que no se puede deshacer y que se borra en todos los equipos. **Rechazar** es la opción preseleccionada y Esc rechaza; solo **Aprobar** (o **Borrar**) ejecuta. Un pedido sin respuesta vence a los diez minutos, y si el lote, la página o la colección cambiaron mientras tanto, no se ejecuta nada. Una corrección aprobada se deshace con **Restaurar OCR original** en el documento. Los lotes que arma un asistente aparecen en **Configuración → Lotes** como los tuyos, y lo que ya está procesado, o compartido desde otro equipo, no se vuelve a pagar.
+
+**Carpetas de entrada.** Un asistente con permiso para editar el corpus solo puede proponer importar archivos de las carpetas que agregues en **Carpetas de entrada** (**Agregar carpeta**), y no de sus subcarpetas. Cada importación la aprobás viendo la lista de archivos.
+
+> **Privacidad.** Lo que el asistente lee de tu archivo pasa a la conversación con ese asistente y, por lo tanto, al proveedor de IA que use (Anthropic, OpenAI u otro), con su cuenta y sus condiciones. Los textos de tus documentos son datos para el asistente: no pueden darle permisos nuevos. Conectá solo asistentes en los que confíes y revocá los que ya no uses.
+
+Si el asistente no conecta, comprobá que EntropIA esté abierta y el interruptor activado, y que el asistente no haya sido revocado. En Windows, algunos antivirus demoran el primer arranque del conector; si el asistente se rinde antes, ampliá su tiempo de espera para servidores MCP o excluí la carpeta de EntropIA en el antivirus.
+
 ---
 
 <a id="capitulo-14-procesamiento-por-lotes"></a>
@@ -928,7 +980,7 @@ No hace falta repetir tareas completas. Los embeddings, las entidades y los trip
 
 Un OCR terminado sin texto puede contar como completo. Abrí esa página y revisá el resultado; crear otro lote no garantiza que vuelva a procesarla.
 
-Lo que pedís a mano en un documento —por ejemplo, pulsar **OCRH**— pasa adelante de los lotes en segundo plano. En esta pestaña también aparecen los procesos de la [Biblioteca](#biblioteca): la sincronización de una biblioteca de Zotero y el [reprocesamiento de texto](#reprocesar-texto), con su avance, pausa y cancelación.
+Lo que pedís a mano en un documento —por ejemplo, pulsar **OCRH**— pasa adelante de los lotes en segundo plano. En esta pestaña también aparecen los procesos de la [Biblioteca](#biblioteca): la sincronización de una biblioteca de Zotero y el [reprocesamiento de texto](#reprocesar-texto), con su avance, pausa y cancelación. También los lotes que preparó un [asistente externo](#asistentes-externos), que se controlan igual que los tuyos.
 
 En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. Si configuraste el respaldo de Vercel, las entidades, tripletes y esquemas usan Vercel cuando OpenRouter falla; los embeddings no. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
 
@@ -979,7 +1031,7 @@ El indicador inferior puede mostrar que la sincronización está al día, que ha
 
 **Re-verificar archivos** encola su reenvío para comprobarlos; no crea una copia de respaldo (para eso están las [copias de seguridad](#copias-de-seguridad)). **Borrar mis datos del servidor** requiere la contraseña y confirmar **Borrar todo**. Elimina los datos remotos, pero conserva los de este equipo. No lo uses como prueba para solucionar un error.
 
-> **Qué viaja y qué no.** Se sincronizan las colecciones, documentos y sus archivos, textos, notas, tópicos, anotaciones, entidades, relaciones, resúmenes, embeddings y conversaciones del Chat. Los manuscritos de **Escritura** también se sincronizan, con sus imágenes, y se pueden compartir con otra cuenta ([11.8](#compartir-manuscrito)); las investigaciones terminadas o fallidas viajan con su informe ([10.4](#capitulo-10-investigacion)). **No** se sincronizan la [Biblioteca](#biblioteca) (cada equipo la sincroniza desde su Zotero), los esquemas propios y sus tablas, los flujos guardados, las colecciones de ejemplo, las claves de los proveedores ni las preferencias de Apariencia.
+> **Qué viaja y qué no.** Se sincronizan las colecciones, documentos y sus archivos, textos, notas, tópicos, anotaciones, entidades, relaciones, resúmenes, embeddings y conversaciones del Chat. Los manuscritos de **Escritura** también se sincronizan, con sus imágenes, y se pueden compartir con otra cuenta ([11.8](#compartir-manuscrito)); las investigaciones terminadas o fallidas viajan con su informe ([10.4](#capitulo-10-investigacion)). **No** se sincronizan la [Biblioteca](#biblioteca) (cada equipo la sincroniza desde su Zotero, y sus anotaciones viajan a través de Zotero), los asistentes externos emparejados y sus carpetas de entrada, los esquemas propios y sus tablas, los flujos guardados, las colecciones de ejemplo, las claves de los proveedores ni las preferencias de Apariencia. Lo que sí se comparte de la Biblioteca es el resultado pago de su OCR y sus embeddings, para que otro equipo de la misma cuenta no vuelva a pagarlo ([12.4](#biblioteca)).
 
 ![Decidir, iniciar sesión, configurar y revisar el estado de sincronización.](images/14-sincronizacion-opcional.svg)
 
@@ -1003,6 +1055,7 @@ Abrí **Configuración** con el botón de engranaje de la barra superior. En Lit
 | **Model Params** | Ajustar el modelo y la forma en que prepara cada respuesta. | Dejá los valores predeterminados. |
 | **RAG Params** | Elegir qué pasajes de tus documentos consulta el Chat, cuántos usa y cuánto de la conversación previa considera. | Dejá los valores predeterminados hasta tener una necesidad concreta. |
 | **Sincronización** | Conectar la cuenta y compartir datos entre equipos. | No la actives si no necesitás usar más de un equipo. |
+| **Asistentes** | Permitir que un asistente externo (Claude Code, Codex, OpenCode, Pi) consulte el archivo, darle permisos y elegir sus carpetas de entrada ([13.4](#asistentes-externos)). | Dejala apagada si no usás un asistente externo. |
 | **Lotes** | Procesar varias colecciones: OCR, embeddings, entidades, tripletes y esquemas propios; seguir también la sincronización de la Biblioteca. | Ejecutá primero una prueba con una colección pequeña. |
 | **Logs** | Leer mensajes de actividad y error. | Anotá el mensaje visible antes de compartirlo con soporte. |
 | **Copias** | Elegir la carpeta y la frecuencia de las copias de seguridad, y hacer una al momento. | Elegí una carpeta en otro disco y activá una copia automática. |
@@ -1025,7 +1078,7 @@ En **APIs remotas**:
 | **AssemblyAI** | Transcribe audio y permite dictar con el micrófono. El selector **Identificación de hablantes en audio de colección** controla la separación de intervenciones en STT; el dictado no usa esa identificación. |
 | **OpenRouter** | Corrección, resúmenes, Chat, Investigación, agente de Escritura, entidades, relaciones, esquemas propios, embeddings y búsqueda por significado en la Biblioteca. Tiene campos separados para **Modelo generativo** y **Modelo de embeddings**. |
 | **Respaldo: Vercel AI Gateway** | Opcional. Si OpenRouter no responde, está saturado o se quedó sin crédito, los pedidos de texto van a Vercel con el mismo modelo. |
-| **Zotero** | Opcional. Guarda una clave de la Web API de Zotero. Hoy solo la usa una función experimental que no viene activada en Lite; **no** hace falta para citar ni para la Biblioteca, que usan el Zotero de este equipo. |
+| **Zotero** | Opcional. Guarda una clave de la Web API de Zotero. La usan las [anotaciones de la Biblioteca](#anotaciones-zotero) (necesitan permiso de escritura en la biblioteca personal) y **Copiar a Zotero** del Navegador, que con ella completa los campos vacíos de una obra que ya estaba en Zotero. **No** hace falta para citar, sincronizar ni buscar en la Biblioteca, que usan el Zotero de este equipo. |
 
 Una clave válida no garantiza que el servicio esté funcionando ni que tu cuenta permita más usos en ese momento. Antes de enviar material sensible, revisá cómo trata los datos el servicio. EntropIA envía el contenido necesario para reconocer, transcribir o generar una respuesta.
 
@@ -1279,6 +1332,8 @@ El vínculo conserva una instantánea y permite volver a consultar la nota; no a
 | Un lote muestra un error | Abrí **Configuración → Lotes**, expandí la tarea y leé el mensaje. Corregí primero el problema y después volvé a intentarla. |
 | No puedo sincronizar | Revisá el estado inferior, la conexión y la sesión. En **Configuración → Sincronización** y **Logs** podés leer más detalles; no borres datos como prueba. |
 | Zotero no aparece en Escritura | Abrí Zotero y habilitá **Permitir que otras aplicaciones se comuniquen con Zotero** en **Editar → Configuración → Avanzado**. Después, volvé a **Escritura → Zotero** y usá **Actualizar** si está disponible. |
+| Las anotaciones de la Biblioteca no llegan a Zotero | Leé el aviso del panel **Anotaciones**. Hace falta una clave de la Web API con permiso de escritura en la biblioteca personal (**Configuración → APIs remotas → Zotero → Verificar clave**), de la misma cuenta que tenés abierta en Zotero; en los grupos no se puede anotar. Sin conexión quedan **Pendiente**; pulsá **Sincronizar con Zotero** cuando vuelva. Ver [12.7](#anotaciones-zotero). |
+| Un asistente externo no se conecta | EntropIA tiene que estar abierta y **Configuración → Asistentes → Permitir asistentes externos**, activado. Si lo revocaste, conectalo de nuevo y copiá la línea nueva. En Windows, un antivirus puede demorar el arranque del conector. Ver [13.4](#asistentes-externos). |
 | Escritura no guardó un cambio | Esperá el estado **Guardado**. Si aparece **Error de guardado**, pulsá **Reintentar** si está disponible y copiá el texto importante antes de cerrar. |
 | Quiero volver a una versión anterior de un manuscrito | Pulsá **Historial de versiones** en la barra del manuscrito, elegí la versión y **Restaurar esta versión**. Lo que tenías queda guardado como otra versión. Ver [11.3](#historial-de-versiones). |
 | No puedo abrir otra pestaña | El máximo es 4. Cerrá una con **Cerrar pestaña** y volvé a pulsar **Abrir nueva pestaña**. |
@@ -1353,7 +1408,10 @@ Antes de recurrir a ayuda, anotá el nombre de la pantalla, el paso, el mensaje 
 - **Búsqueda aproximada:** amplía coincidencias a grafías parecidas; no demuestra que las palabras sean equivalentes.
 - **Texto nativo de PDF:** texto digital que el archivo ya contiene, distinto del reconocimiento de una imagen escaneada.
 - **Lote:** conjunto de tareas de OCR, embeddings, entidades, tripletes o un esquema propio sobre varias colecciones, con estado, avance, prioridad y recuperación.
-- **Biblioteca:** sección con las obras de las bibliotecas de Zotero sincronizadas en EntropIA. Es de solo lectura y no viaja con la sincronización.
+- **Asistente externo:** programa de IA instalado en tu computadora (Claude Code, Codex, OpenCode, Pi) que, si lo permitís en **Configuración → Asistentes**, consulta tu archivo a través de MCP.
+- **Anotación de Zotero:** resaltado, subrayado, nota, área o texto sobre un PDF de la Biblioteca; se guarda en Zotero y se sincroniza en los dos sentidos.
+- **Biblioteca:** sección con las obras de las bibliotecas de Zotero sincronizadas en EntropIA. Sus fichas se editan en Zotero, no en EntropIA; solo sus PDF admiten anotaciones. No viaja con la sincronización.
+- **MCP (Model Context Protocol):** protocolo con el que un asistente externo pide datos a EntropIA; aquí funciona solo dentro de esta computadora.
 - **Copia de seguridad:** carpeta `entropia-backup-…` con la base de datos y los archivos de EntropIA; permite recuperar todo copiándola de vuelta.
 - **Colección:** grupo de documentos reunidos para un tema o proyecto.
 - **Corpus:** conjunto de documentos y colecciones que reunís para trabajar.
