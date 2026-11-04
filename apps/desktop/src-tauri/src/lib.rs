@@ -1439,6 +1439,9 @@ pub fn run() {
                         );
                     }
                 }
+                // While the window is still hidden: the Navegador's tabs go on
+                // a layer over the app's webview, not beside it.
+                navegador::prepare_main_window(app.handle());
             }
 
             Ok(())

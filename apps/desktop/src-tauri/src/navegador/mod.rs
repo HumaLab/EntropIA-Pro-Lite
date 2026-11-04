@@ -46,8 +46,13 @@ pub mod zotero_copy;
 #[allow(dead_code)]
 pub mod url_policy;
 
+// Linux: the layer the tabs' webviews go on, over the app's webview.
+#[cfg(target_os = "linux")]
+mod gtk_layout;
 mod viewer;
 
+#[cfg(target_os = "linux")]
+pub use viewer::prepare_main_window;
 pub use viewer::shutdown;
 
 /// Event the main webview listens to for changes in the browser state (its tabs

@@ -648,6 +648,44 @@ fn to_rect(bounds: Bounds) -> Rect {
     }
 }
 
+/// Move a tab's webview to `bounds`. On Linux, Tauri's `set_bounds` does not
+/// move a child webview, so `gtk_layout` places it (see there).
+fn place(view: &Webview, bounds: Bounds) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let label = view.label().to_string();
+        view.with_webview(move |platform| {
+            use gtk::prelude::Cast;
+            let widget = platform.inner().upcast::<gtk::Widget>();
+            if let Err(reason) = super::gtk_layout::place(&widget, bounds) {
+                log::warn!(target: "navegador", "Could not place {label}: {reason}");
+            }
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    view.set_bounds(to_rect(bounds))
+}
+
+/// Linux only: prepare the main window for the tabs' webviews, while it is
+/// still hidden (see `gtk_layout`). Without it a tab takes half the window.
+#[cfg(target_os = "linux")]
+pub fn prepare_main_window(app: &AppHandle) {
+    let Some(main) = app.get_webview(MAIN_LABEL) else {
+        log::warn!(target: "navegador", "No main webview to prepare for the browser");
+        return;
+    };
+    let prepared = main.with_webview(|platform| {
+        use gtk::prelude::Cast;
+        let widget = platform.inner().upcast::<gtk::Widget>();
+        if let Err(reason) = super::gtk_layout::wrap_app_webview(&widget) {
+            log::warn!(target: "navegador", "Could not prepare the browser layer: {reason}");
+        }
+    });
+    if let Err(e) = prepared {
+        log::warn!(target: "navegador", "Could not prepare the browser layer: {e}");
+    }
+}
+
 /// Make the webviews agree with the state: the active tab's is at the browser's
 /// rect and shown while the browser is shown; every other one is hidden (alive,
 /// with its page and history). Safe to call after any change, and from any
@@ -668,7 +706,7 @@ fn sync_views(app: &AppHandle, shared: &Shared) {
         };
         if Some(id) == active {
             if let Some(bounds) = bounds {
-                let _ = view.set_bounds(to_rect(bounds));
+                let _ = place(&view, bounds);
             }
             let _ = if visible { view.show() } else { view.hide() };
         } else {
@@ -736,6 +774,9 @@ fn create_tab_webview(
         let _ = view.close();
         return Err(NO_SUCH_TAB.to_string());
     }
+    // A background tab is not placed by `sync_views`; on Linux it would stay in
+    // the window's box until it comes to the front.
+    let _ = place(&view, bounds);
     Ok(())
 }
 
@@ -883,8 +924,7 @@ pub fn set_bounds(app: &AppHandle, bounds: Bounds) -> Result<(), String> {
         browser.tabs.active()
     };
     if let Some(view) = active.and_then(|id| app.get_webview(&tabs::label(id))) {
-        view.set_bounds(to_rect(bounds))
-            .map_err(|e| e.to_string())?;
+        place(&view, bounds).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
