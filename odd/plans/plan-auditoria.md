@@ -1,8 +1,8 @@
 # Plan de implementación de las mejoras de la auditoría
 
-**Base:** `auditoria.md` (commit `0ea30b3`, 2026-10-09). Cada tarea cita el ID del hallazgo que resuelve.
-**Referencias `archivo:línea`:** revalidadas contra `ce239141`. Las de `auditoria.md` siguen apuntando a `0ea30b3`.
-**Estado:** plan propuesto, **sin aplicar**. Nada de lo descrito acá está implementado todavía.
+**Base:** `odd/reports/auditoria-2026-10.md` (commit `0ea30b3`, 2026-10-09). Cada tarea cita el ID del hallazgo que resuelve.
+**Referencias `archivo:línea`:** revalidadas contra `ce239141`. Las de `odd/reports/auditoria-2026-10.md` siguen apuntando a `0ea30b3`.
+**Estado:** ejecutado entre el 2026-10-09 y el 2026-10-12 (PRs #26 a #100). El avance por tarea está en `odd/tasks/audit-remediation.md` y el estado de cada hallazgo, en «Estado de la remediación» de `odd/reports/auditoria-2026-10.md`. El texto que sigue es el plan tal como se aprobó.
 
 ---
 
@@ -152,7 +152,7 @@ Son los tres cambios que impiden que un XSS escale. Son chicos y se pueden rever
 #### 2.3 Actualizar dependencias Rust con avisos (D-08) · M-L
 
 - **Pasos:**
-  1. `cargo update -p rustls -p crossbeam-epoch -p quick-xml -p quinn-proto` (cambios menores de versión; `quinn-proto 0.11.14` es la sexta vulnerabilidad de `cargo audit` según `auditoria.md:50,139`: está en el lock vía `quinn 0.11.9` pero no en el árbol activo de Linux, así que si `-p quinn-proto` no la mueve, actualizar su padre `quinn`). Correr clippy y tests en Lite y Pro.
+  1. `cargo update -p rustls -p crossbeam-epoch -p quick-xml -p quinn-proto` (cambios menores de versión; `quinn-proto 0.11.14` es la sexta vulnerabilidad de `cargo audit` según `auditoria-2026-10.md:50,139`: está en el lock vía `quinn 0.11.9` pero no en el árbol activo de Linux, así que si `-p quinn-proto` no la mueve, actualizar su padre `quinn`). Correr clippy y tests en Lite y Pro.
   2. `imageproc` 0.25 → la versión corregida; revisar los usos (`image_edit.rs`, OCR).
   3. **`pdf-extract` / `lopdf 0.34`:**
      - Ver si hay una versión de `pdf-extract` que use `lopdf ≥ 0.42`. Si existe, actualizar.
@@ -420,7 +420,7 @@ PRs chicos e independientes, que se pueden hacer en cualquier momento.
 
 ## 5. Checklist de cada PR
 
-- [ ] Cita el ID del hallazgo de `auditoria.md`.
+- [ ] Cita el ID del hallazgo de `odd/reports/auditoria-2026-10.md`.
 - [ ] Tiene un test que fallaba antes del cambio (si es un hallazgo de seguridad o un bug).
 - [ ] `pnpm lint`, `pnpm typecheck` (Pro y Lite), `pnpm format:check`.
 - [ ] `pnpm test` y `VITE_LOCAL_ML=0 pnpm --filter @entropia-pro/desktop test`.
@@ -428,13 +428,13 @@ PRs chicos e independientes, que se pueden hacer en cualquier momento.
 - [ ] Si toca migraciones o arranque: probado en `ENTROPIA_DEV_PROFILE`, nunca en el archivo real; el esquema resultante se compara con el volcado canónico de 4.0 y no se agregan filas a `_migrations` sin revisión de sync (regla 5).
 - [ ] Si toca capabilities, CSP o scopes: hay test nuevo en `tests/app_acl.rs` y se probaron a mano los flujos afectados.
 - [ ] Si toca empaquetado: se generó el instalador de la variante afectada y se instaló en una máquina o VM limpia.
-- [ ] Se actualiza `auditoria.md`, marcando el hallazgo como resuelto con el enlace al PR.
+- [ ] Se actualiza `odd/reports/auditoria-2026-10.md`, marcando el hallazgo como resuelto con el enlace al PR.
 
 ---
 
 ## 6. Cómo se mide el avance
 
-Al final de cada fase, volver a correr la batería de verificaciones de §2 de `auditoria.md` y actualizar la tabla. Estado objetivo al cerrar el plan:
+Al final de cada fase, volver a correr la batería de verificaciones de §2 de `odd/reports/auditoria-2026-10.md` y actualizar la tabla. Estado objetivo al cerrar el plan:
 
 | Verificación                                  | Hoy                  | Objetivo                                  |
 | --------------------------------------------- | -------------------- | ----------------------------------------- |

@@ -9,7 +9,7 @@
 
 ## Estado de la remediación (2026-10-12)
 
-El plan de `plan.md` se ejecutó fase por fase como PRs apilados, desde #26 hasta #100, todavía sin mergear a `main` al momento de escribir esta sección. El detalle por tarea (tests, commits y revisión) está en `odd/tasks/audit-remediation.md`; acá se resume el estado de cada hallazgo.
+El plan de `odd/plans/plan-auditoria.md` se ejecutó fase por fase como PRs apilados, desde #26 hasta #100, todavía sin mergear a `main` al momento de escribir esta sección. El detalle por tarea (tests, commits y revisión) está en `odd/tasks/audit-remediation.md`; acá se resume el estado de cada hallazgo.
 
 | Hallazgo | Severidad           | Estado             | Fase / PR                  | Nota                                                                                      |
 | -------- | ------------------- | ------------------ | -------------------------- | ----------------------------------------------------------------------------------------- |
@@ -61,7 +61,7 @@ El plan de `plan.md` se ejecutó fase por fase como PRs apilados, desde #26 hast
 
 ### Medición actual
 
-Estado de la batería de §6 de `plan.md` al 2026-10-12. Cada fila indica si el valor se volvió a medir ese día o si sale de `odd/tasks/audit-remediation.md`.
+Estado de la batería de §6 de `odd/plans/plan-auditoria.md` al 2026-10-12. Cada fila indica si el valor se volvió a medir ese día o si sale de `odd/tasks/audit-remediation.md`.
 
 | Verificación                                  | Estado actual                                                                            | Fuente               |
 | --------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------- |

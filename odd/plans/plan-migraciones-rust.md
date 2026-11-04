@@ -2,7 +2,7 @@
 
 Estado: **implementado** (4.0 a 4.4b, PRs #46 a #54; detalle y evidencia en
 `odd/tasks/audit-remediation.md`, Fase 4). Fecha: 2026-10-11.
-Origen: `plan.md`, Fase 4 (A-01, A-02, A-03). Este documento es el paso 4.0: fija las reglas
+Origen: `plan-auditoria.md`, Fase 4 (A-01, A-02, A-03). Este documento es el paso 4.0: fija las reglas
 antes de tocar código. Las referencias `archivo:línea` son de la rama `feat/phase4-migrations-design`.
 
 ## 1. Qué cambia y qué no
@@ -162,7 +162,7 @@ propio con revisión de sync y nota de despliegue.
 3. `ensure_capture` sobre la ruta (como hoy, `lib.rs:~1196-1205`). Ahora cubre todas las tablas
    desde el primer arranque.
 4. En el paso 4.4, la auditoría de triggers y vistas por definición canónica, antes de abrir la
-   conexión de UI (detalle en `plan.md` 4.4).
+   conexión de UI (detalle en `plan-auditoria.md` 4.4).
 5. `ui_conn`, `worker_conn`, `AppDbState`, motor de sync (como hoy).
 6. El frontend arranca. Hasta 4.4, `initDb` sigue llamando a `runMigrations`: no encuentra nada
    pendiente, la ventana de migración de S-02 se abre y se cierra sola (ya está `0058`) y
@@ -183,7 +183,7 @@ el runner.
 - Se eliminan la ventana de migración, las huellas de `migration_allowlist.rs` y
   `migration_ddl_allowlist.txt`, el grabador `migration-ipc-recorder.ts` y su fixture, y
   `defer_foreign_keys` de los pragmas permitidos.
-- Auditoría de triggers y vistas plantados, según `plan.md` 4.4, con sus tests (a) a (d).
+- Auditoría de triggers y vistas plantados, según `plan-auditoria.md` 4.4, con sus tests (a) a (d).
 
 ## 8. Unidades de trabajo
 
