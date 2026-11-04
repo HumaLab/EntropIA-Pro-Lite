@@ -1,6 +1,6 @@
-# Audit remediation (plan.md)
+# Audit remediation (odd/plans/plan-auditoria.md)
 
-Source: `plan.md` (remediation plan for `auditoria.md`). One branch/PR per task or small group of
+Source: `odd/plans/plan-auditoria.md` (remediation plan for `odd/reports/auditoria-2026-10.md`). One branch/PR per task or small group of
 related tasks; security never mixed with refactors. Work starts at Phase 0, then Phase 1.
 
 ## Phase 0 — Linux CI baseline (branch `ci/audit-phase-0`)
@@ -718,7 +718,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
       lockfile anomaly returns, the diagnostics are gone. Accepted: the restore mitigation stays
       and the scripts are recoverable from git history (`cb10d8ab^`). RDD
       `review-a0e3cd641a90c0e3` (7.4b, medium) approved, no findings.
-  - [x] 7.5 — release upload refs through env (follow-up of the 6.5 advisory; not in plan.md).
+  - [x] 7.5 — release upload refs through env (follow-up of the 6.5 advisory; not in plan-auditoria.md).
     Branch `ci/p7-5-release-ref-env`, commit `567e9319`. The two `gh release upload` steps in
     `release.yml` used `"${{ github.ref_name }}"` / `"${{ github.repository }}"` inside `run:` (a
     crafted tag name is legal and would run as code); now `"$GITHUB_REF_NAME"` /
@@ -730,7 +730,7 @@ RDD approved #26, #27, #28 and #29; these act on their non-blocking advisories.
     script indentation) accepted: a layout change fails the test loudly, never silently.
 - [x] Phase 8 — quality, hygiene, docs (Q-01..Q-04, R-01..R-05, A-06, S-07, C-06). Started and
   closed 2026-10-12 (user: "arrancá y no pares hasta terminar"). Stacked PRs #79–#84, #100 and the
-  docs PR, on 7.5. `auditoria.md` gains "Estado de la remediación (2026-10-12)": one row per
+  docs PR, on 7.5. `odd/reports/auditoria-2026-10.md` gains "Estado de la remediación (2026-10-12)": one row per
   finding (45) with status and phase/PR, plus the plan §6 measurement (pnpm audit --prod 0
   high/critical, cargo audit 0 vulnerabilities, eprintln! 1 — re-measured).
   - Integration (2026-10-12): #65–#74 were merged into `main` meanwhile, and `main` carried its own
