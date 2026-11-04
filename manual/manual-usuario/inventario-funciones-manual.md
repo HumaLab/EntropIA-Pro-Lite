@@ -164,7 +164,7 @@ La columna **Sección del manual** enlaza con los pasos y explicaciones correspo
 
 Las capturas originales (PNG) no se versionan en el repositorio; sus copias web se publican en `manual/manual-usuario/images/` como WebP sin pérdida, conservando las dimensiones originales. No se alteraron controles, datos ni resultados. Los ejemplos pertenecen al corpus de las capturas, no a una instalación nueva.
 
-Las capturas se tomaron con la versión 1.1.1. Las funciones agregadas después —las anotaciones de los PDF de la Biblioteca y la pestaña **Asistentes** de Configuración— se describen en el texto pero todavía no aparecen en las imágenes.
+Las capturas se tomaron con la versión 1.3.0 sobre las colecciones de ejemplo, en un perfil de desarrollo aislado. La obra de la Biblioteca es *Facundo* (Sarmiento, 1845), de dominio público, cargada con anotaciones de ejemplo. Las capturas del Chat, Investigar y su informe, el Navegador y el detalle de Zotero siguen siendo de la 1.1.1: muestran respuestas de IA, páginas web o una biblioteca de Zotero real, que no se reproducen con el corpus de ejemplo.
 
 | Captura fuente | Uso en el manual |
 |---|---|
@@ -176,11 +176,14 @@ Las capturas se tomaron con la versión 1.1.1. Las funciones agregadas después 
 | `EntropIA-Investigacion.png` | Informe, cobertura y consulta de la fuente original. |
 | `EntropIA-Chat-RAG.png` | Chat, citas, fuentes e historial. |
 | `EntropIA-Escritura.png` | Lista de manuscritos. |
-| `EntropIA-Escrito.png` | Editor de manuscrito y panel de investigación; detalle de Zotero. |
+| `EntropIA-Escrito.png` | Editor de manuscrito y panel de investigación con la pestaña Corpus. |
 | `EntropIA-Configuracion.png` | Proveedores remotos y navegación de Configuración. |
 | `EntropIA-Base.png` | Consulta DB, filtros, datos y exportación. |
+| `EntropIA-Navegador.png` | Navegador con una solapa abierta (1.1.1). |
+| `EntropIA-Biblioteca-anotaciones.png` | Obra de la Biblioteca con anotaciones y el panel **Anotaciones**. |
+| `EntropIA-Asistentes.png` | Configuración → Asistentes: emparejar, permisos, carpetas de entrada y líneas de conexión. |
 
-Los cuatro recortes se publican como `EntropIA-Inicio-detalle.webp`, `EntropIA-Analisis-detalle.webp`, `EntropIA-Notas-detalle.webp` y `EntropIA-Zotero-detalle.webp`. Solo eliminan áreas externas al panel explicado.
+Los cuatro recortes se publican como `EntropIA-Inicio-detalle.webp`, `EntropIA-Analisis-detalle.webp`, `EntropIA-Notas-detalle.webp` y `EntropIA-Zotero-detalle.webp` (este último, de la 1.1.1). Solo eliminan áreas externas al panel explicado.
 
 Los diagramas restantes ilustran flujos de OCR, organización, lotes, sincronización, ejemplos y resolución de problemas; no sustituyen capturas ni afirman que se hayan ejecutado esas tareas con el corpus mostrado.
 

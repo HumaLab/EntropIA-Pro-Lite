@@ -12,7 +12,7 @@ Para comprobar qué versión tenés instalada, mirá la barra inferior.
 
 Este manual acompaña el recorrido completo: **preparar el espacio de trabajo → reunir fuentes → obtener y revisar texto → buscar y analizar → investigar → escribir con citas → exportar y respaldar**. No necesitás configurar todas las funciones para empezar.
 
-> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. Las capturas corresponden a la versión 1.1.1: lo agregado después, como las herramientas de anotación de la Biblioteca o la pestaña **Asistentes** de Configuración, se explica en el texto aunque no se vea en la imagen. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
+> **Cómo leer las imágenes.** Las capturas muestran EntropIA Lite con un corpus de ejemplo; tus títulos, recuentos y resultados serán diferentes. Los recortes están identificados como «Detalle» y conservan la interfaz original. Los diagramas explican procesos, no representan pantallas. La mayoría de las capturas corresponden a la versión 1.3.0. Las del Chat, Investigar y su informe, el Navegador y el detalle de Zotero son de la 1.1.1, porque muestran respuestas de IA, páginas web o una biblioteca de Zotero que no se pueden reproducir con el corpus de ejemplo; esas pantallas no cambiaron de forma visible. En la edición web, pulsá cualquier imagen para abrirla a tamaño completo en otra pestaña.
 
 ### Elegí tu recorrido
 
@@ -689,7 +689,7 @@ La vista actual no importa un DOCX o un Markdown como manuscrito. Si ya tenés t
 
 ### 11.2. Escribir y navegar
 
-![Captura de un manuscrito: Esquema a la izquierda, editor central, estado Guardado y panel de investigación con Zotero abierto.](images/EntropIA-Escrito.webp)
+![Captura de un manuscrito: Esquema a la izquierda, editor central, estado Guardado y panel de investigación con la pestaña Corpus y una búsqueda.](images/EntropIA-Escrito.webp)
 
 El espacio reúne **Esquema**, el manuscrito y el panel de investigación. Usá **Mostrar u ocultar el esquema** y **Mostrar u ocultar el panel de investigación**, o arrastrá sus separadores. Si falta ancho, el esquema puede cerrarse automáticamente. **Volver a los documentos** regresa a la lista y **Más herramientas** muestra opciones que no entran en la barra.
 
@@ -858,6 +858,8 @@ Los PDF de tu biblioteca personal de Zotero se pueden resaltar, subrayar y comen
 
 **Antes de empezar.** Las anotaciones usan la Web API de Zotero, no la comunicación local: guardá en **Configuración → APIs remotas → Zotero** una clave con permiso de escritura en tu biblioteca personal ([16.1](#capitulo-16-configuracion-y-herramientas-generales)). Abrí Zotero al menos una vez para que EntropIA sepa qué cuenta usás. Por ahora funcionan solo en la **biblioteca personal**, no en los grupos.
 
+![Captura de una obra de la Biblioteca en la pestaña Original: el PDF con un resaltado amarillo, un subrayado azul y un resaltado verde, la columna de herramientas y colores de Zotero a la derecha del visor, y el panel Anotaciones con cada marca, su texto y su comentario, agrupadas por página.](images/EntropIA-Biblioteca-anotaciones.webp)
+
 1. En **Biblioteca**, abrí una obra con PDF y quedate en la pestaña **Original**. A la derecha aparece el panel **Anotaciones**.
 2. Seleccioná texto en la página: el menú **Anotar la selección** ofrece resaltar o subrayar con los colores de Zotero. También podés elegir una herramienta en la columna del visor: **Seleccionar**, **Resaltar**, **Subrayar**, **Nota**, **Área** (un recorte rectangular) o **Texto**.
 3. En el panel, cada anotación aparece por página con su tipo (**Resaltado**, **Subrayado**, **Nota**, **Área**, **Texto**, **Dibujo**) y un campo **Agregar un comentario…**. Con una anotación seleccionada, elegir otro color la recolorea; **Eliminar anotación** pide confirmación.
@@ -930,6 +932,8 @@ El agente no modifica el manuscrito automáticamente. Si el pasaje cambió, desa
 ### 13.4. Asistentes externos: Claude Code, Codex, OpenCode y Pi
 
 Además de sus propios agentes, EntropIA puede atender a un **asistente externo** instalado en tu computadora —Claude Code, Codex, OpenCode o Pi— para que consulte tu archivo mientras trabajás con él. La conexión usa el protocolo MCP, está **apagada de entrada**, escucha solo en esta computadora (`127.0.0.1`, nunca en la red local) y funciona igual en Lite y en Pro. EntropIA tiene que estar abierta mientras el asistente trabaja; puede quedar minimizada.
+
+![Captura de Configuración → Asistentes: el interruptor Permitir asistentes externos activo en 127.0.0.1, un asistente emparejado con el permiso Preparar procesamiento y editar el corpus marcado, una carpeta de entrada y las líneas de conexión para Claude Code, Codex, OpenCode y Pi con la ruta del conector instalado.](images/EntropIA-Asistentes.webp)
 
 **Conectar un asistente.**
 
@@ -1044,7 +1048,7 @@ Si necesitás otra capacidad, abrí **Solicitar cambio de plan**, elegí un plan
 <a id="capitulo-16-configuracion-y-herramientas-generales"></a>
 ## Capítulo 16. Configuración y herramientas generales
 
-![Captura de Configuración en Lite: OpenRouter con su prueba de conexión, el respaldo Vercel AI Gateway, AssemblyAI y las pestañas de preferencias, incluida Apariencia. Los campos muestran claves ocultas.](images/EntropIA-Configuracion.webp)
+![Captura de Configuración en Lite recién instalada: tarjetas de OpenRouter, Respaldo Vercel AI Gateway y AssemblyAI todavía sin clave guardada, y la fila de pestañas, incluidas Asistentes y Apariencia.](images/EntropIA-Configuracion.webp)
 
 Abrí **Configuración** con el botón de engranaje de la barra superior. En Lite aparecen estas pestañas:
 
