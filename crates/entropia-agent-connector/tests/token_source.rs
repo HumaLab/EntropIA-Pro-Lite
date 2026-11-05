@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use common::{FakeApp, Reply};
 use entropia_agent_connector::cli;
-use entropia_agent_connector::error::{ConnectorError, CREDENTIAL_STORE_UNAVAILABLE};
+use entropia_agent_connector::error::{
+    ConnectorError, CREDENTIAL_MISSING, CREDENTIAL_STORE_UNAVAILABLE,
+};
 use entropia_agent_connector::keyring_source::{
     token_path, CredentialStore, KeyringOutcome, KeyringSource, TOKENS_DIR,
 };
@@ -198,6 +200,57 @@ fn neither_a_store_entry_nor_a_file_is_a_missing_credential() {
     let dir = tempfile::tempdir().unwrap();
     let source = source(dir.path(), KeyringOutcome::NoEntry);
     assert_eq!(source.token(CLIENT_ID), Err(TokenError::Missing));
+}
+
+/// The real incident: the person revoked a client, paired a new one, but the
+/// assistant still held the old registration. "Pair it again" sent them to pair
+/// a third client, so the sentence now names the other likely cause and the step
+/// that actually fixes it: replacing the registration with the panel's line.
+#[test]
+fn a_missing_credential_names_the_revoke_and_asks_to_replace_the_registration() {
+    let rpc = ConnectorError::credential(TokenError::Missing);
+
+    // The code is a contract with the assistant, so it never changes.
+    assert_eq!(rpc.rpc_code, CREDENTIAL_MISSING);
+    assert_eq!(rpc.rpc_code, -32005);
+    assert_eq!(rpc.code, "credential_missing");
+    assert_eq!(rpc.detail, None);
+    assert!(
+        rpc.message
+            .contains("No hay una credencial guardada para este cliente"),
+        "{}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("revocado") && rpc.message.contains("otro equipo"),
+        "the message must name why this id has no credential: {}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("Ajustes → Asistentes"),
+        "the message must say where to pair: {}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("reemplazá"),
+        "the message must say to replace the registration: {}",
+        rpc.message
+    );
+}
+
+/// A store that failed on this machine says the same thing and keeps its reason
+/// in the diagnostic detail, as before.
+#[test]
+fn a_failed_credential_read_keeps_the_reason_apart_from_the_advice() {
+    let rpc = ConnectorError::credential(TokenError::Failed("json corrupto".into()));
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_MISSING);
+    assert_eq!(rpc.code, "credential_missing");
+    assert_eq!(rpc.detail.as_deref(), Some("json corrupto"));
+    assert_eq!(
+        rpc.message,
+        ConnectorError::credential(TokenError::Missing).message
+    );
 }
 
 /// A process started with a scrubbed environment (Codex does this) cannot

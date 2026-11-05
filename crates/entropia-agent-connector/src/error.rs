@@ -26,6 +26,18 @@ pub const UNEXPECTED_STATUS: i32 = -32000;
 /// The line on stdin was not JSON.
 pub const PARSE_ERROR: i32 = -32700;
 
+/// What -32005 says to the person. A revoke leaves a registration behind in the
+/// assistant, and "pair it again" then sent people to pair yet another client:
+/// the same text therefore names both likely causes of a missing credential and
+/// the step that actually fixes it (replace, never add a second one). The two
+/// ways a lookup fails — nothing stored, or a store that answered an error —
+/// keep this same advice; only the diagnostic detail differs.
+const CREDENTIAL_MISSING_MESSAGE: &str =
+    "No hay una credencial guardada para este cliente en este equipo: lo más probable es que se \
+     lo haya revocado, o que se lo haya emparejado en otro equipo. Emparejá un asistente nuevo en \
+     EntropIA, Ajustes → Asistentes, y reemplazá la entrada de entropia del asistente con la línea \
+     que muestra el panel, sin agregar una segunda.";
+
 /// One failure, ready to become a JSON-RPC error response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectorError {
@@ -134,8 +146,7 @@ impl ConnectorError {
             TokenError::Missing => Self::new(
                 CREDENTIAL_MISSING,
                 "credential_missing",
-                "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
-                 Asistentes.",
+                CREDENTIAL_MISSING_MESSAGE,
                 None,
             ),
             TokenError::StoreUnavailable(detail) => Self::new(
@@ -150,8 +161,7 @@ impl ConnectorError {
             TokenError::Failed(reason) => Self::new(
                 CREDENTIAL_MISSING,
                 "credential_missing",
-                "No hay una credencial guardada para este cliente: emparejalo en EntropIA, Ajustes → \
-                 Asistentes.",
+                CREDENTIAL_MISSING_MESSAGE,
                 Some(reason),
             ),
         }
