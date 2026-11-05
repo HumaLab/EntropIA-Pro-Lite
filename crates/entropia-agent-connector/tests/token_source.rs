@@ -15,7 +15,7 @@ use std::sync::Arc;
 use common::{FakeApp, Reply};
 use entropia_agent_connector::cli;
 use entropia_agent_connector::error::{
-    ConnectorError, CREDENTIAL_MISSING, CREDENTIAL_STORE_UNAVAILABLE,
+    ConnectorError, Platform, CREDENTIAL_MISSING, CREDENTIAL_STORE_UNAVAILABLE,
 };
 use entropia_agent_connector::keyring_source::{
     token_path, CredentialStore, KeyringOutcome, KeyringSource, TOKENS_DIR,
@@ -271,6 +271,76 @@ fn an_unreachable_store_without_a_file_says_so_instead_of_missing() {
     assert_eq!(rpc.code, "credential_store_unavailable");
     assert_eq!(rpc.detail.as_deref(), Some("no session bus"));
     assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+}
+
+/// S2: on Windows the store is the Credential Manager, which an SSH logon or a
+/// service cannot open at all, so D-Bus advice is meaningless there.
+#[test]
+fn the_windows_store_refusal_names_the_credential_manager_and_the_desktop_session() {
+    let rpc = ConnectorError::credential_on(
+        Platform::Windows,
+        TokenError::StoreUnavailable("ERROR_NO_SUCH_LOGON_SESSION".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, -32007);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert_eq!(rpc.detail.as_deref(), Some("ERROR_NO_SUCH_LOGON_SESSION"));
+    assert!(
+        rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
+    assert!(rpc.message.contains("SSH"), "{}", rpc.message);
+    assert!(rpc.message.contains("servicio"), "{}", rpc.message);
+    assert!(
+        rpc.message.contains("sesión de escritorio"),
+        "{}",
+        rpc.message
+    );
+    assert!(!rpc.message.contains("DBUS"), "{}", rpc.message);
+}
+
+/// S2: macOS has a keychain, not a D-Bus session bus.
+#[test]
+fn the_macos_store_refusal_asks_for_an_unlocked_keychain_without_dbus() {
+    let rpc = ConnectorError::credential_on(
+        Platform::MacOs,
+        TokenError::StoreUnavailable("denied".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_STORE_UNAVAILABLE);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+    assert!(!rpc.message.contains("DBUS"), "{}", rpc.message);
+    assert!(
+        !rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
+}
+
+/// S2: Linux keeps the advice it already had: an unlocked keyring, or the
+/// session bus variable when the agent scrubbed the environment.
+#[test]
+fn the_linux_store_refusal_keeps_the_keyring_and_dbus_advice() {
+    let rpc = ConnectorError::credential_on(
+        Platform::Linux,
+        TokenError::StoreUnavailable("no session bus".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_STORE_UNAVAILABLE);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+    assert!(
+        rpc.message.contains("DBUS_SESSION_BUS_ADDRESS"),
+        "{}",
+        rpc.message
+    );
+    assert!(
+        !rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
 }
 
 #[test]

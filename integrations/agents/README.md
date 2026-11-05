@@ -220,7 +220,18 @@ the fallback token file is readable by other users, so fix its permissions
 (`chmod 600`) or pair the assistant again; `credential_store_unavailable` means the
 connector could not reach the OS keyring from the process the agent started (log
 in to the desktop session with the keyring unlocked, or pass the agent
-`DBUS_SESSION_BUS_ADDRESS`).
+`DBUS_SESSION_BUS_ADDRESS` on Linux; on Windows the Credential Manager is only
+reachable from the desktop session, so a connector started over SSH or by a
+service cannot read it).
+
+Every refusal the connector builds is also written to stderr, one line per
+refused request with the numeric code, `data.code` and `data.detail` (for example
+`entropia-agent-connector: -32001 app_absent: no pude leer
+…/agent-endpoint.json: …`), because the assistant shows only the `message` and
+never the detail. Claude Code records that stderr per server: on Windows
+`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-entropia\*.jsonl`; on
+Linux `~/.cache/claude-cli-nodejs/<project>/mcp-logs-entropia/` (the per-project
+cache directory exists on this machine, with one `mcp-logs-<server>` per server).
 
 ### Known issues on Windows
 

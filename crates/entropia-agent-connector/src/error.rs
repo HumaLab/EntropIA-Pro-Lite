@@ -38,6 +38,61 @@ const CREDENTIAL_MISSING_MESSAGE: &str =
      EntropIA, Ajustes → Asistentes, y reemplazá la entrada de entropia del asistente con la línea \
      que muestra el panel, sin agregar una segunda.";
 
+/// -32007 on Linux: the Secret Service needs an unlocked keyring, and the
+/// session bus variable when the agent scrubbed the environment.
+const STORE_UNAVAILABLE_LINUX: &str =
+    "No pude acceder al llavero del sistema desde este proceso, así que no puedo leer la \
+     credencial del asistente: abrí la sesión del escritorio (el llavero tiene que estar \
+     desbloqueado) o, si el agente lanza el conector con un entorno reducido, pasale \
+     DBUS_SESSION_BUS_ADDRESS.";
+
+/// -32007 on Windows: the Credential Manager is only reachable from the user's
+/// desktop session, so a connector started over SSH or by a service never reads
+/// it. D-Bus advice would be meaningless here.
+const STORE_UNAVAILABLE_WINDOWS: &str =
+    "No pude acceder al llavero del sistema desde este proceso: en Windows es el Administrador \
+     de credenciales, que solo está disponible en la sesión de escritorio del usuario, así que un \
+     conector lanzado desde SSH o por un servicio no puede leer la credencial del asistente. Abrí \
+     el asistente desde la sesión de escritorio y volvé a intentarlo.";
+
+/// -32007 on macOS: an unlocked keychain, and no D-Bus advice.
+const STORE_UNAVAILABLE_MACOS: &str =
+    "No pude acceder al llavero del sistema desde este proceso, así que no puedo leer la \
+     credencial del asistente: el llavero tiene que estar desbloqueado en la sesión del \
+     escritorio. Desbloquealo desde Acceso a Llaveros y volvé a intentarlo.";
+
+/// The platform whose credential store a refusal describes. The platform is a
+/// parameter of [`ConnectorError::credential_on`] so every text is testable on
+/// one machine; [`ConnectorError::credential`] passes this build's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    Windows,
+    MacOs,
+    Linux,
+}
+
+impl Platform {
+    /// The platform this build runs on.
+    pub const fn host() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
+    }
+
+    /// The -32007 sentence to use on this platform.
+    fn store_unavailable_message(self) -> &'static str {
+        match self {
+            Self::Windows => STORE_UNAVAILABLE_WINDOWS,
+            Self::MacOs => STORE_UNAVAILABLE_MACOS,
+            Self::Linux => STORE_UNAVAILABLE_LINUX,
+        }
+    }
+}
+
 /// One failure, ready to become a JSON-RPC error response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectorError {
@@ -132,8 +187,15 @@ impl ConnectorError {
     }
 
     /// No token anywhere for this client id, or a credential store that failed
-    /// in a way that is not "unavailable" (D14).
+    /// in a way that is not "unavailable" (D14), as this build's platform would
+    /// word it.
     pub fn credential(error: TokenError) -> Self {
+        Self::credential_on(Platform::host(), error)
+    }
+
+    /// The same refusal with the -32007 sentence of an explicit platform, so
+    /// the Windows and macOS texts are tested on every host (S2).
+    pub fn credential_on(platform: Platform, error: TokenError) -> Self {
         match error {
             TokenError::Insecure(detail) => Self::new(
                 CREDENTIAL_INSECURE,
@@ -152,10 +214,7 @@ impl ConnectorError {
             TokenError::StoreUnavailable(detail) => Self::new(
                 CREDENTIAL_STORE_UNAVAILABLE,
                 "credential_store_unavailable",
-                "No pude acceder al llavero del sistema desde este proceso, así que no puedo leer \
-                 la credencial del asistente: abrí la sesión del escritorio (el llavero tiene que \
-                 estar desbloqueado) o, si el agente lanza el conector con un entorno reducido, \
-                 pasale DBUS_SESSION_BUS_ADDRESS.",
+                platform.store_unavailable_message(),
                 Some(detail),
             ),
             TokenError::Failed(reason) => Self::new(
@@ -223,11 +282,13 @@ impl ConnectorError {
         )
     }
 
-    /// One line for the diagnostic channel.
+    /// One line for the diagnostic channel: the numeric code, the stable
+    /// `data.code` and, when the refusal carries one, the detail. The detail is
+    /// the part an assistant never shows (`data.detail`), so it leads; a refusal
+    /// without one falls back to its actionable sentence. Never a secret: no
+    /// detail here carries the token or the instance key.
     pub fn describe(&self) -> String {
-        match &self.detail {
-            Some(detail) => format!("{}: {} ({detail})", self.code, self.message),
-            None => format!("{}: {}", self.code, self.message),
-        }
+        let context = self.detail.as_deref().unwrap_or(&self.message);
+        format!("{} {}: {context}", self.rpc_code, self.code)
     }
 }
