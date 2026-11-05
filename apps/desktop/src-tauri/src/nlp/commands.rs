@@ -974,6 +974,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn scored_asset_ranks_higher_similarity_then_lower_asset_id_as_better() {
+        let scored = |similarity: f64, asset_id: &str| super::ScoredAsset {
+            similarity,
+            asset_id: asset_id.to_string(),
+        };
+
+        // The scan visits rows in whatever order SQLite picks, so a late
+        // equal-score candidate must still displace a kept one with a higher id.
+        assert!(scored(0.5, "a") > scored(0.5, "c"));
+        assert!(scored(0.6, "z") > scored(0.5, "a"));
+        assert_eq!(scored(0.5, "a"), scored(0.5, "a"));
+    }
+
     /// Latency probe for the full scan, not a regression check. Run it in
     /// release, where the app ships:
     /// `cargo test --release --lib similar_assets_scan_benchmark -- --ignored --nocapture`

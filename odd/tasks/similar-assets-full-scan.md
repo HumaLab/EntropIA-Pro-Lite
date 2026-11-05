@@ -20,8 +20,8 @@ JD-A-001 fixed in round 1); branch `fix/similar-assets-full-scan`.
 ## Tasks
 
 - [x] T1 — S1-S9 — inline, test-first: full scan, effective-contract filter, top-k heap, hydration, fixture — commit: 54e405f8 (726 authored lines, one behavior unit: ~270 code, rest tests/fixture; slice boundary)
-- [x] T2 — S10 — inline: ignored release benchmark + recorded numbers — commit: this commit (test(nlp): benchmark the similar assets full scan)
-- [ ] T3 — S1-S10 — gentle-ai-verify (Risk item 4: scan holds ui_conn) — commit: n/a
+- [x] T2 — S10 — inline: ignored release benchmark + recorded numbers — commit: 50d13d0b
+- [x] T3 — S1-S10 — gentle-ai-verify (Risk item 4: scan holds ui_conn) — commit: this commit (probe test)
 
 ## Log
 
@@ -41,3 +41,7 @@ JD-A-001 fixed in round 1); branch `fix/similar-assets-full-scan`.
   canonical 1024-dim vectors, `open_archive_connection` pragmas): fresh connection 260 ms; warm min 249 / median 260 /
   max 266 ms; a concurrent UI read waited 239 ms on `ui_conn`. Under the ~500 ms threshold, so C/D are not triggered.
   Not measured: cold disk (dropping the OS page cache needs root) and the unoptimized dev profile.
+- L9 — Independent verify (gentle-ai-verify): S1-S9 pass, S10 partial (cold disk and dev profile unmeasured, as L8
+  states); no blockers; JSON keys match `SimilarAsset` in `apps/desktop/src/lib/nlp.ts:39-48`. Its suggested tie probe
+  through the public path would not reach the displacement branch (SQLite visits rows in asset-id index order), so the
+  tie rule is pinned on `ScoredAsset` ordering directly. Lite `nlp::commands::tests` 22 passed, 1 ignored; clippy clean.
