@@ -482,6 +482,11 @@ mod tests {
 
     fn setup_similar_assets_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory db should open");
+        create_similar_assets_schema(&conn);
+        conn
+    }
+
+    fn create_similar_assets_schema(conn: &rusqlite::Connection) {
         conn.execute_batch(
             r#"
             CREATE TABLE items (
@@ -528,8 +533,6 @@ mod tests {
             "#,
         )
         .expect("test schema should be created");
-
-        conn
     }
 
     #[test]
@@ -969,6 +972,92 @@ mod tests {
                 assert_eq!(row["itemId"], format!("item-{asset_id}"));
             }
         }
+    }
+
+    /// Latency probe for the full scan, not a regression check. Run it in
+    /// release, where the app ships:
+    /// `cargo test --release --lib similar_assets_scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: 100k canonical vectors; run in release with --ignored --nocapture"]
+    fn similar_assets_scan_benchmark() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        const ROWS: usize = 100_000;
+        let dir = tempfile::tempdir().expect("tempdir should open");
+        let path = dir.path().join("entropia.sqlite");
+        {
+            let conn =
+                crate::db::open::open_archive_connection(&path).expect("archive should open");
+            create_similar_assets_schema(&conn);
+            insert_canonical_asset(&conn, "asset-target", &[1.0, 0.5, 0.25]);
+            // Deterministic xorshift values fill every dimension, so each
+            // vector costs a full 4 KB read and a full dot product.
+            let mut state = 0x2545_f491_4f6c_dd1d_u64;
+            let mut values = vec![0.0_f32; CANONICAL_EMBEDDING_DIMENSIONS];
+            conn.execute_batch("BEGIN").expect("begin");
+            for index in 0..ROWS {
+                for value in values.iter_mut() {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    *value = (state >> 40) as f32 / (1_u64 << 24) as f32 - 0.5;
+                }
+                insert_vector_row(
+                    &conn,
+                    &format!("asset-{index:06}"),
+                    values.iter().flat_map(|f| f.to_le_bytes()).collect(),
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS,
+                );
+            }
+            conn.execute_batch("COMMIT").expect("commit");
+        }
+
+        // A fresh connection starts with an empty SQLite page cache; the OS
+        // page cache stays warm (dropping it needs root), so this is not cold disk.
+        let conn = crate::db::open::open_archive_connection(&path).expect("archive should reopen");
+        let started = Instant::now();
+        let first = similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+        let first_run = started.elapsed();
+        assert_eq!(first.as_array().map(Vec::len), Some(5));
+
+        let mut warm: Vec<Duration> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+                started.elapsed()
+            })
+            .collect();
+        warm.sort();
+
+        // The command holds the shared UI connection for the whole scan; time
+        // how long another UI read waits behind it.
+        let shared = Arc::new(Mutex::new(conn));
+        let scanner = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let conn = shared.lock().expect("lock");
+                similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+            })
+        };
+        std::thread::sleep(Duration::from_millis(5));
+        let waited = Instant::now();
+        let one: i64 = shared
+            .lock()
+            .expect("lock")
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .expect("ui read");
+        let ui_wait = waited.elapsed();
+        scanner.join().expect("scanner thread");
+        assert_eq!(one, 1);
+
+        eprintln!(
+            "similar_assets over {ROWS} vectors: fresh connection {first_run:?}, \
+             warm min {:?} / median {:?} / max {:?}, concurrent UI read waited {ui_wait:?}",
+            warm[0], warm[2], warm[4]
+        );
     }
 }
 
