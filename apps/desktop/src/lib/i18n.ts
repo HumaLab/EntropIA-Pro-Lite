@@ -909,6 +909,11 @@ const es = {
   'ragChat.librariesAll': 'Todas las bibliotecas',
   'ragChat.librariesSome': '{count} de {total} bibliotecas',
   'ragChat.libraryCounts': '{works} obras · {passages} pasajes',
+  'ragChat.collectionsMenu': 'Colecciones del corpus',
+  'ragChat.collectionsAll': 'Todas las colecciones',
+  'ragChat.collectionsSome': '{count} de {total} colecciones',
+  'ragChat.collectionItemsOne': '{count} documento',
+  'ragChat.collectionItemsMany': '{count} documentos',
   'ragChat.libraryStatusLoading': 'Revisando las bibliotecas de Zotero…',
   'ragChat.libraryStatusError': 'No se pudo consultar el estado de las bibliotecas de Zotero.',
   'ragChat.libraryStatusNone':
@@ -4299,6 +4304,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'ragChat.librariesAll': 'All libraries',
   'ragChat.librariesSome': '{count} of {total} libraries',
   'ragChat.libraryCounts': '{works} works · {passages} passages',
+  'ragChat.collectionsMenu': 'Corpus collections',
+  'ragChat.collectionsAll': 'All collections',
+  'ragChat.collectionsSome': '{count} of {total} collections',
+  'ragChat.collectionItemsOne': '{count} document',
+  'ragChat.collectionItemsMany': '{count} documents',
   'ragChat.libraryStatusLoading': 'Checking the Zotero libraries…',
   'ragChat.libraryStatusError': 'The state of the Zotero libraries could not be read.',
   'ragChat.libraryStatusNone':

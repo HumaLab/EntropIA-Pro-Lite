@@ -158,6 +158,54 @@ enum AssetFilter<'a> {
     WithoutChunks(&'a EffectiveEmbeddingContract),
 }
 
+/// Las colecciones del corpus en las que busca una recuperación. El Chat lo
+/// elige; Escritura y el resto buscan siempre en todo el corpus.
+///
+/// Cada pierna lo aplica en su propia consulta, ANTES de quedarse con sus
+/// candidatos: filtrar la lista ya recortada dejaba sin resultados a una
+/// colección que no estaba entre los primeros del corpus entero.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CollectionScope {
+    /// Arreglo JSON de ids para `json_each`; `None` es todo el corpus.
+    ids_json: Option<String>,
+}
+
+impl CollectionScope {
+    pub(crate) fn all() -> Self {
+        Self::default()
+    }
+
+    /// Solo esas colecciones. Sin ids es todo el corpus: una elección vacía
+    /// no puede significar "no buscar en nada" en silencio.
+    pub(crate) fn only(ids: &[String]) -> Self {
+        if ids.is_empty() {
+            return Self::all();
+        }
+        Self {
+            ids_json: Some(serde_json::Value::from(ids.to_vec()).to_string()),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_all(&self) -> bool {
+        self.ids_json.is_none()
+    }
+
+    /// El parámetro SQL de [`asset_in_scope`]: NULL deja pasar todo.
+    fn param(&self) -> Option<&str> {
+        self.ids_json.as_deref()
+    }
+}
+
+/// Condición SQL "el asset de `column` pertenece al alcance `?param`".
+fn asset_in_scope(column: &str, param: usize) -> String {
+    format!(
+        "(?{param} IS NULL OR {column} IN (
+            SELECT a.id FROM assets a JOIN items i ON i.id = a.item_id
+            WHERE i.collection_id IN (SELECT value FROM json_each(?{param}))))"
+    )
+}
+
 /// Pregunta, por asset, si ya tiene chunks en el espacio efectivo.
 struct ChunkCoverage<'c, 'a> {
     stmt: Option<(rusqlite::Statement<'c>, &'a EffectiveEmbeddingContract)>,
@@ -216,7 +264,7 @@ pub(crate) fn retrieval_legs(
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RetrievalLeg>, String> {
-    Ok(legs_reporting(conn, queries, params, unit)?.0)
+    Ok(legs_reporting(conn, queries, params, unit, &CollectionScope::all())?.0)
 }
 
 /// Código de [`RagDegradation`]: sin espacio de embedding resoluble no hay
@@ -228,6 +276,7 @@ fn legs_reporting(
     queries: &[RetrievalQuery<'_>],
     params: &RagParams,
     unit: RetrievalUnit,
+    collections: &CollectionScope,
 ) -> Result<(Vec<RetrievalLeg>, Vec<RagDegradation>), String> {
     let mut degradation = Vec::new();
     // Sin espacio efectivo resoluble (proveedor desconocido) no hay chunks que
@@ -272,12 +321,19 @@ fn legs_reporting(
                         limit,
                         params.min_similarity,
                         effective,
+                        collections,
                     )?),
                 });
             }
             legs.push(RetrievalLeg {
                 kind: LegKind::ChunkLexical,
-                records: chunks(chunk_lexical_leg_in(conn, query.text, limit, effective)?),
+                records: chunks(chunk_lexical_leg_in(
+                    conn,
+                    query.text,
+                    limit,
+                    effective,
+                    collections,
+                )?),
             });
         }
         if let Some(embedding) = query.embedding {
@@ -289,6 +345,7 @@ fn legs_reporting(
                     limit,
                     params.min_similarity,
                     filter,
+                    collections,
                 )?),
             });
         }
@@ -300,6 +357,7 @@ fn legs_reporting(
                 limit,
                 filter,
                 params.top_k.max(LEXICAL_SCAN_MIN_ITEMS),
+                collections,
             )?),
         });
     }
@@ -321,18 +379,19 @@ pub(crate) fn hybrid_retrieve_candidates(
     params: &RagParams,
     unit: RetrievalUnit,
 ) -> Result<Vec<RrfCandidate>, String> {
-    Ok(retrieve_reporting(conn, queries, params, unit)?.candidates)
+    Ok(retrieve_reporting(conn, queries, params, unit, &CollectionScope::all())?.candidates)
 }
 
 /// [`hybrid_retrieve_candidates`] más las degradaciones declaradas, para el
-/// Chat, que las devuelve en la respuesta.
+/// Chat, que las devuelve en la respuesta, en las colecciones que eligió.
 pub(crate) fn retrieve_reporting(
     conn: &Connection,
     queries: &[RetrievalQuery<'_>],
     params: &RagParams,
     unit: RetrievalUnit,
+    collections: &CollectionScope,
 ) -> Result<HybridRetrieval, String> {
-    let (legs, degradation) = legs_reporting(conn, queries, params, unit)?;
+    let (legs, degradation) = legs_reporting(conn, queries, params, unit, collections)?;
     let legs: Vec<Vec<RecordKey>> = legs.into_iter().map(|leg| leg.records).collect();
     let fused = rrf_fuse(&legs, params.fusion_candidate_limit, params.rrf_k as f64);
 
@@ -477,6 +536,7 @@ pub(crate) fn vector_leg(
         limit,
         min_similarity,
         AssetFilter::All,
+        &CollectionScope::all(),
     )
 }
 
@@ -486,13 +546,17 @@ fn vector_leg_filtered(
     limit: usize,
     min_similarity: f64,
     filter: AssetFilter<'_>,
+    collections: &CollectionScope,
 ) -> Result<Vec<String>, String> {
     let mut stmt = conn
-        .prepare("SELECT v.asset_id, v.embedding FROM vec_assets v")
+        .prepare(&format!(
+            "SELECT v.asset_id, v.embedding FROM vec_assets v WHERE {}",
+            asset_in_scope("v.asset_id", 1)
+        ))
         .map_err(|e| format!("Failed to prepare RAG vector query: {e}"))?;
     let scored = score_embeddings(
         &mut stmt,
-        [],
+        [collections.param()],
         query_embedding,
         min_similarity,
         "RAG vector query",
@@ -656,7 +720,14 @@ pub(crate) fn chunk_vector_leg(
     min_similarity: f64,
 ) -> Result<Vec<String>, String> {
     let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
-    chunk_vector_leg_in(conn, query_embedding, limit, min_similarity, &effective)
+    chunk_vector_leg_in(
+        conn,
+        query_embedding,
+        limit,
+        min_similarity,
+        &effective,
+        &CollectionScope::all(),
+    )
 }
 
 fn chunk_vector_leg_in(
@@ -665,22 +736,26 @@ fn chunk_vector_leg_in(
     limit: usize,
     min_similarity: f64,
     effective: &EffectiveEmbeddingContract,
+    collections: &CollectionScope,
 ) -> Result<Vec<String>, String> {
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT id, embedding
              FROM rag_chunks
              WHERE embedding_model = ?1
                AND embedding_contract = ?2
-               AND dimensions = ?3",
-        )
+               AND dimensions = ?3
+               AND {}",
+            asset_in_scope("asset_id", 4)
+        ))
         .map_err(|error| format!("Failed to prepare RAG chunk vector query: {error}"))?;
     let mut scored = score_embeddings(
         &mut stmt,
         rusqlite::params![
             effective.model,
             effective.contract,
-            query_embedding.len() as i64
+            query_embedding.len() as i64,
+            collections.param()
         ],
         query_embedding,
         min_similarity,
@@ -715,6 +790,7 @@ pub(crate) fn lexical_leg(
         limit,
         AssetFilter::All,
         LEXICAL_SCAN_MIN_ITEMS,
+        &CollectionScope::all(),
     )
 }
 
@@ -724,16 +800,46 @@ fn lexical_leg_filtered(
     limit: usize,
     filter: AssetFilter<'_>,
     scan_items: usize,
+    collections: &CollectionScope,
 ) -> Result<Vec<String>, String> {
+    // Los ítems fuera del alcance se descartan antes del tope de la pierna.
+    let mut in_scope = match collections.param() {
+        None => None,
+        Some(ids) => Some((
+            conn.prepare(
+                "SELECT EXISTS(SELECT 1 FROM items
+                               WHERE id = ?1
+                                 AND collection_id IN (SELECT value FROM json_each(?2)))",
+            )
+            .map_err(|e| format!("Failed to prepare RAG lexical collection check: {e}"))?,
+            ids,
+        )),
+    };
+    let mut scoped = |rows: Vec<crate::nlp::fts::FtsRow>| -> Result<_, String> {
+        let Some((stmt, ids)) = in_scope.as_mut() else {
+            return Ok(rows);
+        };
+        let mut kept = Vec::with_capacity(rows.len());
+        for row in rows {
+            let admitted: bool = stmt
+                .query_row(rusqlite::params![row.item_id, *ids], |r| r.get(0))
+                .map_err(|e| format!("Failed to check RAG lexical collection: {e}"))?;
+            if admitted {
+                kept.push(row);
+            }
+        }
+        Ok(kept)
+    };
+
     // El input es una pregunta en lenguaje natural, no una lista de keywords:
     // con el AND implícito de FTS5 cada `que`/`el`/`sobre` sería obligatorio y
     // esta pierna devolvía cero filas para cualquier pregunta real (F1).
-    let mut items = crate::nlp::fts::fts_search_with_mode(
+    let mut items = scoped(crate::nlp::fts::fts_search_with_mode(
         conn,
         question,
         None,
         crate::nlp::fts::FtsMatchMode::Any,
-    )?;
+    )?)?;
 
     // Con lugar libre, los ítems que solo contienen variantes cercanas de los
     // términos (lecturas erróneas del OCR, otras grafías de un nombre raro) van
@@ -744,6 +850,7 @@ fn lexical_leg_filtered(
         let terms = crate::nlp::fts::any_mode_terms(question);
         if let Some(expr) = crate::nlp::fuzzy::variants_only_match(conn, &terms) {
             if let Ok(extra) = crate::nlp::fts::fts_search_match(conn, &expr, None) {
+                let extra = scoped(extra)?;
                 let seen: HashSet<String> = items.iter().map(|row| row.item_id.clone()).collect();
                 items.extend(extra.into_iter().filter(|row| !seen.contains(&row.item_id)));
             }
@@ -888,7 +995,7 @@ pub(crate) fn chunk_lexical_leg(
     limit: usize,
 ) -> Result<Vec<String>, String> {
     let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
-    chunk_lexical_leg_in(conn, question, limit, &effective)
+    chunk_lexical_leg_in(conn, question, limit, &effective, &CollectionScope::all())
 }
 
 /// Pierna léxica por chunk, restringida a los chunks del espacio efectivo:
@@ -899,6 +1006,7 @@ fn chunk_lexical_leg_in(
     question: &str,
     limit: usize,
     effective: &EffectiveEmbeddingContract,
+    collections: &CollectionScope,
 ) -> Result<Vec<String>, String> {
     let fts_query = crate::nlp::fts::sanitize_fts5_query_with_mode(
         question,
@@ -908,7 +1016,7 @@ fn chunk_lexical_leg_in(
         return Ok(Vec::new());
     }
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT rag_chunks_fts.chunk_id
              FROM rag_chunks_fts
              JOIN rag_chunks rc ON rc.id = rag_chunks_fts.chunk_id
@@ -916,9 +1024,11 @@ fn chunk_lexical_leg_in(
                AND rc.embedding_model = ?3
                AND rc.embedding_contract = ?4
                AND rc.dimensions = ?5
+               AND {}
              ORDER BY bm25(rag_chunks_fts), rag_chunks_fts.chunk_id
              LIMIT ?2",
-        )
+            asset_in_scope("rc.asset_id", 6)
+        ))
         .map_err(|error| format!("Failed to prepare RAG chunk lexical query: {error}"))?;
     let run = |stmt: &mut rusqlite::Statement<'_>, expr: &str| {
         stmt.query_map(
@@ -927,7 +1037,8 @@ fn chunk_lexical_leg_in(
                 limit as i64,
                 effective.model,
                 effective.contract,
-                effective.dimensions as i64
+                effective.dimensions as i64,
+                collections.param()
             ],
             |row| row.get::<_, String>(0),
         )
@@ -3457,6 +3568,7 @@ mod tests {
                 24,
                 AssetFilter::WithoutChunks(&effective),
                 scan_items,
+                &CollectionScope::all(),
             )
             .expect("lexical leg should succeed");
             assert_eq!(ranked, ["page-24"], "scan_items={scan_items}");
@@ -3648,19 +3760,118 @@ mod tests {
             embedding: None,
         };
 
-        let healthy =
-            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
-                .expect("retrieval");
+        let healthy = retrieve_reporting(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+            &CollectionScope::all(),
+        )
+        .expect("retrieval");
         assert!(healthy.degradation.is_empty());
 
         set_setting(&conn, "embedding_provider", "mystery");
-        let degraded =
-            retrieve_reporting(&conn, &[query], &RagParams::default(), RetrievalUnit::Chunk)
-                .expect("an unknown provider must not fail retrieval");
+        let degraded = retrieve_reporting(
+            &conn,
+            &[query],
+            &RagParams::default(),
+            RetrievalUnit::Chunk,
+            &CollectionScope::all(),
+        )
+        .expect("an unknown provider must not fail retrieval");
         assert_eq!(degraded.degradation.len(), 1);
         assert_eq!(degraded.degradation[0].code, "whole_pages_only");
         assert!(degraded.degradation[0].detail.contains("mystery"));
         assert_eq!(degraded.candidates.len(), 2);
+    }
+
+    fn retrieved_assets(
+        conn: &Connection,
+        embedding: Option<&[f32]>,
+        params: &RagParams,
+        unit: RetrievalUnit,
+        collections: &CollectionScope,
+    ) -> Vec<(String, bool)> {
+        let query = RetrievalQuery {
+            text: "cabildo",
+            embedding,
+        };
+        retrieve_reporting(conn, &[query], params, unit, collections)
+            .expect("retrieval")
+            .candidates
+            .into_iter()
+            .map(|candidate| (candidate.record.asset_id, candidate.record.chunk.is_some()))
+            .collect()
+    }
+
+    #[test]
+    fn hybrid_retrieval_only_proposes_pages_of_the_chosen_collections() {
+        use super::hybrid_fixture::{axis, corpus, CHUNKED_ASSET, PLAIN_ASSET};
+        let conn = corpus();
+        conn.execute_batch(
+            "INSERT INTO collections(id, name) VALUES ('col-2', 'Hemeroteca');
+             UPDATE items SET collection_id = 'col-2' WHERE id = 'item-plain';",
+        )
+        .expect("second collection");
+        let embedding = axis(1);
+        let params = RagParams::default();
+        let chunked = (CHUNKED_ASSET.to_string(), true);
+        let plain = (PLAIN_ASSET.to_string(), false);
+
+        for unit in [RetrievalUnit::Chunk, RetrievalUnit::Asset] {
+            let only_first = CollectionScope::only(&["col-1".to_string()]);
+            let found = retrieved_assets(&conn, Some(&embedding), &params, unit, &only_first);
+            let expected = (CHUNKED_ASSET.to_string(), unit == RetrievalUnit::Chunk);
+            assert_eq!(found, vec![expected], "{unit:?}");
+
+            let only_second = CollectionScope::only(&["col-2".to_string()]);
+            let found = retrieved_assets(&conn, Some(&embedding), &params, unit, &only_second);
+            assert_eq!(found, vec![plain.clone()], "{unit:?}");
+
+            let unknown = CollectionScope::only(&["col-none".to_string()]);
+            let found = retrieved_assets(&conn, Some(&embedding), &params, unit, &unknown);
+            assert!(found.is_empty(), "{unit:?}: {found:?}");
+        }
+
+        let everything = retrieved_assets(
+            &conn,
+            Some(&embedding),
+            &params,
+            RetrievalUnit::Chunk,
+            &CollectionScope::all(),
+        );
+        assert!(everything.contains(&chunked), "{everything:?}");
+        assert!(everything.contains(&plain), "{everything:?}");
+    }
+
+    #[test]
+    fn collection_scope_is_applied_before_each_leg_takes_its_candidates() {
+        use super::hybrid_fixture::{axis, corpus, PLAIN_ASSET};
+        let conn = corpus();
+        conn.execute_batch(
+            "INSERT INTO collections(id, name) VALUES ('col-2', 'Hemeroteca');
+             UPDATE items SET collection_id = 'col-2' WHERE id = 'item-plain';",
+        )
+        .expect("second collection");
+        // One candidate per leg, and the query is closest to the excluded page:
+        // filtering after the cut would leave nothing.
+        let params = RagParams {
+            candidates_per_leg: 1,
+            ..RagParams::default()
+        };
+        let embedding = axis(1);
+        let scope = CollectionScope::only(&["col-2".to_string()]);
+        for unit in [RetrievalUnit::Chunk, RetrievalUnit::Asset] {
+            let found = retrieved_assets(&conn, Some(&embedding), &params, unit, &scope);
+            assert_eq!(found, vec![(PLAIN_ASSET.to_string(), false)], "{unit:?}");
+        }
+    }
+
+    #[test]
+    fn collection_scope_with_no_ids_is_the_whole_corpus() {
+        assert!(CollectionScope::only(&[]).is_all());
+        assert!(CollectionScope::all().is_all());
+        assert!(!CollectionScope::only(&["col-1".to_string()]).is_all());
     }
 
     fn chunk_candidate(conn: &Connection, chunk_id: &str, score: f64) -> RrfCandidate {

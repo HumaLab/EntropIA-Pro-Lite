@@ -1063,17 +1063,60 @@ describe('RagChatStore scope', () => {
     expect(payload.libraries).toBeUndefined()
   })
 
+  it('starts on every collection', () => {
+    setupBackend()
+    expect(snapshotOf(new RagChatStore()).collections).toBeNull()
+  })
+
+  it('sends only the chosen collections on the corpus', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections(['col-2'])
+
+    await store.send('pregunta')
+
+    const payload = (state.ask as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(payload.collections).toEqual(['col-2'])
+    expect(payload.scope).toBeUndefined()
+    expect(payload.libraries).toBeUndefined()
+  })
+
+  it('sends the chosen collections with both scopes, and none on the Biblioteca', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections(['col-1'])
+    store.setScope('both')
+
+    await store.send('primera')
+    store.setScope('biblioteca')
+    await store.send('segunda')
+
+    const calls = (state.ask as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls[0]![0]).toEqual(expect.objectContaining({ scope: 'both', collections: ['col-1'] }))
+    expect(calls[1]![0].scope).toBe('biblioteca')
+    expect(calls[1]![0].collections).toBeUndefined()
+  })
+
+  it('treats an empty collection choice as every collection', () => {
+    setupBackend()
+    const store = new RagChatStore()
+    store.setCollections([])
+    expect(snapshotOf(store).collections).toBeNull()
+  })
+
   it('keeps the choice when a new conversation starts, for the whole session', async () => {
     setupBackend({ ask: () => answer('conv-new') })
     const store = new RagChatStore()
     store.setScope('biblioteca')
     store.setLibraries([libraryA])
+    store.setCollections(['col-1'])
 
     store.startNew()
 
     const snapshot = snapshotOf(store)
     expect(snapshot.scope).toBe('biblioteca')
     expect(snapshot.libraries).toEqual([libraryA])
+    expect(snapshot.collections).toEqual(['col-1'])
   })
 
   it('shows the Biblioteca notice on the answer it belongs to', async () => {

@@ -14,6 +14,7 @@ import {
   passageMarks,
   passageWindow,
   researchScopeKey,
+  selectedCollectionsAfterToggle,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
   withNoticeDetail,
@@ -161,6 +162,22 @@ describe('library selection', () => {
 
   it('never leaves an empty selection: the last library stays checked', () => {
     expect(selectedLibrariesAfterToggle([all[1]!], all, all[1]!)).toEqual([all[1]])
+  })
+})
+
+describe('collection selection', () => {
+  const all = ['col-1', 'col-2', 'col-3']
+
+  it('unchecking one collection from "all" selects the others explicitly', () => {
+    expect(selectedCollectionsAfterToggle(null, all, 'col-1')).toEqual(['col-2', 'col-3'])
+  })
+
+  it('checking back every collection returns to "all" (null)', () => {
+    expect(selectedCollectionsAfterToggle(['col-2', 'col-3'], all, 'col-1')).toBeNull()
+  })
+
+  it('never leaves an empty selection: the last collection stays checked', () => {
+    expect(selectedCollectionsAfterToggle(['col-2'], all, 'col-2')).toEqual(['col-2'])
   })
 })
 

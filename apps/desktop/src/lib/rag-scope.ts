@@ -180,6 +180,24 @@ export function selectedLibrariesAfterToggle(
   return next.length >= all.length ? null : next
 }
 
+/**
+ * The corpus collection choice after toggling one, with the same rules as the
+ * library choice: `null` is every collection, and the last checked collection
+ * stays checked.
+ */
+export function selectedCollectionsAfterToggle(
+  current: string[] | null,
+  all: string[],
+  toggled: string
+): string[] | null {
+  const selected = current ?? all
+  const next = selected.includes(toggled)
+    ? selected.filter((id) => id !== toggled)
+    : [...selected, toggled]
+  if (next.length === 0) return current
+  return all.every((id) => next.includes(id)) ? null : next
+}
+
 export interface PassageSegment {
   text: string
   marked: boolean

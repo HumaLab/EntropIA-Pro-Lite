@@ -98,6 +98,31 @@ describe('ragAsk', () => {
     })
   })
 
+  it('forwards the chosen collections when given', async () => {
+    mockInvoke.mockResolvedValueOnce(sampleAnswer)
+
+    await ragAsk('pregunta', undefined, undefined, { collections: ['col-1', 'col-2'] })
+
+    expect(mockInvoke).toHaveBeenCalledWith('rag_ask', {
+      question: 'pregunta',
+      conversationId: undefined,
+      topK: undefined,
+      scope: undefined,
+      libraries: undefined,
+      collections: ['col-1', 'col-2'],
+    })
+  })
+
+  it('sends no collections when the choice is "every collection" (null)', async () => {
+    mockInvoke.mockResolvedValueOnce(sampleAnswer)
+
+    await ragAsk('pregunta', undefined, undefined, { scope: 'both', collections: null })
+
+    const payload = mockInvoke.mock.calls[0]![1] as Record<string, unknown>
+    expect(payload.scope).toBe('both')
+    expect(payload.collections).toBeUndefined()
+  })
+
   it('sends no libraries when the choice is "all synced" (null)', async () => {
     mockInvoke.mockResolvedValueOnce(sampleAnswer)
 

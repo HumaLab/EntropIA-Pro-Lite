@@ -23,6 +23,7 @@
     libraryChoiceKey,
     locationText,
     passageHeading,
+    selectedCollectionsAfterToggle,
     selectedLibrariesAfterToggle,
     sourceScopeKey,
     withNoticeDetail,
@@ -216,6 +217,91 @@
   function keepLibraryMenuOpen(apply: () => void) {
     apply()
     libraryMenuOpen = true
+  }
+
+  // ── Corpus collections ──────────────────────────────────────────────────
+  // Read once per view, the first time the scope includes the corpus. A
+  // collection the user picked earlier in the session and has since been
+  // deleted is dropped from the choice, so it never narrows to nothing.
+  let corpusCollections = $state<Array<{ id: string; name: string; items: number }>>([])
+  let collectionMenuOpen = $state(false)
+  let collectionsRequested = false
+
+  async function loadCollections() {
+    try {
+      const store = getStore()
+      const found = await store.collections.findAll()
+      const counted = await Promise.all(
+        found.map(async (collection) => ({
+          id: collection.id,
+          name: collection.name,
+          items: await store.collections.countItems(collection.id),
+        }))
+      )
+      corpusCollections = counted
+      const chosen = $ragChat.collections
+      if (chosen) {
+        const known = chosen.filter((id) => counted.some((collection) => collection.id === id))
+        if (known.length !== chosen.length) {
+          ragChat.setCollections(known.length === counted.length ? null : known)
+        }
+      }
+    } catch {
+      corpusCollections = []
+    }
+  }
+
+  $effect(() => {
+    if (scope === 'biblioteca' || collectionsRequested) return
+    collectionsRequested = true
+    untrack(() => void loadCollections())
+  })
+
+  const collectionIds = $derived(corpusCollections.map((collection) => collection.id))
+  const checkedCollectionIds = $derived(new Set($ragChat.collections ?? collectionIds))
+  const collectionsAllChecked = $derived(
+    collectionIds.length > 0 && collectionIds.every((id) => checkedCollectionIds.has(id))
+  )
+  const collectionTriggerLabel = $derived(
+    $currentLocale &&
+      (collectionsAllChecked
+        ? t('ragChat.collectionsAll')
+        : t('ragChat.collectionsSome', {
+            count: collectionIds.filter((id) => checkedCollectionIds.has(id)).length,
+            total: collectionIds.length,
+          }))
+  )
+  const collectionItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'radio',
+      id: 'all',
+      label: $currentLocale && t('ragChat.collectionsAll'),
+      checked: collectionsAllChecked,
+      onselect: () => keepCollectionMenuOpen(() => ragChat.setCollections(null)),
+    },
+    ...corpusCollections.map((collection) => ({
+      kind: 'checkbox' as const,
+      id: collection.id,
+      label:
+        $currentLocale &&
+        `${collection.name} · ${t(
+          collection.items === 1 ? 'ragChat.collectionItemsOne' : 'ragChat.collectionItemsMany',
+          { count: collection.items }
+        )}`,
+      checked: checkedCollectionIds.has(collection.id),
+      onselect: () =>
+        keepCollectionMenuOpen(() =>
+          ragChat.setCollections(
+            selectedCollectionsAfterToggle($ragChat.collections, collectionIds, collection.id)
+          )
+        ),
+    })),
+  ])
+
+  // Same as the library menu: several clicks, so it reopens after each one.
+  function keepCollectionMenuOpen(apply: () => void) {
+    apply()
+    collectionMenuOpen = true
   }
 
   const libraryStatusMessage = $derived.by(() => {
@@ -764,6 +850,25 @@
               </TabButton>
             {/each}
           </TabList>
+          {#if scope !== 'biblioteca' && corpusCollections.length > 0}
+            <ToolbarMenu
+              label={$currentLocale && t('ragChat.collectionsMenu')}
+              items={collectionItems}
+              bind:open={collectionMenuOpen}
+            >
+              {#snippet trigger(props, { open })}
+                <button
+                  type="button"
+                  class="rag-chat__library-trigger"
+                  class:rag-chat__library-trigger--open={open}
+                  {...props}
+                >
+                  <span>{collectionTriggerLabel}</span>
+                  <ActionIcon name="chevron-down" size={12} />
+                </button>
+              {/snippet}
+            </ToolbarMenu>
+          {/if}
           {#if scope !== 'corpus' && libraryStatus && libraryStatus.libraries.length > 0}
             <ToolbarMenu
               label={$currentLocale && t('ragChat.librariesMenu')}

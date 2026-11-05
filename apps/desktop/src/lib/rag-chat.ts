@@ -13,6 +13,7 @@ import {
   ragRenameConversation,
   ragGetConversation,
   ragListConversations,
+  type RagAskOptions,
   type RagConversationSummary,
   type RagLibraryRef,
   type RagMessage,
@@ -44,6 +45,8 @@ export interface RagChatSnapshot {
   scope: RagScope
   /** Libraries to search; `null` is every synced one. */
   libraries: RagLibraryRef[] | null
+  /** Corpus collections to search; `null` is all of them. */
+  collections: string[] | null
 }
 
 type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
@@ -78,6 +81,7 @@ export class RagChatStore {
   private _initialized = false
   private _scope: RagScope = 'corpus'
   private _libraries: RagLibraryRef[] | null = null
+  private _collections: string[] | null = null
   private _initPromise: Promise<void> | null = null
   private _conversationGeneration = 0
   private _conversationRefreshSequence = 0
@@ -108,6 +112,7 @@ export class RagChatStore {
       initialized: this._initialized,
       scope: this._scope,
       libraries: this._libraries ? [...this._libraries] : null,
+      collections: this._collections ? [...this._collections] : null,
     }
   }
 
@@ -235,7 +240,7 @@ export class RagChatStore {
         question,
         requestConversationId ?? undefined,
         undefined,
-        this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
+        this.askOptions()
       )
       if (!this.isRequestCurrent(requestId, requestConversationId)) {
         // La respuesta llegó tarde para esta vista, pero la base SÍ cambió:
@@ -413,6 +418,24 @@ export class RagChatStore {
     this.emit()
   }
 
+  /** `null` means every corpus collection, as does an empty choice. */
+  setCollections(collections: string[] | null): void {
+    this._collections = collections && collections.length > 0 ? [...collections] : null
+    this.emit()
+  }
+
+  /**
+   * What the question carries besides its text: only the choices that apply
+   * to the scope. Libraries mean nothing on the corpus, collections nothing
+   * on the Biblioteca.
+   */
+  private askOptions(): RagAskOptions {
+    const collections = this._scope === 'biblioteca' ? null : this._collections
+    const options: RagAskOptions =
+      this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
+    return collections ? { ...options, collections } : options
+  }
+
   /** Keeps the composer draft at module scope so it survives navigation. */
   setDraft(value: string): void {
     this._draft = value
@@ -439,6 +462,7 @@ export class RagChatStore {
     this._draft = ''
     this._scope = 'corpus'
     this._libraries = null
+    this._collections = null
     this._initialized = false
     this._initPromise = null
     this._autoTitlePromise = null

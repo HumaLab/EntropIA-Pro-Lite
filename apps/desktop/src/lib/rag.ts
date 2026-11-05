@@ -116,6 +116,8 @@ export interface RagAskOptions {
   scope?: RagScope
   /** Libraries to search; absent or empty means every synced one. */
   libraries?: RagLibraryRef[] | null
+  /** Corpus collections to search; absent, null or empty means all of them. */
+  collections?: string[] | null
 }
 
 export function ragAsk(
@@ -130,6 +132,7 @@ export function ragAsk(
     topK,
     scope: options.scope,
     libraries: options.libraries ?? undefined,
+    collections: options.collections ?? undefined,
   })
 }
 
