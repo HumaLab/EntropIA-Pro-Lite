@@ -172,4 +172,62 @@ mod tests {
             ExecOutput::Fatal { code, .. } if code == "ner_failed"
         ));
     }
+
+    /// What the executor sees for a given OpenRouter client failure.
+    fn mapped(client_error: &str) -> ExecOutput {
+        map_ner_error(&format!(
+            "NER extraction failed: {}",
+            crate::nlp::ner::openrouter::describe_openrouter_failure(client_error)
+        ))
+    }
+
+    #[test]
+    fn provider_trouble_retries_instead_of_asking_for_configuration() {
+        // A provider failing after the 200, or a rate limit, is transient:
+        // it must not park the asset as if the key were missing.
+        assert!(matches!(
+            mapped("OpenRouter provider error (502): Provider disconnected"),
+            ExecOutput::Retryable { .. }
+        ));
+        assert!(matches!(
+            mapped("OpenRouter API error (429 Too Many Requests): rate-limited upstream"),
+            ExecOutput::Retryable { .. }
+        ));
+        assert!(matches!(
+            mapped("OpenRouter request timed out after 180s: operation timed out"),
+            ExecOutput::Retryable { .. }
+        ));
+        // An answer that cannot be read fails this asset only.
+        assert!(matches!(
+            mapped("Failed to parse OpenRouter response: expected value at line 1 column 1; body: <html>"),
+            ExecOutput::Fatal { code, .. } if code == "ner_failed"
+        ));
+        assert!(matches!(
+            mapped("OpenRouter returned no content (finish_reason: length)"),
+            ExecOutput::Fatal { code, .. } if code == "ner_failed"
+        ));
+    }
+
+    #[test]
+    fn credential_and_model_rejections_still_ask_for_configuration() {
+        for client_error in [
+            "OpenRouter API error (401 Unauthorized): bad key",
+            "OpenRouter API error (402 Payment Required): insufficient credits",
+            "OpenRouter API error (403 Forbidden): key disabled",
+            "OpenRouter API error (404 Not Found): no such model",
+        ] {
+            match mapped(client_error) {
+                ExecOutput::Blocked { code, message } => {
+                    assert_eq!(code, "configuration_required");
+                    assert_eq!(
+                        message,
+                        format!(
+                            "NER extraction failed: OpenRouter NER unavailable: {client_error}. Configure OpenRouter API key/model."
+                        )
+                    );
+                }
+                other => panic!("{client_error}: expected Blocked, got {other:?}"),
+            }
+        }
+    }
 }

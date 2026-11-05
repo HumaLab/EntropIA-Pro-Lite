@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 
-use super::generation::OpenRouterGenerationParams;
+use super::generation::{OpenRouterGenerationParams, ReasoningConfig};
 
 // ---------------------------------------------------------------------------
 // Fallback provider (T-45)
@@ -84,11 +84,8 @@ struct ChatCompletionRequest {
     frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     stop: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
 }
 
 /// A single failed generation attempt, classified by whether repeating it is
@@ -161,14 +158,104 @@ impl RequestFailure {
     }
 }
 
+/// Whether this failure means the model refused the `reasoning` override, so
+/// the same request can be resent once without it. Some models make reasoning
+/// mandatory and answer `{"effort":"none"}` with a `400` that names it; no
+/// other `400` is worth repeating, hence the body check.
+fn should_drop_reasoning(failure: &RequestFailure, request: &ChatCompletionRequest) -> bool {
+    request.reasoning.is_some()
+        && matches!(
+            failure,
+            RequestFailure::Status { status, body }
+                if *status == reqwest::StatusCode::BAD_REQUEST
+                    && body.to_ascii_lowercase().contains("reasoning")
+        )
+}
+
+/// The success body, read leniently: OpenRouter sends `200 OK` before the
+/// model produces a token, so a provider failure after that point arrives as
+/// a `200` whose body holds an `error` (top-level or on the choice) and maybe
+/// no `choices` or a `null` content.
+#[derive(Deserialize)]
+struct ChatCompletionBody {
+    #[serde(default)]
+    choices: Vec<ChatChoice>,
+    #[serde(default)]
+    error: Option<ProviderError>,
+}
+
 #[derive(Deserialize)]
 struct ChatChoice {
-    message: ChatResponseMessage,
+    #[serde(default)]
+    message: Option<ChatResponseMessage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+    #[serde(default)]
+    error: Option<ProviderError>,
 }
 
 #[derive(Deserialize)]
 struct ChatResponseMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ProviderError {
+    #[serde(default)]
+    code: Option<serde_json::Value>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+impl ProviderError {
+    fn describe(&self) -> String {
+        let code = match &self.code {
+            Some(serde_json::Value::String(code)) => code.clone(),
+            Some(serde_json::Value::Null) | None => "unknown".to_string(),
+            Some(other) => other.to_string(),
+        };
+        let message = self
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .unwrap_or("no message");
+        format!("OpenRouter provider error ({code}): {message}")
+    }
+}
+
+/// Longest stretch of an unreadable body quoted in the error, so the log
+/// shows what came back without dumping a whole completion.
+const BODY_EXCERPT_CHARS: usize = 300;
+
+/// Reads the answer out of a `200` body, turning every way it can carry no
+/// answer into a failure that says why.
+fn parse_chat_completion_body(body: &str) -> Result<String, RequestFailure> {
+    let parsed: ChatCompletionBody = serde_json::from_str(body).map_err(|error| {
+        let excerpt: String = body.trim().chars().take(BODY_EXCERPT_CHARS).collect();
+        RequestFailure::Payload(format!(
+            "Failed to parse OpenRouter response: {error}; body: {excerpt}"
+        ))
+    })?;
+    if let Some(error) = parsed.error {
+        return Err(RequestFailure::Payload(error.describe()));
+    }
+    let choice = parsed
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| RequestFailure::Payload("OpenRouter returned no choices".to_string()))?;
+    if let Some(error) = choice.error {
+        return Err(RequestFailure::Payload(error.describe()));
+    }
+    match choice.message.and_then(|message| message.content) {
+        Some(content) => Ok(content.trim().to_string()),
+        None => Err(RequestFailure::Payload(format!(
+            "OpenRouter returned no content (finish_reason: {})",
+            choice.finish_reason.as_deref().unwrap_or("unknown")
+        ))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -410,6 +497,9 @@ impl OpenRouterClient {
         );
         let mut fallback = request;
         fallback.model = fallback_model(&fallback.model);
+        // `reasoning` is an OpenRouter extension: the gateway gets the request
+        // as it was before NER started asking for the override.
+        fallback.reasoning = None;
         self.try_send_request(VERCEL_AI_GATEWAY_URL, &key, &fallback)
             .await
             .map_err(|second| {
@@ -423,18 +513,36 @@ impl OpenRouterClient {
 
     /// Sends the request to OpenRouter, retrying at most once and only for
     /// failures that are safe to repeat (see [`RequestFailure::is_retryable`]).
+    /// A request carrying a `reasoning` override is also resent once without it
+    /// when the model rejects the override (see [`should_drop_reasoning`]).
     async fn send_to_openrouter(
         &self,
         request: &ChatCompletionRequest,
     ) -> Result<String, RequestFailure> {
+        // A copy, so a rejected `reasoning` override can be removed for the
+        // resend without losing what the caller built.
+        let mut current = request.clone();
         let mut attempt = 1;
         loop {
             match self
-                .try_send_request(OPENROUTER_CHAT_URL, &self.api_key, request)
+                .try_send_request(OPENROUTER_CHAT_URL, &self.api_key, &current)
                 .await
             {
                 Ok(answer) => return Ok(answer),
                 Err(failure) => {
+                    // The resend is a different request (no override), so it
+                    // does not spend the retry budget: a rejected override
+                    // never bills and the situation is trivially fixable.
+                    // Clearing the override also makes this branch one-shot.
+                    if should_drop_reasoning(&failure, &current) {
+                        log::warn!(
+                            target: "openrouter",
+                            "attempt {attempt} rejected the reasoning override ({}); resending without it",
+                            failure.message()
+                        );
+                        current.reasoning = None;
+                        continue;
+                    }
                     if attempt >= Self::MAX_ATTEMPTS || !failure.is_retryable() {
                         return Err(failure);
                     }
@@ -472,16 +580,15 @@ impl OpenRouterClient {
             return Err(RequestFailure::Status { status, body });
         }
 
-        let parsed: ChatCompletionResponse = response.json().await.map_err(|e| {
-            RequestFailure::Payload(format!("Failed to parse OpenRouter response: {e}"))
+        // Read the body as text first: a decode error must be able to say
+        // what actually came back.
+        let body = response.text().await.map_err(|error| {
+            RequestFailure::Payload(format!(
+                "Failed to read OpenRouter response: {}",
+                crate::nlp::embeddings::error_chain(&error)
+            ))
         })?;
-
-        parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content.trim().to_string())
-            .ok_or_else(|| RequestFailure::Payload("OpenRouter returned no choices".to_string()))
+        parse_chat_completion_body(&body)
     }
 
     fn build_request(
@@ -502,6 +609,7 @@ impl OpenRouterClient {
             presence_penalty: params.presence_penalty,
             frequency_penalty: params.frequency_penalty,
             stop: params.stop.clone(),
+            reasoning: params.reasoning,
         }
     }
 
@@ -534,6 +642,7 @@ impl OpenRouterClient {
             presence_penalty: params.presence_penalty,
             frequency_penalty: params.frequency_penalty,
             stop: params.stop.clone(),
+            reasoning: params.reasoning,
         }
     }
 
@@ -556,6 +665,7 @@ impl OpenRouterClient {
             presence_penalty: None,
             frequency_penalty: None,
             stop: Vec::new(),
+            reasoning: None,
         };
         Self::new(String::new(), String::new())
             .try_send_request(VERCEL_AI_GATEWAY_URL, &key, &request)
@@ -620,6 +730,77 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    // ── Reading a 200 body ───────────────────────────────────────────────────
+
+    fn payload_message(result: Result<String, RequestFailure>) -> String {
+        match result {
+            Err(RequestFailure::Payload(message)) => message,
+            Err(other) => panic!("expected a payload failure, got {other:?}"),
+            Ok(answer) => panic!("expected a failure, got the answer {answer:?}"),
+        }
+    }
+
+    #[test]
+    fn a_completion_body_yields_its_trimmed_content() {
+        let body = r#"{"id":"gen-1","choices":[{"message":{"role":"assistant","content":"  [] \n"},"finish_reason":"stop"}]}"#;
+        assert_eq!(parse_chat_completion_body(body).unwrap(), "[]");
+    }
+
+    #[test]
+    fn an_error_only_200_body_reports_the_provider_error() {
+        // OpenRouter's documented shape when the provider fails after the
+        // 200 went out: an `error` object and no `choices`.
+        let body = r#"{"id":"gen-2","error":{"code":502,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}}}"#;
+        assert_eq!(
+            payload_message(parse_chat_completion_body(body)),
+            "OpenRouter provider error (502): Provider disconnected"
+        );
+    }
+
+    #[test]
+    fn an_error_on_the_choice_reports_the_provider_error() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":"[{\"value\":"},"finish_reason":"error","error":{"code":429,"message":"Rate limit exceeded"}}]}"#;
+        assert_eq!(
+            payload_message(parse_chat_completion_body(body)),
+            "OpenRouter provider error (429): Rate limit exceeded"
+        );
+    }
+
+    #[test]
+    fn a_null_content_names_the_finish_reason() {
+        let body = r#"{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"length"}]}"#;
+        assert_eq!(
+            payload_message(parse_chat_completion_body(body)),
+            "OpenRouter returned no content (finish_reason: length)"
+        );
+    }
+
+    #[test]
+    fn an_empty_choice_list_keeps_its_legacy_message() {
+        assert_eq!(
+            payload_message(parse_chat_completion_body(r#"{"choices":[]}"#)),
+            "OpenRouter returned no choices"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_body_quotes_the_parse_error_and_a_bounded_excerpt() {
+        let message = payload_message(parse_chat_completion_body("<html>Bad gateway</html>"));
+        assert!(
+            message.starts_with("Failed to parse OpenRouter response: expected value"),
+            "unexpected: {message}"
+        );
+        assert!(
+            message.ends_with("body: <html>Bad gateway</html>"),
+            "unexpected: {message}"
+        );
+
+        let long = "x".repeat(BODY_EXCERPT_CHARS * 3);
+        let message = payload_message(parse_chat_completion_body(&long));
+        let excerpt = message.split("body: ").nth(1).unwrap();
+        assert_eq!(excerpt.chars().count(), BODY_EXCERPT_CHARS);
     }
 
     // ── Timeout and retry classification (F5) ────────────────────────────────
@@ -762,6 +943,7 @@ mod tests {
             presence_penalty: Some(0.2),
             frequency_penalty: Some(-0.3),
             stop: vec!["END".to_string(), "STOP".to_string()],
+            reasoning: None,
         };
 
         let value = serde_json::to_value(client.build_request("prompt", &params)).unwrap();
@@ -786,6 +968,136 @@ mod tests {
         assert!(value.get("presence_penalty").is_none());
         assert!(value.get("frequency_penalty").is_none());
         assert!(value.get("stop").is_none());
+    }
+
+    // ── The NER reasoning override ───────────────────────────────────────────
+
+    fn request_json(params: &OpenRouterGenerationParams) -> serde_json::Value {
+        let client = OpenRouterClient::new(
+            "secret".to_string(),
+            "anthropic/claude-haiku-5.5".to_string(),
+        );
+        serde_json::to_value(client.build_request("prompt", params)).unwrap()
+    }
+
+    #[test]
+    fn the_ner_flow_turns_the_model_reasoning_off() {
+        // Reasoning is on by default for some models and its tokens bill
+        // against `max_tokens`, which emptied the NER completion with
+        // `finish_reason: "length"` and no content.
+        let params = crate::nlp::ner::openrouter::ner_request_params(
+            OpenRouterGenerationParams::provider_defaults(4096, 0.3),
+        );
+
+        let value = request_json(&params);
+        assert_eq!(value["reasoning"], serde_json::json!({"effort": "none"}));
+    }
+
+    #[test]
+    fn every_other_flow_sends_no_reasoning_key() {
+        // A differential guarantee: RAG, titles, triples, summary and OCR
+        // correction keep the exact request shape they had before.
+        let conn = settings_conn();
+        let mut requests = vec![request_json(
+            &OpenRouterGenerationParams::provider_defaults(128, 0.0),
+        )];
+        for flow in [
+            GenerationFlow::OcrCorrection,
+            GenerationFlow::Summary,
+            GenerationFlow::Ner,
+            GenerationFlow::Triplets,
+        ] {
+            requests.push(request_json(
+                &generation_config_from_settings(&conn, flow).params,
+            ));
+        }
+        let image = OpenRouterImage {
+            data_url: "data:image/png;base64,AQID".to_string(),
+            mime_type: "image/png".to_string(),
+            payload_bytes: 3,
+        };
+        requests.push(
+            serde_json::to_value(
+                OpenRouterClient::new("secret".to_string(), "vendor/ocr".to_string())
+                    .build_multimodal_request(
+                        "prompt",
+                        &image,
+                        &OpenRouterGenerationParams::provider_defaults(1024, 0.3),
+                    ),
+            )
+            .unwrap(),
+        );
+
+        for value in requests {
+            assert!(
+                value.get("reasoning").is_none(),
+                "a flow must not gain a reasoning key: {value}"
+            );
+        }
+    }
+
+    fn request_with_reasoning(reasoning: Option<ReasoningConfig>) -> ChatCompletionRequest {
+        let mut params = OpenRouterGenerationParams::provider_defaults(4096, 0.3);
+        params.reasoning = reasoning;
+        let client = OpenRouterClient::new(
+            "secret".to_string(),
+            "anthropic/claude-haiku-5.5".to_string(),
+        );
+        client.build_request("prompt", &params)
+    }
+
+    fn status_failure(status: u16, body: &str) -> RequestFailure {
+        RequestFailure::Status {
+            status: reqwest::StatusCode::from_u16(status).unwrap(),
+            body: body.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_400_that_names_reasoning_drops_the_override() {
+        let request = request_with_reasoning(Some(ReasoningConfig::NONE));
+
+        assert!(should_drop_reasoning(
+            &status_failure(
+                400,
+                r#"{"error":{"message":"Reasoning is mandatory for this model"}}"#
+            ),
+            &request
+        ));
+        // Providers do not agree on capitalisation.
+        assert!(should_drop_reasoning(
+            &status_failure(400, "REASONING effort is not supported"),
+            &request
+        ));
+    }
+
+    #[test]
+    fn other_failures_never_drop_the_override() {
+        let request = request_with_reasoning(Some(ReasoningConfig::NONE));
+
+        // A 400 about anything else would fail again in exactly the same way.
+        assert!(!should_drop_reasoning(
+            &status_failure(400, "context length exceeded"),
+            &request
+        ));
+        // Other statuses keep their existing handling (retry/fallback).
+        assert!(!should_drop_reasoning(
+            &status_failure(502, "reasoning"),
+            &request
+        ));
+        assert!(!should_drop_reasoning(
+            &status_failure(401, "reasoning"),
+            &request
+        ));
+        assert!(!should_drop_reasoning(
+            &RequestFailure::Payload("reasoning".to_string()),
+            &request
+        ));
+        // Nothing to drop when the request never carried the override.
+        assert!(!should_drop_reasoning(
+            &status_failure(400, "reasoning"),
+            &request_with_reasoning(None)
+        ));
     }
 
     #[test]

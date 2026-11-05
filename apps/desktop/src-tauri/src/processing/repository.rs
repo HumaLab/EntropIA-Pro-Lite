@@ -4383,6 +4383,29 @@ pub fn resume_ocr_configuration_blocked(conn: &Connection) -> Result<usize, Stri
     .map_err(|e| format!("Failed to resume OCR configuration-blocked units: {e}"))
 }
 
+/// Requeues the NER units parked `configuration_required` once the NER chain
+/// can run from the current settings (an OpenRouter key when OpenRouter does
+/// the extraction). Older builds parked any OpenRouter failure this way, so
+/// this also frees the units a transient provider error left blocked. Other
+/// block reasons keep their own resume paths. Returns how many were requeued;
+/// with the configuration still invalid it touches nothing, so callers may
+/// invoke it on every settings change and at startup without spinning.
+pub fn resume_ner_configuration_blocked(conn: &Connection) -> Result<usize, String> {
+    if !crate::nlp::ner_configuration_ready(conn) {
+        return Ok(0);
+    }
+    conn.execute(
+        "UPDATE processing_tasks SET state = 'pending', outcome = '', owner_session = NULL,
+           next_retry_at = NULL, last_error_code = NULL, last_error_message = NULL,
+           updated_at = strftime('%s', 'now') * 1000
+         WHERE state = 'blocked'
+           AND last_error_code = 'configuration_required'
+           AND kind = 'ner'",
+        [],
+    )
+    .map_err(|e| format!("Failed to resume NER configuration-blocked units: {e}"))
+}
+
 fn close_open_attempt(conn: &Connection, task_id: &str, outcome: &str) -> Result<(), String> {
     conn.execute(
         "UPDATE processing_attempts SET outcome = ?1, finished_at = strftime('%s', 'now') * 1000
@@ -10833,6 +10856,59 @@ mod tests {
         assert_eq!(task_state(&conn, "t-contract"), "blocked");
         assert_eq!(task_state(&conn, "t-embed"), "blocked");
         assert_eq!(resume_ocr_configuration_blocked(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn configuration_blocked_ner_resumes_once_its_openrouter_key_exists() {
+        let (_dir, conn) = batch_db();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT OR REPLACE INTO app_settings(key, value) VALUES ('llm_mode', 'openrouter');",
+        )
+        .expect("settings");
+        insert_blocked_unit(
+            &conn,
+            "t-ner",
+            "ner",
+            "configuration_required",
+            "NER extraction failed: OpenRouter NER unavailable: Failed to parse OpenRouter response: error decoding response body. Configure OpenRouter API key/model.",
+        );
+        // Other kinds and other block reasons keep their own resume paths.
+        insert_blocked_unit(
+            &conn,
+            "t-embed",
+            "embedding",
+            "configuration_required",
+            "no engine",
+        );
+        insert_blocked_unit(
+            &conn,
+            "t-ner-other",
+            "ner",
+            "configuration_changed",
+            "contract",
+        );
+        // No OpenRouter key yet: nothing may move back into the same wall.
+        assert_eq!(resume_ner_configuration_blocked(&conn).unwrap(), 0);
+        assert_eq!(task_state(&conn, "t-ner"), "blocked");
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings(key, value) VALUES ('openrouter_api_key', 'sk-test')",
+            [],
+        )
+        .expect("key");
+        assert_eq!(resume_ner_configuration_blocked(&conn).unwrap(), 1);
+        assert_eq!(task_state(&conn, "t-ner"), "pending");
+        let (code, message, outcome): (Option<String>, Option<String>, String) = conn
+            .query_row(
+                "SELECT last_error_code, last_error_message, outcome FROM processing_tasks WHERE id = 't-ner'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((code, message, outcome.as_str()), (None, None, ""));
+        assert_eq!(task_state(&conn, "t-embed"), "blocked");
+        assert_eq!(task_state(&conn, "t-ner-other"), "blocked");
+        assert_eq!(resume_ner_configuration_blocked(&conn).unwrap(), 0);
     }
 
     #[test]

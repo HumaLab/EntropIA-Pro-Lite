@@ -117,7 +117,19 @@ NO superes las 15 líneas. NO cortes a mitad de frase.
 Texto:
 {text}"#;
 
-pub const DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","start_offset":0,"end_offset":0,"confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
+pub const DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
+
+Texto:
+{text}"#;
+
+/// The NER default that shipped before the model's reasoning was turned off.
+/// It asked for character offsets, which NER never used: the parser keeps them
+/// only when the model volunteers both, and otherwise resolves the span itself
+/// with `find_entity_span`.
+///
+/// Kept verbatim because a stored `prompt_ner` byte-identical to it is that old
+/// default, not a customization, and resolves to [`DEFAULT_NER_PROMPT`].
+pub const LEGACY_DEFAULT_NER_PROMPT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","start_offset":0,"end_offset":0,"confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
 
 Texto:
 {text}"#;
@@ -481,5 +493,25 @@ mod tests {
         assert!(DEFAULT_OCR_CORRECTION_PROMPT
             .contains("La separación en párrafos del OCR es provisional"));
         assert!(DEFAULT_OCR_CORRECTION_PROMPT.contains("aunque no sean líneas cortas"));
+    }
+
+    #[test]
+    fn default_ner_prompt_no_longer_asks_for_character_offsets() {
+        // NER resolves the span itself (`find_entity_span`), so asking the
+        // model for offsets only spent output tokens the parser threw away
+        // — and on a thinking model that is what emptied the completion.
+        assert!(DEFAULT_NER_PROMPT
+            .contains(r#"[{"value":"...","type":"PER|LOC|ORG|DATE|MISC","confidence":0.95}]"#));
+        assert!(!DEFAULT_NER_PROMPT.contains("start_offset"));
+        assert!(!DEFAULT_NER_PROMPT.contains("end_offset"));
+    }
+
+    #[test]
+    fn the_retired_ner_default_keeps_the_offsets_it_used_to_ask_for() {
+        // A stored setting is compared against this exact text, so it must
+        // stay what shipped — offsets and all — and never drift into the
+        // current default.
+        assert!(LEGACY_DEFAULT_NER_PROMPT.contains(r#""start_offset":0,"end_offset":0"#));
+        assert_ne!(LEGACY_DEFAULT_NER_PROMPT, DEFAULT_NER_PROMPT);
     }
 }

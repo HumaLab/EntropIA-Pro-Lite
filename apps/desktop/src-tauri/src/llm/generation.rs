@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::{llm::prompt, settings};
 
@@ -17,6 +18,20 @@ pub enum GenerationFlow {
     Triplets,
 }
 
+/// OpenRouter's `reasoning` request object. Only the NER flow sets it: on a
+/// model that reasons by default the thinking pass bills against `max_tokens`,
+/// so a long one can end the completion with `finish_reason: "length"` and no
+/// content at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ReasoningConfig {
+    pub effort: &'static str,
+}
+
+impl ReasoningConfig {
+    /// Ask the model to think nothing at all.
+    pub const NONE: Self = Self { effort: "none" };
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenRouterGenerationParams {
     pub max_tokens: i32,
@@ -26,6 +41,9 @@ pub struct OpenRouterGenerationParams {
     pub presence_penalty: Option<f32>,
     pub frequency_penalty: Option<f32>,
     pub stop: Vec<String>,
+    /// `None` serializes no key at all, which is what every flow except NER
+    /// wants (and what all of them sent before NER turned reasoning off).
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 impl OpenRouterGenerationParams {
@@ -38,6 +56,7 @@ impl OpenRouterGenerationParams {
             presence_penalty: None,
             frequency_penalty: None,
             stop: Vec::new(),
+            reasoning: None,
         }
     }
 }
@@ -139,6 +158,7 @@ impl GenerationFlow {
                 presence_penalty: Some(DEFAULT_PRESENCE_PENALTY),
                 frequency_penalty: Some(DEFAULT_FREQUENCY_PENALTY),
                 stop: Vec::new(),
+                reasoning: None,
             },
         }
     }
@@ -158,12 +178,24 @@ impl GenerationFlow {
             Self::OcrCorrection | Self::Summary => true,
         }
     }
+
+    /// A stored template byte-identical to a default this build no longer
+    /// ships is not a customization: NER's retired default asked the model for
+    /// offsets NER computes itself, so it resolves to the current default.
+    /// Any other text is the person's and is used unchanged.
+    fn resolve_retired_default(self, template: String) -> String {
+        if self == Self::Ner && template.trim() == prompt::LEGACY_DEFAULT_NER_PROMPT {
+            return prompt::DEFAULT_NER_PROMPT.to_string();
+        }
+        template
+    }
 }
 
 pub fn prompt_template_from_settings(conn: &Connection, flow: GenerationFlow) -> String {
     let keys = flow.settings();
     let template = non_empty_setting(conn, keys.prompt)
         .filter(|template| flow.accepts_prompt(template))
+        .map(|template| flow.resolve_retired_default(template))
         .unwrap_or_else(|| keys.default_prompt.to_string());
 
     if flow == GenerationFlow::OcrCorrection {
@@ -246,6 +278,7 @@ pub fn generation_config_from_settings(
                 .take(4)
                 .map(str::to_string)
                 .collect(),
+            reasoning: None,
         },
     }
 }
@@ -476,6 +509,44 @@ mod tests {
         assert_eq!(
             prompt_template_from_settings(&conn, GenerationFlow::Summary),
             prompt::DEFAULT_SUMMARY_PROMPT
+        );
+    }
+
+    /// The NER default that shipped before reasoning was turned off, copied
+    /// verbatim from the release that stored it: it asks the model for
+    /// character offsets NER computes itself.
+    const RETIRED_NER_DEFAULT: &str = r#"Extraé entidades nombradas del texto histórico. Devolvé SOLO JSON válido, sin markdown. Usá exclusivamente estas categorías: PER, LOC, ORG, DATE, MISC. Formato: [{"value":"...","type":"PER|LOC|ORG|DATE|MISC","start_offset":0,"end_offset":0,"confidence":0.95}]. Si no hay entidades, devolvé []. No inventes entidades ni uses categorías fuera del contrato.
+
+Texto:
+{text}"#;
+
+    #[test]
+    fn a_stored_retired_ner_default_resolves_to_the_current_default() {
+        // The person who ran NER before this change has the old default stored
+        // byte for byte. It is not a customization: honouring it would keep
+        // asking for offsets and keep emptying completions.
+        let conn = settings_conn();
+        settings::set_setting(&conn, "prompt_ner", RETIRED_NER_DEFAULT).unwrap();
+
+        assert_eq!(
+            prompt_template_from_settings(&conn, GenerationFlow::Ner),
+            prompt::DEFAULT_NER_PROMPT
+        );
+    }
+
+    #[test]
+    fn a_stored_custom_ner_prompt_is_used_unchanged() {
+        let conn = settings_conn();
+        settings::set_setting(
+            &conn,
+            "prompt_ner",
+            "Custom NER PER LOC ORG DATE MISC: {text}",
+        )
+        .unwrap();
+
+        assert_eq!(
+            prompt_template_from_settings(&conn, GenerationFlow::Ner),
+            "Custom NER PER LOC ORG DATE MISC: {text}"
         );
     }
 }
