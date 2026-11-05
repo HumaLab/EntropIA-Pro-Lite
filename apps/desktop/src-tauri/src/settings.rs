@@ -349,6 +349,13 @@ fn is_ocr_engine_setting(key: &str) -> bool {
     key == GLM_OCR_API_KEY || key == crate::ocr::OCRH_SETTING_MODE
 }
 
+/// Settings that decide whether the NER chain can run: the OpenRouter
+/// credential, the mode that picks OpenRouter or the local engine, and the
+/// NER model (a rejected model parks units the same way a missing key does).
+fn is_ner_engine_setting(key: &str) -> bool {
+    key == OPENROUTER_API_KEY || key == "llm_mode" || key == "openrouter_ner_model"
+}
+
 /// Runs one engine's configuration resume, logging its outcome best-effort.
 fn resume_configuration_blocked_with(
     conn: &rusqlite::Connection,
@@ -380,24 +387,33 @@ fn resume_configuration_blocked_with(
 /// `configuration_required` rows of OCR work signed with the executor's
 /// `configuration:` message prefix) when an OCR setting is saved. Embedding
 /// and contract-change blocks never move on an OCR save and vice versa —
-/// each engine resumes only its own. Best effort: a failure is logged and
-/// never fails the save. Returns how many units were requeued.
+/// each engine resumes only its own. NER units parked
+/// `configuration_required` resume when the OpenRouter key, the LLM mode or
+/// the NER model is saved. Best effort: a failure is logged and never fails
+/// the save. Returns how many units were requeued.
 pub(crate) fn resume_work_after_setting_change(conn: &rusqlite::Connection, key: &str) -> usize {
+    let mut resumed = 0;
     if is_embedding_engine_setting(key) {
-        resume_configuration_blocked_with(
+        resumed += resume_configuration_blocked_with(
             conn,
             "embedding",
             crate::processing::repository::resume_embedding_configuration_blocked,
-        )
+        );
     } else if is_ocr_engine_setting(key) {
-        resume_configuration_blocked_with(
+        resumed += resume_configuration_blocked_with(
             conn,
             "OCR",
             crate::processing::repository::resume_ocr_configuration_blocked,
-        )
-    } else {
-        0
+        );
     }
+    if is_ner_engine_setting(key) {
+        resumed += resume_configuration_blocked_with(
+            conn,
+            "NER",
+            crate::processing::repository::resume_ner_configuration_blocked,
+        );
+    }
+    resumed
 }
 
 #[tauri::command]
@@ -1906,6 +1922,47 @@ mod tests {
                 .expect_err("missing public key should fail");
 
         assert!(error.contains("entropia-root"));
+    }
+
+    #[test]
+    fn saving_the_openrouter_key_or_ner_model_resumes_configuration_blocked_ner() {
+        let conn = in_memory_settings_db();
+        conn.execute_batch(
+            "CREATE TABLE processing_tasks (
+               id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+               outcome TEXT NOT NULL DEFAULT '', owner_session TEXT, next_retry_at INTEGER,
+               last_error_code TEXT, last_error_message TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
+             INSERT INTO processing_tasks (id, kind, state, outcome, last_error_code)
+               VALUES ('t-ner', 'ner', 'blocked', 'configuration_required', 'configuration_required');",
+        )
+        .expect("queue table");
+        set_setting(&conn, "llm_mode", "openrouter").expect("mode");
+        let state = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT state FROM processing_tasks WHERE id = 't-ner'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("state")
+        };
+        // Without a key the NER chain still cannot run: nothing moves.
+        assert_eq!(
+            resume_work_after_setting_change(&conn, OPENROUTER_API_KEY),
+            0
+        );
+        assert_eq!(state(&conn), "blocked");
+        set_setting(&conn, OPENROUTER_API_KEY, "sk-test").expect("save key");
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_model"),
+            0,
+            "an unrelated key never resumes work"
+        );
+        assert_eq!(state(&conn), "blocked");
+        assert_eq!(
+            resume_work_after_setting_change(&conn, "openrouter_ner_model"),
+            1
+        );
+        assert_eq!(state(&conn), "pending");
     }
 
     #[test]

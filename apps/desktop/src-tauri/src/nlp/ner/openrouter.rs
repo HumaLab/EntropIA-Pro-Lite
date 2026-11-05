@@ -29,6 +29,19 @@ pub fn build_ner_prompt(template: &str, text: &str) -> String {
     crate::llm::prompt::render_template(template, text)
 }
 
+/// Params for one NER request: the configured flow params with the model's
+/// reasoning turned off. Reasoning is on by default for some models and its
+/// tokens bill against `max_tokens`, so the thinking pass can eat the whole
+/// 4096-token budget and the completion arrives empty with
+/// `finish_reason: "length"`. NER answers one JSON array and resolves its own
+/// character offsets, so it gains nothing from thinking.
+pub fn ner_request_params(
+    mut params: crate::llm::generation::OpenRouterGenerationParams,
+) -> crate::llm::generation::OpenRouterGenerationParams {
+    params.reasoning = Some(crate::llm::generation::ReasoningConfig::NONE);
+    params
+}
+
 pub async fn extract_entities_with_openrouter(
     api_key: String,
     generation: crate::llm::generation::FlowGenerationConfig,
@@ -46,9 +59,12 @@ pub async fn extract_entities_with_openrouter(
     let model_name = generation.model.clone();
     let client = crate::llm::openrouter::OpenRouterClient::new(api_key, model_name.clone());
     let raw = client
-        .generate(&build_ner_prompt(prompt_template, text), &generation.params)
+        .generate(
+            &build_ner_prompt(prompt_template, text),
+            &ner_request_params(generation.params),
+        )
         .await
-        .map_err(|error| openrouter_ner_unavailable(&error))?;
+        .map_err(|error| describe_openrouter_failure(&error))?;
 
     parse_openrouter_entities(text, protected_entities, &raw, &model_name)
 }
@@ -109,6 +125,30 @@ pub fn parse_openrouter_entities(
 
     entities.sort_by_key(|entity| entity.start_offset);
     Ok(entities)
+}
+
+/// Statuses that only the person can fix: a rejected or unfunded key, or a
+/// model OpenRouter does not serve.
+const CONFIGURATION_STATUSES: [&str; 4] = [
+    "OpenRouter API error (401",
+    "OpenRouter API error (402",
+    "OpenRouter API error (403",
+    "OpenRouter API error (404",
+];
+
+/// Words an OpenRouter client failure for the NER queue. Only credential and
+/// model rejections read as "unavailable" (which parks the task until the
+/// settings change); provider trouble, timeouts and unreadable answers keep
+/// their own wording so they retry or fail this asset alone.
+pub fn describe_openrouter_failure(error: &str) -> String {
+    if CONFIGURATION_STATUSES
+        .iter()
+        .any(|status| error.starts_with(status))
+    {
+        openrouter_ner_unavailable(error)
+    } else {
+        format!("OpenRouter NER request failed: {error}")
+    }
 }
 
 pub fn openrouter_ner_unavailable(reason: &str) -> String {

@@ -779,6 +779,17 @@ pub(crate) fn ner_fallback_config(conn: &rusqlite::Connection) -> NerFallbackCon
     NerFallbackConfig { mode, openrouter }
 }
 
+/// Whether the configured NER chain has what it needs to run: an OpenRouter
+/// key when OpenRouter does the extraction (the local engine needs none).
+pub(crate) fn ner_configuration_ready(conn: &rusqlite::Connection) -> bool {
+    let config = ner_fallback_config(conn);
+    match config.mode {
+        NerLlmFallbackMode::OpenRouter => config.openrouter.is_ok(),
+        #[cfg(feature = "local-ml")]
+        NerLlmFallbackMode::Local => true,
+    }
+}
+
 #[cfg(feature = "local-ml")]
 async fn run_spacy_ner(
     app_handle: &AppHandle,

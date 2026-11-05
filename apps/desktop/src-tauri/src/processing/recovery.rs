@@ -237,6 +237,9 @@ pub fn recover_session(
         // A unit parked for a missing embedding configuration that is valid
         // now (the key was saved while no scheduler watched) resumes at start.
         repository::resume_embedding_configuration_blocked(conn)?;
+        // Likewise for NER: older builds parked every OpenRouter failure as a
+        // missing configuration, so a valid one frees those units at start.
+        repository::resume_ner_configuration_blocked(conn)?;
         // Work only system batches own has nobody to resume it: requeue it.
         repository::requeue_interrupted_system_tasks(conn, None)?;
         // A generation whose vectors all landed but that no build ever

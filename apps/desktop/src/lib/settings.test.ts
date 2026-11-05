@@ -236,6 +236,16 @@ describe('settings', () => {
       expect(DEFAULT_PROMPTS.tripletsPrompt).toContain('{text}')
     })
 
+    it('asks the NER model for no character offsets', () => {
+      // Espejo del default de Rust (`llm/prompt.rs`): NER calcula los offsets
+      // por su cuenta, así que pedirlos solo gastaba tokens de salida.
+      expect(DEFAULT_PROMPTS.nerPrompt).toContain(
+        '[{"value":"...","type":"PER|LOC|ORG|DATE|MISC","confidence":0.95}]'
+      )
+      expect(DEFAULT_PROMPTS.nerPrompt).not.toContain('start_offset')
+      expect(DEFAULT_PROMPTS.nerPrompt).not.toContain('end_offset')
+    })
+
     it('exports default model params and per-flow overrides', () => {
       expect(DEFAULT_MODEL_PARAMS.model).toBe(DEFAULT_OPENROUTER_MODEL)
       expect(DEFAULT_MODEL_PARAMS.temperature).toBe('0.3')
