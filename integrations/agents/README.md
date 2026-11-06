@@ -3,7 +3,8 @@
 An external assistant — Claude Code, Codex, OpenCode, Pi — can read this
 installed EntropIA archive through a loopback MCP endpoint, once you pair it in
 **Configuración › Asistentes**. If you allow it there, it can also prepare and
-control processing jobs (OCR, embeddings, entities, triples, schemas) and ask to
+control processing jobs (OCR, embeddings, entities, triples, OCR correction,
+page summaries, schemas) and ask to
 start paid work, which you approve in the app. The endpoint is **local-only and
 off by default**, a new assistant can only read, and it is the same code in Pro
 and Lite.

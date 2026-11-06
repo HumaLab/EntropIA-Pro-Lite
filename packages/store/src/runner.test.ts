@@ -2916,7 +2916,7 @@ describe('web captures migration (0057)', () => {
     try {
       db.exec(`CREATE TABLE _migrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, applied_at INTEGER NOT NULL);
-        INSERT INTO _migrations (name, applied_at) VALUES ('0060_from_the_future', 1)`)
+        INSERT INTO _migrations (name, applied_at) VALUES ('9999_from_the_future', 1)`)
       await migrated(db)
 
       expect(
@@ -3070,6 +3070,215 @@ describe('batch NER tasks migration (0058)', () => {
           )
           .all()
       ).toHaveLength(1)
+    } finally {
+      db.close()
+    }
+  })
+})
+
+describe('batch OCR correction and summary tasks migration (0060)', () => {
+  const MIGRATION_0060 = '0060_processing_ocr_correction_summary_tasks'
+
+  const shim = (db: DatabaseSync): DbClient => ({
+    async execute(sql, params = []) {
+      return { rowsAffected: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) }
+    },
+    async executeBatch(sql) {
+      db.exec(sql)
+    },
+    async select<T>(sql: string, params: unknown[] = []) {
+      return db.prepare(sql).all(...(params as SQLInputValue[])) as T[]
+    },
+    async selectRows(sql, params = []) {
+      return db
+        .prepare(sql)
+        .all(...(params as SQLInputValue[]))
+        .map(Object.values)
+    },
+  })
+
+  /** The archive as it stood at 0059: the applier skips 0060 because the test
+   * reports it as already recorded, and it is never written to `_migrations`. */
+  const upTo0059 = (db: DatabaseSync): DbClient => {
+    const base = shim(db)
+    return {
+      ...base,
+      async select<T>(sql: string, params: unknown[] = []) {
+        if (sql.includes('FROM _migrations')) return [{ name: MIGRATION_0060 }] as T[]
+        return base.select<T>(sql, params)
+      },
+    }
+  }
+
+  function seedQueueRows(db: DatabaseSync) {
+    db.exec(`
+      INSERT INTO processing_batches
+        (id, request_id, origin, state, desired_state, operations, planning_done, revision, created_at, updated_at)
+      VALUES ('b1', 'req-1', 'user', 'running', 'run', '["ocr","ocr_correction"]', 1, 3, 10, 20);
+      INSERT INTO processing_tasks
+        (id, kind, asset_id_snapshot, state, subject_id, attempt_count, created_at, updated_at)
+      VALUES ('t-ocr', 'ocr', 'a1', 'succeeded', 'a1', 1, 11, 12),
+             ('t-ner', 'ner', 'a2', 'blocked', 'a2', 0, 13, 14);
+      INSERT INTO processing_batch_tasks
+        (batch_id, task_id, kind, asset_id_snapshot, dependency_task_id)
+      VALUES ('b1', 't-ocr', 'ocr', 'a1', NULL),
+             ('b1', 't-ner', 'ner', 'a2', 't-ocr');
+      INSERT INTO processing_attempts
+        (task_id, attempt_number, lease_epoch, started_at, finished_at, outcome)
+      VALUES ('t-ocr', 1, 2, 15, 16, 'succeeded');
+      INSERT INTO processing_checkpoints
+        (task_id, unit_key, input_fingerprint, contract_hash, payload, created_at)
+      VALUES ('t-ocr', 'page-1', 'fp', 'hash', '{"units":1}', 17);
+    `)
+  }
+
+  it('has a standalone .sql mirror that matches the registry', () => {
+    const flat = (text: string) => text.replaceAll('\r', '').trim()
+    const mirror = flat(
+      readFileSync(
+        resolve(here, 'migrations/0060_processing_ocr_correction_summary_tasks.sql'),
+        'utf8'
+      )
+    )
+    expect(flat(buildSchemaFixture())).toContain(mirror)
+  })
+
+  it('rebuilds the queue tables keeping every row and admitting the new kinds', async () => {
+    const db = new DatabaseSync(':memory:')
+    try {
+      db.exec('PRAGMA foreign_keys=ON')
+      await applyMigrations(upTo0059(db))
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM _migrations WHERE name=?').get(MIGRATION_0060)?.n
+      ).toBe(0)
+      seedQueueRows(db)
+
+      await applyMigrations(shim(db))
+
+      expect(
+        db
+          .prepare(
+            'SELECT id, kind, state, asset_id_snapshot, attempt_count FROM processing_tasks ORDER BY id'
+          )
+          .all()
+      ).toEqual([
+        { id: 't-ner', kind: 'ner', state: 'blocked', asset_id_snapshot: 'a2', attempt_count: 0 },
+        { id: 't-ocr', kind: 'ocr', state: 'succeeded', asset_id_snapshot: 'a1', attempt_count: 1 },
+      ])
+      expect(
+        db
+          .prepare('SELECT id, request_id, state, operations, revision FROM processing_batches')
+          .all()
+      ).toEqual([
+        {
+          id: 'b1',
+          request_id: 'req-1',
+          state: 'running',
+          operations: '["ocr","ocr_correction"]',
+          revision: 3,
+        },
+      ])
+      expect(
+        db
+          .prepare(
+            'SELECT batch_id, task_id, kind, dependency_task_id FROM processing_batch_tasks ORDER BY task_id'
+          )
+          .all()
+      ).toEqual([
+        { batch_id: 'b1', task_id: 't-ner', kind: 'ner', dependency_task_id: 't-ocr' },
+        { batch_id: 'b1', task_id: 't-ocr', kind: 'ocr', dependency_task_id: null },
+      ])
+      expect(
+        db.prepare('SELECT task_id, attempt_number, outcome FROM processing_attempts').all()
+      ).toEqual([{ task_id: 't-ocr', attempt_number: 1, outcome: 'succeeded' }])
+      expect(
+        db.prepare('SELECT task_id, unit_key, payload FROM processing_checkpoints').all()
+      ).toEqual([{ task_id: 't-ocr', unit_key: 'page-1', payload: '{"units":1}' }])
+
+      // The two kinds this migration exists for.
+      const newKinds: Array<[string, string, string]> = [
+        ['t-correct', 'ocr_correction', 'a3'],
+        ['t-summary', 'summary', 'a4'],
+      ]
+      for (const [taskId, kind, assetId] of newKinds) {
+        db.prepare(
+          `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+           VALUES (?, ?, ?, 'pending', 30, 30)`
+        ).run(taskId, kind, assetId)
+        db.prepare(
+          `INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot)
+           VALUES ('b1', ?, ?, ?)`
+        ).run(taskId, kind, assetId)
+      }
+      expect(
+        db
+          .prepare(
+            "SELECT id, kind FROM processing_tasks WHERE kind IN ('ocr_correction', 'summary') ORDER BY id"
+          )
+          .all()
+      ).toEqual([
+        { id: 't-correct', kind: 'ocr_correction' },
+        { id: 't-summary', kind: 'summary' },
+      ])
+
+      // Neither table widened into "anything goes".
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
+             VALUES ('t-x', 'unknown', 'a9', 'pending', 1, 1)`
+          )
+          .run()
+      ).toThrow()
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot)
+             VALUES ('b1', 't-ocr', 'unknown', 'a1')`
+          )
+          .run()
+      ).toThrow()
+
+      // The rebuild dropped and recreated both tables: the queue's own links
+      // still have to be enforced.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot)
+             VALUES ('ghost', 't-ocr', 'ocr', 'a1')`
+          )
+          .run()
+      ).toThrow()
+      db.prepare(
+        `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, subject_id, created_at, updated_at)
+         VALUES ('t-dep', 'ocr_correction', 'a5', 'running', 'a5', 40, 40),
+                ('t-blocked', 'summary', 'a6', 'blocked', 'a6', 41, 41)`
+      ).run()
+      db.prepare(
+        `INSERT INTO processing_batch_tasks (batch_id, task_id, kind, asset_id_snapshot, dependency_task_id)
+         VALUES ('b1', 't-blocked', 'summary', 'a6', 't-dep')`
+      ).run()
+      db.prepare("UPDATE processing_tasks SET state='succeeded' WHERE id='t-dep'").run()
+      expect(
+        db.prepare("SELECT state FROM processing_tasks WHERE id='t-blocked'").get()?.state
+      ).toBe('pending')
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='trigger' AND name='processing_tasks_settle_dependents'"
+          )
+          .all()
+      ).toHaveLength(1)
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_processing_tasks_state_id'"
+          )
+          .all()
+      ).toHaveLength(1)
+      expect(
+        db.prepare('SELECT COUNT(*) AS n FROM _migrations WHERE name=?').get(MIGRATION_0060)?.n
+      ).toBe(1)
     } finally {
       db.close()
     }

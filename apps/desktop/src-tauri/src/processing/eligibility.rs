@@ -442,6 +442,83 @@ pub enum ExtractionDecision {
     NoSourceText,
 }
 
+/// Verdict for one asset under the OCR-correction rule (S3–S6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorrectionDecision {
+    /// Extraction text exists and no correction matches it.
+    Eligible,
+    /// The stored `correct_ocr` result already equals the current text: the
+    /// page was corrected from exactly this extraction.
+    AlreadyDone,
+    /// No extraction text to correct (nothing at all, or a transcription only:
+    /// the per-document command replaces an extraction row and nothing else).
+    NoSourceText,
+}
+
+/// Applies the OCR-correction rule to one asset.
+///
+/// "Done" reads the same facts the per-document command writes in one
+/// transaction: `extractions.text_content` is replaced by the corrected text
+/// and `llm_results correct_ocr` stores that same text. Equality is therefore
+/// the anti-stale proof — a later edit of the page's text breaks it, and so
+/// does «Restaurar OCR original», which clears both rows.
+pub fn correction_decision(
+    conn: &Connection,
+    asset_id: &str,
+) -> Result<CorrectionDecision, String> {
+    let extraction: Option<String> = conn
+        .query_row(
+            "SELECT text_content FROM extractions WHERE asset_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(format!(
+                "Failed to read extraction of {asset_id}: {other}"
+            )),
+        })?;
+    let Some(extraction) = extraction.filter(|text| !text.trim().is_empty()) else {
+        return Ok(CorrectionDecision::NoSourceText);
+    };
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT result FROM llm_results
+             WHERE target_id = ?1 AND target_type IN ('asset', 'unknown') AND job_type = 'correct_ocr'
+             ORDER BY created_at DESC LIMIT 1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            // Archives that never ran the LLM layer have no llm_results: that
+            // is "no correction stored", not a failure to read one.
+            other if other.to_string().contains("no such") => Ok(None),
+            other => Err(format!(
+                "Failed to read correction of {asset_id}: {other}"
+            )),
+        })?;
+    Ok(if stored.as_deref() == Some(extraction.as_str()) {
+        CorrectionDecision::AlreadyDone
+    } else {
+        CorrectionDecision::Eligible
+    })
+}
+
+/// Applies the per-page summary rule to one asset: one `llm_results`
+/// `summarize` row for the asset itself. An item-level summary is not this
+/// page's summary, so it never marks the page done.
+pub fn summary_decision(conn: &Connection, asset_id: &str) -> Result<ExtractionDecision, String> {
+    extraction_decision(
+        conn,
+        asset_id,
+        "SELECT COUNT(*) FROM llm_results
+          WHERE target_id = ?1 AND target_type IN ('asset', 'unknown') AND job_type = 'summarize'",
+    )
+}
+
 /// Applies the batch NER rule to one asset. A batch never re-runs NER over an
 /// asset that already has automatic entities: the per-item button stays the
 /// way to refresh them.

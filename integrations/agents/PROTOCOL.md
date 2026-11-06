@@ -498,15 +498,18 @@ unchanged. A "job" is a batch.
 | `processing_control` | see below | `jobId`, `action`, `revision?`, `taskId?`, `failedOnly?` | `{jobId, action, outcome, job, approval}` |
 | `approvals_status` | `read` | `approvalId` | The approval, for the client that asked for it only |
 
-- **Prepare.** `operations` are `ocr`, `embeddings`, `ner`, `triples` and
-  `schema:<id>`; any other value is `invalid_argument` (never silently dropped).
+- **Prepare.** `operations` are `ocr`, `embeddings`, `ner`, `triples`,
+  `ocr_correction` (LLM OCR correction per page), `summary` (one summary per
+  page) and `schema:<id>`; any other value is `invalid_argument` (never silently
+  dropped).
   The scope is collections, items or both; each file enters once.
   `requestId` (1-128 visible characters) is stored as `agent:<client id>:<requestId>`:
   sending it again with the same arguments returns the same job (`created: false`),
   with other arguments it is `invalid_argument`, and two assistants never collide.
   Pages and units are counted by background planning, so no cost is estimated at
   this point (`costNote` says so); `jobs_get` reports `tasksByKind` once
-  `planningDone` is true. In Lite, embeddings, entities, triples and schemas need
+  `planningDone` is true. In Lite, embeddings, entities, triples, correction,
+  summaries and schemas need
   the OpenRouter key, as in the tab: without it the answer is
   `provider_not_configured`. Only the stored reference is checked; the secret is
   never read.

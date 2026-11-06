@@ -13,6 +13,10 @@ export interface BatchFlowSteps {
   embeddings: boolean
   ner: boolean
   triples: boolean
+  /** LLM OCR correction per page (T2); flows stored before it load it off. */
+  ocrCorrection: boolean
+  /** One summary per page (T2); flows stored before it load it off. */
+  summary: boolean
   /** Custom schema id; '' runs none. */
   schemaId: string
 }
@@ -40,6 +44,8 @@ export function parseFlows(raw: string | null | undefined): BatchFlow[] {
             embeddings: steps.embeddings === true,
             ner: steps.ner === true,
             triples: steps.triples === true,
+            ocrCorrection: steps.ocrCorrection === true,
+            summary: steps.summary === true,
             schemaId: typeof steps.schemaId === 'string' ? steps.schemaId : '',
           },
         },

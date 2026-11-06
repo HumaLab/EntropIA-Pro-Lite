@@ -195,12 +195,26 @@ fn resolve_limit(limit: Option<u32>) -> Result<usize, JobsError> {
     Ok(limit)
 }
 
+/// Operations that always run through OpenRouter, in every variant: OCR
+/// correction has no local vision path (`force_remote_ocr_correction`).
+fn is_always_remote(op: &str) -> bool {
+    op == "ocr_correction"
+}
+
 /// Operations Lite runs through OpenRouter: the Procesamiento tab refuses them
-/// without the key, and so does the endpoint.
-fn needs_openrouter(operations: &[String]) -> bool {
-    operations.iter().any(|op| {
-        matches!(op.as_str(), "embeddings" | "ner" | "triples") || op.starts_with("schema:")
-    })
+/// without the key, and so does the endpoint. In Pro the local engine covers
+/// them, summaries included, so they are not pre-flighted there.
+fn runs_on_openrouter_in_lite(op: &str) -> bool {
+    matches!(op, "embeddings" | "ner" | "triples" | "summary") || op.starts_with("schema:")
+}
+
+/// Whether the request needs the OpenRouter key before planning. Correction is
+/// always remote, so Pro refuses it without the key exactly as Lite does
+/// instead of planning tasks that could only park as blocked.
+fn needs_openrouter_key(operations: &[String], local_ml: bool) -> bool {
+    operations
+        .iter()
+        .any(|op| is_always_remote(op) || (!local_ml && runs_on_openrouter_in_lite(op)))
 }
 
 /// Whether the OpenRouter key is configured. Reads the stored value (a keyring
@@ -213,8 +227,10 @@ fn openrouter_configured(conn: &Connection) -> bool {
 /// The operations a batch runs. The tab only ever sends these; an assistant's
 /// typo is refused instead of silently dropped.
 fn is_known_operation(op: &str) -> bool {
-    matches!(op, "ocr" | "embeddings" | "ner" | "triples")
-        || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+    matches!(
+        op,
+        "ocr" | "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
+    ) || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
 }
 
 fn check_request_id(request_id: &str) -> Result<(), JobsError> {
@@ -278,7 +294,7 @@ impl JobsArchive {
             return Err(JobsError::new(
                 "invalid_argument",
                 format!(
-                    "Operación desconocida \"{unknown}\": usá ocr, embeddings, ner, triples o schema:<id>."
+                    "Operación desconocida \"{unknown}\": usá ocr, embeddings, ner, triples, ocr_correction, summary o schema:<id>."
                 ),
             ));
         }
@@ -289,13 +305,12 @@ impl JobsArchive {
             ));
         }
         let conn = self.write_connection()?;
-        if !cfg!(feature = "local-ml")
-            && needs_openrouter(operations)
+        if needs_openrouter_key(operations, cfg!(feature = "local-ml"))
             && !openrouter_configured(&conn)
         {
             return Err(JobsError::new(
                 ERROR_PROVIDER_NOT_CONFIGURED,
-                "Embeddings, entidades, tripletas y esquemas necesitan la clave de OpenRouter, que no está configurada. La persona puede cargarla en Configuración › Modelos; mientras tanto se puede preparar solo OCR.",
+                "Embeddings, entidades, tripletas, esquemas, corrección OCR y resúmenes necesitan la clave de OpenRouter, que no está configurada. La persona puede cargarla en Configuración › Modelos; mientras tanto se puede preparar solo OCR.",
             ));
         }
         let prepared = batches::prepare_batch(
@@ -314,7 +329,7 @@ impl JobsArchive {
             operations: job.operations,
             state: job.state,
             revision: job.revision,
-            cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
+            cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Corrección OCR y resúmenes son una llamada paga por página. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
             next_step: "Esperá a que jobs_get muestre state \"ready\"; después pedí empezar con processing_start, que la persona aprueba en EntropIA.".to_string(),
         })
     }
@@ -519,6 +534,29 @@ mod tests {
         ];
         for (service, code) in cases {
             assert_eq!(from_service(service.to_string()).code, code, "{service}");
+        }
+    }
+
+    #[test]
+    fn correction_needs_the_key_before_planning_in_pro_as_well() {
+        let ops = |list: &[&str]| list.iter().map(|op| op.to_string()).collect::<Vec<_>>();
+        // OCR correction has no local vision path, so Pro pre-flights it exactly
+        // as Lite does instead of planning tasks that could only park as blocked.
+        for local_ml in [false, true] {
+            assert!(
+                needs_openrouter_key(&ops(&["ocr_correction"]), local_ml),
+                "correction needs the key (local_ml={local_ml})"
+            );
+            assert!(
+                !needs_openrouter_key(&ops(&["ocr"]), local_ml),
+                "ocr never needs it (local_ml={local_ml})"
+            );
+        }
+        // Everything else keeps its variant behaviour: Pro runs those on the
+        // local engine, summaries included, so it never pre-flights them.
+        for op in ["embeddings", "ner", "triples", "summary", "schema:custom"] {
+            assert!(needs_openrouter_key(&ops(&[op]), false), "{op} in Lite");
+            assert!(!needs_openrouter_key(&ops(&[op]), true), "{op} in Pro");
         }
     }
 

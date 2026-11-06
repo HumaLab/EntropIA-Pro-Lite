@@ -965,12 +965,12 @@ Si el asistente no conecta, comprobá que EntropIA esté abierta y el interrupto
 <a id="capitulo-14-procesamiento-por-lotes"></a>
 ## Capítulo 14. Procesamiento por lotes
 
-Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto, **Embeddings** para preparar materiales para compararlos por semejanza, **Entidades** para encontrar personas, lugares y organizaciones, **Tripletes** para extraer relaciones del tipo quién hizo qué y un [esquema propio](#esquema-propio) para armar una tabla con los datos que vos definas. No incluyen transcripción de audio STT ni generan un resumen conjunto.
+Los lotes permiten procesar varias colecciones a la vez: **OCR** para reconocer texto, **Embeddings** para preparar materiales para compararlos por semejanza, **Entidades** para encontrar personas, lugares y organizaciones, **Tripletes** para extraer relaciones del tipo quién hizo qué, **Corrección OCR** para reemplazar el texto reconocido por una versión corregida, **Resúmenes** para escribir un resumen de cada página y un [esquema propio](#esquema-propio) para armar una tabla con los datos que vos definas. No incluyen transcripción de audio STT ni arman un resumen conjunto de la colección: los resúmenes son de cada página.
 
 ![Seleccionar colecciones, revisar tareas y seguir el avance del lote.](images/06-lotes-progreso.svg)
 
 1. Abrí **Configuración → Lotes** y seleccioná una o varias colecciones. **Seleccionar todas** marca todas las disponibles.
-2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, o varias a la vez. Después, pulsá **Analizar selección**. Si marcaste Embeddings, Entidades, Tripletes o un esquema y todavía no guardaste la clave de OpenRouter, el botón queda deshabilitado y, al pasar el cursor, indica que primero hay que cargarla en **Configuración → APIs remotas → OpenRouter**.
+2. Elegí **OCR** para reconocer palabras en imágenes o PDF, **Embeddings** para preparar una comparación por semejanza, **Entidades**, **Tripletes**, **Corrección OCR**, **Resúmenes**, o varias a la vez. Después, pulsá **Analizar selección**. Si marcaste Embeddings, Entidades, Tripletes, Corrección OCR, Resúmenes o un esquema y todavía no guardaste la clave de OpenRouter, el botón queda deshabilitado y, al pasar el cursor, indica que primero hay que cargarla en **Configuración → APIs remotas → OpenRouter**.
 3. Revisá qué documentos y tareas incluye la propuesta. Si el alcance no es correcto, descartala.
 4. Cuando termine el análisis, pulsá **Iniciar lote**.
 5. Seguí el estado en la pestaña o desde el indicador de lotes de la barra inferior.
@@ -988,11 +988,22 @@ Un OCR terminado sin texto puede contar como completo. Abrí esa página y revis
 
 Lo que pedís a mano en un documento —por ejemplo, pulsar **OCRH**— pasa adelante de los lotes en segundo plano. En esta pestaña también aparecen los procesos de la [Biblioteca](#biblioteca): la sincronización de una biblioteca de Zotero y el [reprocesamiento de texto](#reprocesar-texto), con su avance, pausa y cancelación. También los lotes que preparó un [asistente externo](#asistentes-externos), que se controlan igual que los tuyos.
 
-En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. Si configuraste el respaldo de Vercel, las entidades, tripletes y esquemas usan Vercel cuando OpenRouter falla; los embeddings no. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+En Lite, reconocer texto, comparar materiales y extraer entidades, tripletes o un esquema propio depende de servicios por Internet y claves configuradas. Si configuraste el respaldo de Vercel, las entidades, tripletes, esquemas, la corrección y los resúmenes usan Vercel cuando OpenRouter falla; los embeddings no. **Entidades** y **Tripletes** vienen apagadas: cada documento es una consulta paga a OpenRouter, y la propuesta del lote dice cuántos documentos pasan por cada una antes de que lo inicies. **Corrección OCR** y **Resúmenes** también vienen apagados: son llamadas pagas a OpenRouter por página, también en Pro, y la propuesta dice cuántas páginas pasan por cada una. Los resultados aparecen en el panel derecho de cada documento, igual que si usaras **NER** o **TRIPLET** de a uno, y conviene revisarlos: son una propuesta del modelo. Que el lote muestre avance no garantiza que el servicio esté disponible ni que cada tarea termine correctamente.
+
+<a id="corregir-y-resumir-por-lote"></a>
+### 14.1. Corregir el texto o resumir por lote
+
+**Corrección OCR** y **Resúmenes** hacen por lote lo mismo que **OCRC** y **OCRR/Resumen** hacen en un documento ([6.2](#capitulo-6-obtener-texto-de-documentos)), página por página.
+
+**Corrección OCR** usa el prompt de corrección de **Configuración → Prompts** y el modelo de corrección de **Model Params** y reemplaza el texto de cada página por la versión corregida. El original queda guardado: en el documento, **Texto extraído** sobre el visor ofrece **Restaurar OCR original** para volver a él. Cada página se corrige una sola vez y las que ya están corregidas se saltean, así que repetir el lote no vuelve a pagarlas. Los embeddings, las entidades y los tripletes que ya existían quedan como están: la corrección cambia el texto y no rehace lo derivado hasta que vos lo pidas. Dentro del mismo lote, las operaciones que se hacen por primera vez sobre una página esperan su corrección y usan el texto corregido.
+
+**Resúmenes** escribe un resumen de cada página con el prompt de resumen de **Configuración → Prompts** y el modelo de resumen de **Model Params**. Se ve en el documento, en la sección **Resumen** de **Texto extraído** para esa página, y una página que ya tiene resumen se saltea. Si el mismo lote también corrige esa página, el resumen espera la corrección y resume el texto corregido.
+
+Las dos son llamadas pagas a OpenRouter por página, también en Pro, y necesitan la clave guardada en **Configuración → APIs remotas → OpenRouter**. Conviene revisar el resultado: el modelo puede omitir datos o cambiar el sentido, igual que de a un documento ([6.2](#capitulo-6-obtener-texto-de-documentos)).
 
 
 <a id="esquema-propio"></a>
-### 14.1. Extraer una tabla con tu propio esquema
+### 14.2. Extraer una tabla con tu propio esquema
 
 Las entidades y los tripletes buscan siempre lo mismo. Con un **esquema propio** decidís vos qué datos sacar de cada documento, y el lote arma una tabla con una fila por cada caso que encuentre. Por ejemplo, para partes de un puerto: **barco**, **carga** y **destino**.
 
@@ -1008,7 +1019,7 @@ Un documento que ya tiene resultados con ese esquema no se vuelve a procesar. **
 El modelo copia lo que encuentra en el texto, pero puede equivocarse o saltearse casos, sobre todo si el OCR tiene errores. Revisá una muestra contra los documentos antes de usar la tabla. En Lite cada documento es una consulta paga a OpenRouter. Los esquemas y sus resultados quedan en este equipo: todavía no viajan con la sincronización.
 
 <a id="flujos-guardados"></a>
-### 14.2. Guardar una combinación como flujo
+### 14.3. Guardar una combinación como flujo
 
 Si siempre procesás tus colecciones con los mismos pasos, guardalos una vez. Marcá las operaciones (y el esquema propio, si usás uno), pulsá **Guardar como flujo**, escribí un nombre —por ejemplo «Partes de puerto»— y **Guardar**. La próxima vez elegilo en **Flujo guardado** y quedan marcadas solas. Un flujo solo recuerda qué marcar: las colecciones las elegís en cada lote. Guardar con un nombre que ya existe lo reemplaza.
 
@@ -1258,7 +1269,7 @@ Si usás sincronización, al volver a abrir EntropIA la copia recuperada se sinc
 ![Caso: preparar texto, analizar cada fuente y registrar hallazgos.](images/10-caso-analisis-documentos.svg)
 
 1. Importá las fuentes y obtené el texto de cada documento que lo necesite.
-2. Abrí cada documento y seleccioná la página o archivo con texto. Usá **OCRR/Resumen** para resumirlo, **NER** para proponer nombres de personas o lugares o **TRIPLET** para sugerir relaciones, como quién hizo qué. Para muchos documentos, **Entidades** y **Tripletes** también corren por lote. Revisá el alcance de la salida; los lotes no crean un resumen general.
+2. Abrí cada documento y seleccioná la página o archivo con texto. Usá **OCRR/Resumen** para resumirlo, **NER** para proponer nombres de personas o lugares o **TRIPLET** para sugerir relaciones, como quién hizo qué. Para muchos documentos, **Entidades**, **Tripletes**, **Corrección OCR** y **Resúmenes** también corren por lote: los resúmenes quedan página por página, no como un resumen general de la colección. Revisá el alcance de la salida.
 3. Contrastá cada salida con su texto original; usá **Análisis textual** en la colección para observar frecuencias de palabras.
 4. Registrá coincidencias y diferencias en notas, citando qué documento las respalda.
 

@@ -1185,3 +1185,268 @@ describe('the collection picker reflows and truncates', () => {
     ]).toEqual([true, true, true, true])
   })
 })
+
+describe('batch OCR correction and page summaries', () => {
+  const OPENROUTER_TOOLTIP = 'Primero cargá tu API key de OpenRouter'
+
+  function analysisMock(
+    prepareOperations: string[],
+    draft: Record<string, unknown>,
+    prepareAssert?: (args: Record<string, unknown> | undefined) => void
+  ) {
+    return async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'processing_prepare') {
+        expect(args?.['operations']).toEqual(prepareOperations)
+        prepareAssert?.(args)
+        return { batchId: 'b-draft', created: true, members: 4 }
+      }
+      if (command === 'processing_get_batch') return { ...draftSnapshot(), ...draft }
+      return undefined
+    }
+  }
+
+  it('offers correction and summaries right after triples and sends their ids', async () => {
+    mockInvoke.mockImplementation(
+      analysisMock(['ocr', 'embeddings', 'ocr_correction', 'summary'], {
+        operations: ['embeddings', 'ocr', 'ocr_correction', 'summary'],
+        planningDone: true,
+        tasksByKind: [
+          { name: 'ocr_correction', count: 2 },
+          { name: 'summary', count: 3 },
+        ],
+      })
+    )
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    const operations = screen.getByRole('group', { name: 'Operaciones' })
+    const labels = within(operations)
+      .getAllByRole('checkbox')
+      .map((box) => box.closest('label')?.textContent?.trim())
+    expect(labels).toEqual([
+      'OCR',
+      'Embeddings',
+      'Entidades',
+      'Tripletes',
+      'Corrección OCR',
+      'Resúmenes',
+    ])
+
+    const correction = within(operations).getByRole('checkbox', { name: 'Corrección OCR' })
+    const summary = within(operations).getByRole('checkbox', { name: 'Resúmenes' })
+    // Paid calls nobody asked for: both start off.
+    expect(correction).not.toBeChecked()
+    expect(summary).not.toBeChecked()
+
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    await fireEvent.click(correction)
+    await fireEvent.click(summary)
+    await fireEvent.click(screen.getByRole('button', { name: 'Analizar selección' }))
+
+    expect(
+      await screen.findByText(/2 páginas se corrigen con el modelo de Prompts\./)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/3 páginas reciben un resumen\./)).toBeInTheDocument()
+  })
+
+  it('carries a hint on each new toggle instead of a line under it', async () => {
+    render(BatchProcessingTab)
+
+    const correction = await screen.findByRole('checkbox', { name: 'Corrección OCR' })
+    const summary = screen.getByRole('checkbox', { name: 'Resúmenes' })
+
+    expect(correction.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      'Corrige el texto OCR de cada página con el modelo de Prompts; guarda el original.'
+    )
+    expect(summary.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      'Escribe un resumen por página.'
+    )
+  })
+
+  it.runIf(!LOCAL_ML)(
+    'without an OpenRouter key either new operation blocks the batch on its own',
+    async () => {
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+        if (command === 'settings_get') return null
+        return undefined
+      })
+      render(BatchProcessingTab)
+
+      await screen.findByText('Legajo 1')
+      await fireEvent.click(screen.getByText('Legajo 1'))
+      const analyze = screen.getByRole('button', { name: 'Analizar selección' })
+      await waitFor(() => expect(analyze).toBeDisabled())
+
+      // Free the button from embeddings first, so each new toggle is the only
+      // thing that could close it again.
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Embeddings' }))
+      await waitFor(() => expect(analyze).toBeEnabled())
+
+      const correction = screen.getByRole('checkbox', { name: 'Corrección OCR' })
+      await fireEvent.click(correction)
+      await waitFor(() => expect(analyze).toBeDisabled())
+      expect(analyze.closest('[data-tooltip]')).toHaveAttribute(
+        'data-tooltip',
+        expect.stringContaining(OPENROUTER_TOOLTIP)
+      )
+
+      await fireEvent.click(correction)
+      await waitFor(() => expect(analyze).toBeEnabled())
+      await fireEvent.click(screen.getByRole('checkbox', { name: 'Resúmenes' }))
+      await waitFor(() => expect(analyze).toBeDisabled())
+    }
+  )
+
+  // S6, T4 finding 1: correction has no local path (`force_remote_ocr_correction`),
+  // so Pro pre-flights it too. Summaries stay local in Pro, as the per-page button is.
+  it.runIf(LOCAL_ML)('in Pro, correction alone needs the key while summaries do not', async () => {
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'settings_get') return null
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    await screen.findByText('Legajo 1')
+    await fireEvent.click(screen.getByText('Legajo 1'))
+    // In Pro embeddings run on the local engine, so the batch is not blocked yet.
+    const analyze = await screen.findByRole('button', { name: 'Analizar selección' })
+    await waitFor(() => expect(analyze).toBeEnabled())
+
+    const correction = screen.getByRole('checkbox', { name: 'Corrección OCR' })
+    await fireEvent.click(correction)
+    await waitFor(() => expect(analyze).toBeDisabled())
+    expect(analyze.closest('[data-tooltip]')).toHaveAttribute(
+      'data-tooltip',
+      expect.stringContaining(OPENROUTER_TOOLTIP)
+    )
+    expect(mockInvoke).not.toHaveBeenCalledWith('processing_prepare', expect.anything())
+
+    await fireEvent.click(correction)
+    await waitFor(() => expect(analyze).toBeEnabled())
+
+    // A summary runs on the local engine in Pro, like the per-page button does.
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'Resúmenes' }))
+    await waitFor(() => expect(analyze).toBeEnabled())
+  })
+
+  it('saves a flow with both toggles and restores them', async () => {
+    let stored: string | null = null
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'settings_get') return args?.['key'] === 'batch_flows' ? stored : null
+      if (command === 'settings_set') {
+        stored = String(args?.['value'])
+        return undefined
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    const correction = await screen.findByRole('checkbox', { name: 'Corrección OCR' })
+    const summary = screen.getByRole('checkbox', { name: 'Resúmenes' })
+    await fireEvent.click(correction)
+    await fireEvent.click(summary)
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar como flujo' }))
+    await fireEvent.input(screen.getByLabelText('Nombre del flujo'), {
+      target: { value: 'Corregir y resumir' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Guardar' }))
+
+    await waitFor(() =>
+      expect(JSON.parse(stored ?? '[]')[0].steps).toMatchObject({
+        ocrCorrection: true,
+        summary: true,
+      })
+    )
+
+    // Back to the plain ticks, then the saved flow puts both back.
+    await fireEvent.click(correction)
+    await fireEvent.click(summary)
+    expect(correction).not.toBeChecked()
+    await fireEvent.click(screen.getByRole('button', { name: /Flujo guardado/ }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Corregir y resumir' }))
+    await waitFor(() => expect(correction).toBeChecked())
+    expect(summary).toBeChecked()
+  })
+
+  it('loads a flow saved before the two toggles existed with both off', async () => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') return { batches: [], nextCursor: null }
+      if (command === 'settings_get')
+        return args?.['key'] === 'batch_flows'
+          ? JSON.stringify([
+              {
+                name: 'Viejo',
+                steps: { ocr: true, embeddings: false, ner: false, triples: false, schemaId: '' },
+              },
+            ])
+          : null
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    const correction = await screen.findByRole('checkbox', { name: 'Corrección OCR' })
+    await fireEvent.click(await screen.findByRole('button', { name: /Flujo guardado/ }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Viejo' }))
+
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'OCR' })).toBeChecked())
+    expect(correction).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: 'Resúmenes' })).not.toBeChecked()
+  })
+
+  it('names the two new kinds in the task list like the other units', async () => {
+    mockInvoke.mockImplementation(async (command: string, ...rest: unknown[]) => {
+      const args = rest[0] as Record<string, unknown> | undefined
+      if (command === 'processing_list_batches') {
+        const states = args?.['states']
+        if (Array.isArray(states) && states.includes('completed')) {
+          return { batches: [], nextCursor: null }
+        }
+        return {
+          batches: [
+            {
+              id: 'b-run',
+              state: 'running',
+              desiredState: 'run',
+              operations: ['ocr_correction', 'summary'],
+              revision: 2,
+              createdAt: 1,
+              updatedAt: 1,
+              activeUnits: 2,
+              failedUnits: 0,
+              succeededUnits: 0,
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      if (command === 'processing_get_batch') return runningSnapshot()
+      if (command === 'processing_list_tasks') {
+        return {
+          tasks: [
+            { ...failedTask(), taskId: 'c1', kind: 'ocr_correction', state: 'succeeded' },
+            { ...failedTask(), taskId: 's1', kind: 'summary', state: 'succeeded' },
+          ],
+          total: 2,
+        }
+      }
+      return undefined
+    })
+    render(BatchProcessingTab)
+
+    const [row] = await screen.findAllByText('b-run')
+    if (!row) throw new Error('expected a batch row')
+    await fireEvent.click(row)
+
+    expect(await screen.findByText('ocr_correction')).toBeInTheDocument()
+    expect(screen.getByText('summary')).toBeInTheDocument()
+  })
+})

@@ -74,21 +74,31 @@
   // Off by default: under Lite every document is a paid OpenRouter call.
   let runNer = $state(false)
   let runTriples = $state(false)
+  // Off by default: both are paid LLM calls, one per page.
+  let runOcrCorrection = $state(false)
+  let runSummary = $state(false)
   // A user-defined schema (T-51) the batch also runs; '' runs none.
   let schemaId = $state('')
-  // Under Lite, embeddings, entities, triples and schemas are OpenRouter calls:
-  // without the key «Analizar selección» could only fail later, out of sight.
+  // Under Lite, embeddings, entities, triples, summaries and schemas are
+  // OpenRouter calls: without the key «Analizar selección» could only fail
+  // later, out of sight. Correction is always remote, also in Pro
+  // (`force_remote_ocr_correction`), so it is gated in both variants; a Pro
+  // summary runs on the local engine like the per-page button.
   // Unknown until read (and when the read answers nothing) means not blocked.
   let hasOpenrouterKey = $state(true)
   const missingOpenrouterKey = $derived(
-    !LOCAL_ML && !hasOpenrouterKey && (runEmbeddings || runNer || runTriples || Boolean(schemaId))
+    !hasOpenrouterKey &&
+      (runOcrCorrection ||
+        (!LOCAL_ML && (runEmbeddings || runNer || runTriples || runSummary || Boolean(schemaId))))
   )
-  // A saved flow (T-52) is these five choices under a name.
+  // A saved flow (T-52) is these choices under a name.
   const flowSteps = $derived<BatchFlowSteps>({
     ocr: runOcr,
     embeddings: runEmbeddings,
     ner: runNer,
     triples: runTriples,
+    ocrCorrection: runOcrCorrection,
+    summary: runSummary,
     schemaId,
   })
   function applyFlow(steps: BatchFlowSteps) {
@@ -96,12 +106,17 @@
     runEmbeddings = steps.embeddings
     runNer = steps.ner
     runTriples = steps.triples
+    runOcrCorrection = steps.ocrCorrection
+    runSummary = steps.summary
     schemaId = steps.schemaId
   }
-  // Text extractions whose draft line says how many documents they cover.
+  // Lines under the draft that say how many pages each operation covers.
+  // `alwaysPaid` marks the calls that go to OpenRouter even in Pro.
   const extractionCounts = [
-    { kind: 'ner', label: 'batch.nerCount' },
-    { kind: 'triples', label: 'batch.triplesCount' },
+    { kind: 'ner', label: 'batch.nerCount', alwaysPaid: false },
+    { kind: 'triples', label: 'batch.triplesCount', alwaysPaid: false },
+    { kind: 'ocr_correction', label: 'batch.ocrCorrectionCount', alwaysPaid: true },
+    { kind: 'summary', label: 'batch.summaryCount', alwaysPaid: false },
   ] as const
 
   // Draft
@@ -384,7 +399,16 @@
   }
 
   async function handleAnalyze(): Promise<void> {
-    if (selectedCount === 0 || (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId))
+    if (
+      selectedCount === 0 ||
+      (!runOcr &&
+        !runEmbeddings &&
+        !runNer &&
+        !runTriples &&
+        !runOcrCorrection &&
+        !runSummary &&
+        !schemaId)
+    )
       return
     analyzing = true
     feedback = null
@@ -394,6 +418,8 @@
         ...(runEmbeddings ? ['embeddings'] : []),
         ...(runNer ? ['ner'] : []),
         ...(runTriples ? ['triples'] : []),
+        ...(runOcrCorrection ? ['ocr_correction'] : []),
+        ...(runSummary ? ['summary'] : []),
         ...(schemaId ? [schemaOperation(schemaId)] : []),
       ]
       const key = JSON.stringify([Object.keys(selected).sort(), operations])
@@ -691,13 +717,13 @@
   onMount(() => {
     void loadCollections()
     void loadLists()
-    if (!LOCAL_ML) {
-      settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
-        .then((key) => {
-          if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
-        })
-        .catch(() => {})
-    }
+    // Read in Pro too: correction needs the key in both variants, and an
+    // unread key must never be mistaken for a missing one.
+    settingsGet(SETTINGS_KEYS.OPENROUTER_API_KEY)
+      .then((key) => {
+        if (key !== undefined) hasOpenrouterKey = Boolean(key?.trim())
+      })
+      .catch(() => {})
     const unsubscribeStore = batchStore.subscribe((summary) => {
       const init = summary.init
       if (init?.recovered && !recoveryDismissed) {
@@ -1242,6 +1268,16 @@
               >{t('batch.opTriples')}</Checkbox
             >
           </span>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opOcrCorrectionHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={runOcrCorrection}
+              >{t('batch.opOcrCorrection')}</Checkbox
+            >
+          </span>
+          <span class="batch-ops__hinted" use:tooltip={t('batch.opSummaryHint')}>
+            <Checkbox class="batch-ops__toggle" bind:checked={runSummary}
+              >{t('batch.opSummary')}</Checkbox
+            >
+          </span>
           <!-- The span carries the tooltip: a disabled button gets no pointer events. -->
           <span
             class="batch-ops__hinted batch-ops__action-slot"
@@ -1252,7 +1288,13 @@
               variant="primary"
               size="sm"
               disabled={selectedCount === 0 ||
-                (!runOcr && !runEmbeddings && !runNer && !runTriples && !schemaId) ||
+                (!runOcr &&
+                  !runEmbeddings &&
+                  !runNer &&
+                  !runTriples &&
+                  !runOcrCorrection &&
+                  !runSummary &&
+                  !schemaId) ||
                 missingOpenrouterKey ||
                 analyzing}
               onclick={handleAnalyze}
@@ -1279,7 +1321,9 @@
                   draft.tasksByKind.find((kind) => kind.name === extraction.kind)?.count ?? 0}
                 <p>
                   {t(extraction.label, { count })}
-                  {#if !LOCAL_ML && count > 0}{t('batch.extractionPaidNotice')}{/if}
+                  {#if (extraction.alwaysPaid || !LOCAL_ML) && count > 0}
+                    {t('batch.extractionPaidNotice')}
+                  {/if}
                 </p>
               {/if}
             {/each}

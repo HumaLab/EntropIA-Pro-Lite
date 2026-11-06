@@ -766,6 +766,28 @@ pub(crate) fn commit_asset_correction_if_current(
     commit_asset_correction_impl(conn, asset_id, model_output, Some(expected_extraction))
 }
 
+/// The same commit for a caller that already owns a transaction: the batch
+/// supervisor publishes inside its own `BEGIN IMMEDIATE`, so the three writes
+/// (backup, extraction, result) join that transaction instead of opening a
+/// second one SQLite would refuse. Atomicity is the caller's, and the staged
+/// answer commits with the task receipt or not at all.
+pub(crate) fn commit_asset_correction_in_owner_transaction(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    model_output: &str,
+    expected_extraction: &str,
+) -> Result<String, String> {
+    if model_output.trim().is_empty() {
+        return Err("OCR correction model output is empty or whitespace-only".to_string());
+    }
+    // The backup table has no migration behind it (the per-document path
+    // creates it lazily), so the batch path proves it exists too. DDL joins the
+    // caller's transaction, which SQLite allows and which keeps the receipt and
+    // the table together.
+    ensure_schema(conn)?;
+    apply_asset_correction(conn, asset_id, model_output, Some(expected_extraction))
+}
+
 fn commit_asset_correction_impl(
     conn: &rusqlite::Connection,
     asset_id: &str,
@@ -780,8 +802,21 @@ fn commit_asset_correction_impl(
     let tx = conn
         .unchecked_transaction()
         .map_err(|error| format!("Failed to begin OCR correction transaction: {error}"))?;
+    let corrected = apply_asset_correction(conn, asset_id, model_output, expected_extraction)?;
+    tx.commit()
+        .map_err(|error| format!("Failed to commit OCR correction transaction: {error}"))?;
+    Ok(corrected)
+}
 
-    let existing_backup: Option<String> = tx
+/// Writes the correction with whatever transaction context the caller owns.
+/// Never begins or commits one of its own.
+fn apply_asset_correction(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    model_output: &str,
+    expected_extraction: Option<&str>,
+) -> Result<String, String> {
+    let existing_backup: Option<String> = conn
         .query_row(
             "SELECT original_text_content FROM ocr_correction_backups WHERE asset_id = ?1",
             [asset_id],
@@ -790,7 +825,7 @@ fn commit_asset_correction_impl(
         .optional()
         .map_err(|error| format!("Failed to read OCR correction backup: {error}"))?;
 
-    let current_extraction: Option<String> = tx
+    let current_extraction: Option<String> = conn
         .query_row(
             "SELECT text_content FROM extractions
              WHERE asset_id = ?1
@@ -810,7 +845,7 @@ fn commit_asset_correction_impl(
     let corrected = restore_image_references(original, model_output);
     let now = now_millis();
 
-    tx.execute(
+    conn.execute(
         "INSERT OR IGNORE INTO ocr_correction_backups(
             asset_id, original_text_content, created_at
          ) VALUES (?1, ?2, ?3)",
@@ -818,7 +853,7 @@ fn commit_asset_correction_impl(
     )
     .map_err(|error| format!("Failed to save original OCR backup: {error}"))?;
 
-    let updated = tx
+    let updated = conn
         .execute(
             "UPDATE extractions SET text_content = ?1 WHERE asset_id = ?2",
             params![corrected, asset_id],
@@ -831,7 +866,7 @@ fn commit_asset_correction_impl(
     }
 
     let result_id = format!("llr-asset-{asset_id}-correct_ocr");
-    tx.execute(
+    conn.execute(
         "INSERT INTO llm_results(id, target_id, target_type, job_type, result, created_at)
          VALUES (?1, ?2, 'asset', 'correct_ocr', ?3, ?4)
          ON CONFLICT(id) DO UPDATE SET
@@ -844,8 +879,6 @@ fn commit_asset_correction_impl(
     )
     .map_err(|error| format!("Failed to persist OCR correction result: {error}"))?;
 
-    tx.commit()
-        .map_err(|error| format!("Failed to commit OCR correction transaction: {error}"))?;
     Ok(corrected)
 }
 

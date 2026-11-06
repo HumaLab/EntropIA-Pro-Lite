@@ -1354,6 +1354,87 @@ pub(crate) fn extract_schema_for_asset_blocking(
     run_asset_job_blocking(app_handle, db_path, &job).map(|(output, _)| output)
 }
 
+/// The OpenRouter key the remote-only operations need, or the message the
+/// per-document commands word when it is missing. Read before any request, so
+/// a batch that finds no key parks the unit instead of spending (S6).
+pub(crate) fn require_openrouter_key(conn: &rusqlite::Connection) -> Result<String, String> {
+    let key = settings::get_setting(conn, "openrouter_api_key").unwrap_or_default();
+    if key.trim().is_empty() {
+        return Err(
+            "OpenRouter API key no configurada. Configure OpenRouter API key/model.".to_string(),
+        );
+    }
+    Ok(key)
+}
+
+/// One per-asset OCR correction run outside the LLM queue.
+pub(crate) struct AssetCorrectionRun {
+    /// The extraction the prompt was built from: the commit gate refuses a
+    /// correction computed from text that changed while the model answered.
+    pub(crate) expected_extraction: String,
+    /// The model's corrected text, not yet committed.
+    pub(crate) corrected: String,
+}
+
+/// Runs the per-asset OCR correction outside the LLM queue (the batch
+/// executor's thread). Always remote, exactly like the per-document command
+/// (`force_remote_ocr_correction`): OCRC has no local vision path, in Pro as
+/// well. Blocks: never call it from inside the async runtime.
+pub(crate) fn correct_ocr_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+) -> Result<AssetCorrectionRun, String> {
+    let job = LlmJob::CorrectOcrAsset {
+        asset_id: asset_id.to_string(),
+    };
+    let conn = crate::db::open::open_archive_connection(db_path)?;
+    let api_key = require_openrouter_key(&conn)?;
+    let request = prepare_remote_job_request(
+        &conn,
+        &job,
+        OpenRouterClient::DEFAULT_CONTEXT_WINDOW,
+        db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
+    drop(conn);
+    let expected_extraction = request.ocr_extraction_snapshot.clone().ok_or_else(|| {
+        "OCR correction completion is missing its extraction snapshot".to_string()
+    })?;
+    let client = OpenRouterClient::new(api_key, request.generation.model.clone());
+    let generated =
+        tauri::async_runtime::block_on(execute_remote_job_request(&client, &request, app_handle))?;
+    Ok(AssetCorrectionRun {
+        expected_extraction,
+        corrected: generated.output,
+    })
+}
+
+/// The same for a page summary: the local engine or OpenRouter, chosen by the
+/// saved settings exactly as the per-page button does.
+pub(crate) fn summarize_for_asset_blocking(
+    app_handle: &AppHandle,
+    db_path: &std::path::Path,
+    asset_id: &str,
+) -> Result<String, String> {
+    let job = LlmJob::SummarizeAsset {
+        asset_id: asset_id.to_string(),
+    };
+    run_asset_job_blocking(app_handle, db_path, &job).map(|(output, _)| output)
+}
+
+/// Stores one page summary through the same writer the per-page button uses
+/// (`llm_results` target `asset`, job `summarize`), so the ItemView reads the
+/// batch result exactly as it reads the manual one.
+pub(crate) fn persist_asset_summary(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    summary: &str,
+) -> Result<(), String> {
+    persist_result(conn, LLM_TARGET_ASSET, asset_id, "summarize", summary)
+}
+
 /// Runs one asset job outside the LLM queue, choosing the local engine or
 /// OpenRouter the same way the queue worker does. Returns the raw output and
 /// the log prefix of the engine that produced it.
@@ -2608,6 +2689,43 @@ fn prepare_remote_job_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S6: both new operations need the OpenRouter key, and a missing key is
+    /// refused before any request is prepared — so a batch parks the unit on
+    /// configuration instead of spending. The same error maps to
+    /// `blocked/configuration_required` for either kind, never to a retry or a
+    /// fatal failure of the page.
+    #[test]
+    fn a_missing_openrouter_key_is_refused_before_any_request() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        conn.execute_batch(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .expect("settings table");
+        let error = require_openrouter_key(&conn).expect_err("no key configured");
+        assert_eq!(
+            error,
+            "OpenRouter API key no configurada. Configure OpenRouter API key/model."
+        );
+        for fatal_code in ["ocr_correction_failed", "summary_failed"] {
+            match crate::processing::ner::map_remote_llm_error(&error, fatal_code) {
+                crate::processing::scheduler::ExecOutput::Blocked { code, message } => {
+                    assert_eq!(code, "configuration_required");
+                    assert_eq!(message, error, "the settings wording reaches the panel");
+                }
+                other => panic!("{fatal_code}: expected Blocked, got {other:?}"),
+            }
+        }
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('openrouter_api_key', 'sk-or-test')",
+            [],
+        )
+        .expect("key");
+        assert_eq!(require_openrouter_key(&conn).expect("key"), "sk-or-test");
+        // No `secret_ref:` case here: the gate returns the resolved key the
+        // client sends, and resolving a reference reads the machine's OS
+        // keyring, so such an assertion would pass or fail with the host.
+    }
 
     #[test]
     fn log_target_keeps_compound_prefixes_byte_identical() {

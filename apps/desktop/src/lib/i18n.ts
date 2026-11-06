@@ -215,6 +215,14 @@ const es = {
   'batch.opTriplesHint':
     'Extrae relaciones sujeto-verbo-objeto de cada documento con texto. Saltea los que ya tienen tripletes.',
   'batch.triplesCount': '{count} documentos pasan por la extracción de tripletes.',
+  'batch.opOcrCorrection': 'Corrección OCR',
+  'batch.opOcrCorrectionHint':
+    'Corrige el texto OCR de cada página con el modelo de Prompts; guarda el original.',
+  'batch.ocrCorrectionCount':
+    '{count} páginas se corrigen con el modelo de Prompts. Las que ya están corregidas se saltean.',
+  'batch.opSummary': 'Resúmenes',
+  'batch.opSummaryHint': 'Escribe un resumen por página.',
+  'batch.summaryCount': '{count} páginas reciben un resumen. Las que ya tienen uno se saltean.',
   'batch.schema': 'Esquema propio',
   'batch.flow': 'Flujo guardado',
   'batch.flowNone': 'Elegir a mano',
@@ -3680,6 +3688,14 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'batch.opTriplesHint':
     'Extracts subject-verb-object relations from every document with text. Skips documents that already have triples.',
   'batch.triplesCount': '{count} documents go through triple extraction.',
+  'batch.opOcrCorrection': 'OCR correction',
+  'batch.opOcrCorrectionHint':
+    'Corrects the OCR text of every page with the Prompts model; the original is kept.',
+  'batch.ocrCorrectionCount':
+    '{count} pages are corrected with the Prompts model. Pages already corrected are skipped.',
+  'batch.opSummary': 'Summaries',
+  'batch.opSummaryHint': 'Writes one summary per page.',
+  'batch.summaryCount': '{count} pages get a summary. Pages that already have one are skipped.',
   'batch.schema': 'Custom schema',
   'batch.flow': 'Saved flow',
   'batch.flowNone': 'Choose by hand',

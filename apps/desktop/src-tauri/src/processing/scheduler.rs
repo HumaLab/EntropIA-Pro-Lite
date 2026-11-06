@@ -101,6 +101,8 @@ pub enum EngineOutput {
     Ner(super::ner::NerComputeOutput),
     Triples(super::triples::TriplesComputeOutput),
     Schema(super::schema_extract::SchemaComputeOutput),
+    Correction(super::ocr_correction::CorrectionComputeOutput),
+    Summary(super::summary::SummaryComputeOutput),
     Bibliography(crate::bibliography::processing::BibliographyComputeOutput),
     BibliographyProfile(crate::bibliography::processing::BibliographyProfileComputeOutput),
     BibliographyExtract(crate::bibliography::processing::BibliographyExtractComputeOutput),
@@ -615,6 +617,12 @@ fn publish_engine_output(
         ("corpus", "asset", "schema_extract", EngineOutput::Schema(schema)) => {
             super::schema_extract::publish_schema_output(conn, &task.asset_id, schema)
         }
+        ("corpus", "asset", "ocr_correction", EngineOutput::Correction(correction)) => {
+            super::ocr_correction::publish_correction_output(conn, &task.asset_id, correction)
+        }
+        ("corpus", "asset", "summary", EngineOutput::Summary(summary)) => {
+            super::summary::publish_summary_output(conn, &task.asset_id, summary)
+        }
         (
             "bibliography",
             "library",
@@ -930,7 +938,7 @@ mod tests {
              CREATE UNIQUE INDEX idx_extractions_asset_id_unique ON extractions(asset_id);
              CREATE UNIQUE INDEX idx_layouts_asset_id_unique ON layouts(asset_id);
              CREATE TABLE llm_results (id TEXT PRIMARY KEY, target_id TEXT NOT NULL, target_type TEXT NOT NULL DEFAULT 'unknown', job_type TEXT NOT NULL, result TEXT NOT NULL, created_at INTEGER NOT NULL);
-             CREATE TABLE ocr_correction_backups (asset_id TEXT PRIMARY KEY, text_content TEXT NOT NULL);",
+             CREATE TABLE ocr_correction_backups (asset_id TEXT PRIMARY KEY, original_text_content TEXT NOT NULL, created_at INTEGER NOT NULL);",
         )
         .expect("base tables");
         let migration: &str =
@@ -1101,6 +1109,83 @@ mod tests {
         let mut registry = ExecutorRegistry::new();
         registry.register(Arc::new(ScriptExecutor::succeed()));
         registry
+    }
+
+    /// The publish router knows both new kinds: a correction commits the text,
+    /// backup and result the per-document command writes, and a summary lands
+    /// in the page's own `llm_results` row. Neither is refused as foreign work
+    /// nor routed to another kind's publisher.
+    #[test]
+    fn the_publish_router_handles_correction_and_summary() {
+        let (_dir, conn) = running_db();
+        conn.execute(
+            "INSERT INTO extractions (id, asset_id, text_content, method, created_at)
+             VALUES ('e1', 'a1', 'texto original del OCR', 'ocr', 1)",
+            [],
+        )
+        .expect("extraction");
+        let correction = ClaimedTask {
+            task_id: "corr-a1".to_string(),
+            kind: "ocr_correction".to_string(),
+            asset_id: "a1".to_string(),
+            domain: "corpus".to_string(),
+            subject_kind: "asset".to_string(),
+            subject_id: "a1".to_string(),
+            input_revision: 1,
+            input_fingerprint: String::new(),
+            contract_hash: "ocr_correction:v1".to_string(),
+            lease_epoch: 1,
+            attempt_number: 1,
+        };
+        publish_engine_output(
+            &conn,
+            &correction,
+            &EngineOutput::Correction(crate::processing::ocr_correction::CorrectionComputeOutput {
+                expected_extraction: "texto original del OCR".to_string(),
+                corrected: "Texto original del OCR.".to_string(),
+            }),
+        )
+        .expect("a correction publishes");
+        let text: String = conn
+            .query_row(
+                "SELECT text_content FROM extractions WHERE asset_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("corrected text");
+        assert_eq!(text, "Texto original del OCR.");
+        let original: String = conn
+            .query_row(
+                "SELECT original_text_content FROM ocr_correction_backups WHERE asset_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("backup");
+        assert_eq!(original, "texto original del OCR");
+        let summary = ClaimedTask {
+            task_id: "sum-a1".to_string(),
+            kind: "summary".to_string(),
+            ..correction.clone()
+        };
+        publish_engine_output(
+            &conn,
+            &summary,
+            &EngineOutput::Summary(crate::processing::summary::SummaryComputeOutput {
+                summary: "Resumen de la página.".to_string(),
+            }),
+        )
+        .expect("a summary publishes");
+        let (target, target_type, result): (String, String, String) = conn
+            .query_row(
+                "SELECT target_id, target_type, result FROM llm_results WHERE job_type = 'summarize'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("stored summary");
+        assert_eq!(
+            (target.as_str(), target_type.as_str(), result.as_str()),
+            ("a1", "asset", "Resumen de la página.")
+        );
     }
 
     #[test]

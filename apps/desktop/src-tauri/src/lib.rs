@@ -373,6 +373,30 @@ fn processing_commit_observer(
                 },
             );
         }
+        // The correction and the summary emit exactly the events the
+        // per-page buttons emit, so ItemView reloads without knowing which
+        // path produced the result. Neither admits a follow-up: S3 leaves the
+        // data derived from the old text untouched.
+        processing::scheduler::EngineOutput::Correction(correction) => {
+            let _ = app_handle.emit(
+                "llm:complete",
+                llm::LlmCompletePayload {
+                    id: task.asset_id.clone(),
+                    job: "correct_ocr".to_string(),
+                    result: correction.corrected.clone(),
+                },
+            );
+        }
+        processing::scheduler::EngineOutput::Summary(summary) => {
+            let _ = app_handle.emit(
+                "llm:complete",
+                llm::LlmCompletePayload {
+                    id: task.asset_id.clone(),
+                    job: "summarize".to_string(),
+                    result: summary.summary.clone(),
+                },
+            );
+        }
         processing::scheduler::EngineOutput::Bibliography(sync) => {
             // `processing:changed` above is the durable bibliography signal.
             // The library's Zotero annotations are pulled right after.
@@ -435,6 +459,20 @@ fn processing_terminal_observer(
                     "extract_triples"
                 } else {
                     "extract_schema"
+                }
+                .to_string(),
+                error,
+            },
+        );
+    } else if task.kind == "ocr_correction" || task.kind == "summary" {
+        let _ = app_handle.emit(
+            "llm:error",
+            llm::LlmErrorPayload {
+                id: task.asset_id.clone(),
+                job: if task.kind == "ocr_correction" {
+                    "correct_ocr"
+                } else {
+                    "summarize"
                 }
                 .to_string(),
                 error,
@@ -1233,6 +1271,21 @@ pub fn run() {
                 scheduler_app.clone(),
                 db_path.clone(),
             )));
+            // Per-page LLM correction and summaries (odd/tasks/
+            // batch-ocr-correction-summary.md): the same writers the
+            // per-document commands use, behind the same durable queue.
+            scheduler_registry.register(std::sync::Arc::new(
+                processing::ocr_correction::OcrCorrectionExecutor::new(
+                    scheduler_app.clone(),
+                    db_path.clone(),
+                ),
+            ));
+            scheduler_registry.register(std::sync::Arc::new(
+                processing::summary::SummaryExecutor::new(
+                    scheduler_app.clone(),
+                    db_path.clone(),
+                ),
+            ));
             scheduler_registry.register(std::sync::Arc::new(
                 bibliography::processing::BibliographySyncExecutor::production(),
             ));

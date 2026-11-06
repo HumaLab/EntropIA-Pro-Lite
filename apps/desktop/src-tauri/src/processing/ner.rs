@@ -42,6 +42,12 @@ pub fn publish_ner_output(
 /// Missing keys or engines park the task for the person to fix settings;
 /// transport trouble retries; anything else fails this asset only.
 pub(crate) fn map_ner_error(error: &str) -> ExecOutput {
+    map_remote_llm_error(error, "ner_failed")
+}
+
+/// The same mapping for every remote-flow kind: one gate, one wording, and a
+/// kind-specific fatal code so a failed summary never reads as a failed NER.
+pub(crate) fn map_remote_llm_error(error: &str, fatal_code: &str) -> ExecOutput {
     let lower = error.to_lowercase();
     if lower.contains("unavailable") || lower.contains("api key") {
         return ExecOutput::Blocked {
@@ -51,7 +57,7 @@ pub(crate) fn map_ner_error(error: &str) -> ExecOutput {
     }
     match super::embedding::map_embedding_error(error) {
         ExecOutput::Fatal { message, .. } => ExecOutput::Fatal {
-            code: "ner_failed".to_string(),
+            code: fatal_code.to_string(),
             message,
         },
         other => other,

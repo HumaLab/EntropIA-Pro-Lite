@@ -2177,6 +2177,11 @@ fn e2b5_wu1_equal_string_subjects_remain_distinct_and_route_by_domain() {
             EngineOutput::Ner(_) => "ner",
             EngineOutput::Triples(_) => "triples",
             EngineOutput::Schema(_) => "schema_extract",
+            // The corpus correction and summary run in their own suites
+            // (processing/repository.rs, processing/scheduler.rs); this
+            // bibliography harness registers no executor that stages them.
+            EngineOutput::Correction(_) => "ocr_correction",
+            EngineOutput::Summary(_) => "summary",
             EngineOutput::BibliographyProfile(_) => "bibliography_profile",
             EngineOutput::BibliographyExtract(_) => "bibliography_extract",
         };
