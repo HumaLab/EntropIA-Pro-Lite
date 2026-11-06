@@ -1067,7 +1067,7 @@ mod tests {
         scanner.join().expect("scanner thread");
         assert_eq!(one, 1);
 
-        eprintln!(
+        println!(
             "similar_assets over {ROWS} vectors: fresh connection {first_run:?}, \
              warm min {:?} / median {:?} / max {:?}, concurrent UI read waited {ui_wait:?}",
             warm[0], warm[2], warm[4]
