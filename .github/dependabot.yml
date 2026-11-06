@@ -18,6 +18,12 @@ updates:
       - dependency-name: pdfjs-dist
         update-types:
           - version-update:semver-major
+      # Vite 8 replaces esbuild with Rolldown/Oxc and our build fails on it
+      # (transformWithEsbuild). The upgrade is a deliberate migration of
+      # apps/desktop/vite.config.ts, tracked in odd/tasks/vite-8-migration.md.
+      - dependency-name: vite
+        update-types:
+          - version-update:semver-major
     groups:
       # Tiptap packages share one ProseMirror core and must move together, majors
       # included; a single extension on a different major breaks the editor.
