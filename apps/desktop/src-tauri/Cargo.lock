@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "entropia-pro-desktop"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
