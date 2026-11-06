@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  agentParametersForm,
+  agentParametersJson,
   frozenResearchModel,
   frozenResearchScope,
   type ResearchArtifact,
@@ -115,5 +117,65 @@ describe('research request shapes', () => {
     }
     expect(citation.provenance).toBe('zotero')
     expect(citation.ubicacion).toEqual({ tipo: 'paginas', desde: 3, hasta: 4 })
+  })
+})
+
+describe('agentParametersForm', () => {
+  // La forma de la respuesta del motor: los campos y sus valores por defecto
+  // (`ParametrosAgente::default()`). El formulario no repite ninguno.
+  const DEFAULTS = {
+    max_tokens_salida: 16384,
+    temperatura: 0.3,
+    esperas_reintento_s: [2, 6],
+    lotes_archivo_bytes: [48000, 24000, 12000],
+    max_consultas: { general: 20, trayectorias: 30, cronologia: 20 },
+  }
+
+  it('shows every engine default, lists as comma-separated text', () => {
+    const form = agentParametersForm(DEFAULTS)
+    expect(form.values.max_tokens_salida).toBe('16384')
+    expect(form.values.temperatura).toBe('0.3')
+    expect(form.values.esperas_reintento_s).toBe('2, 6')
+    expect(form.values.lotes_archivo_bytes).toBe('48000, 24000, 12000')
+    expect(form.maxConsultas).toEqual({ general: '20', trayectorias: '30', cronologia: '20' })
+  })
+
+  it('reads the saved parameters over the defaults and keeps what is missing', () => {
+    const form = agentParametersForm(
+      DEFAULTS,
+      JSON.stringify({ max_tokens_salida: 2048, max_consultas: { general: 25 } })
+    )
+    expect(form.values.max_tokens_salida).toBe('2048')
+    expect(form.values.temperatura).toBe('0.3')
+    expect(form.maxConsultas).toEqual({ general: '25', trayectorias: '30', cronologia: '20' })
+  })
+
+  it('falls back to the defaults when the saved value is not readable', () => {
+    const form = agentParametersForm(DEFAULTS, 'no es json')
+    expect(form.values.max_tokens_salida).toBe('16384')
+    expect(form.values.lotes_archivo_bytes).toBe('48000, 24000, 12000')
+  })
+
+  it('builds the parameters JSON the engine validates, lists as arrays', () => {
+    const form = agentParametersForm(
+      DEFAULTS,
+      JSON.stringify({ temperatura: 1.1, esperas_reintento_s: [], max_consultas: { general: 25 } })
+    )
+    expect(agentParametersJson(form)).toEqual({
+      max_tokens_salida: 16384,
+      temperatura: 1.1,
+      esperas_reintento_s: [],
+      lotes_archivo_bytes: [48000, 24000, 12000],
+      max_consultas: { general: 25, trayectorias: 30, cronologia: 20 },
+    })
+  })
+
+  it('sends a non-numeric text as null so the engine answers with its own message', () => {
+    const form = agentParametersForm(DEFAULTS)
+    form.values.max_tokens_salida = 'muchos'
+    form.values.lotes_archivo_bytes = '48000, tanto'
+    const parameters = agentParametersJson(form)
+    expect(parameters.max_tokens_salida).toBeNull()
+    expect(parameters.lotes_archivo_bytes).toEqual([48000, null])
   })
 })

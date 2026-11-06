@@ -1450,6 +1450,8 @@ pub fn run() {
             resolve_data_dir,
             asset_integrity::assets_check_integrity,
             research::research_request,
+            research::research_parameters_defaults,
+            research::research_parameters_validate,
             db::commands::db_execute,
             db::commands::db_execute_batch,
             db::commands::db_execute_transaction,

@@ -7,6 +7,8 @@
     "allow-resolve-data-dir",
     "allow-assets-check-integrity",
     "allow-research-request",
+    "allow-research-parameters-defaults",
+    "allow-research-parameters-validate",
     "allow-db-execute",
     "allow-db-execute-batch",
     "allow-db-execute-transaction",

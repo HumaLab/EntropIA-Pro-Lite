@@ -15,6 +15,8 @@ const APP_COMMANDS: &[&str] = &[
     "resolve_data_dir",
     "assets_check_integrity",
     "research_request",
+    "research_parameters_defaults",
+    "research_parameters_validate",
     "db_execute",
     "db_execute_batch",
     "db_execute_transaction",
