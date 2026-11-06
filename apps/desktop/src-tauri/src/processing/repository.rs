@@ -154,13 +154,17 @@ pub const TERMINAL_TASK_STATES: &[&str] = &["succeeded", "failed", "skipped", "c
 
 /// Operations a batch asked for, parsed from `processing_batches.operations`
 /// (JSON array of `"ocr"` / `"embeddings"` / `"ner"` / `"triples"` /
-/// `"schema:<id>"`).
+/// `"ocr_correction"` / `"summary"` / `"schema:<id>"`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchOperations {
     pub ocr: bool,
     pub embeddings: bool,
     pub ner: bool,
     pub triples: bool,
+    /// LLM OCR correction per page (S3–S6).
+    pub ocr_correction: bool,
+    /// One summary per page (S2, S5).
+    pub summary: bool,
     /// Extraction with a user-defined schema (T-51): the schema id.
     pub schema: Option<String>,
 }
@@ -180,6 +184,8 @@ pub fn batch_operations(conn: &Connection, batch_id: &str) -> Result<BatchOperat
                 "embeddings" => ops.embeddings = true,
                 "ner" => ops.ner = true,
                 "triples" => ops.triples = true,
+                "ocr_correction" => ops.ocr_correction = true,
+                "summary" => ops.summary = true,
                 other => {
                     if let Some(id) = other.strip_prefix("schema:") {
                         ops.schema = Some(id.to_string());
@@ -508,10 +514,10 @@ pub fn admit_subject_or_attach(
     subject.check_admittable()?;
     if !matches!(
         kind,
-        "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+        "ocr" | "embedding" | "ner" | "triples" | "schema_extract" | "ocr_correction" | "summary"
     ) {
         return Err(format!(
-            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner/triples/schema_extract only)",
+            "unsupported_subject: domain='{}' subject_kind='{}' kind='{kind}' is not admittable (corpus admits ocr/embedding/ner/triples/schema_extract/ocr_correction/summary only)",
             subject.domain, subject.subject_kind
         ));
     }
@@ -3920,7 +3926,13 @@ pub fn list_tasks(
     if let Some(kind) = kind_filter {
         if !matches!(
             kind,
-            "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+            "ocr"
+                | "embedding"
+                | "ner"
+                | "triples"
+                | "schema_extract"
+                | "ocr_correction"
+                | "summary"
         ) {
             return Err(format!("invalid_selection: unknown task kind {kind}"));
         }
@@ -4446,6 +4458,8 @@ pub fn claim_next(
             && *kind != "ner"
             && *kind != "triples"
             && *kind != "schema_extract"
+            && *kind != "ocr_correction"
+            && *kind != "summary"
             && *kind != "bibliography_sync"
             && *kind != "bibliography_profile"
             && *kind != "bibliography_extract"
@@ -4952,7 +4966,25 @@ fn validate_corpus_claim_input(
         })?;
         return Ok(Some((source_revision(conn, asset_id)?, fingerprint)));
     }
-    if matches!(kind, "ner" | "triples" | "schema_extract") {
+    if kind == "ocr_correction" {
+        // The correction rule re-checks itself: a page corrected (or edited)
+        // between admission and this claim is skipped instead of paying twice.
+        use super::eligibility::CorrectionDecision;
+        return match super::eligibility::correction_decision(conn, asset_id)? {
+            CorrectionDecision::Eligible => {
+                Ok(Some((source_revision(conn, asset_id)?, String::new())))
+            }
+            CorrectionDecision::AlreadyDone => {
+                mark_skipped(conn, task_id, "already_satisfied")?;
+                Ok(None)
+            }
+            CorrectionDecision::NoSourceText => {
+                mark_skipped(conn, task_id, "no_source_text")?;
+                Ok(None)
+            }
+        };
+    }
+    if matches!(kind, "ner" | "triples" | "schema_extract" | "summary") {
         // Text extractions re-check their own rule; the embedding freshness
         // rule below would skip them as soon as the asset was embedded. They
         // pin only the source revision (admission stores no fingerprint).
@@ -4960,6 +4992,7 @@ fn validate_corpus_claim_input(
         let decision = match kind {
             "ner" => super::eligibility::ner_decision(conn, asset_id)?,
             "triples" => super::eligibility::triples_decision(conn, asset_id)?,
+            "summary" => super::eligibility::summary_decision(conn, asset_id)?,
             _ => match super::schema_extract::schema_id_from_contract(contract_hash) {
                 Some(schema_id) => super::eligibility::schema_decision(conn, asset_id, schema_id)?,
                 None => {
@@ -5645,7 +5678,13 @@ pub fn commit_success_with(
             && subject_kind == "asset"
             && matches!(
                 stored_kind.as_str(),
-                "ocr" | "embedding" | "ner" | "triples" | "schema_extract"
+                "ocr"
+                    | "embedding"
+                    | "ner"
+                    | "triples"
+                    | "schema_extract"
+                    | "ocr_correction"
+                    | "summary"
             );
         let bibliography_route = domain == "bibliography"
             && subject_kind == "library"
@@ -5938,6 +5977,20 @@ pub fn fail_attempt(
     Ok(FailOutcome::Failed)
 }
 
+/// Which earlier unit of the same page a text-derived task must wait for.
+///
+/// A page that needs OCR has no text yet; a page that needs correction has
+/// text that is about to be rewritten. Either way the derived unit reads the
+/// text the earlier unit produces, so it is admitted blocked behind it (S4 /
+/// L3-L5) — never from the text that is about to disappear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextDependency {
+    /// The page's OCR task: it creates the text.
+    Ocr,
+    /// The page's OCR-correction task: it replaces the text.
+    Correction,
+}
+
 /// One classified member: what the batch will do about it, if anything.
 #[derive(Debug, Clone)]
 struct MemberWork {
@@ -5946,9 +5999,16 @@ struct MemberWork {
     classification: &'static str,
     reason: String,
     ocr_task: Option<(String, String, String)>,
-    emb_task: Option<(String, String, Option<String>)>,
-    /// Text-extraction tasks (NER, triples, schema): `(kind, contract, wait_for_ocr)`.
-    extract_tasks: Vec<(&'static str, String, bool)>,
+    /// Correction: `(kind, contract, dependency)`. It rewrites the page's
+    /// text, so everything derived after it waits for it.
+    correction_task: Option<(String, String, Option<TextDependency>)>,
+    emb_task: Option<(String, String, Option<TextDependency>)>,
+    /// Text-extraction tasks (NER, triples, schema, summary):
+    /// `(kind, contract, dependency)`.
+    extract_tasks: Vec<(&'static str, String, Option<TextDependency>)>,
+    /// The per-page summary (S2): its own unit, dependency resolved like the
+    /// rest of the text-derived work.
+    summary_task: Option<(String, String, Option<TextDependency>)>,
 }
 
 /// Progress of one classification page.
@@ -6059,8 +6119,45 @@ pub fn classify_batch_page(
                     admitted += 1;
                 }
             }
+            // The correction owns the page's text for everything admitted
+            // after it: it is admitted before the derived units so their
+            // dependency rows can point at it.
+            let mut correction_id = None;
+            if let Some((kind, contract, dependency)) = &work.correction_task {
+                let revision = source_revision(conn, &work.asset_id)?;
+                let dependency = match dependency {
+                    Some(TextDependency::Ocr) => ocr_id.as_deref(),
+                    Some(TextDependency::Correction) | None => None,
+                };
+                let out = admit_subject_or_attach(
+                    conn,
+                    batch_id,
+                    kind,
+                    &TaskSubject::corpus_asset(&work.asset_id),
+                    revision,
+                    "",
+                    contract,
+                    dependency,
+                )?
+                .ok_or_else(|| {
+                    "unsupported_subject: a corpus classification admission can never be skipped"
+                        .to_string()
+                })?;
+                correction_id = Some(out.task_id.clone());
+                if out.created {
+                    admitted += 1;
+                }
+            }
+            let resolve = |dependency: Option<TextDependency>| -> Option<String> {
+                match dependency {
+                    Some(TextDependency::Ocr) => ocr_id.clone(),
+                    Some(TextDependency::Correction) => correction_id.clone(),
+                    None => None,
+                }
+            };
             if let Some((kind, fingerprint, dependency)) = &work.emb_task {
                 let revision = source_revision(conn, &work.asset_id)?;
+                let dependency = resolve(*dependency);
                 // Explicit corpus/asset subject at admission (E2a-3).
                 let out = admit_subject_or_attach(
                     conn,
@@ -6070,11 +6167,7 @@ pub fn classify_batch_page(
                     revision,
                     fingerprint,
                     &emb_contract,
-                    if dependency.is_some() {
-                        ocr_id.as_deref()
-                    } else {
-                        None
-                    },
+                    dependency.as_deref(),
                 )?
                 .ok_or_else(|| {
                     "unsupported_subject: a corpus classification admission can never be skipped"
@@ -6084,9 +6177,10 @@ pub fn classify_batch_page(
                     admitted += 1;
                 }
             }
-            for (kind, contract, wait_for_ocr) in &work.extract_tasks {
-                let (kind, wait_for_ocr) = (*kind, *wait_for_ocr);
+            for (kind, contract, dependency) in &work.extract_tasks {
+                let (kind, dependency) = (*kind, *dependency);
                 let revision = source_revision(conn, &work.asset_id)?;
+                let dependency = resolve(dependency);
                 // Text extraction pins only the source revision: the commit
                 // gate rejects results computed from text that changed mid-run.
                 let out = admit_subject_or_attach(
@@ -6097,11 +6191,28 @@ pub fn classify_batch_page(
                     revision,
                     "",
                     contract,
-                    if wait_for_ocr {
-                        ocr_id.as_deref()
-                    } else {
-                        None
-                    },
+                    dependency.as_deref(),
+                )?
+                .ok_or_else(|| {
+                    "unsupported_subject: a corpus classification admission can never be skipped"
+                        .to_string()
+                })?;
+                if out.created {
+                    admitted += 1;
+                }
+            }
+            if let Some((kind, contract, dependency)) = &work.summary_task {
+                let revision = source_revision(conn, &work.asset_id)?;
+                let dependency = resolve(*dependency);
+                let out = admit_subject_or_attach(
+                    conn,
+                    batch_id,
+                    kind,
+                    &TaskSubject::corpus_asset(&work.asset_id),
+                    revision,
+                    "",
+                    contract,
+                    dependency.as_deref(),
                 )?
                 .ok_or_else(|| {
                     "unsupported_subject: a corpus classification admission can never be skipped"
@@ -6153,6 +6264,8 @@ fn plan_member(
     ocr_mode: &str,
 ) -> Result<MemberWork, String> {
     let mut ocr_task = None;
+    let mut correction_task = None;
+    let mut summary_task = None;
     let mut emb_task = None;
     let mut notes: Vec<String> = Vec::new();
     // OCR first: an eligible OCR task becomes the embedding dependency below.
@@ -6179,6 +6292,57 @@ fn plan_member(
             }
         }
     }
+    // The correction rewrites the page's text, so it is planned before
+    // anything derived from that text: it pins the dependency the derived
+    // units wait for (S4), and when the page also needs OCR it follows that
+    // OCR instead of running from text that does not exist yet.
+    let mut correction_open = false;
+    if ops.ocr_correction {
+        use super::eligibility::CorrectionDecision;
+        match super::eligibility::correction_decision(conn, asset_id)? {
+            CorrectionDecision::Eligible => {
+                correction_task = Some((
+                    super::ocr_correction::CORRECTION_TASK_KIND.to_string(),
+                    super::ocr_correction::OCR_CORRECTION_TASK_CONTRACT.to_string(),
+                    if ocr_open.is_some() {
+                        Some(TextDependency::Ocr)
+                    } else {
+                        None
+                    },
+                ));
+                correction_open = true;
+                notes.push("ocr_correction:admit".to_string());
+            }
+            CorrectionDecision::AlreadyDone => {
+                notes.push("ocr_correction:already_done".to_string());
+            }
+            CorrectionDecision::NoSourceText => {
+                if ocr_open.is_some() {
+                    correction_task = Some((
+                        super::ocr_correction::CORRECTION_TASK_KIND.to_string(),
+                        super::ocr_correction::OCR_CORRECTION_TASK_CONTRACT.to_string(),
+                        Some(TextDependency::Ocr),
+                    ));
+                    correction_open = true;
+                    notes.push("ocr_correction:wait_for_ocr".to_string());
+                } else {
+                    notes.push("ocr_correction:no_source_text".to_string());
+                }
+            }
+        }
+    }
+    // What a text-derived unit waits for when the page has no text yet, and
+    // what it waits for when the page's text is about to change under it.
+    let text_wait = if correction_open {
+        Some(TextDependency::Correction)
+    } else if ocr_open.is_some() {
+        Some(TextDependency::Ocr)
+    } else {
+        None
+    };
+    // Fresh text: only a correction that is about to rewrite it can make a
+    // derived unit stale, so this is the one dependency an eligible unit takes.
+    let text_rewrite = correction_open.then_some(TextDependency::Correction);
     if ops.embeddings {
         match super::eligibility::embedding_decision(conn, asset_id)? {
             super::eligibility::EmbeddingDecision::Eligible { reason } => {
@@ -6186,15 +6350,15 @@ fn plan_member(
                 // below), so the fingerprint pins the real input set.
                 let fingerprint = super::eligibility::embedding_input_fingerprint(conn, asset_id)?;
                 let _ = reason;
-                emb_task = Some(("embedding".to_string(), fingerprint, None));
+                emb_task = Some(("embedding".to_string(), fingerprint, text_rewrite));
                 notes.push("embeddings:admit".to_string());
             }
             super::eligibility::EmbeddingDecision::Fresh => {
                 notes.push("embeddings:fresh".to_string());
             }
             super::eligibility::EmbeddingDecision::NoSourceText => {
-                if ocr_open.is_some() {
-                    emb_task = Some(("embedding".to_string(), String::new(), ocr_open.clone()));
+                if text_wait.is_some() {
+                    emb_task = Some(("embedding".to_string(), String::new(), text_wait));
                     notes.push("embeddings:wait_for_ocr".to_string());
                 } else {
                     notes.push("embeddings:no_source_text".to_string());
@@ -6228,15 +6392,15 @@ fn plan_member(
     for (kind, contract, decision) in decisions {
         match decision {
             ExtractionDecision::Eligible => {
-                extract_tasks.push((kind, contract, false));
+                extract_tasks.push((kind, contract, text_rewrite));
                 notes.push(format!("{kind}:admit"));
             }
             ExtractionDecision::AlreadyDone => {
                 notes.push(format!("{kind}:already_done"));
             }
             ExtractionDecision::NoSourceText => {
-                if ocr_open.is_some() {
-                    extract_tasks.push((kind, contract, true));
+                if text_wait.is_some() {
+                    extract_tasks.push((kind, contract, text_wait));
                     notes.push(format!("{kind}:wait_for_ocr"));
                 } else {
                     notes.push(format!("{kind}:no_source_text"));
@@ -6244,7 +6408,42 @@ fn plan_member(
             }
         }
     }
-    let classification = if ocr_task.is_some() || emb_task.is_some() || !extract_tasks.is_empty() {
+    // S2: the summary unit is the page. L5: when the same batch corrects this
+    // page, the summary reads the corrected text — the same dependency the
+    // embeddings and the extractions take.
+    if ops.summary {
+        match super::eligibility::summary_decision(conn, asset_id)? {
+            ExtractionDecision::Eligible => {
+                summary_task = Some((
+                    super::summary::SUMMARY_TASK_KIND.to_string(),
+                    super::summary::SUMMARY_TASK_CONTRACT.to_string(),
+                    text_rewrite,
+                ));
+                notes.push("summary:admit".to_string());
+            }
+            ExtractionDecision::AlreadyDone => {
+                notes.push("summary:already_done".to_string());
+            }
+            ExtractionDecision::NoSourceText => {
+                if text_wait.is_some() {
+                    summary_task = Some((
+                        super::summary::SUMMARY_TASK_KIND.to_string(),
+                        super::summary::SUMMARY_TASK_CONTRACT.to_string(),
+                        text_wait,
+                    ));
+                    notes.push("summary:wait_for_ocr".to_string());
+                } else {
+                    notes.push("summary:no_source_text".to_string());
+                }
+            }
+        }
+    }
+    let classification = if ocr_task.is_some()
+        || correction_task.is_some()
+        || emb_task.is_some()
+        || summary_task.is_some()
+        || !extract_tasks.is_empty()
+    {
         "admitted"
     } else if notes.iter().any(|n| n.starts_with("ocr:unsupported")) {
         "unsupported_type"
@@ -6261,8 +6460,10 @@ fn plan_member(
         classification,
         reason: notes.join("; "),
         ocr_task,
+        correction_task,
         emb_task,
         extract_tasks,
+        summary_task,
     })
 }
 
@@ -6359,6 +6560,12 @@ mod tests {
     const MIGRATION_0058_SQL: &str =
         include_str!("../../../../../packages/store/src/migrations/0058_processing_ner_tasks.sql");
     const MIGRATION_0058_NAME: &str = "0058_processing_ner_tasks";
+    // Batch OCR correction and page summaries: kind CHECK widening for the
+    // two new corpus kinds, same rebuild shape as 0058.
+    const MIGRATION_0060_SQL: &str = include_str!(
+        "../../../../../packages/store/src/migrations/0060_processing_ocr_correction_summary_tasks.sql"
+    );
+    const MIGRATION_0060_NAME: &str = "0060_processing_ocr_correction_summary_tasks";
 
     fn migrated_db() -> (tempfile::TempDir, Connection) {
         let (dir, conn) = legacy_db();
@@ -6468,6 +6675,15 @@ mod tests {
             [MIGRATION_0058_NAME],
         )
         .expect("track 0058");
+        // The kind CHECK must admit the two new corpus kinds before any test
+        // seeds them; the mirror is the same file the store runner applies.
+        conn.execute_batch(MIGRATION_0060_SQL)
+            .expect("apply 0060 mirror");
+        conn.execute(
+            "INSERT INTO _migrations (name, applied_at) VALUES (?1, 1)",
+            [MIGRATION_0060_NAME],
+        )
+        .expect("track 0060");
         (dir, conn)
     }
 
@@ -7410,7 +7626,10 @@ mod tests {
                start_char INTEGER NOT NULL, end_char INTEGER NOT NULL,
                source_text_hash TEXT NOT NULL, chunking_contract TEXT NOT NULL,
                embedding BLOB NOT NULL, embedding_model TEXT NOT NULL,
-               embedding_contract TEXT NOT NULL, dimensions INTEGER NOT NULL);",
+               embedding_contract TEXT NOT NULL, dimensions INTEGER NOT NULL);
+             CREATE TABLE llm_results(id TEXT PRIMARY KEY, target_id TEXT NOT NULL,
+               target_type TEXT NOT NULL, job_type TEXT NOT NULL, result TEXT NOT NULL,
+               created_at INTEGER NOT NULL);",
         )
         .expect("embedding tables");
         conn.execute(
@@ -7726,6 +7945,431 @@ mod tests {
             )
             .expect("blocked state");
         assert_eq!(state, "blocked");
+    }
+
+    fn extraction_text(conn: &Connection, asset_id: &str) -> String {
+        conn.query_row(
+            "SELECT text_content FROM extractions WHERE asset_id = ?1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .expect("extraction text")
+    }
+
+    fn state_of(conn: &Connection, task_id: &str) -> String {
+        conn.query_row(
+            "SELECT state FROM processing_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .expect("task state")
+    }
+
+    fn dependency_of(conn: &Connection, batch: &str, task_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT dependency_task_id FROM processing_batch_tasks WHERE batch_id = ?1 AND task_id = ?2",
+            rusqlite::params![batch, task_id],
+            |row| row.get(0),
+        )
+        .expect("dependency link")
+    }
+
+    fn kinds_of(conn: &Connection, batch: &str) -> Vec<(String, i64)> {
+        read_batch_snapshot(conn, batch)
+            .expect("snapshot")
+            .tasks_by_kind
+    }
+
+    fn count_kind(conn: &Connection, batch: &str, kind: &str) -> i64 {
+        kinds_of(conn, batch)
+            .into_iter()
+            .find(|(name, _)| name == kind)
+            .map(|(_, count)| count)
+            .unwrap_or(0)
+    }
+
+    /// S2: correction and summary are one task per page (asset), admitted for
+    /// exactly the pages that still need them — the correction for pages with
+    /// OCR text, the summary for every page with any text.
+    #[test]
+    fn plan_admits_correction_and_summary_per_page() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr_correction", "summary"]"#);
+        // c1 holds the legajo; c2 brings a6, whose only text is a transcription.
+        prepare_membership(&conn, "b1", &["c1".to_string(), "c2".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        // Correction: a2, a4, a5p2, a7 hold an extraction. Summary: those plus
+        // a6, whose text comes from its transcription.
+        assert_eq!(count_kind(&conn, "b1", "ocr_correction"), 4);
+        assert_eq!(count_kind(&conn, "b1", "summary"), 5);
+        // Pages without text are classified, never queued.
+        assert_eq!(member_class(&conn, "b1", "a1").0, "no_source_text");
+        assert_eq!(member_class(&conn, "b1", "a3").0, "no_source_text");
+        // A transcription is not an extraction: correction has nothing to
+        // replace there, the summary does have text to read.
+        assert!(member_class(&conn, "b1", "a6")
+            .1
+            .contains("ocr_correction:no_source_text"));
+        assert!(member_class(&conn, "b1", "a6").1.contains("summary:admit"));
+        assert!(member_class(&conn, "b1", "a2")
+            .1
+            .contains("ocr_correction:admit"));
+        // One task per page and kind, never one per item.
+        for (asset, kind) in [
+            ("a2", "ocr_correction"),
+            ("a2", "summary"),
+            ("a4", "ocr_correction"),
+            ("a4", "summary"),
+            ("a7", "summary"),
+            ("a6", "summary"),
+        ] {
+            let per_page: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM processing_tasks WHERE kind = ?1 AND asset_id_snapshot = ?2",
+                    rusqlite::params![kind, asset],
+                    |row| row.get(0),
+                )
+                .expect("task rows");
+            assert_eq!(per_page, 1, "{asset}/{kind}");
+        }
+    }
+
+    /// S4: a page without OCR text waits for OCR, and the correction that
+    /// turns that text is itself what the summary waits for — the chain is
+    /// OCR → correction → summary, not both behind OCR.
+    #[test]
+    fn correction_and_summary_chain_behind_a_missing_ocr() {
+        let (_dir, conn) = batch_db();
+        insert_batch(
+            &conn,
+            "b1",
+            "req-1",
+            r#"["ocr", "ocr_correction", "summary"]"#,
+        );
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        let ocr = live_task(&conn, "corpus", "asset", "a1", "ocr")
+            .expect("ocr lookup")
+            .expect("an OCR task for a1");
+        let correction = live_task(&conn, "corpus", "asset", "a1", "ocr_correction")
+            .expect("correction lookup")
+            .expect("a correction for a1");
+        let summary = live_task(&conn, "corpus", "asset", "a1", "summary")
+            .expect("summary lookup")
+            .expect("a summary for a1");
+        assert_eq!(dependency_of(&conn, "b1", &correction), Some(ocr));
+        assert_eq!(
+            dependency_of(&conn, "b1", &summary),
+            Some(correction.clone())
+        );
+        assert_eq!(state_of(&conn, &correction), "blocked");
+        assert_eq!(state_of(&conn, &summary), "blocked");
+    }
+
+    /// S4 (L3/L5): when the same batch corrects a page and derives from it,
+    /// the derived units wait for the correction so they read its text.
+    #[test]
+    fn derived_units_wait_for_the_same_batchs_correction() {
+        let (_dir, conn) = batch_db();
+        insert_batch(
+            &conn,
+            "b1",
+            "req-1",
+            r#"["ocr_correction", "embeddings", "ner", "triples"]"#,
+        );
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        // a4: native text, no vector, no entities, no triples.
+        let correction = live_task(&conn, "corpus", "asset", "a4", "ocr_correction")
+            .expect("correction lookup")
+            .expect("a correction for a4");
+        assert_eq!(state_of(&conn, &correction), "pending");
+        for kind in ["embedding", "ner", "triples"] {
+            let task = live_task(&conn, "corpus", "asset", "a4", kind)
+                .expect("derived lookup")
+                .unwrap_or_else(|| panic!("a {kind} task for a4"));
+            assert_eq!(
+                dependency_of(&conn, "b1", &task),
+                Some(correction.clone()),
+                "{kind} must read the corrected text"
+            );
+            assert_eq!(state_of(&conn, &task), "blocked", "{kind}");
+        }
+        // a2's embeddings are fresh: S3 keeps them and they never wait on the
+        // correction they were not made from.
+        assert!(live_task(&conn, "corpus", "asset", "a2", "embedding")
+            .expect("embedding lookup")
+            .is_none());
+    }
+
+    /// S5: a page corrected from its current text is not corrected again, so
+    /// re-running the flow never pays twice; a later edit re-admits it.
+    #[test]
+    fn a_page_already_corrected_is_not_corrected_again() {
+        let (_dir, conn) = batch_db();
+        let corrected = extraction_text(&conn, "a2");
+        conn.execute(
+            "INSERT INTO llm_results (id, target_id, target_type, job_type, result, created_at)
+             VALUES ('llr-asset-a2-correct_ocr', 'a2', 'asset', 'correct_ocr', ?1, 1)",
+            [&corrected],
+        )
+        .expect("stored correction");
+        insert_batch(&conn, "b1", "req-1", r#"["ocr_correction"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        assert!(live_task(&conn, "corpus", "asset", "a2", "ocr_correction")
+            .expect("lookup")
+            .is_none());
+        let (class, reason) = member_class(&conn, "b1", "a2");
+        assert_eq!(class, "already_done");
+        assert!(reason.contains("ocr_correction:already_done"), "{reason}");
+        // The text moved: the stored correction no longer matches it.
+        conn.execute(
+            "UPDATE extractions SET text_content = 'texto nuevo' WHERE id = 'e2'",
+            [],
+        )
+        .expect("edit text");
+        insert_batch(&conn, "b2", "req-2", r#"["ocr_correction"]"#);
+        prepare_membership(&conn, "b2", &["c1".to_string()]).expect("prepare b2");
+        classify_batch_page(&conn, "b2", 200).expect("classify b2");
+        assert!(live_task(&conn, "corpus", "asset", "a2", "ocr_correction")
+            .expect("lookup")
+            .is_some());
+    }
+
+    /// S2/S5: the summary unit is the page — an item-level summary is not this
+    /// page's summary — and a page that already has one is not summarized
+    /// again.
+    #[test]
+    fn a_page_with_a_summary_is_not_summarized_again() {
+        let (_dir, conn) = batch_db();
+        conn.execute(
+            "INSERT INTO llm_results (id, target_id, target_type, job_type, result, created_at)
+             VALUES ('llr-item-i1-summarize', 'i1', 'item', 'summarize', 'resumen del documento', 1)",
+            [],
+        )
+        .expect("item summary");
+        insert_batch(&conn, "b1", "req-1", r#"["summary"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        assert!(
+            live_task(&conn, "corpus", "asset", "a2", "summary")
+                .expect("lookup")
+                .is_some(),
+            "every page with text is still owed its own summary"
+        );
+        // Settle the first batch, store a2's page summary, run the flow again.
+        conn.execute("UPDATE processing_tasks SET state = 'succeeded'", [])
+            .expect("settle b1");
+        conn.execute(
+            "INSERT INTO llm_results (id, target_id, target_type, job_type, result, created_at)
+             VALUES ('llr-asset-a2-summarize', 'a2', 'asset', 'summarize', 'resumen de la página', 2)",
+            [],
+        )
+        .expect("page summary");
+        insert_batch(&conn, "b2", "req-2", r#"["summary"]"#);
+        prepare_membership(&conn, "b2", &["c1".to_string()]).expect("prepare b2");
+        classify_batch_page(&conn, "b2", 200).expect("classify b2");
+        assert!(live_task(&conn, "corpus", "asset", "a2", "summary")
+            .expect("lookup")
+            .is_none());
+        assert_eq!(member_class(&conn, "b2", "a2").0, "already_done");
+    }
+
+    /// S8: the snapshot counts the new kinds like any other, and the task list
+    /// filter accepts them instead of refusing them as unknown.
+    #[test]
+    fn snapshot_counts_the_new_kinds_and_lists_them() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr_correction", "summary"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        let kinds: Vec<String> = kinds_of(&conn, "b1")
+            .into_iter()
+            .map(|(kind, _)| kind)
+            .collect();
+        assert_eq!(kinds, ["ocr_correction", "summary"]);
+        for kind in ["ocr_correction", "summary"] {
+            let (tasks, _) = list_tasks(&conn, "b1", None, Some(kind), None, 50, 0)
+                .unwrap_or_else(|error| panic!("{kind} must be a filterable kind: {error}"));
+            assert!(!tasks.is_empty(), "{kind}");
+        }
+    }
+
+    /// The new kinds are their own claim rule, never a fallback to the
+    /// embedding (or any other) freshness rule: a page whose embeddings are
+    /// fresh still claims its correction.
+    #[test]
+    fn the_new_kinds_claim_as_their_own_rule_and_not_as_embeddings() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr_correction", "summary"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        // Claiming needs the running demand the tab's start produces.
+        conn.execute("UPDATE processing_batches SET state = 'running'", [])
+            .expect("running batch");
+        // a2's embeddings are fresh: an embedding-shaped validation would
+        // skip its correction as already satisfied and claim nothing at all.
+        // The other pages' units settle first so a2's is the only candidate.
+        for kind in ["ocr_correction", "summary"] {
+            conn.execute(
+                "UPDATE processing_tasks SET state = 'succeeded' WHERE kind = ?1 AND asset_id_snapshot <> 'a2'",
+                [kind],
+            )
+            .expect("settle the other pages");
+        }
+        let claimed = claim_next(&conn, "s", &["ocr_correction"], 1)
+            .expect("claim")
+            .expect("a correction is claimable");
+        assert_eq!(claimed.kind, "ocr_correction");
+        assert_eq!(claimed.asset_id, "a2");
+        assert_eq!(state_of(&conn, &claimed.task_id), "running");
+        // L5: the same page's summary waits for that correction, and becomes
+        // claimable the moment it lands.
+        let blocked_summary = live_task(&conn, "corpus", "asset", "a2", "summary")
+            .expect("summary lookup")
+            .expect("a summary for a2");
+        assert_eq!(state_of(&conn, &blocked_summary), "blocked");
+        assert_eq!(
+            dependency_of(&conn, "b1", &blocked_summary),
+            Some(claimed.task_id.clone())
+        );
+        conn.execute(
+            "UPDATE processing_tasks SET state = 'succeeded' WHERE id = ?1",
+            [&claimed.task_id],
+        )
+        .expect("settle the correction");
+        let summary = claim_next(&conn, "s", &["summary"], 1)
+            .expect("claim summary")
+            .expect("a summary is claimable");
+        assert_eq!(summary.kind, "summary");
+        assert_eq!(summary.asset_id, "a2");
+        assert_eq!(state_of(&conn, &summary.task_id), "running");
+    }
+
+    /// The commit gate knows both new kinds: they commit through the corpus
+    /// route, and their real publishers write inside that one transaction
+    /// instead of being refused as foreign work or opening a nested one. The
+    /// gate also holds for them: a summary computed from the text a correction
+    /// just replaced cannot land on top of it.
+    #[test]
+    fn the_new_kinds_commit_through_the_corpus_route() {
+        let (_dir, conn) = batch_db();
+        insert_batch(&conn, "b1", "req-1", r#"["ocr_correction", "summary"]"#);
+        prepare_membership(&conn, "b1", &["c1".to_string()]).expect("prepare");
+        classify_batch_page(&conn, "b1", 200).expect("classify");
+        // Committing proves the batch still wants the unit.
+        conn.execute("UPDATE processing_batches SET state = 'ready'", [])
+            .expect("ready batch");
+        let original = extraction_text(&conn, "a4");
+        let own = |task_id: &str| {
+            conn.execute(
+                "UPDATE processing_tasks SET state = 'running', lease_epoch = 1 WHERE id = ?1",
+                [task_id],
+            )
+            .expect("own the task");
+        };
+        let correction_id = live_task(&conn, "corpus", "asset", "a4", "ocr_correction")
+            .expect("lookup")
+            .expect("a correction for a4");
+        // Keep the summary pinned to the pre-correction revision, as the batch
+        // would have planned it, to prove the gate is not kind-blind.
+        let summary_id = live_task(&conn, "corpus", "asset", "a4", "summary")
+            .expect("lookup")
+            .expect("a summary for a4");
+        own(&correction_id);
+        commit_success_with(
+            &conn,
+            &correction_id,
+            1,
+            "ocr_correction",
+            "corrected",
+            r#"{"characters":22}"#,
+            |conn| {
+                super::super::ocr_correction::publish_correction_output(
+                    conn,
+                    "a4",
+                    &super::super::ocr_correction::CorrectionComputeOutput {
+                        expected_extraction: original.clone(),
+                        corrected: "Texto nativo corregido.".to_string(),
+                    },
+                )
+            },
+        )
+        .expect("a correction commits");
+        assert_eq!(state_of(&conn, &correction_id), "succeeded");
+        assert_eq!(extraction_text(&conn, "a4"), "Texto nativo corregido.");
+        assert_eq!(
+            one_text(
+                &conn,
+                "SELECT original_text_content FROM ocr_correction_backups WHERE asset_id = 'a4'"
+            ),
+            original
+        );
+        own(&summary_id);
+        let stale = commit_success_with(
+            &conn,
+            &summary_id,
+            1,
+            "summary",
+            "summary",
+            r#"{"characters":28}"#,
+            |conn| {
+                super::super::summary::publish_summary_output(
+                    conn,
+                    "a4",
+                    &super::super::summary::SummaryComputeOutput {
+                        summary: "Resumen de la página cuatro.".to_string(),
+                    },
+                )
+            },
+        )
+        .expect_err("a summary from the old text is refused");
+        assert!(stale.starts_with("source_changed"), "{stale}");
+        let stored_summaries: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM llm_results WHERE id = 'llr-asset-a4-summarize'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count summaries");
+        assert_eq!(stored_summaries, 0, "the stale summary wrote nothing");
+        // What claiming after a source change does: re-pin the live revision.
+        conn.execute(
+            "UPDATE processing_tasks SET input_revision = (SELECT source_revision FROM processing_asset_revisions WHERE asset_id = 'a4') WHERE id = ?1",
+            [&summary_id],
+        )
+        .expect("re-pin the revision");
+        commit_success_with(
+            &conn,
+            &summary_id,
+            1,
+            "summary",
+            "summary",
+            r#"{"characters":28}"#,
+            |conn| {
+                super::super::summary::publish_summary_output(
+                    conn,
+                    "a4",
+                    &super::super::summary::SummaryComputeOutput {
+                        summary: "Resumen de la página cuatro.".to_string(),
+                    },
+                )
+            },
+        )
+        .expect("a summary commits");
+        assert_eq!(
+            one_text(
+                &conn,
+                "SELECT result FROM llm_results WHERE id = 'llr-asset-a4-summarize'"
+            ),
+            "Resumen de la página cuatro."
+        );
+    }
+
+    fn one_text(conn: &Connection, sql: &str) -> String {
+        conn.query_row(sql, [], |row| row.get(0))
+            .expect("query text")
     }
 
     #[test]

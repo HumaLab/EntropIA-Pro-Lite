@@ -18,10 +18,12 @@ pub mod eligibility;
 pub mod embedding;
 pub mod ner;
 pub mod ocr;
+pub mod ocr_correction;
 pub mod recovery;
 pub mod repository;
 pub mod scheduler;
 pub mod schema_extract;
+pub mod summary;
 pub mod triples;
 
 use crate::db::open::open_archive_connection;

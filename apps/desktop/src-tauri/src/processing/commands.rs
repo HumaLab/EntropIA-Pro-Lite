@@ -533,15 +533,17 @@ pub fn prepare_batch(
     let mut ops: Vec<String> = operations
         .iter()
         .filter(|op| {
-            matches!(op.as_str(), "ocr" | "embeddings" | "ner" | "triples")
-                || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+            matches!(
+                op.as_str(),
+                "ocr" | "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
+            ) || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
         })
         .cloned()
         .collect();
     ops.sort();
     ops.dedup();
     if ops.is_empty() {
-        return Err("invalid_selection: select OCR, embeddings, entities or triples".to_string());
+        return Err("invalid_selection: select OCR, embeddings, entities, triples, corrections or summaries".to_string());
     }
     let mut scope = collection_ids.to_vec();
     scope.sort();
@@ -982,11 +984,13 @@ fn validate_tab_prepare(
         );
     }
     let known = operations.iter().any(|op| {
-        matches!(op.as_str(), "ocr" | "embeddings" | "ner" | "triples")
-            || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+        matches!(
+            op.as_str(),
+            "ocr" | "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
+        ) || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
     });
     if !known {
-        return Err("invalid_selection: select OCR, embeddings, entities or triples".to_string());
+        return Err("invalid_selection: select OCR, embeddings, entities, triples, corrections or summaries".to_string());
     }
     Ok(())
 }
@@ -1364,7 +1368,7 @@ mod tests {
         );
         assert_eq!(
             validate_tab_prepare("req", &[ALFA.to_string()], &ops(&["shell"])).unwrap_err(),
-            "invalid_selection: select OCR, embeddings, entities or triples"
+            "invalid_selection: select OCR, embeddings, entities, triples, corrections or summaries"
         );
         assert!(validate_tab_prepare("req", &[ALFA.to_string()], &ops(&["ocr"])).is_ok());
     }
@@ -1405,12 +1409,40 @@ mod tests {
     fn prepare_refuses_no_known_operation() {
         let (_dir, conn) = archive();
         let error = prepare_batch(&conn, "req-1", &[ALFA.to_string()], &[], &ops(&["shell"]))
-            .expect_err("only the five operations exist");
+            .expect_err("only the known operations exist");
         assert_eq!(
             error,
-            "invalid_selection: select OCR, embeddings, entities or triples"
+            "invalid_selection: select OCR, embeddings, entities, triples, corrections or summaries"
         );
         assert_eq!(batch_count(&conn), 0);
+    }
+
+    /// S2/S5 (batch contracts): the tab and the prepare service accept the two
+    /// new operation ids and store them verbatim, so the planning step and the
+    /// saved flow agree on the same strings.
+    #[test]
+    fn the_tab_and_prepare_accept_correction_and_summary() {
+        for op in ["ocr_correction", "summary"] {
+            validate_tab_prepare("req", &[ALFA.to_string()], &ops(&[op]))
+                .unwrap_or_else(|error| panic!("{op} must be a tab operation: {error}"));
+        }
+        validate_tab_prepare(
+            "req",
+            &[ALFA.to_string()],
+            &ops(&["ocr_correction", "summary"]),
+        )
+        .expect("both together");
+        let (_dir, conn) = archive();
+        let prepared = prepare_batch(
+            &conn,
+            "req-1",
+            &[ALFA.to_string()],
+            &[],
+            &ops(&["ocr_correction", "summary"]),
+        )
+        .expect("prepare both operations");
+        let snapshot = batch_snapshot(&conn, &prepared.batch_id).expect("snapshot");
+        assert_eq!(snapshot.operations, vec!["ocr_correction", "summary"]);
     }
 
     #[test]
