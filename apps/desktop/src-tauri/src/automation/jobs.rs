@@ -196,10 +196,14 @@ fn resolve_limit(limit: Option<u32>) -> Result<usize, JobsError> {
 }
 
 /// Operations Lite runs through OpenRouter: the Procesamiento tab refuses them
-/// without the key, and so does the endpoint.
+/// without the key, and so does the endpoint. OCR correction is always remote,
+/// also in Pro, so it belongs here too.
 fn needs_openrouter(operations: &[String]) -> bool {
     operations.iter().any(|op| {
-        matches!(op.as_str(), "embeddings" | "ner" | "triples") || op.starts_with("schema:")
+        matches!(
+            op.as_str(),
+            "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
+        ) || op.starts_with("schema:")
     })
 }
 
@@ -213,8 +217,10 @@ fn openrouter_configured(conn: &Connection) -> bool {
 /// The operations a batch runs. The tab only ever sends these; an assistant's
 /// typo is refused instead of silently dropped.
 fn is_known_operation(op: &str) -> bool {
-    matches!(op, "ocr" | "embeddings" | "ner" | "triples")
-        || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
+    matches!(
+        op,
+        "ocr" | "embeddings" | "ner" | "triples" | "ocr_correction" | "summary"
+    ) || op.strip_prefix("schema:").is_some_and(|id| !id.is_empty())
 }
 
 fn check_request_id(request_id: &str) -> Result<(), JobsError> {
@@ -278,7 +284,7 @@ impl JobsArchive {
             return Err(JobsError::new(
                 "invalid_argument",
                 format!(
-                    "Operación desconocida \"{unknown}\": usá ocr, embeddings, ner, triples o schema:<id>."
+                    "Operación desconocida \"{unknown}\": usá ocr, embeddings, ner, triples, ocr_correction, summary o schema:<id>."
                 ),
             ));
         }
@@ -295,7 +301,7 @@ impl JobsArchive {
         {
             return Err(JobsError::new(
                 ERROR_PROVIDER_NOT_CONFIGURED,
-                "Embeddings, entidades, tripletas y esquemas necesitan la clave de OpenRouter, que no está configurada. La persona puede cargarla en Configuración › Modelos; mientras tanto se puede preparar solo OCR.",
+                "Embeddings, entidades, tripletas, esquemas, corrección OCR y resúmenes necesitan la clave de OpenRouter, que no está configurada. La persona puede cargarla en Configuración › Modelos; mientras tanto se puede preparar solo OCR.",
             ));
         }
         let prepared = batches::prepare_batch(
@@ -314,7 +320,7 @@ impl JobsArchive {
             operations: job.operations,
             state: job.state,
             revision: job.revision,
-            cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
+            cost_note: "EntropIA no estima el costo al preparar: las páginas y unidades se cuentan al planificar. Corrección OCR y resúmenes son una llamada paga por página. Cuando jobs_get muestre planningDone en true, tasksByKind dice cuántas unidades de cada operación hay. Lo que ya está procesado o compartido desde otro equipo no se vuelve a pagar.".to_string(),
             next_step: "Esperá a que jobs_get muestre state \"ready\"; después pedí empezar con processing_start, que la persona aprueba en EntropIA.".to_string(),
         })
     }

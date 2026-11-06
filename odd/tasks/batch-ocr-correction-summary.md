@@ -35,8 +35,8 @@ Branch `feat/batch-ocr-correction-summary`.
 - [x] T1 — S2-S6, S8 (backend) — worker: Rust contracts, executors, eligibility, plan wiring, migration of task kinds,
   tests — route: done — commit: 28c69149
 - [x] T2 — S1, S7, S8 (frontend) — worker: Lotes tab checkboxes, ops array, flows, i18n, counts, OpenRouter gate,
-  tests — route: done — commit: pending
-- [ ] T3 — S9, S10 — worker: MCP/assistant operations and docs, manual — commit: pending
+  tests — route: done — commit: 885ef8c8
+- [x] T3 — S9, S10 — worker: MCP/assistant operations and docs, manual — route: done — commit: pending
 - [ ] T4 — S1-S10 — gentle-ai-verify (Risk: item 1 correction rewrites stored OCR text in a batch; item 3 new task
   kinds in a synced schema) — commit: none
 
@@ -95,3 +95,29 @@ Branch `feat/batch-ocr-correction-summary`.
   .test.ts` +6 (order and ids, tooltip hints, key gate, flow save/restore, legacy flow, kind names in the task list).
   Desktop suite 275 files / 3865 passed (10 skipped), Lite tab 44 passed, lint and both typechecks clean,
   `pnpm format:check` clean.
+- L7 — T3 assistants and manual done (route: done, commit pending). S9: `automation/jobs.rs:201` `needs_openrouter` and
+  `:219` `is_known_operation` take `ocr_correction` and `summary` (the exact strings the tab sends); the unknown-op
+  refusal (`:287`), the `provider_not_configured` gate (`:304`) and the `costNote` (`:323`) name them, the note saying
+  each is one paid call per page; `automation/mcp.rs:255` documents the param, `:236` adds the two task kinds to
+  `jobs_get`'s `taskKind` and `:960` the `processing_prepare` description names both and says they are paid remote calls
+  the person approves, like entities and triples. No tools/list snapshot exists; the published schema only gained doc
+  text, so `every_tool_publishes_a_strict_input_schema` still passes unchanged. Approval flow untouched (correction and
+  summaries reach the same `processing_start` approval). Docs:
+  `integrations/agents/README.md:6`, `PROTOCOL.md:501-513` (operations list and Lite key list), `INVENTORY.md:88`
+  (correction/summaries now "as a batch"; `documents_transform_start` stays planned). Tests (RED first: both new tests
+  failed, `invalid_argument` for `ocr_correction`, before the change): `mcp_tests.rs:1156` prepares with both ops and
+  asserts the job keeps them plus the description naming them as paid-and-approved; `:1245` (Lite) refuses each with
+  `provider_not_configured` and creates no batch. `cargo test --lib automation::` 146 passed (144 before, +2), clippy
+  `--lib --tests` clean, `cargo fmt --check` clean. No `tests/*mcp*` target exists: the endpoint tests are the unit
+  module `automation::mcp_tests`, already covered by that filter.
+- L8 — T3 manual (S10). Verified in code before rewording: the batch has no audio/STT operation (kinds are `ocr`,
+  `embedding`, `ner`, `triples`, `schema_extract`, `ocr_correction`, `summary`), so "no transcribe audio" stays.
+  `inventario-funciones-manual.md:120` now lists corrección and resúmenes and says the summaries are per page, not a
+  collection-wide one; `:156` changed from "Resumir muchos documentos a la vez con los lotes" (a denial that is no
+  longer true) to the one claim that still holds (`Un resumen general de toda la colección`). `manual-usuario.md` ch. 14: intro `:968`, step 2
+  and the key gate `:973`, Lite/paid paragraph `:991`; new §14.1 «Corregir el texto o resumir por lote» (`:993-1002`)
+  documents «Corrección OCR» (prompt in Prompts, model in Model Params, replaces each page's text, original restorable
+  with «Restaurar OCR original», once per page, existing embeddings/entities/triples left alone, same-batch ops wait and
+  read the corrected text) and «Resúmenes» (one per page, in the «Resumen» section of «Texto extraído», once per page,
+  waits for the same batch's correction); both paid per page and needing the OpenRouter key. Later sections renumbered
+  14.2/14.3 (anchors unchanged, no numeric cross-references existed); §18.4 `:1272` stops denying batch summaries.

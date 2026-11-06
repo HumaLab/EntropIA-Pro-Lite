@@ -233,7 +233,7 @@ pub struct JobsGetParams {
     /// `interrupted`, `succeeded`, `failed`, `skipped`, `cancelled`.
     pub task_state: Option<String>,
     /// Only tasks of this kind: `ocr`, `embedding`, `ner`, `triples`,
-    /// `schema_extract`.
+    /// `schema_extract`, `ocr_correction`, `summary`.
     pub task_kind: Option<String>,
     /// The `nextTasksCursor` the previous call returned.
     pub tasks_cursor: Option<String>,
@@ -252,7 +252,8 @@ pub struct ProcessingPrepareParams {
     pub collection_ids: Option<Vec<String>>,
     /// Items whose files enter the job.
     pub item_ids: Option<Vec<String>>,
-    /// `ocr`, `embeddings`, `ner`, `triples`, or `schema:<id>`.
+    /// `ocr`, `embeddings`, `ner`, `triples`, `ocr_correction`, `summary`, or
+    /// `schema:<id>`.
     pub operations: Vec<String>,
 }
 
@@ -956,7 +957,7 @@ impl AgentServer {
 
     #[tool(
         name = "processing_prepare",
-        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`) o un esquema (`schema:<id>`). No gasta nada: empezar lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar procesamiento y editar el corpus».",
+        description = "Prepara un trabajo de procesamiento pausado sobre colecciones (`collectionIds`) y/o ítems (`itemIds`): OCR, `embeddings`, entidades (`ner`), tripletas (`triples`), corrección OCR (`ocr_correction`), resúmenes por página (`summary`) o un esquema (`schema:<id>`). Preparar no gasta nada: corrección, resúmenes, entidades, tripletas y esquemas son llamadas pagas a un servicio remoto y empezar el trabajo lo aprueba la persona en EntropIA. `requestId` es tu id para este pedido; reenviarlo igual devuelve el mismo trabajo. Necesita el permiso «Preparar procesamiento y editar el corpus».",
         annotations(
             read_only_hint = false,
             destructive_hint = false,

@@ -1149,6 +1149,70 @@ async fn processing_prepare_takes_items_and_refuses_bad_requests() {
     );
 }
 
+/// S9: the two operations the Lotes tab gained after Tripletes reach the tools
+/// under the same names, and `processing_prepare` says they cost money and
+/// need the owner's approval like entities and triples.
+#[tokio::test]
+async fn processing_prepare_takes_correction_and_summaries_and_documents_them() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    // The key is what a Lite gate asks for; in Pro the same call simply runs.
+    // `app_settings` lives outside the migrated schema, as the app creates it.
+    let conn = crate::db::open::open_archive_connection(&harness.db_path()).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )
+    .unwrap();
+    crate::settings::set_setting(&conn, crate::settings::OPENROUTER_API_KEY, "sk-or-test").unwrap();
+
+    let prepared = harness
+        .payload(
+            &token,
+            "processing_prepare",
+            json!({
+                "requestId": "r-batch-text",
+                "collectionIds": [ALFA],
+                "operations": ["ocr_correction", "summary"]
+            }),
+        )
+        .await;
+    assert_eq!(prepared["created"], true);
+    assert_eq!(
+        prepared["operations"],
+        json!(["ocr_correction", "summary"]),
+        "both operations reach the job instead of being dropped"
+    );
+    assert_eq!(prepared["state"], "preparing");
+
+    let body = harness
+        .rpc(
+            &token,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        )
+        .await;
+    let description = body["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == "processing_prepare")
+        .and_then(|tool| tool["description"].as_str())
+        .expect("processing_prepare has a description")
+        .to_string();
+    for operation in ["ocr_correction", "summary"] {
+        assert!(
+            description.contains(&format!("`{operation}`")),
+            "the tool names {operation}: {description}"
+        );
+    }
+    for claim in ["paga", "aprueba"] {
+        assert!(
+            description.contains(claim),
+            "the tool says the work is paid and approved by the person: {description}"
+        );
+    }
+}
+
 /// Lite calls OpenRouter for every text operation; the Procesamiento tab
 /// blocks them without the key, and so does the tool (S7).
 #[cfg(not(feature = "local-ml"))]
@@ -1172,6 +1236,31 @@ async fn lite_refuses_paid_text_operations_without_the_openrouter_key() {
     harness
         .payload(&token, "processing_prepare", prepare_args("ocr-only"))
         .await;
+}
+
+/// S9: correction and summaries are paid remote work too, so Lite refuses them
+/// at prepare time exactly as it refuses entities and triples.
+#[cfg(not(feature = "local-ml"))]
+#[tokio::test]
+async fn lite_refuses_correction_and_summaries_without_the_openrouter_key() {
+    let harness = harness().await;
+    let (id, token) = harness.pair("Claude Code");
+    harness.grant(&id, true, false);
+    for operation in ["ocr_correction", "summary"] {
+        let refusal = harness
+            .refusal(
+                &token,
+                "processing_prepare",
+                json!({ "requestId": operation, "collectionIds": [ALFA], "operations": [operation] }),
+            )
+            .await;
+        assert_eq!(refusal["error"], "provider_not_configured", "{operation}");
+    }
+    let jobs = harness.payload(&token, "jobs_list", json!({})).await;
+    assert!(
+        records(&jobs).is_empty(),
+        "no refused request created a batch"
+    );
 }
 
 #[tokio::test]
