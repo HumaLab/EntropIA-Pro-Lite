@@ -20,6 +20,7 @@ import {
   type RagScope,
   type RagSource,
 } from './rag'
+import { noCollectionsChosen } from './rag-scope'
 import { settingsDelete, settingsGet, settingsSet, SETTINGS_KEYS } from './settings'
 
 export interface UiMessage {
@@ -45,7 +46,7 @@ export interface RagChatSnapshot {
   scope: RagScope
   /** Libraries to search; `null` is every synced one. */
   libraries: RagLibraryRef[] | null
-  /** Corpus collections to search; `null` is all of them. */
+  /** Corpus collections to search; `null` is all of them, an empty list none. */
   collections: string[] | null
 }
 
@@ -216,6 +217,10 @@ export class RagChatStore {
   async send(rawQuestion: string): Promise<void> {
     const question = rawQuestion.trim()
     if (!question || this._loading) return
+    // Defensive: the composer already blocks this, but an empty collection
+    // choice means "search nothing" and must never reach the backend, where
+    // an empty list means the whole corpus.
+    if (noCollectionsChosen(this._scope, this._collections)) return
 
     // El bootstrap es barato (promesa memoizada) y cierra la carrera entre
     // la rehidratación y el primer envío: el id de conversación que
@@ -418,9 +423,12 @@ export class RagChatStore {
     this.emit()
   }
 
-  /** `null` means every corpus collection, as does an empty choice. */
+  /**
+   * `null` means every corpus collection. An empty list means none: the menu
+   * lets the user uncheck them all, and the chat then asks for at least one.
+   */
   setCollections(collections: string[] | null): void {
-    this._collections = collections && collections.length > 0 ? [...collections] : null
+    this._collections = collections ? [...collections] : null
     this.emit()
   }
 
@@ -433,7 +441,8 @@ export class RagChatStore {
     const collections = this._scope === 'biblioteca' ? null : this._collections
     const options: RagAskOptions =
       this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
-    return collections ? { ...options, collections } : options
+    // An empty list is never sent: the backend reads it as the whole corpus.
+    return collections && collections.length > 0 ? { ...options, collections } : options
   }
 
   /** Keeps the composer draft at module scope so it survives navigation. */

@@ -131,6 +131,55 @@ describe('RagChatView collection choice', () => {
     await waitFor(() => expect(get(ragChat).collections).toEqual(['col-2']))
   })
 
+  it('unchecks every collection from "Todas las colecciones" and checks them again', async () => {
+    const askMock = setupBackend()
+    render(RagChatView)
+
+    await fireEvent.click(await screen.findByRole('button', { name: /Todas las colecciones/ }))
+    await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Todas las colecciones' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Ninguna colección/ })).toBeVisible()
+    )
+    expect(screen.getByRole('menuitemcheckbox', { name: /Archivo General/ })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    )
+    expect(screen.getAllByRole('menuitemcheckbox')).toHaveLength(3)
+    screen
+      .getAllByRole('menuitemcheckbox')
+      .forEach((item) => expect(item).toHaveAttribute('aria-checked', 'false'))
+    const note = screen.getByText('Elegí al menos una colección para buscar en el corpus.')
+    expect(note).toHaveAttribute('role', 'status')
+
+    // Neither the button nor Enter sends while no collection is chosen.
+    const composer = screen.getByRole('textbox', { name: 'Escribí tu pregunta…' })
+    await fireEvent.input(composer, { target: { value: '¿Qué pasó?' } })
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled()
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expect(askMock).not.toHaveBeenCalled()
+
+    await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Todas las colecciones' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Todas las colecciones/ })).toBeVisible()
+    )
+    expect(screen.queryByText('Elegí al menos una colección para buscar en el corpus.')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled()
+  })
+
+  it('leaves none selected when the last checked collection is unchecked', async () => {
+    setupBackend()
+    render(RagChatView)
+
+    await fireEvent.click(await screen.findByRole('button', { name: /Todas las colecciones/ }))
+    await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Archivo General · 12/ }))
+    await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Hemeroteca · 3/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Ninguna colección/ })).toBeVisible()
+    )
+  })
+
   it('hides the choice when the corpus has no collections', async () => {
     storeMock.collections.findAll.mockResolvedValue([])
     setupBackend()

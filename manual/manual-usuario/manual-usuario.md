@@ -880,7 +880,7 @@ La interfaz tiene tres ayudas relacionadas, pero distintas:
 
 | Herramienta | Cómo llegar | Resultado y control |
 |---|---|---|
-| **Chat de investigación** | Botón superior del mismo nombre. | Conversación; puede responder con fuentes del corpus, de la Biblioteca o sin recuperación documental. No tiene selector de colecciones ni navegación web. |
+| **Chat de investigación** | Botón superior del mismo nombre. | Conversación; puede responder con fuentes del corpus, de la Biblioteca o sin recuperación documental. Con **Corpus** y **Ambos**, el menú **Colecciones del corpus** acota la búsqueda; no navega la Web. |
 | **Investigar** | **Agente de investigación**, o **Profundizar con el Agente** desde Chat. | Investigación por etapas e informe. Corpus acotado a colecciones, Biblioteca o ambos, con consultas bibliográficas del plan a Zotero/OpenAlex. |
 | **Agente de Escritura** | Abrir manuscrito → panel **Agente**. | Propuesta sobre una selección. No modifica el manuscrito hasta **Reemplazar** o **Insertar debajo**. |
 
@@ -897,7 +897,7 @@ Ninguna de estas herramientas sustituye la comprobación de la fuente. Aparte de
 5. Revisá **Fuentes** debajo de la respuesta, cuando aparezca, para comprobar títulos, colecciones y fragmentos citados. Cada fuente indica si viene del corpus o de la Biblioteca; las de la Biblioteca nombran la obra, la biblioteca y la página o párrafo.
 6. Pulsá una fuente del corpus para abrir el documento con el fragmento citado marcado; si es un audio, el reproductor se ubica en ese tramo de la transcripción. Una fuente de la Biblioteca abre **Abrir pasaje**, con el texto citado resaltado y **Abrir original** para ver el PDF en esa página.
 
-La elección de **Buscar en** dura la sesión. El Chat no permite elegir una colección ni navega la Web. Si la Biblioteca no tiene bibliotecas sincronizadas o su indexado no terminó, el Chat lo avisa y responde sin ella. En Lite utiliza OpenRouter —con el respaldo de Vercel si lo configuraste—: puede enviar la pregunta, el historial pertinente y los pasajes recuperados. Una respuesta conversacional directa puede no tener fuentes. Si una consulta documental no encuentra pasajes, aparece **No encontré contenido relevante en la base de conocimiento para esa pregunta**; revisá el texto procesado y reformulá.
+La elección de **Buscar en** dura la sesión. Con **Corpus** y **Ambos** aparece además el menú **Colecciones del corpus**: por defecto busca en todas, y cada colección se marca o desmarca. La fila **Todas las colecciones** marca todas de una vez y, si ya están todas marcadas, las desmarca todas: con ninguna marcada el Chat espera al menos una colección y muestra **Elegí al menos una colección para buscar en el corpus** en lugar de enviar la pregunta. El Chat no navega la Web. Si la Biblioteca no tiene bibliotecas sincronizadas o su indexado no terminó, el Chat lo avisa y responde sin ella. En Lite utiliza OpenRouter —con el respaldo de Vercel si lo configuraste—: puede enviar la pregunta, el historial pertinente y los pasajes recuperados. Una respuesta conversacional directa puede no tener fuentes. Si una consulta documental no encuentra pasajes, aparece **No encontré contenido relevante en la base de conocimiento para esa pregunta**; revisá el texto procesado y reformulá.
 
 ### 13.2. Conversaciones e historial
 

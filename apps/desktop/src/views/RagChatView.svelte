@@ -18,11 +18,14 @@
     type RagSource,
   } from '$lib/rag'
   import {
+    allCollectionsChosen,
     bibliographyNoticeKey,
     isBibliographySource,
     libraryChoiceKey,
     locationText,
+    noCollectionsChosen,
     passageHeading,
+    selectedCollectionsAfterSelectAll,
     selectedCollectionsAfterToggle,
     selectedLibrariesAfterToggle,
     sourceScopeKey,
@@ -94,7 +97,11 @@
   )
 
   const currentLocale = locale
-  const canSend = $derived(!$ragChat.loading && $ragChat.draft.trim().length > 0)
+  const canSend = $derived(
+    !$ragChat.loading &&
+      $ragChat.draft.trim().length > 0 &&
+      !noCollectionsChosen($ragChat.scope, $ragChat.collections)
+  )
 
   // ── Scope: Corpus / Biblioteca / Ambos ───────────────────────────────────
   const SCOPES: Array<{
@@ -259,25 +266,36 @@
 
   const collectionIds = $derived(corpusCollections.map((collection) => collection.id))
   const checkedCollectionIds = $derived(new Set($ragChat.collections ?? collectionIds))
-  const collectionsAllChecked = $derived(
-    collectionIds.length > 0 && collectionIds.every((id) => checkedCollectionIds.has(id))
+  const checkedCollectionCount = $derived(
+    collectionIds.filter((id) => checkedCollectionIds.has(id)).length
   )
+  const collectionsAllChecked = $derived(allCollectionsChosen($ragChat.collections, collectionIds))
+  const noCollections = $derived(noCollectionsChosen($ragChat.scope, $ragChat.collections))
   const collectionTriggerLabel = $derived(
     $currentLocale &&
       (collectionsAllChecked
         ? t('ragChat.collectionsAll')
-        : t('ragChat.collectionsSome', {
-            count: collectionIds.filter((id) => checkedCollectionIds.has(id)).length,
-            total: collectionIds.length,
-          }))
+        : checkedCollectionCount === 0
+          ? t('ragChat.collectionsNone')
+          : t('ragChat.collectionsSome', {
+              count: checkedCollectionCount,
+              total: collectionIds.length,
+            }))
   )
   const collectionItems = $derived<ToolbarMenuItem[]>([
     {
-      kind: 'radio',
+      kind: 'checkbox',
       id: 'all',
       label: $currentLocale && t('ragChat.collectionsAll'),
       checked: collectionsAllChecked,
-      onselect: () => keepCollectionMenuOpen(() => ragChat.setCollections(null)),
+      // The row toggles both ways: the same click checks every collection or
+      // unchecks them all, as the owner asked.
+      onselect: () =>
+        keepCollectionMenuOpen(() =>
+          ragChat.setCollections(
+            selectedCollectionsAfterSelectAll($ragChat.collections, collectionIds)
+          )
+        ),
     },
     ...corpusCollections.map((collection) => ({
       kind: 'checkbox' as const,
@@ -379,6 +397,9 @@
   }
 
   function handleSend() {
+    // With no collection checked the corpus has nothing to search: the
+    // composer says so and Enter does nothing.
+    if (noCollections) return
     void ragChat.send($ragChat.draft)
   }
 
@@ -892,6 +913,11 @@
         {#if libraryStatusMessage}
           <p class="rag-chat__scope-note" role="status">
             {$currentLocale && libraryStatusMessage}
+          </p>
+        {/if}
+        {#if noCollections}
+          <p class="rag-chat__scope-note" role="status">
+            {$currentLocale && t('ragChat.collectionsRequired')}
           </p>
         {/if}
         {#if chunkCoverageMessage}
