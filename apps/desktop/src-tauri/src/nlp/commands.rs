@@ -3,23 +3,14 @@
 /// Each command pushes a job to the `NlpQueue` and returns immediately with
 /// `Ok("queued")`. The worker emits `nlp:progress`, `nlp:complete`, or
 /// `nlp:error` events asynchronously.
-use super::vector::{cosine_distance, decode_embedding_blob};
+#[cfg(test)]
+use super::vector::cosine_distance;
+use super::vector::{cosine_distance_to_blob, decode_embedding_blob};
 use super::{NlpJob, NlpQueue};
 use crate::db::commands::run_blocking_db_task;
 use crate::db::state::AppDbState;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-
-type SimilarAssetRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    Vec<u8>,
-);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -418,12 +409,84 @@ pub async fn extract_triples_for_asset(
 mod tests {
     use super::*;
 
-    fn embedding_blob(values: [f32; 2]) -> Vec<u8> {
+    use crate::nlp::embeddings::{
+        CANONICAL_EMBEDDING_CONTRACT_V1, CANONICAL_EMBEDDING_DIMENSIONS, CANONICAL_EMBEDDING_MODEL,
+    };
+
+    /// A canonical-width vector whose leading components are `head` and the
+    /// rest zero, so cosine similarity is the one of `head` alone.
+    fn canonical_blob(head: &[f32]) -> Vec<u8> {
+        let mut values = vec![0.0_f32; CANONICAL_EMBEDDING_DIMENSIONS];
+        values[..head.len()].copy_from_slice(head);
         values.into_iter().flat_map(|f| f.to_le_bytes()).collect()
+    }
+
+    fn insert_asset_row(conn: &rusqlite::Connection, asset_id: &str, collection_id: &str) {
+        let item_id = format!("item-{asset_id}");
+        conn.execute(
+            "INSERT INTO items(id, collection_id, title) VALUES (?1, ?2, ?3)",
+            rusqlite::params![item_id, collection_id, format!("Title {asset_id}")],
+        )
+        .expect("item should insert");
+        conn.execute(
+            "INSERT INTO assets(id, item_id, path, type, created_at) VALUES (?1, ?2, ?3, 'pdf', 1)",
+            rusqlite::params![asset_id, item_id, format!("{asset_id}.pdf")],
+        )
+        .expect("asset should insert");
+    }
+
+    fn insert_vector_row(
+        conn: &rusqlite::Connection,
+        asset_id: &str,
+        blob: Vec<u8>,
+        model: &str,
+        contract: &str,
+        dimensions: usize,
+    ) {
+        conn.execute(
+            "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                asset_id,
+                format!("item-{asset_id}"),
+                blob,
+                model,
+                contract,
+                dimensions as i64
+            ],
+        )
+        .expect("vector should insert");
+    }
+
+    /// Asset with item, file and a vector stamped with the canonical contract.
+    fn insert_canonical_asset(conn: &rusqlite::Connection, asset_id: &str, head: &[f32]) {
+        insert_asset_row(conn, asset_id, "col-1");
+        insert_vector_row(
+            conn,
+            asset_id,
+            canonical_blob(head),
+            CANONICAL_EMBEDDING_MODEL,
+            CANONICAL_EMBEDDING_CONTRACT_V1,
+            CANONICAL_EMBEDDING_DIMENSIONS,
+        );
+    }
+
+    fn result_ids(results: &serde_json::Value) -> Vec<String> {
+        results
+            .as_array()
+            .expect("result should be a JSON array")
+            .iter()
+            .map(|row| row["assetId"].as_str().unwrap_or_default().to_string())
+            .collect()
     }
 
     fn setup_similar_assets_test_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().expect("in-memory db should open");
+        create_similar_assets_schema(&conn);
+        conn
+    }
+
+    fn create_similar_assets_schema(conn: &rusqlite::Connection) {
         conn.execute_batch(
             r#"
             CREATE TABLE items (
@@ -443,7 +506,15 @@ mod tests {
             CREATE TABLE vec_assets (
                 asset_id TEXT PRIMARY KEY,
                 item_id TEXT NOT NULL,
-                embedding BLOB NOT NULL
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL DEFAULT 'legacy',
+                embedding_contract TEXT NOT NULL DEFAULT 'legacy',
+                dimensions INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
 
             CREATE TABLE extractions (
@@ -462,8 +533,6 @@ mod tests {
             "#,
         )
         .expect("test schema should be created");
-
-        conn
     }
 
     #[test]
@@ -634,49 +703,6 @@ mod tests {
     }
 
     #[test]
-    fn rank_similar_asset_rows_keeps_asset_context() {
-        let target_blob = embedding_blob([1.0_f32, 0.0_f32]);
-        let same_item_blob = embedding_blob([0.85_f32, 0.15_f32]);
-        let other_collection_blob = embedding_blob([0.95_f32, 0.05_f32]);
-
-        let results = super::rank_similar_asset_rows(
-            &target_blob,
-            vec![
-                (
-                    "asset-same".to_string(),
-                    "item-same".to_string(),
-                    "Página hermana".to_string(),
-                    "col-1".to_string(),
-                    "same.pdf".to_string(),
-                    "pdf".to_string(),
-                    "Texto OCR de la hermana".to_string(),
-                    same_item_blob,
-                ),
-                (
-                    "asset-other".to_string(),
-                    "item-other".to_string(),
-                    "Página externa".to_string(),
-                    "col-2".to_string(),
-                    "other.wav".to_string(),
-                    "audio".to_string(),
-                    "Transcripción externa".to_string(),
-                    other_collection_blob,
-                ),
-            ],
-            5,
-        )
-        .expect("ranking should succeed");
-
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0]["assetId"], "asset-other");
-        assert_eq!(results[0]["assetPath"], "other.wav");
-        assert_eq!(results[0]["assetType"], "audio");
-        assert_eq!(results[0]["textPreview"], "Transcripción externa");
-        assert_eq!(results[1]["assetId"], "asset-same");
-        assert_eq!(results[1]["textPreview"], "Texto OCR de la hermana");
-    }
-
-    #[test]
     fn similar_assets_queries_across_collections_and_excludes_self() {
         let conn = setup_similar_assets_test_db();
 
@@ -712,33 +738,25 @@ mod tests {
         )
         .expect("other asset should insert");
 
-        conn.execute(
-            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                "asset-target",
-                "item-target",
-                embedding_blob([1.0_f32, 0.0_f32])
-            ],
-        )
-        .expect("target embedding should insert");
-        conn.execute(
-            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                "asset-same",
-                "item-same",
-                embedding_blob([0.8_f32, 0.2_f32])
-            ],
-        )
-        .expect("same asset embedding should insert");
-        conn.execute(
-            "INSERT INTO vec_assets(asset_id, item_id, embedding) VALUES (?1, ?2, ?3)",
-            rusqlite::params![
-                "asset-other",
-                "item-other",
-                embedding_blob([0.95_f32, 0.05_f32])
-            ],
-        )
-        .expect("other asset embedding should insert");
+        for (asset_id, item_id, head) in [
+            ("asset-target", "item-target", [1.0_f32, 0.0_f32]),
+            ("asset-same", "item-same", [0.8_f32, 0.2_f32]),
+            ("asset-other", "item-other", [0.95_f32, 0.05_f32]),
+        ] {
+            conn.execute(
+                "INSERT INTO vec_assets(asset_id, item_id, embedding, embedding_model, embedding_contract, dimensions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    asset_id,
+                    item_id,
+                    canonical_blob(&head),
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS as i64
+                ],
+            )
+            .expect("embedding should insert");
+        }
 
         // Seed OCR text for the sibling asset and transcription text for the
         // cross-collection asset so the preview covers both source tables.
@@ -769,6 +787,290 @@ mod tests {
         assert_eq!(
             results[1]["textPreview"], "Texto OCR de la página hermana",
             "extraction text should surface as the preview"
+        );
+    }
+
+    #[test]
+    fn similar_assets_scans_past_the_first_2000_vectors() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-target", &[1.0, 0.0]);
+        conn.execute_batch("BEGIN").expect("begin");
+        for index in 0..2100 {
+            insert_canonical_asset(&conn, &format!("filler-{index:04}"), &[0.5, 0.5]);
+        }
+        conn.execute_batch("COMMIT").expect("commit");
+        insert_canonical_asset(&conn, "zz-winner", &[1.0, 0.01]);
+
+        // The pre-fix query read this capped subset (SQLite walks the asset_id
+        // primary key here); prove the winner is outside it so the test pins the bug.
+        let capped: Vec<String> = conn
+            .prepare("SELECT asset_id FROM vec_assets WHERE asset_id != ?1 LIMIT 2000")
+            .expect("prepare capped")
+            .query_map(["asset-target"], |row| row.get(0))
+            .expect("query capped")
+            .collect::<Result<_, _>>()
+            .expect("read capped");
+        assert!(!capped.contains(&"zz-winner".to_string()));
+
+        let results = super::similar_assets_from_conn(&conn, "asset-target", 5)
+            .expect("similar assets query should succeed");
+
+        assert_eq!(
+            result_ids(&results),
+            vec![
+                "zz-winner",
+                "filler-0000",
+                "filler-0001",
+                "filler-0002",
+                "filler-0003"
+            ],
+            "the closest vector wins and equal scores break ties by asset id"
+        );
+        assert_eq!(results[0]["title"], "Title zz-winner");
+        assert_eq!(results[0]["assetPath"], "zz-winner.pdf");
+    }
+
+    #[test]
+    fn similar_assets_compares_only_vectors_of_the_effective_contract() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-target", &[1.0, 0.0]);
+        insert_canonical_asset(&conn, "asset-compatible", &[0.5, 0.5]);
+        for (asset_id, model, contract, dimensions) in [
+            (
+                "asset-other-contract",
+                CANONICAL_EMBEDDING_MODEL,
+                "other-contract",
+                CANONICAL_EMBEDDING_DIMENSIONS,
+            ),
+            (
+                "asset-other-model",
+                "other/model",
+                CANONICAL_EMBEDDING_CONTRACT_V1,
+                CANONICAL_EMBEDDING_DIMENSIONS,
+            ),
+            ("asset-legacy", "legacy", "legacy", 0),
+        ] {
+            insert_asset_row(&conn, asset_id, "col-1");
+            insert_vector_row(
+                &conn,
+                asset_id,
+                canonical_blob(&[1.0, 0.0]),
+                model,
+                contract,
+                dimensions,
+            );
+        }
+
+        let results = super::similar_assets_from_conn(&conn, "asset-target", 5)
+            .expect("similar assets query should succeed");
+
+        assert_eq!(result_ids(&results), vec!["asset-compatible"]);
+    }
+
+    #[test]
+    fn similar_assets_returns_empty_when_the_source_vector_is_not_compatible() {
+        let conn = setup_similar_assets_test_db();
+        for asset_id in ["asset-target", "asset-legacy-peer"] {
+            insert_asset_row(&conn, asset_id, "col-1");
+            insert_vector_row(
+                &conn,
+                asset_id,
+                canonical_blob(&[1.0, 0.0]),
+                "legacy",
+                "legacy",
+                0,
+            );
+        }
+        insert_canonical_asset(&conn, "asset-canonical", &[1.0, 0.0]);
+
+        let results = super::similar_assets_from_conn(&conn, "asset-target", 5)
+            .expect("an incompatible source is not an error");
+
+        assert_eq!(results, serde_json::json!([]));
+    }
+
+    #[test]
+    fn similar_assets_reports_a_missing_source_embedding() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-peer", &[1.0, 0.0]);
+
+        let error = super::similar_assets_from_conn(&conn, "asset-missing", 5)
+            .expect_err("a source without a vector is an error");
+
+        assert_eq!(error, "No embedding found for asset 'asset-missing'");
+    }
+
+    #[test]
+    fn similar_assets_propagates_an_unknown_embedding_provider() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-target", &[1.0, 0.0]);
+        insert_canonical_asset(&conn, "asset-peer", &[1.0, 0.0]);
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES ('embedding_provider', 'mystery')",
+            [],
+        )
+        .expect("setting should insert");
+
+        let error = super::similar_assets_from_conn(&conn, "asset-target", 5)
+            .expect_err("an unknown provider names no comparable space");
+
+        assert_eq!(
+            error,
+            "Proveedor de embeddings no soportado: mystery. Usa api o local."
+        );
+    }
+
+    #[test]
+    fn similar_assets_scores_cosine_similarity_and_skips_zero_vectors() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-target", &[1.0, 0.0]);
+        insert_canonical_asset(&conn, "asset-identical", &[2.0, 0.0]);
+        insert_canonical_asset(&conn, "asset-orthogonal", &[0.0, 3.0]);
+        insert_canonical_asset(&conn, "asset-opposite", &[-1.0, 0.0]);
+        insert_canonical_asset(&conn, "asset-zero", &[0.0, 0.0]);
+
+        let results = super::similar_assets_from_conn(&conn, "asset-target", 5)
+            .expect("similar assets query should succeed");
+
+        assert_eq!(
+            result_ids(&results),
+            vec!["asset-identical", "asset-orthogonal", "asset-opposite"]
+        );
+        let scores: Vec<f64> = results
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["similarity"].as_f64().unwrap())
+            .collect();
+        for (score, expected) in scores.iter().zip([1.0, 0.0, -1.0]) {
+            assert!(
+                (score - expected).abs() < 1e-9,
+                "score {score} should be {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn similar_assets_returns_exactly_limit_hydrated_results() {
+        let conn = setup_similar_assets_test_db();
+        insert_canonical_asset(&conn, "asset-target", &[1.0, 0.0]);
+        for index in 0..8 {
+            insert_canonical_asset(&conn, &format!("asset-{index}"), &[1.0, index as f32]);
+        }
+
+        for limit in [0_usize, 1, 7] {
+            let results = super::similar_assets_from_conn(&conn, "asset-target", limit)
+                .expect("similar assets query should succeed");
+            let ids = result_ids(&results);
+            let expected: Vec<String> = (0..limit).map(|index| format!("asset-{index}")).collect();
+            assert_eq!(ids, expected, "limit {limit}");
+            for row in results.as_array().unwrap() {
+                let asset_id = row["assetId"].as_str().unwrap();
+                assert_eq!(row["title"], format!("Title {asset_id}"));
+                assert_eq!(row["assetPath"], format!("{asset_id}.pdf"));
+                assert_eq!(row["collectionId"], "col-1");
+                assert_eq!(row["itemId"], format!("item-{asset_id}"));
+            }
+        }
+    }
+
+    #[test]
+    fn scored_asset_ranks_higher_similarity_then_lower_asset_id_as_better() {
+        let scored = |similarity: f64, asset_id: &str| super::ScoredAsset {
+            similarity,
+            asset_id: asset_id.to_string(),
+        };
+
+        // The scan visits rows in whatever order SQLite picks, so a late
+        // equal-score candidate must still displace a kept one with a higher id.
+        assert!(scored(0.5, "a") > scored(0.5, "c"));
+        assert!(scored(0.6, "z") > scored(0.5, "a"));
+        assert_eq!(scored(0.5, "a"), scored(0.5, "a"));
+    }
+
+    /// Latency probe for the full scan, not a regression check. Run it in
+    /// release, where the app ships:
+    /// `cargo test --release --lib similar_assets_scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: 100k canonical vectors; run in release with --ignored --nocapture"]
+    fn similar_assets_scan_benchmark() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        const ROWS: usize = 100_000;
+        let dir = tempfile::tempdir().expect("tempdir should open");
+        let path = dir.path().join("entropia.sqlite");
+        {
+            let conn =
+                crate::db::open::open_archive_connection(&path).expect("archive should open");
+            create_similar_assets_schema(&conn);
+            insert_canonical_asset(&conn, "asset-target", &[1.0, 0.5, 0.25]);
+            // Deterministic xorshift values fill every dimension, so each
+            // vector costs a full 4 KB read and a full dot product.
+            let mut state = 0x2545_f491_4f6c_dd1d_u64;
+            let mut values = vec![0.0_f32; CANONICAL_EMBEDDING_DIMENSIONS];
+            conn.execute_batch("BEGIN").expect("begin");
+            for index in 0..ROWS {
+                for value in values.iter_mut() {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    *value = (state >> 40) as f32 / (1_u64 << 24) as f32 - 0.5;
+                }
+                insert_vector_row(
+                    &conn,
+                    &format!("asset-{index:06}"),
+                    values.iter().flat_map(|f| f.to_le_bytes()).collect(),
+                    CANONICAL_EMBEDDING_MODEL,
+                    CANONICAL_EMBEDDING_CONTRACT_V1,
+                    CANONICAL_EMBEDDING_DIMENSIONS,
+                );
+            }
+            conn.execute_batch("COMMIT").expect("commit");
+        }
+
+        // A fresh connection starts with an empty SQLite page cache; the OS
+        // page cache stays warm (dropping it needs root), so this is not cold disk.
+        let conn = crate::db::open::open_archive_connection(&path).expect("archive should reopen");
+        let started = Instant::now();
+        let first = similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+        let first_run = started.elapsed();
+        assert_eq!(first.as_array().map(Vec::len), Some(5));
+
+        let mut warm: Vec<Duration> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+                started.elapsed()
+            })
+            .collect();
+        warm.sort();
+
+        // The command holds the shared UI connection for the whole scan; time
+        // how long another UI read waits behind it.
+        let shared = Arc::new(Mutex::new(conn));
+        let scanner = {
+            let shared = Arc::clone(&shared);
+            std::thread::spawn(move || {
+                let conn = shared.lock().expect("lock");
+                similar_assets_from_conn(&conn, "asset-target", 5).expect("scan");
+            })
+        };
+        std::thread::sleep(Duration::from_millis(5));
+        let waited = Instant::now();
+        let one: i64 = shared
+            .lock()
+            .expect("lock")
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .expect("ui read");
+        let ui_wait = waited.elapsed();
+        scanner.join().expect("scanner thread");
+        assert_eq!(one, 1);
+
+        println!(
+            "similar_assets over {ROWS} vectors: fresh connection {first_run:?}, \
+             warm min {:?} / median {:?} / max {:?}, concurrent UI read waited {ui_wait:?}",
+            warm[0], warm[2], warm[4]
         );
     }
 }
@@ -805,6 +1107,9 @@ pub async fn fts_search(
 
 /// Find assets similar to `asset_id` using asset-level kNN vector search.
 /// Returns up to `limit` (default 5) similar assets ordered by cosine similarity.
+///
+/// Scores every vector of the effective embedding contract, keeping only the
+/// best `limit` in memory, so no page is skipped by a candidate cap.
 #[tauri::command]
 pub async fn similar_assets(
     asset_id: String,
@@ -825,13 +1130,12 @@ fn similar_assets_from_conn(
     asset_id: &str,
     limit: usize,
 ) -> Result<serde_json::Value, String> {
-    const MAX_CANDIDATES: usize = 2000;
-
-    let target_blob: Vec<u8> = conn
+    let (target_blob, model, contract, dimensions): (Vec<u8>, String, String, i64) = conn
         .query_row(
-            "SELECT embedding FROM vec_assets WHERE asset_id = ?1",
+            "SELECT embedding, embedding_model, embedding_contract, dimensions
+             FROM vec_assets WHERE asset_id = ?1",
             rusqlite::params![asset_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(|e| {
             if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
@@ -841,50 +1145,198 @@ fn similar_assets_from_conn(
             }
         })?;
 
+    // Only vectors of the effective space are comparable. A source stamped
+    // with another space (for example a legacy row awaiting backfill) has
+    // nothing it can be meaningfully ranked against.
+    let effective = crate::processing::eligibility::resolve_effective_embedding_contract(conn)?;
+    let effective_dimensions = effective.dimensions as i64;
+    if limit == 0
+        || model != effective.model
+        || contract != effective.contract
+        || dimensions != effective_dimensions
+    {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    }
+
+    let target = decode_embedding_blob(&target_blob)?;
+    let ranked = top_similar_assets(
+        conn,
+        asset_id,
+        &target,
+        &effective.model,
+        &effective.contract,
+        effective_dimensions,
+        limit,
+    )?;
+    hydrate_similar_assets(conn, ranked)
+}
+
+/// A scored candidate. Ordering is "better than": higher similarity first,
+/// then the lower asset id, so ties resolve the same way on every run.
+#[derive(Debug)]
+struct ScoredAsset {
+    similarity: f64,
+    asset_id: String,
+}
+
+impl Ord for ScoredAsset {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.similarity
+            .total_cmp(&other.similarity)
+            .then_with(|| other.asset_id.cmp(&self.asset_id))
+    }
+}
+
+impl PartialOrd for ScoredAsset {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ScoredAsset {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for ScoredAsset {}
+
+/// Stream every compatible vector and keep the best `limit`, best first.
+fn top_similar_assets(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+    target: &[f32],
+    model: &str,
+    contract: &str,
+    dimensions: i64,
+    limit: usize,
+) -> Result<Vec<ScoredAsset>, String> {
+    use std::cmp::Reverse;
+
     let mut stmt = conn
         .prepare(
-            "SELECT v.asset_id, v.item_id, i.title, i.collection_id, a.path, a.type,
-                    COALESCE(e.text_content, t.text_content, '') AS text_preview, v.embedding
-             FROM vec_assets v
-             LEFT JOIN assets a ON a.id = v.asset_id
-             LEFT JOIN items i ON i.id = v.item_id
-             LEFT JOIN extractions e ON e.asset_id = v.asset_id
-             LEFT JOIN transcriptions t ON t.asset_id = v.asset_id
-             WHERE v.asset_id != ?1
-             LIMIT ?2",
+            "SELECT asset_id, embedding FROM vec_assets
+             WHERE asset_id != ?1 AND embedding_model = ?2
+               AND embedding_contract = ?3 AND dimensions = ?4",
         )
         .map_err(|e| format!("Failed to prepare asset similarity query: {e}"))?;
+    let mut rows = stmt
+        .query(rusqlite::params![asset_id, model, contract, dimensions])
+        .map_err(|e| format!("Failed to execute asset similarity query: {e}"))?;
 
-    let rows = stmt
-        .query_map(rusqlite::params![asset_id, MAX_CANDIDATES as i64], |row| {
-            let asset_id: String = row.get(0)?;
-            let item_id: String = row.get(1)?;
-            let title: Option<String> = row.get(2)?;
-            let collection_id: Option<String> = row.get(3)?;
-            let asset_path: Option<String> = row.get(4)?;
-            let asset_type: Option<String> = row.get(5)?;
-            let text_preview: Option<String> = row.get(6)?;
-            let blob: Vec<u8> = row.get(7)?;
-            Ok((
-                asset_id,
-                item_id,
-                title.unwrap_or_default(),
-                collection_id.unwrap_or_default(),
-                asset_path.unwrap_or_default(),
-                asset_type.unwrap_or_default(),
-                text_preview.unwrap_or_default(),
-                blob,
-            ))
-        })
-        .map_err(|e| format!("Failed to execute asset similarity query: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to read asset similarity rows: {e}"))?;
+    // Min-heap of the current winners: its top is the weakest one kept.
+    let mut best: std::collections::BinaryHeap<Reverse<ScoredAsset>> =
+        std::collections::BinaryHeap::with_capacity(limit + 1);
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("Failed to read asset similarity rows: {e}"))?
+    {
+        let blob = row
+            .get_ref(1)
+            .and_then(|value| value.as_blob().map_err(Into::into))
+            .map_err(|e| format!("Failed to read asset similarity rows: {e}"))?;
+        let Some(distance) = cosine_distance_to_blob(target, blob) else {
+            continue;
+        };
+        let similarity = 1.0 - distance;
+        if !similarity.is_finite() {
+            continue;
+        }
+        if best.len() == limit
+            && best
+                .peek()
+                .is_some_and(|Reverse(weakest)| similarity < weakest.similarity)
+        {
+            continue;
+        }
+        let candidate = ScoredAsset {
+            similarity,
+            asset_id: row
+                .get(0)
+                .map_err(|e| format!("Failed to read asset similarity rows: {e}"))?,
+        };
+        if best.len() < limit {
+            best.push(Reverse(candidate));
+        } else if best
+            .peek()
+            .is_some_and(|Reverse(weakest)| candidate > *weakest)
+        {
+            best.pop();
+            best.push(Reverse(candidate));
+        }
+    }
 
-    Ok(serde_json::Value::Array(rank_similar_asset_rows(
-        &target_blob,
-        rows,
-        limit,
-    )?))
+    // Ascending order of `Reverse` is descending similarity: best first.
+    Ok(best
+        .into_sorted_vec()
+        .into_iter()
+        .map(|Reverse(scored)| scored)
+        .collect())
+}
+
+/// Load title, file and text preview for the winners in one query, keeping
+/// the ranking order (`IN (...)` returns rows in no particular order).
+fn hydrate_similar_assets(
+    conn: &rusqlite::Connection,
+    ranked: Vec<ScoredAsset>,
+) -> Result<serde_json::Value, String> {
+    if ranked.is_empty() {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    }
+
+    let placeholders = (1..=ranked.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT v.asset_id, v.item_id, i.title, i.collection_id, a.path, a.type,
+                COALESCE(e.text_content, t.text_content, '') AS text_preview
+         FROM vec_assets v
+         LEFT JOIN assets a ON a.id = v.asset_id
+         LEFT JOIN items i ON i.id = v.item_id
+         LEFT JOIN extractions e ON e.asset_id = v.asset_id
+         LEFT JOIN transcriptions t ON t.asset_id = v.asset_id
+         WHERE v.asset_id IN ({placeholders})"
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to prepare similar asset details query: {e}"))?;
+    let mut details: std::collections::HashMap<String, [String; 6]> = stmt
+        .query_map(
+            rusqlite::params_from_iter(ranked.iter().map(|scored| scored.asset_id.as_str())),
+            |row| {
+                let text = |index: usize| -> rusqlite::Result<String> {
+                    Ok(row.get::<_, Option<String>>(index)?.unwrap_or_default())
+                };
+                Ok((
+                    text(0)?,
+                    [text(1)?, text(2)?, text(3)?, text(4)?, text(5)?, text(6)?],
+                ))
+            },
+        )
+        .map_err(|e| format!("Failed to execute similar asset details query: {e}"))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Failed to read similar asset details: {e}"))?;
+
+    Ok(serde_json::Value::Array(
+        ranked
+            .into_iter()
+            .filter_map(|scored| {
+                let [item_id, title, collection_id, asset_path, asset_type, text_preview] =
+                    details.remove(&scored.asset_id)?;
+                Some(serde_json::json!({
+                    "assetId": scored.asset_id,
+                    "itemId": item_id,
+                    "title": title,
+                    "collectionId": collection_id,
+                    "assetPath": asset_path,
+                    "assetType": asset_type,
+                    "textPreview": truncate_preview(&text_preview, PREVIEW_MAX_CHARS),
+                    "similarity": scored.similarity,
+                }))
+            })
+            .collect(),
+    ))
 }
 
 /// Max number of characters surfaced in a similar-asset text preview. The
@@ -899,90 +1351,6 @@ fn truncate_preview(text: &str, max_chars: usize) -> String {
         Some((byte_idx, _)) => text[..byte_idx].to_string(),
         None => text.to_string(),
     }
-}
-
-fn rank_similar_asset_rows(
-    target_blob: &[u8],
-    rows: Vec<SimilarAssetRow>,
-    limit: usize,
-) -> Result<Vec<serde_json::Value>, String> {
-    rank_similarity_rows(
-        target_blob,
-        rows.into_iter()
-            .map(
-                |(
-                    asset_id,
-                    item_id,
-                    title,
-                    collection_id,
-                    asset_path,
-                    asset_type,
-                    text_preview,
-                    blob,
-                )| {
-                    (
-                        (
-                            asset_id,
-                            item_id,
-                            title,
-                            collection_id,
-                            asset_path,
-                            asset_type,
-                            text_preview,
-                        ),
-                        blob,
-                    )
-                },
-            )
-            .collect(),
-        limit,
-        |(asset_id, item_id, title, collection_id, asset_path, asset_type, text_preview),
-         similarity| {
-            serde_json::json!({
-                "assetId": asset_id,
-                "itemId": item_id,
-                "title": title,
-                "collectionId": collection_id,
-                "assetPath": asset_path,
-                "assetType": asset_type,
-                "textPreview": truncate_preview(&text_preview, PREVIEW_MAX_CHARS),
-                "similarity": similarity,
-            })
-        },
-    )
-}
-
-fn rank_similarity_rows<T, F>(
-    target_blob: &[u8],
-    rows: Vec<(T, Vec<u8>)>,
-    limit: usize,
-    to_json: F,
-) -> Result<Vec<serde_json::Value>, String>
-where
-    F: Fn(T, f64) -> serde_json::Value,
-{
-    let target = decode_embedding_blob(target_blob)?;
-
-    let mut results: Vec<(T, f64)> = rows
-        .into_iter()
-        .filter_map(|(meta, blob)| {
-            if blob.len() != target_blob.len() {
-                return None;
-            }
-
-            let other = decode_embedding_blob(&blob).ok()?;
-            let distance = cosine_distance(&target, &other)?;
-            Some((meta, 1.0 - distance))
-        })
-        .collect();
-
-    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-    Ok(results
-        .into_iter()
-        .take(limit)
-        .map(|(meta, similarity)| to_json(meta, similarity))
-        .collect())
 }
 
 // `decode_embedding_blob` y `cosine_distance` viven en `nlp::vector` para que
