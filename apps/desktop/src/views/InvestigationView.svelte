@@ -1116,8 +1116,7 @@
                       class="investigation-round__input"
                       rows="2"
                       bind:value={designDraft.hypothesis}
-                      disabled={answeringRound}
-                    ></textarea>
+                      disabled={answeringRound}></textarea>
                   </label>
                   <label class="investigation-round__field">
                     <span class="investigation-round__axis"
@@ -1127,8 +1126,7 @@
                       class="investigation-round__input"
                       rows="2"
                       bind:value={designDraft.scope}
-                      disabled={answeringRound}
-                    ></textarea>
+                      disabled={answeringRound}></textarea>
                   </label>
                   <label class="investigation-round__field">
                     <span class="investigation-round__axis"
@@ -1138,8 +1136,7 @@
                       class="investigation-round__input"
                       rows="3"
                       bind:value={designDraft.criteria}
-                      disabled={answeringRound}
-                    ></textarea>
+                      disabled={answeringRound}></textarea>
                   </label>
                 {:else}
                   <dl class="report__framing-list">
@@ -1170,8 +1167,7 @@
                   class="investigation-round__input"
                   rows="2"
                   bind:value={clarificationDraft[question.id]}
-                  disabled={answeringRound}
-                ></textarea>
+                  disabled={answeringRound}></textarea>
               </label>
             {/each}
             <Button
@@ -1219,8 +1215,7 @@
                   class="investigation-round__input"
                   rows="5"
                   bind:value={planDraft.queries}
-                  disabled={planActionInFlight !== null}
-                ></textarea>
+                  disabled={planActionInFlight !== null}></textarea>
               </label>
               <label class="investigation-round__field">
                 <span class="investigation-round__axis"
@@ -1230,8 +1225,7 @@
                   class="investigation-round__input"
                   rows="3"
                   bind:value={planDraft.bibliography}
-                  disabled={planActionInFlight !== null}
-                ></textarea>
+                  disabled={planActionInFlight !== null}></textarea>
               </label>
             </div>
           {:else}
@@ -1422,8 +1416,7 @@
                         class="investigation-round__input"
                         rows="8"
                         bind:value={sectionEdit.text}
-                        disabled={sectionActionInFlight !== null}
-                      ></textarea>
+                        disabled={sectionActionInFlight !== null}></textarea>
                     </label>
                   </div>
                 {:else}
@@ -1480,8 +1473,7 @@
                         class="investigation-round__input"
                         rows="3"
                         bind:value={sectionRewrite.instruction}
-                        disabled={sectionActionInFlight !== null}
-                      ></textarea>
+                        disabled={sectionActionInFlight !== null}></textarea>
                     </label>
                     <p class="investigation-round__intro">
                       {$currentLocale && t('investigation.section.instructionHint')}

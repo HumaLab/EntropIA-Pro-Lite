@@ -333,8 +333,7 @@
                 value={commentOf(view)}
                 oninput={(event) =>
                   editComment(view.key, (event.currentTarget as HTMLTextAreaElement).value)}
-                onblur={() => flush(view.key)}
-              ></textarea>
+                onblur={() => flush(view.key)}></textarea>
 
               {#if Array.isArray(view.data?.tags) && view.data.tags.length > 0}
                 <p class="annotation-entry__tags">

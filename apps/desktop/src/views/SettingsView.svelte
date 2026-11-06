@@ -2620,8 +2620,7 @@
                 id="ocr-correction-prompt-{paneId}"
                 class="settings__textarea"
                 rows="12"
-                bind:value={ocrCorrectionPrompt}
-              ></textarea>
+                bind:value={ocrCorrectionPrompt}></textarea>
               {#if promptValidationFeedback.ocrCorrectionPrompt}
                 <p
                   class="settings__validation"
@@ -2652,8 +2651,7 @@
                 id="summary-prompt-{paneId}"
                 class="settings__textarea"
                 rows="10"
-                bind:value={summaryPrompt}
-              ></textarea>
+                bind:value={summaryPrompt}></textarea>
               {#if promptValidationFeedback.summaryPrompt}
                 <p
                   class="settings__validation"
@@ -2681,8 +2679,7 @@
                 id="ner-prompt-{paneId}"
                 class="settings__textarea"
                 rows="8"
-                bind:value={nerPrompt}
-              ></textarea>
+                bind:value={nerPrompt}></textarea>
               {#if promptValidationFeedback.nerPrompt}
                 <p
                   class="settings__validation"
@@ -2707,8 +2704,7 @@
                 id="triplets-prompt-{paneId}"
                 class="settings__textarea"
                 rows="10"
-                bind:value={tripletsPrompt}
-              ></textarea>
+                bind:value={tripletsPrompt}></textarea>
               {#if promptValidationFeedback.tripletsPrompt}
                 <p
                   class="settings__validation"
@@ -2816,8 +2812,7 @@
                       class="settings__textarea"
                       rows="3"
                       bind:value={modelParamsByFlow[flow.id].stopSequences}
-                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}
-                    ></textarea>
+                      placeholder={t('settings.modelParams.stopSequencesPlaceholder')}></textarea>
                     <p class="settings__hint">{t('settings.modelParams.hint.stopSequences')}</p>
                   </div>
                 </div>

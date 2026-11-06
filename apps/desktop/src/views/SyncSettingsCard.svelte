@@ -939,8 +939,7 @@
           class="sync-card__number-input sync-plan-modal__textarea"
           bind:value={planNote}
           placeholder={t('sync.upgrade.notePlaceholder')}
-          rows="3"
-        ></textarea>
+          rows="3"></textarea>
       </div>
 
       <p class="sync-plan-modal__disclaimer">{t('sync.upgrade.disclaimer')}</p>

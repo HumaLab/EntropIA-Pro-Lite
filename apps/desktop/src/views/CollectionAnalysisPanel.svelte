@@ -481,8 +481,7 @@
           rows="6"
           placeholder={translate('collectionAnalysis.stopwordsPlaceholder')}
           value={stopwordsInput}
-          oninput={onStopwordsInput}
-        ></textarea>
+          oninput={onStopwordsInput}></textarea>
         <p class="settings-hint">{translate('collectionAnalysis.stopwordsHelp')}</p>
       </div>
     </div>
