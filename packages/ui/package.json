@@ -28,7 +28,7 @@
     "@tiptap/pm": "catalog:",
     "@tiptap/starter-kit": "catalog:",
     "leaflet": "catalog:",
-    "pdfjs-dist": "^4",
+    "pdfjs-dist": "^6",
     "tiptap-footnotes": "^3.0.1"
   },
   "peerDependencies": {
