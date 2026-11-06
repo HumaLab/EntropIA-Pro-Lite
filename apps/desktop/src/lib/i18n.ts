@@ -1904,6 +1904,8 @@ const es = {
   'collection.error.selectingFiles': 'seleccionando archivos',
   'collection.error.creatingItem': 'creando documento',
   'collection.error.importingFile': 'importando {name}',
+  'collection.error.collectionGone':
+    'Esta colección ya no existe (se borró en este equipo o en otro sincronizado). Elegí o creá otra colección.',
   'collection.error.unsupportedFormat': 'Formato no soportado: {files}',
   'collection.error.noAssetToDelete': 'No se encontró una página para eliminar en este documento.',
   'collection.error.deleteAsset': 'No se pudo eliminar la página: {message}',
@@ -4826,6 +4828,8 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'collection.error.selectingFiles': 'selecting files',
   'collection.error.creatingItem': 'creating document',
   'collection.error.importingFile': 'importing {name}',
+  'collection.error.collectionGone':
+    'This collection no longer exists (it was deleted on this or a synced device). Choose or create another collection.',
   'collection.error.unsupportedFormat': 'Unsupported format: {files}',
   'collection.error.noAssetToDelete': 'No page found to delete for this document.',
   'collection.error.deleteAsset': 'Failed to delete page: {message}',

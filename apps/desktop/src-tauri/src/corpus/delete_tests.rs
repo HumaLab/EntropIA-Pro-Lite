@@ -520,9 +520,12 @@ fn a_symlinked_item_folder_does_not_delete_outside() {
     );
 }
 
+/// Deleting the last document of a collection leaves the collection in place:
+/// the owner deletes collections explicitly. The next import into it works.
 #[test]
-fn deleting_the_last_items_removes_the_collection_they_emptied() {
+fn deleting_the_last_items_keeps_their_collection_and_the_next_import_lands_in_it() {
     let f = fixture();
+    f.enable_capture();
     f.write_file(&f.item_folder(BETA, &item_id(BETA, 1)).join("a.txt"), b"a");
     f.write_file(&f.item_folder(BETA, &item_id(BETA, 2)).join("b.txt"), b"b");
 
@@ -536,13 +539,96 @@ fn deleting_the_last_items_removes_the_collection_they_emptied() {
 
     assert_eq!(
         f.count_where("SELECT count(*) FROM collections WHERE id = ?1", [BETA]),
-        0
+        1,
+        "the emptied collection keeps its row"
     );
-    assert!(!f.collection_folder(BETA).exists());
+    assert_eq!(
+        f.count_where(
+            "SELECT count(*) FROM items WHERE collection_id = ?1",
+            [BETA]
+        ),
+        0,
+        "and holds no documents"
+    );
+    assert_eq!(
+        f.d_rows("collections", BETA),
+        0,
+        "emptying a collection records no delete tombstone for it"
+    );
+    assert!(
+        f.collection_folder(BETA).exists(),
+        "its folder stays; only an explicit collection delete removes it"
+    );
     assert_eq!(
         f.count_where("SELECT count(*) FROM collections WHERE id = ?1", [ALFA]),
         1,
         "another collection keeps its row"
+    );
+
+    // The app's next drag into the same collection imports instead of refusing
+    // with `not_found: no collection <id>`.
+    let source = f._root.path().join("foto.png");
+    f.write_file(&source, b"png");
+    let file = crate::corpus::ingest::check_app_source(
+        &source.to_string_lossy(),
+        &f.data_dir,
+        &crate::corpus::ingest::SourceLimits::default(),
+    )
+    .unwrap();
+    let outcome = crate::corpus::ingest::import_file(
+        &f.conn,
+        &f.data_dir,
+        BETA,
+        &file,
+        &crate::corpus::ingest::ImportOverrides::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            outcome,
+            crate::corpus::ingest::ImportOutcome::Imported { .. }
+        ),
+        "the import into the emptied collection succeeds: {outcome:?}"
+    );
+    assert_eq!(
+        f.count_where(
+            "SELECT count(*) FROM items WHERE collection_id = ?1",
+            [BETA]
+        ),
+        1
+    );
+}
+
+/// The same collection is deleted only when the owner asks for it, and that
+/// explicit delete records the collection's own delete tombstone.
+#[test]
+fn an_emptied_collection_is_deleted_only_by_an_explicit_collection_delete() {
+    let f = fixture();
+    f.enable_capture();
+
+    delete_items(
+        &f.conn,
+        &f.data_dir,
+        &f.cache_dir,
+        &[item_id(BETA, 1), item_id(BETA, 2)],
+    )
+    .unwrap();
+    assert_eq!(
+        f.count_where("SELECT count(*) FROM collections WHERE id = ?1", [BETA]),
+        1
+    );
+
+    delete_collection(&f.conn, &f.data_dir, &f.cache_dir, BETA).unwrap();
+
+    assert_eq!(
+        f.count_where("SELECT count(*) FROM collections WHERE id = ?1", [BETA]),
+        0
+    );
+    assert_eq!(f.d_rows("collections", BETA), 1);
+    assert_eq!(
+        f.count_where("SELECT count(*) FROM collections WHERE id = ?1", [ALFA]),
+        1,
+        "another collection is untouched"
     );
 }
 

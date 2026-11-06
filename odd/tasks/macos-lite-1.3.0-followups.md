@@ -13,12 +13,24 @@ from the GitHub `.dmg` on an Intel Mac with **macOS Ventura 13.2 and Safari
       - *Workaround for that user:* update macOS to 13.3+ (ships Safari 16.4).
       - *Real fix, to decide:* transpile the macOS build for older Safari, or
         declare a minimum macOS version and warn at startup.
-- [ ] **«no collection…» when dragging a file in.** Dragged a screenshot into
+- [x] **«no collection…» when dragging a file in.** Dragged a screenshot into
       collection «Prueba» and the app said that collection didn't exist,
       although it was visible in the list. Right after, a PDF imported fine
       into the same collection, so it's intermittent. Message comes from
       `apps/desktop/src-tauri/src/corpus/ingest.rs:486`. Cause not
       investigated.
+      - *Cause:* deleting documents also deleted the collection they left empty
+        (`corpus/delete.rs`, `delete_items_rows`), and the renderer never learned
+        it: the sidebar and the open collection kept the deleted row, so the next
+        drag asked the backend to import into a collection that no longer
+        existed. Not macOS-specific: the delete path is the same on every
+        platform.
+      - *Fix:* deleting documents never deletes their collection — the owner
+        deletes collections explicitly — so an emptied collection keeps its row,
+        its folder and produces no sync tombstone. If an import still finds the
+        collection gone (deleted on this or a synced device in 1.3.0), the view
+        says so in plain words and refreshes the sidebar instead of showing the
+        raw backend error. Branch `fix/keep-emptied-collections`.
 - [ ] **Permissions.** Before it worked, the app threw permission errors; they
       went away only after granting **Full Disk Access**. That shouldn't be
       needed: find which permission it really requires and document it in the

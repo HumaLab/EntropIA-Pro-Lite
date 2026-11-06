@@ -1507,6 +1507,9 @@ export class ItemRepo {
    * 7. Notes (FK → items)
    * 8. Item itself
    *
+   * The item's collection is never touched, not even when this was its last
+   * item: an emptied collection stays until the owner deletes it explicitly.
+   *
    * The database command owns the transaction and rolls back a failing
    * statement itself, so the repo never sends BEGIN/COMMIT/ROLLBACK and every
    * value travels bound instead of interpolated into the SQL.
@@ -1519,13 +1522,6 @@ export class ItemRepo {
     if (!rawClient?.executeTransaction) {
       throw new Error('deleteWithCascade requires a rawClient for transactional execution')
     }
-
-    // Get the parent collection ID before deleting the item (needed for auto-cleanup)
-    const parentRows = await rawClient.select<{ collection_id: string | null }>(
-      'SELECT collection_id FROM items WHERE id = ?',
-      [id]
-    )
-    const collectionId = parentRows[0]?.collection_id ?? ''
 
     // The embedding table is optional: join its cleanup to the transaction only
     // when it exists, so the delete never fails on a missing virtual table.
@@ -1563,10 +1559,6 @@ export class ItemRepo {
         params: [id],
       },
       { sql: 'DELETE FROM items WHERE id = ?', params: [id] },
-      {
-        sql: 'DELETE FROM collections WHERE id = ? AND id NOT IN (SELECT DISTINCT collection_id FROM items)',
-        params: [collectionId],
-      },
     ]
     if (vecAssetsExists) {
       statements.push({ sql: 'DELETE FROM vec_assets WHERE item_id = ?', params: [id] })

@@ -47,6 +47,13 @@ export interface ImportClassifiedPathsResult {
   createdItems: Array<{ id: string; title: string }>
   importErrors: string[]
   alreadyImported: string[]
+  /**
+   * The backend refused the import because the target collection no longer
+   * exists (`not_found: no collection <id>`): it was deleted on this device or
+   * applied from a synced one while the view still held its id. Callers say so
+   * in their own words instead of repeating the raw error.
+   */
+  missingCollection: boolean
 }
 
 /**
@@ -142,6 +149,19 @@ function getErrorDetails(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/**
+ * The backend's code for an import whose collection is gone
+ * (`CorpusError::NotFound` in `corpus::ingest`). Matched as a prefix, never
+ * against the localized sentence, so any rewording of the message keeps it
+ * working.
+ */
+const MISSING_COLLECTION_PREFIX = 'not_found: no collection'
+
+/** Whether a refused import failed because its collection no longer exists. */
+function isMissingCollectionError(error: unknown): boolean {
+  return getErrorDetails(error).trimStart().startsWith(MISSING_COLLECTION_PREFIX)
+}
+
 export function formatImportStageError(baseMessage: string, stage: string, e: unknown): string {
   return `${baseMessage} (${stage}): ${getErrorDetails(e)}`
 }
@@ -225,6 +245,7 @@ export async function importClassifiedPathsIntoCollection(
       createdItems: [],
       importErrors: [],
       alreadyImported: [],
+      missingCollection: false,
     }
   }
 
@@ -234,6 +255,7 @@ export async function importClassifiedPathsIntoCollection(
   const createdItems: Array<{ id: string; title: string }> = []
   const importErrors: string[] = []
   const alreadyImported: string[] = []
+  let missingCollection = false
   let progress: ImportProgress = {
     total: classified.length,
     completed: 0,
@@ -288,6 +310,7 @@ export async function importClassifiedPathsIntoCollection(
       alreadyImported.push(file.name)
       updateProgress({ skipped: progress.skipped + 1 })
     } catch (e) {
+      missingCollection = missingCollection || isMissingCollectionError(e)
       importErrors.push(
         formatImportStageError(
           baseErrorMessage,
@@ -309,5 +332,6 @@ export async function importClassifiedPathsIntoCollection(
     createdItems,
     importErrors,
     alreadyImported,
+    missingCollection,
   }
 }
