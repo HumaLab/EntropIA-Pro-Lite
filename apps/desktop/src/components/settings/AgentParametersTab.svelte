@@ -176,7 +176,7 @@
     font-weight: var(--font-weight-medium);
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
   }
 
   .agent-params__grid {
@@ -215,7 +215,7 @@
     margin: 0;
     font-family: var(--font-ui);
     font-size: var(--font-size-xs);
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
   }
 
   .agent-params__quotas {
