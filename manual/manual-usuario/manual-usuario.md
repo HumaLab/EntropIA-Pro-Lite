@@ -234,6 +234,8 @@ Las respuestas y resúmenes automáticos son ayudas para el trabajo. Comprobá s
 
 Las cuentas de proveedores y la cuenta de sincronización son independientes. El uso de servicios remotos puede tener costos o límites del proveedor; una clave no equivale a uso ilimitado. **Lite no instala los motores locales de IA de Pro**.
 
+**Requisitos del sistema en macOS.** El instalador de macOS pide **macOS 13.3 Ventura o posterior**. EntropIA se muestra con el motor de Safari que trae tu Mac, y el visor de PDF necesita el de Safari 16.4 (que llega con 13.3): en versiones anteriores los PDF no abren.
+
 ### 2.2. Preparar una sesión de trabajo segura
 
 1. Conservá una copia externa de las fuentes originales y configurá las [copias de seguridad](#copias-de-seguridad) automáticas.

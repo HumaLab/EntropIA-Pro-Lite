@@ -50,7 +50,7 @@ const pdf = vi.hoisted(() => {
   }
 })
 
-vi.mock('pdfjs-dist', () => {
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => {
   const page = {
     getViewport: ({ scale }: { scale: number }) => pdf.viewportFactory.current?.(scale),
     render: () => ({ promise: Promise.resolve(), cancel: () => {} }),

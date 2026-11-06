@@ -1090,10 +1090,13 @@
     const requestId = ++loadRequestId
     try {
       activatePdfMode()
-      const pdfjs = await import('pdfjs-dist')
+      // Legacy build: the macOS WKWebView is the system Safari, and the modern
+      // build needs class static blocks (Safari 16.4) plus Promise.withResolvers
+      // without a polyfill (Safari 17.4). See pdfjs-legacy-build.test.ts.
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
       pdfjsLib = pdfjs
       pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.min.mjs',
+        'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
         import.meta.url
       ).href
       if (requestId !== loadRequestId) return

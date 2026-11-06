@@ -12,7 +12,7 @@ const pdfMock = vi.hoisted(() => ({ getDocument: vi.fn() }))
 
 // The viewer must open the PDF exactly once however often the tabs change,
 // so the load is counted here instead of letting real pdf.js fetch.
-vi.mock('pdfjs-dist', () => ({
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   getDocument: pdfMock.getDocument,
   GlobalWorkerOptions: { workerSrc: '' },
 }))
