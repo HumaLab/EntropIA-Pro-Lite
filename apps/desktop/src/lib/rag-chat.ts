@@ -13,12 +13,14 @@ import {
   ragRenameConversation,
   ragGetConversation,
   ragListConversations,
+  type RagAskOptions,
   type RagConversationSummary,
   type RagLibraryRef,
   type RagMessage,
   type RagScope,
   type RagSource,
 } from './rag'
+import { noCollectionsChosen } from './rag-scope'
 import { settingsDelete, settingsGet, settingsSet, SETTINGS_KEYS } from './settings'
 
 export interface UiMessage {
@@ -44,6 +46,8 @@ export interface RagChatSnapshot {
   scope: RagScope
   /** Libraries to search; `null` is every synced one. */
   libraries: RagLibraryRef[] | null
+  /** Corpus collections to search; `null` is all of them, an empty list none. */
+  collections: string[] | null
 }
 
 type RagChatSubscriber = (snapshot: RagChatSnapshot) => void
@@ -78,6 +82,7 @@ export class RagChatStore {
   private _initialized = false
   private _scope: RagScope = 'corpus'
   private _libraries: RagLibraryRef[] | null = null
+  private _collections: string[] | null = null
   private _initPromise: Promise<void> | null = null
   private _conversationGeneration = 0
   private _conversationRefreshSequence = 0
@@ -108,6 +113,7 @@ export class RagChatStore {
       initialized: this._initialized,
       scope: this._scope,
       libraries: this._libraries ? [...this._libraries] : null,
+      collections: this._collections ? [...this._collections] : null,
     }
   }
 
@@ -211,6 +217,10 @@ export class RagChatStore {
   async send(rawQuestion: string): Promise<void> {
     const question = rawQuestion.trim()
     if (!question || this._loading) return
+    // Defensive: the composer already blocks this, but an empty collection
+    // choice means "search nothing" and must never reach the backend, where
+    // an empty list means the whole corpus.
+    if (noCollectionsChosen(this._scope, this._collections)) return
 
     // El bootstrap es barato (promesa memoizada) y cierra la carrera entre
     // la rehidratación y el primer envío: el id de conversación que
@@ -235,7 +245,7 @@ export class RagChatStore {
         question,
         requestConversationId ?? undefined,
         undefined,
-        this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
+        this.askOptions()
       )
       if (!this.isRequestCurrent(requestId, requestConversationId)) {
         // La respuesta llegó tarde para esta vista, pero la base SÍ cambió:
@@ -413,6 +423,28 @@ export class RagChatStore {
     this.emit()
   }
 
+  /**
+   * `null` means every corpus collection. An empty list means none: the menu
+   * lets the user uncheck them all, and the chat then asks for at least one.
+   */
+  setCollections(collections: string[] | null): void {
+    this._collections = collections ? [...collections] : null
+    this.emit()
+  }
+
+  /**
+   * What the question carries besides its text: only the choices that apply
+   * to the scope. Libraries mean nothing on the corpus, collections nothing
+   * on the Biblioteca.
+   */
+  private askOptions(): RagAskOptions {
+    const collections = this._scope === 'biblioteca' ? null : this._collections
+    const options: RagAskOptions =
+      this._scope === 'corpus' ? {} : { scope: this._scope, libraries: this._libraries }
+    // An empty list is never sent: the backend reads it as the whole corpus.
+    return collections && collections.length > 0 ? { ...options, collections } : options
+  }
+
   /** Keeps the composer draft at module scope so it survives navigation. */
   setDraft(value: string): void {
     this._draft = value
@@ -439,6 +471,7 @@ export class RagChatStore {
     this._draft = ''
     this._scope = 'corpus'
     this._libraries = null
+    this._collections = null
     this._initialized = false
     this._initPromise = null
     this._autoTitlePromise = null

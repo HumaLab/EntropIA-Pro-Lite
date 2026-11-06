@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { locale } from './i18n'
 import type { RagSource } from './rag'
 import {
+  allCollectionsChosen,
   bibliographyNoticeKey,
   citationLocation,
   isBibliographyCitation,
@@ -13,7 +14,10 @@ import {
   passageHeading,
   passageMarks,
   passageWindow,
+  noCollectionsChosen,
   researchScopeKey,
+  selectedCollectionsAfterSelectAll,
+  selectedCollectionsAfterToggle,
   selectedLibrariesAfterToggle,
   sourceScopeKey,
   withNoticeDetail,
@@ -161,6 +165,57 @@ describe('library selection', () => {
 
   it('never leaves an empty selection: the last library stays checked', () => {
     expect(selectedLibrariesAfterToggle([all[1]!], all, all[1]!)).toEqual([all[1]])
+  })
+})
+
+describe('collection selection', () => {
+  const all = ['col-1', 'col-2', 'col-3']
+
+  it('unchecking one collection from "all" selects the others explicitly', () => {
+    expect(selectedCollectionsAfterToggle(null, all, 'col-1')).toEqual(['col-2', 'col-3'])
+  })
+
+  it('checking back every collection returns to "all" (null)', () => {
+    expect(selectedCollectionsAfterToggle(['col-2', 'col-3'], all, 'col-1')).toBeNull()
+  })
+
+  it('unchecking the last checked collection leaves none selected', () => {
+    expect(selectedCollectionsAfterToggle(['col-2'], all, 'col-2')).toEqual([])
+  })
+})
+
+describe('collection "all" row', () => {
+  const all = ['col-1', 'col-2']
+
+  it('reads as checked while every collection is selected, including "all"', () => {
+    expect(allCollectionsChosen(null, all)).toBe(true)
+    expect(allCollectionsChosen(['col-1', 'col-2'], all)).toBe(true)
+    expect(allCollectionsChosen(['col-1'], all)).toBe(false)
+    expect(allCollectionsChosen([], all)).toBe(false)
+  })
+
+  it('unchecks every collection when all of them are checked', () => {
+    expect(selectedCollectionsAfterSelectAll(null, all)).toEqual([])
+    expect(selectedCollectionsAfterSelectAll(['col-1', 'col-2'], all)).toEqual([])
+  })
+
+  it('checks every collection when some or none are checked', () => {
+    expect(selectedCollectionsAfterSelectAll(['col-1'], all)).toBeNull()
+    expect(selectedCollectionsAfterSelectAll([], all)).toBeNull()
+  })
+})
+
+describe('noCollectionsChosen', () => {
+  it('blocks the scopes that search the corpus only when the choice is explicitly empty', () => {
+    expect(noCollectionsChosen('corpus', [])).toBe(true)
+    expect(noCollectionsChosen('both', [])).toBe(true)
+    expect(noCollectionsChosen('corpus', null)).toBe(false)
+    expect(noCollectionsChosen('both', ['col-1'])).toBe(false)
+  })
+
+  it('never blocks the Biblioteca, which sends no collections', () => {
+    expect(noCollectionsChosen('biblioteca', [])).toBe(false)
+    expect(noCollectionsChosen('biblioteca', null)).toBe(false)
   })
 })
 
