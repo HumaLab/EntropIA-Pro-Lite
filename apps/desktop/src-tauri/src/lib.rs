@@ -1596,6 +1596,7 @@ pub fn run() {
             ocr::commands::edit_pdf,
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
+            ocr::block_reocr::reocr_layout_block,
             ocr::commands::generate_pdf_thumbnail,
             ocr::commands::generate_image_thumbnail,
             ocr::commands::delete_pdf_thumbnail,

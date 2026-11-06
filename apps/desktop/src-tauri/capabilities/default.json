@@ -100,6 +100,7 @@
     "allow-edit-pdf",
     "allow-test-glm-ocr-connection",
     "allow-update-extraction-text-cmd",
+    "allow-reocr-layout-block",
     "allow-generate-pdf-thumbnail",
     "allow-generate-image-thumbnail",
     "allow-delete-pdf-thumbnail",

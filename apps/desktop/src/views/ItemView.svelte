@@ -69,6 +69,7 @@
   import {
     buildLayoutBlockViews,
     countLayoutBlocksByFilter,
+    createLayoutBoxDraft,
     filterBlocksByPage,
     filterRegionsByPage,
     filterLayoutBlocksByType,
@@ -79,8 +80,14 @@
     getLayoutByAsset,
     getPagesFromLayout,
     LAYOUT_BLOCK_FILTERS,
+    LAYOUT_DRAFT_BLOCK_ID,
+    LAYOUT_DRAFT_REGION_ID,
+    layoutBlockIdForIndex,
     pruneLayoutInteractionSelectionState,
+    reocrLayoutBlock,
+    type LayoutBlockEditMode,
     type LayoutBlockFilterId,
+    type LayoutBoxDraft,
   } from '$lib/layouts'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
   import { OcrStore, extractText, type OcrMode } from '$lib/ocr'
@@ -263,6 +270,13 @@
   let layoutSelectedBlockId = $state<string | null>(null)
   let layoutHoveredRegionId = $state<string | null>(null)
   let layoutSelectedRegionId = $state<string | null>(null)
+  // Manual layout correction: the box being adjusted (or drawn after a block)
+  // before GLM-OCR recognizes it. Nothing is persisted until "Reconocer".
+  let layoutBoxDraft = $state<LayoutBoxDraft | null>(null)
+  let layoutBoxBusy = $state(false)
+  let layoutBoxMessage = $state<{ tone: 'success' | 'warning' | 'error'; text: string } | null>(
+    null
+  )
   const itemLoadGuard = new LatestRequestGuard()
   const layoutLoadGuard = new LatestRequestGuard()
   const notesLoadGuard = new LatestRequestGuard()
@@ -1110,17 +1124,41 @@
   let selectedLayoutBlock = $derived(
     findLayoutBlockById(visibleLayoutBlocks, layoutSelectedBlockId)
   )
-  let layoutRegions = $derived<ViewerLayoutRegion[]>(
-    visibleLayoutBlocks.map((block) => ({
-      id: block.regionId,
-      blockId: block.id,
-      label: block.label,
-      x: block.overlayBbox.x,
-      y: block.overlayBbox.y,
-      width: block.overlayBbox.width,
-      height: block.overlayBbox.height,
-      matchSource: block.overlaySource,
-    }))
+  let layoutRegions = $derived.by<ViewerLayoutRegion[]>(() => {
+    const draft = layoutBoxDraft
+    const regions: ViewerLayoutRegion[] = visibleLayoutBlocks.map((block) => {
+      const box =
+        draft && draft.mode === 'replace' && draft.blockId === block.id
+          ? draft.bbox
+          : block.overlayBbox
+      return {
+        id: block.regionId,
+        blockId: block.id,
+        label: block.label,
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        matchSource: block.overlaySource,
+      }
+    })
+    if (draft?.mode === 'insert_after' && visibleLayoutBlocks.some((b) => b.id === draft.blockId)) {
+      regions.push({
+        id: LAYOUT_DRAFT_REGION_ID,
+        blockId: LAYOUT_DRAFT_BLOCK_ID,
+        label: translate('item.layoutBoxEditNewLabel'),
+        ...draft.bbox,
+        matchSource: 'block',
+      })
+    }
+    return regions
+  })
+  let editableLayoutRegionId = $derived(
+    layoutBoxDraft && !layoutBoxBusy
+      ? layoutBoxDraft.mode === 'insert_after'
+        ? LAYOUT_DRAFT_REGION_ID
+        : `${layoutBoxDraft.blockId}::overlay`
+      : null
   )
   let layoutReferenceWidth = $derived(
     layoutPageBlocks[0]?.imageWidth ??
@@ -1199,6 +1237,7 @@
 
   function setSelectedLayoutBlock(blockId: string | null) {
     const nextState = getLayoutInteractionStateFromBlockId(visibleLayoutBlocks, blockId)
+    discardLayoutBoxDraftUnlessFor(nextState.blockId)
     layoutSelectedBlockId = nextState.blockId
     layoutSelectedRegionId = nextState.regionId
     if (nextState.hasMatch) {
@@ -1207,11 +1246,110 @@
   }
 
   function setSelectedLayoutRegion(regionId: string | null) {
+    // The box drawn for a new block is not a block yet: clicking it keeps the
+    // block it was drawn after selected.
+    if (regionId === LAYOUT_DRAFT_REGION_ID) return
     const nextState = getLayoutInteractionStateFromRegionId(visibleLayoutBlocks, regionId)
+    discardLayoutBoxDraftUnlessFor(nextState.blockId)
     layoutSelectedBlockId = nextState.blockId
     layoutSelectedRegionId = nextState.regionId
     if (nextState.hasMatch) {
       showLayout = true
+    }
+  }
+
+  function discardLayoutBoxDraftUnlessFor(blockId: string | null) {
+    if (layoutBoxBusy) return
+    if (layoutBoxDraft && layoutBoxDraft.blockId !== blockId) {
+      layoutBoxDraft = null
+    }
+    if (blockId !== layoutSelectedBlockId) layoutBoxMessage = null
+  }
+
+  function startLayoutBoxEdit(blockId: string, mode: LayoutBlockEditMode) {
+    if (layoutBoxBusy) return
+    const block = findLayoutBlockById(layoutBlocks, blockId)
+    if (!block) return
+    layoutBoxMessage = null
+    layoutBoxDraft = createLayoutBoxDraft(block, mode)
+    showLayout = true
+  }
+
+  function cancelLayoutBoxEdit() {
+    if (layoutBoxBusy) return
+    layoutBoxDraft = null
+  }
+
+  function handleLayoutRegionGeometryChange(
+    regionId: string,
+    box: { x: number; y: number; width: number; height: number }
+  ) {
+    const draft = layoutBoxDraft
+    if (!draft || layoutBoxBusy || regionId !== editableLayoutRegionId) return
+    layoutBoxDraft = { ...draft, bbox: box }
+  }
+
+  /**
+   * Sends the corrected box to GLM-OCR. The backend splices the recognized
+   * text into the text shown here (manual edits included) at the block's
+   * place in the reading order, and stores layout and text together.
+   */
+  async function applyLayoutBoxEdit() {
+    const asset = selectedAsset
+    const draft = layoutBoxDraft
+    if (!asset || asset.type === 'audio' || !draft || layoutBoxBusy) return
+    const block = findLayoutBlockById(layoutBlocks, draft.blockId)
+    if (!block) {
+      layoutBoxDraft = null
+      return
+    }
+
+    layoutBoxBusy = true
+    layoutBoxMessage = null
+    try {
+      // The text sent already carries any pending manual edit; a debounced
+      // write landing after the splice would undo it.
+      await ocrTextPersistor.cancelAndWait(asset.id)
+      const currentText = ocrEditedText.get(asset.id) ?? getOcrState(asset.id).textContent ?? ''
+      const result = await reocrLayoutBlock({
+        assetId: asset.id,
+        blockIndex: block.sourceIndex,
+        expectedBbox: block.bbox,
+        bbox: draft.bbox,
+        mode: draft.mode,
+        currentText,
+      })
+      if (selectedAsset?.id !== asset.id) return
+
+      const nextEditedText = new Map(ocrEditedText)
+      nextEditedText.set(asset.id, result.textContent)
+      ocrEditedText = nextEditedText
+      ocrStore.setTextContent(asset.id, result.textContent)
+      ocrTick++
+      layoutBoxDraft = null
+      scheduleAssetReanalysis(asset.id)
+
+      await reloadLayoutForAsset(asset)
+      const editedBlockId = layoutBlockIdForIndex(result.blockIndex)
+      setSelectedLayoutBlock(editedBlockId)
+      const editedBlock = findLayoutBlockById(layoutBlocks, editedBlockId)
+      layoutBoxMessage = result.anchored
+        ? {
+            tone: 'success',
+            text: translate('item.layoutBoxEditDone', {
+              order: editedBlock?.order ?? block.order,
+            }),
+          }
+        : { tone: 'warning', text: translate('item.layoutBoxEditAppended') }
+    } catch (error) {
+      layoutBoxMessage = {
+        tone: 'error',
+        text: translate('item.layoutBoxEditError', {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      }
+    } finally {
+      layoutBoxBusy = false
     }
   }
 
@@ -2375,6 +2513,7 @@
       }
 
       assetLayout = layout
+      if (!layoutBoxBusy) layoutBoxDraft = null
       if (!layout || layout.blocks.length === 0) {
         showLayout = false
       }
@@ -2418,6 +2557,10 @@
       layoutSelectedBlockId = null
       layoutHoveredRegionId = null
       layoutSelectedRegionId = null
+      if (!layoutBoxBusy) {
+        layoutBoxDraft = null
+        layoutBoxMessage = null
+      }
     }
 
     const pendingAnnotationAssetId = annotationPersistor.getPendingAssetId()
@@ -2856,6 +2999,7 @@
         showLayoutOverlay={showLayout && layoutRegions.length > 0}
         hoveredLayoutRegionId={layoutHoveredRegionId}
         selectedLayoutRegionId={layoutSelectedRegionId}
+        {editableLayoutRegionId}
         {layoutReferenceWidth}
         {layoutReferenceHeight}
         {selectedAnnotationId}
@@ -2886,6 +3030,7 @@
         onAnnotationColorChange={handleAnnotationColorChange}
         onLayoutRegionHoverChange={syncLayoutHoverFromRegion}
         onLayoutRegionSelect={setSelectedLayoutRegion}
+        onLayoutRegionGeometryChange={handleLayoutRegionGeometryChange}
         onEditSelect={handleEditSelect}
         onEditToolChange={(tool: EditTool) => {
           editTool = tool
@@ -3113,6 +3258,12 @@
               }}
               onHoverBlock={syncLayoutHoverFromBlock}
               onSelectBlock={setSelectedLayoutBlock}
+              {layoutBoxDraft}
+              {layoutBoxBusy}
+              {layoutBoxMessage}
+              onStartBoxEdit={startLayoutBoxEdit}
+              onCancelBoxEdit={cancelLayoutBoxEdit}
+              onApplyBoxEdit={applyLayoutBoxEdit}
             />
           </div>
 

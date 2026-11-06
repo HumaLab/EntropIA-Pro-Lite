@@ -5,7 +5,9 @@
     type AssetLayout,
     type LayoutBlockFilterCounts,
     type LayoutBlockFilterId,
+    type LayoutBlockEditMode,
     type LayoutBlockView,
+    type LayoutBoxDraft,
     type LayoutPageBlockCounts,
   } from '$lib/layouts'
   import {
@@ -45,6 +47,12 @@
     onFilterChange,
     onHoverBlock,
     onSelectBlock,
+    layoutBoxDraft = null,
+    layoutBoxBusy = false,
+    layoutBoxMessage = null,
+    onStartBoxEdit = () => {},
+    onCancelBoxEdit = () => {},
+    onApplyBoxEdit = () => {},
   }: {
     selectedAssetType: Asset['type'] | null
     viewerType: 'image' | 'pdf' | 'audio'
@@ -73,6 +81,14 @@
     onFilterChange: (filter: LayoutBlockFilterId) => void
     onHoverBlock: (blockId: string | null) => void
     onSelectBlock: (blockId: string | null) => void
+    /** The box being corrected over the viewer, if any. */
+    layoutBoxDraft?: LayoutBoxDraft | null
+    /** A corrected box is being recognized. */
+    layoutBoxBusy?: boolean
+    layoutBoxMessage?: { tone: 'success' | 'warning' | 'error'; text: string } | null
+    onStartBoxEdit?: (blockId: string, mode: LayoutBlockEditMode) => void
+    onCancelBoxEdit?: () => void
+    onApplyBoxEdit?: () => void
   } = $props()
 
   let layoutBlockListEl = $state<HTMLDivElement | null>(null)
@@ -399,6 +415,74 @@
                 </strong>
                 <p>{overlayMeta.description}</p>
               </div>
+            </div>
+
+            <div class="layout-box-edit" data-testid="layout-box-edit">
+              <span class="layout-inspector__label">{translate('item.layoutBoxEditTitle')}</span>
+              {#if layoutBoxDraft && layoutBoxDraft.blockId === selectedLayoutBlock.id}
+                <p class="layout-box-edit__hint" data-testid="layout-box-edit-hint">
+                  {translate('item.layoutBoxEditDragHint')}
+                </p>
+                <div class="layout-box-edit__actions">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    type="button"
+                    data-testid="layout-box-edit-apply"
+                    disabled={layoutBoxBusy}
+                    onclick={() => onApplyBoxEdit()}
+                  >
+                    {layoutBoxBusy
+                      ? translate('item.layoutBoxEditApplying')
+                      : translate('item.layoutBoxEditApply')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    data-testid="layout-box-edit-cancel"
+                    disabled={layoutBoxBusy}
+                    onclick={() => onCancelBoxEdit()}
+                  >
+                    {translate('item.layoutBoxEditCancel')}
+                  </Button>
+                </div>
+              {:else}
+                <p class="layout-box-edit__hint">{translate('item.layoutBoxEditHelp')}</p>
+                <div class="layout-box-edit__actions">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    data-testid="layout-box-edit-adjust"
+                    disabled={layoutBoxBusy}
+                    onclick={() => onStartBoxEdit(selectedLayoutBlock.id, 'replace')}
+                  >
+                    {translate('item.layoutBoxEditAdjust')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    data-testid="layout-box-edit-insert"
+                    disabled={layoutBoxBusy}
+                    onclick={() => onStartBoxEdit(selectedLayoutBlock.id, 'insert_after')}
+                  >
+                    {translate('item.layoutBoxEditInsert')}
+                  </Button>
+                </div>
+              {/if}
+              {#if layoutBoxMessage}
+                <p
+                  class="layout-box-edit__message"
+                  class:layout-box-edit__message--error={layoutBoxMessage.tone === 'error'}
+                  class:layout-box-edit__message--warning={layoutBoxMessage.tone === 'warning'}
+                  data-testid="layout-box-edit-message"
+                  role="status"
+                >
+                  {layoutBoxMessage.text}
+                </p>
+              {/if}
             </div>
 
             <div class="layout-inspector__content">
@@ -803,6 +887,51 @@
 
   .layout-inspector__content {
     margin-top: var(--space-3);
+  }
+
+  .layout-box-edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .layout-box-edit__hint {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+    line-height: 1.4;
+  }
+
+  .layout-box-edit__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .layout-box-edit__message {
+    width: fit-content;
+    margin: 0;
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid color-mix(in srgb, var(--color-success) 28%, transparent);
+    border-radius: var(--radius-sm);
+    background: var(--color-success-soft);
+    color: var(--color-success);
+    font-size: var(--font-size-sm);
+  }
+
+  .layout-box-edit__message--warning {
+    border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+    background: color-mix(in srgb, var(--color-warning) 12%, var(--surface-card));
+    color: var(--color-text-primary);
+  }
+
+  .layout-box-edit__message--error {
+    border-color: color-mix(in srgb, var(--color-danger) 30%, transparent);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 
   .layout-inspector__content pre {

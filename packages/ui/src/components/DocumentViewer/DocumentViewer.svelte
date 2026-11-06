@@ -26,6 +26,15 @@
   } from '../PdfMarkup/sortIndex'
   import type { PdfMarkupDraft, PdfMarkupGeometryChange, PdfRect } from '../PdfMarkup/types'
   import type { PDFPageProxy } from 'pdfjs-dist'
+  import {
+    LAYOUT_RESIZE_HANDLES,
+    dragLayoutBox,
+    layoutHandleCenter,
+    layoutHandleCursor,
+    roundLayoutBox,
+    type LayoutEditBox,
+    type LayoutEditHandle,
+  } from './layoutBoxEdit'
 
   let {
     path: _path,
@@ -37,6 +46,7 @@
     selectedAnnotationId = null,
     hoveredLayoutRegionId = null,
     selectedLayoutRegionId = null,
+    editableLayoutRegionId = null,
     annotationTool = 'select',
     annotationColor = 'var(--color-accent)',
     editTool = 'none',
@@ -51,6 +61,7 @@
     onSelectedAnnotationIdChange = () => {},
     onLayoutRegionHoverChange = () => {},
     onLayoutRegionSelect = () => {},
+    onLayoutRegionGeometryChange = () => {},
     onAnnotationToolChange = () => {},
     onAnnotationColorChange = () => {},
     onEditSelect = () => {},
@@ -409,6 +420,17 @@
     kind: Exclude<AnnotationTool, 'select'>
   } | null>(null)
 
+  // Layout box being moved/resized: geometry in layout reference units.
+  let layoutEditDrag = $state<{
+    pointerId: number
+    regionId: string
+    handle: LayoutEditHandle
+    startX: number
+    startY: number
+    startBox: LayoutEditBox
+    box: LayoutEditBox
+  } | null>(null)
+
   // Edit draft: temporary rectangle drawn while crop/erase is active
   let editDraft = $state<{
     startX: number
@@ -497,6 +519,21 @@
   const layoutViewportH = $derived(type === 'image' ? naturalH : layoutReferenceHeight)
   const layoutDisplayW = $derived(type === 'image' ? displayW : pdfCanvasW)
   const layoutDisplayH = $derived(type === 'image' ? displayH : pdfCanvasH)
+  /** Regions as drawn: the one being dragged shows its live geometry. */
+  const displayedLayoutRegions = $derived(
+    layoutEditDrag
+      ? layoutRegions.map((region) =>
+          region.id === layoutEditDrag?.regionId ? { ...region, ...layoutEditDrag.box } : region
+        )
+      : layoutRegions
+  )
+  // Handle size in viewBox units so it stays ~10 screen pixels at any zoom.
+  const layoutHandleW = $derived(
+    (10 * naturalW) / Math.max(type === 'pdf' ? pdfCanvasW : baseDisplayW, 1)
+  )
+  const layoutHandleH = $derived(
+    (10 * naturalH) / Math.max(type === 'pdf' ? pdfCanvasH : baseDisplayH, 1)
+  )
   const canRenderLayoutOverlay = $derived(
     showLayoutOverlay &&
       layoutRegions.length > 0 &&
@@ -600,8 +637,10 @@
   /** Convert a viewport PointerEvent to normalized [0,1] coordinates.
    *  Prefer the SVG screen matrix so rotation/zoom transforms are inverted
    *  before translating the pointer to natural-image coordinates. */
-  function getNormalizedPoint(event: PointerEvent) {
-    const target = event.currentTarget as SVGSVGElement
+  function getNormalizedPoint(
+    event: PointerEvent,
+    target: SVGSVGElement = event.currentTarget as SVGSVGElement
+  ) {
     const usesPdfViewport = target.dataset.coordinateSpace === 'pdf-viewport'
     const coordinateWidth = usesPdfViewport ? pdfRotatedW : naturalW
     const coordinateHeight = usesPdfViewport ? pdfRotatedH : naturalH
@@ -849,6 +888,7 @@
 
   function cancelDrafts(event: PointerEvent) {
     releaseOverlayPointer(event)
+    layoutEditDrag = null
     panDrag = null
     isPanning = false
     draft = null
@@ -903,7 +943,76 @@
     captureOverlayPointer(event)
   }
 
+  /** Layout reference coordinates of a pointer over `svg`. */
+  function getLayoutPoint(event: PointerEvent, svg: SVGSVGElement) {
+    const point = getNormalizedPoint(event, svg)
+    if (!point) return null
+    return { x: point.x * layoutViewportW, y: point.y * layoutViewportH }
+  }
+
+  function handleLayoutEditPointerDown(
+    event: PointerEvent,
+    region: (typeof layoutRegions)[number],
+    handle: LayoutEditHandle
+  ) {
+    if (region.id !== editableLayoutRegionId || !layoutOverlayInteractive || event.button !== 0)
+      return
+    const svg = (event.currentTarget as SVGGraphicsElement).ownerSVGElement
+    if (!svg) return
+    const point = getLayoutPoint(event, svg)
+    if (!point) return
+    event.preventDefault()
+    event.stopPropagation()
+    const box = { x: region.x, y: region.y, width: region.width, height: region.height }
+    layoutEditDrag = {
+      pointerId: event.pointerId,
+      regionId: region.id,
+      handle,
+      startX: point.x,
+      startY: point.y,
+      startBox: box,
+      box,
+    }
+    svg.setPointerCapture?.(event.pointerId)
+  }
+
+  function finishLayoutEditDrag() {
+    const drag = layoutEditDrag
+    layoutEditDrag = null
+    if (!drag) return
+    const next = roundLayoutBox(drag.box)
+    const start = drag.startBox
+    if (
+      next.x === Math.round(start.x) &&
+      next.y === Math.round(start.y) &&
+      next.width === Math.round(start.width) &&
+      next.height === Math.round(start.height)
+    ) {
+      return
+    }
+    onLayoutRegionGeometryChange(drag.regionId, next)
+  }
+
   function handleOverlayPointerMove(event: PointerEvent) {
+    if (layoutEditDrag) {
+      if (event.pointerId !== layoutEditDrag.pointerId) return
+      const point = getLayoutPoint(event, event.currentTarget as SVGSVGElement)
+      if (!point) return
+      event.preventDefault()
+      layoutEditDrag = {
+        ...layoutEditDrag,
+        box: dragLayoutBox(
+          layoutEditDrag.startBox,
+          layoutEditDrag.handle,
+          point.x - layoutEditDrag.startX,
+          point.y - layoutEditDrag.startY,
+          layoutViewportW,
+          layoutViewportH
+        ),
+      }
+      return
+    }
+
     const scrollViewport = type === 'pdf' ? pdfScrollEl : containerEl
     if (panDrag && scrollViewport) {
       event.preventDefault()
@@ -935,6 +1044,11 @@
 
   function finishDraft(event?: PointerEvent) {
     if (event) releaseOverlayPointer(event)
+
+    if (layoutEditDrag) {
+      finishLayoutEditDrag()
+      return
+    }
 
     if (panDrag) {
       panDrag = null
@@ -1422,13 +1536,14 @@
                 onpointercancel={cancelDrafts}
               >
                 {#if canRenderLayoutOverlay}
-                  {#each layoutRegions as region (region.id)}
+                  {#each displayedLayoutRegions as region (region.id)}
                     {@const isSelectedRegion = region.id === selectedLayoutRegionId}
                     {@const isHoveredRegion = region.id === hoveredLayoutRegionId}
                     <rect
                       data-testid={`layout-overlay-${region.id}`}
                       class:selected={isSelectedRegion}
                       class:hovered={isHoveredRegion}
+                      class:editable={region.id === editableLayoutRegionId}
                       class="document-viewer__layout-region"
                       x={region.x}
                       y={region.y}
@@ -1454,7 +1569,26 @@
                         handleLayoutRegionClick(region.id)
                       }}
                       onkeydown={(event) => handleLayoutRegionKeydown(event, region.id)}
+                      onpointerdown={(event) => handleLayoutEditPointerDown(event, region, 'move')}
                     />
+                    {#if region.id === editableLayoutRegionId && layoutOverlayInteractive}
+                      {#each LAYOUT_RESIZE_HANDLES as handle (handle)}
+                        {@const center = layoutHandleCenter(region, handle)}
+                        <rect
+                          data-testid={`layout-edit-handle-${handle}`}
+                          class="document-viewer__layout-handle"
+                          x={layoutPx(center.x, 'x') - layoutHandleW / 2}
+                          y={layoutPx(center.y, 'y') - layoutHandleH / 2}
+                          width={layoutHandleW}
+                          height={layoutHandleH}
+                          vector-effect="non-scaling-stroke"
+                          role="presentation"
+                          style={`cursor:${layoutHandleCursor(handle)}`}
+                          onpointerdown={(event) =>
+                            handleLayoutEditPointerDown(event, region, handle)}
+                        />
+                      {/each}
+                    {/if}
                   {/each}
                 {/if}
 
@@ -1704,13 +1838,14 @@
                   onpointercancel={cancelDrafts}
                 >
                   {#if canRenderLayoutOverlay}
-                    {#each layoutRegions as region (region.id)}
+                    {#each displayedLayoutRegions as region (region.id)}
                       {@const isSelectedRegion = region.id === selectedLayoutRegionId}
                       {@const isHoveredRegion = region.id === hoveredLayoutRegionId}
                       <rect
                         data-testid={`layout-overlay-${region.id}`}
                         class:selected={isSelectedRegion}
                         class:hovered={isHoveredRegion}
+                        class:editable={region.id === editableLayoutRegionId}
                         class="document-viewer__layout-region"
                         x={layoutPx(region.x, 'x')}
                         y={layoutPx(region.y, 'y')}
@@ -1736,7 +1871,27 @@
                           handleLayoutRegionClick(region.id)
                         }}
                         onkeydown={(event) => handleLayoutRegionKeydown(event, region.id)}
+                        onpointerdown={(event) =>
+                          handleLayoutEditPointerDown(event, region, 'move')}
                       />
+                      {#if region.id === editableLayoutRegionId && layoutOverlayInteractive}
+                        {#each LAYOUT_RESIZE_HANDLES as handle (handle)}
+                          {@const center = layoutHandleCenter(region, handle)}
+                          <rect
+                            data-testid={`layout-edit-handle-${handle}`}
+                            class="document-viewer__layout-handle"
+                            x={layoutPx(center.x, 'x') - layoutHandleW / 2}
+                            y={layoutPx(center.y, 'y') - layoutHandleH / 2}
+                            width={layoutHandleW}
+                            height={layoutHandleH}
+                            vector-effect="non-scaling-stroke"
+                            role="presentation"
+                            style={`cursor:${layoutHandleCursor(handle)}`}
+                            onpointerdown={(event) =>
+                              handleLayoutEditPointerDown(event, region, handle)}
+                          />
+                        {/each}
+                      {/if}
                     {/each}
                   {/if}
 
@@ -1996,6 +2151,18 @@
       fill 0.15s ease,
       stroke 0.15s ease,
       stroke-width 0.15s ease;
+  }
+
+  .document-viewer__layout-region.editable {
+    cursor: move;
+    transition: none;
+  }
+
+  .document-viewer__layout-handle {
+    fill: var(--color-surface, #fff);
+    stroke: rgb(245, 158, 11);
+    stroke-width: 1.5;
+    touch-action: none;
   }
 
   .document-viewer__canvas-container {

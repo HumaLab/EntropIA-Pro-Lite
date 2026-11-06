@@ -2058,6 +2058,21 @@ const es = {
   'item.layoutEmptyInspector':
     'Seleccioná un bloque para ver label, orden, página, bbox, source y texto completo.',
   'item.layoutUnavailableForAudio': 'Layout no disponible para audios.',
+  'item.layoutBoxEditTitle': 'Corregir caja',
+  'item.layoutBoxEditHelp':
+    'Si GLM-OCR cortó o no detectó texto, ajustá la caja sobre el documento y volvé a reconocerla. El bloque conserva su lugar en el orden de lectura.',
+  'item.layoutBoxEditAdjust': 'Ajustar caja',
+  'item.layoutBoxEditInsert': 'Nueva caja a continuación',
+  'item.layoutBoxEditDragHint':
+    'Arrastrá los bordes o las esquinas de la caja resaltada en el documento; arrastrá el interior para moverla.',
+  'item.layoutBoxEditApply': 'Reconocer texto de la caja',
+  'item.layoutBoxEditApplying': 'Reconociendo…',
+  'item.layoutBoxEditCancel': 'Cancelar',
+  'item.layoutBoxEditDone': 'Texto del bloque #{order} actualizado.',
+  'item.layoutBoxEditAppended':
+    'Texto reconocido, pero no encontré dónde iba en la extracción: quedó agregado al final.',
+  'item.layoutBoxEditError': 'No se pudo reconocer la caja: {error}',
+  'item.layoutBoxEditNewLabel': 'nueva',
   'item.textExtraction': 'Extracción de texto',
   'item.extractionRunning': 'Ejecutando… {progress}%',
   'item.extractionRunningStage': 'Ejecutando… {progress}% · {stage}',
@@ -4992,6 +5007,21 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'item.layoutEmptyInspector':
     'Select a block to inspect its label, order, page, bbox, source, and full text.',
   'item.layoutUnavailableForAudio': 'Layout is not available for audio.',
+  'item.layoutBoxEditTitle': 'Fix box',
+  'item.layoutBoxEditHelp':
+    'If GLM-OCR cut off or missed some text, adjust the box over the document and recognize it again. The block keeps its place in the reading order.',
+  'item.layoutBoxEditAdjust': 'Adjust box',
+  'item.layoutBoxEditInsert': 'New box after this one',
+  'item.layoutBoxEditDragHint':
+    'Drag the edges or corners of the highlighted box on the document; drag its inside to move it.',
+  'item.layoutBoxEditApply': 'Recognize box text',
+  'item.layoutBoxEditApplying': 'Recognizing…',
+  'item.layoutBoxEditCancel': 'Cancel',
+  'item.layoutBoxEditDone': 'Text of block #{order} updated.',
+  'item.layoutBoxEditAppended':
+    'Text recognized, but its place in the extraction could not be found: it was appended at the end.',
+  'item.layoutBoxEditError': 'Could not recognize the box: {error}',
+  'item.layoutBoxEditNewLabel': 'new',
   'item.textExtraction': 'Text extraction',
   'item.extractionRunning': 'Running… {progress}%',
   'item.extractionRunningStage': 'Running… {progress}% · {stage}',

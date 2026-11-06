@@ -1,3 +1,4 @@
+pub mod block_reocr;
 pub mod commands;
 pub mod glm_ocr;
 pub mod markup;

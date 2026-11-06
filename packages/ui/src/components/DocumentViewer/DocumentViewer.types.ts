@@ -73,12 +73,23 @@ export interface DocumentViewerProps {
   showLayoutOverlay?: boolean
   hoveredLayoutRegionId?: string | null
   selectedLayoutRegionId?: string | null
+  /**
+   * Layout region the user may move and resize (handles on its edges and
+   * corners). Each finished drag reports the new box, in layout reference
+   * coordinates, through `onLayoutRegionGeometryChange`; the viewer keeps no
+   * edited geometry of its own.
+   */
+  editableLayoutRegionId?: string | null
   layoutReferenceWidth?: number
   layoutReferenceHeight?: number
   onAnnotationsChange?: (annotations: ViewerAnnotation[]) => void
   onSelectedAnnotationIdChange?: (annotationId: string | null) => void
   onLayoutRegionHoverChange?: (regionId: string | null) => void
   onLayoutRegionSelect?: (regionId: string) => void
+  onLayoutRegionGeometryChange?: (
+    regionId: string,
+    box: { x: number; y: number; width: number; height: number }
+  ) => void
   onAnnotationToolChange?: (tool: AnnotationTool) => void
   onAnnotationColorChange?: (color: string) => void
   onEditSelect?: (region: { x: number; y: number; width: number; height: number }) => void
