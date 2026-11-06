@@ -93,6 +93,9 @@
       "scripts/paddle_vl.py",
       "scripts/spacy_ner.py",
       "scripts/transcribe.py"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.3"
+    }
   }
 }

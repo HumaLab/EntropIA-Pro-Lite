@@ -91,7 +91,9 @@ export default defineConfig({
       'leaflet',
       // The 3D relation graph (T-46), loaded on demand but prebundled like the rest.
       '3d-force-graph',
-      'pdfjs-dist',
+      // The specifier both PDF load sites import (DocumentViewer and the OCR
+      // reader): the legacy build, the only one macOS Safari can run.
+      'pdfjs-dist/legacy/build/pdf.mjs',
       'svelte',
       'svelte/store',
     ],
