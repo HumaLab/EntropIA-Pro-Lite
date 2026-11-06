@@ -513,6 +513,53 @@ async fn no_discovery_file_means_the_app_is_absent() {
     assert_rpc_family(&response);
 }
 
+/// S1: the assistant shows only `message`, never `data.detail`, and keeps the
+/// server's stderr; so every refusal the connector builds also leaves one line
+/// on the diagnostic channel with the numeric code, `data.code` and the detail.
+#[tokio::test]
+async fn a_refused_request_is_reported_on_diagnostics_with_its_code_and_detail() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let outcome = relay_once(discovery_file(dir.path()), Some(TOKEN), &[tools_list(9)]).await;
+
+    assert_eq!(outcome.lines.len(), 1, "{:?}", outcome.lines);
+    let response = parse(&outcome.lines[0]);
+    assert_eq!(response["id"], 9);
+    let detail = response["error"]["data"]["detail"]
+        .as_str()
+        .expect("the refusal carries its detail");
+    assert_eq!(outcome.warnings.len(), 1, "{:?}", outcome.warnings);
+    let warning = &outcome.warnings[0];
+    let prefix = format!("{} {}: ", rpc_error_code(&response), error_code(&response));
+    assert!(warning.starts_with(&prefix), "{warning:?}");
+    assert!(warning.contains(detail), "{warning:?} lacks {detail:?}");
+}
+
+/// An error the app itself sent is forwarded as is and never logged: it is not
+/// the connector's refusal (S1).
+#[tokio::test]
+async fn an_error_forwarded_from_the_app_is_not_logged_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = FakeApp::start(|_| {
+        Reply::json(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 40,
+                "error": { "code": -32601, "message": "no such tool" }
+            })
+            .to_string(),
+        )
+    })
+    .await;
+    write_discovery(dir.path(), "entropia-agent/1", app.port);
+
+    let outcome = relay_once(discovery_file(dir.path()), Some(TOKEN), &[tools_list(40)]).await;
+
+    assert_eq!(outcome.lines.len(), 1, "{:?}", outcome.lines);
+    assert_eq!(parse(&outcome.lines[0])["error"]["code"], -32601);
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
 #[tokio::test]
 async fn a_discovery_port_nothing_listens_on_means_the_app_is_absent() {
     let dir = tempfile::tempdir().unwrap();
@@ -680,10 +727,18 @@ async fn nothing_but_json_lines_ever_reaches_stdout() {
             "one protocol message per line: {line:?}"
         );
     }
-    // Each notification that failed produced one diagnostic; the 202 did not.
-    assert_eq!(outcome.warnings.len(), 2, "{:?}", outcome.warnings);
-    for warning in &outcome.warnings {
-        assert!(warning.contains("unauthorized"), "{warning}");
+    // The parse error was answered with a refusal (S1) and each notification that
+    // failed produced one diagnostic; the 202 did not. Order is not part of the
+    // contract: responses overlap.
+    assert_eq!(outcome.warnings.len(), 3, "{:?}", outcome.warnings);
+    let (parse_errors, refusals): (Vec<&String>, Vec<&String>) = outcome
+        .warnings
+        .iter()
+        .partition(|warning| warning.starts_with("-32700 parse_error: "));
+    assert_eq!(parse_errors.len(), 1, "{:?}", outcome.warnings);
+    assert_eq!(refusals.len(), 2, "{:?}", outcome.warnings);
+    for warning in refusals {
+        assert!(warning.starts_with("-32002 unauthorized: "), "{warning}");
     }
 }
 

@@ -84,12 +84,20 @@ describes the Lite debug run, where `<connector>` was
 
 | Client | Line | Verified |
 |---|---|---|
-| Claude Code | `claude mcp add entropia -- <connector> --client cl_…` | Linux and Windows — `claude mcp list` reported **Connected**; Claude Code 2.1 speaks MCP `2026-07-28` (`server/discover`, then `tools/list`) |
+| Claude Code | `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- <connector> --client cl_…` | Linux and Windows — `claude mcp list` reported **Connected**; Claude Code 2.1 speaks MCP `2026-07-28` (`server/discover`, then `tools/list`) |
 | Codex | `codex mcp add entropia -- <connector> --client cl_…` | Linux — `codex exec` called `entropia_status`. Windows — handshake and `tools/list` completed (the model call itself failed on that machine's account). Codex starts MCP servers with a reduced environment; the connector copes on both |
 | OpenCode | `{"mcp":{"entropia":{"type":"local","command":["<connector>","--client","cl_…"]}}}` | Linux and Windows — `opencode mcp list` reported **connected** |
 | Pi | `{"mcpServers":{"entropia":{"command":"<connector>","args":["--client","cl_…"]}}}` | Linux and Windows — `pi mcp list` reported **connected** with 5 tools |
 
 "No token in the config" held for all four: each config names only the client id.
+
+The Claude Code line removes the `entropia` entry from both scopes before it adds
+the new one at user scope, so re-pairing after a revoke replaces the old
+registration instead of leaving it in place with a client id that no longer has a
+credential. `claude mcp add` alone refuses a name it already knows in the local
+scope, and a user-scope entry does not shadow a local one — that combination is
+what made `claude mcp list` keep reporting the revoked client. Codex needs no
+such step: `codex mcp add` overwrites an existing entry of the same name.
 
 The same panel lists every paired client with its creation date and last use, and
 **"Revocar"** (behind a confirmation) makes that credential useless on the next
@@ -212,7 +220,18 @@ the fallback token file is readable by other users, so fix its permissions
 (`chmod 600`) or pair the assistant again; `credential_store_unavailable` means the
 connector could not reach the OS keyring from the process the agent started (log
 in to the desktop session with the keyring unlocked, or pass the agent
-`DBUS_SESSION_BUS_ADDRESS`).
+`DBUS_SESSION_BUS_ADDRESS` on Linux; on Windows the Credential Manager is only
+reachable from the desktop session, so a connector started over SSH or by a
+service cannot read it).
+
+Every refusal the connector builds is also written to stderr, one line per
+refused request with the numeric code, `data.code` and `data.detail` (for example
+`entropia-agent-connector: -32001 app_absent: no pude leer
+…/agent-endpoint.json: …`), because the assistant shows only the `message` and
+never the detail. Claude Code records that stderr per server: on Windows
+`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<project>\mcp-logs-entropia\*.jsonl`; on
+Linux `~/.cache/claude-cli-nodejs/<project>/mcp-logs-entropia/` (the per-project
+cache directory exists on this machine, with one `mcp-logs-<server>` per server).
 
 ### Known issues on Windows
 

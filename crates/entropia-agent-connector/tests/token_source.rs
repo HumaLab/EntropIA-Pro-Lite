@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use common::{FakeApp, Reply};
 use entropia_agent_connector::cli;
-use entropia_agent_connector::error::{ConnectorError, CREDENTIAL_STORE_UNAVAILABLE};
+use entropia_agent_connector::error::{
+    ConnectorError, Platform, CREDENTIAL_MISSING, CREDENTIAL_STORE_UNAVAILABLE,
+};
 use entropia_agent_connector::keyring_source::{
     token_path, CredentialStore, KeyringOutcome, KeyringSource, TOKENS_DIR,
 };
@@ -200,6 +202,57 @@ fn neither_a_store_entry_nor_a_file_is_a_missing_credential() {
     assert_eq!(source.token(CLIENT_ID), Err(TokenError::Missing));
 }
 
+/// The real incident: the person revoked a client, paired a new one, but the
+/// assistant still held the old registration. "Pair it again" sent them to pair
+/// a third client, so the sentence now names the other likely cause and the step
+/// that actually fixes it: replacing the registration with the panel's line.
+#[test]
+fn a_missing_credential_names_the_revoke_and_asks_to_replace_the_registration() {
+    let rpc = ConnectorError::credential(TokenError::Missing);
+
+    // The code is a contract with the assistant, so it never changes.
+    assert_eq!(rpc.rpc_code, CREDENTIAL_MISSING);
+    assert_eq!(rpc.rpc_code, -32005);
+    assert_eq!(rpc.code, "credential_missing");
+    assert_eq!(rpc.detail, None);
+    assert!(
+        rpc.message
+            .contains("No hay una credencial guardada para este cliente"),
+        "{}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("revocado") && rpc.message.contains("otro equipo"),
+        "the message must name why this id has no credential: {}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("Ajustes → Asistentes"),
+        "the message must say where to pair: {}",
+        rpc.message
+    );
+    assert!(
+        rpc.message.contains("reemplazá"),
+        "the message must say to replace the registration: {}",
+        rpc.message
+    );
+}
+
+/// A store that failed on this machine says the same thing and keeps its reason
+/// in the diagnostic detail, as before.
+#[test]
+fn a_failed_credential_read_keeps_the_reason_apart_from_the_advice() {
+    let rpc = ConnectorError::credential(TokenError::Failed("json corrupto".into()));
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_MISSING);
+    assert_eq!(rpc.code, "credential_missing");
+    assert_eq!(rpc.detail.as_deref(), Some("json corrupto"));
+    assert_eq!(
+        rpc.message,
+        ConnectorError::credential(TokenError::Missing).message
+    );
+}
+
 /// A process started with a scrubbed environment (Codex does this) cannot
 /// reach the session keyring. Reporting that as "not paired" sent people to
 /// re-pair a client that was paired all along.
@@ -218,6 +271,76 @@ fn an_unreachable_store_without_a_file_says_so_instead_of_missing() {
     assert_eq!(rpc.code, "credential_store_unavailable");
     assert_eq!(rpc.detail.as_deref(), Some("no session bus"));
     assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+}
+
+/// S2: on Windows the store is the Credential Manager, which an SSH logon or a
+/// service cannot open at all, so D-Bus advice is meaningless there.
+#[test]
+fn the_windows_store_refusal_names_the_credential_manager_and_the_desktop_session() {
+    let rpc = ConnectorError::credential_on(
+        Platform::Windows,
+        TokenError::StoreUnavailable("ERROR_NO_SUCH_LOGON_SESSION".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, -32007);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert_eq!(rpc.detail.as_deref(), Some("ERROR_NO_SUCH_LOGON_SESSION"));
+    assert!(
+        rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
+    assert!(rpc.message.contains("SSH"), "{}", rpc.message);
+    assert!(rpc.message.contains("servicio"), "{}", rpc.message);
+    assert!(
+        rpc.message.contains("sesión de escritorio"),
+        "{}",
+        rpc.message
+    );
+    assert!(!rpc.message.contains("DBUS"), "{}", rpc.message);
+}
+
+/// S2: macOS has a keychain, not a D-Bus session bus.
+#[test]
+fn the_macos_store_refusal_asks_for_an_unlocked_keychain_without_dbus() {
+    let rpc = ConnectorError::credential_on(
+        Platform::MacOs,
+        TokenError::StoreUnavailable("denied".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_STORE_UNAVAILABLE);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+    assert!(!rpc.message.contains("DBUS"), "{}", rpc.message);
+    assert!(
+        !rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
+}
+
+/// S2: Linux keeps the advice it already had: an unlocked keyring, or the
+/// session bus variable when the agent scrubbed the environment.
+#[test]
+fn the_linux_store_refusal_keeps_the_keyring_and_dbus_advice() {
+    let rpc = ConnectorError::credential_on(
+        Platform::Linux,
+        TokenError::StoreUnavailable("no session bus".into()),
+    );
+
+    assert_eq!(rpc.rpc_code, CREDENTIAL_STORE_UNAVAILABLE);
+    assert_eq!(rpc.code, "credential_store_unavailable");
+    assert!(rpc.message.contains("llavero"), "{}", rpc.message);
+    assert!(
+        rpc.message.contains("DBUS_SESSION_BUS_ADDRESS"),
+        "{}",
+        rpc.message
+    );
+    assert!(
+        !rpc.message.contains("Administrador de credenciales"),
+        "{}",
+        rpc.message
+    );
 }
 
 #[test]
