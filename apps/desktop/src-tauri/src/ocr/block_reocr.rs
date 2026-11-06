@@ -601,6 +601,31 @@ fn persist_edit(
     )
     .map_err(|e| format!("Failed to update layout: {e}"))?;
     super::update_extraction_text(&tx, &request.asset_id, &text_content)?;
+    crate::asset_history::record_best_effort(
+        &tx,
+        &crate::asset_history::ProcessEvent::new(
+            &request.asset_id,
+            crate::asset_history::PROCESS_LAYOUT_BOX_OCR,
+            "GLM-OCR API (z.ai layout_parsing)",
+        )
+        .tool_version("paas/v4")
+        .model(super::glm_ocr::GLM_OCR_MODEL_ID)
+        .params(json!({
+            "mode": match request.mode {
+                LayoutBlockEditMode::Replace => "replace",
+                LayoutBlockEditMode::InsertAfter => "insert_after",
+            },
+            "page": page_of(&blocks[edited_index]),
+            "blockIndex": edited_index,
+            "previousBbox": bbox_json(&request.expected_bbox),
+            "bbox": bbox_json(bbox),
+            "anchored": anchored,
+        }))
+        .input_sha256(Some(crate::asset_history::sha256_hex(
+            request.current_text.as_bytes(),
+        )))
+        .output_text(&text_content),
+    );
     tx.commit()
         .map_err(|e| format!("Failed to commit layout edit: {e}"))?;
 

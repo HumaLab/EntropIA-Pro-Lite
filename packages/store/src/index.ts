@@ -11,6 +11,7 @@ export {
   notes,
   extractions,
   layouts,
+  assetProcessEvents,
   entities,
   triples,
   annotations,
@@ -43,6 +44,7 @@ export { NoteRepo } from './repos/note.repo'
 export { AnnotationRepo } from './repos/annotation.repo'
 export { ExtractionRepo } from './repos/extraction.repo'
 export { LayoutRepo } from './repos/layout.repo'
+export { AssetProcessEventRepo } from './repos/asset-process-event.repo'
 export { EntityRepo } from './repos/entity.repo'
 export { FtsRepo, sanitizeFts5Query } from './repos/fts.repo'
 export { TripleRepo } from './repos/triple.repo'
@@ -59,7 +61,13 @@ export type { StoreApi } from './repos/store'
 
 // Types
 export type { DbClient, DrizzleClient } from './types'
-export type { LayoutBoundingBox, LayoutRegion, LayoutBlock, AssetLayout } from './types'
+export type {
+  LayoutBoundingBox,
+  LayoutRegion,
+  LayoutBlock,
+  AssetLayout,
+  AssetProcessEvent,
+} from './types'
 export type { Collection, NewCollection } from './repos/collection.repo'
 export type {
   Item,

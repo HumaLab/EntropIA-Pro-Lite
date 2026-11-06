@@ -909,6 +909,7 @@ mod tests {
             image_height: 0,
             provider: "test".to_string(),
             page_count: 1,
+            page_methods: Vec::new(),
         })
     }
 

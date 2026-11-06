@@ -1735,6 +1735,7 @@ impl Executor for WrongCorpusPublisher {
                         image_height: 0,
                         provider: "synthetic".to_string(),
                         page_count: 1,
+                        page_methods: Vec::new(),
                     },
                 ),
             ),
@@ -1969,6 +1970,7 @@ impl Executor for SyntheticOcrExecutor {
                 image_height: 0,
                 provider: "synthetic".to_string(),
                 page_count: 1,
+                page_methods: Vec::new(),
             })),
             output: ExecOutput::Success {
                 outcome: "text".to_string(),

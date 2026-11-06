@@ -45,6 +45,24 @@ export interface LayoutBlock {
   groupId: number
 }
 
+/** One process an asset went through (`asset_process_events`). */
+export interface AssetProcessEvent {
+  id: string
+  assetId: string
+  /** Stable code: 'import', 'page_split', 'image_crop', 'ocr', 'text_edit'... */
+  process: string
+  tool: string
+  toolVersion: string | null
+  model: string | null
+  modelVersion: string | null
+  /** EntropIA build that ran the process. */
+  appVersion: string
+  params: Record<string, unknown> | null
+  inputSha256: string | null
+  outputSha256: string | null
+  createdAt: number
+}
+
 export interface AssetLayout {
   id: string
   assetId: string

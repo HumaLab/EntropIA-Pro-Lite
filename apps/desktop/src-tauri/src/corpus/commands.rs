@@ -501,6 +501,20 @@ pub fn replace_page_text(
             params![text, extraction_id],
         )
         .map_err(|error| unavailable("replace the page text", error))?;
+        crate::asset_history::record_best_effort(
+            conn,
+            &crate::asset_history::ProcessEvent::new(
+                asset_id,
+                crate::asset_history::PROCESS_TEXT_REPLACE,
+                "Asistente conectado (conector EntropIA Agent)",
+            )
+            .params(serde_json::json!({
+                "previousCharacters": current.chars().count(),
+                "characters": text.chars().count(),
+            }))
+            .input_sha256(Some(current_hash.clone()))
+            .output_text(text),
+        );
         crate::nlp::fts::index_item_from_db(conn, &item_id)
             .map_err(|error| unavailable("refresh the search index", error))?;
         Ok(ReplacedText {

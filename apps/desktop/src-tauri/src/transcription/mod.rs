@@ -770,6 +770,27 @@ fn save_transcription(
     )
     .map_err(|e| format!("Failed to upsert transcription: {e}"))?;
 
+    let (tool, model) = model_name.split_once('/').unwrap_or((model_name, ""));
+    crate::asset_history::record_best_effort(
+        conn,
+        &crate::asset_history::ProcessEvent::new(
+            asset_id,
+            crate::asset_history::PROCESS_TRANSCRIPTION,
+            match tool {
+                "assemblyai" => "AssemblyAI API",
+                "faster-whisper" => "faster-whisper (local)",
+                other => other,
+            },
+        )
+        .model(model)
+        .params(serde_json::json!({
+            "language": result.language,
+            "durationMs": result.duration_ms,
+            "segments": result.segments.len(),
+        }))
+        .output_text(&result.text),
+    );
+
     lookup_item_id_for_asset(conn, asset_id)
 }
 

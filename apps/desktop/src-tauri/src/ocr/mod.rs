@@ -2031,6 +2031,7 @@ mod tests {
             image_height: layout.image_height,
             provider: "test".to_string(),
             page_count: 1,
+            page_methods: Vec::new(),
         }
     }
 

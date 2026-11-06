@@ -1493,6 +1493,33 @@ export const zoteroAnnotationItems = sqliteTable(
   })
 )
 
+/**
+ * Process history of an asset (migration 0061): one row per process it went
+ * through, with tool, model and versions. Append-only and local to the device.
+ */
+export const assetProcessEvents = sqliteTable(
+  'asset_process_events',
+  {
+    id: text('id').primaryKey(),
+    assetId: text('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    process: text('process').notNull(),
+    tool: text('tool').notNull(),
+    toolVersion: text('tool_version'),
+    model: text('model'),
+    modelVersion: text('model_version'),
+    appVersion: text('app_version').notNull(),
+    paramsJson: text('params_json'),
+    inputSha256: text('input_sha256'),
+    outputSha256: text('output_sha256'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => ({
+    assetIdx: index('idx_asset_process_events_asset').on(table.assetId, table.createdAt),
+  })
+)
+
 /** Web API pull cursor and shared pause of one library for one Web account. */
 export const zoteroAnnotationSyncState = sqliteTable(
   'zotero_annotation_sync_state',

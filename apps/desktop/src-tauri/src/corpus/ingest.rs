@@ -353,6 +353,30 @@ fn provenance(
     serde_json::Value::Object(metadata)
 }
 
+/// What the history keeps of an import: the source as the person picked it.
+fn import_params(
+    file: &SourceFile,
+    stored_name: &str,
+    overrides: &ImportOverrides,
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "originalName": stored_name,
+        "originalPath": original_path(file),
+        "sizeBytes": file.size_bytes,
+        "kind": file.kind.as_str(),
+        "modifiedAt": file.modified_at,
+    });
+    // Flows that import on the person's behalf (web captures, the assistant)
+    // add their own provenance keys to the item metadata; name them here.
+    if let Some(extra) = overrides.extra_metadata.as_ref() {
+        params["flowMetadataKeys"] = serde_json::json!(extra.keys().collect::<Vec<_>>());
+    }
+    if overrides.allow_duplicate {
+        params["allowDuplicate"] = serde_json::json!(true);
+    }
+    params
+}
+
 /// The item title for a file: its name without the last extension, bounded
 /// like any item title.
 fn title_for(name: &str) -> String {
@@ -557,6 +581,12 @@ pub fn import_file(
         }
     };
 
+    // Hashed before the transaction: reading the files can take a moment.
+    let stored_hash = crate::asset_history::sha256_file(&destination);
+    let page_hashes: Vec<Option<String>> = pages
+        .iter()
+        .map(|(_, page_path)| crate::asset_history::sha256_file(page_path))
+        .collect();
     let recorded = (|| {
         conn.execute_batch("BEGIN IMMEDIATE").map_err(|error| {
             format!("unavailable: could not begin recording the files: {error}")
@@ -575,12 +605,23 @@ pub fn import_file(
                     page_number: None,
                 },
             )?;
-            for (page_number, page_path) in &pages {
+            crate::asset_history::record_best_effort(
+                conn,
+                &crate::asset_history::ProcessEvent::new(
+                    &parent,
+                    crate::asset_history::PROCESS_IMPORT,
+                    "EntropIA (importación de archivo)",
+                )
+                .params(import_params(file, stored_name, overrides))
+                .input_sha256(stored_hash.clone())
+                .output_sha256(stored_hash.clone()),
+            );
+            for ((page_number, page_path), page_hash) in pages.iter().zip(&page_hashes) {
                 let size = std::fs::metadata(page_path)
                     .map(|meta| meta.len())
                     .unwrap_or(0);
                 let page_key = stored_key(page_path, data_dir)?;
-                insert_asset(
+                let page_asset = insert_asset(
                     conn,
                     &NewAsset {
                         item_id: &item_id,
@@ -592,6 +633,21 @@ pub fn import_file(
                         page_number: Some(i64::from(*page_number)),
                     },
                 )?;
+                crate::asset_history::record_best_effort(
+                    conn,
+                    &crate::asset_history::ProcessEvent::new(
+                        &page_asset,
+                        crate::asset_history::PROCESS_PAGE_SPLIT,
+                        "EntropIA split_pdf_to_files (crate lopdf)",
+                    )
+                    .params(serde_json::json!({
+                        "parentAssetId": parent,
+                        "page": page_number,
+                        "pageCount": pages.len(),
+                    }))
+                    .input_sha256(stored_hash.clone())
+                    .output_sha256(page_hash.clone()),
+                );
             }
             crate::nlp::fts::index_item_from_db(conn, &item_id)
                 .map_err(|error| format!("unavailable: could not index the item: {error}"))?;

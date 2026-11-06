@@ -140,3 +140,11 @@ neither cascade to annotation rows that may still hold unsent local edits nor
 be blocked by them. The tables are local only and stay out of device sync;
 each device pulls its annotations from the Zotero Web API. Keep comments in
 the SQL free of semicolons: the runner splits statements on them.
+
+## 0061_asset_process_events
+
+Process history of each asset (import, page split, image edits, OCR, text
+corrections, transcription and derived data), with tool, model and versions,
+so the person can audit what was done to a document. Append-only except for
+the coalesced manual-edit row. Local only: it stays out of device sync until
+the sync server learns the table, so each device lists the processes it ran.

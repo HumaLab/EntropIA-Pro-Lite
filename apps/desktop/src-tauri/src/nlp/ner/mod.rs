@@ -210,7 +210,41 @@ pub fn replace_entities_for_asset(
     entities: &[Entity],
 ) -> Result<(), String> {
     delete_automatic_entities_for_asset(conn, item_id, asset_id)?;
-    insert_entities_for_asset(conn, item_id, asset_id, entities)
+    insert_entities_for_asset(conn, item_id, asset_id, entities)?;
+    crate::asset_history::record_best_effort(conn, &entities_history_event(asset_id, entities));
+    Ok(())
+}
+
+/// The history row of an entity extraction: the engines and models that
+/// produced the stored entities (rule-based patterns, an LLM review, or both).
+fn entities_history_event(
+    asset_id: &str,
+    entities: &[Entity],
+) -> crate::asset_history::ProcessEvent {
+    let mut sources: Vec<&str> = entities
+        .iter()
+        .map(|entity| entity.source.as_str())
+        .collect();
+    sources.sort_unstable();
+    sources.dedup();
+    let mut models: Vec<&str> = entities
+        .iter()
+        .filter_map(|entity| entity.model_name.as_deref())
+        .filter(|model| !model.trim().is_empty())
+        .collect();
+    models.sort_unstable();
+    models.dedup();
+    let tool = match (sources.contains(&"rule_based"), sources.contains(&"llm")) {
+        (true, true) => "EntropIA NER (reglas + revisión LLM)",
+        (false, true) => "EntropIA NER (LLM)",
+        _ => "EntropIA NER (reglas)",
+    };
+    crate::asset_history::ProcessEvent::new(asset_id, crate::asset_history::PROCESS_ENTITIES, tool)
+        .model(models.join(", "))
+        .params(serde_json::json!({
+            "entities": entities.len(),
+            "sources": sources,
+        }))
 }
 
 fn insert_entities_for_item(

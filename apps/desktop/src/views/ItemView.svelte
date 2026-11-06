@@ -62,6 +62,7 @@
   import ItemMetadataPanel from './ItemMetadataPanel.svelte'
   import ItemNotesPanel from './ItemNotesPanel.svelte'
   import ItemLayoutPanel from './ItemLayoutPanel.svelte'
+  import AssetProcessHistory from './AssetProcessHistory.svelte'
   import ItemTextPanel from './ItemTextPanel.svelte'
   import ItemAnalysisPanel from './ItemAnalysisPanel.svelte'
   import ItemMapViewer from './ItemMapViewer.svelte'
@@ -90,6 +91,7 @@
     type LayoutBoxDraft,
   } from '$lib/layouts'
   import { runPendingAssetJob } from '$lib/item-view-media-jobs'
+  import { recordAssetProcess, type RendererProcess } from '$lib/asset-history'
   import { OcrStore, extractText, type OcrMode } from '$lib/ocr'
   import { TranscriptionStore, transcribeAudio, transcribeDictation } from '$lib/transcription'
   import {
@@ -607,6 +609,12 @@
         path: duplicate.path,
         type: sourceAsset.type,
         size: sourceAsset.size,
+      })
+      void recordAssetProcess({
+        assetId: createdAsset.id,
+        process: 'duplicate',
+        params: { sourceAssetId: sourceAsset.id },
+        previousPath: sourceAsset.path,
       })
       const currentSourceIndex =
         itemId === sourceAsset.itemId
@@ -1496,6 +1504,7 @@
 
   async function runEditOperation(
     operation: (asset: Asset, previous: ImageEditUndoEntry) => Promise<ImageEditUndoEntry>,
+    history: { process: RendererProcess; params: Record<string, unknown> },
     clearPdfExtraction = false
   ) {
     if (annotationsLoading || editInProgress || undoInProgress || duplicateAssetInProgress) return
@@ -1510,6 +1519,12 @@
       const next = await operation(asset, previous)
       if (!(await commitViewerState(asset, previous, next, previous.page))) return
       recordViewerEdit(asset.id, previous)
+      void recordAssetProcess({
+        assetId: asset.id,
+        process: history.process,
+        params: { page: previous.page, ...history.params },
+        previousPath: previous.path,
+      })
       if (clearPdfExtraction) {
         const store = getStore()
         const results = await Promise.allSettled([
@@ -1559,47 +1574,52 @@
     rotationDegrees: number
   }) {
     if (selectedAsset?.type !== 'pdf') return
-    await runEditOperation(async (asset, previous) => {
-      const existingCrop = previous.annotations.find((annotation) => annotation.kind === 'crop')
-      const result = await invoke<PdfCropResult>('edit_pdf', {
-        path: previous.path,
-        page: previous.page,
-        operation,
-        rotationDegrees,
-        region,
-        existingCrop: existingCrop
-          ? {
-              x: existingCrop.x,
-              y: existingCrop.y,
-              width: existingCrop.width,
-              height: existingCrop.height,
-            }
-          : null,
-        existingErasures: previous.annotations
-          .filter((annotation) => annotation.kind === 'erase')
-          .map(({ x, y, width, height }) => ({ x, y, width, height })),
-      })
-      let nextAnnotations = previous.annotations.filter(
-        (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
-      )
-      if (existingCrop) nextAnnotations = cropAnnotations(nextAnnotations, existingCrop)
-      nextAnnotations = rotateAnnotationsByQuarterTurns(
-        nextAnnotations,
-        Math.round(rotationDegrees / 90)
-      )
-      if (operation === 'crop' && region) nextAnnotations = cropAnnotations(nextAnnotations, region)
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        annotations: normalizeAnnotationsForAsset({
-          annotations: nextAnnotations,
-          assetId: asset.id,
+    await runEditOperation(
+      async (asset, previous) => {
+        const existingCrop = previous.annotations.find((annotation) => annotation.kind === 'crop')
+        const result = await invoke<PdfCropResult>('edit_pdf', {
+          path: previous.path,
           page: previous.page,
-          now: Date.now(),
-          createId: () => crypto.randomUUID(),
-        }),
-      })
-    }, operation === 'crop')
+          operation,
+          rotationDegrees,
+          region,
+          existingCrop: existingCrop
+            ? {
+                x: existingCrop.x,
+                y: existingCrop.y,
+                width: existingCrop.width,
+                height: existingCrop.height,
+              }
+            : null,
+          existingErasures: previous.annotations
+            .filter((annotation) => annotation.kind === 'erase')
+            .map(({ x, y, width, height }) => ({ x, y, width, height })),
+        })
+        let nextAnnotations = previous.annotations.filter(
+          (annotation) => annotation.kind === 'rectangle' || annotation.kind === 'underline'
+        )
+        if (existingCrop) nextAnnotations = cropAnnotations(nextAnnotations, existingCrop)
+        nextAnnotations = rotateAnnotationsByQuarterTurns(
+          nextAnnotations,
+          Math.round(rotationDegrees / 90)
+        )
+        if (operation === 'crop' && region)
+          nextAnnotations = cropAnnotations(nextAnnotations, region)
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          annotations: normalizeAnnotationsForAsset({
+            annotations: nextAnnotations,
+            assetId: asset.id,
+            page: previous.page,
+            now: Date.now(),
+            createId: () => crypto.randomUUID(),
+          }),
+        })
+      },
+      { process: `pdf_${operation}`, params: { region, rotationDegrees } },
+      operation === 'crop'
+    )
   }
 
   async function handleEditSelect(region: { x: number; y: number; width: number; height: number }) {
@@ -1615,25 +1635,36 @@
       })
     } else {
       if (imageNaturalW === 0 || imageNaturalH === 0) return
-      await runEditOperation(async (_asset, previous) => {
-        const pixels = normalizedToPixels(region, previous.width, previous.height)
-        const result = await invoke<ImageEditResult>(
-          tool === 'crop' ? 'crop_image' : 'erase_region',
-          {
-            path: previous.path,
-            ...pixels,
+      await runEditOperation(
+        async (_asset, previous) => {
+          const pixels = normalizedToPixels(region, previous.width, previous.height)
+          const result = await invoke<ImageEditResult>(
+            tool === 'crop' ? 'crop_image' : 'erase_region',
+            {
+              path: previous.path,
+              ...pixels,
+              ...(tool === 'erase' ? { fill: 'white' } : {}),
+            }
+          )
+          return createImageEditUndoEntry({
+            ...previous,
+            path: result.path,
+            width: result.width,
+            height: result.height,
+            annotations:
+              tool === 'crop'
+                ? cropAnnotations(previous.annotations, region)
+                : previous.annotations,
+          })
+        },
+        {
+          process: tool === 'crop' ? 'image_crop' : 'image_erase',
+          params: {
+            region: normalizedToPixels(region, imageNaturalW, imageNaturalH),
             ...(tool === 'erase' ? { fill: 'white' } : {}),
-          }
-        )
-        return createImageEditUndoEntry({
-          ...previous,
-          path: result.path,
-          width: result.width,
-          height: result.height,
-          annotations:
-            tool === 'crop' ? cropAnnotations(previous.annotations, region) : previous.annotations,
-        })
-      })
+          },
+        }
+      )
     }
     editTool = 'none'
   }
@@ -1651,19 +1682,22 @@
       })
       return
     }
-    await runEditOperation(async (_asset, previous) => {
-      const result = await invoke<ImageEditResult>('rotate_image', {
-        path: previous.path,
-        direction,
-      })
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        width: result.width,
-        height: result.height,
-        annotations: rotateAnnotations(previous.annotations, direction),
-      })
-    })
+    await runEditOperation(
+      async (_asset, previous) => {
+        const result = await invoke<ImageEditResult>('rotate_image', {
+          path: previous.path,
+          direction,
+        })
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          width: result.width,
+          height: result.height,
+          annotations: rotateAnnotations(previous.annotations, direction),
+        })
+      },
+      { process: 'image_rotate', params: { direction } }
+    )
   }
 
   async function handleRotateLeft() {
@@ -1684,19 +1718,22 @@
       return
     }
     if (degrees === 0) return
-    await runEditOperation(async (_asset, previous) => {
-      const result = await invoke<ImageEditResult>('rotate_image_degrees', {
-        path: previous.path,
-        degrees,
-      })
-      // Free-angle rotation keeps the existing normalized rectangular annotation model.
-      return createImageEditUndoEntry({
-        ...previous,
-        path: result.path,
-        width: result.width,
-        height: result.height,
-      })
-    })
+    await runEditOperation(
+      async (_asset, previous) => {
+        const result = await invoke<ImageEditResult>('rotate_image_degrees', {
+          path: previous.path,
+          degrees,
+        })
+        // Free-angle rotation keeps the existing normalized rectangular annotation model.
+        return createImageEditUndoEntry({
+          ...previous,
+          path: result.path,
+          width: result.width,
+          height: result.height,
+        })
+      },
+      { process: 'image_rotate_fine', params: { degrees } }
+    )
   }
 
   async function restoreViewerHistory(direction: 'undo' | 'redo') {
@@ -1718,6 +1755,14 @@
       if (!current) return
       const previous = createImageEditUndoEntry({ ...current, path: asset.path })
       if (!(await commitViewerState(asset, previous, entry, sourcePage))) return
+      if (previous.path !== entry.path) {
+        void recordAssetProcess({
+          assetId: asset.id,
+          process: direction === 'undo' ? 'image_undo' : 'image_redo',
+          params: { page: entry.page },
+          previousPath: previous.path,
+        })
+      }
       const destination = direction === 'undo' ? 'redo' : 'undo'
       editHistories[asset.id] = {
         ...history,
@@ -3220,6 +3265,11 @@
               {metadataEditorLabels}
               {translate}
               onMetadataChange={handleMetadataChange}
+            />
+            <AssetProcessHistory
+              asset={selectedAsset}
+              refreshKey={`${rightPanelTab === 'metadata'}:${ocrTick}:${imageVersion}:${transcriptionTick}:${nlpTick}:${llmTick}:${summaryTick}:${assetLayout?.createdAt ?? 0}:${layoutBoxBusy}`}
+              {translate}
             />
           </div>
 

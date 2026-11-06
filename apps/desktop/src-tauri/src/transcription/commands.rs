@@ -111,6 +111,12 @@ pub async fn update_transcription_text_cmd(
                 rusqlite::params![text_content, id],
             )
             .map_err(|e| format!("Failed to update transcription text: {e}"))?;
+            crate::asset_history::record_text_edit(
+                &conn,
+                &asset_id,
+                crate::asset_history::PROCESS_TRANSCRIPTION_EDIT,
+                &text_content,
+            );
         }
 
         Ok(())

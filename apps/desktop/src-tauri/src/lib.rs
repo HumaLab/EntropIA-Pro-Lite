@@ -1,5 +1,6 @@
 mod app_logs;
 mod archive_close;
+pub(crate) mod asset_history;
 mod asset_integrity;
 pub mod asset_scope;
 mod asset_sweep;
@@ -1597,6 +1598,7 @@ pub fn run() {
             ocr::commands::test_glm_ocr_connection,
             ocr::commands::update_extraction_text_cmd,
             ocr::block_reocr::reocr_layout_block,
+            asset_history::asset_history_record,
             ocr::commands::generate_pdf_thumbnail,
             ocr::commands::generate_image_thumbnail,
             ocr::commands::delete_pdf_thumbnail,

@@ -31,6 +31,10 @@ pub struct OcrComputeOutput {
     pub image_height: u32,
     pub provider: String,
     pub page_count: i64,
+    /// Engine of each page of a PDF, in page order (`native`, `glm_ocr`...),
+    /// for the asset's process history. Empty for one image.
+    #[serde(default)]
+    pub page_methods: Vec<String>,
 }
 
 /// Writes extraction/layout rows for one asset. Runs INSIDE the commit
@@ -47,6 +51,7 @@ pub fn publish_ocr_output(
     output: &OcrComputeOutput,
 ) -> Result<(), String> {
     ocr::save_extraction_row(conn, asset_id, &output.text, &output.method)?;
+    crate::asset_history::record_best_effort(conn, &ocr_history_event(asset_id, output));
     match (&output.regions_json, &output.blocks_json) {
         (Some(regions), Some(blocks)) => ocr::save_layout_rows(
             conn,
@@ -61,6 +66,48 @@ pub fn publish_ocr_output(
     }
     crate::llm::ocr_correction::clear_asset_state(conn, asset_id)?;
     Ok(())
+}
+
+/// The history row of a published OCR: which engine and model read the
+/// asset, with the per-page engines of a PDF.
+pub(crate) fn ocr_history_event(
+    asset_id: &str,
+    output: &OcrComputeOutput,
+) -> crate::asset_history::ProcessEvent {
+    use crate::asset_history::{ProcessEvent, PROCESS_OCR};
+    let uses_glm =
+        output.provider == "glm" || output.page_methods.iter().any(|m| m.contains("glm"));
+    let all_native = output.method == "native";
+    let mut event = if all_native {
+        ProcessEvent::new(asset_id, PROCESS_OCR, "pdfium (capa de texto del PDF)")
+    } else if uses_glm {
+        ProcessEvent::new(asset_id, PROCESS_OCR, "GLM-OCR API (z.ai layout_parsing)")
+            .tool_version("paas/v4")
+            .model(crate::ocr::glm_ocr::GLM_OCR_MODEL_ID)
+    } else {
+        ProcessEvent::new(asset_id, PROCESS_OCR, "PaddleOCR (local)").model(
+            if output.layout_model.is_empty() {
+                output.method.clone()
+            } else {
+                output.layout_model.clone()
+            },
+        )
+    };
+    if uses_glm && !output.layout_model.is_empty() {
+        event = event.model_version(output.layout_model.clone());
+    }
+    let mut params = serde_json::json!({
+        "method": output.method,
+        "provider": output.provider,
+        "outcome": output.outcome,
+        "pageCount": output.page_count,
+        "textCharacters": output.text.chars().count(),
+        "layout": output.blocks_json.is_some(),
+    });
+    if !output.page_methods.is_empty() {
+        params["pageMethods"] = serde_json::json!(output.page_methods);
+    }
+    event.params(params).output_text(&output.text)
 }
 
 /// Resolves the OCR mode a new batch pins for its tasks from the saved OCRH
@@ -219,6 +266,7 @@ impl Executor for OcrExecutor {
                                 image_height: 0,
                                 provider: "native".to_string(),
                                 page_count: 1,
+                                page_methods: Vec::new(),
                             });
                         }
                     }
@@ -277,6 +325,7 @@ fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String>
         image_height: 0,
         provider: String::new(),
         page_count: count,
+        page_methods: Vec::new(),
     };
     let mut regions = Vec::<serde_json::Value>::new();
     let mut blocks = Vec::<serde_json::Value>::new();
@@ -285,6 +334,7 @@ fn merge_pages(pages: Vec<OcrComputeOutput>) -> Result<OcrComputeOutput, String>
             merged.text.push_str("\n\n");
         }
         merged.text.push_str(&page.text);
+        merged.page_methods.push(page.method.clone());
         merged.image_width = merged.image_width.max(page.image_width);
         merged.image_height = merged.image_height.max(page.image_height);
         merged.layout_model = page.layout_model;
@@ -550,6 +600,7 @@ fn to_compute_output(
         image_height,
         provider: provider.to_string(),
         page_count,
+        page_methods: Vec::new(),
     })
 }
 
@@ -636,6 +687,7 @@ mod tests {
             image_height: 200,
             provider: "test".to_string(),
             page_count: 1,
+            page_methods: Vec::new(),
         };
         publish_ocr_output(&conn, "a1", &output).expect("publish");
         let (text, method): (String, String) = conn
@@ -676,6 +728,7 @@ mod tests {
             image_height: 0,
             provider: method.to_string(),
             page_count: 1,
+            page_methods: Vec::new(),
         }
     }
 

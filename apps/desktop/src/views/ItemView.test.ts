@@ -319,6 +319,9 @@ function createStore({
       findByAssetId: vi.fn().mockResolvedValue(null),
       deleteByAssetId: vi.fn().mockResolvedValue(undefined),
     },
+    assetProcessEvents: {
+      findByAsset: vi.fn().mockResolvedValue([]),
+    },
   }
 }
 
@@ -3610,7 +3613,7 @@ describe('ItemView image annotations', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Crop tool' }))
     await fireEvent.click(screen.getByRole('button', { name: 'Apply edit region' }))
     await vi.advanceTimersByTimeAsync(0)
-    expect(invokeMock).toHaveBeenLastCalledWith('edit_pdf', {
+    expect(invokeMock).toHaveBeenCalledWith('edit_pdf', {
       path: 'docs/acta_v2.pdf',
       page: 1,
       operation: 'crop',
@@ -3618,6 +3621,19 @@ describe('ItemView image annotations', () => {
       region: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
       existingCrop: null,
       existingErasures: [],
+    })
+    // The edit lands in the asset's process history, with its input file.
+    expect(invokeMock).toHaveBeenLastCalledWith('asset_history_record', {
+      report: {
+        assetId: 'asset-pdf-1',
+        process: 'pdf_crop',
+        params: {
+          page: 1,
+          region: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
+          rotationDegrees: 0,
+        },
+        previousPath: 'docs/acta_v2.pdf',
+      },
     })
     expect(storeRef.current.assets.updatePath).toHaveBeenLastCalledWith(
       'asset-pdf-1',
@@ -4370,6 +4386,48 @@ describe('ItemView image annotations', () => {
       'Texto del bloque #2 actualizado.'
     )
     expect(screen.getByTestId('viewer-editable-layout-region')).toHaveTextContent('none')
+  })
+
+  it('records an image rotation in the asset process history', async () => {
+    storeRef.current = createStore({
+      assetsRows: [
+        {
+          id: 'asset-image-1',
+          itemId: 'item-1',
+          path: 'docs/photo-a.jpg',
+          type: 'image',
+          createdAt: 1,
+        },
+      ],
+    })
+    const defaultInvoke = invokeMock.getMockImplementation()
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'rotate_image') {
+        return {
+          path: 'docs/photo-a_v2.jpg',
+          width: 100,
+          height: 200,
+          format_changed: false,
+          previous_path: 'docs/photo-a.jpg',
+        }
+      }
+      return defaultInvoke?.(command, args)
+    })
+
+    render(ItemView, { itemId: 'item-1', collectionId: 'col-1' })
+    await screen.findByTestId('mock-document-viewer')
+    await fireEvent.click(screen.getByRole('button', { name: 'Rotate right' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('asset_history_record', {
+        report: {
+          assetId: 'asset-image-1',
+          process: 'image_rotate',
+          params: { page: 1, direction: 'right' },
+          previousPath: 'docs/photo-a.jpg',
+        },
+      })
+    })
   })
 
   it('draws a new box after the selected block without selecting it away', async () => {
