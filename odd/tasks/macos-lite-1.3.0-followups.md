@@ -4,15 +4,22 @@
 from the GitHub `.dmg` on an Intel Mac with **macOS Ventura 13.2 and Safari
 16.3**.
 
-- [ ] **PDFs don't open: «Unexpected token '{'».** Almost certain cause: on
-      macOS the webview is the system Safari (WKWebView), and pdf.js 4.10 uses
-      syntax that Safari only supports from 16.4 (March 2023). The frontend is
-      built for Windows' engine only (`apps/desktop/vite.config.ts:116`,
-      `target: 'chrome105'`), and the pdf.js worker is loaded as shipped
-      (`apps/desktop/src/lib/ocr-rich-text.ts:468`).
-      - *Workaround for that user:* update macOS to 13.3+ (ships Safari 16.4).
-      - *Real fix, to decide:* transpile the macOS build for older Safari, or
-        declare a minimum macOS version and warn at startup.
+- [x] **PDFs don't open: «Unexpected token '{'».** Cause confirmed: on macOS
+      the webview is the system Safari (WKWebView), and pdf.js 4.10.38 uses two
+      APIs no Safari reaches before 16.4 and 17.4 respectively — class static
+      blocks in `build/pdf.mjs` and both workers (Safari 16.4) and
+      `Promise.withResolvers` with no polyfill in the modern entry (Safari
+      17.4). The frontend target (`apps/desktop/vite.config.ts`,
+      `target: 'chrome105'`) never described the macOS engine.
+      - *Fix (branch `fix/macos-pdfjs-legacy`):* both runtime load sites import
+        the legacy build (`pdfjs-dist/legacy/build/pdf.mjs` and
+        `pdfjs-dist/legacy/build/pdf.worker.min.mjs`), which is transpiled and
+        ships the polyfill; `apps/desktop/src/lib/pdfjs-legacy-build.test.ts`
+        keeps the modern build out. The macOS installer now declares
+        `bundle.macOS.minimumSystemVersion: "13.3"` (the Ventura release that
+        ships Safari 16.4), stated in the README and the user manual. Older
+        Macs are not supported.
+      - *Workaround for that user:* update macOS to 13.3+.
 - [ ] **«no collection…» when dragging a file in.** Dragged a screenshot into
       collection «Prueba» and the app said that collection didn't exist,
       although it was visible in the list. Right after, a PDF imported fine

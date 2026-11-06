@@ -462,10 +462,13 @@ async function loadPdfDocument(assetUrl: string): Promise<PDFDocumentProxy> {
   const cached = pdfDocumentCache.get(assetUrl)
   if (cached) return cached
 
-  // PDF.js must load only for PDF regions; static loading selects its Node legacy build in Vitest.
-  const pdfjs = await import('pdfjs-dist')
+  // PDF.js must load only for PDF regions. The legacy build is the one the macOS
+  // WKWebView (system Safari) can parse: the modern build needs class static
+  // blocks (Safari 16.4) and Promise.withResolvers without a polyfill (17.4).
+  // See apps/desktop/src/lib/pdfjs-legacy-build.test.ts.
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
+    'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
     import.meta.url
   ).href
   const pending = pdfjs.getDocument(pdfDocumentOptions(assetUrl)).promise

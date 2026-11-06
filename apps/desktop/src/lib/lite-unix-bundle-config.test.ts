@@ -23,7 +23,7 @@ interface TauriConfig {
     resources?: string[]
     externalBin?: string[]
     linux?: { deb?: { desktopTemplate?: string; conflicts?: string[]; replaces?: string[] } }
-    macOS?: { frameworks?: string[] }
+    macOS?: { frameworks?: string[]; minimumSystemVersion?: string }
   }
 }
 
@@ -141,7 +141,17 @@ describe('Lite Linux bundle identity (tauri.lite.linux.conf.json)', () => {
 })
 
 describe('Lite macOS bundle (tauri.lite.macos.conf.json)', () => {
+  const base = readConfig('tauri.conf.json')
   const liteMac = readConfig('tauri.lite.macos.conf.json')
+
+  // The macOS webview is the system Safari, and pdf.js runs only from its
+  // legacy build, which needs Safari 16.4 (pdfjs-legacy-build.test.ts). The
+  // floor lives in the base config so every macOS build inherits it; the Lite
+  // overlay must not lower it back.
+  it('requires macOS 13.3, the first Ventura release with Safari 16.4', () => {
+    expect(base.bundle?.macOS?.minimumSystemVersion).toBe('13.3')
+    expect(liteMac.bundle?.macOS?.minimumSystemVersion).toBeUndefined()
+  })
 
   it('ships the pinned Pdfium library in Contents/Frameworks', () => {
     expect(liteMac.bundle?.macOS?.frameworks).toContain('resources/pdfium/libpdfium.dylib')
