@@ -1690,6 +1690,9 @@ const es = {
   'settings.modelList.noKey':
     'Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.',
   'settings.modelList.openSettings': 'Ir a Configuración',
+  'settings.modelList.moreMatches': '{count} más: seguí escribiendo para acotar',
+  'settings.modelList.unknownModel':
+    'No está en el catálogo de OpenRouter: se valida al crear.',
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'Dependencias de IA',
@@ -4620,6 +4623,9 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
   'settings.suggestedModels': 'Suggested models from OpenRouter',
   'settings.modelList.noKey': 'To pick a model from the list, first save your OpenRouter key.',
   'settings.modelList.openSettings': 'Open Settings',
+  'settings.modelList.moreMatches': '{count} more: keep typing to narrow it down',
+  'settings.modelList.unknownModel':
+    'Not in the OpenRouter catalog: it is validated when the request is created.',
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'AI dependencies',
