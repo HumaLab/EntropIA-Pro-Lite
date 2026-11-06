@@ -1,5 +1,5 @@
 import { t, type I18nKey } from './i18n'
-import type { RagBibliographyLocation, RagLibraryRef, RagSource } from './rag'
+import type { RagBibliographyLocation, RagLibraryRef, RagScope, RagSource } from './rag'
 
 /**
  * Pure helpers of the research chat's scope (Corpus / Biblioteca / Ambos):
@@ -178,6 +178,50 @@ export function selectedLibrariesAfterToggle(
     : [...selected, toggled]
   if (next.length === 0) return current
   return next.length >= all.length ? null : next
+}
+
+/**
+ * The corpus collection choice after toggling one. `null` is every collection,
+ * and unchecking the last one leaves an empty choice: the corpus menu lets the
+ * user search nothing, which the chat then refuses to send (the Agent does the
+ * same). An empty list is therefore a state of its own, never sent as "all".
+ */
+export function selectedCollectionsAfterToggle(
+  current: string[] | null,
+  all: string[],
+  toggled: string
+): string[] | null {
+  const selected = current ?? all
+  const next = selected.includes(toggled)
+    ? selected.filter((id) => id !== toggled)
+    : [...selected, toggled]
+  return all.length > 0 && all.every((id) => next.includes(id)) ? null : next
+}
+
+/** Whether the choice covers every collection: `null` or all of them checked. */
+export function allCollectionsChosen(current: string[] | null, all: string[]): boolean {
+  if (current === null) return all.length > 0
+  return all.length > 0 && all.every((id) => current.includes(id))
+}
+
+/**
+ * The menu's "all collections" row, which toggles both ways: it unchecks them
+ * all when every one is checked and checks them all back otherwise.
+ */
+export function selectedCollectionsAfterSelectAll(
+  current: string[] | null,
+  all: string[]
+): string[] | null {
+  return allCollectionsChosen(current, all) ? [] : null
+}
+
+/**
+ * Whether the scope would search the corpus with nothing in it. `null` is
+ * every collection, so only an explicitly empty choice blocks sending; the
+ * Biblioteca leg sends no collections at all.
+ */
+export function noCollectionsChosen(scope: RagScope, collections: string[] | null): boolean {
+  return scope !== 'biblioteca' && collections !== null && collections.length === 0
 }
 
 export interface PassageSegment {

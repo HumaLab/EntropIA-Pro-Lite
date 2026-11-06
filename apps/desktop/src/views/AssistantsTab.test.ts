@@ -199,8 +199,11 @@ describe('AssistantsTab', () => {
     expect(screen.getByTestId('assistants-connector-command')).toHaveTextContent(
       'entropia-agent-connector --client cl_new123'
     )
+    // A registration made before the last revoke keeps the old client id, so the
+    // Claude line removes both scopes it can live in before adding the new one
+    // at user scope (re-pairing after a revoke must not need a manual cleanup).
     expect(screen.getByTestId('assistants-line-claude')).toHaveTextContent(
-      'claude mcp add entropia -- entropia-agent-connector --client cl_new123'
+      'claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- entropia-agent-connector --client cl_new123'
     )
     expect(screen.getByTestId('assistants-line-codex')).toHaveTextContent(
       'codex mcp add entropia -- entropia-agent-connector --client cl_new123'
@@ -215,7 +218,7 @@ describe('AssistantsTab', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Copiar comando para Claude Code' }))
     await waitFor(() =>
       expect(writeTextMock).toHaveBeenCalledWith(
-        'claude mcp add entropia -- entropia-agent-connector --client cl_new123'
+        'claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- entropia-agent-connector --client cl_new123'
       )
     )
   })
@@ -424,7 +427,7 @@ describe('AssistantsTab', () => {
       "'/opt/EntropIA Lite/entropia-agent-connector' --client cl_new123"
     )
     expect(screen.getByTestId('assistants-line-claude')).toHaveTextContent(
-      "claude mcp add entropia -- '/opt/EntropIA Lite/entropia-agent-connector' --client cl_new123"
+      "claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- '/opt/EntropIA Lite/entropia-agent-connector' --client cl_new123"
     )
     expect(screen.queryByTestId('assistants-connector-missing')).not.toBeInTheDocument()
   })
@@ -546,12 +549,14 @@ describe('connector recipes', () => {
         id: 'claude',
         label: 'Claude Code',
         kind: 'command',
-        line: `claude mcp add entropia -- '${program}' --client ${CLIENT}`,
+        line: `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- '${program}' --client ${CLIENT}`,
       },
       {
         id: 'codex',
         label: 'Codex',
         kind: 'command',
+        // `codex mcp add` overwrites an existing entry of the same name, so no
+        // removal step is needed (checked against codex 0.146.1).
         line: `codex mcp add entropia -- '${program}' --client ${CLIENT}`,
       },
       {
@@ -574,7 +579,9 @@ describe('connector recipes', () => {
     const location: ConnectorLocation = { installed: true, path, kind: 'bundled' }
     expect(connectorInvocation(CLIENT, location)).toBe(`& '${path}' --client ${CLIENT}`)
     const claude = connectorRecipes(CLIENT, location).find((r) => r.id === 'claude')!
-    expect(claude.line).toBe(`claude mcp add entropia -- '${path}' --client ${CLIENT}`)
+    expect(claude.line).toBe(
+      `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- '${path}' --client ${CLIENT}`
+    )
     expect(opencodeProgram(location)).toEqual([path, '--client', CLIENT])
     expect(piConfig(location)).toEqual({ command: path, args: ['--client', CLIENT] })
   })
@@ -602,7 +609,7 @@ describe('connector recipes', () => {
     expect(connectorInvocation(CLIENT, POSIX_CONNECTOR)).toBe(`'${program}' --client ${CLIENT}`)
     const lines = connectorRecipes(CLIENT, POSIX_CONNECTOR)
     expect(lines.find((r) => r.id === 'claude')!.line).toBe(
-      `claude mcp add entropia -- '${program}' --client ${CLIENT}`
+      `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- '${program}' --client ${CLIENT}`
     )
     expect(lines.find((r) => r.id === 'codex')!.line).toBe(
       `codex mcp add entropia -- '${program}' --client ${CLIENT}`
@@ -615,7 +622,7 @@ describe('connector recipes', () => {
     const program = MSIX_CONNECTOR.path
     expect(connectorInvocation(CLIENT, MSIX_CONNECTOR)).toBe(`${program} --client ${CLIENT}`)
     expect(connectorRecipes(CLIENT, MSIX_CONNECTOR).find((r) => r.id === 'claude')!.line).toBe(
-      `claude mcp add entropia -- ${program} --client ${CLIENT}`
+      `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- ${program} --client ${CLIENT}`
     )
     expect(opencodeProgram(MSIX_CONNECTOR)).toEqual([program, '--client', CLIENT])
     expect(piConfig(MSIX_CONNECTOR)).toEqual({ command: program, args: ['--client', CLIENT] })
@@ -631,7 +638,7 @@ describe('connector recipes', () => {
         id: 'claude',
         label: 'Claude Code',
         kind: 'command',
-        line: `claude mcp add entropia -- entropia-agent-connector --client ${CLIENT}`,
+        line: `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- entropia-agent-connector --client ${CLIENT}`,
       },
       {
         id: 'codex',

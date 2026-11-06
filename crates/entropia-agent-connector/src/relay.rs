@@ -487,7 +487,12 @@ impl Connector {
     }
 
     /// A JSON-RPC error response for a request that could not be answered.
+    ///
+    /// The same refusal also leaves one line on the diagnostic channel (S1):
+    /// assistants show only `error.message`, never `data.detail`, and keep the
+    /// server's stderr, so the detail the person needs is only visible there.
     async fn emit(&self, id: Value, error: &ConnectorError) {
+        self.diagnostics.warn(&error.describe());
         let mut data = serde_json::Map::new();
         data.insert("code".to_string(), json!(error.code));
         if let Some(detail) = &error.detail {

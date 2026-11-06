@@ -304,7 +304,13 @@ export function connectorRecipes(
       id: 'claude',
       label: 'Claude Code',
       kind: 'command',
-      line: `claude mcp add entropia -- ${command}`,
+      // `claude mcp add` refuses a name it already knows in the local scope, and
+      // a user-scope entry does not shadow a local one, so a registration made
+      // before a revoke keeps the old client id and its dead credential. Both
+      // scopes go first, then the entry lands at user scope so it works from any
+      // folder; `;` continues when there was nothing to remove, in bash and in
+      // PowerShell. Codex needs none of this: `codex mcp add` overwrites.
+      line: `claude mcp remove entropia -s user; claude mcp remove entropia -s local; claude mcp add -s user entropia -- ${command}`,
     },
     {
       id: 'codex',

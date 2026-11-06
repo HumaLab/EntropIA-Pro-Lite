@@ -1063,17 +1063,96 @@ describe('RagChatStore scope', () => {
     expect(payload.libraries).toBeUndefined()
   })
 
+  it('starts on every collection', () => {
+    setupBackend()
+    expect(snapshotOf(new RagChatStore()).collections).toBeNull()
+  })
+
+  it('sends only the chosen collections on the corpus', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections(['col-2'])
+
+    await store.send('pregunta')
+
+    const payload = (state.ask as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(payload.collections).toEqual(['col-2'])
+    expect(payload.scope).toBeUndefined()
+    expect(payload.libraries).toBeUndefined()
+  })
+
+  it('sends the chosen collections with both scopes, and none on the Biblioteca', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections(['col-1'])
+    store.setScope('both')
+
+    await store.send('primera')
+    store.setScope('biblioteca')
+    await store.send('segunda')
+
+    const calls = (state.ask as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls[0]![0]).toEqual(expect.objectContaining({ scope: 'both', collections: ['col-1'] }))
+    expect(calls[1]![0].scope).toBe('biblioteca')
+    expect(calls[1]![0].collections).toBeUndefined()
+  })
+
+  it('keeps an explicitly empty collection choice as none', () => {
+    setupBackend()
+    const store = new RagChatStore()
+    store.setCollections([])
+    expect(snapshotOf(store).collections).toEqual([])
+  })
+
+  it('refuses to ask with no collection chosen on the corpus, without asking the backend', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections([])
+
+    await store.send('pregunta')
+
+    expect(state.ask).not.toHaveBeenCalled()
+    expect(snapshotOf(store).messages).toEqual([])
+  })
+
+  it('refuses to ask with no collection chosen on both scopes, without asking the backend', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections([])
+    store.setScope('both')
+
+    await store.send('pregunta')
+
+    expect(state.ask).not.toHaveBeenCalled()
+    expect(snapshotOf(store).messages).toEqual([])
+  })
+
+  it('still sends on the Biblioteca with no collection chosen', async () => {
+    const state = setupBackend({ ask: vi.fn(() => answer('conv-new')) })
+    const store = new RagChatStore()
+    store.setCollections([])
+    store.setScope('biblioteca')
+
+    await store.send('pregunta')
+
+    const payload = (state.ask as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    expect(payload.scope).toBe('biblioteca')
+    expect(payload.collections).toBeUndefined()
+  })
+
   it('keeps the choice when a new conversation starts, for the whole session', async () => {
     setupBackend({ ask: () => answer('conv-new') })
     const store = new RagChatStore()
     store.setScope('biblioteca')
     store.setLibraries([libraryA])
+    store.setCollections(['col-1'])
 
     store.startNew()
 
     const snapshot = snapshotOf(store)
     expect(snapshot.scope).toBe('biblioteca')
     expect(snapshot.libraries).toEqual([libraryA])
+    expect(snapshot.collections).toEqual(['col-1'])
   })
 
   it('shows the Biblioteca notice on the answer it belongs to', async () => {

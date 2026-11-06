@@ -18,11 +18,15 @@
     type RagSource,
   } from '$lib/rag'
   import {
+    allCollectionsChosen,
     bibliographyNoticeKey,
     isBibliographySource,
     libraryChoiceKey,
     locationText,
+    noCollectionsChosen,
     passageHeading,
+    selectedCollectionsAfterSelectAll,
+    selectedCollectionsAfterToggle,
     selectedLibrariesAfterToggle,
     sourceScopeKey,
     withNoticeDetail,
@@ -93,7 +97,11 @@
   )
 
   const currentLocale = locale
-  const canSend = $derived(!$ragChat.loading && $ragChat.draft.trim().length > 0)
+  const canSend = $derived(
+    !$ragChat.loading &&
+      $ragChat.draft.trim().length > 0 &&
+      !noCollectionsChosen($ragChat.scope, $ragChat.collections)
+  )
 
   // ── Scope: Corpus / Biblioteca / Ambos ───────────────────────────────────
   const SCOPES: Array<{
@@ -218,6 +226,102 @@
     libraryMenuOpen = true
   }
 
+  // ── Corpus collections ──────────────────────────────────────────────────
+  // Read once per view, the first time the scope includes the corpus. A
+  // collection the user picked earlier in the session and has since been
+  // deleted is dropped from the choice, so it never narrows to nothing.
+  let corpusCollections = $state<Array<{ id: string; name: string; items: number }>>([])
+  let collectionMenuOpen = $state(false)
+  let collectionsRequested = false
+
+  async function loadCollections() {
+    try {
+      const store = getStore()
+      const found = await store.collections.findAll()
+      const counted = await Promise.all(
+        found.map(async (collection) => ({
+          id: collection.id,
+          name: collection.name,
+          items: await store.collections.countItems(collection.id),
+        }))
+      )
+      corpusCollections = counted
+      const chosen = $ragChat.collections
+      if (chosen) {
+        const known = chosen.filter((id) => counted.some((collection) => collection.id === id))
+        if (known.length !== chosen.length) {
+          ragChat.setCollections(known.length === counted.length ? null : known)
+        }
+      }
+    } catch {
+      corpusCollections = []
+    }
+  }
+
+  $effect(() => {
+    if (scope === 'biblioteca' || collectionsRequested) return
+    collectionsRequested = true
+    untrack(() => void loadCollections())
+  })
+
+  const collectionIds = $derived(corpusCollections.map((collection) => collection.id))
+  const checkedCollectionIds = $derived(new Set($ragChat.collections ?? collectionIds))
+  const checkedCollectionCount = $derived(
+    collectionIds.filter((id) => checkedCollectionIds.has(id)).length
+  )
+  const collectionsAllChecked = $derived(allCollectionsChosen($ragChat.collections, collectionIds))
+  const noCollections = $derived(noCollectionsChosen($ragChat.scope, $ragChat.collections))
+  const collectionTriggerLabel = $derived(
+    $currentLocale &&
+      (collectionsAllChecked
+        ? t('ragChat.collectionsAll')
+        : checkedCollectionCount === 0
+          ? t('ragChat.collectionsNone')
+          : t('ragChat.collectionsSome', {
+              count: checkedCollectionCount,
+              total: collectionIds.length,
+            }))
+  )
+  const collectionItems = $derived<ToolbarMenuItem[]>([
+    {
+      kind: 'checkbox',
+      id: 'all',
+      label: $currentLocale && t('ragChat.collectionsAll'),
+      checked: collectionsAllChecked,
+      // The row toggles both ways: the same click checks every collection or
+      // unchecks them all, as the owner asked.
+      onselect: () =>
+        keepCollectionMenuOpen(() =>
+          ragChat.setCollections(
+            selectedCollectionsAfterSelectAll($ragChat.collections, collectionIds)
+          )
+        ),
+    },
+    ...corpusCollections.map((collection) => ({
+      kind: 'checkbox' as const,
+      id: collection.id,
+      label:
+        $currentLocale &&
+        `${collection.name} · ${t(
+          collection.items === 1 ? 'ragChat.collectionItemsOne' : 'ragChat.collectionItemsMany',
+          { count: collection.items }
+        )}`,
+      checked: checkedCollectionIds.has(collection.id),
+      onselect: () =>
+        keepCollectionMenuOpen(() =>
+          ragChat.setCollections(
+            selectedCollectionsAfterToggle($ragChat.collections, collectionIds, collection.id)
+          )
+        ),
+    })),
+  ])
+
+  // Same as the library menu: several clicks, so it reopens after each one.
+  function keepCollectionMenuOpen(apply: () => void) {
+    apply()
+    collectionMenuOpen = true
+  }
+
   const libraryStatusMessage = $derived.by(() => {
     if (scope === 'corpus') return null
     if (libraryStatusLoading && !libraryStatus) return t('ragChat.libraryStatusLoading')
@@ -293,6 +397,9 @@
   }
 
   function handleSend() {
+    // With no collection checked the corpus has nothing to search: the
+    // composer says so and Enter does nothing.
+    if (noCollections) return
     void ragChat.send($ragChat.draft)
   }
 
@@ -764,6 +871,25 @@
               </TabButton>
             {/each}
           </TabList>
+          {#if scope !== 'biblioteca' && corpusCollections.length > 0}
+            <ToolbarMenu
+              label={$currentLocale && t('ragChat.collectionsMenu')}
+              items={collectionItems}
+              bind:open={collectionMenuOpen}
+            >
+              {#snippet trigger(props, { open })}
+                <button
+                  type="button"
+                  class="rag-chat__library-trigger"
+                  class:rag-chat__library-trigger--open={open}
+                  {...props}
+                >
+                  <span>{collectionTriggerLabel}</span>
+                  <ActionIcon name="chevron-down" size={12} />
+                </button>
+              {/snippet}
+            </ToolbarMenu>
+          {/if}
           {#if scope !== 'corpus' && libraryStatus && libraryStatus.libraries.length > 0}
             <ToolbarMenu
               label={$currentLocale && t('ragChat.librariesMenu')}
@@ -787,6 +913,11 @@
         {#if libraryStatusMessage}
           <p class="rag-chat__scope-note" role="status">
             {$currentLocale && libraryStatusMessage}
+          </p>
+        {/if}
+        {#if noCollections}
+          <p class="rag-chat__scope-note" role="status">
+            {$currentLocale && t('ragChat.collectionsRequired')}
           </p>
         {/if}
         {#if chunkCoverageMessage}

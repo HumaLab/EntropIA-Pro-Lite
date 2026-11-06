@@ -242,6 +242,8 @@ pub async fn rag_chunk_coverage(
     .map_err(|e| format!("RAG chunk coverage task panicked: {e}"))?
 }
 
+// Each argument is a field of the IPC payload: grouping them would change it.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn rag_ask(
     question: String,
@@ -249,6 +251,7 @@ pub async fn rag_ask(
     top_k: Option<u8>,
     scope: Option<String>,
     libraries: Option<Vec<RagLibraryRef>>,
+    collections: Option<Vec<String>>,
     app_handle: tauri::AppHandle,
     db: tauri::State<'_, crate::db::state::AppDbState>,
 ) -> Result<RagAnswer, String> {
@@ -256,6 +259,8 @@ pub async fn rag_ask(
     // Corpus unless the UI says otherwise: an old caller keeps today's answer.
     let scope = RagScope::parse(scope.as_deref())?;
     let libraries = libraries.unwrap_or_default();
+    // Absent or empty: the whole corpus, as before the chat could choose.
+    let collections = retrieval::CollectionScope::only(&collections.unwrap_or_default());
     let requested_top_k = top_k;
     let db_path = db.db_path.clone();
 
@@ -461,8 +466,13 @@ pub async fn rag_ask(
             );
 
             let conn = retrieval_conn.lock().map_err(|error| error.to_string())?;
-            let retrieved =
-                retrieval::retrieve_reporting(&conn, &queries, &retrieval_params, retrieval_unit)?;
+            let retrieved = retrieval::retrieve_reporting(
+                &conn,
+                &queries,
+                &retrieval_params,
+                retrieval_unit,
+                &collections,
+            )?;
             trace_stage(
                 trace,
                 "hybrid_retrieval",
