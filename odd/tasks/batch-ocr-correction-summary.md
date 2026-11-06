@@ -33,9 +33,9 @@ Branch `feat/batch-ocr-correction-summary`.
 ## Tasks
 
 - [x] T1 — S2-S6, S8 (backend) — worker: Rust contracts, executors, eligibility, plan wiring, migration of task kinds,
+  tests — route: done — commit: 28c69149
+- [x] T2 — S1, S7, S8 (frontend) — worker: Lotes tab checkboxes, ops array, flows, i18n, counts, OpenRouter gate,
   tests — route: done — commit: pending
-- [ ] T2 — S1, S7, S8 (frontend) — worker: Lotes tab checkboxes, ops array, flows, i18n, counts, OpenRouter gate,
-  tests — commit: pending
 - [ ] T3 — S9, S10 — worker: MCP/assistant operations and docs, manual — commit: pending
 - [ ] T4 — S1-S10 — gentle-ai-verify (Risk: item 1 correction rewrites stored OCR text in a batch; item 3 new task
   kinds in a synced schema) — commit: none
@@ -79,3 +79,19 @@ Branch `feat/batch-ocr-correction-summary`.
   per-document command. Tests: `cargo test --lib processing::` 200 passed (RED first: 11 failures, including the
   "correction is not an embedding" claim pin), `llm::` 89, `sync::` 499, `db::` 121 (2 ignored), clippy/fmt clean,
   `pnpm --filter @entropia/store test` 457.
+- L6 — T2 frontend done (route: done, commit pending). `BatchProcessingTab.svelte` gained `runOcrCorrection`/
+  `runSummary` (both off by default), two hinted toggles after Tripletes in that order («Corrección OCR»,
+  «Resúmenes»), `'ocr_correction'`/`'summary'` in the `operations` array (after triples, before `schema:<id>`) and in
+  both "at least one op" guards; `missingOpenrouterKey` includes both, so under Lite they block «Analizar selección»
+  exactly like Entidades/Tripletes. `extractionCounts` now carries four kinds with readable count lines, and the paid
+  notice for correction shows also in Pro (`alwaysPaid`) because that call is always remote. T1 exposed no draft-count
+  fields for the new kinds — the snapshot only has `tasksByKind` — so the counts are read from it; task lists and the
+  history keep rendering `task.kind` raw, as they do for every kind (`ocr`, `ner`, `triples`), and `batchProgress`
+  already keeps non OCR/embedding units out of the page/chunk aggregate, so a correction/summary batch reports by
+  settled tasks. `batch-flows.ts` `BatchFlowSteps` gained `ocrCorrection`/`summary` (`=== true`, so flows stored before
+  this change load with both off); i18n got `batch.opOcrCorrection(+Hint)`, `batch.ocrCorrectionCount`,
+  `batch.opSummary(+Hint)`, `batch.summaryCount` in es and en. Tests (RED first: 7 failures): `batch-flows.test.ts` +2
+  (round-trip, legacy), `batch-processing.test.ts` +1 (new kinds stay out of the unit aggregate), `BatchProcessingTab
+  .test.ts` +6 (order and ids, tooltip hints, key gate, flow save/restore, legacy flow, kind names in the task list).
+  Desktop suite 275 files / 3865 passed (10 skipped), Lite tab 44 passed, lint and both typechecks clean,
+  `pnpm format:check` clean.

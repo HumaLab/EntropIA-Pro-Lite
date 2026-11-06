@@ -135,6 +135,30 @@ describe('batchProgress', () => {
     expect(progress.ratio).toBe(0)
   })
 
+  it('keeps correction and summary units out of the page/chunk aggregate', () => {
+    // The backend aggregates only OCR/embedding units; a batch that also
+    // corrects and summarizes would otherwise report a denominator it never
+    // measures against.
+    const batch = snapshot(
+      [
+        ['succeeded', 2],
+        ['running', 3],
+      ],
+      { done: 6, total: 8, unknownTasks: 0 }
+    )
+    batch.tasksByKind = [
+      { name: 'ocr_correction', count: 2 },
+      { name: 'summary', count: 3 },
+    ]
+
+    const progress = batchProgress(batch)
+
+    expect(progress.unknownUnitTasks).toBe(5)
+    expect(progress.unitRatio).toBeNull()
+    expect(progress.basis).toBe('tasks')
+    expect(progress.ratio).toBeCloseTo(0.4)
+  })
+
   it('never presents failures as success', () => {
     const progress = batchProgress(snapshot([['failed', 2]]))
     expect(progress.ratio).toBe(1)
