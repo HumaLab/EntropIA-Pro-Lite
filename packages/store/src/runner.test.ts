@@ -3196,10 +3196,11 @@ describe('batch OCR correction and summary tasks migration (0060)', () => {
       ).toEqual([{ task_id: 't-ocr', unit_key: 'page-1', payload: '{"units":1}' }])
 
       // The two kinds this migration exists for.
-      for (const [taskId, kind, assetId] of [
+      const newKinds: Array<[string, string, string]> = [
         ['t-correct', 'ocr_correction', 'a3'],
         ['t-summary', 'summary', 'a4'],
-      ]) {
+      ]
+      for (const [taskId, kind, assetId] of newKinds) {
         db.prepare(
           `INSERT INTO processing_tasks (id, kind, asset_id_snapshot, state, created_at, updated_at)
            VALUES (?, ?, ?, 'pending', 30, 30)`
