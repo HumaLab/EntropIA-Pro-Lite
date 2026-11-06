@@ -350,12 +350,21 @@ describe('ResearchView modelo de la investigación', () => {
     })
   }
 
-  /** The model menu trigger: its accessible name is "Modelo <value>". */
-  function modelBox() {
-    return screen.getByRole('button', { name: /^Modelo / })
+  /**
+   * The model field: a combobox (the same one Configuración's suggestions
+   * feed) whose accessible name is "Modelo" and whose text is the model.
+   */
+  function modelBox(): HTMLInputElement {
+    return screen.getByRole('combobox', { name: 'Modelo' }) as HTMLInputElement
   }
   function modelValue() {
-    return modelBox().textContent?.trim() ?? ''
+    return modelBox().value.trim()
+  }
+
+  /** Types into the model field the way a person does: focus, then keys. */
+  async function typeModel(value: string) {
+    await fireEvent.focus(modelBox())
+    await fireEvent.input(modelBox(), { target: { value } })
   }
 
   async function writeQuestion() {
@@ -404,8 +413,14 @@ describe('ResearchView modelo de la investigación', () => {
     render(ResearchView)
     await waitFor(() => expect(modelValue()).toBe('google/gemma-4-26b-a4b-it'))
 
-    await fireEvent.click(modelBox())
-    await fireEvent.click(screen.getByRole('menuitemradio', { name: /meta\/llama-3.3-70b/ }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Modelo' })).toBeEnabled())
+    await typeModel('llama')
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /meta\/llama-3.3-70b/ })).toBeInTheDocument()
+    )
+    await fireEvent.keyDown(modelBox(), { key: 'Enter' })
+    expect(modelValue()).toBe('meta/llama-3.3-70b')
+
     await writeQuestion()
     await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
 
@@ -419,7 +434,10 @@ describe('ResearchView modelo de la investigación', () => {
     backend()
     render(ResearchView)
     await waitFor(() => expect(screen.getByText('Conflicto SOIP 1965-66')).toBeInTheDocument())
-    expect(modelValue()).toBe(DEFAULT_OPENROUTER_MODEL)
+    expect(modelValue()).toBe('')
+    // The field is empty because no model of its own is chosen; the general
+    // one is what the placeholder and the first list row say.
+    expect(modelBox().placeholder).toBe(DEFAULT_OPENROUTER_MODEL)
 
     await writeQuestion()
     await fireEvent.click(screen.getByRole('button', { name: 'Investigar' }))
@@ -437,16 +455,19 @@ describe('ResearchView modelo de la investigación', () => {
       ],
     })
     render(ResearchView)
-    await waitFor(() => expect(modelBox()).toBeEnabled())
+    await waitFor(() => expect(modelValue()).toBe('google/gemma-4-26b-a4b-it'))
 
-    await fireEvent.click(modelBox())
-    const options = screen.getAllByRole('menuitemradio').map((o) => o.textContent?.trim())
+    await fireEvent.focus(modelBox())
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3))
+    const options = screen.getAllByRole('option').map((o) => o.textContent?.trim())
     expect(options).toEqual([
       DEFAULT_OPENROUTER_MODEL,
       'meta/llama-3.3-70b · 128k',
       'qwen/qwen-2.5-7b · 32k',
     ])
-    await fireEvent.click(screen.getByRole('menuitemradio', { name: /qwen\/qwen-2.5-7b/ }))
+
+    await typeModel('qwen')
+    await fireEvent.click(screen.getByRole('option', { name: /qwen\/qwen-2.5-7b/ }))
     expect(modelValue()).toBe('qwen/qwen-2.5-7b')
   })
 })
