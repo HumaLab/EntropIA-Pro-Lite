@@ -1624,6 +1624,11 @@ const es = {
     'Tus respuestas no cambiaron el plan: las búsquedas son las mismas que antes de la ronda.',
   'investigation.planGate.error': 'No se pudo aplicar la decisión sobre el plan.',
   'investigation.working.report': 'Estoy escribiendo el informe…',
+  'investigation.error.title': 'La investigación se detuvo por un error',
+  'investigation.error.retry': 'Reintentar',
+  'investigation.activity.label': 'Actividad de la investigación',
+  'investigation.archiveRetry.line':
+    'Lote {batch}: reintento con un lote más chico ({budget} KB, {items} documentos) — {error}',
   'investigation.pausedHint': 'Se detuvo. Continuá para que termine el informe.',
   'investigation.reportPending': 'Todavía no hay informe.',
   'investigation.loadError': 'No se pudo cargar el detalle.',
@@ -4495,6 +4500,11 @@ const en: Record<keyof typeof es | ExtraI18nKey, string> = {
     'Your answers did not change the plan: the searches are the same as before the round.',
   'investigation.planGate.error': 'The decision on the plan could not be applied.',
   'investigation.working.report': 'Writing the report…',
+  'investigation.error.title': 'The research stopped because of an error',
+  'investigation.error.retry': 'Retry',
+  'investigation.activity.label': 'Research activity',
+  'investigation.archiveRetry.line':
+    'Batch {batch}: retried with a smaller batch ({budget} KB, {items} documents) — {error}',
   'investigation.pausedHint': 'It stopped. Continue so the report can finish.',
   'investigation.reportPending': 'No report yet.',
   'investigation.loadError': 'The detail could not be loaded.',
