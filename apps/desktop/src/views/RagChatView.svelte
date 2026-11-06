@@ -941,8 +941,7 @@
             placeholder={$currentLocale && t('ragChat.placeholder')}
             aria-label={$currentLocale && t('ragChat.placeholder')}
             onkeydown={handleComposerKeydown}
-            disabled={$ragChat.loading}
-          ></textarea>
+            disabled={$ragChat.loading}></textarea>
           <Button
             variant="primary"
             iconOnly

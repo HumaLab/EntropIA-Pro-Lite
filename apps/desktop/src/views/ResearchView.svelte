@@ -526,8 +526,7 @@
               oninput={(event) => {
                 question = event.currentTarget.value
                 submitError = null
-              }}
-            ></textarea>
+              }}></textarea>
           </label>
 
           <!-- El modelo del trabajo: el mismo campo y la misma lista de
