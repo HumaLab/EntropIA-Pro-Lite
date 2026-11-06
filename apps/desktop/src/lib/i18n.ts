@@ -1691,8 +1691,7 @@ const es = {
     'Para elegir un modelo de la lista, primero cargá la clave de OpenRouter.',
   'settings.modelList.openSettings': 'Ir a Configuración',
   'settings.modelList.moreMatches': '{count} más: seguí escribiendo para acotar',
-  'settings.modelList.unknownModel':
-    'No está en el catálogo de OpenRouter: se valida al crear.',
+  'settings.modelList.unknownModel': 'No está en el catálogo de OpenRouter: se valida al crear.',
   'settings.promptsTab': 'Prompts',
   'settings.modelParamsTab': 'Model Params',
   'settings.dependenciesTab': 'Dependencias de IA',
