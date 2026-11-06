@@ -387,8 +387,9 @@ describe('ItemRepo', () => {
       expect(sql).toContain('DELETE FROM triples')
       expect(sql).toContain('DELETE FROM notes')
       expect(sql).toContain('DELETE FROM items')
-      expect(sql).toContain('DELETE FROM collections')
-      expect(sql).toContain('AND id NOT IN (SELECT DISTINCT collection_id FROM items)')
+      // Deleting documents never deletes their collection: the owner deletes
+      // collections explicitly (odd/tasks/macos-lite-1.3.0-followups.md).
+      expect(sql).not.toContain('DELETE FROM collections')
       // Optional tables should NOT be in the batch
       expect(sql).not.toContain('DELETE FROM vec_items')
       expect(sql).not.toContain('DELETE FROM embeddings_fallback')
@@ -1476,11 +1477,11 @@ describe('keyset pagination against the real schema', () => {
     })
   })
 
-  describe('deleting a document auto-cleans its collection', () => {
+  describe('deleting a document keeps its collection', () => {
     const collectionCount = (sqlite: DatabaseSync, id: string) =>
       sqlite.prepare('SELECT COUNT(*) AS n FROM collections WHERE id = ?').get(id)
 
-    it('removes a collection that the deleted document emptied', async () => {
+    it('keeps the collection that the deleted document emptied', async () => {
       const { sqlite, repo: realRepo } = createRealDb([
         { id: 'doc-a', title: 'Alpha', collectionId: 'col-1' },
         { id: 'doc-b', title: 'Bravo', collectionId: 'col-2' },
@@ -1488,7 +1489,7 @@ describe('keyset pagination against the real schema', () => {
 
       await realRepo.deleteWithCascade('doc-a')
 
-      expect(collectionCount(sqlite, 'col-1')).toEqual({ n: 0 })
+      expect(collectionCount(sqlite, 'col-1')).toEqual({ n: 1 })
       expect(collectionCount(sqlite, 'col-2')).toEqual({ n: 1 })
     })
 

@@ -18,6 +18,7 @@
   import { exportCollectionById } from '$lib/export'
   import { getAssetPathLabel } from '$lib/item-metadata'
   import {
+    DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
     DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
     notifyDocumentExplorerCollectionChanged,
     type DocumentExplorerCollectionChangedDetail,
@@ -737,6 +738,20 @@
     await loadItems()
     notifyExplorerCollectionChanged()
     analysisRefreshToken++
+
+    if (result.missingCollection && result.createdItems.length === 0) {
+      // The backend refused with `not_found: no collection <id>`: it was deleted
+      // on this device, or a delete from another one was applied by sync, while
+      // this view still held its id. Say it plainly and tell the sidebar to
+      // drop the row, instead of leaving a dead collection on screen. The
+      // batch failed for this one reason, already said, so its per-file list
+      // would only repeat the raw sentence.
+      error = t('collection.error.collectionGone')
+      importSummary = null
+      importProgress = null
+      window.dispatchEvent(new CustomEvent(DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT))
+      return
+    }
 
     const hasFailures = result.importErrors.length > 0 || result.rejected.length > 0
     const lastCreated = result.createdItems.at(-1) ?? null

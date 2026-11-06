@@ -74,6 +74,7 @@ describe('importClassifiedPathsIntoCollection', () => {
       createdItems: [],
       importErrors: [],
       alreadyImported: [],
+      missingCollection: false,
     })
     expect(invokeMock).not.toHaveBeenCalled()
   })
@@ -133,6 +134,32 @@ describe('importClassifiedPathsIntoCollection', () => {
     )
 
     expect(result.createdItems).toEqual([{ id: 'item-1', title: 'The paper' }])
+  })
+
+  it('marks a batch refused because its collection is gone', async () => {
+    classifyA()
+    invokeMock.mockRejectedValue('not_found: no collection col-1')
+
+    const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import dropped files',
+    })
+
+    expect(result.missingCollection).toBe(true)
+    // The per-file error is unchanged: views that list it keep the sentence.
+    expect(result.importErrors).toEqual([
+      'Failed to import dropped files (importing a.png): no collection col-1',
+    ])
+  })
+
+  it('does not mark any other refusal as a missing collection', async () => {
+    classifyA()
+    invokeMock.mockRejectedValue('not_found: no item item-1')
+
+    const result = await importClassifiedPathsIntoCollection(['/src/a.png'], 'col-1', {
+      baseErrorMessage: 'Failed to import files',
+    })
+
+    expect(result.missingCollection).toBe(false)
   })
 
   it('reports an unchanged earlier import as already imported, never as an error', async () => {
@@ -340,6 +367,7 @@ describe('buildImportSummary', () => {
       createdItems: [{ id: 'item-1', title: 'a' }],
       importErrors: [],
       alreadyImported: [],
+      missingCollection: false,
     })
 
     expect(summary).toEqual({
@@ -359,6 +387,7 @@ describe('buildImportSummary', () => {
       createdItems: [{ id: 'item-1', title: 'a' }],
       importErrors: [],
       alreadyImported: ['c.png'],
+      missingCollection: false,
     })
 
     expect(summary.skipped).toBe(2)
@@ -371,6 +400,7 @@ describe('buildImportSummary', () => {
       createdItems: [{ id: 'item-1', title: 'a' }],
       importErrors: ['Failed to import files (importing b.png): boom'],
       alreadyImported: [],
+      missingCollection: false,
     })
 
     expect(summary.lastItemTitle).toBeNull()

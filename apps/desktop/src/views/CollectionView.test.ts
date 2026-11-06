@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import CollectionView from './CollectionView.svelte'
 import { locale } from '$lib/i18n'
-import { DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT } from '$lib/document-explorer'
+import {
+  DOCUMENT_EXPLORER_COLLECTION_CHANGED_EVENT,
+  DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
+} from '$lib/document-explorer'
 import { exportCollectionById } from '$lib/export'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -862,6 +865,80 @@ describe('CollectionView import flow', () => {
     // The renderer no longer deletes anything on a failed import.
     expect(storeRef.current.items.delete).not.toHaveBeenCalled()
     expect(storeRef.current.assets.deleteWithCascade).not.toHaveBeenCalled()
+  })
+
+  it('says the collection is gone and refreshes the sidebar when the backend no longer has it', async () => {
+    // A collection deleted on this device or applied from a synced one leaves
+    // this view holding an id the backend no longer knows.
+    const sourcePath = 'C:\\tmp\\foto.png'
+    const collectionsRefreshes: CustomEvent[] = []
+    const handleCollectionsRefresh = (event: Event) => {
+      collectionsRefreshes.push(event as CustomEvent)
+    }
+    window.addEventListener(DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT, handleCollectionsRefresh)
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'foto.png')
+    answerImports({ [sourcePath]: 'not_found: no collection col-1' })
+
+    try {
+      render(CollectionView, { collectionId: 'col-1' })
+
+      await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            'Esta colección ya no existe (se borró en este equipo o en otro sincronizado). Elegí o creá otra colección.'
+          )
+        ).toBeInTheDocument()
+      })
+      // Detected by the backend's code, so the raw sentence never reaches the
+      // banner.
+      expect(screen.queryByText(/no collection col-1/)).not.toBeInTheDocument()
+      expect(collectionsRefreshes).toHaveLength(1)
+      expect(navigationRef.navigate).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener(
+        DOCUMENT_EXPLORER_COLLECTIONS_CHANGED_EVENT,
+        handleCollectionsRefresh
+      )
+    }
+  })
+
+  it('says the collection is gone in English too', async () => {
+    locale.set('en')
+    const sourcePath = 'C:\\tmp\\foto.png'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'foto.png')
+    answerImports({ [sourcePath]: 'not_found: no collection col-1' })
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Import document/ }))
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'This collection no longer exists (it was deleted on this or a synced device). Choose or create another collection.'
+        )
+      ).toBeInTheDocument()
+    })
+  })
+
+  it('keeps the backend sentence for every other import failure', async () => {
+    const sourcePath = 'C:\\tmp\\doc.pdf'
+    fileImportRef.pickFiles.mockResolvedValue([sourcePath])
+    classifyOne(sourcePath, 'doc.pdf', 'pdf')
+    answerImports({ [sourcePath]: 'not_found: no item item-x' })
+
+    render(CollectionView, { collectionId: 'col-1' })
+
+    await fireEvent.click(screen.getByRole('button', { name: /Importar documento/ }))
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/no item item-x/).length).toBeGreaterThan(0)
+    })
+    expect(screen.queryByText(/ya no existe/)).not.toBeInTheDocument()
   })
 
   it('skips a file already imported into this collection', async () => {

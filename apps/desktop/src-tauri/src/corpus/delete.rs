@@ -6,13 +6,17 @@
 //! `collection.repo.ts` `delete`). They live here now, on one connection and
 //! in one `BEGIN IMMEDIATE`, so the app and the assistant endpoint share the
 //! same rules: the same rows the store deleted explicitly, the same foreign-key
-//! cascades, the same search rows, the same `D` tombstones through the sync
-//! triggers, and the same empty-collection cleanup.
+//! cascades, the same search rows, and the same `D` tombstones through the sync
+//! triggers.
+//!
+//! Deleting documents never deletes their collection, not even the one the
+//! delete empties: the owner deletes collections explicitly, so an emptied
+//! collection keeps its row, its folder and its sync record.
 //!
 //! Files are removed only after the transaction commits (D11 b): each asset's
 //! own stored file (its image version family and a PDF's generated pages
 //! directory included), the item folders under `<data>/assets`, the collection
-//! folder when the collection is deleted or left empty, and the cached
+//! folder when the collection itself is deleted, and the cached
 //! thumbnails. Asset files and folders are touched only when their canonical
 //! path resolves strictly inside `<data>/assets`; the thumbnail cache is only
 //! addressed by its own exact names. A file that cannot be removed is logged
@@ -59,8 +63,6 @@ struct AssetFile {
 struct DeleteOutcome {
     /// `(collection_id, item_id)` of every deleted item, for its folder.
     item_folders: Vec<(String, String)>,
-    /// Collections the item delete emptied, whose folder only goes if empty.
-    empty_collections: Vec<String>,
     /// Collections deleted whole, whose folder goes recursively.
     whole_collections: Vec<String>,
     /// Deleted assets, whose own files and cached thumbnails go after commit.
@@ -369,8 +371,9 @@ fn run_in_transaction<T>(
     }
 }
 
-/// Delete the rows of `item_ids` in the store's order, including the collection
-/// each one leaves empty, all in the caller's one transaction.
+/// Delete the rows of `item_ids` in the store's order, all in the caller's one
+/// transaction. The collections those items belonged to keep their rows: an
+/// emptied collection is deleted only by an explicit collection delete.
 fn delete_items_rows(
     conn: &Connection,
     data_dir: &Path,
@@ -412,20 +415,6 @@ fn delete_items_rows(
             .map_err(|error| unavailable("delete the item rows", error))?;
     }
 
-    let mut empty_collections = Vec::new();
-    for collection_id in unique_collections(&owners) {
-        let changed = conn
-            .execute(
-                "DELETE FROM collections WHERE id = ?1
-                 AND id NOT IN (SELECT DISTINCT collection_id FROM items)",
-                [collection_id.as_str()],
-            )
-            .map_err(|error| unavailable("delete the emptied collection", error))?;
-        if changed > 0 {
-            empty_collections.push(collection_id);
-        }
-    }
-
     if has_vec_assets {
         conn.execute(
             &format!("DELETE FROM vec_assets WHERE item_id IN ({placeholders})"),
@@ -441,22 +430,10 @@ fn delete_items_rows(
             .into_iter()
             .map(|(item_id, collection_id)| (collection_id, item_id))
             .collect(),
-        empty_collections,
         whole_collections: Vec::new(),
         asset_files,
         remaining_asset_paths,
     })
-}
-
-fn unique_collections(owners: &[(String, String)]) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut collections = Vec::new();
-    for (_, collection_id) in owners {
-        if seen.insert(collection_id.as_str()) {
-            collections.push(collection_id.clone());
-        }
-    }
-    collections
 }
 
 /// Delete one collection and everything it owns in the store's order, all in
@@ -520,16 +497,10 @@ fn delete_collection_rows(
             .into_iter()
             .map(|item_id| (collection_id.to_string(), item_id))
             .collect(),
-        empty_collections: Vec::new(),
         whole_collections: vec![collection_id.to_string()],
         asset_files,
         remaining_asset_paths,
     })
-}
-
-enum FolderRemoval {
-    Recursive,
-    EmptyOnly,
 }
 
 /// A database id is only usable as a folder name when it is exactly one
@@ -703,10 +674,12 @@ fn remove_asset_file(
     }
 }
 
+/// Remove a whole folder once every file that survives the delete is known to
+/// live outside it. A folder is removed only at its exact depth below
+/// `<data>/assets`, and never one that still holds a surviving asset.
 fn remove_folder_inside(
     canonical_root: &Path,
     folder: &Path,
-    mode: FolderRemoval,
     depth: usize,
     remaining: &HashSet<PathBuf>,
 ) {
@@ -726,11 +699,7 @@ fn remove_folder_inside(
         );
         return;
     }
-    let removed = match mode {
-        FolderRemoval::Recursive => std::fs::remove_dir_all(&canonical),
-        FolderRemoval::EmptyOnly => std::fs::remove_dir(&canonical),
-    };
-    if let Err(error) = removed {
+    if let Err(error) = std::fs::remove_dir_all(&canonical) {
         log::warn!(
             "corpus delete: could not remove {}: {error}",
             canonical.display()
@@ -751,41 +720,15 @@ fn remove_files_after_commit(data_dir: &Path, cache_dir: &Path, outcome: &Delete
         }
         for (collection_id, item_id) in &outcome.item_folders {
             match folder_path(&assets_root, collection_id, Some(item_id)) {
-                Some(folder) => remove_folder_inside(
-                    &canonical_root,
-                    &folder,
-                    FolderRemoval::Recursive,
-                    2,
-                    &remaining,
-                ),
+                Some(folder) => remove_folder_inside(&canonical_root, &folder, 2, &remaining),
                 None => log::warn!(
                     "corpus delete: refusing to build an item folder from ids {collection_id:?}/{item_id:?}"
                 ),
             }
         }
-        for collection_id in &outcome.empty_collections {
-            match folder_path(&assets_root, collection_id, None) {
-                Some(folder) => remove_folder_inside(
-                    &canonical_root,
-                    &folder,
-                    FolderRemoval::EmptyOnly,
-                    1,
-                    &remaining,
-                ),
-                None => log::warn!(
-                    "corpus delete: refusing to build a collection folder from id {collection_id:?}"
-                ),
-            }
-        }
         for collection_id in &outcome.whole_collections {
             match folder_path(&assets_root, collection_id, None) {
-                Some(folder) => remove_folder_inside(
-                    &canonical_root,
-                    &folder,
-                    FolderRemoval::Recursive,
-                    1,
-                    &remaining,
-                ),
+                Some(folder) => remove_folder_inside(&canonical_root, &folder, 1, &remaining),
                 None => log::warn!(
                     "corpus delete: refusing to build a collection folder from id {collection_id:?}"
                 ),
